@@ -1,0 +1,291 @@
+// Mock COM boundary for the unmodified production queue/snapshot/JNI functions.
+// No Windows marshaling or real WebView2 behavior is claimed by this host test.
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cwchar>
+#include <deque>
+#include <functional>
+#include <future>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+using HRESULT = int32_t;
+using DWORD = uint32_t;
+using UINT = unsigned;
+using HWND = void*;
+using HANDLE = void*;
+using PROPERTYID = int;
+using BSTR = wchar_t*;
+using jchar = wchar_t;  // The host adapter observes text, not JNI's UTF-16 encoding.
+using jsize = int;
+using jlong = int64_t;
+using jint = int;
+using jclass = void*;
+using jstring = std::wstring*;
+constexpr HRESULT S_OK = 0, E_FAIL = -1, E_UNEXPECTED = -2;
+constexpr int COINIT_MULTITHREADED = 0, CLSCTX_INPROC_SERVER = 0;
+constexpr int VT_BOOL = 1, VT_I4 = 2, VT_BSTR = 3, ToggleState_On = 1;
+#define SUCCEEDED(value) ((value) >= 0)
+#define FAILED(value) ((value) < 0)
+#define WINAPI
+#define __uuidof(...) 0
+struct CLSID { uint32_t a; uint16_t b, c; uint8_t d[8]; };
+struct RECT { int left, top, right, bottom; };
+struct VARIANT { int vt = 0; int boolVal = 0; int lVal = 0; BSTR bstrVal = nullptr; };
+void VariantInit(VARIANT* v) { *v = {}; }
+void VariantClear(VARIANT* v) { if (v->vt == VT_BSTR) delete[] v->bstrVal; }
+unsigned SysStringLen(BSTR s) { return static_cast<unsigned>(std::wcslen(s)); }
+void SysFreeString(BSTR s) { delete[] s; }
+BSTR SysAllocStringLen(const wchar_t* s, UINT n) {
+  auto value = new wchar_t[n + 1];
+  std::copy_n(s, n, value); value[n] = 0; return value;
+}
+struct JNIEnv {
+  jstring NewString(const jchar* s, jsize n) { return new std::wstring(s, static_cast<size_t>(n)); }
+};
+@CONSTANTS@
+
+int checks = 0;
+void require(bool value, const char* description) {
+  ++checks;
+  if (!value) { std::fprintf(stderr, "FAIL %s\n", description); std::_Exit(1); }
+}
+
+enum class Failure { None, NoUia, Cache, CacheNull, Property, Walker, WalkerNull, Root,
+                     RootNull, FirstChild, FirstChildPointer, TopSibling, Descendant, DeepSibling };
+Failure failure = Failure::None;
+std::atomic<int> references{0};
+std::atomic<int> wrong_thread_release{0};
+std::thread::id uia_thread;
+std::atomic<bool> live_window{true};
+const HWND window1 = reinterpret_cast<HWND>(uintptr_t(1));
+const HWND window2 = reinterpret_cast<HWND>(uintptr_t(2));
+bool IsWindow(HWND h) { return h != nullptr && live_window.load(); }
+
+struct Ref {
+  Ref() { ++references; }
+  virtual ~Ref() { --references; }
+  void Release() { if (std::this_thread::get_id() != uia_thread) ++wrong_thread_release; delete this; }
+};
+struct Node {
+  int id;
+  Node* parent = nullptr;
+  std::vector<Node*> children;
+  int focus = 0;
+};
+Node tree_root{0, nullptr, {}}, button{1, &tree_root, {}}, field{2, &tree_root, {}};
+Node leaf1{3, &field, {}}, leaf2{4, &field, {}};
+void reset_tree() { tree_root.children = {&button, &field}; field.children = {&leaf1, &leaf2}; }
+
+std::mutex pause_mutex;
+std::condition_variable pause_cv;
+bool pause_capture = false, entered_capture = false, resume_capture = false;
+void capture_pause() {
+  std::unique_lock<std::mutex> lock(pause_mutex);
+  if (!pause_capture) return;
+  entered_capture = true;
+  pause_cv.notify_all();
+  pause_cv.wait(lock, [] { return resume_capture; });
+}
+
+struct IUIAutomationInvokePattern : Ref { HRESULT Invoke() { return E_FAIL; } };
+struct IUIAutomationTogglePattern : Ref { HRESULT Toggle() { return E_FAIL; } };
+struct IUIAutomationSelectionItemPattern : Ref { HRESULT Select() { return E_FAIL; } };
+struct IUIAutomationLegacyIAccessiblePattern : Ref { HRESULT DoDefaultAction() { return E_FAIL; } };
+struct IUIAutomationValuePattern : Ref { HRESULT SetValue(BSTR) { return E_FAIL; } };
+struct IUIAutomationScrollItemPattern : Ref { HRESULT ScrollIntoView() { return E_FAIL; } };
+struct IUIAutomationElement : Ref {
+  Node* node;
+  explicit IUIAutomationElement(Node* n) : node(n) {}
+  HRESULT GetCachedPropertyValue(PROPERTYID p, VARIANT* v) {
+    if (p == UIA_HeadingLevelPropertyId) { v->vt = VT_I4; v->lVal = 80050; }
+    else { v->vt = VT_BOOL; v->boolVal = 0; }
+    return S_OK;
+  }
+  HRESULT get_CachedName(BSTR* s) { *s = SysAllocStringLen(L"node", 4); return S_OK; }
+  HRESULT get_CachedBoundingRectangle(RECT* r) { *r = {0, 0, 20, 20}; return S_OK; }
+  HRESULT get_CachedControlType(int* t) { *t = 50004; return S_OK; }
+  HRESULT GetCurrentPatternAs(int, int, void**) { return E_FAIL; }
+  HRESULT SetFocus() { ++node->focus; return S_OK; }
+};
+struct IUIAutomationCacheRequest : Ref {
+  HRESULT AddProperty(PROPERTYID) { return failure == Failure::Property ? E_FAIL : S_OK; }
+};
+struct IUIAutomationTreeWalker : Ref {
+  HRESULT GetFirstChildElementBuildCache(IUIAutomationElement* e, IUIAutomationCacheRequest*,
+                                         IUIAutomationElement** out) {
+    *out = nullptr;
+    if (e->node == &tree_root) {
+      capture_pause();
+      if (failure == Failure::FirstChild) return E_FAIL;
+      if (failure == Failure::FirstChildPointer) {
+        *out = new IUIAutomationElement(&button); return E_FAIL;
+      }
+    }
+    if (failure == Failure::Descendant && e->node == &field) return E_FAIL;
+    if (!e->node->children.empty()) *out = new IUIAutomationElement(e->node->children.front());
+    return S_OK;
+  }
+  HRESULT GetNextSiblingElementBuildCache(IUIAutomationElement* e, IUIAutomationCacheRequest*,
+                                          IUIAutomationElement** out) {
+    *out = nullptr;
+    auto& siblings = e->node->parent->children;
+    auto it = std::find(siblings.begin(), siblings.end(), e->node);
+    if (it != siblings.end() && ++it != siblings.end()) *out = new IUIAutomationElement(*it);
+    if (failure == Failure::TopSibling && e->node == &button) return E_FAIL;
+    if (failure == Failure::DeepSibling && e->node == &leaf1) return E_FAIL;
+    return S_OK;
+  }
+};
+struct IUIAutomation : Ref {
+  HRESULT CreateCacheRequest(IUIAutomationCacheRequest** out) {
+    if (failure == Failure::Cache) { *out = new IUIAutomationCacheRequest; return E_FAIL; }
+    *out = failure == Failure::CacheNull ? nullptr : new IUIAutomationCacheRequest;
+    return S_OK;
+  }
+  HRESULT get_ControlViewWalker(IUIAutomationTreeWalker** out) {
+    *out = failure == Failure::WalkerNull ? nullptr : new IUIAutomationTreeWalker;
+    return failure == Failure::Walker ? E_FAIL : S_OK;
+  }
+  HRESULT ElementFromHandleBuildCache(HWND, IUIAutomationCacheRequest*, IUIAutomationElement** out) {
+    *out = failure == Failure::RootNull ? nullptr : new IUIAutomationElement(&tree_root);
+    return failure == Failure::Root ? E_FAIL : S_OK;
+  }
+};
+HRESULT CoInitializeEx(void*, int) { uia_thread = std::this_thread::get_id(); return S_OK; }
+HRESULT CoCreateInstance(CLSID, void*, int, int, void** out) { *out = new IUIAutomation; return S_OK; }
+HANDLE CreateThread(void*, size_t, DWORD (*fn)(void*), void* argument, DWORD, void*) {
+  std::thread([fn, argument] { fn(argument); }).detach(); return reinterpret_cast<HANDLE>(uintptr_t(1));
+}
+void CloseHandle(HANDLE) {}
+
+@PRODUCTION@
+
+void worker(std::function<void()> fn) {
+  require(RunOnUiaThread(std::move(fn), 2000), "worker operation completed");
+}
+int generation(jstring value) {
+  require(value != nullptr, "successful snapshot returned text");
+  int result = std::stoi(value->substr(4)); delete value; return result;
+}
+jstring request(HWND window = window1, int limit = 1500, int timeout = 2000) {
+  JNIEnv env;
+  return UiaClient_nativeSnapshot(&env, nullptr, static_cast<jlong>(reinterpret_cast<intptr_t>(window)),
+                                   limit, timeout);
+}
+bool action(int gen) {
+  bool result = false;
+  worker([&] { result = Act(gen, 0, 2, L""); });
+  return result;
+}
+void drain() { worker([] {}); }
+
+int main() {
+  reset_tree();
+  int displayed = generation(request());
+  drain();
+  require(action(displayed), "action on received snapshot works");
+  int initial_refs = references.load();
+  for (Failure point : {Failure::Cache, Failure::CacheNull, Failure::Property, Failure::Walker,
+          Failure::WalkerNull, Failure::Root, Failure::RootNull, Failure::FirstChild,
+          Failure::FirstChildPointer, Failure::TopSibling, Failure::Descendant, Failure::DeepSibling}) {
+    worker([&] { failure = point; });
+    for (int repeat = 0; repeat != 3; ++repeat) {
+      jstring failed = request();
+      require(failed == nullptr, "failed COM traversal is not a successful empty/partial snapshot");
+      drain();
+      require(g_generation == displayed, "failed refresh does not publish a generation");
+      require(references.load() == initial_refs, "failed traversal releases every pending COM reference");
+      require(action(displayed), "repeated failure preserves the displayed action target");
+    }
+  }
+  worker([] { failure = Failure::None; });
+  // An unavailable client has the same failure semantics, without deleting the
+  // test's process-owned singleton.
+  IUIAutomation* saved = nullptr;
+  worker([&] { saved = g_uia; g_uia = nullptr; });
+  require(request() == nullptr, "missing UIA client is unavailable, not empty success");
+  worker([&] { g_uia = saved; });
+  require(action(displayed), "missing UIA client preserves prior targets");
+
+  // Let a real queued capture time out while it owns pending COM references.
+  {
+    std::lock_guard<std::mutex> lock(pause_mutex);
+    pause_capture = true; entered_capture = false; resume_capture = false;
+  }
+  auto late = std::async(std::launch::async, [] { return request(window1, 1500, 25); });
+  {
+    std::unique_lock<std::mutex> lock(pause_mutex);
+    require(pause_cv.wait_for(lock, std::chrono::seconds(2), [] { return entered_capture; }),
+            "timed-out snapshot reached COM traversal");
+  }
+  require(late.get() == nullptr, "in-flight capture returns timeout");
+  {
+    std::lock_guard<std::mutex> lock(pause_mutex);
+    resume_capture = true; pause_capture = false; pause_cv.notify_all();
+  }
+  drain();
+  require(g_generation == displayed, "late successful traversal never publishes");
+  require(references.load() == initial_refs, "late successful traversal releases its private references");
+  require(action(displayed), "late capture cannot invalidate the displayed target");
+
+  // A snapshot abandoned before its job begins must not evict a received tree.
+  std::mutex busy_mutex;
+  std::condition_variable busy_cv;
+  bool entered = false, released = false;
+  auto busy = std::async(std::launch::async, [&] {
+    return RunOnUiaThread([&] {
+      std::unique_lock<std::mutex> lock(busy_mutex);
+      entered = true; busy_cv.notify_all();
+      busy_cv.wait(lock, [&] { return released; });
+    }, 2000);
+  });
+  {
+    std::unique_lock<std::mutex> lock(busy_mutex);
+    require(busy_cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }), "UIA queue is occupied");
+  }
+  require(request(window1, 1500, 5) == nullptr, "queued snapshot times out without an answer");
+  {
+    std::lock_guard<std::mutex> lock(busy_mutex);
+    released = true; busy_cv.notify_all();
+  }
+  require(busy.get(), "blocking predecessor completes");
+  drain();
+  require(g_generation == displayed, "abandoned queued capture never publishes");
+  require(references.load() == initial_refs, "abandoned queued capture releases its private references");
+  require(action(displayed), "abandoned queued capture preserves displayed action");
+
+  int second_window = generation(request(window2));
+  drain();
+  worker([] { tree_root.children.clear(); });
+  int empty = generation(request());
+  drain();
+  require(g_elements.at(empty).nodes.empty(), "successful empty tree clears the current snapshot");
+  require(action(displayed), "one accepted refresh preserves previous action generation");
+  require(action(second_window), "another WebView retains its own action generation");
+  worker([] { reset_tree(); });
+  int capped = generation(request(window1, 1));
+  drain();
+  require(g_elements.at(capped).nodes.size() == 1, "node budget still limits the successful snapshot");
+  require(!action(displayed), "older generations retire after two received replacements");
+  require(action(second_window), "generation retirement is per-window");
+  require(references.load() == 6, "node-budget truncation releases unvisited siblings and descendants");
+  worker([] { live_window = false; ReleaseElements(window1); });
+  require(references.load() == 1, "closed-window cleanup releases all nodes (only UIA singleton remains)");
+  require(wrong_thread_release.load() == 0, "all COM releases stay on the UIA worker");
+  std::printf("UIA snapshot contracts passed: %d checks\n", checks);
+  std::fflush(stdout);
+  // Production's UIA worker is process-long; avoid destroying its globals while
+  // that intentionally persistent thread waits. All mock COM references were
+  // explicitly counted and released above, apart from its process singleton.
+  std::_Exit(0);
+}

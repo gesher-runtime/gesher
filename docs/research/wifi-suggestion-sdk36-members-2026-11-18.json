@@ -1,0 +1,1189 @@
+{
+  "scope": "Selected SDK36 public/protected declarations; no runtime coverage percentage",
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "classes": {
+    "android.net.wifi.WifiNetworkSuggestion": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "RANDOMIZATION_NON_PERSISTENT",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "RANDOMIZATION_PERSISTENT",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getBssid",
+          "descriptor": "()Landroid/net/MacAddress;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getEnterpriseConfig",
+          "descriptor": "()Landroid/net/wifi/WifiEnterpriseConfig;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getMacRandomizationSetting",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPassphrase",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPasspointConfig",
+          "descriptor": "()Landroid/net/wifi/hotspot2/PasspointConfiguration;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPriority",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPriorityGroup",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSsid",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSubscriptionGroup",
+          "descriptor": "()Landroid/os/ParcelUuid;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSubscriptionId",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getWifiSsid",
+          "descriptor": "()Landroid/net/wifi/WifiSsid;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isAppInteractionRequired",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isCarrierMerged",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isCredentialSharedWithUser",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isEnhancedOpen",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isHiddenSsid",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isInitialAutojoinEnabled",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isMetered",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isRestricted",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isUntrusted",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isUserInteractionRequired",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isWifi7Enabled",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "4301bc10c1bfa63c8a89217d54193732a7a6366abd82754d05a2058c73a28376"
+    },
+    "android.net.wifi.WifiNetworkSuggestion$Builder": {
+      "declarations": [
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "build",
+          "descriptor": "()Landroid/net/wifi/WifiNetworkSuggestion;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setBssid",
+          "descriptor": "(Landroid/net/MacAddress;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCarrierMerged",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCredentialSharedWithUser",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsAppInteractionRequired",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsEnhancedOpen",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsHiddenSsid",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsInitialAutojoinEnabled",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsMetered",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsUserInteractionRequired",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsWpa3SaeH2eOnlyModeEnabled",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setMacRandomizationSetting",
+          "descriptor": "(I)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setPasspointConfig",
+          "descriptor": "(Landroid/net/wifi/hotspot2/PasspointConfiguration;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setPriority",
+          "descriptor": "(I)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setPriorityGroup",
+          "descriptor": "(I)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setRestricted",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSsid",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSubscriptionGroup",
+          "descriptor": "(Landroid/os/ParcelUuid;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSubscriptionId",
+          "descriptor": "(I)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setUntrusted",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWapiEnterpriseConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWapiPassphrase",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWifi7Enabled",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWifiSsid",
+          "descriptor": "(Landroid/net/wifi/WifiSsid;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa2EnterpriseConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa2Passphrase",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3Enterprise192BitModeConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3EnterpriseConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3EnterpriseStandardModeConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3Passphrase",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiNetworkSuggestion$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "b7c787072749597937d459df0542eb934d2e655edb638f671c7a9dd64b7d4c42"
+    },
+    "android.net.wifi.hotspot2.PasspointConfiguration": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "(Landroid/net/wifi/hotspot2/PasspointConfiguration;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getCredential",
+          "descriptor": "()Landroid/net/wifi/hotspot2/pps/Credential;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getDecoratedIdentityPrefix",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getHomeSp",
+          "descriptor": "()Landroid/net/wifi/hotspot2/pps/HomeSp;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSubscriptionExpirationTimeMillis",
+          "descriptor": "()J",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getUniqueId",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isOsuProvisioned",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCredential",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setDecoratedIdentityPrefix",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setHomeSp",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/HomeSp;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSubscriptionExpirationTimeInMillis",
+          "descriptor": "(J)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "2924f477bdc4df38862ade640f86f1eb9f644bc7aa50b9179c070f6f9213e6c6"
+    },
+    "android.net.wifi.hotspot2.pps.HomeSp": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/HomeSp;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getFqdn",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getFriendlyName",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getMatchAllOis",
+          "descriptor": "()[J",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getMatchAnyOis",
+          "descriptor": "()[J",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getOtherHomePartnersList",
+          "descriptor": "()Ljava/util/Collection;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getRoamingConsortiumOis",
+          "descriptor": "()[J",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setFqdn",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setFriendlyName",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setMatchAllOis",
+          "descriptor": "([J)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setMatchAnyOis",
+          "descriptor": "([J)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setOtherHomePartnersList",
+          "descriptor": "(Ljava/util/Collection;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setRoamingConsortiumOis",
+          "descriptor": "([J)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "7bc231deb8cf6a8e7f5d1052113236b76ce9e25c40cef4e3b3bd04f5c695f193"
+    },
+    "android.net.wifi.hotspot2.pps.Credential": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getCaCertificate",
+          "descriptor": "()Ljava/security/cert/X509Certificate;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getCertCredential",
+          "descriptor": "()Landroid/net/wifi/hotspot2/pps/Credential$CertificateCredential;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getClientCertificateChain",
+          "descriptor": "()[Ljava/security/cert/X509Certificate;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getClientPrivateKey",
+          "descriptor": "()Ljava/security/PrivateKey;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getMinimumTlsVersion",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getRealm",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSimCredential",
+          "descriptor": "()Landroid/net/wifi/hotspot2/pps/Credential$SimCredential;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getUserCredential",
+          "descriptor": "()Landroid/net/wifi/hotspot2/pps/Credential$UserCredential;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCaCertificate",
+          "descriptor": "(Ljava/security/cert/X509Certificate;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCertCredential",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential$CertificateCredential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setClientCertificateChain",
+          "descriptor": "([Ljava/security/cert/X509Certificate;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setClientPrivateKey",
+          "descriptor": "(Ljava/security/PrivateKey;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setMinimumTlsVersion",
+          "descriptor": "(I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setRealm",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSimCredential",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential$SimCredential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setUserCredential",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential$UserCredential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "c81773fefbc8543ca49fec13196da5e05b771e1f9a78e2f570c8fba0e752ee0c"
+    },
+    "android.net.wifi.hotspot2.pps.Credential$UserCredential": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential$UserCredential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getEapType",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getNonEapInnerMethod",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPassword",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getUsername",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setEapType",
+          "descriptor": "(I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setNonEapInnerMethod",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setPassword",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setUsername",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "0a1560838bdf487d98fb7ab69603022dbdb8db01d30f0fc6baca2a9489876cc0"
+    },
+    "android.net.wifi.hotspot2.pps.Credential$CertificateCredential": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential$CertificateCredential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getCertSha256Fingerprint",
+          "descriptor": "()[B",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getCertType",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCertSha256Fingerprint",
+          "descriptor": "([B)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCertType",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "875442d319ad7277160176aa973acb56ac6658632337688ca1adc57c5ca2795d"
+    },
+    "android.net.wifi.hotspot2.pps.Credential$SimCredential": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "(Landroid/net/wifi/hotspot2/pps/Credential$SimCredential;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getEapType",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getImsi",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setEapType",
+          "descriptor": "(I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setImsi",
+          "descriptor": "(Ljava/lang/String;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "3ea81bf7ba84497a6fab3c7a5c06d12f43c6e7d03eca94629894430527d7ab48"
+    }
+  },
+  "total_declarations": 163,
+  "constant_values": "2 runtime reflection checks against SDK-inlined constants in the same corpus"
+}

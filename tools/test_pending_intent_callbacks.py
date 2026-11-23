@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +37,7 @@ def main() -> None:
                         '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
                         str(ROOT / 'tests/pending-intent/framework_host.c'), '-o', str(library)], check=True)
         sources = []
-        for name in ('PendingIntents', 'ActivityManagerService', 'BroadcastController', 'ClipboardService', 'ContentService'):
+        for name in ('PendingIntents', 'ActivityManagerService', 'BroadcastController', 'ContentService'):
             relative = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / relative
             if args.source_ref:
@@ -46,7 +47,6 @@ def main() -> None:
             sources.append(str(source))
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/PendingIntentContractTest.java',
-            'tests/dex-services/gesher/services/ClipboardCallbackTest.java',
             'tests/dex-services/gesher/services/ContentObserverLifecycleTest.java',
             'tests/dex-services/gesher/services/PowerWakeLockCallbackTest.java',
             'tests/pending-intent/CallbackContractsHost.java'))
@@ -61,6 +61,16 @@ def main() -> None:
         environment.pop('GESHER_BINDER_UID', None)
         cases = (args.case, 'clipboard', 'content') if args.case == 'all' else (args.case,)
         for case in cases:
+            if case == 'clipboard':
+                # Clipboard now authenticates actual PM/ATM identities and AppOps. Its
+                # dedicated fixture supplies the required native clock/identity boundaries.
+                subprocess.run([sys.executable, str(ROOT / 'tools/test_clipboard.py'),
+                                '--java-home', str(args.java_home),
+                                '--framework-classes', str(args.framework_classes),
+                                '--core-classes', str(args.core_classes),
+                                '--app-classes', str(args.app_classes),
+                                '--apksig', str(args.apksig_jar)], check=True, timeout=90)
+                continue
             case_environment = environment.copy()
             # PMS now persists enabled-state ownership during construction. Keep
             # every host case off the device's /data and isolated from other cases.

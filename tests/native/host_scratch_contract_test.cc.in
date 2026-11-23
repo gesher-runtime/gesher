@@ -1,0 +1,701 @@
+// The actual outer poll, EpollWaiter, nested epoll readiness, Epoll state and
+// delivery methods. Win32 events use Linux eventfds; sockets use Linux poll.
+// Descriptor registration and topology edits are explicit fixture boundaries.
+// File snapshots own real Linux duplicates; pipe readiness uses real Linux poll.
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <optional>
+#include <poll.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+#include "poll_scratch.h"
+#include "socket_internal.h"
+@HAS_SCRATCH@
+
+namespace { void check(const char* text, bool passed); }
+
+namespace allocation {
+thread_local bool enabled = false;
+thread_local size_t calls = 0, bytes = 0;
+void begin() { calls = bytes = 0; enabled = true; }
+void end() { enabled = false; }
+}
+[[gnu::noinline]] void* operator new(size_t bytes) {
+  void* p = std::malloc(bytes == 0 ? 1 : bytes);
+  if (p == nullptr) std::abort();
+  if (allocation::enabled) { ++allocation::calls; allocation::bytes += bytes; }
+  return p;
+}
+[[gnu::noinline]] void* operator new[](size_t bytes) { return ::operator new(bytes); }
+[[gnu::noinline]] void operator delete(void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete(void* p, size_t) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p, size_t) noexcept { std::free(p); }
+
+using DWORD = uint32_t;
+using ULONGLONG = unsigned long long;
+struct NativeEvent { int fd; bool manual; };
+using HANDLE = NativeEvent*;
+#define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(intptr_t{-1})
+static constexpr int FALSE = 0;
+static constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258, WAIT_FAILED = 0xffffffffu;
+static constexpr DWORD INFINITE = 0xffffffffu, MAXIMUM_WAIT_OBJECTS = 64;
+static constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_PIPE = 3;
+static std::atomic<int> live_handles{0};
+static thread_local bool fail_create, fail_wait;
+static thread_local void (*close_observer)(void*);
+static thread_local void* close_context;
+struct WaitStep { int expected_ms, elapsed_ms; void (*action)(void*) = nullptr; void* context = nullptr; };
+static thread_local bool controlled_clock, plan_matched;
+static thread_local ULONGLONG virtual_micros;
+static thread_local size_t next_wait;
+static thread_local std::vector<WaitStep> wait_plan;
+static int planned_wait(int milliseconds) {
+  if (!controlled_clock || milliseconds == 0) return milliseconds;
+  if (next_wait >= wait_plan.size()) { plan_matched = false; virtual_micros += 1000000; return 0; }
+  const WaitStep step = wait_plan[next_wait++];
+  plan_matched &= milliseconds == step.expected_ms;
+  virtual_micros += static_cast<ULONGLONG>(step.elapsed_ms) * 1000;
+  if (step.action) step.action(step.context);
+  return 0;
+}
+static HANDLE CreateEventW(void*, int manual, int initial, void*) {
+  if (fail_create) { fail_create = false; errno = ENOMEM; return nullptr; }
+  const int fd = ::eventfd(initial != 0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (fd < 0) return nullptr;
+  // The Win32 handle allocation is outside operator-new measurements.
+  auto* event = static_cast<NativeEvent*>(std::malloc(sizeof(NativeEvent)));
+  if (!event) std::abort();
+  *event = {fd, manual != 0};
+  ++live_handles;
+  return event;
+}
+static bool CloseHandle(HANDLE event) {
+  if (!event) return false;
+  if (close_observer) {
+    auto observer = close_observer;
+    close_observer = nullptr;
+    observer(close_context);
+  }
+  const bool ok = ::close(event->fd) == 0;
+  std::free(event); --live_handles; return ok;
+}
+static void SetEvent(HANDLE event) {
+  if (!event) return;
+  const uint64_t value = 1;
+  if (::write(event->fd, &value, sizeof(value)) < 0 && errno != EAGAIN) std::abort();
+}
+static void ResetEvent(HANDLE event) {
+  if (!event) return;
+  uint64_t value;
+  while (::read(event->fd, &value, sizeof(value)) > 0) {}
+}
+static DWORD WaitForMultipleObjects(DWORD count, const HANDLE* handles, int, DWORD milliseconds) {
+  if (fail_wait) { fail_wait = false; errno = EIO; return WAIT_FAILED; }
+  std::array<pollfd, MAXIMUM_WAIT_OBJECTS> fds{};
+  if (count > fds.size()) std::abort();
+  for (DWORD i = 0; i < count; ++i) {
+    // Win32 forbids duplicate HANDLEs even though Linux poll accepts aliases.
+    for (DWORD j = 0; j < i; ++j) if (handles[j] == handles[i]) { errno = EINVAL; return WAIT_FAILED; }
+    fds[i] = {handles[i]->fd, POLLIN, 0};
+  }
+  const int result = ::poll(fds.data(), count, planned_wait(milliseconds == INFINITE ? -1 : int(milliseconds)));
+  if (result < 0) return WAIT_FAILED;
+  for (DWORD i = 0; i < count; ++i) {
+    if (fds[i].revents != 0) {
+      if (!handles[i]->manual) ResetEvent(handles[i]);
+      return WAIT_OBJECT_0 + i;
+    }
+  }
+  return WAIT_TIMEOUT;
+}
+static DWORD WaitForSingleObject(HANDLE handle, DWORD milliseconds) {
+  return WaitForMultipleObjects(1, &handle, FALSE, milliseconds);
+}
+static void Sleep(DWORD milliseconds) {
+  if (milliseconds == INFINITE) std::abort();
+  std::this_thread::sleep_for(std::chrono::milliseconds(planned_wait(int(milliseconds))));
+}
+static int HostFd(HANDLE h) { return static_cast<int>(reinterpret_cast<intptr_t>(h) - 1); }
+static DWORD GetFileType(HANDLE h) {
+  struct stat info{};
+  if (::fstat(HostFd(h), &info) < 0) return 0;
+  return S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : FILE_TYPE_DISK;
+}
+static bool PeekNamedPipe(HANDLE h, void*, DWORD, void*, DWORD* available, void*) {
+  pollfd fd{HostFd(h), POLLIN, 0};
+  int bytes = 0;
+  if (::ioctl(fd.fd, FIONREAD, &bytes) < 0 || ::poll(&fd, 1, 0) < 0 || (fd.revents & POLLHUP)) return false;
+  *available = static_cast<DWORD>(bytes); return true;
+}
+
+namespace gesher {
+// This corpus constructs sockets, files, eventfds and epolls, but no GPU
+// fences. Declare that registry boundary explicitly; reaching a fence wait
+// here is a fixture error, not an emulation of native completion.
+class NativeFence;
+static std::shared_ptr<NativeFence> LookupNativeFence(int) { return {}; }
+static short PollNativeFence(const std::shared_ptr<NativeFence>&, short, HANDLE*) { std::abort(); }
+void WakePollers();
+@EVENTFD_STATE@
+@EPOLL_STATE@
+@EPOLL_CONVERSION@
+using PollObserver = void (*)(void*);
+static std::mutex registry_mutex;
+static std::map<int, std::shared_ptr<EventFd>> events;
+static std::map<int, SocketFd> sockets;
+static std::map<int, std::shared_ptr<Epoll>> epolls;
+// The complete OFD/Windows pipe backends run in their own corpora. Here the
+// declared boundary retains an actual native descriptor across slot reuse.
+namespace record_locks {
+static std::recursive_mutex descriptors;
+static thread_local unsigned depth;
+static thread_local void (*after_guard)(void*);
+static thread_local void* guard_context;
+struct DescriptorGuard {
+  std::unique_lock<std::recursive_mutex> lock{descriptors};
+  DescriptorGuard() { ++depth; }
+  ~DescriptorGuard() {
+    --depth;
+    lock.unlock();
+    if (depth == 0 && after_guard) {
+      auto callback = after_guard;
+      after_guard = nullptr;
+      callback(guard_context);
+    }
+  }
+};
+}
+static thread_local unsigned live_snapshots, captured_snapshots, pipe_samples;
+static thread_local int capture_error, pipe_error;
+struct DescriptorSnapshot {
+  int fd;
+  explicit DescriptorSnapshot(int owned) : fd(owned) { ++live_snapshots; }
+  ~DescriptorSnapshot() {
+    const int saved = errno;
+    if (fd >= 0) ::close(fd);
+    --live_snapshots;
+    errno = saved;
+  }
+};
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
+  check("pipe capture holds the descriptor guard", record_locks::depth == 1);
+  if (capture_error) { errno = capture_error; capture_error = 0; return {}; }
+  auto snapshot = std::make_shared<DescriptorSnapshot>(-1);
+  snapshot->fd = ::fcntl(fd, F_DUPFD_CLOEXEC, 0);
+  if (snapshot->fd < 0) return {};
+  ++captured_snapshots;
+  return snapshot;
+}
+static int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* ready) {
+  check("pipe readiness releases the descriptor guard", record_locks::depth == 0);
+  ++pipe_samples;
+  *ready = 0;
+  if (pipe_error) { errno = pipe_error; pipe_error = 0; return -1; }
+  pollfd native{snapshot->fd, events, 0};
+  if (::poll(&native, 1, 0) < 0) return -1;
+  *ready = native.revents;
+  return 0;
+}
+static std::shared_ptr<EventFd> LookupEventFd(int fd) {
+  std::lock_guard<std::mutex> lock(registry_mutex);
+  auto it = events.find(fd); return it == events.end() ? nullptr : it->second;
+}
+bool LookupSocket(int fd, SocketFd* out) {
+  std::lock_guard<std::mutex> lock(registry_mutex);
+  auto it = sockets.find(fd); if (it == sockets.end()) return false;
+  *out = it->second; return true;
+}
+static std::shared_ptr<Epoll> LookupEpoll(int fd) {
+  std::lock_guard<std::mutex> lock(registry_mutex);
+  auto it = epolls.find(fd); return it == epolls.end() ? nullptr : it->second;
+}
+static HANDLE HandleFromFd(int fd) {
+  return ::fcntl(fd, F_GETFD) < 0 ? INVALID_HANDLE_VALUE : reinterpret_cast<HANDLE>(intptr_t{fd} + 1);
+}
+static int FailWithLastError() { return -1; }
+static ULONGLONG MonotonicMicros() {
+  if (controlled_clock) return virtual_micros;
+  return static_cast<ULONGLONG>(std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+static ULONGLONG DeadlineAfter(int timeout) {
+  return timeout < 0 ? ~0ULL : MonotonicMicros() + static_cast<ULONGLONG>(timeout) * 1000;
+}
+static int MillisUntil(ULONGLONG deadline) {
+  const auto now = MonotonicMicros(); return now >= deadline ? 0 : int((deadline - now + 999) / 1000);
+}
+int PollFds(pollfd*, nfds_t, int, HANDLE, bool*);
+@POLL_EVENTFD@
+@POLL_EPOLL@
+}
+
+namespace gesher::ws {
+static thread_local int injected_error = 0;
+static thread_local size_t transport_calls = 0;
+Socket NewWakeSocket(uint16_t* port) {
+  const int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (fd < 0) return kInvalidSocket;
+  if (fd > UINT16_MAX) std::abort();
+  *port = static_cast<uint16_t>(fd); return static_cast<Socket>(fd);
+}
+void Wake(uint16_t port) { const uint64_t value = 1; if (::write(port, &value, sizeof(value)) < 0) std::abort(); }
+void DrainWakeSocket(Socket fd) { uint64_t value; while (::read(int(fd), &value, sizeof(value)) > 0) {} }
+void CloseWakeSocket(Socket fd) { ::close(int(fd)); }
+int Poll(PollEntry* entries, size_t count, int timeout, NativePollObserver observer, void* context,
+         Socket wake, bool* woken) {
+  ++transport_calls;
+  if (observer) observer(true, 0, 0, context);
+  if (injected_error) { errno = injected_error; injected_error = 0; return -1; }
+  std::array<pollfd, 4097> native{};
+  if (count >= native.size()) std::abort();
+  for (size_t i = 0; i < count; ++i) {
+    const int wanted = entries[i].events;
+    native[i] = {static_cast<int>(entries[i].socket), static_cast<short>(
+        ((wanted & kPollIn) ? POLLIN : 0) | ((wanted & kPollOut) ? POLLOUT : 0) |
+        ((wanted & kPollPri) ? POLLPRI : 0)), 0};
+  }
+  const bool has_wake = wake != kInvalidSocket;
+  if (has_wake) native[count] = {static_cast<int>(wake), POLLIN, 0};
+  const int rc = ::poll(native.data(), count + has_wake, planned_wait(timeout));
+  if (observer) observer(false, rc, rc < 0 ? errno : 0, context);
+  if (woken) *woken = has_wake && native[count].revents != 0;
+  if (rc < 0) return rc;
+  int ready = 0;
+  for (size_t i = 0; i < count; ++i) {
+    const short bits = native[i].revents;
+    entries[i].revents = ((bits & POLLIN) ? kPollIn : 0) | ((bits & POLLOUT) ? kPollOut : 0) |
+        ((bits & POLLPRI) ? kPollPri : 0) | ((bits & POLLERR) ? kPollErr : 0) |
+        ((bits & POLLHUP) ? kPollHup : 0) | ((bits & POLLNVAL) ? kPollNval : 0);
+    ready += entries[i].revents != 0;
+  }
+  return ready;
+}
+}
+@POLL_FDS@
+using gesher::Epoll;
+@EPOLL_WAIT@
+
+namespace {
+int checked = 0, failed = 0;
+bool measure = false;
+void check(const char* text, bool passed) {
+  ++checked; if (!passed) { ++failed; std::printf("FAIL %s\n", text); }
+}
+int fresh_fd() {
+  const int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (fd < 0) std::abort();
+  return fd;
+}
+int new_event(bool ready) {
+  auto event = std::make_shared<gesher::EventFd>();
+  event->counter = ready;
+  event->readable = CreateEventW(nullptr, 1, ready, nullptr);
+  event->writable = CreateEventW(nullptr, 1, 1, nullptr);
+  event->readable_set = ready; event->writable_set = true;
+  if (!event->readable || !event->writable) std::abort();
+  const int fd = fresh_fd();
+  std::lock_guard<std::mutex> lock(gesher::registry_mutex);
+  gesher::events[fd] = event;
+  return fd;
+}
+int new_socket(bool ready) {
+  const int fd = fresh_fd();
+  if (ready) { const uint64_t value = 1; if (::write(fd, &value, sizeof(value)) < 0) std::abort(); }
+  std::lock_guard<std::mutex> lock(gesher::registry_mutex);
+  gesher::SocketFd state;
+  state.socket = static_cast<gesher::ws::Socket>(fd);
+  state.description = std::make_shared<gesher::ws::SocketDescription>();
+  gesher::sockets[fd] = state;
+  return fd;
+}
+int new_epoll() {
+  const int fd = fresh_fd();
+  std::lock_guard<std::mutex> lock(gesher::registry_mutex);
+  gesher::epolls[fd] = std::make_shared<gesher::Epoll>();
+  return fd;
+}
+void erase_fd(int fd) {
+  {
+    std::lock_guard<std::mutex> lock(gesher::registry_mutex);
+    gesher::events.erase(fd); gesher::sockets.erase(fd); gesher::epolls.erase(fd);
+  }
+  ::close(fd);
+}
+void edit_entry(int epfd, int fd, uint32_t flags, uint64_t value, bool remove = false) {
+  auto ep = gesher::LookupEpoll(epfd);
+  std::lock_guard<std::mutex> lock(ep->mutex);
+  if (remove) ep->entries.erase(fd);
+  else ep->entries[fd] = {flags, {.u64 = value}, ep->next_id++, true, {}};
+  ep->NotifyLocked();
+}
+template <typename EpollState>
+bool waiters_empty(EpollState& ep) {
+  // Older production sources keep the waiter registry directly in Epoll.
+  if constexpr (requires { ep.wake; }) {
+    std::lock_guard<std::mutex> lock(ep.wake->mutex);
+    return ep.wake->waiters.empty();
+  } else {
+    std::lock_guard<std::mutex> lock(ep.mutex);
+    return ep.waiters.empty();
+  }
+}
+int run_poll(pollfd* fds, size_t count, int timeout = 0) {
+  return gesher::PollFds(fds, count, timeout, nullptr, nullptr);
+}
+void pipe_snapshot_lifetime() {
+  int original[2], replacement[2];
+  if (::pipe(original) < 0 || ::pipe(replacement) < 0) std::abort();
+  pollfd fd{original[0], POLLIN, 0};
+  check("empty real pipe is not ready", run_poll(&fd, 1) == 0 && fd.revents == 0);
+  const char byte = 'x';
+  check("pipe lifetime fixture writes original data", ::write(original[1], &byte, 1) == 1);
+  struct Reuse { int source, destination; bool replaced = false; } reuse{replacement[0], original[0]};
+  gesher::record_locks::guard_context = &reuse;
+  gesher::record_locks::after_guard = [](void* context) {
+    auto& reuse = *static_cast<Reuse*>(context);
+    reuse.replaced = ::dup2(reuse.source, reuse.destination) == reuse.destination;
+  };
+  const unsigned captured = gesher::captured_snapshots;
+  check("pipe sample keeps the captured object after its original slot is reused",
+        run_poll(&fd, 1) == 1 && fd.revents == POLLIN);
+  gesher::record_locks::after_guard = nullptr;
+  check("pipe capture precedes actual descriptor replacement", reuse.replaced &&
+        gesher::captured_snapshots == captured + 1);
+  pollfd current{original[0], POLLIN, 0};
+  check("reused descriptor names the distinct empty pipe", ::poll(&current, 1, 0) == 0);
+  check("completed pipe sample releases its retained descriptor", gesher::live_snapshots == 0);
+
+  const unsigned sampled = gesher::pipe_samples;
+  gesher::capture_error = EMFILE;
+  check("snapshot failure propagates without sampling or false readiness",
+        run_poll(&fd, 1) == -1 && errno == EMFILE && fd.revents == 0 &&
+        gesher::pipe_samples == sampled && gesher::live_snapshots == 0);
+  gesher::capture_error = 0;
+  gesher::pipe_error = EOPNOTSUPP;
+  check("pipe backend error propagates and releases its captured owner",
+        run_poll(&fd, 1) == -1 && errno == EOPNOTSUPP && fd.revents == 0 &&
+        gesher::live_snapshots == 0);
+  gesher::pipe_error = 0;
+  ::close(replacement[1]);
+  check("closed real pipe reports hangup", run_poll(&fd, 1) == 1 && fd.revents == POLLHUP);
+  ::close(original[0]); ::close(original[1]); ::close(replacement[0]);
+  check("pipe fixture leaves no snapshot or descriptor guard",
+        gesher::live_snapshots == 0 && gesher::record_locks::depth == 0);
+}
+void check_empty_cache() {
+#ifdef HAS_POLL_SCRATCH
+  gesher::PollScratchLease<FdPollScratch> lease;
+  const auto& s = lease.get();
+  check("all owning and non-owning outer vectors empty between calls", s.sockets.empty() && s.socket_index.empty() &&
+      s.eventfds.empty() && s.eventfd_index.empty() && s.handles.empty());
+  check("all outer retained capacities bounded", s.sockets.capacity() <= gesher::kPollScratchLimit &&
+      s.socket_index.capacity() <= gesher::kPollScratchLimit && s.eventfds.capacity() <= gesher::kPollScratchLimit &&
+      s.eventfd_index.capacity() <= gesher::kPollScratchLimit && s.handles.capacity() <= gesher::kPollScratchLimit);
+#endif
+}
+void basic_and_lifetime() {
+  const int event = new_event(true), socket = new_socket(true);
+  pollfd fds[] = {{event, POLLIN, 0}, {socket, POLLIN, 0}, {-1, POLLIN, -1}, {999999, POLLIN, 0}};
+  check("mixed readiness, ignored negative and invalid descriptor", run_poll(fds, 4) == 3 &&
+        fds[0].revents == POLLIN && fds[1].revents == POLLIN && fds[2].revents == 0 && fds[3].revents == POLLNVAL);
+  std::weak_ptr<gesher::EventFd> weak_event = gesher::LookupEventFd(event);
+  gesher::SocketFd state;
+  gesher::LookupSocket(socket, &state);
+  std::weak_ptr<gesher::ws::SocketDescription> weak_socket = state.description;
+  state.description.reset();
+  erase_fd(event); erase_fd(socket);
+  check("returned poll retains no retired event owner", weak_event.expired());
+  check("returned poll retains no retired socket owner", weak_socket.expired());
+  check_empty_cache();
+
+  const int failed_socket = new_socket(false), failed_event = new_event(false);
+  pollfd fail_fds[] = {{failed_socket, POLLIN, 0}, {failed_event, POLLIN, 0}};
+  weak_event = gesher::LookupEventFd(failed_event);
+  gesher::LookupSocket(failed_socket, &state); weak_socket = state.description; state.description.reset();
+  gesher::ws::injected_error = EIO;
+  check("native sample error preserves errno", run_poll(fail_fds, 2) == -1 && errno == EIO);
+  erase_fd(failed_socket); erase_fd(failed_event);
+  check("error return drops both owner kinds", weak_socket.expired() && weak_event.expired());
+  check_empty_cache();
+
+  const int waiter = new_event(false);
+  pollfd waiting{waiter, POLLIN, 0};
+  fail_wait = true;
+  check("Windows wait error propagated", run_poll(&waiting, 1, 10) == -1 && errno == EIO);
+  weak_event = gesher::LookupEventFd(waiter);
+  erase_fd(waiter);
+  check("Windows wait failure also releases event owner", weak_event.expired());
+  check_empty_cache();
+}
+struct Reentry { int nested, removed; std::weak_ptr<gesher::EventFd> event; std::weak_ptr<gesher::ws::SocketDescription> socket; bool retained = false; };
+void nested_poll(void* context) {
+  auto& test = *static_cast<Reentry*>(context);
+  pollfd fd{test.nested, POLLIN, 0};
+  check("reentrant poll readiness", run_poll(&fd, 1) == 1 && fd.revents == POLLIN);
+  if (test.removed >= 0) {
+    erase_fd(test.removed);
+    test.retained = !test.event.expired() || !test.socket.expired();
+  }
+}
+void native_nested_poll(bool before, int, int, void* context) {
+  if (before) nested_poll(context);
+}
+struct Reuse { int fd; std::weak_ptr<gesher::ws::SocketDescription> old; bool retained; };
+void replace_socket(void* context) {
+  auto& test = *static_cast<Reuse*>(context);
+  std::lock_guard<std::mutex> lock(gesher::registry_mutex);
+  gesher::sockets.at(test.fd).description = std::make_shared<gesher::ws::SocketDescription>();
+  test.retained = !test.old.expired();
+}
+void reentry_and_reuse() {
+  int outer = new_event(true), inner = new_event(false);
+  Reentry test{inner, outer, gesher::LookupEventFd(outer), {}, false};
+  // Make the nested descriptor ready while the outer poll owns a different EventFd.
+  {
+    auto event = gesher::LookupEventFd(inner);
+    std::lock_guard<std::mutex> lock(event->mutex); event->counter = 1; event->Update();
+  }
+  pollfd fd{outer, POLLIN, 0};
+  check("outer event snapshot survives nested poll and close",
+      gesher::PollWithObserver(&fd, 1, 0, nested_poll, &test, nullptr, nullptr) == 1 && fd.revents == POLLIN);
+  check("event owner held while outer call active then released", test.retained && test.event.expired());
+  erase_fd(inner);
+  check_empty_cache();
+
+  outer = new_socket(true); inner = new_socket(true);
+  gesher::SocketFd state; gesher::LookupSocket(outer, &state);
+  test = {inner, outer, {}, state.description, false}; state.description.reset();
+  fd = {outer, POLLIN, 0};
+  check("socket closed in reentrant observer reports stale identity",
+      gesher::PollWithObserver(&fd, 1, 0, nested_poll, &test, nullptr, nullptr) == 1 && fd.revents == POLLNVAL);
+  check("socket owner held only through outer sample", test.retained && test.socket.expired());
+  erase_fd(inner);
+  check_empty_cache();
+
+  outer = new_socket(true); inner = new_event(true);
+  test = {inner, -1, {}, {}, false}; fd = {outer, POLLIN, 0};
+  check("reentry during native sample leaves outer storage intact",
+      gesher::PollWithObserver(&fd, 1, 0, nullptr, nullptr, native_nested_poll, &test) == 1 && fd.revents == POLLIN);
+  erase_fd(outer); erase_fd(inner);
+  check_empty_cache();
+
+  outer = new_socket(true);
+  gesher::LookupSocket(outer, &state);
+  Reuse reused{outer, state.description, false}; state.description.reset();
+  fd = {outer, POLLIN, 0};
+  check("same descriptor number with a new description rejects old readiness",
+      gesher::PollWithObserver(&fd, 1, 0, replace_socket, &reused, nullptr, nullptr) == 1 && fd.revents == POLLNVAL);
+  check("replaced description held only through admitted sample", reused.retained && reused.old.expired());
+  check("next invocation samples replacement description", run_poll(&fd, 1) == 1 && fd.revents == POLLIN);
+  erase_fd(outer);
+
+  outer = new_event(true); inner = new_event(true);
+  Reentry retirement{inner, -1, {}, {}, false};
+  test = {inner, outer, gesher::LookupEventFd(outer), {}, false};
+  close_observer = nested_poll; close_context = &retirement;
+  fd = {outer, POLLIN, 0};
+  check("reentry during final snapshot-owner cleanup uses private scratch",
+      gesher::PollWithObserver(&fd, 1, 0, nested_poll, &test, nullptr, nullptr) == 1 && test.event.expired());
+  check("retirement callback was exercised", close_observer == nullptr);
+  erase_fd(inner);
+  check_empty_cache();
+}
+void nested_epolls() {
+  std::array<int, 5> eps{};
+  const int event = new_event(true);
+  for (int& fd : eps) fd = new_epoll();
+  for (size_t i = 0; i < eps.size(); ++i) edit_entry(eps[i], i + 1 < eps.size() ? eps[i + 1] : event, EPOLLIN, 100 + i);
+  pollfd fd{eps[0], POLLIN, 0};
+  check("five-level nested epoll readiness", run_poll(&fd, 1) == 1 && fd.revents == POLLIN);
+  epoll_event result{};
+  check("outer epoll wait returns its own data", EpollWaitImpl(eps[0], &result, 1, 0, nullptr, nullptr) == 1 && result.data.u64 == 100);
+  edit_entry(eps[4], eps[0], EPOLLIN, 99);  // Simulated historical graph reversal: cycle guard must still bound recursion.
+  check("historical nested cycle does not corrupt live sibling snapshot", run_poll(&fd, 1) == 1);
+  edit_entry(eps[4], event, 0, 0, true);
+  check("historical nested cycle with no ready leaf is bounded", run_poll(&fd, 1) == 0);
+  for (int ep : eps) erase_fd(ep);
+  erase_fd(event);
+  check_empty_cache();
+#ifdef HAS_POLL_SCRATCH
+  gesher::PollScratchLease<gesher::EpollPollScratch> lease;
+  check("nested epoll snapshot cache empty", lease.get().fds.empty() && lease.get().ids.empty());
+#endif
+}
+struct EpollMutation { int ep, remove, add; };
+void mutate_epoll(void* context) {
+  const auto& m = *static_cast<EpollMutation*>(context);
+  if (m.remove >= 0) edit_entry(m.ep, m.remove, 0, 0, true);
+  edit_entry(m.ep, m.add, EPOLLIN | EPOLLONESHOT, 222);
+}
+void epoll_mutation_and_errors() {
+  const int ep = new_epoll(), event = new_event(true), replacement = new_event(true);
+  edit_entry(ep, event, EPOLLIN, 111);
+  EpollMutation mutation{ep, event, replacement};
+  epoll_event out{};
+  check("generation rejection and interrupted snapshot rebuild", EpollWaitImpl(ep, &out, 1, 30, mutate_epoll, &mutation) == 1 && out.data.u64 == 222);
+  check("oneshot disarmed across cache reuse", EpollWaitImpl(ep, &out, 1, 0, nullptr, nullptr) == 0);
+  edit_entry(ep, replacement, EPOLLIN | EPOLLONESHOT, 333);
+  check("oneshot rearm changes delivered data", EpollWaitImpl(ep, &out, 1, 0, nullptr, nullptr) == 1 && out.data.u64 == 333);
+  const int handles = live_handles.load();
+  fail_create = true;
+  check("EpollWaiter event creation failure preserved", EpollWaitImpl(ep, &out, 1, 0, nullptr, nullptr) == -1 && errno == ENOMEM);
+  check("event creation failure does not register or leak waiter", live_handles == handles && waiters_empty(*gesher::LookupEpoll(ep)));
+  erase_fd(ep); erase_fd(event); erase_fd(replacement);
+}
+void oversize() {
+  const int event = new_event(true), socket = new_socket(true), ep = new_epoll();
+  std::vector<pollfd> fds(1024);
+  for (size_t i = 0; i < fds.size(); ++i) fds[i] = {i % 2 ? event : socket, POLLIN, 0};
+  check("large poll keeps every requested descriptor", run_poll(fds.data(), fds.size()) == int(fds.size()));
+  check_empty_cache();
+  std::vector<int> owned;
+  for (int i = 0; i < 600; ++i) { const int fd = new_event(true); owned.push_back(fd); edit_entry(ep, fd, EPOLLIN, i); }
+  epoll_event out{};
+  check("large epoll snapshot delivers readiness", EpollWaitImpl(ep, &out, 1, 0, nullptr, nullptr) == 1);
+#ifdef HAS_POLL_SCRATCH
+  {
+    gesher::PollScratchLease<gesher::EpollPollScratch> lease;
+    check("oversized epoll capacity is shed", lease.get().fds.capacity() == 0 && lease.get().ids.capacity() == 0);
+  }
+#endif
+  for (int fd : owned) erase_fd(fd);
+  erase_fd(ep); erase_fd(event); erase_fd(socket);
+}
+void concurrent_waiters() {
+  const int ep = new_epoll(), first = new_event(true), second = new_event(true);
+  edit_entry(ep, first, EPOLLIN | EPOLLONESHOT, 1);
+  edit_entry(ep, second, EPOLLIN | EPOLLONESHOT, 2);
+  std::atomic<int> arrived{0};
+  std::array<int, 2> count{};
+  std::array<uint64_t, 2> delivered{};
+  auto barrier = [](void* p) {
+    auto* reached = static_cast<std::atomic<int>*>(p);
+    ++*reached; while (reached->load() != 2) std::this_thread::yield();
+  };
+  std::array<std::thread, 2> workers;
+  for (size_t i = 0; i < workers.size(); ++i) {
+    workers[i] = std::thread([&, i] {
+      epoll_event out{};
+      count[i] = EpollWaitImpl(ep, &out, 1, 0, barrier, &arrived);
+      delivered[i] = out.data.u64;
+    });
+  }
+  for (auto& worker : workers) worker.join();
+  check("concurrent waiter scratch and one-shot delivery independent", count[0] == 1 && count[1] == 1 &&
+        delivered[0] != delivered[1] && delivered[0] + delivered[1] == 3);
+  check("concurrent waiter handles removed before thread exit", waiters_empty(*gesher::LookupEpoll(ep)));
+  erase_fd(ep); erase_fd(first); erase_fd(second);
+}
+void start_plan(std::initializer_list<WaitStep> plan) {
+  wait_plan = plan; next_wait = 0; plan_matched = true; virtual_micros = 1000000; controlled_clock = true;
+}
+bool finish_plan() {
+  controlled_clock = false; return plan_matched && next_wait == wait_plan.size();
+}
+void add_unready(void* context) {
+  const auto& mutation = *static_cast<EpollMutation*>(context);
+  edit_entry(mutation.ep, mutation.add, EPOLLIN, 44);
+}
+void deadlines() {
+  const int event = new_event(false), socket = new_socket(false);
+  pollfd mixed[] = {{event, POLLIN, 0}, {socket, POLLIN, 0}};
+  start_plan({{10, 10}, {10, 10}, {5, 5}});
+  const int mixed_result = run_poll(mixed, 2, 25);
+  check("mixed wait keeps one deadline through bounded socket samples", mixed_result == 0 && finish_plan());
+  pollfd one{event, POLLIN, 0};
+  start_plan({{25, 25}});
+  const int one_result = run_poll(&one, 1, 25);
+  check("event-only wait uses complete caller budget", one_result == 0 && finish_plan());
+  const int ep = new_epoll(), added = new_event(false);
+  edit_entry(ep, event, EPOLLIN, 33);
+  EpollMutation change{ep, -1, added};
+  epoll_event out{};
+  start_plan({{25, 5, add_unready, &change}, {20, 20}});
+  const int epoll_result = EpollWaitImpl(ep, &out, 1, 25, nullptr, nullptr);
+  check("topology wake rebuild does not restart epoll deadline", epoll_result == 0 && finish_plan());
+  // Repeated POSIX slots share a wait HANDLE and do not exceed Win32's limit.
+  std::array<pollfd, 65> aliases;
+  for (auto& item : aliases) item = {event, POLLIN, 0};
+  start_plan({{25, 25}});
+  const int aliases_result = run_poll(aliases.data(), aliases.size(), 25);
+  check("aliased wait handles are unique and retain the caller deadline", aliases_result == 0 && finish_plan());
+  // Distinct events exceed the native handle-set limit: keep sliced fallback.
+  std::array<pollfd, 65> large;
+  for (auto& item : large) item = {new_event(false), POLLIN, 0};
+  start_plan({{10, 10}, {10, 10}, {5, 5}});
+  const int large_result = run_poll(large.data(), large.size(), 25);
+  check("oversized handle set keeps fallback timeout budget", large_result == 0 && finish_plan());
+  for (const auto& item : large) erase_fd(item.fd);
+  erase_fd(ep); erase_fd(added); erase_fd(event); erase_fd(socket);
+  check_empty_cache();
+}
+template <typename Run>
+void measurement(const char* label, Run run, size_t allocations_per_call = 0, size_t bytes_per_call = 0) {
+  constexpr size_t iterations = 10000;
+  run();  // Warm only the actual working storage used by this scenario.
+  allocation::begin();
+  const auto before = std::chrono::steady_clock::now();
+  for (size_t i = 0; i < iterations; ++i) run();
+  const auto after = std::chrono::steady_clock::now();
+  allocation::end();
+  std::printf("MEASURE %s: calls=%zu allocations=%zu bytes=%zu elapsed_us=%lld\n", label, iterations,
+      allocation::calls, allocation::bytes,
+      static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(after - before).count()));
+  if (!measure) check(label, allocation::calls <= allocations_per_call * iterations &&
+      allocation::bytes <= bytes_per_call * iterations);
+}
+void measurements() {
+  const int event = new_event(true), socket = new_socket(true), ep = new_epoll();
+  std::array<pollfd, 64> fds;
+  for (size_t i = 0; i < fds.size(); ++i) fds[i] = {i % 2 ? event : socket, POLLIN, 0};
+  measurement("64 mixed poll descriptors", [&] { if (run_poll(fds.data(), fds.size()) != int(fds.size())) std::abort(); });
+  pollfd one{event, POLLIN, 0};
+  measurement("one eventfd poll", [&] { if (run_poll(&one, 1) != 1) std::abort(); });
+  std::vector<int> owned;
+  for (int i = 0; i < 64; ++i) { const int fd = new_event(true); owned.push_back(fd); edit_entry(ep, fd, EPOLLIN, i); }
+  epoll_event out{};
+  measurement("64-entry epoll wait", [&] { if (EpollWaitImpl(ep, &out, 1, 0, nullptr, nullptr) != 1) std::abort(); });
+  pollfd nested{ep, POLLIN, 0};
+  // The recursive PollFds invocation intentionally uses private storage. Its
+  // two vectors still grow seven times each; the epoll snapshot itself is warm.
+  measurement("64-entry epoll poll (private nested storage)",
+      [&] { if (run_poll(&nested, 1) != 1) std::abort(); }, 14, 127 * (sizeof(std::shared_ptr<gesher::EventFd>) + sizeof(nfds_t)));
+  for (int fd : owned) erase_fd(fd);
+  erase_fd(ep); erase_fd(event); erase_fd(socket);
+}
+}  // namespace
+int main(int argc, char** argv) {
+  measure = argc == 2 && std::strcmp(argv[1], "measure") == 0;
+  basic_and_lifetime();
+  pipe_snapshot_lifetime();
+  reentry_and_reuse();
+  nested_epolls();
+  epoll_mutation_and_errors();
+  oversize();
+  concurrent_waiters();
+  deadlines();
+  measurements();
+  check("all fixture descriptors retired", gesher::events.empty() && gesher::sockets.empty() && gesher::epolls.empty());
+  std::printf("outer poll scratch: %d checks, %d failures\n", checked, failed);
+  return failed != 0;
+}

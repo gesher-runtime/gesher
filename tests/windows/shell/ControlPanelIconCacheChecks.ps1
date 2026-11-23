@@ -14,12 +14,13 @@ $source = if ($SourceRef) { (& git -C $repo show "${SourceRef}:tools/package/ges
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Get-FileStamp', 'Get-AppFilesStamp', 'Get-PanelAppIcon', 'Update-AppsView') {
+foreach ($name in 'Get-FileStamp', 'Get-AppFilesStamp', 'Get-PanelAppIcon', 'Update-AppsView', 'Get-SeparateWindowApps') {
     $definitions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $false))
     if ($definitions.Count -eq 0 -and $SourceRef -and $name -eq 'Get-PanelAppIcon') { continue }
+    if ($definitions.Count -eq 0 -and $SourceRef -and $name -eq 'Get-SeparateWindowApps') { continue }
     if ($definitions.Count -ne 1) { throw "Expected one production function: $name" }
     $definition = $definitions[0].Extent.Text
     if ($name -eq 'Get-FileStamp') { $definition = $definition.Replace('function Get-FileStamp(', 'function Get-UncountedFileStamp(') }
@@ -51,6 +52,8 @@ function Get-IconColor($image) {
 $scratchRoot = [IO.Path]::GetFullPath((Join-Path $repo 'out')) + [IO.Path]::DirectorySeparatorChar
 $scratch = Join-Path $scratchRoot ('gesher-panel-icons-' + [Guid]::NewGuid().ToString('N'))
 $root = $scratch
+# The per-app windows setting (production reader; no file: no app has separate windows).
+$script:AppWindowsFile = Join-Path $root 'system/app-windows.properties'
 $icoFile = Join-Path $root 'gesher.ico'
 $appsList = [PSCustomObject]@{ ItemsSource = $null }
 $script:ViewState = @{ AppFiles = @(); Icons = @{}; AppsSignature = $null }

@@ -2,7 +2,7 @@
 #   pwsh tests/windows/run-tests.ps1 <dir with *.exe, hello.dex, hello.apk>
 param([Parameter(Mandatory)] [string] $Dir, [string] $Web3Observer = '',
   [switch] $FrameworkContractsOnly,
-  [ValidateSet('all', 'native', 'desktop', 'services', 'compilation')]
+  [ValidateSet('all', 'native', 'desktop', 'windowing', 'services', 'contracts', 'media', 'compilation')]
   [string] $Shard = 'all', [switch] $ListTracks)
 
 $ErrorActionPreference = 'Stop'
@@ -40,7 +40,7 @@ function Check([string] $Name, [scriptblock] $Run, [string[]] $Expect) {
 
 Check 'platform probe' { & "$Dir/platform_probe.exe" } @('0 probe(s) failed')
 Check 'socket probe' { & "$Dir/socket_probe.exe" } @('all passed')
-Check 'epoll probe' { & "$Dir/epoll_probe.exe" } @('all passed')
+Check 'epoll probe' { & "$Dir/epoll_probe.exe" } @('all passed', 'eventfd edge contracts: complete', 'eventfd edge wait contracts: complete', 'readonly edge contracts: complete')
 Check 'libutils probe' { & "$Dir/libutils_probe.exe" } @('all passed')
 
 Check 'dexdump: disassemble .dex' { & "$Dir/dexdump.exe" -d "$Dir/hello.dex" } @(

@@ -50,6 +50,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
+#include "../windows/host_dialog_theme.h"
 
 #include <algorithm>
 #include <cstring>
@@ -171,9 +172,37 @@ void ShowLaunchFailure(const std::wstring& reason) {
   const size_t at = text.find(L"{0}");
   if (at != std::wstring::npos) text.replace(at, 3, reason);
   else text = reason;
-  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
-  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
-  MessageBoxW(nullptr, text.c_str(), GesherUiText(language, "brand"), flags);
+  GesherHostPrompt(GesherUiText(language, "brand"), text.c_str(),
+                   GesherUiText(language, "cp_dialog_ok"), nullptr,
+                   GesherUiRtl(language), nullptr);
+}
+
+// A failing app starts this short-lived host process rather than waiting inside
+// Android's dying main thread. No PowerShell, APK launch, splash or retry here.
+int ShowAppCrash(int argc, LPWSTR* argv) {
+  if (argc != 6 || wcslen(argv[2]) == 0 || wcslen(argv[2]) > 255 ||
+      wcslen(argv[4]) == 0 || wcslen(argv[4]) > 8192 ||
+      wcslen(argv[5]) == 0 || wcslen(argv[5]) > 64) return 1;
+  const char* key = nullptr;
+  if (wcscmp(argv[3], L"generic") == 0) key = "app_crash_generic";
+  else if (wcscmp(argv[3], L"bluetooth") == 0) key = "app_crash_bluetooth";
+  else if (wcscmp(argv[3], L"security") == 0) key = "app_crash_security";
+  else if (wcscmp(argv[3], L"compatibility") == 0) key = "app_crash_compatibility";
+  if (key == nullptr) return 1;
+  const auto language = GesherUiCurrentLanguage();
+  const std::wstring pattern = GesherUiText(language, key);
+  std::wstring message;
+  // Substitute once: package/path data containing braces is never a template.
+  for (size_t i = 0; i < pattern.size();) {
+    if (pattern.compare(i, 3, L"{0}") == 0) { message += argv[2]; i += 3; }
+    else if (pattern.compare(i, 3, L"{1}") == 0) { message += argv[4]; i += 3; }
+    else if (pattern.compare(i, 3, L"{2}") == 0) { message += argv[5]; i += 3; }
+    else message += pattern[i++];
+  }
+  GesherHostPrompt(GesherUiText(language, "brand"), message.c_str(),
+                   GesherUiText(language, "cp_dialog_ok"), nullptr,
+                   GesherUiRtl(language), nullptr);
+  return 0;
 }
 
 // A small file's bytes (at most 4 MB).
@@ -353,7 +382,8 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     // gesher-app.ps1's other commands show no window of an app; anything else is an APK.
     static const wchar_t* const kCommands[] = {L"install", L"uninstall", L"view", L"list",
                                                L"status", L"start", L"shutdown",
-                                               L"toast-activated", L"apk-icon", L"proxy",
+                                               L"toast-activated", L"apk-icon", L"proxy", L"spell-checker",
+                                               L"windows",
                                                L"control-panel", L"settings", L"dashboard", L"gui"};
     for (const wchar_t* command : kCommands) {
       if (Lower(args[0]) == command) return false;
@@ -514,7 +544,10 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     HDC dc = BeginPaint(hwnd, &ps);
     RECT client;
     GetClientRect(hwnd, &client);
-    FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
+    // Match the Control Center's light surface and semantic text hierarchy.
+    const bool high_contrast = GesherHostHighContrast() != FALSE;
+    FillRect(dc, &client, high_contrast ? GetSysColorBrush(COLOR_WINDOW)
+        : static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
     const int w = client.right, h = client.bottom;
     const int size = std::min(kIconSize, w / 2);
     const int top = std::max(16, h * 2 / 5 - size / 2);
@@ -523,12 +556,12 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ old = SelectObject(dc, g_splash->title_font);
-    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_WINDOWTEXT) : RGB(16, 24, 40));
     RECT label = {16, top + size + 24, w - 16, top + size + 24 + 64};
     DrawTextW(dc, g_splash->label.c_str(), -1, &label,
               DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
     SelectObject(dc, g_splash->text_font);
-    SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_GRAYTEXT) : RGB(102, 112, 133));
     RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
     const auto language = GesherUiCurrentLanguage();
     DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
@@ -597,6 +630,7 @@ HWND ShowSplash(Splash* splash) {
   HWND hwnd = CreateWindowExW(ex_style, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
                               nullptr, instance, nullptr);
   if (hwnd == nullptr) return nullptr;
+  GesherHostApplyCaption(hwnd);
   // Before it is shown: its taskbar button is the app's (the shortcut's icon).
   if (!splash->app_id.empty()) SetWindowAppUserModelId(hwnd, splash->app_id);
   if (splash->big != nullptr) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(splash->big));
@@ -731,6 +765,18 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid, bo
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+  {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv != nullptr) {
+      if (argc > 1 && wcscmp(argv[1], L"--app-crash") == 0) {
+        int result = ShowAppCrash(argc, argv);
+        LocalFree(argv);
+        return result;
+      }
+      LocalFree(argv);
+    }
+  }
   wchar_t self[MAX_PATH * 4];
   DWORD n = GetModuleFileNameW(nullptr, self, static_cast<DWORD>(sizeof(self) / sizeof(self[0])));
   if (n == 0 || n >= sizeof(self) / sizeof(self[0])) return 1;

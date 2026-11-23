@@ -24,6 +24,10 @@ jobs:
           fetch-depth: 0
       - name: Pure Python owned exit and cleanup error controls
         run: python3 tests/native3-locks/test_command_cleanup.py
+      - name: Exact FILE argument instruction-pattern controls
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror tests/native3-locks/file_call_pattern_test.cc -o /tmp/file-call-pattern-test
+          /tmp/file-call-pattern-test
       - name: Actual strict archive adversarial controls before producer compilation
         run: python3 tools/native3-locks/artifact/test-verified-artifact.py
   compile:
@@ -125,7 +129,8 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
+    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,7 +146,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
           $ciSource = $sourceJson | ConvertFrom-Json
           if ((git rev-parse HEAD) -cne $ciSource.checkout_sha -or $LASTEXITCODE -ne 0) { throw 'Checkout source mismatch' }
-          $jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+          $jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual producer' }
           $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'union-native-blocking / compile')
           Write-CiProducerIdentity -Producer 'union-native-blocking / compile' -Rows $jobs -SourceIdentity $ciSource

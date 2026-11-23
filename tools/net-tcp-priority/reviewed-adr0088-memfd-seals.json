@@ -1,0 +1,1043 @@
+{
+ "checkpoint": "7a45c2468c270bfe68ee5f854aa9d4feaf2208b3",
+ "hunks": {
+  "compat/posix/src/fd.cc": [
+   [
+    27,
+    [],
+    [
+     "#include \"native_fence_internal.h\"\n"
+    ]
+   ],
+   [
+    192,
+    [],
+    [
+     "    gesher::ForgetMemfd(fd);\n"
+    ]
+   ],
+   [
+    267,
+    [],
+    [
+     "    int result;\n"
+    ]
+   ],
+   [
+    268,
+    [
+     "    int result;\n"
+    ],
+    []
+   ],
+   [
+    270,
+    [],
+    [
+     "    if (gesher::LookupNativeFence(fd)) return errno = EINVAL, -1;\n"
+    ]
+   ],
+   [
+    281,
+    [],
+    [
+     "    if (gesher::LookupNativeFence(fd)) return errno = EINVAL, -1;\n",
+     "    // A memfd's seals may forbid the write (memfd_seals.cc).\n",
+     "    if (const int sealed = gesher::MemfdWriteError(fd, true, 0, count)) return errno = sealed, -1;\n"
+    ]
+   ],
+   [
+    301,
+    [],
+    [
+     "    if (fd2 >= 0) gesher::DupNativeFence(fd, fd2);\n"
+    ]
+   ],
+   [
+    302,
+    [],
+    [
+     "    if (fd2 >= 0) gesher::CopyMemfdRegistration(fd, fd2);\n"
+    ]
+   ],
+   [
+    337,
+    [],
+    [
+     "    gesher::CopyMemfdRegistration(fd, fd2);\n"
+    ]
+   ],
+   [
+    342,
+    [],
+    [
+     "      gesher::DupNativeFence(fd, fd2);\n"
+    ]
+   ],
+   [
+    397,
+    [],
+    [
+     "  std::vector<std::shared_ptr<gesher::NativeFence>> fences;\n",
+     "  std::vector<nfds_t> fence_index;\n"
+    ]
+   ],
+   [
+    401,
+    [],
+    [
+     "    gesher::ClearPollScratch(fence_index);\n",
+     "    gesher::ClearPollScratch(fences);\n"
+    ]
+   ],
+   [
+    521,
+    [],
+    [
+     "  auto& fences = scratch.fences;\n",
+     "  auto& fence_index = scratch.fence_index;\n"
+    ]
+   ],
+   [
+    527,
+    [
+     "    if (std::shared_ptr<EventFd> e = LookupEventFd(p->fd)) {\n"
+    ],
+    [
+     "    if (auto fence = LookupNativeFence(p->fd)) {\n",
+     "      p->revents = PollNativeFence(fence, p->events, nullptr);\n",
+     "      fences.push_back(std::move(fence));\n",
+     "      fence_index.push_back(i);\n",
+     "    } else if (std::shared_ptr<EventFd> e = LookupEventFd(p->fd)) {\n"
+    ]
+   ],
+   [
+    563,
+    [
+     "      (interrupt != nullptr || waiting_files || (!sockets.empty() && !eventfds.empty()))) {\n"
+    ],
+    [
+     "      (interrupt != nullptr || waiting_files || !fences.empty() || (!sockets.empty() && !eventfds.empty()))) {\n"
+    ]
+   ],
+   [
+    612,
+    [],
+    [
+     "      auto append_handle = [&](HANDLE handle) {\n",
+     "        // Aliases of one fence/eventfd share an event. Windows forbids the\n",
+     "        // same HANDLE twice in one WaitForMultipleObjects call, while POSIX\n",
+     "        // poll must still report readiness for every requested fd slot.\n",
+     "        // Once overflow is certain, the bounded fallback below needs no more\n",
+     "        // handles. Keep duplicate scans bounded for very large poll sets.\n",
+     "        if (handles.size() > MAXIMUM_WAIT_OBJECTS) return;\n",
+     "        if (handle && std::find(handles.begin(), handles.end(), handle) == handles.end()) handles.push_back(handle);\n",
+     "      };\n",
+     "      for (size_t k = 0; k < fences.size(); ++k) {\n",
+     "        pollfd* p = &fds[fence_index[k]];\n",
+     "        HANDLE wake = nullptr;\n",
+     "        p->revents = LookupNativeFence(p->fd) == fences[k] ? PollNativeFence(fences[k], p->events, &wake) : POLLNVAL;\n",
+     "        if (p->revents != 0) wait_ms = 0;\n",
+     "        append_handle(wake);\n",
+     "      }\n"
+    ]
+   ],
+   [
+    617,
+    [
+     "        if (wake != nullptr) handles.push_back(wake);\n"
+    ],
+    [
+     "        append_handle(wake);\n"
+    ]
+   ],
+   [
+    640,
+    [],
+    [
+     "    for (size_t k = 0; k < fences.size(); ++k) {\n",
+     "      pollfd* p = &fds[fence_index[k]];\n",
+     "      p->revents = LookupNativeFence(p->fd) == fences[k] ? PollNativeFence(fences[k], p->events, nullptr) : POLLNVAL;\n",
+     "    }\n"
+    ]
+   ],
+   [
+    655,
+    [
+     "        if (p->fd < 0 || p->revents != 0 || LookupSocket(p->fd, &state) || LookupEventFd(p->fd)) {\n"
+    ],
+    [
+     "        if (p->fd < 0 || p->revents != 0 || LookupSocket(p->fd, &state) || LookupEventFd(p->fd) || LookupNativeFence(p->fd)) {\n"
+    ]
+   ]
+  ],
+  "compat/posix/src/socket.cc": [
+   [
+    28,
+    [],
+    [
+     "\n",
+     "// The credentials this process's AF_UNIX messages carry (ADR 0088): its pid\n",
+     "// (the Windows process id, as getpid) and the uid and gid it runs as.\n",
+     "ws::UnixCredentials gesher::ws::LocalCredentials() {\n",
+     "  UnixCredentials self;\n",
+     "  self.pid = static_cast<int32_t>(GetCurrentProcessId());\n",
+     "  self.uid = static_cast<uint32_t>(getuid());\n",
+     "  self.gid = static_cast<uint32_t>(getgid());\n",
+     "  return self;\n",
+     "}\n"
+    ]
+   ],
+   [
+    324,
+    [],
+    [
+     "  // AF_UNIX (ADR 0088): SO_PEERCRED of both ends is the process that made the\n",
+     "  // pair, as on Linux; datagram pairs frame each datagram with credentials.\n",
+     "  if (domain == AF_UNIX) {\n",
+     "    const ws::UnixCredentials self = ws::LocalCredentials();\n",
+     "    for (int fd : {fd_a, fd_b}) {\n",
+     "      SocketFd end;\n",
+     "      if (!gesher::LookupSocket(fd, &end)) continue;\n",
+     "      end.description->has_peer_credentials = true;\n",
+     "      end.description->peer_pid = self.pid;\n",
+     "      end.description->peer_uid = self.uid;\n",
+     "      end.description->peer_gid = self.gid;\n",
+     "      end.description->unix_datagram_pair.store(ws_type == ws::Type::kDgram);\n",
+     "      end.description->unix_stream_pair.store(ws_type == ws::Type::kStream);\n",
+     "      // A stream pair's ends start at stream position 0 (binder_wire.h): their\n",
+     "      // loopback ports are this connection's while it lives.\n",
+     "      uint16_t local, peer;\n",
+     "      const int saved = errno;\n",
+     "      if (ws_type == ws::Type::kStream &&\n",
+     "          ws::StreamPorts(end.socket, *end.description, &local, &peer)) {\n",
+     "        gesher::StartStream(local);\n",
+     "      }\n",
+     "      errno = saved;\n",
+     "    }\n",
+     "  }\n"
+    ]
+   ],
+   [
+    418,
+    [
+     "                    const sockaddr* addr, socklen_t addrlen) {\n"
+    ],
+    [
+     "                    const sockaddr* addr, socklen_t addrlen,\n",
+     "                    const ws::RightsToken* rights = nullptr) {\n"
+    ]
+   ],
+   [
+    425,
+    [
+     "                       state.description, (flags & MSG_DONTWAIT) != 0);\n"
+    ],
+    [
+     "                       state.description, (flags & MSG_DONTWAIT) != 0, rights);\n"
+    ]
+   ],
+   [
+    429,
+    [
+     "                    socklen_t* addrlen, int* result_flags = nullptr) {\n"
+    ],
+    [
+     "                    socklen_t* addrlen, int* result_flags = nullptr,\n",
+     "                    ws::UnixCredentials* credentials = nullptr, bool* pass_credentials = nullptr,\n",
+     "                    std::vector<int>* rights = nullptr) {\n"
+    ]
+   ],
+   [
+    435,
+    [],
+    [
+     "  if (pass_credentials != nullptr) {\n",
+     "    *pass_credentials = state.description->unix_datagram_pair.load() &&\n",
+     "                        state.description->pass_credentials.load();\n",
+     "  }\n"
+    ]
+   ],
+   [
+    436,
+    [],
+    [
+     "  ws::RightsToken token;\n",
+     "  // SCM_RIGHTS (ADR 0088): a stream pair's groups come with the read that\n",
+     "  // returns their first byte (RecvOwned), a datagram's with its token.\n"
+    ]
+   ],
+   [
+    438,
+    [
+     "                            (flags & MSG_DONTWAIT) != 0, result_flags);\n"
+    ],
+    [
+     "                            (flags & MSG_DONTWAIT) != 0, result_flags, credentials,\n",
+     "                            rights != nullptr ? &token : nullptr, rights);\n",
+     "  if (n >= 0 && rights != nullptr && token.count != 0) gesher::ClaimRights(token, rights);\n"
+    ]
+   ],
+   [
+    469,
+    [],
+    [
+     "// Ancillary data a message may carry (ADR 0088). SCM_CREDENTIALS is accepted on\n",
+     "// an AF_UNIX datagram pair when it names this process, as Linux allows an\n",
+     "// unprivileged sender (any other credentials are EPERM); every datagram's\n",
+     "// header carries them anyway. SCM_RIGHTS on an AF_UNIX socketpair gives its\n",
+     "// descriptors in `rights` (at most SCM_MAX_FD, 253, as on Linux). Anything\n",
+     "// else rejects the complete message before its payload is sent, so the peer\n",
+     "// never sees a message without the control data it was sent with.\n",
+     "bool AcceptSendControl(int fd, const msghdr& message, std::vector<int>* rights) {\n",
+     "  if (message.msg_controllen < sizeof(cmsghdr)) return true;  // no complete header: none\n",
+     "  if (message.msg_controllen > 65536) return errno = ENOBUFS, false;\n",
+     "  std::vector<unsigned char> control(message.msg_controllen);\n",
+     "  if (message.msg_control == nullptr ||\n",
+     "      !ws::CopyFromUser(control.data(), message.msg_control, control.size())) {\n",
+     "    return errno = EFAULT, false;\n",
+     "  }\n",
+     "  SocketFd state;\n",
+     "  if (!Lookup(fd, &state)) return false;\n",
+     "  for (size_t at = 0; control.size() - at >= sizeof(cmsghdr);) {\n",
+     "    cmsghdr header;\n",
+     "    memcpy(&header, control.data() + at, sizeof(header));\n",
+     "    if (header.cmsg_len < sizeof(cmsghdr) || header.cmsg_len > control.size() - at) {\n",
+     "      return errno = EINVAL, false;\n",
+     "    }\n",
+     "    if (header.cmsg_level == SOL_SOCKET && header.cmsg_type == SCM_RIGHTS) {\n",
+     "      if (!state.description->unix_datagram_pair.load() &&\n",
+     "          !state.description->unix_stream_pair.load()) {\n",
+     "        return errno = EOPNOTSUPP, false;\n",
+     "      }\n",
+     "      if (!gesher::UnixRightsAvailable()) return errno = EOPNOTSUPP, false;\n",
+     "      const size_t count = (header.cmsg_len - CMSG_LEN(0)) / sizeof(int);\n",
+     "      if (rights->size() + count > 253) return errno = EINVAL, false;\n",
+     "      for (size_t i = 0; i < count; ++i) {\n",
+     "        int value;\n",
+     "        memcpy(&value, control.data() + at + CMSG_LEN(0) + i * sizeof(int), sizeof(value));\n",
+     "        rights->push_back(value);\n",
+     "      }\n",
+     "      at += CMSG_ALIGN(header.cmsg_len);\n",
+     "      if (at > control.size()) break;\n",
+     "      continue;\n",
+     "    }\n",
+     "    if (header.cmsg_level != SOL_SOCKET || header.cmsg_type != SCM_CREDENTIALS) {\n",
+     "      return errno = EOPNOTSUPP, false;\n",
+     "    }\n",
+     "    if (!state.description->unix_datagram_pair.load()) return errno = EOPNOTSUPP, false;\n",
+     "    if (header.cmsg_len != CMSG_LEN(sizeof(ucred))) return errno = EINVAL, false;\n",
+     "    ucred claimed;\n",
+     "    memcpy(&claimed, control.data() + at + CMSG_ALIGN(sizeof(cmsghdr)), sizeof(claimed));\n",
+     "    const ws::UnixCredentials self = ws::LocalCredentials();\n",
+     "    if (claimed.pid != self.pid || static_cast<uint32_t>(claimed.uid) != self.uid ||\n",
+     "        static_cast<uint32_t>(claimed.gid) != self.gid) {\n",
+     "      return errno = EPERM, false;\n",
+     "    }\n",
+     "    at += CMSG_ALIGN(header.cmsg_len);\n",
+     "    if (at > control.size()) break;\n",
+     "  }\n",
+     "  return true;\n",
+     "}\n",
+     "\n"
+    ]
+   ],
+   [
+    484,
+    [
+     "// The backend cannot transmit ancillary data. Reject the complete message\n",
+     "// before sending its payload so the peer cannot observe missing descriptors\n",
+     "// or credentials after the caller was told that transmission succeeded.\n"
+    ],
+    []
+   ],
+   [
+    490,
+    [
+     "  if (local.msg_controllen != 0) return errno = EOPNOTSUPP, -1;\n"
+    ],
+    [
+     "  std::vector<int> rights;\n",
+     "  if (!AcceptSendControl(fd, local, &rights)) return -1;\n"
+    ]
+   ],
+   [
+    493,
+    [],
+    [
+     "  // SCM_RIGHTS: the descriptors go to the broker first. A datagram carries the\n",
+     "  // group's token; on a stream pair the group waits in the connection's queue\n",
+     "  // before its bytes are written, at the position where they begin, so the\n",
+     "  // read that returns their first byte takes it (RecvOwned).\n",
+     "  // As on Linux, a stream message without bytes carries no descriptors.\n",
+     "  ws::RightsToken token;\n",
+     "  if (!rights.empty()) {\n",
+     "    SocketFd state;\n",
+     "    if (!Lookup(fd, &state)) return -1;\n",
+     "    size_t total = 0;\n",
+     "    for (const ws::Buffer& b : buffers) total += b.len;\n",
+     "    if (state.description->unix_datagram_pair.load()) {\n",
+     "      if (!gesher::DepositRights(rights, 0, 0, &token)) return -1;\n",
+     "    } else if (total != 0) {\n",
+     "      uint16_t own, peer;\n",
+     "      if (!ws::StreamPorts(state.socket, *state.description, &own, &peer) ||\n",
+     "          !gesher::DepositRights(rights, static_cast<uint64_t>(peer) << 16 | own,\n",
+     "                                 gesher::StreamPosition(own, true), &token)) {\n",
+     "        return -1;\n",
+     "      }\n",
+     "    }\n",
+     "  }\n"
+    ]
+   ],
+   [
+    496,
+    [
+     "                       static_cast<const sockaddr*>(local.msg_name), local.msg_namelen);\n"
+    ],
+    [
+     "                       static_cast<const sockaddr*>(local.msg_name), local.msg_namelen,\n",
+     "                       token.count != 0 ? &token : nullptr);\n"
+    ]
+   ],
+   [
+    498,
+    [],
+    [
+     "  if (result < 0 && token.count != 0) {\n",
+     "    const int saved = errno;\n",
+     "    gesher::CancelRights(token);\n",
+     "    errno = saved;\n",
+     "  }\n"
+    ]
+   ],
+   [
+    518,
+    [],
+    [
+     "  ws::UnixCredentials credentials;\n",
+     "  bool pass_credentials = false;\n",
+     "  // The descriptors that came with the bytes read go into the control buffer,\n",
+     "  // as many as fit; the others are closed and the message is MSG_CTRUNC, as on\n",
+     "  // Linux (also with no control buffer at all).\n",
+     "  const size_t capacity = local.msg_control != nullptr ? local.msg_controllen : 0;\n",
+     "  std::vector<int> rights;\n"
+    ]
+   ],
+   [
+    522,
+    [
+     "                 local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags);\n"
+    ],
+    [
+     "                 local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags,\n",
+     "                 &credentials, &pass_credentials, &rights);\n"
+    ]
+   ],
+   [
+    525,
+    [
+     "    local.msg_controllen = 0;  // no ancillary data\n"
+    ],
+    []
+   ],
+   [
+    527,
+    [],
+    [
+     "    std::vector<unsigned char> control;\n",
+     "    // Appends one control message, as much of it as fits (Linux's put_cmsg).\n",
+     "    auto append = [&](int type, const void* data, size_t size) -> bool {\n",
+     "      const size_t at = control.size();\n",
+     "      if (capacity - at < CMSG_LEN(size)) return false;\n",
+     "      cmsghdr header = {};\n",
+     "      header.cmsg_len = CMSG_LEN(size);\n",
+     "      header.cmsg_level = SOL_SOCKET;\n",
+     "      header.cmsg_type = type;\n",
+     "      const size_t space = CMSG_SPACE(size) < capacity - at ? CMSG_SPACE(size) : capacity - at;\n",
+     "      control.resize(at + space, 0);\n",
+     "      memcpy(control.data() + at, &header, sizeof(header));\n",
+     "      memcpy(control.data() + at + CMSG_LEN(0), data, size);\n",
+     "      return true;\n",
+     "    };\n",
+     "    if (pass_credentials) {\n",
+     "      // SO_PASSCRED (ADR 0088): the sender's credentials, from the datagram's\n",
+     "      // header. A control buffer too small for them is MSG_CTRUNC, as on Linux.\n",
+     "      ucred value = {};\n",
+     "      value.pid = credentials.pid;\n",
+     "      value.uid = credentials.uid;\n",
+     "      value.gid = credentials.gid;\n",
+     "      if (!append(SCM_CREDENTIALS, &value, sizeof(value))) local.msg_flags |= MSG_CTRUNC;\n",
+     "    }\n",
+     "    if (!rights.empty()) {\n",
+     "      // SCM_RIGHTS: as many descriptors as fit; the others are closed and the\n",
+     "      // message is MSG_CTRUNC, as Linux does (scm_detach_fds).\n",
+     "      size_t fit = 0;\n",
+     "      const size_t room = capacity - control.size();\n",
+     "      if (room >= CMSG_LEN(sizeof(int))) fit = (room - CMSG_LEN(0)) / sizeof(int);\n",
+     "      std::vector<int> delivered;\n",
+     "      for (int received : rights) {\n",
+     "        if (received < 0) continue;  // could not be adopted here\n",
+     "        if (delivered.size() < fit) delivered.push_back(received);\n",
+     "        else close(received);\n",
+     "      }\n",
+     "      if (delivered.size() < rights.size()) local.msg_flags |= MSG_CTRUNC;\n",
+     "      if (!delivered.empty()) append(SCM_RIGHTS, delivered.data(), delivered.size() * sizeof(int));\n",
+     "    }\n",
+     "    if (!control.empty() && !ws::CopyToUser(local.msg_control, control.data(), control.size())) {\n",
+     "      return errno = EFAULT, -1;\n",
+     "    }\n",
+     "    local.msg_controllen = control.size();\n"
+    ]
+   ],
+   [
+    754,
+    [],
+    [
+     "  if (level == SOL_SOCKET && name == SO_PASSCRED) {\n",
+     "    // ADR 0088: an AF_UNIX datagram pair carries its senders' credentials and\n",
+     "    // delivers them as SCM_CREDENTIALS. Other sockets cannot carry them yet,\n",
+     "    // so the option is not accepted there instead of being ignored.\n",
+     "    if (!state.description->unix_datagram_pair.load()) return errno = ENOPROTOOPT, -1;\n",
+     "    if (!ReadInt(value, len, &v)) return -1;\n",
+     "    state.description->pass_credentials.store(v != 0);\n",
+     "    return 0;\n",
+     "  }\n"
+    ]
+   ],
+   [
+    829,
+    [],
+    [
+     "  if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->unix_datagram_pair.load()) {\n",
+     "    return WriteInt(state.description->pass_credentials.load() ? 1 : 0, value, len) ? 0 : -1;\n",
+     "  }\n",
+     "  if (level == SOL_SOCKET && name == SO_PEERCRED && state.description->has_peer_credentials) {\n",
+     "    // A socketpair's peer credentials are its creator's (ADR 0088), as on Linux.\n",
+     "    ucred peer = {};\n",
+     "    peer.pid = state.description->peer_pid;\n",
+     "    peer.uid = state.description->peer_uid;\n",
+     "    peer.gid = state.description->peer_gid;\n",
+     "    socklen_t capacity = 0;\n",
+     "    if (!ws::CopyFromUser(&capacity, len, sizeof(capacity))) return errno = EFAULT, -1;\n",
+     "    const socklen_t copied = capacity < sizeof(peer) ? capacity : static_cast<socklen_t>(sizeof(peer));\n",
+     "    if (!ws::CopyToUser(value, &peer, copied) || !ws::CopyToUser(len, &copied, sizeof(copied))) {\n",
+     "      return errno = EFAULT, -1;\n",
+     "    }\n",
+     "    return 0;\n",
+     "  }\n"
+    ]
+   ],
+   [
+    885,
+    [],
+    [
+     "\n",
+     "// --- sockets in Binder transactions (ADR 0088 phase 3) -------------------------\n",
+     "//\n",
+     "// Metadata bits after kTransferredSocket; the creator's pid (SO_PEERCRED of a\n",
+     "// socketpair) fills the rest of the low 32 bits, divided by 4: Windows process\n",
+     "// ids are multiples of 4 below 2^26. The creator's uid is the high 32 bits: the\n",
+     "// receiver may run as another uid ($GESHER_UID), and SO_PEERCRED reports the\n",
+     "// creator's. Gesher's gid is its uid (getgid), so credentials whose gid differs\n",
+     "// do not travel, and the received end then has none, as one Linux never knew.\n",
+     "namespace {\n",
+     "constexpr uint32_t kTransferUnixDatagram = 0x2;\n",
+     "constexpr uint32_t kTransferPassCredentials = 0x4;\n",
+     "constexpr uint32_t kTransferNonBlocking = 0x8;\n",
+     "constexpr uint32_t kTransferPeerCredentials = 0x10;\n",
+     "constexpr uint32_t kTransferUnixStream = 0x20;\n",
+     "constexpr int kTransferPidShift = 6;\n",
+     "}  // namespace\n",
+     "\n",
+     "bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {\n",
+     "  SocketFd state;\n",
+     "  if (!gesher::LookupSocket(fd, &state)) return false;\n",
+     "  const ws::SocketDescription& d = *state.description;\n",
+     "  uint64_t m = kTransferredSocket;\n",
+     "  if (d.unix_datagram_pair.load()) m |= kTransferUnixDatagram;\n",
+     "  if (d.unix_stream_pair.load()) m |= kTransferUnixStream;\n",
+     "  if (d.pass_credentials.load()) m |= kTransferPassCredentials;\n",
+     "  if (d.nonblocking.load()) m |= kTransferNonBlocking;\n",
+     "  if (d.has_peer_credentials && d.peer_pid > 0 && d.peer_pid % 4 == 0 &&\n",
+     "      (static_cast<uint32_t>(d.peer_pid) >> 2) < (1u << (32 - kTransferPidShift)) &&\n",
+     "      d.peer_gid == d.peer_uid) {\n",
+     "    m |= kTransferPeerCredentials |\n",
+     "         uint64_t{static_cast<uint32_t>(d.peer_pid) >> 2} << kTransferPidShift |\n",
+     "         uint64_t{d.peer_uid} << 32;\n",
+     "  }\n",
+     "  *socket = state.socket;\n",
+     "  *metadata = m;\n",
+     "  return true;\n",
+     "}\n",
+     "\n",
+     "int gesher::AdoptSocket(uintptr_t socket, uint64_t metadata) {\n",
+     "  if (!ws::Startup()) {\n",
+     "    int saved = errno;\n",
+     "    ws::Close(socket);\n",
+     "    return errno = saved, -1;\n",
+     "  }\n",
+     "  int fd = RegisterNew(socket, (metadata & kTransferNonBlocking) != 0);\n",
+     "  if (fd < 0) return -1;\n",
+     "  SocketFd end;\n",
+     "  if (gesher::LookupSocket(fd, &end)) {\n",
+     "    ws::SocketDescription& d = *end.description;\n",
+     "    d.unix_datagram_pair.store((metadata & kTransferUnixDatagram) != 0);\n",
+     "    d.unix_stream_pair.store((metadata & kTransferUnixStream) != 0);\n",
+     "    d.pass_credentials.store((metadata & kTransferPassCredentials) != 0);\n",
+     "    if ((metadata & kTransferPeerCredentials) != 0) {\n",
+     "      d.has_peer_credentials = true;\n",
+     "      d.peer_pid = static_cast<int32_t>(((metadata & 0xffffffffu) >> kTransferPidShift) << 2);\n",
+     "      d.peer_uid = static_cast<uint32_t>(metadata >> 32);\n",
+     "      d.peer_gid = d.peer_uid;\n",
+     "    }\n",
+     "  }\n",
+     "  return fd;\n",
+     "}\n"
+    ]
+   ]
+  ],
+  "compat/posix/src/socket_internal.h": [
+   [
+    87,
+    [],
+    [
+     "  // AF_UNIX socketpair (ADR 0088). Set by socketpair before it returns the fds.\n",
+     "  // A datagram pair (SOCK_SEQPACKET, SOCK_DGRAM) frames each datagram with the\n",
+     "  // sender's credentials (winsock.cc's UnixDatagramHeader); SO_PASSCRED delivers them.\n",
+     "  std::atomic<bool> unix_datagram_pair{false};\n",
+     "  std::atomic<bool> pass_credentials{false};  // SO_PASSCRED\n",
+     "  // A stream pair (SOCK_STREAM): SCM_RIGHTS goes through the broker's queue for\n",
+     "  // the connection, keyed by both loopback ports (stream_ports: local << 16 |\n",
+     "  // peer, 0 until first needed), at stream positions that SendOwned and\n",
+     "  // RecvOwned keep (binder_wire.h's kStreamPositionsPrefix).\n",
+     "  std::atomic<bool> unix_stream_pair{false};\n",
+     "  std::atomic<uint32_t> stream_ports{0};\n",
+     "  bool has_peer_credentials = false;  // SO_PEERCRED: the pair's creator, as on Linux\n",
+     "  int32_t peer_pid = 0;\n",
+     "  uint32_t peer_uid = 0, peer_gid = 0;\n"
+    ]
+   ],
+   [
+    88,
+    [],
+    [
+     "\n",
+     "// A group of descriptors deposited with binderd's broker (SCM_RIGHTS, ADR 0088\n",
+     "// section 3): its token, and how many descriptors it holds.\n",
+     "struct RightsToken {\n",
+     "  uint64_t value[2] = {};\n",
+     "  uint32_t count = 0;\n",
+     "};\n",
+     "\n",
+     "// A process's credentials as SCM_CREDENTIALS and SO_PEERCRED carry them.\n",
+     "struct UnixCredentials {\n",
+     "  int32_t pid = 0;\n",
+     "  uint32_t uid = 0, gid = 0;\n",
+     "};\n",
+     "// This process's credentials (socket.cc: the Linux side computes them).\n",
+     "UnixCredentials LocalCredentials();\n"
+    ]
+   ],
+   [
+    139,
+    [],
+    [
+     "// On an AF_UNIX datagram pair, `rights` (deposited descriptors) travel in the\n",
+     "// datagram's header; RecvOwned stores a received datagram's in `rights`, or,\n",
+     "// when that is null, discards them as Linux does for a reader without control\n",
+     "// data (a peek leaves them).\n"
+    ]
+   ],
+   [
+    140,
+    [
+     "                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false);\n"
+    ],
+    [
+     "                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false,\n",
+     "                    const RightsToken* rights = nullptr);\n",
+     "// On an AF_UNIX datagram pair (SocketDescription::unix_datagram_pair) both add\n",
+     "// and remove the framing header: callers see only the payload. RecvOwned\n",
+     "// stores the sender's credentials in `credentials` when it is not null.\n",
+     "// On an AF_UNIX stream pair both keep the end's stream position, and a read\n",
+     "// (not a peek) takes the descriptors sent with the bytes it returns, those whose\n",
+     "// first byte is among them: into `stream_rights`, or, when that is null,\n",
+     "// discards them as Linux does for a reader without control data.\n"
+    ]
+   ],
+   [
+    143,
+    [
+     "                    int* result_flags = nullptr);\n"
+    ],
+    [
+     "                    int* result_flags = nullptr, UnixCredentials* credentials = nullptr,\n",
+     "                    RightsToken* rights = nullptr, std::vector<int>* stream_rights = nullptr);\n",
+     "// Bytes of the next datagram's payload on an AF_UNIX datagram pair (FIONREAD).\n",
+     "int UnixDatagramPayload(int available);\n",
+     "// A stream pair end's loopback ports (SocketDescription::stream_ports, cached\n",
+     "// there); false with errno if they cannot be known.\n",
+     "bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint16_t* peer);\n"
+    ]
+   ],
+   [
+    287,
+    [],
+    [
+     "// SCM_RIGHTS through binderd's descriptor broker (unix_rights.cc). Each\n",
+     "// returns false with errno set; EOPNOTSUPP when there is no broker.\n",
+     "bool UnixRightsAvailable();\n",
+     "// Deposits fds' descriptors; `queue` is 0 for a datagram (the token travels in\n",
+     "// it) or a stream connection's key (local port << 16 | peer port, the\n",
+     "// receiver's), where they wait at `position`, the sender's StreamPosition\n",
+     "// before the bytes sent with them.\n",
+     "bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t position,\n",
+     "                   ws::RightsToken* token);\n",
+     "// The deposited descriptors as new fds here (-1 for one that could not be\n",
+     "// adopted). With `fds` null, the descriptors are discarded.\n",
+     "bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds);\n",
+     "// The groups of a stream connection's queue whose position is below `limit`.\n",
+     "bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds);\n",
+     "// A sender's deposit whose message was not sent: discarded, if still queued.\n",
+     "void CancelRights(const ws::RightsToken& token);\n",
+     "// Whether a group waits in the queue of a connection whose receiving end is\n",
+     "// loopback `port` at a position below `end` (the broker's doorbell): a cheap\n",
+     "// check before TakeRights.\n",
+     "bool RightsDue(uint16_t port, uint64_t end);\n",
+     "// Stream positions (binder_wire.h): the bytes the stream pair end at loopback\n",
+     "// `port` has sent (`sent`) or received. StartStream sets both to 0 for a new\n",
+     "// pair; AdvanceStream adds `bytes` and returns the new position. Without a\n",
+     "// broker they are 0 and stay so.\n",
+     "void StartStream(uint16_t port);\n",
+     "uint64_t StreamPosition(uint16_t port, bool sent);\n",
+     "uint64_t AdvanceStream(uint16_t port, bool sent, uint64_t bytes);\n",
+     "\n"
+    ]
+   ]
+  ],
+  "compat/posix/src/system.cc": [
+   [
+    89,
+    [
+     "  // Not \"Linux\": kernel-version checks must not pass.\n",
+     "  snprintf(buf->sysname, sizeof(buf->sysname), \"Windows\");\n"
+    ],
+    [
+     "  // Android's kernel is Linux, and Android code takes it as given: libcore turns\n",
+     "  // sysname into os.name (JNA, for one, selects its native platform from it), and\n",
+     "  // ART's IsKernelVersionAtLeast CHECKs that sysname is \"Linux\". The release names\n",
+     "  // no real kernel version, so \"kernel >= X\" checks still fail: callers take their\n",
+     "  // oldest-kernel path instead of assuming features Gesher may not provide.\n",
+     "  snprintf(buf->sysname, sizeof(buf->sysname), \"Linux\");\n"
+    ]
+   ],
+   [
+    333,
+    [
+     "    if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);\n"
+    ],
+    [
+     "    if (request == FIONREAD) {\n",
+     "      if (gesher::ws::Available(state.socket, argp) != 0) return -1;\n",
+     "      // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).\n",
+     "      if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);\n",
+     "      return 0;\n",
+     "    }\n"
+    ]
+   ],
+   [
+    456,
+    [
+     "      return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);\n"
+    ],
+    [
+     "      const int duplicate = gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);\n",
+     "      if (duplicate >= 0) gesher::CopyMemfdRegistration(fd, duplicate);\n",
+     "      return duplicate;\n"
+    ]
+   ],
+   [
+    459,
+    [],
+    [
+     "      return gesher::AddMemfdSeals(fd, static_cast<unsigned>(arg));\n"
+    ]
+   ],
+   [
+    460,
+    [
+     "      return 0;  // seals are advisory here\n"
+    ],
+    [
+     "      return gesher::GetMemfdSeals(fd);\n"
+    ]
+   ],
+   [
+    544,
+    [],
+    [
+     "    // A memfd sealed with F_SEAL_GROW cannot be extended (memfd_seals.cc).\n",
+     "    if (const int sealed = gesher::MemfdGrowError(fd, static_cast<uint64_t>(end))) return sealed;\n"
+    ]
+   ],
+   [
+    747,
+    [
+     "  if ((flags & (MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0)\n",
+     "    return errno = EOPNOTSUPP, -1;\n"
+    ],
+    [
+     "  // Seals are stored on the file and enforced by gesher-base (memfd_seals.cc).\n",
+     "  if ((flags & (MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0) return errno = EOPNOTSUPP, -1;\n"
+    ]
+   ],
+   [
+    767,
+    [],
+    [
+     "  // Every memfd carries its seals (F_SEAL_SEAL alone without MFD_ALLOW_SEALING,\n",
+     "  // as on Linux). A file system that cannot store them cannot seal: refuse\n",
+     "  // MFD_ALLOW_SEALING rather than accept seals nothing would keep.\n",
+     "  if (!gesher::InitMemfdSeals(h, (flags & MFD_ALLOW_SEALING) != 0) &&\n",
+     "      (flags & MFD_ALLOW_SEALING) != 0) {\n",
+     "    CloseHandle(h);\n",
+     "    return errno = EOPNOTSUPP, -1;\n",
+     "  }\n"
+    ]
+   ],
+   [
+    770,
+    [
+     "  if (fd < 0) CloseHandle(h);\n"
+    ],
+    [
+     "  if (fd < 0) {\n",
+     "    CloseHandle(h);\n",
+     "    return fd;\n",
+     "  }\n",
+     "  gesher::RegisterMemfd(fd);\n"
+    ]
+   ]
+  ],
+  "compat/posix/src/winsock.cc": [
+   [
+    1045,
+    [
+     "}  // namespace\n",
+     "\n",
+     "ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,\n",
+     "                    std::shared_ptr<SocketDescription>& description, bool dont_wait) {\n"
+    ],
+    [
+     "ptrdiff_t SendOwnedRaw(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,\n",
+     "                       std::shared_ptr<SocketDescription>& description, bool dont_wait) {\n"
+    ]
+   ],
+   [
+    1054,
+    [],
+    [
+     "ptrdiff_t RecvOwnedRaw(Socket s, Buffer* buffers, size_t count, int flags, Address* from,\n",
+     "                       std::shared_ptr<SocketDescription>& description, bool dont_wait,\n",
+     "                       int* result_flags) {\n",
+     "  if (!description->native_nonblocking_datagram) return Recv(s, buffers, count, flags, from, result_flags);\n",
+     "  return DatagramIo(s, buffers, count, flags, from, nullptr, false, description, dont_wait, result_flags);\n",
+     "}\n",
+     "\n",
+     "// ADR 0088: every datagram on a Gesher AF_UNIX datagram socketpair (a connected\n",
+     "// loopback UDP pair) starts with this header. Both ends are Gesher's; callers\n",
+     "// see only the payload, and SO_PASSCRED the credentials.\n",
+     "struct UnixDatagramHeader {\n",
+     "  uint32_t magic;\n",
+     "  uint16_t version;\n",
+     "  uint16_t size;\n",
+     "  int32_t pid;\n",
+     "  uint32_t uid;\n",
+     "  uint32_t gid;\n",
+     "  uint32_t descriptors;  // SCM_RIGHTS: descriptors in the broker group whose token follows\n",
+     "};\n",
+     "static_assert(sizeof(UnixDatagramHeader) == 24, \"header layout\");\n",
+     "constexpr uint32_t kUnixMagic = 0x58554747;  // \"GGUX\"\n",
+     "constexpr uint16_t kUnixVersion = 1;\n",
+     "constexpr size_t kUnixHeader = sizeof(UnixDatagramHeader);\n",
+     "// With descriptors, the header is followed by their group's token (two u64),\n",
+     "// and `size` covers both.\n",
+     "constexpr size_t kUnixRightsHeader = kUnixHeader + 2 * sizeof(uint64_t);\n",
+     "constexpr size_t kLoopbackDatagram = 65507;  // the largest IPv4 UDP payload\n",
+     "constexpr size_t kReceiveBuffer = 65536;\n",
+     "\n",
+     "ptrdiff_t SendUnixDatagram(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,\n",
+     "                           std::shared_ptr<SocketDescription>& description, bool dont_wait,\n",
+     "                           const RightsToken* rights) {\n",
+     "  const bool with_rights = rights != nullptr && rights->count != 0;\n",
+     "  const size_t header_size = with_rights ? kUnixRightsHeader : kUnixHeader;\n",
+     "  size_t total = 0;\n",
+     "  for (size_t i = 0; i < count; ++i) {\n",
+     "    if (buffers[i].len > kLoopbackDatagram - header_size - total) return errno = EMSGSIZE, -1;\n",
+     "    total += buffers[i].len;\n",
+     "  }\n",
+     "  std::unique_ptr<char, decltype(&std::free)> packet(\n",
+     "      static_cast<char*>(std::malloc(header_size + total)), &std::free);\n",
+     "  if (!packet) return errno = ENOMEM, -1;\n",
+     "  const UnixCredentials self = LocalCredentials();\n",
+     "  UnixDatagramHeader header = {kUnixMagic, kUnixVersion, static_cast<uint16_t>(header_size),\n",
+     "                               self.pid, self.uid, self.gid, with_rights ? rights->count : 0};\n",
+     "  memcpy(packet.get(), &header, kUnixHeader);\n",
+     "  if (with_rights) memcpy(packet.get() + kUnixHeader, rights->value, sizeof(rights->value));\n",
+     "  size_t at = header_size;\n",
+     "  for (size_t i = 0; i < count; ++i) {\n",
+     "    if (!CopyFromUser(packet.get() + at, buffers[i].data, buffers[i].len)) return errno = EFAULT, -1;\n",
+     "    at += buffers[i].len;\n",
+     "  }\n",
+     "  Buffer whole = {packet.get(), at};\n",
+     "  const ptrdiff_t sent = SendOwnedRaw(s, &whole, 1, flags, to, description, dont_wait);\n",
+     "  if (sent < 0) return sent;\n",
+     "  // A datagram is sent whole or not at all.\n",
+     "  const ptrdiff_t header_bytes = static_cast<ptrdiff_t>(header_size);\n",
+     "  return sent >= header_bytes ? sent - header_bytes : 0;\n",
+     "}\n",
+     "\n",
+     "ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, Address* from,\n",
+     "                           std::shared_ptr<SocketDescription>& description, bool dont_wait,\n",
+     "                           int* result_flags, UnixCredentials* credentials, RightsToken* rights) {\n",
+     "  std::unique_ptr<char, decltype(&std::free)> packet(\n",
+     "      static_cast<char*>(std::malloc(kReceiveBuffer)), &std::free);\n",
+     "  if (!packet) return errno = ENOMEM, -1;\n",
+     "  for (;;) {\n",
+     "    Buffer whole = {packet.get(), kReceiveBuffer};\n",
+     "    const ptrdiff_t n = RecvOwnedRaw(s, &whole, 1, flags & ~kMsgTrunc, from, description,\n",
+     "                                     dont_wait, nullptr);\n",
+     "    if (n < 0) return n;\n",
+     "    UnixDatagramHeader header = {};\n",
+     "    if (static_cast<size_t>(n) >= kUnixHeader) memcpy(&header, packet.get(), kUnixHeader);\n",
+     "    const size_t header_size = header.descriptors != 0 ? kUnixRightsHeader : kUnixHeader;\n",
+     "    if (static_cast<size_t>(n) < header_size || header.magic != kUnixMagic ||\n",
+     "        header.version != kUnixVersion || header.size != header_size) {\n",
+     "      // Not from a Gesher AF_UNIX endpoint (another local process wrote to the\n",
+     "      // loopback port): no socketpair on Linux could receive it. Drop it; a\n",
+     "      // peek still has to consume it.\n",
+     "      if ((flags & kMsgPeek) != 0) {\n",
+     "        Buffer drop = {packet.get(), kReceiveBuffer};\n",
+     "        RecvOwnedRaw(s, &drop, 1, flags & ~(kMsgPeek | kMsgTrunc), nullptr, description, true,\n",
+     "                     nullptr);\n",
+     "      }\n",
+     "      continue;\n",
+     "    }\n",
+     "    RightsToken carried;\n",
+     "    if (header.descriptors != 0) {\n",
+     "      memcpy(carried.value, packet.get() + kUnixHeader, sizeof(carried.value));\n",
+     "      carried.count = header.descriptors;\n",
+     "    }\n",
+     "    // The descriptors leave the broker with their datagram: to the caller, or\n",
+     "    // discarded for a reader without control data, as Linux discards them. A\n",
+     "    // peek leaves the datagram, and them, in place.\n",
+     "    if ((flags & kMsgPeek) == 0) {\n",
+     "      if (rights != nullptr) *rights = carried;\n",
+     "      else if (carried.count != 0) gesher::ClaimRights(carried, nullptr);\n",
+     "    } else if (rights != nullptr) {\n",
+     "      *rights = {};\n",
+     "    }\n",
+     "    const size_t payload = static_cast<size_t>(n) - header_size;\n",
+     "    size_t copied = 0;\n",
+     "    for (size_t i = 0; i < count && copied < payload; ++i) {\n",
+     "      const size_t part = buffers[i].len < payload - copied ? buffers[i].len : payload - copied;\n",
+     "      if (!CopyToUser(buffers[i].data, packet.get() + header_size + copied, part)) {\n",
+     "        return errno = EFAULT, -1;\n",
+     "      }\n",
+     "      copied += part;\n",
+     "    }\n",
+     "    if (result_flags != nullptr) *result_flags = copied < payload ? kMsgTrunc : 0;\n",
+     "    if (credentials != nullptr) *credentials = {header.pid, header.uid, header.gid};\n",
+     "    return static_cast<ptrdiff_t>((flags & kMsgTrunc) != 0 ? payload : copied);\n",
+     "  }\n",
+     "}\n",
+     "\n",
+     "// SCM_RIGHTS on an AF_UNIX stream pair (ADR 0088): after `bytes` were read at\n",
+     "// this end, the descriptor groups whose first byte was among them, into\n",
+     "// `rights` or discarded. Every read, from any process holding the end, keeps\n",
+     "// its position, so that a group is never delivered with bytes sent before it.\n",
+     "void StreamReceived(Socket s, SocketDescription& description, size_t bytes,\n",
+     "                    std::vector<int>* rights) {\n",
+     "  const int saved = errno;\n",
+     "  uint16_t local, peer;\n",
+     "  if (StreamPorts(s, description, &local, &peer)) {\n",
+     "    const uint64_t end = gesher::AdvanceStream(local, false, bytes);\n",
+     "    if (gesher::RightsDue(local, end)) {\n",
+     "      gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, end, rights);\n",
+     "    }\n",
+     "  }\n",
+     "  errno = saved;\n",
+     "}\n",
+     "\n",
+     "}  // namespace\n",
+     "\n",
+     "bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint16_t* peer) {\n",
+     "  uint32_t ports = description.stream_ports.load();\n",
+     "  if (ports == 0) {\n",
+     "    Address self, other;\n",
+     "    if (GetSockName(s, &self) < 0 || GetPeerName(s, &other) < 0) return false;\n",
+     "    if (self.family != Family::kInet || other.family != Family::kInet || self.data_len < 2 ||\n",
+     "        other.data_len < 2) {\n",
+     "      return errno = EOPNOTSUPP, false;\n",
+     "    }\n",
+     "    // The port of sockaddr_in, in network order, follows the family field.\n",
+     "    ports = static_cast<uint32_t>((self.data[0] << 8) | self.data[1]) << 16 |\n",
+     "            static_cast<uint32_t>((other.data[0] << 8) | other.data[1]);\n",
+     "    description.stream_ports.store(ports);\n",
+     "  }\n",
+     "  *local = static_cast<uint16_t>(ports >> 16);\n",
+     "  *peer = static_cast<uint16_t>(ports);\n",
+     "  return true;\n",
+     "}\n",
+     "\n",
+     "ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,\n",
+     "                    std::shared_ptr<SocketDescription>& description, bool dont_wait,\n",
+     "                    const RightsToken* rights) {\n",
+     "  if (description->unix_datagram_pair.load()) {\n",
+     "    return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);\n",
+     "  }\n",
+     "  const ptrdiff_t sent = SendOwnedRaw(s, buffers, count, flags, to, description, dont_wait);\n",
+     "  if (sent > 0 && description->unix_stream_pair.load()) {\n",
+     "    const int saved = errno;\n",
+     "    uint16_t local, peer;\n",
+     "    if (StreamPorts(s, *description, &local, &peer)) {\n",
+     "      gesher::AdvanceStream(local, true, static_cast<uint64_t>(sent));\n",
+     "    }\n",
+     "    errno = saved;\n",
+     "  }\n",
+     "  return sent;\n",
+     "}\n",
+     "\n"
+    ]
+   ],
+   [
+    1056,
+    [
+     "                    int* result_flags) {\n",
+     "  if (!description->native_nonblocking_datagram) return Recv(s, buffers, count, flags, from, result_flags);\n",
+     "  return DatagramIo(s, buffers, count, flags, from, nullptr, false, description, dont_wait, result_flags);\n"
+    ],
+    [
+     "                    int* result_flags, UnixCredentials* credentials, RightsToken* rights,\n",
+     "                    std::vector<int>* stream_rights) {\n",
+     "  if (description->unix_datagram_pair.load()) {\n",
+     "    return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,\n",
+     "                            credentials, rights);\n",
+     "  }\n",
+     "  if (rights != nullptr) *rights = {};\n",
+     "  if (credentials != nullptr) *credentials = {};\n",
+     "  const ptrdiff_t n =\n",
+     "      RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);\n",
+     "  if (n > 0 && (flags & kMsgPeek) == 0 && description->unix_stream_pair.load()) {\n",
+     "    StreamReceived(s, *description, static_cast<size_t>(n), stream_rights);\n",
+     "  }\n",
+     "  return n;\n",
+     "}\n",
+     "\n",
+     "int UnixDatagramPayload(int available) {\n",
+     "  return available >= static_cast<int>(kUnixHeader) ? available - static_cast<int>(kUnixHeader) : 0;\n"
+    ]
+   ]
+  ]
+ }
+}

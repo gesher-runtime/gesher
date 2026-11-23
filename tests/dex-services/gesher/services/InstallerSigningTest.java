@@ -34,7 +34,12 @@ public final class InstallerSigningTest {
                 .invoke(null, file.getPath());
     }
 
-    private static void reject(Object previous, File incoming, String code) throws Exception {
+    private static void reject(File root, File previousApk, File incoming, String code) throws Exception {
+        // These are independent installed-device histories. Do not carry a
+        // descendant signer admitted by one case into the next case's boot scan.
+        File device = Files.createTempDirectory(root.toPath(), "reject-").toFile();
+        android.system.Os.setenv("ANDROID_DATA", device.getAbsolutePath(), true);
+        Object previous = parse(previousApk);
         Class<?> apkClass = previous.getClass();
         String pkg = (String) apkClass.getField("packageName").get(previous);
         Class<?> pmClass = Class.forName("com.gesher.server.PackageManagerService");
@@ -66,6 +71,8 @@ public final class InstallerSigningTest {
     }
 
     private static void forwardRotation(File data, File oldApk, File rotatedApk) throws Exception {
+        File device = Files.createTempDirectory(data.toPath(), "forward-").toFile();
+        android.system.Os.setenv("ANDROID_DATA", device.getAbsolutePath(), true);
         File oldCode = new File(data, "forward-code-1"); Files.createDirectories(oldCode.toPath());
         File base = new File(oldCode, "base.apk"); Files.copy(oldApk.toPath(), base.toPath());
         Object previous = parse(base);
@@ -79,14 +86,20 @@ public final class InstallerSigningTest {
         Class<?> amClass = Class.forName("com.gesher.server.ActivityManagerService");
         Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
         Class<?> installerClass = Class.forName("com.gesher.server.Installer");
-        Class<?> entryClass = Class.forName(installerClass.getName() + "$Entry");
         Object pm = construct(pmClass, new Class<?>[] {java.util.Collection.class}, Collections.singletonList(previous));
         Object atm = construct(atmClass, new Class<?>[] {pmClass}, pm);
         construct(amClass, new Class<?>[] {atmClass, pmClass, notifications}, atm, pm,
                 construct(notifications, new Class<?>[0]));
-        Map<String, Object> entries = new LinkedHashMap<>();
-        entries.put(pkg, construct(entryClass, new Class<?>[] {String.class, String.class, long.class, long.class},
-                pkg, oldCode.getPath(), 12345L, 12345L));
+        // Seed the supported on-disk registry format, as system-server startup
+        // does. Entry is private implementation state and gains fields as
+        // installer metadata evolves; this also verifies legacy-row migration.
+        File registry = new File(device, "system/packages.list");
+        Files.createDirectories(registry.toPath().getParent());
+        Files.writeString(registry.toPath(), pkg + "\t" + oldCode.getPath() + "\t12345\t12345\n");
+        Method readRegistry = installerClass.getDeclaredMethod("readRegistry");
+        readRegistry.setAccessible(true);
+        Map<?, ?> entries = (Map<?, ?>) readRegistry.invoke(null);
+        require(entries.containsKey(pkg), "Legacy registry row did not restore the installed entry");
         Object installer = construct(installerClass, new Class<?>[] {pmClass, atmClass, Map.class}, pm, atm, entries);
         File marker = new File((String) apkClass.getMethod("dataDir").invoke(previous), "rotation-data.txt");
         Files.createDirectories(marker.toPath().getParent());
@@ -122,8 +135,8 @@ public final class InstallerSigningTest {
         File rotated = new File(fixtures, "rotated.apk");
         // A predecessor key is not allowed to replace its descendant without a new
         // valid forward proof. The two fixtures have different current signer keys.
-        reject(parse(rotated), v2, "INSTALL_FAILED_UPDATE_INCOMPATIBLE");
-        reject(parse(v2), unsigned, "INSTALL_FAILED_UPDATE_INCOMPATIBLE");
+        reject(data, rotated, v2, "INSTALL_FAILED_UPDATE_INCOMPATIBLE");
+        reject(data, v2, unsigned, "INSTALL_FAILED_UPDATE_INCOMPATIBLE");
 
         File changed = new File(data, "tampered.apk");
         Files.copy(v2.toPath(), changed.toPath(), StandardCopyOption.REPLACE_EXISTING);
@@ -134,17 +147,17 @@ public final class InstallerSigningTest {
             file.seek(10); int value = file.readUnsignedByte();
             file.seek(10); file.writeByte(value ^ 1);
         }
-        reject(parse(v2), changed, "INSTALL_FAILED_BAD_SIGNATURE");
+        reject(data, v2, changed, "INSTALL_FAILED_BAD_SIGNATURE");
 
         File splitDirectory = new File(data, "split-upload");
         Files.createDirectories(splitDirectory.toPath());
         File base = new File(splitDirectory, "base.apk");
         Files.copy(v2.toPath(), base.toPath());
         Files.copy(rotated.toPath(), new File(splitDirectory, "split_other.apk").toPath());
-        reject(parse(v2), base, "INSTALL_FAILED_BAD_SPLIT_SIGNATURE");
+        reject(data, v2, base, "INSTALL_FAILED_BAD_SPLIT_SIGNATURE");
         File capabilities = new File(fixtures.getParentFile(), "identity-fixtures");
         if (capabilities.isDirectory()) {
-            reject(parse(new File(capabilities, "old.apk")), new File(capabilities, "rotated-no-data.apk"),
+            reject(data, new File(capabilities, "old.apk"), new File(capabilities, "rotated-no-data.apk"),
                     "INSTALL_FAILED_UPDATE_INCOMPATIBLE");
         }
         forwardRotation(data, v2, rotated);

@@ -1,0 +1,33 @@
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=0 api=2 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=0 api=2 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=0 api=2 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=0 api=2 seed=1
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=0 api=3 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=0 api=3 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=0 api=3 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=0 api=3 seed=1
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=1 api=2 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=1 api=2 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=1 api=2 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=1 api=2 seed=1
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=1 api=3 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=1 api=3 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=1 api=3 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=1 api=3 seed=1
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=2 api=2 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=2 api=2 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=2 api=2 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=2 api=2 seed=1
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=2 api=3 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=2 api=3 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=2 api=3 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=2 api=3 seed=1
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=3 api=2 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=3 api=2 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=3 api=2 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=3 api=2 seed=1
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=3 api=3 seed=0
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=3 api=3 seed=0
+NUMERIC_RETURN_FAIL full binary128 result sample=5 mode=3 api=3 seed=1
+NUMERIC_RETURN_FAIL end pointer sample=5 mode=3 api=3 seed=1
+NUMERIC_RETURN_DONE conversions=256 checks=1292 failures=32

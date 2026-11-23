@@ -8,7 +8,7 @@ import host_roles
 
 def verify_actor(root, production, context, strict_payload=True):
     manifest = json.loads((root / 'binder-host-source.json').read_text())
-    assert all(manifest[k] == v for k, v in context.items()), 'Actor source/run/attempt/repository mismatch'
+    producer = host_roles.supplier_context(root / 'binder-host-source.json', context, 'binder-ordinary-actor')
     assert manifest['role'] == 'binder-ordinary-actor'
     assert production['role'] == 'production' and production['test_hook_compiled'] is False
     assert manifest['compiler'] == production['compiler']
@@ -32,7 +32,7 @@ def verify_actor(root, production, context, strict_payload=True):
         'tests/binder/sg-actor.h', 'tests/binder/run-modes.ps1', 'tests/binder/OutputPageObserver.cs'}
     for path, digest in manifest['sources'].items():
         assert host_roles.sha(path) == digest, ('Actor/current source mismatch', path)
-    host_roles.verify_selected(root, manifest.get('selected_link'), manifest['compiler'], context,
+    host_roles.verify_selected(root, manifest.get('selected_link'), manifest['compiler'], producer,
                                {'binder_sg_actor.exe'}, 'binder-ordinary-actor')
     host_roles.emit_record('ACTUAL_BINDER_FULL_HOST', manifest, flush=True)
     return manifest

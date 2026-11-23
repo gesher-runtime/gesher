@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "source_profile": "Android16-r4/API36.1 source, separate from SDK36r02 and actual Android36.0",
+  "wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+  "official_directory_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/?format=JSON",
+  "official_tree": "bc6fa389e4813423eb82cfcc71379058c497f0e9",
+  "complete_source_files": [
+    {
+      "path": "framework/java/android/net/wifi/WifiAvailableChannel.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/WifiAvailableChannel.java?format=TEXT",
+      "pin": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+      "bytes": 7434,
+      "sha256": "4c78e3ac60acc19d733807f65171cde64fe47d471abed47911c4038f3f30cc92",
+      "git_blob": "4f3596d688e33e75d820e614296dba83afb46230",
+      "official_directory_blob_matches": true
+    },
+    {
+      "path": "framework/java/android/net/wifi/BlockingOption.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/BlockingOption.java?format=TEXT",
+      "pin": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+      "bytes": 4803,
+      "sha256": "ef7dd6e0d2e8d77b1b82cee708c4456c1c182bfe4699d0c3e257e6f68ca35200",
+      "git_blob": "ee152d4398d1651baeff9f8dfbdef4217557e2de",
+      "official_directory_blob_matches": true
+    }
+  ],
+  "support_sources": [
+    {
+      "path": "WifiAnnotations.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/WifiAnnotations.java?format=TEXT",
+      "bytes": 10595,
+      "sha256": "978d080c60253390e4257a44190b177211b4f2022b0f5d8574fce47cca01909a",
+      "git_blob": "7013b2b94dcd1492ac9e92fca68cbdab82f423ab",
+      "directory_blob_matches": true,
+      "official_directory_blob_matches": true
+    },
+    {
+      "path": "ScanResult.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/ScanResult.java?format=TEXT",
+      "bytes": 68062,
+      "sha256": "ca6c29c8c119dc6ba22fbd4c92a2e4f76a3f4a5b6d894f3d81ba6f89832d1875",
+      "git_blob": "15d8b3e08006557ae4ab825b2f16e7ecf927b30a",
+      "directory_blob_matches": true,
+      "official_directory_blob_matches": true
+    }
+  ],
+  "candidate_source_audit": {
+    "wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+    "scope": "Complete source preservation, not runtime coverage",
+    "files": {
+      "WifiAvailableChannel.java": {
+        "raw_sha256": "4c78e3ac60acc19d733807f65171cde64fe47d471abed47911c4038f3f30cc92",
+        "candidate_sha256": "f37cd02186e3502940d6cfa944efac3ce9aba6879e3276ae5514aa584b2a6d44",
+        "removed_flag_imports": 2,
+        "removed_flag_annotations": 1,
+        "removed_source_channel_width_annotations": 3,
+        "removed_androidx_nonnull": 0,
+        "token_count": 686,
+        "complete_tokens_match": true,
+        "token_sha256": "f2de43b69c961b4b202272e46593edb0e56c42a980708c10029e32417cfa52e9"
+      },
+      "BlockingOption.java": {
+        "raw_sha256": "ef7dd6e0d2e8d77b1b82cee708c4456c1c182bfe4699d0c3e257e6f68ca35200",
+        "candidate_sha256": "881b180a14a0185d8bced9d113c0a6431539e8cbc859345319b3396f9ef47853",
+        "removed_flag_imports": 2,
+        "removed_flag_annotations": 2,
+        "removed_source_channel_width_annotations": 0,
+        "removed_androidx_nonnull": 4,
+        "token_count": 395,
+        "complete_tokens_match": true,
+        "token_sha256": "7eb195d9084114c90948ef3207620c3aa16e2fca418e61594ae8678a953fe0af"
+      }
+    },
+    "support_sources": {
+      "WifiAnnotations.java": "978d080c60253390e4257a44190b177211b4f2022b0f5d8574fce47cca01909a",
+      "ScanResult.java": "ca6c29c8c119dc6ba22fbd4c92a2e4f76a3f4a5b6d894f3d81ba6f89832d1875"
+    },
+    "scan_result_sha256": "d199a7f827ad88b8039f60ff964b663f7c4a72cfd5a66f22f3e2c99f90c3ff3f",
+    "scan_result_compile_constant": {
+      "CHANNEL_WIDTH_20MHZ": 0
+    },
+    "new_runtime_helpers": [],
+    "manager_or_radio_implementation": false
+  },
+  "sdk36r02": {
+    "android_jar_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "public_protected_declarations": {
+      "android.net.wifi.WifiAvailableChannel": 16,
+      "android.net.wifi.BlockingOption": 8,
+      "android.net.wifi.BlockingOption$Builder": 3
+    },
+    "total_types": 3,
+    "total_declarations": 27
+  },
+  "source_recovery": {
+    "lost_candidate": "e90aef5b5c5910872d46263cb49028bbf871d649",
+    "both_production_sources_byte_identical": true,
+    "tests_and_tools_reconstructed": true,
+    "historical_fixture_results_automatically_transferred": false
+  },
+  "runtime_adaptations": [],
+  "new_runtime_helpers": [],
+  "manager_radio_regulatory_blocklist_operations": false
+}

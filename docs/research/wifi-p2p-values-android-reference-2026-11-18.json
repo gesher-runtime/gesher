@@ -1,0 +1,720 @@
+{
+  "schema_version": 1,
+  "scope": "Ordinary native value records; three source-owned DeviceList cases write only; Windows full readers remain required",
+  "wire_reference": {
+    "profile": "android16-r4",
+    "release_profile": "bp4a",
+    "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+    "capsule_manifest_sha256": "c4abd06c012e8331d1fd654b0d5ac8c928e50ce1fe186a9c998ae59a79daf291",
+    "reference_payload_sha256": "8af11feec42da83cf2e54ea283f2f9250dfc6a2f9dca391e0bdf1d132de5063b"
+  },
+  "wire_cases": [
+    {
+      "case": "config_default",
+      "bytes": 132,
+      "sha256": "1a2c0d484d540de5dc809e6d83d49c8ab2cafae879e5c3ac154befd81111f08c",
+      "roundtrip": true
+    },
+    {
+      "case": "config_peer",
+      "bytes": 164,
+      "sha256": "30ed1544e3962576e2ed95a1b2724766c65848097f6386b7397d6943a24e451f",
+      "roundtrip": true
+    },
+    {
+      "case": "config_unicode",
+      "bytes": 212,
+      "sha256": "19ce5411a42c43320ee378cf835e181ccabb7caef0c36d319f6452084abcc1fa",
+      "roundtrip": true
+    },
+    {
+      "case": "device_default",
+      "bytes": 64,
+      "sha256": "43b6510016145fead32f51aa47eef172cd545dfe087eea857bb211576a14f7da",
+      "roundtrip": true
+    },
+    {
+      "case": "device_unicode",
+      "bytes": 184,
+      "sha256": "9ca52259a088873db7648ae69f53c1f62d23a4a54151b9a1aacd0d98b8f2dac5",
+      "roundtrip": true
+    },
+    {
+      "case": "device_null_fields",
+      "bytes": 92,
+      "sha256": "9c9113347814e45bc03cc95ed68f35666ec4f246f96ef73f2ad02ac22a0c1287",
+      "roundtrip": true
+    },
+    {
+      "case": "devicelist_empty",
+      "bytes": 4,
+      "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "roundtrip": false
+    },
+    {
+      "case": "devicelist_public_two",
+      "bytes": 504,
+      "sha256": "0d78c909b317febb88d7cddb944cb93ec4336d89fb4d74b532b00c5215769a17",
+      "roundtrip": false
+    },
+    {
+      "case": "group_default",
+      "bytes": 40,
+      "sha256": "fbee51493077af1de0918326b4136a5a1affc069e5e9668e5d5377980fdcd5c8",
+      "roundtrip": true
+    },
+    {
+      "case": "group_default_owner_copy",
+      "bytes": 176,
+      "sha256": "79804fcad8b5bbc1d11860ab5efb3b7f111dbfc6b4115e12200b37babb0985f5",
+      "roundtrip": true
+    },
+    {
+      "case": "info_default",
+      "bytes": 12,
+      "sha256": "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+      "roundtrip": true
+    },
+    {
+      "case": "info_ipv4",
+      "bytes": 20,
+      "sha256": "aa9bdd2c682147731175f1921263d2b9623d395dea915111e2688f59f3efd9ac",
+      "roundtrip": true
+    },
+    {
+      "case": "info_ipv6",
+      "bytes": 32,
+      "sha256": "206dc4926bcd8ac08cba1f2944578b5044d48a988d6ccbfc09b49827edffcb53",
+      "roundtrip": true
+    },
+    {
+      "case": "wfd_default",
+      "bytes": 20,
+      "sha256": "17a46ab1a6e4ed76a21a0e9c8bf91d42e072907c4579ce8cb2c5a5de7bb9f064",
+      "roundtrip": true
+    },
+    {
+      "case": "wfd_configured",
+      "bytes": 20,
+      "sha256": "fb9c6ace8250ba641b1dbf51ba29e1c0e51fd3af611d123237aa34986650b7e4",
+      "roundtrip": true
+    },
+    {
+      "case": "pairing_unicode",
+      "bytes": 24,
+      "sha256": "83073217802c826216a42c4f3108ae5ff68b1fe84b230660b6b9f0971e98ea2d",
+      "roundtrip": true
+    },
+    {
+      "case": "pairing_opportunistic",
+      "bytes": 8,
+      "sha256": "b15348c8f462384c01e83b6d499c6faf3f96808f5aa07c6bab4b65b36b4445d4",
+      "roundtrip": true
+    },
+    {
+      "case": "pairing_pin",
+      "bytes": 28,
+      "sha256": "500e387da9b5d08486dd1ba5045686538d97ccfd88840afaa9e6842b7411226f",
+      "roundtrip": true
+    },
+    {
+      "case": "config_pairing",
+      "bytes": 300,
+      "sha256": "35da663639b6edb81afae4644d93fe860d814b1fecbb57d7be11a49eb7095287",
+      "roundtrip": true
+    },
+    {
+      "case": "device_full_ipv4",
+      "bytes": 452,
+      "sha256": "c75ed13763ccf93aafc0c46a195e53bcb7351452ef00193c0e83430d781215d1",
+      "roundtrip": true
+    },
+    {
+      "case": "device_full_ipv6",
+      "bytes": 464,
+      "sha256": "6cba04dfe12c5fa9e53728b3924dd2c07d34ea521e523235276424a9bed8c001",
+      "roundtrip": true
+    },
+    {
+      "case": "devicelist_two",
+      "bytes": 1072,
+      "sha256": "a012526b0384b2d3f00265b92e85f823b164d7f77deb58a22fcc99ca49819d41",
+      "roundtrip": false
+    },
+    {
+      "case": "group_full",
+      "bytes": 1348,
+      "sha256": "cae7333df959eff6b39a98472c165e9b363465c30bb00f7661df8f82b9326631",
+      "roundtrip": true
+    }
+  ],
+  "profiles": {
+    "stock": {
+      "receipt": "059-wifi-p2p-v2-stock.result.json",
+      "receipt_sha256": "54917d14bbefe666ba40498414093e3e466f13bda41d85fe3c044e2b79613d80",
+      "exit_code": 0,
+      "seconds": 4.846,
+      "sdk": 36,
+      "uid": 2000,
+      "vm": "Dalvik",
+      "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "checks_reported": [
+        149
+      ],
+      "providers": {
+        "android.net.wifi.p2p.WifiP2pConfig": "java.lang.BootClassLoader@f7a933e",
+        "android.net.wifi.p2p.WifiP2pDevice": "java.lang.BootClassLoader@f7a933e",
+        "android.net.wifi.p2p.WifiP2pWfdInfo": "java.lang.BootClassLoader@f7a933e",
+        "android.net.wifi.p2p.WifiP2pDeviceList": "java.lang.BootClassLoader@f7a933e",
+        "android.net.wifi.p2p.WifiP2pGroup": "java.lang.BootClassLoader@f7a933e",
+        "android.net.wifi.p2p.WifiP2pInfo": "java.lang.BootClassLoader@f7a933e",
+        "android.net.wifi.WpsInfo": "java.lang.BootClassLoader@f7a933e",
+        "android.net.MacAddress": "java.lang.BootClassLoader@f7a933e",
+        "android.net.wifi.ScanResult$InformationElement": "java.lang.BootClassLoader@f7a933e"
+      },
+      "native_parcel": true,
+      "device_list_reader_executed": true,
+      "wire_cases": [
+        {
+          "case": "config_default",
+          "bytes": 132,
+          "sha256": "45c50d94f83f82bbfe223946e851d2a907e083a83768d7e2e4f45323e5bbbad5",
+          "roundtrip": true
+        },
+        {
+          "case": "config_peer",
+          "bytes": 164,
+          "sha256": "8717698184558092138f0ab32a5c3499f6447cc65f05b42ca05503d98fe94f2c",
+          "roundtrip": true
+        },
+        {
+          "case": "config_unicode",
+          "bytes": 212,
+          "sha256": "77ec365ae8b81bd306320066c45b7fd0248933163a9f6d18e96fc52cb2000825",
+          "roundtrip": true
+        },
+        {
+          "case": "device_default",
+          "bytes": 64,
+          "sha256": "43b6510016145fead32f51aa47eef172cd545dfe087eea857bb211576a14f7da",
+          "roundtrip": true
+        },
+        {
+          "case": "device_unicode",
+          "bytes": 184,
+          "sha256": "9ca52259a088873db7648ae69f53c1f62d23a4a54151b9a1aacd0d98b8f2dac5",
+          "roundtrip": true
+        },
+        {
+          "case": "device_null_fields",
+          "bytes": 92,
+          "sha256": "9c9113347814e45bc03cc95ed68f35666ec4f246f96ef73f2ad02ac22a0c1287",
+          "roundtrip": true
+        },
+        {
+          "case": "devicelist_empty",
+          "bytes": 4,
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+          "roundtrip": true
+        },
+        {
+          "case": "devicelist_public_two",
+          "bytes": 504,
+          "sha256": "0d78c909b317febb88d7cddb944cb93ec4336d89fb4d74b532b00c5215769a17",
+          "roundtrip": true
+        },
+        {
+          "case": "group_default",
+          "bytes": 40,
+          "sha256": "fbee51493077af1de0918326b4136a5a1affc069e5e9668e5d5377980fdcd5c8",
+          "roundtrip": true
+        },
+        {
+          "case": "group_default_owner_copy",
+          "bytes": 176,
+          "sha256": "79804fcad8b5bbc1d11860ab5efb3b7f111dbfc6b4115e12200b37babb0985f5",
+          "roundtrip": true
+        },
+        {
+          "case": "info_default",
+          "bytes": 12,
+          "sha256": "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+          "roundtrip": true
+        },
+        {
+          "case": "info_ipv4",
+          "bytes": 20,
+          "sha256": "aa9bdd2c682147731175f1921263d2b9623d395dea915111e2688f59f3efd9ac",
+          "roundtrip": true
+        },
+        {
+          "case": "info_ipv6",
+          "bytes": 32,
+          "sha256": "206dc4926bcd8ac08cba1f2944578b5044d48a988d6ccbfc09b49827edffcb53",
+          "roundtrip": true
+        },
+        {
+          "case": "wfd_default",
+          "bytes": 20,
+          "sha256": "17a46ab1a6e4ed76a21a0e9c8bf91d42e072907c4579ce8cb2c5a5de7bb9f064",
+          "roundtrip": true
+        },
+        {
+          "case": "wfd_configured",
+          "bytes": 20,
+          "sha256": "fb9c6ace8250ba641b1dbf51ba29e1c0e51fd3af611d123237aa34986650b7e4",
+          "roundtrip": true
+        }
+      ],
+      "stock_observations": [
+        "P2P_STOCK_OPTIONAL android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig=java.lang.BootClassLoader@f7a933e",
+        "P2P_STOCK_OPTIONAL com.android.wifi.flags.Flags=absent",
+        "P2P_STOCK_R2_FLAG unavailable=ClassNotFoundException"
+      ]
+    },
+    "pinned-r4": {
+      "receipt": "060-wifi-p2p-v2-pinned-r4.result.json",
+      "receipt_sha256": "e968940eaa607626588c6fc49f3abb464189d66e7b08e74bd6962cfef61ff3e8",
+      "exit_code": 0,
+      "seconds": 4.754,
+      "sdk": 36,
+      "uid": 2000,
+      "vm": "Dalvik",
+      "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "checks_reported": [
+        220,
+        40
+      ],
+      "providers": {
+        "android.net.wifi.p2p.WifiP2pConfig": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pDevice": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pWfdInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pDeviceList": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pGroup": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WpsInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiConfiguration": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiEnterpriseConfig": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.SecurityParams": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.ParcelUtil": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.OuiKeyedData": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.util.PersistableBundleUtils": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiSsid": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.util.HexEncoding": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.SupplicantState": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.MloLink": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.ScanResult": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.ScanResultSecurity": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.AnqpInformationElement": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.MacAddress": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.TransportInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pDirInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.util.Environment": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.wifi.flags.Flags": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.wifi.flags.FeatureFlags": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.wifi.flags.FeatureFlagsImpl": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]"
+      },
+      "native_parcel": true,
+      "device_list_reader_executed": false,
+      "wire_cases": [
+        {
+          "case": "config_default",
+          "bytes": 132,
+          "sha256": "1a2c0d484d540de5dc809e6d83d49c8ab2cafae879e5c3ac154befd81111f08c",
+          "roundtrip": true
+        },
+        {
+          "case": "config_peer",
+          "bytes": 164,
+          "sha256": "30ed1544e3962576e2ed95a1b2724766c65848097f6386b7397d6943a24e451f",
+          "roundtrip": true
+        },
+        {
+          "case": "config_unicode",
+          "bytes": 212,
+          "sha256": "19ce5411a42c43320ee378cf835e181ccabb7caef0c36d319f6452084abcc1fa",
+          "roundtrip": true
+        },
+        {
+          "case": "device_default",
+          "bytes": 64,
+          "sha256": "43b6510016145fead32f51aa47eef172cd545dfe087eea857bb211576a14f7da",
+          "roundtrip": true
+        },
+        {
+          "case": "device_unicode",
+          "bytes": 184,
+          "sha256": "9ca52259a088873db7648ae69f53c1f62d23a4a54151b9a1aacd0d98b8f2dac5",
+          "roundtrip": true
+        },
+        {
+          "case": "device_null_fields",
+          "bytes": 92,
+          "sha256": "9c9113347814e45bc03cc95ed68f35666ec4f246f96ef73f2ad02ac22a0c1287",
+          "roundtrip": true
+        },
+        {
+          "case": "devicelist_empty",
+          "bytes": 4,
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+          "roundtrip": false
+        },
+        {
+          "case": "devicelist_public_two",
+          "bytes": 504,
+          "sha256": "0d78c909b317febb88d7cddb944cb93ec4336d89fb4d74b532b00c5215769a17",
+          "roundtrip": false
+        },
+        {
+          "case": "group_default",
+          "bytes": 40,
+          "sha256": "fbee51493077af1de0918326b4136a5a1affc069e5e9668e5d5377980fdcd5c8",
+          "roundtrip": true
+        },
+        {
+          "case": "group_default_owner_copy",
+          "bytes": 176,
+          "sha256": "79804fcad8b5bbc1d11860ab5efb3b7f111dbfc6b4115e12200b37babb0985f5",
+          "roundtrip": true
+        },
+        {
+          "case": "info_default",
+          "bytes": 12,
+          "sha256": "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+          "roundtrip": true
+        },
+        {
+          "case": "info_ipv4",
+          "bytes": 20,
+          "sha256": "aa9bdd2c682147731175f1921263d2b9623d395dea915111e2688f59f3efd9ac",
+          "roundtrip": true
+        },
+        {
+          "case": "info_ipv6",
+          "bytes": 32,
+          "sha256": "206dc4926bcd8ac08cba1f2944578b5044d48a988d6ccbfc09b49827edffcb53",
+          "roundtrip": true
+        },
+        {
+          "case": "wfd_default",
+          "bytes": 20,
+          "sha256": "17a46ab1a6e4ed76a21a0e9c8bf91d42e072907c4579ce8cb2c5a5de7bb9f064",
+          "roundtrip": true
+        },
+        {
+          "case": "wfd_configured",
+          "bytes": 20,
+          "sha256": "fb9c6ace8250ba641b1dbf51ba29e1c0e51fd3af611d123237aa34986650b7e4",
+          "roundtrip": true
+        },
+        {
+          "case": "pairing_unicode",
+          "bytes": 24,
+          "sha256": "83073217802c826216a42c4f3108ae5ff68b1fe84b230660b6b9f0971e98ea2d",
+          "roundtrip": true
+        },
+        {
+          "case": "pairing_opportunistic",
+          "bytes": 8,
+          "sha256": "b15348c8f462384c01e83b6d499c6faf3f96808f5aa07c6bab4b65b36b4445d4",
+          "roundtrip": true
+        },
+        {
+          "case": "pairing_pin",
+          "bytes": 28,
+          "sha256": "500e387da9b5d08486dd1ba5045686538d97ccfd88840afaa9e6842b7411226f",
+          "roundtrip": true
+        },
+        {
+          "case": "config_pairing",
+          "bytes": 300,
+          "sha256": "35da663639b6edb81afae4644d93fe860d814b1fecbb57d7be11a49eb7095287",
+          "roundtrip": true
+        },
+        {
+          "case": "device_full_ipv4",
+          "bytes": 452,
+          "sha256": "c75ed13763ccf93aafc0c46a195e53bcb7351452ef00193c0e83430d781215d1",
+          "roundtrip": true
+        },
+        {
+          "case": "device_full_ipv6",
+          "bytes": 464,
+          "sha256": "6cba04dfe12c5fa9e53728b3924dd2c07d34ea521e523235276424a9bed8c001",
+          "roundtrip": true
+        },
+        {
+          "case": "devicelist_two",
+          "bytes": 1072,
+          "sha256": "a012526b0384b2d3f00265b92e85f823b164d7f77deb58a22fcc99ca49819d41",
+          "roundtrip": false
+        },
+        {
+          "case": "group_full",
+          "bytes": 1348,
+          "sha256": "cae7333df959eff6b39a98472c165e9b363465c30bb00f7661df8f82b9326631",
+          "roundtrip": true
+        }
+      ],
+      "stock_observations": []
+    },
+    "candidate": {
+      "receipt": "061-wifi-p2p-v2-candidate.result.json",
+      "receipt_sha256": "5048c4a2b4ef057ce7dbd1183d21b54eef1ef80809f00feec2f5220730ac86c6",
+      "exit_code": 0,
+      "seconds": 4.476,
+      "sdk": 36,
+      "uid": 2000,
+      "vm": "Dalvik",
+      "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "checks_reported": [
+        220,
+        40
+      ],
+      "providers": {
+        "android.net.wifi.p2p.WifiP2pConfig": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pDevice": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pWfdInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pDeviceList": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pGroup": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.WifiP2pInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WpsInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiConfiguration": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiEnterpriseConfig": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.SecurityParams": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.ParcelUtil": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.OuiKeyedData": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.util.PersistableBundleUtils": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.WifiSsid": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.util.HexEncoding": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.SupplicantState": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.MloLink": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.ScanResult": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.ScanResultSecurity": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.AnqpInformationElement": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.MacAddress": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.TransportInfo": "gesher.services.WifiP2pValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-values-b2dc25318006/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]"
+      },
+      "native_parcel": true,
+      "device_list_reader_executed": false,
+      "wire_cases": [
+        {
+          "case": "config_default",
+          "bytes": 132,
+          "sha256": "1a2c0d484d540de5dc809e6d83d49c8ab2cafae879e5c3ac154befd81111f08c",
+          "roundtrip": true
+        },
+        {
+          "case": "config_peer",
+          "bytes": 164,
+          "sha256": "30ed1544e3962576e2ed95a1b2724766c65848097f6386b7397d6943a24e451f",
+          "roundtrip": true
+        },
+        {
+          "case": "config_unicode",
+          "bytes": 212,
+          "sha256": "19ce5411a42c43320ee378cf835e181ccabb7caef0c36d319f6452084abcc1fa",
+          "roundtrip": true
+        },
+        {
+          "case": "device_default",
+          "bytes": 64,
+          "sha256": "43b6510016145fead32f51aa47eef172cd545dfe087eea857bb211576a14f7da",
+          "roundtrip": true
+        },
+        {
+          "case": "device_unicode",
+          "bytes": 184,
+          "sha256": "9ca52259a088873db7648ae69f53c1f62d23a4a54151b9a1aacd0d98b8f2dac5",
+          "roundtrip": true
+        },
+        {
+          "case": "device_null_fields",
+          "bytes": 92,
+          "sha256": "9c9113347814e45bc03cc95ed68f35666ec4f246f96ef73f2ad02ac22a0c1287",
+          "roundtrip": true
+        },
+        {
+          "case": "devicelist_empty",
+          "bytes": 4,
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+          "roundtrip": false
+        },
+        {
+          "case": "devicelist_public_two",
+          "bytes": 504,
+          "sha256": "0d78c909b317febb88d7cddb944cb93ec4336d89fb4d74b532b00c5215769a17",
+          "roundtrip": false
+        },
+        {
+          "case": "group_default",
+          "bytes": 40,
+          "sha256": "fbee51493077af1de0918326b4136a5a1affc069e5e9668e5d5377980fdcd5c8",
+          "roundtrip": true
+        },
+        {
+          "case": "group_default_owner_copy",
+          "bytes": 176,
+          "sha256": "79804fcad8b5bbc1d11860ab5efb3b7f111dbfc6b4115e12200b37babb0985f5",
+          "roundtrip": true
+        },
+        {
+          "case": "info_default",
+          "bytes": 12,
+          "sha256": "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+          "roundtrip": true
+        },
+        {
+          "case": "info_ipv4",
+          "bytes": 20,
+          "sha256": "aa9bdd2c682147731175f1921263d2b9623d395dea915111e2688f59f3efd9ac",
+          "roundtrip": true
+        },
+        {
+          "case": "info_ipv6",
+          "bytes": 32,
+          "sha256": "206dc4926bcd8ac08cba1f2944578b5044d48a988d6ccbfc09b49827edffcb53",
+          "roundtrip": true
+        },
+        {
+          "case": "wfd_default",
+          "bytes": 20,
+          "sha256": "17a46ab1a6e4ed76a21a0e9c8bf91d42e072907c4579ce8cb2c5a5de7bb9f064",
+          "roundtrip": true
+        },
+        {
+          "case": "wfd_configured",
+          "bytes": 20,
+          "sha256": "fb9c6ace8250ba641b1dbf51ba29e1c0e51fd3af611d123237aa34986650b7e4",
+          "roundtrip": true
+        },
+        {
+          "case": "pairing_unicode",
+          "bytes": 24,
+          "sha256": "83073217802c826216a42c4f3108ae5ff68b1fe84b230660b6b9f0971e98ea2d",
+          "roundtrip": true
+        },
+        {
+          "case": "pairing_opportunistic",
+          "bytes": 8,
+          "sha256": "b15348c8f462384c01e83b6d499c6faf3f96808f5aa07c6bab4b65b36b4445d4",
+          "roundtrip": true
+        },
+        {
+          "case": "pairing_pin",
+          "bytes": 28,
+          "sha256": "500e387da9b5d08486dd1ba5045686538d97ccfd88840afaa9e6842b7411226f",
+          "roundtrip": true
+        },
+        {
+          "case": "config_pairing",
+          "bytes": 300,
+          "sha256": "35da663639b6edb81afae4644d93fe860d814b1fecbb57d7be11a49eb7095287",
+          "roundtrip": true
+        },
+        {
+          "case": "device_full_ipv4",
+          "bytes": 452,
+          "sha256": "c75ed13763ccf93aafc0c46a195e53bcb7351452ef00193c0e83430d781215d1",
+          "roundtrip": true
+        },
+        {
+          "case": "device_full_ipv6",
+          "bytes": 464,
+          "sha256": "6cba04dfe12c5fa9e53728b3924dd2c07d34ea521e523235276424a9bed8c001",
+          "roundtrip": true
+        },
+        {
+          "case": "devicelist_two",
+          "bytes": 1072,
+          "sha256": "a012526b0384b2d3f00265b92e85f823b164d7f77deb58a22fcc99ca49819d41",
+          "roundtrip": false
+        },
+        {
+          "case": "group_full",
+          "bytes": 1348,
+          "sha256": "cae7333df959eff6b39a98472c165e9b363465c30bb00f7661df8f82b9326631",
+          "roundtrip": true
+        }
+      ],
+      "stock_observations": []
+    }
+  },
+  "candidate_pinned_equal_records": 23,
+  "source_owned_writer_only_cases": [
+    "devicelist_empty",
+    "devicelist_public_two",
+    "devicelist_two"
+  ],
+  "stock_profile_differences": [
+    {
+      "case": "config_default",
+      "stock": {
+        "case": "config_default",
+        "bytes": 132,
+        "sha256": "45c50d94f83f82bbfe223946e851d2a907e083a83768d7e2e4f45323e5bbbad5",
+        "roundtrip": true
+      },
+      "pinned_r4": {
+        "case": "config_default",
+        "bytes": 132,
+        "sha256": "1a2c0d484d540de5dc809e6d83d49c8ab2cafae879e5c3ac154befd81111f08c",
+        "roundtrip": true
+      }
+    },
+    {
+      "case": "config_peer",
+      "stock": {
+        "case": "config_peer",
+        "bytes": 164,
+        "sha256": "8717698184558092138f0ab32a5c3499f6447cc65f05b42ca05503d98fe94f2c",
+        "roundtrip": true
+      },
+      "pinned_r4": {
+        "case": "config_peer",
+        "bytes": 164,
+        "sha256": "30ed1544e3962576e2ed95a1b2724766c65848097f6386b7397d6943a24e451f",
+        "roundtrip": true
+      }
+    },
+    {
+      "case": "config_unicode",
+      "stock": {
+        "case": "config_unicode",
+        "bytes": 212,
+        "sha256": "77ec365ae8b81bd306320066c45b7fd0248933163a9f6d18e96fc52cb2000825",
+        "roundtrip": true
+      },
+      "pinned_r4": {
+        "case": "config_unicode",
+        "bytes": 212,
+        "sha256": "19ce5411a42c43320ee378cf835e181ccabb7caef0c36d319f6452084abcc1fa",
+        "roundtrip": true
+      }
+    }
+  ],
+  "stock_difference_cause": "Not localized by hash-only observations. Equal lengths do not prove a field or flag cause; unavailable public flag namespace does not establish a disabled flag.",
+  "setup_receipt": {
+    "filename": "058-wifi-p2p-v2-setup.result.json",
+    "sha256": "c816b5e455602612663cfdff5d5433a2d2100a59a0ca20c706ff20baab31225a",
+    "verified_device_payloads": {
+      "stock.jar": "1b2f63fbf69bb872a6effd762d0c51027e0546cfc1e31c449b9b661cceb331c7",
+      "candidate.jar": "b2dc253180062ce95449fd5fc79ddff67683b4b92e8749cd856f515c7057a5f9",
+      "pinned-r4.jar": "8af11feec42da83cf2e54ea283f2f9250dfc6a2f9dca391e0bdf1d132de5063b",
+      "launcher.jar": "e9a837167180ba29729c148b3380922e8019b413b724b65c17ac468299dff816"
+    }
+  },
+  "root_independent_summary_sha256": "0084fc1eb962a7639a2a1e325f713adab32583a41a786f7d391a4e9023ef69b7",
+  "actual_windows_execution": false,
+  "requires_windows_all_23_readers": true,
+  "not_qualified": [
+    "ordinary APK permissions",
+    "Wi-Fi radio/service operations",
+    "API37 runtime",
+    "current full Windows distribution"
+  ]
+}

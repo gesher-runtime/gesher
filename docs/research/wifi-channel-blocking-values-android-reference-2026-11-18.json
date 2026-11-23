@@ -1,0 +1,271 @@
+{
+  "wire_reference": {
+    "profile": "android16-r4",
+    "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+    "sdk_artifact_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "sdk_declarations": 27,
+    "full_original_readers": true,
+    "writer_only_cases": 0,
+    "full_reader_cases": 16,
+    "final_check_count": 289,
+    "final_check_count_basis": "Fresh independent stock, pinned-r4 and candidate native Parcel observations of the reviewed reconstructed fixtures; all 16 complete records agree."
+  },
+  "wire_cases": [
+    {
+      "case": "channel_sta20",
+      "bytes": 12,
+      "sha256": "56a16b1a476eedd5120d532cd2e1120733a063e2ad5d15fea1c11d06ee84e92e",
+      "rewrite_sha256": "56a16b1a476eedd5120d532cd2e1120733a063e2ad5d15fea1c11d06ee84e92e",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "channel_all20",
+      "bytes": 12,
+      "sha256": "3232658b66cd2f6ee43cf1c0166a30e24667093ea2df02c95643b900dcf16db0",
+      "rewrite_sha256": "3232658b66cd2f6ee43cf1c0166a30e24667093ea2df02c95643b900dcf16db0",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "channel_direct20",
+      "bytes": 12,
+      "sha256": "b42def5809ad95068646f9b8e48e12093d1dc5cdeef2814b43bb9163a15a5bab",
+      "rewrite_sha256": "b42def5809ad95068646f9b8e48e12093d1dc5cdeef2814b43bb9163a15a5bab",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_min_network",
+      "bytes": 8,
+      "sha256": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "rewrite_sha256": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_min_bssid",
+      "bytes": 8,
+      "sha256": "64ed86b909d6d0502b64b28db0ea1272ffb358e20e9b1d88b63ccb07fa900cf5",
+      "rewrite_sha256": "64ed86b909d6d0502b64b28db0ea1272ffb358e20e9b1d88b63ccb07fa900cf5",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_max_network",
+      "bytes": 8,
+      "sha256": "68438662c5076b86f146919e66023699d0fb844c2d41b1d78bfde5ff326cf27d",
+      "rewrite_sha256": "68438662c5076b86f146919e66023699d0fb844c2d41b1d78bfde5ff326cf27d",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_max_bssid",
+      "bytes": 8,
+      "sha256": "a1e2f70993c8fc2c5adfc84dc9567d5a649012fd581fbfaa6a0671cfc6275c94",
+      "rewrite_sha256": "a1e2f70993c8fc2c5adfc84dc9567d5a649012fd581fbfaa6a0671cfc6275c94",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_snapshot",
+      "bytes": 8,
+      "sha256": "7c409a28867918b8d44d155b2bacebb9144b998ef1995224fb9bc9aadd1de9c0",
+      "rewrite_sha256": "7c409a28867918b8d44d155b2bacebb9144b998ef1995224fb9bc9aadd1de9c0",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    },
+    {
+      "case": "channel_width40",
+      "bytes": 12,
+      "sha256": "7ed64c191307b4da0ac05c3282968140d6bb1f3677e60bb035867576f0b58e3f",
+      "rewrite_sha256": "7ed64c191307b4da0ac05c3282968140d6bb1f3677e60bb035867576f0b58e3f",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "channel_width80",
+      "bytes": 12,
+      "sha256": "1787c8ba284bc75584d9618e76749b77c8d3397596a07400b6f5e893616e39fa",
+      "rewrite_sha256": "1787c8ba284bc75584d9618e76749b77c8d3397596a07400b6f5e893616e39fa",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "channel_width160",
+      "bytes": 12,
+      "sha256": "3a0c4360d466adc68e794978d818fcdda7e7250b3609aed59ae6ca1e12d11b60",
+      "rewrite_sha256": "3a0c4360d466adc68e794978d818fcdda7e7250b3609aed59ae6ca1e12d11b60",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "channel_width80p80",
+      "bytes": 12,
+      "sha256": "1ab29f6a6030f47d19ee64355053c0c2a18706f471bd6f0f257b89977173e7e8",
+      "rewrite_sha256": "1ab29f6a6030f47d19ee64355053c0c2a18706f471bd6f0f257b89977173e7e8",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "channel_width320",
+      "bytes": 12,
+      "sha256": "9b2e0f4495771b1fe06938d15b1fb3d720ebde72c9f29c1878f387790d80496e",
+      "rewrite_sha256": "9b2e0f4495771b1fe06938d15b1fb3d720ebde72c9f29c1878f387790d80496e",
+      "reader": "android.net.wifi.WifiAvailableChannel",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_direct_network",
+      "bytes": 8,
+      "sha256": "ed049108bc18f2c64369e8d0ea42850bdd1a7d1dd340cfde716315579702a76c",
+      "rewrite_sha256": "ed049108bc18f2c64369e8d0ea42850bdd1a7d1dd340cfde716315579702a76c",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_direct_bssid",
+      "bytes": 8,
+      "sha256": "c61fe7375a82316dd2e92b13470811dbce6b4a7c20efa3068a9ed1799d2ba383",
+      "rewrite_sha256": "c61fe7375a82316dd2e92b13470811dbce6b4a7c20efa3068a9ed1799d2ba383",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    },
+    {
+      "case": "blocking_parcel_constructor",
+      "bytes": 8,
+      "sha256": "040cc9ba2cad7983034e0b4eefeac78b014674a3a384f1e3668645b1ede8ab8f",
+      "rewrite_sha256": "040cc9ba2cad7983034e0b4eefeac78b014674a3a384f1e3668645b1ede8ab8f",
+      "reader": "android.net.wifi.BlockingOption",
+      "roundtrip": true
+    }
+  ],
+  "historical_observation": {
+    "source_head": "8ebf822dd50a1c7d1ca9f6b33c260d24a6259352",
+    "source_tree": "9269712c664f76356cb2b2fea4dbcf028cf20c97",
+    "receipt_sha256": "59e0bf0c9c35700cb9eee8634dfd2632a6062b3b8715f5c264af75c221af8dc8",
+    "device_profile": {
+      "ro.build.fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "ro.build.version.sdk": "36",
+      "ro.build.version.sdk_full": "36.0",
+      "ro.build.version.release": "16",
+      "ro.build.version.security_patch": "2025-07-05",
+      "ro.product.cpu.abilist": "x86_64"
+    },
+    "profiles": {
+      "stock": {
+        "fixture_checks": 293,
+        "full_original_readers": 16
+      },
+      "pinned-r4": {
+        "fixture_checks": 293,
+        "full_original_readers": 16
+      },
+      "candidate": {
+        "fixture_checks": 293,
+        "full_original_readers": 16
+      }
+    },
+    "production_sources_recovered_byte_identically": {
+      "WifiAvailableChannel.java": {
+        "sha256": "f37cd02186e3502940d6cfa944efac3ce9aba6879e3276ae5514aa584b2a6d44",
+        "old_sha256": "f37cd02186e3502940d6cfa944efac3ce9aba6879e3276ae5514aa584b2a6d44",
+        "byte_exact_recovery": true,
+        "bytes": 7219
+      },
+      "BlockingOption.java": {
+        "sha256": "881b180a14a0185d8bced9d113c0a6431539e8cbc859345319b3396f9ef47853",
+        "old_sha256": "881b180a14a0185d8bced9d113c0a6431539e8cbc859345319b3396f9ef47853",
+        "byte_exact_recovery": true,
+        "bytes": 4538
+      }
+    },
+    "limitations": [
+      "Both original complete production sources are byte-identical; recreated fixtures, tools and launcher are not the historical capsule.",
+      "Historical case bytes are reference observations; they do not qualify the reconstructed fixture counter or new artifacts.",
+      "Actual Windows/ART execution remains required."
+    ]
+  },
+  "reconstructed_capsule_native_execution": {
+    "state": "passed",
+    "source_commit": "92c20b82c83af4f1a14e3751826bc7948725bebd",
+    "manifest_sha256": "02a84d58477ff7c8e9b91f6616766c75b292c757e4a9bc6ab5e5cf961f1bfe62",
+    "profiles": {
+      "stock": {
+        "fixture_checks": 289,
+        "full_original_readers": 16,
+        "writer_only": 0,
+        "log_sha256": "c59f03f45e485819c0d097e913c8233a7c9f624df62a138613f86d21f1183ec0",
+        "execution_seconds": 37.798
+      },
+      "pinned-r4": {
+        "fixture_checks": 289,
+        "full_original_readers": 16,
+        "writer_only": 0,
+        "log_sha256": "ce7c155e9df1a59b34f060f84f8f0f40ccd551367808765d3cf34f1a3f16fa9e",
+        "execution_seconds": 29.568
+      },
+      "candidate": {
+        "fixture_checks": 289,
+        "full_original_readers": 16,
+        "writer_only": 0,
+        "log_sha256": "4d14eceee888a313bb90e27d99880ec16483922c40c84f5cc56fbde8f2188ed1",
+        "execution_seconds": 20.255
+      }
+    },
+    "device_profile": {
+      "ro.build.fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "ro.build.version.sdk": "36",
+      "ro.build.version.sdk_full": "36.0",
+      "ro.build.version.release": "16",
+      "ro.build.version.security_patch": "2025-07-05",
+      "ro.product.cpu.abilist": "x86_64",
+      "shell_identity": "uid=2000(shell) gid=2000(shell) groups=2000(shell),1004(input),1007(log),1011(adb),1015(sdcard_rw),1028(sdcard_r),1078(ext_data_rw),1079(ext_obb_rw),3001(net_bt_admin),3002(net_bt),3003(inet),3006(net_bw_stats),3009(readproc),3011(uhid),3012(readtracefs) context=u:r:shell:s0"
+    },
+    "main_isolation_artifact_correspondence": {
+      "candidate-classes.jar": {
+        "sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+        "reviewed_sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+        "identical": true
+      },
+      "candidate.jar": {
+        "sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+        "reviewed_sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+        "identical": true
+      },
+      "launcher-classes.jar": {
+        "sha256": "dd249772000f03f053f45bd2a72dd5a4325678df2f4ae6e67f8b60e3b7ec3478",
+        "reviewed_sha256": "dd249772000f03f053f45bd2a72dd5a4325678df2f4ae6e67f8b60e3b7ec3478",
+        "identical": true
+      },
+      "launcher.jar": {
+        "sha256": "90f691ca7bd4da052e83ba0a1f4d73dce89347e7d81e39e41385c72c20116325",
+        "reviewed_sha256": "90f691ca7bd4da052e83ba0a1f4d73dce89347e7d81e39e41385c72c20116325",
+        "identical": true
+      },
+      "pinned-r4-classes.jar": {
+        "sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+        "reviewed_sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+        "identical": true
+      },
+      "pinned-r4.jar": {
+        "sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+        "reviewed_sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+        "identical": true
+      },
+      "stock-classes.jar": {
+        "sha256": "707cbe353652c29f1b49b283b22b2b360efa6fb0699f40e0ea44f51bc7b1b7e0",
+        "reviewed_sha256": "707cbe353652c29f1b49b283b22b2b360efa6fb0699f40e0ea44f51bc7b1b7e0",
+        "identical": true
+      },
+      "stock.jar": {
+        "sha256": "a068e1c94b610209eb1ccf9597ddb61ab0b1d94c42926ed19aec549a67d2f31e",
+        "reviewed_sha256": "a068e1c94b610209eb1ccf9597ddb61ab0b1d94c42926ed19aec549a67d2f31e",
+        "identical": true
+      }
+    },
+    "setup_steps": 7,
+    "cleanup_steps": 2,
+    "actual_windows_art": false
+  }
+}

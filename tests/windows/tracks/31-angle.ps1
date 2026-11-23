@@ -95,10 +95,20 @@ Remove-Item Env:GESHER_HWUI_RENDERER
 # an ES 1 context, an EGL10 window surface on a Win32 window's Surface (one
 # frame swapped, read back from what Windows composed), and window surfaces on
 # a SurfaceView-like Surface over a SurfaceTexture (EGL10) and on the
-# SurfaceTexture itself (EGL10, EGL14), whose swapped frames reach it.
+# SurfaceTexture itself (EGL10, EGL14), whose swapped frames reach it and are
+# latched by updateTexImage into an external texture.
 $env:GESHER_EGL_DEVICE = 'warp'
 GraphicsDex 'OpenGL ES for Java apps: EGL10 and GLES20 draw a frame (pbuffer, Win32 window, SurfaceTexture), GL10, GLUtils, EGL14' `
   GlBindingsTest @()
+# SurfaceTexture consumed by OpenGL ES (docs/graphics.md "SurfaceTexture in
+# OpenGL ES"; tests/dex-graphics/gesher/SurfaceTextureGlTest.java), as a video
+# decoder's frames reach a compositor (Firefox's): Canvas frames latched by
+# updateTexImage into a GL_TEXTURE_EXTERNAL_OES texture and sampled the right
+# way up with the transform matrix, the time stamp, attach/detach between
+# contexts, releaseTexImage, release, and Android's exceptions for a missing or
+# different current context.
+GraphicsDex 'SurfaceTexture in OpenGL ES: updateTexImage latches frames into an external texture, attach/detach, releaseTexImage, the current-context errors' `
+  SurfaceTextureGlTest @()
 GraphicsDex 'ImageReader native surface: EGL pixels, Canvas notification, queue overflow and close lifetime' `
   ImageReaderEglTest @()
 # Independently exercise the old staging path even if ANGLE supports the

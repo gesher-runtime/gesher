@@ -19,11 +19,25 @@ inline void Close(HANDLE handle) {
   Require(!GetHandleInformation(handle, &flags) && GetLastError() == ERROR_INVALID_HANDLE,
           "closed event handle immediately invalid");
 }
+inline void WaitUntilOriginalDeadline(ULONGLONG deadline) {
+  // These controls target failed final cleanup, not a timeout that removes the
+  // request in an ordinary transaction. Without this scheduling boundary, time
+  // can expire during Begin after the loop's deadline check and bypass the
+  // cleanup injection. Use the real clock and the primitive's original absolute
+  // deadline; never manufacture elapsed time, a return value or an acquisition.
+  // The ordinary timeout case in blocking_oracle.py has no scheduling hook.
+  for (;;) {
+    const ULONGLONG now = GetTickCount64();
+    if (now >= deadline) return;
+    Sleep(static_cast<DWORD>(deadline - now));
+  }
+}
 inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel, const char* mode) {
   const bool timeout = std::strstr(mode, "timeout") != nullptr;
   const bool begin = std::strstr(mode, "begin") != nullptr;
   locks::WaitTestHooks failure;
   failure.fail_begin = begin; failure.fail_commit = !begin;
+  if (timeout) failure.before_recheck = WaitUntilOriginalDeadline;
   HANDLE returned = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   Require(returned && release, "create thread lifetime controls");
@@ -78,6 +92,7 @@ inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel, const ch
   // -1 cannot satisfy this assertion; acquire must observe the owner's release
   // before we read its failure counters below.
   Require(result.load(std::memory_order_acquire) == (timeout ? ETIMEDOUT : ECANCELED), "original outcome preserved");
+  Require(failure.deadline_barriers == (timeout ? 1u : 0u), "exact timeout scheduling barrier consumed");
   Require(failure.begin_failures == (begin ? 1u : 0u) &&
           failure.commit_failures == (begin ? 0u : 1u), "exact final cleanup injection consumed");
   Require(observer.Begin(&state, 1000) == 0, "read authoritative bank after failed cleanup");
@@ -135,8 +150,8 @@ inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel, const ch
   Require(WaitForSingleObject(owner_handle, 0) == WAIT_OBJECT_0, "actual owner thread joined");
   Close(owner_handle);
   Close(returned); Close(release);
-  std::printf("CLEANUP_CONTROL mode=%s result=%d begin_failures=%u commit_failures=%u live_identity=1 retained_capacity=256 denied_capacity=256 unknown_capacity=256 reclaimed_capacity=255 later_timeout=1 handles_closed=260\n",
-    mode, result.load(), failure.begin_failures, failure.commit_failures);
+  std::printf("CLEANUP_CONTROL mode=%s result=%d begin_failures=%u commit_failures=%u deadline_barriers=%u live_identity=1 retained_capacity=256 denied_capacity=256 unknown_capacity=256 reclaimed_capacity=255 later_timeout=1 handles_closed=260\n",
+    mode, result.load(), failure.begin_failures, failure.commit_failures, failure.deadline_barriers);
   std::fflush(stdout);
   return 0;
 }

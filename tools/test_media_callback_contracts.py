@@ -34,7 +34,8 @@ def main():
     extractor = (ROOT / "compat/media/jni/media_extractor_jni.cc").read_text()
     sections = {
         "RETRIEVER": "\n".join((section(retriever, "jfieldID gRetrieverContext;", "void JNICALL MMR_setDataSourcePath("),
-                                  section(retriever, "void JNICALL MMR_setDataSourceCallback(", "// FrameDecoder keeps"),
+                                  section(retriever, "void JNICALL MMR_setDataSourceCallback(",
+                                          "template <typename Consumer>\nvoid VisitRetrieverFrames("),
                                   section(retriever, "void JNICALL MMR_setup(", "const JNINativeMethod kRetrieverMethods[]"))),
         "EXTRACTOR": "\n".join((section(extractor, "jfieldID gContext;", "jobject Boxed("),
                                   section(extractor, "ReceiverLease<JniExtractor> GetForDataSource(", "void JNICALL ME_setDataSourcePath("),

@@ -11,6 +11,9 @@ import android.content.IntentSender;
 import android.content.pm.IPackageInstaller;
 import android.content.pm.IPackageInstallerSession;
 import android.content.pm.IPackageInstallerCallback;
+import android.content.pm.IPackageManager;
+import android.content.pm.InstallSourceInfo;
+import android.content.pm.Signature;
 import android.content.pm.PackageInstaller;
 import android.content.res.AssetManager;
 import android.os.Bundle;
@@ -39,6 +42,18 @@ public final class PackageInstallerSessionTest {
         Method m = type.getDeclaredMethod(name, args); m.setAccessible(true); return m;
     }
     private interface Action { void run() throws Exception; }
+    /** Records the Windows shell steps (ADR 0028) a committed session takes; or fails them all. */
+    private static Object shell(Class<?> serviceClass, List<String> steps, boolean failing) throws Exception {
+        Class<?> type = Class.forName(serviceClass.getName() + "$DesktopShell");
+        return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, called, values) -> {
+            if (failing) throw new IllegalStateException("synthetic shell failure");
+            if (called.getName().equals("installed")) {
+                steps.add("installed " + values[0] + " " + values[1] + " " + values[2]); return null;
+            }
+            steps.add("prepare " + values[0]);
+            return (Runnable)() -> steps.add("retired " + values[0]);
+        });
+    }
     private static void rejected(Action action, Class<? extends Throwable> expected) throws Exception {
         try { action.run(); }
         catch (Throwable e) {
@@ -301,6 +316,94 @@ public final class PackageInstallerSessionTest {
                 && !new File(replacementCode, "base.dm").exists() && manager.getAppMetadataFd(pkg, 0) == null,
                 "Same-content session incorrectly retained metadata from its previous install");
     }
+    private static void installSource(IPackageInstaller service, IPackageManager pm,
+            File fixtures, String pkg, Object backend, Class<?> installerClass,
+            AtomicReference<String> caller, List<Runnable> jobs, AtomicReference<Intent> result)
+            throws Exception {
+        File v2 = new File(fixtures, "v2only.apk"), rotated = new File(fixtures, "rotated.apk");
+        InstallSourceInfo unknown = pm.getInstallSourceInfo(pkg, 0);
+        require(unknown != null && unknown.getInstallingPackageName() == null
+                && unknown.getInitiatingPackageName() == null && pm.getInstallerPackageName(pkg) == null,
+                "Host install invented package attribution");
+        require(pm.getInstallSourceInfo("fixture.missing", 0) == null,
+                "Unknown target acquired install-source metadata");
+        rejected(() -> pm.getInstallerPackageName("fixture.missing"), IllegalArgumentException.class);
+
+        caller.set(pkg);
+        PackageInstaller.SessionParams params =
+                new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        params.setAppPackageName(pkg);
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_STORE);
+        params.setInstallerPackageName("fixture.fake.store");
+        rejected(() -> service.createSession(params, pkg, null, 0), SecurityException.class);
+        params.setInstallerPackageName(null);
+        int id = service.createSession(params, pkg, null, 0);
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE);
+        require(service.getSessionInfo(id).getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE,
+                "Session retained mutable package source input");
+        stage(service, id, rotated, "download.apk");
+        service.openSession(id).commit(receiver(result), false);
+        jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                == PackageInstaller.STATUS_SUCCESS, "Rotated installer session did not update");
+        InstallSourceInfo source = pm.getInstallSourceInfo(pkg, 0);
+        Signature[] original = com.gesher.server.ApkPackage.verifySignatures(v2.getPath());
+        require(pkg.equals(source.getInitiatingPackageName()) && pkg.equals(source.getInstallingPackageName())
+                && pkg.equals(pm.getInstallerPackageName(pkg)), "Session owner was not recorded as installer");
+        require(source.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE
+                && source.getUpdateOwnerPackageName() == null && source.getOriginatingPackageName() == null,
+                "Attribution invented an update owner or originating package");
+        require(Arrays.equals(original, source.getInitiatingPackageSigningInfo().getApkContentsSigners()),
+                "Installer certificates were taken from new target code instead of the initiating snapshot");
+
+        // An identical session reinstall still updates provenance, with no new APK generation.
+        id = service.createSession(params, pkg, null, 0);
+        com.gesher.server.ApkPackage currentCode = ((com.gesher.server.PackageManagerService)pm).get(pkg);
+        String currentPath = currentCode.apkPath;
+        // Losing disposable compiled output must not retire the still-installed code.
+        File oat = (File)method(Class.forName("com.gesher.server.Dexopt"), "oatDir", String.class)
+                .invoke(null, new File(currentPath).getParent());
+        Files.deleteIfExists(new File(oat, "base.odex").toPath());
+        stage(service, id, rotated, "download.apk");
+        service.openSession(id).commit(receiver(result), false);
+        jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                == PackageInstaller.STATUS_SUCCESS, "Identical source-attribution session failed");
+        require(currentPath.equals(((com.gesher.server.PackageManagerService)pm).get(pkg).apkPath),
+                "Attribution-only reinstall manufactured a new code generation");
+        require(currentCode == ((com.gesher.server.PackageManagerService)pm).get(pkg),
+                "Cache-only compilation retired the installed package identity");
+        InstallSourceInfo current = pm.getInstallSourceInfo(pkg, 0);
+        require(current.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE
+                && current.getInitiatingPackageSigningInfo().getSigningCertificateHistory().length == 2,
+                "Attribution-only reinstall lost declared category or verified signing lineage");
+
+        method(installerClass, "install", String.class).invoke(backend, rotated.getPath());
+        @SuppressWarnings("unchecked") Collection<com.gesher.server.ApkPackage> reopened = (Collection<
+                com.gesher.server.ApkPackage>)method(installerClass, "loadInstalled").invoke(null);
+        IPackageManager restarted = new com.gesher.server.PackageManagerService(reopened);
+        InstallSourceInfo reloaded = restarted.getInstallSourceInfo(pkg, 0);
+        require(pkg.equals(reloaded.getInstallingPackageName())
+                && reloaded.getPackageSource() == current.getPackageSource()
+                && Arrays.equals(reloaded.getInitiatingPackageSigningInfo().getSigningCertificateHistory(),
+                        current.getInitiatingPackageSigningInfo().getSigningCertificateHistory()),
+                "Host reopen or durable registry reload lost installer attribution");
+
+        caller.set("android");
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE);
+        id = service.createSession(params, "android", null, 0);
+        stage(service, id, rotated, "download.apk");
+        service.openSession(id).commit(receiver(result), false);
+        jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                == PackageInstaller.STATUS_SUCCESS, "Session without an app installer did not commit");
+        InstallSourceInfo categoryOnly = pm.getInstallSourceInfo(pkg, 0);
+        require(categoryOnly.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE
+                && categoryOnly.getInstallingPackageName() == null
+                && categoryOnly.getInitiatingPackageName() == null,
+                "Session lost its declared category or fabricated an app identity");
+    }
+
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         AssetManager.createSystemAssetsInZygoteLocked(false, System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
@@ -356,12 +459,39 @@ public final class PackageInstallerSessionTest {
                 (Executor)jobs::add, consent, (Supplier<String>)caller::get, transport);
         method(serviceClass, "attach", atmClass, installerClass).invoke(service, atm, backend);
         callbacks(service, serviceClass);
+        Field shellField = serviceClass.getDeclaredField("mShell"); shellField.setAccessible(true);
+        Field windowsShell = serviceClass.getDeclaredField("WINDOWS_SHELL"); windowsShell.setAccessible(true);
+        require(shellField.get(service) == windowsShell.get(null),
+                "Committed sessions do not update the Windows shell by default");
+        List<String> shellSteps = Collections.synchronizedList(new ArrayList<>());
+        shellField.set(service, shell(serviceClass, shellSteps, false));
         rejected(() -> create(service, "not.the.caller", pkg), SecurityException.class);
-        PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_INHERIT_EXISTING);
-        rejected(() -> service.createSession(advanced, pkg, null, 0), UnsupportedOperationException.class);
+        PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(-1);
+        rejected(() -> service.createSession(advanced, pkg, null, 0), IllegalArgumentException.class);
         PackageInstaller.SessionParams apex = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         apex.setInstallAsApex();
         rejected(() -> service.createSession(apex, pkg, null, 0), UnsupportedOperationException.class);
+        File sessionRoot = new File(data, "system/install-sessions");
+        String[] stagesBefore = sessionRoot.list();
+        int sessionsBefore = service.getAllSessions(0).getList().size();
+        int jobsBefore = jobs.size(), promptsBefore = prompts.get();
+        PackageInstaller.SessionParams noKill = new PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_INHERIT_EXISTING);
+        noKill.appPackageName = pkg;
+        noKill.setDontKillApp(true);
+        rejected(() -> service.createSession(noKill, pkg, null, 0), UnsupportedOperationException.class);
+        require(service.getAllSessions(0).getList().size() == sessionsBefore
+                && Arrays.equals(stagesBefore, sessionRoot.list())
+                && jobs.size() == jobsBefore && prompts.get() == promptsBefore,
+                "Unsupported no-kill install allocated a session or started work");
+        PackageInstaller.SessionParams inherit = new PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_INHERIT_EXISTING);
+        inherit.appPackageName = pkg;
+        int inherited = service.createSession(inherit, pkg, null, 0);
+        require(service.getSessionInfo(inherited).getMode() == PackageInstaller.SessionParams.MODE_INHERIT_EXISTING,
+                "Default inherited install mode was rejected or changed");
+        service.abandonSession(inherited);
+        require(service.getSessionInfo(inherited) == null, "Inherited positive control session survived abandonment");
         int first = create(service, pkg, pkg);
         IPackageInstallerSession held = service.openSession(first);
         require(service.getSessionInfo(first).getRequireUserAction()
@@ -395,6 +525,7 @@ public final class PackageInstallerSessionTest {
         require(pmClass.getMethod("get", String.class).invoke(pm, pkg) == parsed,
                 "Denied install replaced existing code");
         require(service.getSessionInfo(first) == null, "Completed denied session survived");
+        require(shellSteps.isEmpty(), "Denied install changed the Windows shell: " + shellSteps);
         rejected(held::getNames, IllegalStateException.class);
 
         // Stale installer identity after asynchronous capture cannot inherit an approval.
@@ -406,6 +537,7 @@ public final class PackageInstallerSessionTest {
         require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
                 == PackageInstaller.STATUS_FAILURE_BLOCKED && prompts.get() == 1,
                 "Stale installer reached consent or install");
+        require(shellSteps.isEmpty(), "Blocked install changed the Windows shell: " + shellSteps);
 
         // Signed production Installer path, synthetic host approval, no application code executes.
         caller.set("android");
@@ -419,6 +551,23 @@ public final class PackageInstallerSessionTest {
         String installedPath = (String)apkClass.getField("apkPath").get(installed);
         require(Arrays.equals(Files.readAllBytes(new File(installedPath).toPath()), Files.readAllBytes(apk.toPath())),
                 "Published bytes differ from approved APK");
+        // Store installs (Aurora and others commit sessions) get the launcher's Start menu
+        // shortcut and URL protocols from the system server, for the published code generation.
+        require(shellSteps.size() == 1 && shellSteps.get(0).startsWith("installed " + pkg + " ")
+                && shellSteps.get(0).endsWith(" true"), "Committed install did not register with the Windows shell: " + shellSteps);
+        String shellCode = shellSteps.get(0).substring(("installed " + pkg + " ").length(),
+                shellSteps.get(0).length() - " true".length());
+        require(new File(shellCode, "base.apk").getAbsolutePath().equals(new File(installedPath).getAbsolutePath()),
+                "Windows shell registered another code generation: " + shellCode + " vs " + installedPath);
+        shellSteps.clear();
+        // Best effort: a failing shell never turns a committed install into a failure.
+        shellField.set(service, shell(serviceClass, shellSteps, true));
+        int shellFails = create(service, "android", pkg); stage(service, shellFails, apk, "base.apk");
+        service.openSession(shellFails).commit(receiver(result), false); jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99) == PackageInstaller.STATUS_SUCCESS
+                && pmClass.getMethod("get", String.class).invoke(pm, pkg) != null,
+                "Windows shell failure changed the install result");
+        shellField.set(service, shell(serviceClass, shellSteps, false));
 
         int raced = create(service, "android", pkg); stage(service, raced, apk, "base.apk");
         Object changed = apkClass.getMethod("parse", String.class).invoke(null, apk.getPath());
@@ -431,6 +580,7 @@ public final class PackageInstallerSessionTest {
                 "Approval survived a target-code replacement inside the consent dialog");
         require(pmClass.getMethod("get", String.class).invoke(pm, pkg) == changed,
                 "Stale approval overwrote the changed target package");
+        require(shellSteps.isEmpty(), "Blocked install changed the Windows shell: " + shellSteps);
 
         int unsigned = create(service, "android", pkg);
         stage(service, unsigned, new File(args[0], "unsigned.apk"), "base.apk");
@@ -439,6 +589,7 @@ public final class PackageInstallerSessionTest {
                 "Unsigned store package was accepted");
         require(pmClass.getMethod("get", String.class).invoke(pm, pkg) == changed,
                 "Rejected unsigned install changed package");
+        require(shellSteps.isEmpty(), "Rejected install changed the Windows shell: " + shellSteps);
         int abandoned = create(service, "android", pkg);
         IPackageInstallerSession oldHandle = service.openSession(abandoned); oldHandle.abandon();
         rejected(oldHandle::getNames, IllegalStateException.class);
@@ -460,6 +611,8 @@ public final class PackageInstallerSessionTest {
         service.abandonSession(recovered);
         metadata(service, new File(args[0]), apk, pkg, lite.getResult().getLongVersionCode(),
                 pm, apkClass, pmClass, caller, allow, prompts, jobs, result);
+        installSource(service, (IPackageManager)pm, new File(args[0]), pkg, backend, installerClass,
+                caller, jobs, result);
         System.out.println("PackageInstallerSessionTest all passed: " + checks + " checks");
     }
 }

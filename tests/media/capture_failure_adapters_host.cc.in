@@ -1,0 +1,128 @@
+// Production OpenSL recorder entry points, MediaRecorder start/audio worker and
+// AudioRecord read translation. Unrelated interface allocation, mux/encoder,
+// output playback and JNI object lookup are explicit boundaries only.
+#include <deque>
+namespace gesher::bionic { void EnterLoadedCode() {} }
+#define SYSV
+namespace opensl_fixture {
+using namespace gesher::media;
+using SLresult = uint32_t; using SLuint32 = uint32_t; using SLboolean = uint32_t;
+using SLint32 = int32_t; using SLInterfaceID = const void*;
+inline constexpr uint32_t kSuccess = 0, kParameterInvalid = 2, kContentUnsupported = 9, kPermissionDenied = 11, kPreconditionsViolated = 1;
+inline constexpr uint32_t kObjectUnrealized = 1, kObjectRealized = 2, kRecordStopped = 1, kRecordPaused = 2, kRecordRecording = 3;
+inline constexpr uint32_t kLocatorIoDevice = 3, kIoDeviceAudioInput = 1, kLocatorAndroidSimpleBufferQueue = 0x800007BD,
+    kLocatorBufferQueue = 6, kFormatPcm = 2, kFormatPcmEx = 4, kPcmRepresentationFloat = 3;
+@OPENSL_LAYOUT@
+enum class Kind { kRecorder, kPlayer };
+struct Object {
+  Kind kind = Kind::kRecorder;
+  ItfSlot object_itf{nullptr, this}, queue_itf{nullptr, this};
+  uint32_t exposed = 0, state = kObjectUnrealized, record_state = kRecordStopped, queue_index = 0;
+  uint32_t rate = 48000, queue_capacity = 0;
+  size_t frame_size = 0;
+  bool queue_player = false, quit = false, record_ready = false;
+  std::shared_ptr<CaptureStream> capture;
+  CaptureParams capture_params;
+  std::mutex mu;
+  std::condition_variable cv;
+  std::thread feeder;
+  struct Buffer { const uint8_t* data; size_t size, done; };
+  std::deque<Buffer> queue;
+  void(*queue_cb)(Itf, void*) = nullptr;
+  void* queue_ctx = nullptr;
+};
+Object* NewObject(Kind kind) { auto* value = new Object; value->kind = kind; return value; }
+uint32_t CheckInterfaces(Kind, bool, uint32_t, const SLInterfaceID*, const SLboolean*, uint32_t* exposed) { *exposed = 0; return 0; }
+std::atomic<bool> permission{true};
+bool RecordingAllowed() { return permission; }
+void FeedLoop(Object*) { std::abort(); } // Output is outside these recording tests.
+@RECORD_LOOP@
+@REALIZE@
+@SET_STATE@
+@CREATE_RECORDER@
+Object* Create() {
+  struct Io { uint32_t type, device_type, device_id; void* device; } source{3, 1, UINT32_MAX, nullptr};
+  DataLocatorQueue queue{kLocatorAndroidSimpleBufferQueue, 1};
+  DataFormatPcm pcm{kFormatPcm, 1, 48000000, 16, 16, 1, 2};
+  SLDataSource src{&source, nullptr}; SLDataSink sink{&queue, &pcm};
+  Itf object = nullptr;
+  if (EngCreateAudioRecorder(nullptr, &object, &src, &sink, 0, nullptr, nullptr) != kSuccess) std::abort();
+  return ObjectOf(object);
+}
+void Destroy(Object* object) {
+  { std::lock_guard<std::mutex> lock(object->mu); object->quit = true; }
+  object->cv.notify_all();
+  if (object->capture) object->capture->Stop();
+  if (object->feeder.joinable()) object->feeder.join();
+  delete object;
+}
+}
+
+namespace recorder_fixture {
+using namespace gesher::media;
+inline constexpr int kInfoMaxDuration = 800;
+inline int muxer_starts = 0;
+struct EncodedPacket {};
+struct Encoder {
+  bool Encode(const int16_t*, size_t, int64_t, std::vector<EncodedPacket>*) { return true; }
+  bool Drain(std::vector<EncodedPacket>*) { return true; }
+};
+struct Muxer {
+  bool success = true;
+  bool Start(std::string* error) { ++muxer_starts; if (!success) *error = "test mux failure"; return success; }
+};
+class Recorder {
+ public:
+  enum class StopReason { kNone, kManual, kDuration, kSize, kError };
+  bool Start(std::string*, bool* invalid_state = nullptr);
+  void AudioLoop();
+  void VideoLoop() { std::abort(); }
+  int64_t NowUs() { return 0; }
+  // Explicit helper observers: this adapter gate tests unchanged Start and
+  // AudioLoop against the real capture engine. Full Recorder finalization,
+  // callback ordering and public error/reset state run in the separate
+  // recorder-lifecycle and checked-JNI state gates.
+  void ReleasePipeline() {
+    if (capture_) capture_->Release();
+    capture_.reset(); muxer_.reset(); audio_enc_.reset(); video_enc_.reset();
+  }
+  void RequestStop(StopReason reason, std::string = {}) {
+    std::lock_guard<std::mutex> lock(mu_);
+    stop_reason_ = reason; running_ = false;
+    if (reason == StopReason::kError) ++error_requests_;
+    if (capture_) capture_->Stop();
+    cv_.notify_all();
+  }
+  bool ShouldDrain() { return stop_reason_ == StopReason::kManual || stop_reason_ == StopReason::kDuration; }
+  void CompleteWorker() { ++completion_requests_; finished_ = true; }
+  bool Write(int, const std::vector<EncodedPacket>&, int64_t*) { return true; }
+  bool prepared_ = true, started_ = false, running_ = false, paused_ = false, error_state_ = false;
+  std::atomic<bool> finished_{false};
+  std::atomic<bool> has_rolled_over_{false};
+  int error_requests_ = 0, completion_requests_ = 0;
+  unsigned audio_epoch_ = 0, active_workers_ = 0;
+  StopReason stop_reason_ = StopReason::kNone;
+  std::mutex mu_; std::condition_variable cv_;
+  std::shared_ptr<CaptureStream> capture_;
+  std::unique_ptr<Muxer> muxer_ = std::make_unique<Muxer>();
+  std::unique_ptr<Encoder> audio_enc_ = std::make_unique<Encoder>(), video_enc_;
+  struct { uint32_t sample_rate = 48000, channels = 1; } audio_params_;
+  struct { int64_t max_duration_ms = 0; } config_;
+  std::atomic<int> amplitude_{0};
+  int audio_track_ = 0; int64_t start_us_ = 0;
+  std::thread audio_thread_, video_thread_;
+  std::function<void(int, int)> listener_;
+};
+@RECORDER_START@
+@RECORDER_AUDIO_LOOP@
+}
+
+namespace audio_record_fixture {
+using namespace gesher::media;
+struct JNIEnv {}; using jobject = void*;
+inline constexpr int kJavaInvalidOperation = -3, kJavaDeadObject = -6, kJavaError = -1;
+std::shared_ptr<CaptureStream> stream;
+std::shared_ptr<CaptureStream> GetStream(JNIEnv*, jobject) { return stream; }
+void TraceRecord(const std::shared_ptr<CaptureStream>&, const char*, size_t, ssize_t) {}
+@READ_INTO@
+}

@@ -4,6 +4,8 @@
  */
 package com.gesher.components;
 
+import android.app.SearchManager;
+import android.app.SearchableInfo;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.ContentResolver;
@@ -141,12 +143,41 @@ public class MainActivity extends ReportingActivity {
             case 5:
                 Report.line("step: content providers");
                 providers();
+                searchable();
                 advance();
                 break;
             default:
                 Report.line("all steps ran");
                 finish();
         }
+    }
+
+    private void searchable() {
+        SearchManager search = getSystemService(SearchManager.class);
+        ComponentName target = new ComponentName(this, SecondActivity.class);
+        for (ComponentName source : new ComponentName[] {getComponentName(), target,
+                new ComponentName(this, SingleTopActivity.class)}) {
+            SearchableInfo info = search.getSearchableInfo(source);
+            if (info == null || !target.equals(info.getSearchActivity())
+                    || !ItemsProvider.AUTHORITY.equals(info.getSuggestAuthority())
+                    || !Intent.ACTION_VIEW.equals(info.getSuggestIntentAction())) {
+                throw new AssertionError("Missing or invalid searchable metadata for " + source);
+            }
+        }
+        if (search.getSearchableInfo(new ComponentName(this, CrossActivity.class)) != null
+                || search.getSearchableInfo(new ComponentName(getPackageName(),
+                        getPackageName() + ".MissingActivity")) != null) {
+            throw new AssertionError("Invalid searchable redirect resolved");
+        }
+        // This is the same framework query path used by SearchView's SuggestionsAdapter.
+        try (Cursor suggestions = search.getSuggestions(search.getSearchableInfo(target), "ban")) {
+            if (suggestions == null || suggestions.getCount() != 1 || !suggestions.moveToFirst()
+                    || !"banana".equals(suggestions.getString(suggestions.getColumnIndexOrThrow(
+                            SearchManager.SUGGEST_COLUMN_TEXT_1)))) {
+                throw new AssertionError("Search suggestions did not use the app's provider and query");
+            }
+        }
+        Report.line("searchable metadata and provider suggestions verified");
     }
 
     private void providers() {
@@ -173,6 +204,8 @@ public class MainActivity extends ReportingActivity {
                 + Settings.Secure.getString(cr, Settings.Secure.ANDROID_ID)
                 + ", Settings.Global auto_time=" + Settings.Global.getInt(cr,
                         Settings.Global.AUTO_TIME, -1));
+        if (!Settings.System.canWrite(this)) throw new AssertionError("Explicit WRITE_SETTINGS special access was not observed by the application");
+        Report.line("Settings.System.canWrite true under app uid " + android.os.Process.myUid());
         Settings.System.putInt(cr, "gesher_test", 7);
         Report.line("Settings.System gesher_test after putInt: "
                 + Settings.System.getInt(cr, "gesher_test", -1));
