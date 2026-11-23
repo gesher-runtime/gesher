@@ -387,6 +387,35 @@ inline uint8_t Clamp(int x) { return static_cast<uint8_t>(x < 0 ? 0 : x > 255 ? 
 // NV12 (w x h) to RGBA rows of `stride` pixels (tw x th), BT.601 limited range.
 void Nv12ToRgba(const uint8_t* src, int w, int h, uint8_t* dst, int stride, int tw, int th) {
   const uint8_t* uv = src + static_cast<size_t>(w) * h;
+  if (w == tw && h == th && w > 0 && h > 0 && w % 2 == 0 && h % 2 == 0) {
+    // One NV12 chroma pair belongs to four luma samples. With no scaling,
+    // reuse its exact BT.601 integer terms and retain the destination stride.
+    const auto pixel = [](uint8_t* out, int y, int red, int green, int blue) {
+      const int luma = 298 * (y - 16);
+      out[0] = Clamp((luma + red) >> 8);
+      out[1] = Clamp((luma + green) >> 8);
+      out[2] = Clamp((luma + blue) >> 8);
+      out[3] = 255;
+    };
+    for (int sy = 0; sy < h; sy += 2) {
+      const uint8_t* y0 = src + static_cast<size_t>(sy) * w;
+      const uint8_t* y1 = y0 + w;
+      const uint8_t* chroma = uv + static_cast<size_t>(sy / 2) * w;
+      uint8_t* row0 = dst + static_cast<size_t>(sy) * stride * 4;
+      uint8_t* row1 = row0 + static_cast<size_t>(stride) * 4;
+      for (int sx = 0; sx < w; sx += 2) {
+        const int d = chroma[sx] - 128, e = chroma[sx + 1] - 128;
+        const int red = 409 * e + 128;
+        const int green = -100 * d - 208 * e + 128;
+        const int blue = 516 * d + 128;
+        pixel(row0 + sx * 4, y0[sx], red, green, blue);
+        pixel(row0 + (sx + 1) * 4, y0[sx + 1], red, green, blue);
+        pixel(row1 + sx * 4, y1[sx], red, green, blue);
+        pixel(row1 + (sx + 1) * 4, y1[sx + 1], red, green, blue);
+      }
+    }
+    return;
+  }
   for (int ty = 0; ty < th; ++ty) {
     int sy = ty * h / th;
     uint8_t* row = dst + static_cast<size_t>(ty) * stride * 4;
