@@ -74,6 +74,11 @@ final class MediaStoreIndex {
     private static final int TARGET_R = 30, TARGET_T = 33, TARGET_U = 34, TARGET_V = 35,
             TARGET_B = 36;
 
+    /** FileUtils.PATTERN_INVISIBLE, relative to the volume. */
+    static final Pattern PATTERN_INVISIBLE = Pattern.compile(
+            "(?i)^(?:(?:Android/(?:data|obb|sandbox))|(?:\\.transforms)|(?:\\.picker_transcoded)"
+                    + "|(?:(?:Movies|Music|Pictures)/.thumbnails))$");
+
     /** FileUtils.PATTERN_EXPIRES_FILE. */
     static final Pattern PATTERN_EXPIRES_FILE = Pattern.compile("(?i)^\\.(pending|trashed)-(\\d+)-([^/]+)$");
 
@@ -1589,6 +1594,13 @@ final class MediaStoreIndex {
         File file = new File(volumeRoot(), relative);
         String name = file.getName();
         if (".nomedia".equals(name)) return null;
+        // ModernMediaScanner.shouldScanDirectory: FileUtils.shouldBeInvisible directories
+        // (and everything below them) are never scanned.
+        String parentPath = relative.contains("/") ? relative.substring(0, relative.lastIndexOf('/')) : "";
+        for (String dir = parentPath; !dir.isEmpty();
+                dir = dir.contains("/") ? dir.substring(0, dir.lastIndexOf('/')) : "") {
+            if (PATTERN_INVISIBLE.matcher(dir).matches()) return null;
+        }
         Long existing = null;
         int existingType = MEDIA_TYPE_NONE;
         synchronized (mLock) {

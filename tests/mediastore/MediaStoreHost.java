@@ -425,7 +425,15 @@ public final class MediaStoreHost {
                 && rows(index.query(stranger, scanned, null, args())).isEmpty(), "scanned media has no owner");
         check(scanned.equals(index.scanFile(shot)) && rows(index.query(system, IMAGES,
                 null, args("_data=?", new String[] {shot.getPath()}, null))).size() == 1, "rescanning updates in place");
-        File hidden = new File(volume, "Pictures/.thumbnails/t.jpg");
+        File thumbnail = new File(volume, "Pictures/.thumbnails/t.jpg");
+        thumbnail.getParentFile().mkdirs();
+        write(thumbnail, jpeg(8, 8, false));
+        check(index.scanFile(thumbnail) == null, "Pictures/.thumbnails is never scanned");
+        File appData = new File(volume, "Android/data/com.example.camera/files/a.jpg");
+        appData.getParentFile().mkdirs();
+        write(appData, jpeg(8, 8, false));
+        check(index.scanFile(appData) == null, "Android/data is never scanned");
+        File hidden = new File(volume, "Pictures/.hidden/t.jpg");
         hidden.getParentFile().mkdirs();
         write(hidden, jpeg(8, 8, false));
         Uri hiddenUri = index.scanFile(hidden);
@@ -443,7 +451,7 @@ public final class MediaStoreHost {
         check(shot.delete() && index.scanFile(shot) == null
                 && rows(index.query(system, scanned, null, args())).isEmpty(), "scanning a deleted file forgets it");
         pass("media: MediaScannerConnection.scanFile / ACTION_MEDIA_SCANNER_SCAN_FILE indexes a file written to "
-                + "the shared volume with its real metadata, no owner, hidden/.nomedia rules, and forgets deleted files");
+                + "the shared volume with its real metadata, no owner, invisible/hidden/.nomedia rules, and forgets deleted files");
 
         // ---- 8. location metadata -------------------------------------------------------------
         File geo = new File(dcim, "IMG_20261123_120000.jpg");
