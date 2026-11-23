@@ -76,7 +76,7 @@ index 31669f76e..cd1d89e0b 100644
 +        } else if (op == wire::kNetlinkInspection) {
 +          ServeNetlinkInspection(pipe, in);
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index c0871558c..c95aacdc7 100644
+index 26022dfda..9df6ef727 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -29,0 +30 @@ add_library(gesher_posix STATIC

@@ -939,7 +939,7 @@ index 3516cd6..78b7466 100644
 +// the guest read access to. A contained process cannot prepare a grant.
 +std::wstring ReadOnlyAreaPath();
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 3492add..c087155 100644
+index 3492add..26022df 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -12,0 +13 @@ add_library(gesher_posix STATIC
@@ -948,12 +948,6 @@ index 3492add..c087155 100644
 +  ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage.cc
 +  ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage_client.cc
 +  ${CMAKE_CURRENT_LIST_DIR}/src/drop_mount.cc
-@@ -133,0 +138,5 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc PROP
-+
-+add_executable(rooted_storage_probe ${CMAKE_SOURCE_DIR}/tests/sandbox/rooted-storage-probe.cc)
-+target_compile_options(rooted_storage_probe PRIVATE -Wall -Wextra -Werror)
-+target_link_options(rooted_storage_probe PRIVATE -municode)
-+target_link_libraries(rooted_storage_probe PRIVATE gesher_posix)
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
 index 2fe5f43..aa76d46 100644
 --- a/compat/posix/src/binder.cc
@@ -2458,3 +2452,64 @@ index c504267..3374c5c 100644
 +    CloseHandle(pipe);
 +    return INVALID_HANDLE_VALUE;
 +  }
+diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
+index 30d03bc86..3051bcb4e 100644
+--- a/tests/native/ofd_transfer_host_test.cc.in
++++ b/tests/native/ofd_transfer_host_test.cc.in
+@@ -86 +86,2 @@ constexpr DWORD CREATE_UNICODE_ENVIRONMENT = 0x400, EXTENDED_STARTUPINFO_PRESENT
+-    CREATE_NO_WINDOW = 0x8000000, DETACHED_PROCESS = 0x8, CREATE_NEW_CONSOLE = 0x10;
++    CREATE_NO_WINDOW = 0x8000000, DETACHED_PROCESS = 0x8, CREATE_NEW_CONSOLE = 0x10,
++    CREATE_SUSPENDED = 0x4, CREATE_BREAKAWAY_FROM_JOB = 0x1000000;
+@@ -444,0 +446,33 @@ static BOOL CreateProcessW(const wchar_t*, wchar_t*, void*, void*, BOOL, DWORD,
++@BINDER_STARTUP_RECORD@
++
++// The Linux fixture exercises ordinary OFD transport. A real AppContainer
++// child is covered by the Windows admission and descriptor fixtures.
++static BOOL TerminateProcess(HANDLE, DWORD) { std::abort(); }
++static DWORD ResumeThread(HANDLE) { std::abort(); }
++
++namespace gesher::binder_bootstrap {
++static uint32_t GuestUid() { std::abort(); }
++}
++namespace gesher::binder_endpoint {
++struct FixtureEndpoint {
++  bool IsGuest() const { return false; }
++  bool IsStandalone() const { std::abort(); }
++  bool DuplicateToGuestChild(HANDLE*) const { std::abort(); }
++};
++static const FixtureEndpoint& Current() {
++  static const FixtureEndpoint endpoint;
++  return endpoint;
++}
++static bool EnrollChild(HANDLE) { std::abort(); }
++}
++namespace gesher::cohost_bootstrap {
++struct FixtureScope {
++  explicit operator bool() const { std::abort(); }
++  bool DuplicateForChild(HANDLE*, HANDLE*) const { std::abort(); }
++};
++static const FixtureScope& Current() {
++  static const FixtureScope scope;
++  return scope;
++}
++}
++
+@@ -445,0 +480,6 @@ namespace gesher {
++static HANDLE OpenDescriptorPlaceholder(bool inherit) {
++  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inherit ? TRUE : FALSE};
++  return CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                    &attributes, OPEN_EXISTING, 0, nullptr);
++}
++static HANDLE OpenNullDevice(DWORD, bool) { std::abort(); }
+diff --git a/tools/test_ofd_transfer_contracts.py b/tools/test_ofd_transfer_contracts.py
+index 17667bdeb..d2b5387b9 100644
+--- a/tools/test_ofd_transfer_contracts.py
++++ b/tools/test_ofd_transfer_contracts.py
+@@ -38,0 +39,5 @@ def main():
++    bootstrap = (ROOT / "compat/posix/include/gesher/binder_bootstrap.h").read_text()
++    boundary = "\ninline bool ReadStartup(Endpoint endpoint, Startup* result)"
++    if bootstrap.count(boundary) != 1:
++        raise ValueError("Binder startup-record boundary changed")
++    startup_record = without_includes(bootstrap[:bootstrap.index(boundary)])
+@@ -46,0 +52 @@ def main():
++        "@BINDER_STARTUP_RECORD@": startup_record + "\n}  // namespace gesher::binder_bootstrap\n",

@@ -396,13 +396,13 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = '0411d27b971370362208fc84c5d0155e9e65b3b3e3ac5060d09a9165590f0f97'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = '79b79f264f5ca02d161d56431cc3c203fb65657e37e71dbba566ef04e1b454b8'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/binder/binderd.cc': '2f37f06e5b5a088c59bf3e676bbb3c22b526b11eb891195a083c9dc811ff0f36',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
  'compat/posix/include/gesher/file_description.h': '94ce9ad7806d727977cc2c6f6df9fa289d1ea94b124404aed6c58fb7416a95d9',
  'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
- 'compat/posix/posix.cmake': '9329dc43678ee9ed79edc1e871a559833749329a366a3142733d3006a82066f2',
+ 'compat/posix/posix.cmake': '8fe75797496a0561ac677ddf12b7b11e31e429daa2ec0379856ffe934392b756',
  'compat/posix/src/binder.cc': '75f01226fce65a5c954986fe0528769e110a9f70e96009934885a381c5ff4f0a',
  'compat/posix/src/binder_wire.h': 'f613f9492b4171c397321f15519ec5b852f2917ad929b6d1e495c1136ddd62d7',
  'compat/posix/src/dirent.cc': '22e3bcf261e56a950fe7a1f3e719cfc5153505f2bd7a693eb6da82c71a4efcff',
@@ -426,6 +426,8 @@ APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/posix/src/system_properties.cc': 'bb8b16bfd421ddef655bec8e933ea0196f18f1b697e59d13c6155c5c487b594a',
  'compat/posix/src/unistd.cc': '586933c9fbb8199caf5fe4fb562363a9397a8020b291b584ce82f2bbbcf8f0c4',
  'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
+ 'tests/native/ofd_transfer_host_test.cc.in': 'd1f0a1ac8987d92e938e2b460d009108c79ee364bdc4bd79759a230f4c18891e',
+ 'tools/test_ofd_transfer_contracts.py': '536e36bd194754f6330e2de2f1cf722b203e22ae0393048dd712915abf0d2c48',
 }
 
 def preceding_appcontainer_identity_sources(netlink):
@@ -445,7 +447,7 @@ def preceding_appcontainer_identity_sources(netlink):
   subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
   return {path:(work/path).read_bytes() for path in paths}
 
-NETLINK_QUALIFICATION_SHA256 = 'c61ca97d30c35eabf1cffc27b293bd51b86ad0fc7f69f7328c7fa177ef93c0ad'
+NETLINK_QUALIFICATION_SHA256 = '034eddd8573d31aacedb185e64fe484ad38cd6612ed786df6d511e0fbd2ea8b6'
 
 def preceding_netlink_sources():
  folder=ROOT/'tools/net-tcp-priority/qualified'

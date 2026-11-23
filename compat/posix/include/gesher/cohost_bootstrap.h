@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-#include <gesher/binder_bootstrap.h>
+#include "binder_bootstrap.h"
 
 namespace gesher::cohost_bootstrap {
 

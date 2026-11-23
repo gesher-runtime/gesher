@@ -1,5 +1,5 @@
-// Complete production capture worker/stream; WASAPI and thread priority alone
-// are declared test boundaries. Native Windows clocks and synchronization run.
+// Complete production capture worker/stream with a controlled WASAPI boundary.
+// Native Windows clocks and synchronization run.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -67,6 +67,10 @@ bool HasWasapiCaptureEndpoint(std::string* name) {
   if (fixture::available && name) *name = "test input";
   return fixture::available;
 }
+// This fixture has no protected broker. Entering that path would invalidate
+// the assertions about which backend produced each failure.
+std::unique_ptr<CaptureSource> OpenBrokeredCapture(std::string*) { std::abort(); }
+bool HasBrokeredCaptureEndpoint(std::string*) { std::abort(); }
 void CaptureComInit() {}
 void RaiseAudioThreadPriority(bool) {}
 size_t BytesPerSample(PcmFormat format) {
