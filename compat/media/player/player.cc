@@ -54,13 +54,19 @@ class Playback : public std::enable_shared_from_this<Playback> {
   }
 
   void Shutdown() {
+    std::shared_ptr<Track> feeding;
     {
       std::lock_guard<std::mutex> lock(mu_);
       quit_ = true;
       owner_ = nullptr;  // nothing more is reported
       if (source_ != nullptr) source_->Cancel();
+      feeding = track_;
     }
     cv_.notify_all();
+    // A feeder waits for room in the track, which cv_ cannot reach: releasing the
+    // track wakes it (a later write fails, and the worker sees quit_).
+    if (feeding != nullptr) feeding->Release();
+    feeding.reset();
     for (std::thread* th : {&thread_, &video_thread_}) {
       if (!th->joinable()) continue;
       if (th->get_id() == std::this_thread::get_id()) {
@@ -133,6 +139,13 @@ class Playback : public std::enable_shared_from_this<Playback> {
     seek_mode_ = mode;
     seek_notify_ = true;
     completed_ = false;
+    // The feeder may be waiting for room in the track, which cv_ cannot reach. The
+    // seek drops what is queued, as DoSeek does next, and that frees the room: the
+    // feeder wakes, sees the seek, and stops writing at once.
+    if (track_ != nullptr) {
+      track_->Pause();
+      track_->Flush();
+    }
     cv_.notify_all();
   }
 
@@ -169,6 +182,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
   void SetLooping(bool loop) {
     std::lock_guard<std::mutex> lock(mu_);
     loop_ = loop;
+    cv_.notify_all();  // a drain waits on it
   }
 
   void SetVolume(float l, float r) {
@@ -185,8 +199,16 @@ class Playback : public std::enable_shared_from_this<Playback> {
 
   void SetSpeed(float speed) {
     std::lock_guard<std::mutex> lock(mu_);
+    // The wall clock is base + elapsed * speed_: bring the base up to now at the
+    // old speed first, or the whole time since the anchor would be rescaled and
+    // the position would jump.
+    if (clock_running_) {
+      clock_base_us_ = WallClockLocked();
+      clock_anchor_ = gesher::MonotonicNanos();
+    }
     speed_ = speed;
     if (track_ != nullptr) track_->SetSpeed(speed);
+    cv_.notify_all();  // waits timed on the old speed end now
   }
 
   void SetSession(int id) {
@@ -199,6 +221,12 @@ class Playback : public std::enable_shared_from_this<Playback> {
     int64_t start_frame;  // frames written to the track when it starts
     int64_t start_us;     // media time of its first frame
   };
+
+  // Upper bounds of timed waits, which events normally end earlier: the track's
+  // room signal for the audio feeder, and re-reads of clocks nothing signals.
+  static constexpr int kFeedSafetyMs = 20;
+  static constexpr int64_t kVideoClockRecheckUs = 50000;
+  static constexpr int64_t kDrainRecheckUs = 100000;
 
   void Notify(int what, int a, int b) {
     Player* owner;
@@ -416,8 +444,23 @@ class Playback : public std::enable_shared_from_this<Playback> {
           interrupted = true;
           break;
         }
+        if (show_current_) {
+          // A new Surface while a frame waits: it shows the current frame.
+          show_current_ = false;
+          if (!last_frame_.data.empty()) {
+            VideoFrame copy = last_frame_;
+            lock.unlock();
+            Render(copy);
+          }
+          continue;
+        }
         if (!playing_ || completed_) {
-          cv_.wait_for(lock, std::chrono::milliseconds(20));
+          // Nothing to time while paused or complete: sleep until the player
+          // resumes, seeks, gets a new Surface, is stopped or destroyed.
+          cv_.wait(lock, [&] {
+            return quit_ || video_generation_ != generation || show_current_ ||
+                   (playing_ && !completed_);
+          });
           continue;
         }
         // Past the audio's end (a longer video), frames follow one another at once.
@@ -430,7 +473,12 @@ class Playback : public std::enable_shared_from_this<Playback> {
           show = ahead > -100000 || frames.size() == 1;
           break;
         }
-        cv_.wait_for(lock, std::chrono::microseconds(std::min<int64_t>(ahead, 10000)));
+        // The media clock runs at the playback speed, so the frame is due in
+        // ahead / speed; the wait ends early for a seek, pause, speed change or
+        // new Surface, and the bound re-reads a clock that may have stalled.
+        const int64_t due_us = static_cast<int64_t>(ahead / std::max(speed_, 0.1f));
+        cv_.wait_for(lock, std::chrono::microseconds(std::clamp<int64_t>(
+                               due_us - 1000, 500, kVideoClockRecheckUs)));
       }
       if (interrupted) continue;
       if (show) Render(f);
@@ -509,6 +557,8 @@ class Playback : public std::enable_shared_from_this<Playback> {
     track_->Start();
     // Resume a paused EOF drain with its bounded stop boundary.
     if (audio_draining_) track_->Stop();
+    // The audio clock the video waits on starts here.
+    cv_.notify_all();
   }
 
   // The track for the decoder's output, created at the first start.
@@ -542,6 +592,8 @@ class Playback : public std::enable_shared_from_this<Playback> {
   bool WritePcm(const std::vector<uint8_t>& pcm) {
     size_t done = 0;
     while (done < pcm.size()) {
+      std::shared_ptr<Track> full;  // the track to wait on for room, with mu_ released
+      size_t room_frames = 0;
       std::unique_lock<std::mutex> lock(mu_);
       if (quit_ || seek_us_ >= 0) return false;
       // Nonblocking: serialize start admission with pause, seek and shutdown,
@@ -556,9 +608,21 @@ class Playback : public std::enable_shared_from_this<Playback> {
         if (!playing_) {
           cv_.wait(lock, [this] { return playing_ || quit_ || seek_us_ >= 0; });
         } else {
-          cv_.wait_for(lock, std::chrono::milliseconds(5));
+          // Playing with a full ring: the mixer frees room as it plays and signals
+          // the track, which wakes the feeder in time (a sleep would wake late
+          // under load). The wait is for an eighth of the ring so that a pause,
+          // which cv_ does not reach from in there, is noticed within one such
+          // slice, or within the timeout if the mixer is not playing (paused,
+          // stalled): the feeder then waits on cv_ for the player, without polling.
+          // A seek flushes the track and shutdown releases it, which wake the wait.
+          full = track_;
+          room_frames = std::max<size_t>(
+              1, std::min<size_t>((pcm.size() - done) / frame_size_, full->buffer_size_frames() / 8));
         }
       }
+      if (full == nullptr) continue;
+      lock.unlock();
+      full->WaitForRoom(room_frames, kFeedSafetyMs);
     }
     return true;
   }
@@ -713,7 +777,24 @@ class Playback : public std::enable_shared_from_this<Playback> {
           break;
         }
         if (t->stopped() && (video_decoder_ == nullptr || video_done_)) break;
-        cv_.wait_for(lock, std::chrono::milliseconds(10));
+        if (!playing_) {
+          // Paused during the drain: the track plays nothing, so only the player's
+          // own events can end the wait.
+          cv_.wait(lock, [&] {
+            return quit_ || seek_us_ >= 0 || loop_ || playing_ ||
+                   (t->stopped() && (video_decoder_ == nullptr || video_done_));
+          });
+          continue;
+        }
+        // Draining: the data still queued plays out in queued / rate / speed
+        // (fractional and slower-than-1 speeds included, as in VideoRun); the
+        // video's end and the player's events notify cv_.
+        const double drain_us = static_cast<double>(t->Queued()) * 1000000.0 /
+                                static_cast<double>(std::max<uint32_t>(rate_, 1)) /
+                                static_cast<double>(std::max(speed_, 0.1f));
+        const int64_t queued_us = static_cast<int64_t>(drain_us);
+        cv_.wait_for(lock, std::chrono::microseconds(std::clamp<int64_t>(
+                               queued_us + 2000, 10000, kDrainRecheckUs)));
       }
       if (interrupted) {
         // setLooping(true) while draining, or a seek: go on reading.

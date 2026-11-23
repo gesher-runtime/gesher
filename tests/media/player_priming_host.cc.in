@@ -3,8 +3,10 @@
 // No Windows codec, WASAPI endpoint or JNI VM runs in this host fixture.
 @AUDIO_IMPLEMENTATION@
 
+#include <cmath>
 #include <map>
 #include <limits>
+#include <sys/resource.h>
 
 class PlayerConditionVariable {
  public:
@@ -24,7 +26,18 @@ class PlayerConditionVariable {
   std::cv_status wait_for(std::unique_lock<std::mutex>& lock,
                           const std::chrono::duration<Rep, Period>& duration) {
     Observe();
+    {
+      std::lock_guard<std::mutex> guard(mu_);
+      timeouts_us_[std::this_thread::get_id()] =
+          std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+    }
     return cv_.wait_for(lock, duration);
+  }
+  // The timeout of a worker's most recent timed wait, or -1 if it has none.
+  int64_t LastTimeoutUs(std::thread::id id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto it = timeouts_us_.find(id);
+    return it == timeouts_us_.end() ? -1 : it->second;
   }
  private:
   void Observe() {
@@ -33,6 +46,7 @@ class PlayerConditionVariable {
   }
   std::mutex mu_;
   std::map<std::thread::id, unsigned> waits_;
+  std::map<std::thread::id, int64_t> timeouts_us_;
   std::condition_variable cv_;
 };
 
@@ -85,6 +99,44 @@ struct Plan {
     render_gate.Release();
   }
 };
+// The player's clock and its waits for room in the track, as the tests see them.
+// Now() is the real monotonic clock unless a test freezes it, to step a video-only
+// wall clock exactly; the feeder's safety timeout is the production constant unless
+// a test makes the track's room signal the only thing that can wake it.
+std::atomic<int64_t> frozen_now_ns{0};
+inline int64_t Now() {
+  const int64_t frozen = frozen_now_ns.load();
+  return frozen != 0 ? frozen : gesher::MonotonicNanos();
+}
+struct FrozenClock {
+  explicit FrozenClock(int64_t start_ns) { frozen_now_ns = start_ns; }
+  ~FrozenClock() { frozen_now_ns = 0; }
+  void Advance(std::chrono::nanoseconds by) { frozen_now_ns += by.count(); }
+};
+std::atomic<int> feed_safety_override_ms{0};
+inline int FeedSafetyMs(int production_ms) {
+  const int override_ms = feed_safety_override_ms.load();
+  return override_ms != 0 ? override_ms : production_ms;
+}
+class RoomWaits {
+ public:
+  void Add() {
+    std::lock_guard<std::mutex> lock(mu_);
+    ++waits_[std::this_thread::get_id()];
+  }
+  unsigned Count(std::thread::id id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    return waits_[id];
+  }
+ private:
+  std::mutex mu_;
+  std::map<std::thread::id, unsigned> waits_;
+};
+RoomWaits room_waits;
+inline bool ObservedRoomWait(gesher::media::Track& track, size_t frames, int timeout_ms) {
+  room_waits.Add();
+  return track.WaitForRoom(frames, timeout_ms);
+}
 }  // namespace player_fixture
 
 struct ANativeWindow {
@@ -304,6 +356,10 @@ struct Fixture {
   bool VideoDone() {
     std::lock_guard<std::mutex> lock(playback->mu_);
     return playback->video_done_;
+  }
+  // A worker's waits on the player's condition variable and for room in the track.
+  unsigned Waits(std::thread::id id) {
+    return playback->cv_.Waits(id) + player_fixture::room_waits.Count(id);
   }
   std::shared_ptr<Plan> plan;
   std::shared_ptr<DataSource> source;
@@ -617,10 +673,10 @@ void CancelBlockedPacket() {
     if (!Wait([&] { return plan->read_gate.Reached(); }, "large packet reaches prefill reader gate")) continue;
     if (paused) f.playback->Pause();
     const auto id = f.playback->thread_.get_id();
-    const unsigned waits = f.playback->cv_.Waits(id);
+    const unsigned waits = f.Waits(id);
     plan->read_gate.Release();
     if (!Wait([&] { return track->Queued() == track->buffer_size_frames() &&
-                          f.playback->cv_.Waits(id) > waits; },
+                          f.Waits(id) > waits; },
               "oversized PCM enters actual WritePcm room wait")) continue;
     auto shutdown = std::async(std::launch::async, [&] { f.playback->Shutdown(); });
     const bool done = shutdown.wait_for(2s) == std::future_status::ready;
@@ -642,7 +698,7 @@ void SeekAtAdmissionBoundaries() {
     if (phase == 0) {
       const auto id = f.playback->thread_.get_id();
       if (!Wait([&] { return track->Queued() == track->buffer_size_frames() &&
-                            f.playback->cv_.Waits(id) != 0; },
+                            f.Waits(id) != 0; },
                 "seek interrupts a packet awaiting full-ring space")) continue;
     } else if (phase == 1) {
       if (!Wait([&] { return plan->eos_gate.Reached(); }, "seek is posted before partial EOS admission")) continue;
@@ -739,10 +795,354 @@ void VideoOnly() {
   Check(f.TrackHandle() == nullptr && window.PositiveFrames() == 1,
         "video-only playback needs no audio Track or priming");
 }
+
+// A video-only player keeps time on a wall clock that SetSpeed rescales: changing
+// the speed must not move the position the clock already reached. The clock is
+// frozen and stepped, so every position below is exact.
+void SetSpeedKeepsPosition() {
+  auto plan = std::make_shared<Plan>();
+  plan->audio = false;
+  plan->video = true;
+  plan->video_pts = {0, 10000000};
+  ANativeWindow window(plan);
+  player_fixture::FrozenClock clock(1000000000000);
+  Fixture f(plan, &window);
+  f.playback->Start();
+  Check(f.playback->PositionUs() == 0, "video-only clock starts at zero");
+  clock.Advance(1s);
+  Check(f.playback->PositionUs() == 1000000, "one second at speed 1 is one second");
+  f.playback->SetSpeed(2.0f);
+  Check(f.playback->PositionUs() == 1000000, "doubling the speed leaves the position where it was");
+  clock.Advance(1s);
+  Check(f.playback->PositionUs() == 3000000, "after the change the clock runs twice as fast");
+  f.playback->SetSpeed(0.5f);
+  Check(f.playback->PositionUs() == 3000000, "halving the speed leaves the position where it was");
+  clock.Advance(2s);
+  Check(f.playback->PositionUs() == 4000000, "after the change the clock runs half as fast");
+  f.playback->Pause();
+  f.playback->SetSpeed(4.0f);
+  clock.Advance(5s);
+  Check(f.playback->PositionUs() == 4000000, "a speed change while paused neither moves nor starts the clock");
+  f.playback->Start();
+  clock.Advance(1s);
+  Check(f.playback->PositionUs() == 8000000, "resuming runs at the speed set while paused");
+}
+
+// The EOF drain sleeps for the queued audio's play time at the playback speed:
+// queued / rate / speed, slower and fractional speeds included. (An integer speed
+// clamped to at least 1 woke a 0.5x drain at half its play time and slept a 1.5x
+// drain half again past it.) The mixer is held still while the timeout is read,
+// so the queued frame count is exact; then the drain completes exactly once.
+void EofDrainAtSpeed(float speed) {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = 1024;
+  Fixture f(plan);
+  f.playback->SetSpeed(speed);
+  auto track = f.Start();
+  if (!Wait([&] { return track->state() == Track::State::kStopping; },
+            "short clip at a non-unit speed force-starts its EOF drain")) return;
+  Check(track->Queued() == 1024, "the held drain keeps its whole short clip queued");
+  const auto id = f.playback->thread_.get_id();
+  const double expected = 1024.0 * 1000000.0 / plan->rate / speed + 2000.0;
+  int64_t timeout = -1;
+  Wait([&] {
+    timeout = f.playback->cv_.LastTimeoutUs(id);
+    return timeout >= 0 && std::abs(static_cast<double>(timeout) - expected) <= 1.0;
+  }, "EOF drain times its wait by queued / rate / speed");
+  if (std::abs(static_cast<double>(timeout) - expected) > 1.0) {
+    std::fprintf(stderr, "  speed %.2f: drain timeout %lld us, expected %.0f us\n", speed,
+                 static_cast<long long>(timeout), expected);
+  }
+  Check(f.owner.Count(kMediaPlaybackComplete) == 0, "a held drain does not complete early");
+  Pump(f);
+  Check(track->Position() == 1024 && track->stopped(),
+        "the drain at a non-unit speed plays its whole clip, then completes");
+}
+
+// A paused or completed player must not wake its video worker: it sleeps until the
+// player resumes, gets a new Surface, or ends. (Polling, as before, woke it every
+// 20 ms for as long as it was paused.)
+void VideoIdleWakeups() {
+  auto plan = std::make_shared<Plan>();
+  plan->audio = false;
+  plan->video = true;
+  plan->video_pts = {0, 100000, 10000000};
+  ANativeWindow window(plan), second(plan);
+  player_fixture::FrozenClock clock(1000000000000);
+  Fixture f(plan, &window);
+  f.playback->Start();
+  if (!Wait([&] { return window.Frames() == 1; }, "first video frame is shown at once")) return;
+  const auto id = f.playback->video_thread_.get_id();
+  // Pause only once the worker holds the second frame and is timing it, so that
+  // the pause reaches the wait for a frame, not the wait for a playing player.
+  const unsigned timing = f.playback->cv_.Waits(id);
+  if (!Wait([&] { return f.playback->cv_.Waits(id) >= timing + 2; }, "video worker times its second frame")) return;
+  f.playback->Pause();
+  std::this_thread::sleep_for(150ms);  // the worker reaches its paused wait
+  const unsigned before = f.playback->cv_.Waits(id);
+  std::this_thread::sleep_for(400ms);
+  const unsigned idle = f.playback->cv_.Waits(id) - before;
+  if (idle != 0) std::fprintf(stderr, "paused video worker woke %u times in 400 ms\n", idle);
+  Check(idle == 0, "a paused video worker is not polling");
+
+  f.playback->SetWindow(&second);
+  Wait([&] { return second.Frames() == 1; }, "a new Surface wakes the paused worker, which shows the current frame in it");
+  Check(window.Frames() == 1, "the old Surface is not drawn again");
+
+  f.playback->Start();
+  clock.Advance(500ms);
+  Wait([&] { return second.PositiveFrames() == 1; }, "resume wakes the worker and the next frame is shown on time");
+  const unsigned playing_before = f.playback->cv_.Waits(id);
+  std::this_thread::sleep_for(300ms);
+  // Waiting for a frame 10 s away re-reads the clock at most every 50 ms.
+  Check(f.playback->cv_.Waits(id) - playing_before <= 8, "a playing worker waiting for a far frame does not poll");
+
+  f.playback->Pause();
+  std::this_thread::sleep_for(100ms);
+  auto shutdown = std::async(std::launch::async, [&] { f.playback->Shutdown(); });
+  const bool done = shutdown.wait_for(2s) == std::future_status::ready;
+  Check(done, "shutdown wakes a sleeping paused video worker");
+  if (!done) std::abort();
+  shutdown.get();
+  Check(window.references == 0 && second.references == 0, "idle video player releases both Surfaces");
+}
+
+// Audio feed: with the ring full and the mixer playing, the feeder sleeps in the
+// track's room wait and the mixer's signal is what wakes it; the timeout only
+// bounds a mixer that does not play. (Polling, as before, woke it every 5 ms.)
+void AudioFeedWaitsForRoom() {
+  {
+    auto plan = std::make_shared<Plan>();
+    plan->frames = plan->packet = 30000;
+    plan->gate_frame = 0;
+    plan->read_gate.Arm();
+    Fixture f(plan);
+    auto track = f.Start();
+    if (!Wait([&] { return plan->read_gate.Reached(); }, "feed packet reaches its reader gate")) return;
+    const auto id = f.playback->thread_.get_id();
+    const unsigned waits = f.Waits(id);
+    plan->read_gate.Release();
+    if (!Wait([&] { return track->Queued() == track->buffer_size_frames() && f.Waits(id) > waits; },
+              "feeder enters its room wait with a full ring")) return;
+    const unsigned before = f.Waits(id);
+    std::this_thread::sleep_for(450ms);  // the mixer is stalled: only the safety timeout runs
+    const unsigned stalled = f.Waits(id) - before;
+    if (stalled > 30) std::fprintf(stderr, "stalled feeder woke %u times in 450 ms\n", stalled);
+    Check(stalled <= 30, "a feeder with a stalled mixer wakes only at its safety timeout");
+  }
+  {
+    // Nothing but the mixer (or a release) may wake the feeder now.
+    player_fixture::feed_safety_override_ms = 600000;
+    auto plan = std::make_shared<Plan>();
+    plan->frames = plan->packet = 30000;
+    plan->gate_frame = 0;
+    plan->read_gate.Arm();
+    Fixture f(plan);
+    auto track = f.Start();
+    if (!Wait([&] { return plan->read_gate.Reached(); }, "event feed packet reaches its reader gate")) {
+      player_fixture::feed_safety_override_ms = 0;
+      return;
+    }
+    const auto id = f.playback->thread_.get_id();
+    const unsigned waits = f.Waits(id);
+    plan->read_gate.Release();
+    const bool parked = Wait([&] { return track->Queued() == track->buffer_size_frames() && f.Waits(id) > waits; },
+                             "event feeder parks in its room wait with a full ring");
+    if (parked) {
+      const size_t full = track->Queued();
+      std::this_thread::sleep_for(100ms);
+      Check(track->Queued() == full, "a parked feeder writes nothing until the mixer plays");
+      for (int tick = 0; tick < 40; ++tick) Mix(track);  // about 1760 frames, over an eighth of the ring
+      Wait([&] { return track->Queued() > full - 1000; }, "the mixer's signal wakes the feeder, which refills the ring");
+      // The mixer is idle again and the feeder parked: a seek must still reach it without the timeout.
+      Wait([&] { return track->Queued() + 1000 > full; }, "the feeder is parked with a nearly full ring");
+      std::this_thread::sleep_for(100ms);
+      plan->seek_gate.Arm();
+      f.playback->Seek(0, 0);
+      Wait([&] { return plan->seek_gate.Reached(); }, "a seek reaches a feeder parked for room without any timeout");
+      plan->seek_gate.Release();
+      auto shutdown = std::async(std::launch::async, [&] { f.playback->Shutdown(); });
+      const bool done = shutdown.wait_for(2s) == std::future_status::ready;
+      Check(done, "shutdown wakes a feeder that has no timeout to fall back on");
+      if (!done) std::abort();
+      shutdown.get();
+    }
+    player_fixture::feed_safety_override_ms = 0;
+  }
+}
+
+// --- Measurement (tools/test_media_player_priming.py --measure): what the same
+// production Playback does while idle, counted on the same scripted fixture, so
+// that two sources can be compared. Wake counts are waits entered by the worker
+// thread (on the player's condition variable or for room in the track); they are
+// counted, not timed, and the fixture's mixer is virtual. Not a Windows measurement.
+double CpuMs() {
+  rusage usage{};
+  getrusage(RUSAGE_SELF, &usage);
+  return usage.ru_utime.tv_sec * 1e3 + usage.ru_utime.tv_usec / 1e3 + usage.ru_stime.tv_sec * 1e3 +
+         usage.ru_stime.tv_usec / 1e3;
+}
+void Report(const char* name, double value, const char* unit) {
+  std::printf("MEASURE %-40s %12.1f %s\n", name, value, unit);
+  std::fflush(stdout);
+}
+double Micros(std::chrono::steady_clock::time_point begin) {
+  return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+}
+double ShutdownMicros(Fixture& f) {
+  const auto begin = std::chrono::steady_clock::now();
+  auto shutdown = std::async(std::launch::async, [&] { f.playback->Shutdown(); });
+  if (shutdown.wait_for(5s) != std::future_status::ready) std::abort();
+  shutdown.get();
+  return Micros(begin);
+}
+void Measure() {
+  constexpr double kSeconds = 2.0;
+  {
+    // A paused video worker holding a frame, and a video worker timing a frame 10 s away.
+    auto plan = std::make_shared<Plan>();
+    plan->audio = false;
+    plan->video = true;
+    plan->video_pts = {0, 100000, 10000000};
+    ANativeWindow window(plan);
+    player_fixture::FrozenClock clock(1000000000000);
+    Fixture f(plan, &window);
+    f.playback->Start();
+    Wait([&] { return window.Frames() == 1; }, "measured first frame");
+    const auto id = f.playback->video_thread_.get_id();
+    unsigned timing = f.Waits(id);
+    Wait([&] { return f.Waits(id) >= timing + 2; }, "measured worker times a frame");
+    timing = f.Waits(id);
+    std::this_thread::sleep_for(std::chrono::duration<double>(kSeconds));
+    Report("video_timing_wakeups_per_s", (f.Waits(id) - timing) / kSeconds, "1/s");
+    f.playback->Pause();
+    std::this_thread::sleep_for(200ms);
+    const unsigned before = f.Waits(id);
+    const double cpu = CpuMs();
+    std::this_thread::sleep_for(std::chrono::duration<double>(kSeconds));
+    Report("video_paused_wakeups_per_s", (f.Waits(id) - before) / kSeconds, "1/s");
+    Report("video_paused_cpu_ms_per_s", (CpuMs() - cpu) / kSeconds, "ms/s");
+    Report("video_paused_shutdown_latency", ShutdownMicros(f), "us");
+  }
+  {
+    // A feeder with a full ring and a mixer that is not playing.
+    auto plan = std::make_shared<Plan>();
+    plan->frames = plan->packet = 400000;
+    plan->gate_frame = 0;
+    plan->read_gate.Arm();
+    Fixture f(plan);
+    auto track = f.Start();
+    Wait([&] { return plan->read_gate.Reached(); }, "measured feeder packet");
+    const auto id = f.playback->thread_.get_id();
+    const unsigned waits = f.Waits(id);
+    plan->read_gate.Release();
+    Wait([&] { return track->Queued() == track->buffer_size_frames() && f.Waits(id) > waits; }, "measured feeder parks");
+    std::this_thread::sleep_for(200ms);
+    const unsigned before = f.Waits(id);
+    const double cpu = CpuMs();
+    std::this_thread::sleep_for(std::chrono::duration<double>(kSeconds));
+    Report("feeder_stalled_wakeups_per_s", (f.Waits(id) - before) / kSeconds, "1/s");
+    Report("feeder_stalled_cpu_ms_per_s", (CpuMs() - cpu) / kSeconds, "ms/s");
+    // The mixer plays 40 blocks (about 1760 frames), twenty times: how long until the feeder
+    // has refilled all but a little (the ring is never left more than 1000 frames short).
+    // Timed in this process under whatever else the host runs, so only the median and the
+    // spread mean anything.
+    std::vector<double> refills;
+    for (int trial = 0; trial < 20; ++trial) {
+      const unsigned parked = f.Waits(id);
+      const size_t before_burst = track->Queued();
+      for (int tick = 0; tick < 40; ++tick) Mix(track);
+      const auto begin = std::chrono::steady_clock::now();
+      const auto deadline = begin + 2s;
+      while (track->Queued() + 1000 <= before_burst && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(50us);
+      }
+      refills.push_back(Micros(begin));
+      Wait([&] { return f.Waits(id) > parked; }, "measured feeder parks again");
+    }
+    std::sort(refills.begin(), refills.end());
+    Report("feeder_refill_latency_median", refills[refills.size() / 2], "us");
+    Report("feeder_refill_latency_p90", refills[refills.size() * 9 / 10], "us");
+    Report("feeder_refill_latency_max", refills.back(), "us");
+    // How soon a seek is noticed by a feeder parked for room: right after a pause (the mixer
+    // is stopped), and while the mixer plays at real time (a thread mixing 44 frames per ms).
+    for (const bool paused : {true, false}) {
+      std::atomic<bool> mixing{!paused}, stop_mixer{false};
+      std::thread mixer([&] {
+        while (!stop_mixer) {
+          if (mixing) Mix(track);
+          std::this_thread::sleep_for(1ms);
+        }
+      });
+      std::vector<double> latencies;
+      unsigned seeks_done = f.owner.Count(kMediaSeekComplete);
+      for (int trial = 0; trial < 15; ++trial) {
+        Wait([&] { return track->Queued() + 2000 >= track->buffer_size_frames(); }, "measured feeder has a full ring");
+        std::this_thread::sleep_for(std::chrono::milliseconds(3 + trial % 7));  // vary the phase
+        if (paused) f.playback->Pause();
+        plan->seek_gate.Arm();
+        const auto begin = std::chrono::steady_clock::now();
+        f.playback->Seek(0, 0);
+        while (!plan->seek_gate.Reached() && std::chrono::steady_clock::now() < begin + 2s) {
+          std::this_thread::sleep_for(20us);
+        }
+        latencies.push_back(Micros(begin));
+        plan->seek_gate.Release();
+        Wait([&] { return f.owner.Count(kMediaSeekComplete) > seeks_done; }, "measured seek completes");
+        ++seeks_done;
+        if (paused) f.playback->Start();
+      }
+      f.playback->Start();
+      stop_mixer = true;
+      mixer.join();
+      std::sort(latencies.begin(), latencies.end());
+      const std::string name = paused ? "seek_noticed_after_pause" : "seek_noticed_while_mixing";
+      Report((name + "_median").c_str(), latencies[latencies.size() / 2], "us");
+      Report((name + "_max").c_str(), latencies.back(), "us");
+    }
+    Report("feeder_shutdown_latency", ShutdownMicros(f), "us");
+  }
+  {
+    // A short clip's end: the drain waits for the mixer, which is not playing.
+    auto plan = std::make_shared<Plan>();
+    plan->frames = 11000;
+    plan->packet = 1024;
+    plan->gate_frame = 100000;
+    Fixture f(plan);
+    auto track = f.Start();
+    Wait([&] { return track->state() == Track::State::kStopping; }, "measured drain begins");
+    std::this_thread::sleep_for(200ms);
+    const auto id = f.playback->thread_.get_id();
+    const unsigned before = f.Waits(id);
+    std::this_thread::sleep_for(std::chrono::duration<double>(kSeconds));
+    Report("drain_wakeups_per_s", (f.Waits(id) - before) / kSeconds, "1/s");
+    Report("drain_shutdown_latency", ShutdownMicros(f), "us");
+  }
+  {
+    // A video-only clock, stepped: the position after doubling the speed one second in.
+    auto plan = std::make_shared<Plan>();
+    plan->audio = false;
+    plan->video = true;
+    plan->video_pts = {0, 10000000};
+    ANativeWindow window(plan);
+    player_fixture::FrozenClock clock(1000000000000);
+    Fixture f(plan, &window);
+    f.playback->Start();
+    clock.Advance(1s);
+    f.playback->SetSpeed(2.0f);
+    Report("setspeed_position_error_after_1s", static_cast<double>(f.playback->PositionUs() - 1000000), "us");
+    clock.Advance(1s);
+    Report("setspeed_position_error_after_2s", static_cast<double>(f.playback->PositionUs() - 3000000), "us");
+  }
+}
 }  // namespace player_test
 
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
+  if (std::string(argv[1]) == "--measure") {
+    player_test::Measure();
+    return 0;
+  }
   player_test::Startup(argv[1]);
   player_test::ShortAndLarge();
   player_test::PausedEos();
@@ -756,6 +1156,11 @@ int main(int argc, char** argv) {
   player_test::VideoAdmissionAndTail();
   player_test::PausedVideoTail();
   player_test::VideoOnly();
+  player_test::SetSpeedKeepsPosition();
+  player_test::EofDrainAtSpeed(0.5f);
+  player_test::EofDrainAtSpeed(1.5f);
+  player_test::VideoIdleWakeups();
+  player_test::AudioFeedWaitsForRoom();
   std::printf("player priming: %d checks, %d failures\n", player_test::checks, player_test::failures);
   return player_test::failures ? 1 : 0;
 }
