@@ -46,11 +46,13 @@ if(Test-Path -LiteralPath (Join-Path $RuntimeDir 'fonts/fonts.xml')){
 $bcp=(@('core-oj.jar','core-libart.jar','core-icu4j.jar','framework.jar','gesher-app.jar')|ForEach-Object{A (Join-Path $RuntimeDir $_)})-join ':'
 $script:vm=@("-Xbootclasspath:$bcp","-Ximage:$(A (Join-Path $RuntimeDir 'framework/boot.art'))",'-Xint','-Xusejit:false')
 $script:device=$null
-function Vm([string]$label,[string[]]$arguments,[int]$ExpectedExit=0){
+function Vm([string]$label,[string[]]$arguments,[int]$ExpectedExit=0,[switch]$ControlFixture){
     $start=New-Object Diagnostics.ProcessStartInfo
     $start.FileName=Join-Path $RuntimeDir 'dalvikvm.exe'
     $start.WorkingDirectory=$RuntimeDir
-    $start.Arguments=(($script:vm+$arguments|ForEach-Object{Q $_})-join ' ')
+    $options=$script:vm.Clone()
+    if($ControlFixture){$options[0]+=':'+(A (Join-Path $AppsDir 'packageevents-control.dex'))}
+    $start.Arguments=(($options+$arguments|ForEach-Object{Q $_})-join ' ')
     $start.UseShellExecute=$false;$start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
     $start.EnvironmentVariables['ANDROID_ROOT']=A (Join-Path $profile 'system')
@@ -87,7 +89,7 @@ function Vm([string]$label,[string[]]$arguments,[int]$ExpectedExit=0){
 }
 function Launcher([string]$label,[string[]]$arguments,[int]$ExpectedExit=0){Vm $label (@('com.gesher.app.Launcher')+$arguments) $ExpectedExit}
 
-function Control([string]$command){Vm ('control-'+$command) @('-cp',(A (Join-Path $AppsDir 'packageevents-control.dex')),'gesher.fixture.PackageEventsControl',$command)}
+function Control([string]$command){Vm ('control-'+$command) @('gesher.fixture.PackageEventsControl',$command) -ControlFixture}
 function ObserverLog{ReadLog (Join-Path $logs 'com.gesher.packageevents.observer.log')}
 function WaitMarker([string]$marker,[int]$Timeout=15000){
     $deadline=[DateTime]::UtcNow.AddMilliseconds($Timeout)

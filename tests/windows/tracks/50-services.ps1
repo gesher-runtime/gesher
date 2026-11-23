@@ -177,8 +177,8 @@ $binderd = Start-Process "$Dir/binderd.exe" -ArgumentList $device -PassThru -NoN
 Remove-Item Env:GESHER_BINDER_TRACE
 $servicemanager = Start-ReadyServiceManager $binderd $device "$logs/servicemanager" "$logs/binderd.log"
 $bcpServices = (('core-oj', 'core-libart', 'core-icu4j', 'framework') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
-$dvm = @("-Xbootclasspath:$bcpServices", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-  '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
+$dvm = @("-Xbootclasspath:${bcpServices}:$(NoDrive "$Dir/services-tests.dex")", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+  '-Xint', '-Xusejit:false')
 CheckTimed 'binder: CursorWindow inline/shared-memory Parcel data and lifetime' "$Dir/dalvikvm.exe" `
   ($dvm + 'gesher.services.CursorWindowParcelTest') @('CursorWindowParcelTest all passed')
 # The XML sniffer and native apps rely on true cursor-independent reads/writes.
@@ -998,8 +998,8 @@ $savedContractsBinder = $env:GESHER_BINDER
 try {
   $env:ANDROID_DATA = NoDrive $serviceContractsData
   Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
-  $dvmContracts = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
+  $dvmContracts = @("-Xbootclasspath:${bcpApp}:$(NoDrive "$Dir/services-tests.dex")", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false')
   CheckTimed 'services: deviceidle real managers, all 22 methods, administrative denial' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.DeviceIdleContractTest') @('DeviceIdleContractTest all passed') 30
   CheckTimed 'services: idle shutdown: cached processes and self-rescheduling jobs do not hold the device, activities and foreground services do' "$Dir/dalvikvm.exe" `

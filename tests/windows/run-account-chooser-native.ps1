@@ -53,8 +53,8 @@ foreach ($mode in 'inputs','client','select','cancel','add','noadd','timer-cance
     Copy-Item -LiteralPath (Join-Path $RuntimeDir 'build.prop') -Destination (Join-Path $profile 'system')
     Copy-Item -LiteralPath $icu[0].FullName -Destination (Join-Path $profile 'i18n/etc/icu')
     $owner = if ($mode -in @('client','intent-client')) { 'com.gesher.server.ChooserClient' } else { 'com.gesher.server.SystemServer' }
-    $vmArgs = @($NativeExe, "-Xbootclasspath:$bcp", "-Ximage:$(AndroidPath (Join-Path $RuntimeDir 'framework/boot.art'))",
-        '-Xint','-Xusejit:false','-cp',(AndroidPath $TestDex),$owner,(AndroidPath $HelperPath),$mode)
+    $vmArgs = @($NativeExe, "-Xbootclasspath:${bcp}:$(AndroidPath $TestDex)", "-Ximage:$(AndroidPath (Join-Path $RuntimeDir 'framework/boot.art'))",
+        '-Xint','-Xusejit:false',$owner,(AndroidPath $HelperPath),$mode)
     if ($mode -in @('client','intent-client')) { $vmArgs += 'com.gesher.server.SystemServer' }
     $commandFile = Join-Path $profile 'command.txt'
     [IO.File]::WriteAllText($commandFile, (($vmArgs | ForEach-Object { QuoteArgument $_ }) -join ' '), [Text.Encoding]::Unicode)

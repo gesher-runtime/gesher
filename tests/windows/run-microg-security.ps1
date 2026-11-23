@@ -125,13 +125,16 @@ function ReadLog([string] $Path) {
     }
 }
 
-function InvokeVm([string] $Label, [string[]] $Arguments, [int] $TimeoutSeconds = 120) {
+function InvokeVm([string] $Label, [string[]] $Arguments, [int] $TimeoutSeconds = 120,
+                  [switch] $FrameworkFixture) {
     $script:sequence++
     $base = Join-Path $run ('{0:D3}-{1}' -f $script:sequence, ($Label -replace '[^A-Za-z0-9.-]', '-'))
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = Join-Path $Dir 'dalvikvm.exe'
     $start.WorkingDirectory = $Dir
-    $start.Arguments = (($script:vm + $Arguments | ForEach-Object { QuoteArgument $_ }) -join ' ')
+    $options = $script:vm.Clone()
+    if ($FrameworkFixture) { $options[0] += ":" + (AndroidPath $ServicesDex) }
+    $start.Arguments = (($options + $Arguments | ForEach-Object { QuoteArgument $_ }) -join ' ')
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
@@ -222,8 +225,8 @@ function Guest([string] $Test, [string[]] $Arguments, [string] $Marker = "$Test 
     $guestRoot = Join-Path $run ("guests/$Label" -replace '[^A-Za-z0-9/.-]', '-')
     SetProfile $guestRoot "$guestRoot/logs"
     if ($Uid) { $env:GESHER_UID = $Uid; $env:GESHER_BINDER_UID = $Uid }
-    $text = InvokeVm $Label (@("-Djava.io.tmpdir=$(AndroidPath $javaTemporaryRoot)",
-        '-cp', (AndroidPath $ServicesDex), 'gesher.services.ServiceFixtureRunner', $Test) + $Arguments)
+    $text = InvokeVm $Label -FrameworkFixture -Arguments (@("-Djava.io.tmpdir=$(AndroidPath $javaTemporaryRoot)",
+        'gesher.services.ServiceFixtureRunner', $Test) + $Arguments)
     RequireOutput $Label $text @($Marker)
 }
 
@@ -407,7 +410,7 @@ try {
     $windowRoleBinderUid = $env:GESHER_BINDER_UID
     try {
         $env:GESHER_UID = '12345'; $env:GESHER_BINDER_UID = '12345'
-        $windowRole = InvokeVm 'window-item-client-denied' @('-cp', (AndroidPath $ServicesDex),
+        $windowRole = InvokeVm 'window-item-client-denied' -FrameworkFixture -Arguments @(
             'gesher.services.ActivityWindowPromotionTest', 'client-denied')
         RequireOutput 'ordinary client cannot authenticate window lifecycle metadata' $windowRole @(
             'ActivityWindowPromotionTest client role denied')
@@ -491,9 +494,9 @@ try {
     # Unknown Binder PID is deliberately not an attached application, despite a claimed UID.
     $env:GESHER_UID = '12345'
     $env:GESHER_BINDER_UID = '12345'
-    $text = InvokeVm 'unattached-account-denied' @('-cp', (AndroidPath $ServicesDex), 'gesher.services.AccountSecurityTest', 'remote-denied')
+    $text = InvokeVm 'unattached-account-denied' -FrameworkFixture -Arguments @( 'gesher.services.AccountSecurityTest', 'remote-denied')
     RequireOutput 'unattached Binder account access denied' $text @('AccountSecurityTest all passed')
-    $text = InvokeVm 'unattached-identity-denied' @('-cp', (AndroidPath $ServicesDex), 'gesher.services.IdentitySecurityTest',
+    $text = InvokeVm 'unattached-identity-denied' -FrameworkFixture -Arguments @( 'gesher.services.IdentitySecurityTest',
         'remote-denied', $probe, 'android.permission.POST_NOTIFICATIONS')
     RequireOutput 'real Binder forged attach and permission mutation denied' $text @('IdentitySecurityTest all passed')
     $env:GESHER_UID = $null
@@ -510,7 +513,7 @@ try {
         'account: owner PendingIntent capability and extras preserved true'
     ) 'account: owner PendingIntent capability and extras preserved'
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'explicit-account-grant' @('-cp', (AndroidPath $ServicesDex), 'gesher.services.AccountSecurityTest', 'grant-probe', 'true')
+    $text = InvokeVm 'explicit-account-grant' -FrameworkFixture -Arguments @( 'gesher.services.AccountSecurityTest', 'grant-probe', 'true')
     RequireOutput 'explicit host credential grant' $text @('AccountSecurityTest all passed')
     $env:GESHER_BINDER_UID = $null
     $null = Activity 'attached-explicit-token-grant' $probe '.ProbeActivity' @('--ez', 'expect-token', 'true') @(
@@ -518,7 +521,7 @@ try {
     ) 'all passed'
     $null = Tool 'stop-granted-probe' @('am', 'force-stop', $probe)
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'explicit-account-revoke' @('-cp', (AndroidPath $ServicesDex), 'gesher.services.AccountSecurityTest', 'grant-probe', 'false')
+    $text = InvokeVm 'explicit-account-revoke' -FrameworkFixture -Arguments @( 'gesher.services.AccountSecurityTest', 'grant-probe', 'false')
     RequireOutput 'explicit host credential revoke' $text @('AccountSecurityTest all passed')
     $env:GESHER_BINDER_UID = $null
     $null = Activity 'attached-probe-after-revoke' $probe '.ProbeActivity' @() $probeExpected 'all passed'
@@ -536,7 +539,7 @@ try {
     # in the same live process uses Android's test-only revoke that skips that kill.
     $env:GESHER_UID = '2000'
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'revoke-notifications-without-kill' @('-cp', (AndroidPath $ServicesDex),
+    $text = InvokeVm 'revoke-notifications-without-kill' -FrameworkFixture -Arguments @(
         'gesher.services.IdentitySecurityTest', 'revoke-post-without-kill', $probe)
     RequireOutput 'test-only POST revoke without kill' $text @('IdentitySecurityTest all passed')
     $env:GESHER_UID = $null
@@ -549,7 +552,7 @@ try {
     # fixture VM. Retire only the synthetic client, then reinstall identical code.
     $null = Tool 'stop-permission-probe-before-removal' @('am', 'force-stop', $probe)
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'prepare-client-removal-grants' @('-cp', (AndroidPath $ServicesDex),
+    $text = InvokeVm 'prepare-client-removal-grants' -FrameworkFixture -Arguments @(
         'gesher.services.AccountClientRemovalProbe', 'prepare')
     RequireOutput 'real server client-removal grant preparation' $text @('AccountClientRemovalProbe READY_GRANTED uid=')
     if ($text -notmatch 'AccountClientRemovalProbe READY_GRANTED uid=(\d+)') { throw 'Missing original client UID.' }
@@ -563,7 +566,7 @@ try {
     $null = Launcher 'reinstall-identical-account-client' @('install', (AndroidPath $ProbeApk))
     UseDevice
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'client-removal-grants-persisted' @('-cp', (AndroidPath $ServicesDex),
+    $text = InvokeVm 'client-removal-grants-persisted' -FrameworkFixture -Arguments @(
         'gesher.services.AccountClientRemovalProbe', 'after', $removedClientUid)
     RequireOutput 'real server client grants retired across identical reinstall' $text @(
         'AccountClientRemovalProbe PASS_AFTER uid-stable=true visibility-revoked=true enumeration-empty=true provider-intact=true')
@@ -588,7 +591,7 @@ try {
     }
     UseDevice
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'client-removal-grants-after-server-restart' @('-cp', (AndroidPath $ServicesDex),
+    $text = InvokeVm 'client-removal-grants-after-server-restart' -FrameworkFixture -Arguments @(
         'gesher.services.AccountClientRemovalProbe', 'restart', $removedClientUid)
     RequireOutput 'native protected restart does not revive removed client grants' $text @(
         'AccountClientRemovalProbe PASS_RESTART uid-stable=true visibility-revoked=true enumeration-empty=true provider-intact=true')
@@ -599,14 +602,14 @@ try {
     # Actual Installer and protected storage: leave a live account, uninstall its
     # authenticator, then prove that an identical APK cannot reacquire the account.
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'prepare-authenticator-owner-removal' @('-cp', (AndroidPath $ServicesDex),
+    $text = InvokeVm 'prepare-authenticator-owner-removal' -FrameworkFixture -Arguments @(
         'gesher.services.AccountClientRemovalProbe', 'owner-prepare')
     RequireOutput 'real authenticator owns a live account' $text @('AccountClientRemovalProbe PASS_owner-prepare')
     $env:GESHER_BINDER_UID = $null
     $null = Launcher 'uninstall-active-authenticator' @('uninstall', $owner)
     UseDevice
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'check-committed-authenticator-removal' @('-cp', (AndroidPath $ServicesDex),
+    $text = InvokeVm 'check-committed-authenticator-removal' -FrameworkFixture -Arguments @(
         'gesher.services.AccountClientRemovalProbe', 'owner-after')
     RequireOutput 'uninstall purges provider accounts and client access' $text @('AccountClientRemovalProbe PASS_owner-after')
     $env:GESHER_BINDER_UID = $null
@@ -619,7 +622,7 @@ try {
     $null = Launcher 'reinstall-identical-authenticator' @('install', (AndroidPath $DevsvcApk))
     UseDevice
     $env:GESHER_BINDER_UID = '2000'
-    $text = InvokeVm 'check-reinstalled-authenticator-retirement' @('-cp', (AndroidPath $ServicesDex),
+    $text = InvokeVm 'check-reinstalled-authenticator-retirement' -FrameworkFixture -Arguments @(
         'gesher.services.AccountClientRemovalProbe', 'owner-reinstall')
     RequireOutput 'same-signer reinstall after restart leaves accounts retired' $text @('AccountClientRemovalProbe PASS_owner-reinstall')
     $env:GESHER_BINDER_UID = $null

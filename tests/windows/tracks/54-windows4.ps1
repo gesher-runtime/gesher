@@ -30,10 +30,12 @@ W4NativeProbe windows4_text_store_probe.exe '0 windows4 TSF store check\(s\) fai
 W4NativeProbe windows4_ime_tsf_probe.exe '0 windows4 IME TSF check\(s\) failed' 'production native IME TSF event bridge, restricted editor teardown and reentrant COM detach'
 $w4Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $w4Dvm = @("-Xbootclasspath:$w4Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+$w4FixtureVm = $w4Dvm.Clone()
+$w4FixtureVm[0] += ":" + (NoDrive "$Dir/graphics-tests.dex")
 $w4Apk = NoDrive "$Dir/winapp.apk"
-W4NativeProbe dalvikvm.exe 'Windows4ConfigurationTest all passed' 'actual Configuration merging keeps Hebrew/Arabic/English layout direction at all four task rotations' (@($w4Dvm) + @('-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Windows4ConfigurationTest'))
-W4NativeProbe dalvikvm.exe 'Windows4CursorGeometryTest all passed' 'actual CursorAnchorInfo preserves measured character bounds and explicitly replaces missing geometry without a caret' (@($w4Dvm) + @('-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Windows4CursorGeometryTest'))
-W4NativeProbe dalvikvm.exe 'Windows4InputBindingTest all passed' 'actual input service retains a bound editor across later focus-only notifications and accepts real restarts' (@($w4Dvm) + @('-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Windows4InputBindingTest'))
+W4NativeProbe dalvikvm.exe 'Windows4ConfigurationTest all passed' 'actual Configuration merging keeps Hebrew/Arabic/English layout direction at all four task rotations' (@($w4FixtureVm) + @( 'gesher.Windows4ConfigurationTest'))
+W4NativeProbe dalvikvm.exe 'Windows4CursorGeometryTest all passed' 'actual CursorAnchorInfo preserves measured character bounds and explicitly replaces missing geometry without a caret' (@($w4FixtureVm) + @( 'gesher.Windows4CursorGeometryTest'))
+W4NativeProbe dalvikvm.exe 'Windows4InputBindingTest all passed' 'actual input service retains a bound editor across later focus-only notifications and accepts real restarts' (@($w4FixtureVm) + @( 'gesher.Windows4InputBindingTest'))
 
 function W4Check([string] $Mode, [string] $What, $Problems) {
   if (@($Problems).Count -eq 0) { Write-Host "PASS  windows4: $What ($Mode)" }

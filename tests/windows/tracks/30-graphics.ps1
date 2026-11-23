@@ -27,8 +27,8 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
   }
   $bcpGraphics = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
   $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
-  foreach ($a in @("-Xbootclasspath:$bcpGraphics", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-                   '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/graphics-tests.dex"), "gesher.$Main") + $Arguments) {
+  foreach ($a in @("-Xbootclasspath:${bcpGraphics}:$(NoDrive "$Dir/graphics-tests.dex")", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+                   '-Xint', '-Xusejit:false', "gesher.$Main") + $Arguments) {
     $psi.ArgumentList.Add($a)
   }
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'  # report a fault where it happens (crash.cc)

@@ -385,7 +385,7 @@ $env:GESHER_GRAPHICS84_EXPECTED_IMAGE=$graphics84Exe
 $graphics84Args=@('space argument','quote"argument','Unicode-אב')
 $bcpGraphics=(('core-oj','core-libart','core-icu4j','framework','gesher-app')|ForEach-Object{NoDrive "$Dir/$_.jar"})-join ':'
 $env:GESHER_GRAPHICS84_ARGS=Join-Path $graphics84Directory 'expected-argv.txt'
-[IO.File]::WriteAllLines($env:GESHER_GRAPHICS84_ARGS,[string[]](@("-Xbootclasspath:$bcpGraphics","-Ximage:$(NoDrive "$root/system")/framework/boot.art",'-Xint','-Xusejit:false','-cp',(NoDrive "$Dir/graphics-tests.dex"),'gesher.GraphicsFixture')+$graphics84Args))
+[IO.File]::WriteAllLines($env:GESHER_GRAPHICS84_ARGS,[string[]](@("-Xbootclasspath:${bcpGraphics}:$(NoDrive "$Dir/graphics-tests.dex")","-Ximage:$(NoDrive "$root/system")/framework/boot.art",'-Xint','-Xusejit:false','gesher.GraphicsFixture')+$graphics84Args))
 # Each input slot belongs to g BEFORE open/read/close, including unknown return.
 # One-byte managed requests keep CUMULATIVE requested bytes <=16385 even when
 # a stream lies about Length, returns partial data, or changes during the read.

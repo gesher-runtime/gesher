@@ -102,8 +102,8 @@ if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
 # Runs a class from natives.dex with the interpreter; passes when it exits 0
 # and prints "all passed" (tests/dex-natives).
 function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @(), [string[]] $Arguments = @(), [string] $Bcp = $bcp) {
-  $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$Bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' @Extra -cp (NoDrive "$Dir/natives.dex") $Main @Arguments 2>&1 | Out-String
+  $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:${Bcp}:$(NoDrive "$Dir/natives.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' @Extra $Main @Arguments 2>&1 | Out-String
   if ($LASTEXITCODE -eq 0 -and $out.Contains('all passed')) {
     Write-Host "PASS  dalvikvm: $Name"
   } else {
@@ -156,23 +156,23 @@ if ($LASTEXITCODE -eq 0 -and $out.Contains('FrameworkSmoke all passed')) {
 RunDex 'framework natives on framework.jar: MessageQueue, Parcel, Binder' gesher.FrameworkNativesTest @() @() $bcpFramework
 
 Check 'framework shared memory: MemoryFile and MemoryIntArray' {
-  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkMemoryTest
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:${bcpFramework}:$(NoDrive "$Dir/framework-tests.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' gesher.FrameworkMemoryTest
 } @('FrameworkMemoryTest all passed')
 
 Check 'framework Scrypt: RFC 7914 and invalid parameters' {
-  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkScryptTest
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:${bcpFramework}:$(NoDrive "$Dir/framework-tests.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' gesher.FrameworkScryptTest
 } @('FrameworkScryptTest all passed')
 
 Check 'framework LocalSocket: filesystem streams, EOF, ownership and unsupported errors' {
-  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkLocalSocketTest
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:${bcpFramework}:$(NoDrive "$Dir/framework-tests.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' gesher.FrameworkLocalSocketTest
 } @('FrameworkLocalSocketTest all passed')
 
 Check 'framework CharsetUtils: UTF bytes, capacity and buffer ownership' {
-  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkCharsetTest
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:${bcpFramework}:$(NoDrive "$Dir/framework-tests.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' gesher.FrameworkCharsetTest
 } @('FrameworkCharsetTest all passed')
 
 # gesher-app drives lifecycle.apk's Activity to onResume (app/README.md): the
@@ -181,8 +181,8 @@ Check 'framework CharsetUtils: UTF bytes, capacity and buffer ownership' {
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework')
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system')
 Check 'framework SQLiteRawStatement: 64-bit pointers, bindings, UTF16 text and bounds' {
-  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkSQLiteRawStatementTest
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:${bcpFramework}:$(NoDrive "$Dir/framework-tests.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' gesher.FrameworkSQLiteRawStatementTest
 } @('FrameworkSQLiteRawStatementTest all passed')
 $bcpApp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `

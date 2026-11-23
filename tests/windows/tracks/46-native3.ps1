@@ -72,8 +72,8 @@ Check 'native3: ART CPU clocks measure the real caller and process, including a 
   'PASS  native3 clocks: the waiting caller keeps its own CPU clock while another thread runs',
   'PASS  native3 clocks: the process CPU clock includes worker CPU time', '0 test(s) failed')
 Check 'native3: Process proc natives use real procfs, full-width values and the Android field format' {
-  N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$n3Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native3ProcessTest',
+  N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:${n3Bcp}:$(NoDrive "$n2/native2-test.dex")", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', 'gesher.Native3ProcessTest',
     (NoDrive "$root/native3-proc-lines.txt"))
 } @('real thread/RSS counters', '64-bit decimal parsing', 'missing file preserves',
   'shared output index', 'parens, quotes, combined delimiters', 'truncated input returns false',

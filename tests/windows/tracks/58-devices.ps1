@@ -68,9 +68,9 @@ function DevCheck([string] $Name, [string] $Out, [object[]] $Sequences, [int] $C
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
 $bcpDev = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
-$dvmDev = @("-Xbootclasspath:$bcpDev", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+$dvmDev = @("-Xbootclasspath:${bcpDev}:$(NoDrive "$Dir/services-tests.dex")", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 Check 'devices: camera request selection is atomic against cancel and flush' {
-  DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+  DevRun "$Dir/dalvikvm.exe" ($dvmDev +
     'gesher.services.CameraRequestRaceTest') 90
 } @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed')
 $d = 'devices: location: '
@@ -232,7 +232,7 @@ if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
 
 # Admit the actual fixture APK and persist explicit operator grants before exercising
 # location/camera APIs. No application is granted permissions merely for requesting them.
-$permissionSetup = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+$permissionSetup = DevRun "$Dir/dalvikvm.exe" ($dvmDev +
   'gesher.services.FixturePermissionSetup', (NoDrive "$Dir/devices.apk"),
   'android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION',
   'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
@@ -278,7 +278,7 @@ $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
 # PM. Grant after the real install, through the running server's Binder policy.
 $installDevices = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'install', (NoDrive "$Dir/devices.apk")) 180
 if ($LASTEXITCODE -ne 0) { throw "Devices remote installation prerequisite failed: $installDevices" }
-$remotePermissions = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+$remotePermissions = DevRun "$Dir/dalvikvm.exe" ($dvmDev +
   'gesher.services.FixturePermissionSetup', '--remote', [string]$devicesUid, 'com.gesher.devices',
   'android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION',
   'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }

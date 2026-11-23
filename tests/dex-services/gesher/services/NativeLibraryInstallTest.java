@@ -17,7 +17,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -60,7 +59,9 @@ public final class NativeLibraryInstallTest {
         String originalRoot = System.getenv("ANDROID_ROOT"), originalData = System.getenv("ANDROID_DATA");
         String originalUidMode = System.getenv("GESHER_MICROG_SPOOF");
         try {
-            Os.setenv("ANDROID_ROOT", fixtures.resolve("device/system").toString(), true);
+            Path system = fixtures.resolve("device/system");
+            copy(Path.of(args[1]), system.resolve("framework/framework-res.apk"));
+            Os.setenv("ANDROID_ROOT", system.toString(), true);
             Os.setenv("ANDROID_DATA", data.toString(), true);
             Os.setenv("GESHER_MICROG_SPOOF", "1", true);
             Class<?> apkType = Class.forName("com.gesher.server.ApkPackage");
@@ -91,19 +92,17 @@ public final class NativeLibraryInstallTest {
             Class<?> pmType = Class.forName("com.gesher.server.PackageManagerService");
             Object pm = pmType.getConstructor(Collection.class).newInstance(List.of(installed));
             Class<?> installerType = Class.forName("com.gesher.server.Installer");
-            Class<?> entryType = Class.forName("com.gesher.server.Installer$Entry");
-            Constructor<?> entryConstructor = entryType.getDeclaredConstructor(String.class, String.class, long.class, long.class);
-            entryConstructor.setAccessible(true);
-            Map<String, Object> entries = new LinkedHashMap<>();
-            entries.put(pkg, entryConstructor.newInstance(pkg, code.toString(), 1L, 1L));
-            Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
-            Constructor<?> installerConstructor = installerType.getDeclaredConstructor(pmType, atmType, Map.class);
-            installerConstructor.setAccessible(true);
-            Object installer = installerConstructor.newInstance(pm, null, entries);
             Path registry = data.resolve("system/packages.list");
             Files.createDirectories(registry.getParent());
             byte[] registryBytes = (pkg + "\t" + code + "\t1\t1\n").getBytes(StandardCharsets.UTF_8);
             Files.write(registry, registryBytes);
+            // Decode the supported legacy entry through production registry parsing.
+            Method readRegistry = installerType.getDeclaredMethod("readRegistry");
+            readRegistry.setAccessible(true);
+            Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
+            Constructor<?> installerConstructor = installerType.getDeclaredConstructor(pmType, atmType, Map.class);
+            installerConstructor.setAccessible(true);
+            Object installer = installerConstructor.newInstance(pm, null, readRegistry.invoke(null));
             Path sentinel = data.resolve("data/" + pkg + "/files/retained.txt");
             Files.createDirectories(sentinel.getParent());
             byte[] retained = "retained old app data".getBytes(StandardCharsets.UTF_8);
@@ -162,7 +161,8 @@ public final class NativeLibraryInstallTest {
                     "preflight metadata retains original selected APK paths after temporary cluster cleanup");
             Object baseOnly = parse.invoke(null, splitBase);
             ParsedPackage baseManifest = (ParsedPackage) apkType.getField("parsed").get(baseOnly);
-            check(baseManifest.getSplitNames() == null
+            String[] baseSplits = baseManifest.getSplitNames();
+            check((baseSplits == null || baseSplits.length == 0)
                     && baseManifest.getUsesNativeLibraries().isEmpty()
                     && baseManifest.getUsesOptionalNativeLibraries().isEmpty(),
                     "single external APK parsing still ignores all unrelated sibling APKs");

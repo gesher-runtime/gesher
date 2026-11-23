@@ -44,8 +44,8 @@ Check 'exec3: Java process signals and binary tools (destroy, destroyForcibly, p
     'Exec3ProcessTest PASS mailbox traps run while stdin is idle and interrupt the read builtin')
 
 Check 'exec3: shared properties through Java, native ELF and tools (read-only, serials, persistence)' {
-  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3PropertiesTest (NoDrive $Dir) --load-runtime
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:${bcpApp}:$(NoDrive "$Dir/exec-test.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' gesher.Exec3PropertiesTest (NoDrive $Dir) --load-runtime
 } @('Exec3PropertiesTest PASS Java, getprop/setprop and ELF bionic share live properties',
     'Exec3PropertiesTest PASS ProcessBuilder tools and ELF children retain the boot property root with scratch ANDROID_DATA',
     'Exec3PropertiesTest PASS cached ELF property callbacks and serials observe another process',
@@ -58,8 +58,8 @@ $exec3SavedLogFile = $env:GESHER_LOG_FILE
 $env:GESHER_LOG_FILE = "$root/exec3-standalone.logcat"
 try {
   Check 'exec3: Java/NDK logcat records, filters, formats, clear and follow' {
-    & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-      -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3LogTest (NoDrive $Dir) --load-runtime
+    & "$Dir/dalvikvm.exe" "-Xbootclasspath:${bcpApp}:$(NoDrive "$Dir/exec-test.dex")" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+      -Xint '-Xusejit:false' gesher.Exec3LogTest (NoDrive $Dir) --load-runtime
   } @('Exec3LogTest PASS actual Java/NDK records, tags, priority filters, nine formats and live loggability properties',
       'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear')
 } finally {

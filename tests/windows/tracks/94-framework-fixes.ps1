@@ -13,8 +13,8 @@ function FixesRun([string[]] $Arguments, [int] $Seconds) {
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
 $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
-$dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
-  '-cp', (NoDrive "$Dir/services-tests.dex"))
+$dvmFixes = @("-Xbootclasspath:${bcpFixes}:$(NoDrive "$Dir/services-tests.dex")",
+  "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 
 $httpEngineOut = FixesRun ($dvmFixes + 'HttpEngineDeviceSmoke') 45
 $httpEngineCode = $LASTEXITCODE

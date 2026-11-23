@@ -7,14 +7,14 @@
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
 $bcpBt = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
-$dvmBt = @("-Xbootclasspath:$bcpBt", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
-  '-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.BluetoothHostTest')
+$dvmBt = @("-Xbootclasspath:${bcpBt}:$(NoDrive "$Dir/services-tests.dex")", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
+  'gesher.services.BluetoothHostTest')
 
 # Server-local fixture injection keeps request policy deterministic, including on
 # machines with a real adapter. This never opens consent UI or changes its radio.
-$requestOut = RunTimed "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcpBt",
+$requestOut = RunTimed "$Dir/dalvikvm.exe" @("-Xbootclasspath:${bcpBt}:$(NoDrive "$Dir/services-tests.dex")",
   "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
-  '-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.BluetoothRequestIntentTest') 120
+  'gesher.services.BluetoothRequestIntentTest') 120
 $requestCode = $LASTEXITCODE
 Check 'bluetooth: request intents preserve consent, permissions, observed state and bounded asynchronous completion' {
   $global:LASTEXITCODE = $requestCode

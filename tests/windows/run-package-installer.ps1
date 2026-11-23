@@ -156,9 +156,13 @@ try {
     RememberDevice
     if (-not $env:GESHER_BINDER) { throw 'Disposable installer device was not recorded.' }
     $env:GESHER_UID = '2000'; $env:GESHER_BINDER_UID = '2000'
-    InvokeFixture 'framework-serial' "$Dir/dalvikvm.exe" ($vm + @('-cp', (AndroidPath $ServicesDex),
-        'gesher.services.DeviceSerialIpcTest')) 'DeviceSerialIpcTest: remote Build.getSerial equals Build.UNKNOWN'
-    $test = $vm + @('-cp', (AndroidPath $ServicesDex), 'gesher.services.PackageInstallerIpcTest')
+    # These host-launched platform fixtures initialize the framework's private
+    # natives. Only their client VM extends its boot path; the device and APK
+    # processes keep their ordinary boot image and application namespaces.
+    $fixtureVm = $vm.Clone()
+    $fixtureVm[0] = "-Xbootclasspath:" + $bcp + ":" + (AndroidPath $ServicesDex)
+    InvokeFixture 'framework-serial' "$Dir/dalvikvm.exe" ($fixtureVm + 'gesher.services.DeviceSerialIpcTest') 'DeviceSerialIpcTest: remote Build.getSerial equals Build.UNKNOWN'
+    $test = $fixtureVm + 'gesher.services.PackageInstallerIpcTest'
     InvokeFixture 'remote-stream' "$Dir/dalvikvm.exe" ($test + @('stream', (AndroidPath $apk))) 'PackageInstallerIpcTest all passed'
     InvokeFixture 'retained-client-cancellation' "$Dir/dalvikvm.exe" ($test + 'cancel') 'PackageInstallerIpcTest all passed'
     $env:GESHER_UID = '12345'; $env:GESHER_BINDER_UID = '12345'

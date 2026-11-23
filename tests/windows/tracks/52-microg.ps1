@@ -8,9 +8,9 @@ if (Test-Path "$Dir/com.android.location.provider.jar") {
         "$root/system/etc/permissions" -Force
 }
 $microgVm = @(
-    "-Xbootclasspath:$bcpApp",
+    "-Xbootclasspath:${bcpApp}:$(NoDrive "$Dir/services-tests.dex")",
     "-Ximage:$(NoDrive "$root/system/framework/boot.art")",
-    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"),
+    '-Xint', '-Xusejit:false',
     'gesher.services.MicrogTest',
     (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures'))
 )
@@ -33,8 +33,8 @@ try {
     }
     if ($env:GESHER_MICROG_TEST_APK) {
         $consentVm = @(
-            "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system/framework/boot.art")",
-            '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"),
+            "-Xbootclasspath:${bcpApp}:$(NoDrive "$Dir/services-tests.dex")", "-Ximage:$(NoDrive "$root/system/framework/boot.art")",
+            '-Xint', '-Xusejit:false',
             'gesher.services.ServiceFixtureRunner', 'PermissionRequestsTest', (NoDrive $env:GESHER_MICROG_TEST_APK)
         )
         CheckTimed 'microg: runtime consent grant/deny and replacement race (injected test decisions)' `

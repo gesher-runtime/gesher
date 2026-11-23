@@ -69,9 +69,9 @@ try {
     $env:GESHER_IP_GEOLOCATION = '0'; $env:GESHER_APP_WINDOW = 'headless'
     $bcp = (@('core-oj','core-libart','core-icu4j','framework','gesher-app') |
         ForEach-Object { AndroidPath (Join-Path $RuntimeDir ($_ + '.jar')) }) -join ':'
-    $arguments = @("-Djava.io.tmpdir=$(AndroidPath (Join-Path $profile 'data'))", "-Xbootclasspath:$bcp",
+    $arguments = @("-Djava.io.tmpdir=$(AndroidPath (Join-Path $profile 'data'))", "-Xbootclasspath:${bcp}:$(AndroidPath $ServicesDex)",
         "-Ximage:$(AndroidPath (Join-Path $RuntimeDir 'framework/boot.art'))", '-Xint','-Xusejit:false',
-        '-cp',(AndroidPath $ServicesDex),'gesher.services.ServiceFixtureRunner','PackageUninstallTest',
+        'gesher.services.ServiceFixtureRunner','PackageUninstallTest',
         (AndroidPath $TargetV1),(AndroidPath $TargetV2),(AndroidPath $CallerApk))
     $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $RuntimeDir 'dalvikvm.exe'))
     $start.Arguments = ($arguments | ForEach-Object { QuoteArgument $_ }) -join ' '

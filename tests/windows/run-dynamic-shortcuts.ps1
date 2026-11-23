@@ -86,7 +86,8 @@ try {
     $started=$true
     foreach($line in [IO.File]::ReadAllLines((Join-Path $profile 'data/system/gesher-device'))){if($line -match '^device=(.+)$'){$script:device=$Matches[1].Trim()}}
     $normalVm=$vm
-    $script:vm=$normalVm[0..3]+@('-cp',(A (Join-Path $RuntimeDir 'services-tests.dex')),'gesher.services.DynamicShortcutTest')
+    $script:vm=$normalVm[0..3]+@('gesher.services.DynamicShortcutTest')
+    $script:vm[0] += ':' + (A (Join-Path $RuntimeDir 'services-tests.dex'))
     $publish=Launcher 'publish' @('--publish','com.gesher.lifecycle')
     $script:vm=$normalVm
     if(-not $publish.finished -or $publish.exitCode -ne 0){throw 'Shortcut CLI publication failed'}

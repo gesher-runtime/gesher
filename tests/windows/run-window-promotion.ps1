@@ -30,11 +30,13 @@ if ($Worker) {
     $control = A (Join-Path $FixtureDir 'windowpromotion-control.dex')
     $logs = Join-Path $OutputRoot 'logs'
     $profile = Join-Path $OutputRoot 'profile/Gesher'
-    function Vm([string] $label, [string[]] $arguments) {
+    function Vm([string] $label, [string[]] $arguments, [switch] $ControlFixture) {
         $start = New-Object Diagnostics.ProcessStartInfo
         $start.FileName = Join-Path $RuntimeDir 'dalvikvm.exe'
         $start.WorkingDirectory = $RuntimeDir
-        $start.Arguments = (($base + $arguments | ForEach-Object { Q $_ }) -join ' ')
+        $options = $base.Clone()
+        if ($ControlFixture) { $options[0] += ':' + $control }
+        $start.Arguments = (($options + $arguments | ForEach-Object { Q $_ }) -join ' ')
         $start.UseShellExecute = $false; $start.CreateNoWindow = $true
         $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
         $process = New-Object Diagnostics.Process; $process.StartInfo = $start
@@ -49,7 +51,7 @@ if ($Worker) {
         } finally { $process.Dispose() }
     }
     function Launch([string] $label, [string[]] $arguments) { Vm $label (@('-cp',$app,'com.gesher.app.Launcher') + $arguments) }
-    function Control([string] $command) { Vm $command @('-cp',"${control}:$app",'WindowPromotionControl',$command) }
+    function Control([string] $command) { Vm $command @('WindowPromotionControl',$command) -ControlFixture }
     function WaitMarker([string] $path, [string] $marker) {
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
