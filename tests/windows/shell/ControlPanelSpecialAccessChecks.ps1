@@ -215,6 +215,13 @@ try {
     Assert-Access ((@($taken | Sort-Object) -join ',') -eq (@($mine | Sort-Object) -join ',')) "The package's tokens are taken: $($taken -join ',')"
     Assert-Access (-not (Test-Path (Join-Path $script:PanelResultsDir $mine[0])) -and (Test-Path (Join-Path $script:PanelResultsDir 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))) 'Taken files go; another app''s stay'
     Assert-Access (@(Receive-PanelResultTokens 'com.example.app').Count -eq 0) 'A token is taken once'
+    # A file the device holds open cannot be removed: its token is still reported.
+    $held = 'dddddddddddddddddddddddddddddddd'
+    $heldPath = Join-Path $script:PanelResultsDir $held
+    [IO.File]::WriteAllText($heldPath, "com.example.app`n")
+    $stream = [IO.File]::Open($heldPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try { $heldTaken = @(Receive-PanelResultTokens 'com.example.app') } finally { $stream.Dispose() }
+    Assert-Access ($heldTaken.Count -eq 1 -and $heldTaken[0] -eq $held -and (Test-Path -LiteralPath $heldPath)) 'A token whose file could not be removed is still reported'
 } finally { Remove-Item -LiteralPath $script:PanelResultsDir -Recurse -Force -ErrorAction SilentlyContinue }
 
 # The App info dialog's switches in actual WPF, through the production background

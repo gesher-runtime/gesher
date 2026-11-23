@@ -105,9 +105,13 @@ sees the user's decision. The result follows AOSP Settings (as known: packages/a
 is not in the local AOSP checkout): ExternalSourcesDetails sets a result only when the user
 turns the switch during the visit, RESULT_OK if the last turn was on and RESULT_CANCELED if
 off, so an app already allowed that is closed without a turn gets RESULT_CANCELED; the other
-details screens set no result (RESULT_CANCELED). The request file stays one package name,
+details screens set no result (RESULT_CANCELED). A turn marks every waiting Install unknown
+apps request of that package (the device does not know which one the details answer; requests
+for one package share the open details). The request file stays one package name,
 so a Control Center of an older Gesher still shows the details (it reports nothing; the result
-then comes at the timeout). A request that one for another app replaces before the Control
+then comes at the timeout). The Control Center records the package it shows
+(`data/system/control-panel-showing`, written before it takes the request) so a new request
+never replaces that package's tokens, and a device start clears both. A request that one for another app replaces before the Control
 Center showed it is answered at once; one for the same app joins the open details. A request
 whose details never report is answered after 15 minutes, at most 32 wait, and an activity
 that finished or died meanwhile gets nothing. Windows' pages and the Control Center's own

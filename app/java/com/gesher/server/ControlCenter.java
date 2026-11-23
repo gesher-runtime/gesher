@@ -39,6 +39,12 @@ final class ControlCenter {
      * comes at the timeout); a current one takes the files of the package it shows.
      */
     static final String RESULTS = "system/control-panel-results";
+    /**
+     * The package whose details the Control Center shows for a request, written by it before
+     * it takes the request and removed when the details close (gesher-control-panel.ps1).
+     */
+    static final String SHOWING = "system/control-panel-showing";
+    private static final String SHOWING_NAME = "control-panel-showing";
 
     /** Opens the Control Center for a request awaiting a result. */
     interface Opener {
@@ -131,26 +137,53 @@ final class ControlCenter {
      */
     static synchronized void publishRequest(File request, File results, String packageName,
             String token, java.util.function.Consumer<String> replaced) throws IOException {
-        if (token != null) {
-            if (packageName == null || !validToken(token)) throw new IOException("invalid token");
-            writeAtomically(new File(results, token), packageName);
+        if (token != null && (packageName == null || !validToken(token))) {
+            throw new IOException("invalid token");
         }
-        File[] waiting = results.listFiles();
-        if (waiting != null) {
-            for (File file : waiting) {
-                String name = file.getName();
-                if (!validToken(name) || name.equals(token)) continue;
-                String owner;
-                try {
-                    owner = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim();
-                } catch (IOException e) {
-                    continue;  // taken by the Control Center meanwhile
-                }
-                if (owner.equals(packageName)) continue;
-                if (file.delete() && replaced != null) replaced.accept(name);
+        boolean published = false;
+        try {
+            if (token != null) writeAtomically(new File(results, token), packageName);
+            // The package whose details the Control Center shows (or is taking): its tokens
+            // are being answered by those details, never replaced.
+            String showing = null;
+            try {
+                showing = new String(Files.readAllBytes(new File(request.getParentFile(),
+                        SHOWING_NAME).toPath()), StandardCharsets.UTF_8).trim();
+            } catch (IOException none) {
+                // no details shown
             }
+            File[] waiting = results.listFiles();
+            if (waiting != null) {
+                for (File file : waiting) {
+                    String name = file.getName();
+                    if (!validToken(name) || name.equals(token)) continue;
+                    String owner;
+                    try {
+                        owner = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim();
+                    } catch (IOException e) {
+                        continue;  // taken by the Control Center meanwhile
+                    }
+                    if (owner.equals(packageName) || owner.equals(showing)) continue;
+                    if (file.delete() && replaced != null) replaced.accept(name);
+                }
+            }
+            writeRequest(request, packageName);
+            published = true;
+        } finally {
+            // Whatever failed, no token file outlives a request that was not published.
+            if (!published && token != null) new File(results, token).delete();
         }
-        writeRequest(request, packageName);
+    }
+
+    /**
+     * A new device: no request from an earlier one waits (their callers are gone), and no
+     * details are shown yet. Removes the token files, leftover temporary files and the
+     * showing marker.
+     */
+    static void clearResults(String dataDir) {
+        File[] files = new File(dataDir, RESULTS).listFiles();
+        if (files != null) for (File file : files) file.delete();
+        new File(dataDir, SHOWING).delete();
     }
 
     /** The request's result was answered (or timed out): its token file goes. */

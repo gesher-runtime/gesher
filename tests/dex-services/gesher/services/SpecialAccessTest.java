@@ -579,6 +579,29 @@ public final class SpecialAccessTest {
                     && new String(java.nio.file.Files.readAllBytes(requestFile.toPath()), "UTF-8").equals("com.example.third\n"),
                     "A request with no token replaces waiting ones too");
             rejects(java.io.IOException.class, () -> publish.invoke(null, requestFile, resultsDir, "com.example.x", "../evil", tell));
+            // The package whose details the Control Center shows keeps its tokens.
+            File showingFile = new File(directory, "system/control-panel-showing");
+            String td = "dddddddddddddddddddddddddddddddd", te = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+            publish.invoke(null, requestFile, resultsDir, "com.example.shown", td, tell);
+            java.nio.file.Files.write(showingFile.toPath(), "com.example.shown".getBytes("UTF-8"));
+            int toldBefore = told.size();
+            publish.invoke(null, requestFile, resultsDir, "com.example.next", te, tell);
+            check(new File(resultsDir, td).isFile() && told.size() == toldBefore,
+                    "A new request never replaces the shown package's tokens");
+            // A request that cannot be published leaves no token file.
+            File blocked = new File(directory, "system/blocked-request");
+            check(blocked.mkdirs(), "Cannot create the blocking directory");
+            java.nio.file.Files.write(new File(blocked, "child").toPath(), new byte[1]);  // not replaceable
+            String tf = "ffffffffffffffffffffffffffffffff";
+            rejects(Exception.class, () -> publish.invoke(null, blocked, resultsDir, "com.example.next", tf, tell));
+            check(!new File(resultsDir, tf).exists(), "A failed publication removes its token file");
+            // A device start clears waiting results, temporary files and the showing marker.
+            java.nio.file.Files.write(new File(resultsDir, "aaaa.tmp").toPath(), new byte[1]);
+            Method clear = type("ControlCenter").getDeclaredMethod("clearResults", String.class);
+            clear.setAccessible(true);
+            clear.invoke(null, directory.getPath());
+            String[] left = resultsDir.list();
+            check(left != null && left.length == 0 && !showingFile.exists(), "A device start clears the results: " + java.util.Arrays.toString(left));
 
             // Persistence: a restarted ledger over the same file has the user's decisions.
             setAccess(pm, APP, AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, true);

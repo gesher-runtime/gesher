@@ -27,6 +27,8 @@ $script:UpdateDirectory = Join-Path $root 'updates'
 $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
 # Requests waiting for their result: one file per token, holding the package (ControlCenter.java).
 $script:PanelResultsDir = Join-Path $root 'data/system/control-panel-results'
+# The package whose details are shown for a request: a new request never replaces its tokens.
+$script:PanelShowingFile = Join-Path $root 'data/system/control-panel-showing'
 $script:PanelLogFile = Join-Path $root 'logs/control-panel.log'
 $script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
 # Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
@@ -906,10 +908,30 @@ function Receive-PanelResultTokens([string] $pkg) {
         if ($file.Name -cnotmatch '^[0-9a-f]{32}$') { continue }
         try { $owner = [IO.File]::ReadAllText($file.FullName).Trim() } catch { continue }
         if ($owner -cne $pkg) { continue }
-        try { [IO.File]::Delete($file.FullName) } catch { continue }
+        # The device may be reading the file: retry briefly. A token is reported even if its
+        # file stays; the device answers each token once and removes its file then.
+        foreach ($attempt in 1..5) {
+            try { [IO.File]::Delete($file.FullName); break } catch { Start-Sleep -Milliseconds 20 }
+        }
         $tokens.Add($file.Name)
     }
     return $tokens.ToArray()
+}
+
+# Records the package whose details are shown for a request ($null: none), for
+# ControlCenter.publishRequest. Written before the request is taken.
+function Set-PanelShowing([string] $pkg) {
+    try {
+        if ($pkg) { [IO.File]::WriteAllText($script:PanelShowingFile, $pkg) }
+        elseif (Test-Path -LiteralPath $script:PanelShowingFile) { [IO.File]::Delete($script:PanelShowingFile) }
+    } catch { Write-PanelLog "showing marker: $($_.Exception.Message)" }
+}
+
+# Adds result tokens to the details shown, once each.
+function Add-PanelShowingTokens([string[]] $tokens) {
+    foreach ($token in $tokens) {
+        if ($token -and -not $script:ShowingTokens.Contains($token)) { $script:ShowingTokens.Add($token) }
+    }
 }
 
 # FromList: the user opened it from the app list, rather than an app from Settings' screens.
@@ -958,17 +980,35 @@ function Invoke-PanelRequest {
     $request = $null
     if ($script:ShowingAppInfo -and $script:ShowingPackage -and -not $script:IsBusy) {
         # New requests for the app shown join these details; another app's waits for them.
-        foreach ($token in (Receive-PanelResultTokens $script:ShowingPackage)) { $script:ShowingTokens.Add($token) }
+        Add-PanelShowingTokens (Receive-PanelResultTokens $script:ShowingPackage)
         $pending = $null
         try { $pending = ConvertFrom-PanelRequest ([IO.File]::ReadAllText($script:PanelRequestFile).Trim()) } catch { }
         if ($pending -and $pending.Package -ceq $script:ShowingPackage) {
             $taken = ConvertFrom-PanelRequest (Read-PanelRequest)
             if ($taken -and $taken.Package -ceq $script:ShowingPackage) {
-                foreach ($token in (Receive-PanelResultTokens $script:ShowingPackage)) { $script:ShowingTokens.Add($token) }
+                Add-PanelShowingTokens (Receive-PanelResultTokens $script:ShowingPackage)
                 $raise = $true
             }
         }
-    } elseif (-not $script:IsBusy -and -not $script:ShowingAppInfo) { $request = Read-PanelRequest }
+    } elseif (-not $script:IsBusy -and -not $script:ShowingAppInfo) {
+        # Mark the package shown before taking its request, so a request published meanwhile
+        # does not replace its tokens (ControlCenter.publishRequest).
+        $peek = $null
+        try {
+            if (Test-Path -LiteralPath $script:PanelRequestFile) {
+                $peek = ConvertFrom-PanelRequest ([IO.File]::ReadAllText($script:PanelRequestFile).Trim())
+            }
+        } catch { }
+        if ($peek) { Set-PanelShowing $peek.Package }
+        $request = Read-PanelRequest
+        $taken = ConvertFrom-PanelRequest $request
+        if ($peek -and (-not $taken -or $taken.Package -cne $peek.Package)) {
+            # Replaced between the two reads: the marked package's requests will not be shown.
+            $lost = @(Receive-PanelResultTokens $peek.Package)
+            if ($lost.Count) { try { Send-PanelSettingsClosed $lost } catch { } }
+            Set-PanelShowing $(if ($taken) { $taken.Package } else { $null })
+        }
+    }
     if ($null -ne $request) { $raise = $true }
     if (-not $raise) { return }
     if ($window.WindowState -eq [System.Windows.WindowState]::Minimized) {
@@ -983,13 +1023,14 @@ function Invoke-PanelRequest {
         $script:ShowingAppInfo = $true
         $script:ShowingPackage = $parsed.Package
         $script:ShowingTokens.Clear()
-        foreach ($token in (Receive-PanelResultTokens $parsed.Package)) { $script:ShowingTokens.Add($token) }
+        Add-PanelShowingTokens (Receive-PanelResultTokens $parsed.Package)
         try { Show-AppInfoDialog $parsed.Package }
         finally {
             $tokens = $script:ShowingTokens.ToArray()
             $script:ShowingTokens.Clear()
             $script:ShowingPackage = $null
             $script:ShowingAppInfo = $false
+            Set-PanelShowing $null
             if ($tokens.Count) { try { Send-PanelSettingsClosed $tokens } catch { } }
         }
     }

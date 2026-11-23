@@ -400,6 +400,8 @@ public final class SystemServer {
         }
 
         void start() throws Exception {
+            // Settings requests of an earlier device wait for nobody now (SettingsResults).
+            ControlCenter.clearResults(Device.dataDir());
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
             // The launcher waits for this file: the services are registered.

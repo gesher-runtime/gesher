@@ -10,7 +10,7 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     [IO.Path]::GetFullPath($PanelPath), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 foreach ($name in 'Read-PanelRequest', 'Get-AppInstallTimes', 'Invoke-PanelRequest', 'ConvertFrom-PanelRequest',
-        'Receive-PanelResultTokens') {
+        'Receive-PanelResultTokens', 'Set-PanelShowing', 'Add-PanelShowingTokens', 'Write-PanelLog') {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -69,6 +69,8 @@ New-Item -ItemType Directory -Force (Join-Path $root 'data/system') | Out-Null
 try {
     $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
     $script:PanelResultsDir = Join-Path $root 'data/system/control-panel-results'
+    $script:PanelShowingFile = Join-Path $root 'data/system/control-panel-showing'
+    $script:PanelLogFile = Join-Path $root 'logs/control-panel.log'
 
     # A request is read once and leaves nothing behind.
     Assert-Request ($null -eq (Read-PanelRequest)) 'A missing request was read'
@@ -159,6 +161,7 @@ try {
     function Show-AppInfoDialog([string] $pkg) {
         $script:Shown.Add($pkg)
         Assert-Request ($script:ShowingPackage -eq $pkg -and $script:Reported.Count -eq 0) 'Nothing is reported while the details are open'
+        Assert-Request ((Test-Path -LiteralPath $script:PanelShowingFile) -and [IO.File]::ReadAllText($script:PanelShowingFile) -eq $pkg) 'The shown package is recorded for the device'
         # The same app again, from a second request: taken into these details.
         Write-Token $second 'com.example.app'
         [IO.File]::WriteAllText($script:PanelRequestFile, "com.example.app`n")
@@ -179,6 +182,7 @@ try {
     $both = (@($first, $second) | Sort-Object) -join ','
     Assert-Request ($script:Reported.Count -eq 1 -and $script:Reported[0] -eq $both) "Both requests are answered as the details close: $($script:Reported -join ' / ')"
     Assert-Request (-not $script:ShowingAppInfo -and $null -eq $script:ShowingPackage -and $script:ShowingTokens.Count -eq 0) 'The shown state was left set'
+    Assert-Request (-not (Test-Path -LiteralPath $script:PanelShowingFile)) 'The shown-package record outlived the details'
     # The waiting request for the other app opens next, and is answered in turn.
     function Show-AppInfoDialog([string] $pkg) { $script:Shown.Add($pkg) }
     Invoke-PanelRequest

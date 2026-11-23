@@ -115,7 +115,9 @@ final class SettingsResults {
     /**
      * The user turned a special access switch (the Control Center's details): the waiting
      * requests of that app's screen for it remember the last turn (ExternalSourcesDetails'
-     * setResult on a change).
+     * setResult on a change). Every waiting Install unknown apps request of the package is
+     * marked, not only the one whose details were open: the turns come from the device, which
+     * does not know which request the Control Center showed (they normally share the details).
      */
     void toggled(String packageName, String opName, boolean allowed) {
         if (!"android:request_install_packages".equals(opName)) return;
