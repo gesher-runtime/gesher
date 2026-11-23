@@ -13,6 +13,7 @@
 #include <shellapi.h>
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -52,9 +53,11 @@ class GesherDropTarget : public IDropTarget {
   std::atomic<ULONG> ref_count_{1};
   HWND hwnd_ = nullptr;
   bool format_supported_ = false;
+  struct DropFiles;
+  std::vector<std::unique_ptr<DropFiles>> file_drops_;
 
   bool QuerySupported(IDataObject* pDataObj);
-  void ExtractAndDispatchDrop(IDataObject* pDataObj, POINT client_pt);
+  bool ExtractAndDispatchDrop(IDataObject* pDataObj, POINT client_pt);
 };
 
 // Dispatches a drag event to the Android WindowSession for the given window handle.

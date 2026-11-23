@@ -2809,10 +2809,12 @@ public final class WindowSession extends IWindowSession.Stub {
                 "application/octet-stream"
             };
             desc = new ClipDescription("Files", mimeTypes);
-            android.net.Uri firstUri = android.net.Uri.fromFile(new java.io.File(files[0]));
+            android.net.Uri firstUri = android.net.Uri.fromFile(new java.io.File(
+                    com.gesher.server.Zygote.fromWindowsPath(files[0])));
             data = new ClipData(desc, new ClipData.Item(firstUri));
             for (int i = 1; i < files.length; i++) {
-                data.addItem(new ClipData.Item(android.net.Uri.fromFile(new java.io.File(files[i]))));
+                data.addItem(new ClipData.Item(android.net.Uri.fromFile(new java.io.File(
+                        com.gesher.server.Zygote.fromWindowsPath(files[i])))));
             }
         } else if (text != null && !text.isEmpty()) {
             data = ClipData.newPlainText("text/plain", text);
