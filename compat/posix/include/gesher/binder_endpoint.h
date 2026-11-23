@@ -9,6 +9,8 @@
 #include "binder_bootstrap.h"
 #include "windows_process_identity.h"
 
+namespace gesher::record_locks { struct LinuxFlock; }
+
 namespace gesher::binder_endpoint {
 
 constexpr DWORD kPinRights = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
@@ -119,5 +121,9 @@ inline Binding& Current() {
 }
 
 bool EnrollChild(HANDLE process);
+int FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* input_and_output);
+// Closes the caller-owned pin after the broker has captured file identity.
+// The pointer is cleared only if the pin was closed.
+int FileRecordClosed(HANDLE* pin);
 
 }  // namespace gesher::binder_endpoint

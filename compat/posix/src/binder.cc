@@ -34,6 +34,7 @@
 #include "binder_file_descriptions.h"
 #include "binder_sg.h"
 #include "binder_wire.h"
+#include "record_lock_operation.h"
 #include "internal.h"
 #include "native_fence_internal.h"
 #include "record_lock_descriptors.h"
@@ -788,6 +789,73 @@ bool binder_endpoint::EnrollChild(HANDLE process) {
   return binder_bootstrap::Transfer(pipe, &request, sizeof(request), true, deadline) &&
          binder_bootstrap::Transfer(pipe, reply, sizeof(reply), false, deadline) &&
          reply[0] == sizeof(reply[1]) && reply[1] == 0;
+}
+
+namespace {
+struct RecordPipe {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  ~RecordPipe() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+};
+
+int ReceiveRecordStatus(HANDLE pipe, std::vector<uint8_t>* reply) {
+  if (!Receive(pipe, reply) || reply->size() < sizeof(int32_t)) return EIO;
+  int32_t status;
+  std::memcpy(&status, reply->data(), sizeof(status));
+  if (status > 0 || status < -4095 || (status != 0 && reply->size() != sizeof(status))) return EPROTO;
+  return -status;
+}
+}  // namespace
+
+int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
+  if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
+  const std::wstring name = PipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());
+  Message request;
+  request.Put<uint32_t>(wire::kFileRecordLock);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put<uint64_t>(binder_bootstrap::EncodeHandle(file));
+  request.Put<int32_t>(command);
+  request.Put<int16_t>(flock->type);
+  request.Put<int16_t>(flock->whence);
+  request.Put<int64_t>(flock->start);
+  request.Put<int64_t>(flock->length);
+  request.Put<int32_t>(flock->pid);
+  std::vector<uint8_t> reply;
+  if (!Send(pipe.handle, request)) return EIO;
+  int error = ReceiveRecordStatus(pipe.handle, &reply);
+  if (error) return error;
+  if (command != 5 && command != 36) return reply.size() == sizeof(int32_t) ? 0 : EPROTO;
+  Reader in{reply.data() + sizeof(int32_t), reply.data() + reply.size()};
+  return in.Get(&flock->type) && in.Get(&flock->whence) && in.Get(&flock->start) &&
+      in.Get(&flock->length) && in.Get(&flock->pid) && in.p == in.end ? 0 : EPROTO;
+}
+
+int binder_endpoint::FileRecordClosed(HANDLE* pin) {
+  if (!binder_endpoint::Current().IsGuest() || !pin || !*pin) return EACCES;
+  const std::wstring name = PipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());
+  Message request;
+  request.Put<uint32_t>(wire::kFileRecordClose);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put<uint64_t>(binder_bootstrap::EncodeHandle(*pin));
+  std::vector<uint8_t> reply;
+  if (!Send(pipe.handle, request)) return EIO;
+  int error = ReceiveRecordStatus(pipe.handle, &reply);
+  if (error) return error;
+  if (reply.size() != sizeof(int32_t)) return EPROTO;
+  if (!CloseHandle(*pin)) return gesher::ErrnoFromWin32(GetLastError());
+  *pin = nullptr;
+  Message acknowledge;
+  acknowledge.Put<uint32_t>(1);
+  if (!Send(pipe.handle, acknowledge)) return EIO;
+  error = ReceiveRecordStatus(pipe.handle, &reply);
+  return !error && reply.size() != sizeof(int32_t) ? EPROTO : error;
 }
 
 bool BinderDeviceExists() {

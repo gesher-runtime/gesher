@@ -116,6 +116,13 @@ enum Op : uint32_t {
   // a Windows process handle in the admitted parent's handle table.
   // -> {magic, version, source (u64)}; <- {status}
   kEnrollChild = 13,
+  // Protected regular-file record locks. Requests refer only to a handle in
+  // the pipe sender's table. The broker derives process and file identities.
+  // -> {magic, version, file_handle:u64, command:i32, flock fields}; <- {-errno or 0[, flock fields]}
+  kFileRecordLock = 14,
+  // -> {magic, version, file_handle:u64}; <- {-errno or 0}. After the client
+  // closes its temporary pin, it sends {1:u32} and receives the commit status.
+  kFileRecordClose = 15,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

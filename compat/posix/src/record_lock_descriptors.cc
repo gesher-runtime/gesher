@@ -1,6 +1,7 @@
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
 #include "internal.h"
+#include <gesher/binder_endpoint.h>
 #include <bcrypt.h>
 #include <cstdlib>
 #include <new>
@@ -30,6 +31,7 @@ struct LocalState {
 // Checked, process-owned allocation: no static destructor races other fd
 // users or runs registry/anchor cleanup during CRT/VM destruction.
 LocalState* local = nullptr;
+bool guest_record_locks = false;  // Protected by DescriptorGuard.
 int WinError() { return gesher::ErrnoFromWin32(GetLastError()); }
 uint64_t Birth(const FILETIME& value) {
   return (static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
@@ -215,6 +217,55 @@ int Description(RegistryState* state, HANDLE file, const File& identity, bool cr
   *allocated = slot;
   return 0;
 }
+
+int RunOperation(HANDLE file, const ProcessIdentity& caller, const PreparedOperation& prepared,
+                 LinuxFlock* broker_output, void* user_flock) {
+  int error = CloseCommitted();
+  RegistryState* state = nullptr;
+  if (!error) error = local->registry.Begin(&state);
+  if (error) return error;
+  Pruned pruned{};
+  PruneDeadOwners(state, &pruned);
+  bool changed = pruned.references || pruned.process_locks || pruned.description_locks || pruned.waits;
+  changed |= Collect(state, prepared.file);
+  Owner owner{Ownership::kProcess, caller.pid, caller.created};
+  Anchor* allocated = nullptr;
+  if (prepared.ofd) {
+    error = Description(state, file, prepared.file, !prepared.query && prepared.input.type != 2,
+                        &owner, &allocated);
+  }
+  LinuxFlock output{};
+  bool mutated = false;
+  if (!error) error = ApplyOperation(state, owner, prepared, &output, &mutated);
+  if (!error && prepared.query && user_flock) error = CopyQueryResult(output, user_flock);
+  if (!error && (changed || mutated || allocated)) error = local->registry.Commit();
+  if (error) {
+    CancelPending();
+    if (allocated) {
+      allocated->close_after_commit = true;
+      int cleanup = ClosePrivate(allocated);
+      if (cleanup) error = cleanup;
+    }
+  } else {
+    error = CloseCommitted();
+  }
+  local->registry.Unlock();
+  if (!error && prepared.query && broker_output) *broker_output = output;
+  return error;
+}
+
+int CloseFileLocks(RegistryState* state, const File& file, const ProcessIdentity& caller) {
+  Pruned pruned{};
+  PruneDeadOwners(state, &pruned);
+  Owner process{Ownership::kProcess, caller.pid, caller.created};
+  RemoveOwner(&state->locks, process, &file);
+  Collect(state, file);
+  int error = local->registry.Commit();
+  if (error) CancelPending();
+  else error = CloseCommitted();
+  local->registry.Unlock();
+  return error;
+}
 }  // namespace
 
 extern "C" void gesher_descriptor_transaction_anchor_v1() {}
@@ -252,48 +303,52 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
   if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   PreparedOperation prepared{};
   int error = PrepareOperation(file, command, user_flock, &prepared);
-  if (!error) error = Initialize();
-  if (!error) error = CloseCommitted();  // Retry only private anchors whose references were already unpublished.
-  RegistryState* state = nullptr;
-  if (!error) error = local->registry.Begin(&state);
   if (error) return errno = error, -1;
-  Pruned pruned{};
-  PruneDeadOwners(state, &pruned);
-  bool changed = pruned.references || pruned.process_locks || pruned.description_locks || pruned.waits;
-  changed |= Collect(state, prepared.file);
-  Owner owner{Ownership::kProcess, local->process.pid, local->process.created};
-  Anchor* allocated = nullptr;
-  if (prepared.ofd) error = Description(state, file, prepared.file, !prepared.query && prepared.input.type != 2,
-                                       &owner, &allocated);
-  LinuxFlock output{};
-  bool mutated = false;
-  if (!error) error = ApplyOperation(state, owner, prepared, &output, &mutated);
-  if (!error && prepared.query) error = CopyQueryResult(output, user_flock);
-  if (!error && (changed || mutated || allocated)) error = local->registry.Commit();
-  if (error) {
-    CancelPending();
-    if (allocated) {
-      allocated->close_after_commit = true;
-      int cleanup = ClosePrivate(allocated);
-      if (cleanup) error = cleanup;
-    }
-  } else error = CloseCommitted();
-  local->registry.Unlock();
+  if (binder_endpoint::Current().IsGuest()) {
+    LinuxFlock output;
+    std::memcpy(&output, &prepared.input, sizeof(output));
+    error = binder_endpoint::FileRecordLock(file, command, &output);
+    if (!error && prepared.query) error = CopyQueryResult(output, user_flock);
+    if (!error && !prepared.query && prepared.input.type != 2) guest_record_locks = true;
+  } else {
+    error = Initialize();
+    if (!error) error = RunOperation(file, local->process, prepared, nullptr, user_flock);
+  }
   if (error) return errno = error, -1;
   errno = saved_errno;
   return 0;
 }
 
+int BrokerDescriptorFcntl(HANDLE file, const ProcessIdentity& caller, int command,
+                          const LinuxFlock& input, LinuxFlock* output) {
+  DescriptorGuard guard;
+  PreparedOperation prepared{};
+  int error = PrepareOperation(file, command, &input, &prepared);
+  if (!error) error = Initialize();
+  return error ? error : RunOperation(file, caller, prepared, output, nullptr);
+}
+
+int BrokerDescriptorClosed(const File& file, const ProcessIdentity& caller) {
+  DescriptorGuard guard;
+  int error = Initialize();
+  if (!error) error = CloseCommitted();
+  RegistryState* state = nullptr;
+  if (!error) error = local->registry.Begin(&state);
+  return error ? error : CloseFileLocks(state, file, caller);
+}
+
 ClosingDescriptor::ClosingDescriptor(int descriptor) : descriptor_(descriptor) {
   error_ = DrainPrivateReservations();
   if (error_) return;
-  if (!local) return;
-  error_ = CloseCommitted();
+  brokered_ = binder_endpoint::Current().IsGuest();
+  if (brokered_ ? !guest_record_locks : !local) return;
+  if (!brokered_) error_ = CloseCommitted();
   if (error_) return;
   HANDLE file = gesher::HandleFromFd(descriptor);
   if (file == INVALID_HANDLE_VALUE || GetFileType(file) != FILE_TYPE_DISK) return;
-  error_ = FileIdentity(file, &file_);
+  if (!brokered_) error_ = FileIdentity(file, &file_);
   if (!error_ && !DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &probe_, 0, FALSE, DUPLICATE_SAME_ACCESS)) error_ = WinError();
+  if (brokered_) return;
   if (!error_) error_ = local->registry.Begin(&staged_);
   if (!error_) {
     begun_ = true;
@@ -308,26 +363,21 @@ int ClosingDescriptor::Finish(bool closed_or_replaced) {
   if (completed_) return EINVAL;
   completed_ = true;
   if (error_) return error_;
-  if (!begun_) return 0;
+  if (!probe_) return 0;
   bool same = false;
   int error = 0;
   if (!closed_or_replaced) {
     HANDLE current = gesher::HandleFromFd(descriptor_);
     error = current == INVALID_HANDLE_VALUE ? 0 : SameDescription(probe_, current, &same);
   }
+  if (brokered_ && !error && (closed_or_replaced || !same)) {
+    return binder_endpoint::FileRecordClosed(&probe_);
+  }
   if (!CloseHandle(probe_)) return WinError();
   probe_ = nullptr;  // Not a user alias; exclude it from the subsequent count.
   if (error || (same && !closed_or_replaced)) return error;
-  Pruned pruned{};
-  PruneDeadOwners(staged_, &pruned);
-  Owner process{Ownership::kProcess, local->process.pid, local->process.created};
-  RemoveOwner(&staged_->locks, process, &file_);
-  Collect(staged_, file_);
-  error = local->registry.Commit();
-  if (error) CancelPending();
-  else error = CloseCommitted();
-  local->registry.Unlock(); begun_ = false;
-  return error;
+  begun_ = false;
+  return CloseFileLocks(staged_, file_, local->process);
 }
 
 }  // namespace gesher::record_locks

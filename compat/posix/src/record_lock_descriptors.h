@@ -20,6 +20,12 @@ class DescriptorGuard {
 // user-input snapshot. Does not implement F_SETLKW or install any C symbols.
 int DescriptorFcntl(int descriptor, int command, void* user_flock);
 
+// Trusted broker operations. The handle must be a broker-owned duplicate of
+// a file in the authenticated caller's handle table.
+int BrokerDescriptorFcntl(HANDLE file, const ProcessIdentity& caller, int command,
+                          const LinuxFlock& input, LinuxFlock* output);
+int BrokerDescriptorClosed(const File& file, const ProcessIdentity& caller);
+
 // Hold across the ACTUAL CRT close/reopen/dup2 replacement, not merely an
 // attempted close. Finish inspects the captured FILE_OBJECT versus the fd's
 // actual post-operation object even if the CRT returned an error.
@@ -39,6 +45,7 @@ class ClosingDescriptor {
   DescriptorGuard guard_;
   int descriptor_, error_ = 0;
   bool begun_ = false, completed_ = false;
+  bool brokered_ = false;
   HANDLE probe_ = nullptr;
   File file_{};
   RegistryState* staged_ = nullptr;

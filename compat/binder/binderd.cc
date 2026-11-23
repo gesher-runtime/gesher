@@ -57,6 +57,9 @@
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 #include "launch_channel.h"
+#ifdef GESHER_RECORD_LOCK_BROKER
+#include "../posix/src/record_lock_descriptors.h"
+#endif
 
 namespace {
 
@@ -1761,6 +1764,108 @@ void ServeEnrollChild(HANDLE pipe, In in) {
   if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
 }
 
+#ifdef GESHER_RECORD_LOCK_BROKER
+namespace locks = gesher::record_locks;
+
+std::mutex g_record_lanes_lock;
+std::set<std::pair<DWORD, uint64_t>> g_record_lanes;
+
+struct RecordLane {
+  explicit RecordLane(const gesher::process_identity::Process& generation)
+      : id{generation.pid, generation.birth} {
+    std::lock_guard<std::mutex> lock(g_record_lanes_lock);
+    active = g_record_lanes.insert(id).second;
+  }
+  ~RecordLane() { Release(); }
+  void Release() {
+    if (!active) return;
+    std::lock_guard<std::mutex> lock(g_record_lanes_lock);
+    g_record_lanes.erase(id);
+    active = false;
+  }
+  std::pair<DWORD, uint64_t> id;
+  bool active = false;
+};
+
+bool ReplyRecordLock(HANDLE pipe, int error, const locks::LinuxFlock* result = nullptr) {
+  WireReply reply;
+  reply.Put<int32_t>(-error);
+  if (result && !error) {
+    reply.Put<int16_t>(result->type);
+    reply.Put<int16_t>(result->whence);
+    reply.Put<int64_t>(result->start);
+    reply.Put<int64_t>(result->length);
+    reply.Put<int32_t>(result->pid);
+  }
+  return WriteMessage(pipe, reply);
+}
+
+bool WaitRecordClient(HANDLE pipe, bool expect_acknowledgment) {
+  // A guest cannot keep a broker thread or a temporary file pin indefinitely.
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  while (GetTickCount64() < deadline) {
+    DWORD bytes = 0;
+    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr)) return false;
+    if (expect_acknowledgment && bytes >= 2 * sizeof(uint32_t)) {
+      uint32_t acknowledgment[2];
+      return ReadExact(pipe, acknowledgment, sizeof(acknowledgment)) &&
+          acknowledgment[0] == sizeof(uint32_t) && acknowledgment[1] == 1;
+    }
+    Sleep(1);
+  }
+  return false;
+}
+
+void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result = nullptr) {
+  // The client closes after reading its reply. A bounded wait avoids both
+  // discarding unread bytes on DisconnectNamedPipe and blocking in FlushFileBuffers.
+  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
+}
+
+void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
+  uint32_t version = 0;
+  uint64_t source = 0;
+  int32_t command = 0;
+  locks::LinuxFlock input{};
+  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&source) ||
+      !source || source > UINTPTR_MAX) return FinishRecordReply(pipe, EINVAL);
+  if ((!close && (!in.Get(&command) || !in.Get(&input.type) || !in.Get(&input.whence) ||
+          !in.Get(&input.start) || !in.Get(&input.length) || !in.Get(&input.pid))) || in.p != in.end) {
+    return FinishRecordReply(pipe, EINVAL);
+  }
+  const auto caller_peer = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
+  if (!caller_peer || caller_peer->role != peer::Role::kApplication) return FinishRecordReply(pipe, EACCES);
+  RecordLane lane(caller_peer->generation);
+  if (!lane.active) return FinishRecordReply(pipe, EBUSY);
+  auto complete = [&](int error, const locks::LinuxFlock* result = nullptr) {
+    lane.Release();
+    FinishRecordReply(pipe, error, result);
+  };
+  HANDLE duplicate = nullptr;
+  if (!DuplicateHandle(caller_peer->process.get(), launch::DecodeHandle(source), GetCurrentProcess(),
+                       &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+    return complete(EBADF);
+  }
+  peer::OwnedHandle file(duplicate);
+  if (!g_peer_registry->Live(caller_peer)) return complete(EACCES);
+  const locks::ProcessIdentity caller{caller_peer->generation.pid, 0, caller_peer->generation.birth};
+  if (!close) {
+    locks::LinuxFlock result{};
+    int error = locks::BrokerDescriptorFcntl(file.get(), caller, command, input, &result);
+    file.reset();
+    return complete(error, command == 5 || command == 36 ? &result : nullptr);
+  }
+
+  locks::File identity{};
+  int error = locks::FileIdentity(file.get(), &identity);
+  if (error) return complete(error);
+  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
+  file.reset();  // Neither temporary pin should be counted as an OFD user alias.
+  if (g_peer_registry->Authenticate(pipe) != caller_peer) return complete(EACCES);
+  complete(locks::BrokerDescriptorClosed(identity, caller));
+}
+#endif
+
 // --- the descriptor broker (ADR 0088 section 3) --------------------------------------
 //
 // SCM_RIGHTS on Gesher's AF_UNIX socketpairs. A deposited group of
@@ -2166,6 +2271,10 @@ void Serve(HANDLE pipe) {
         ServeRights(pipe, in);
       } else if (op == wire::kEnrollChild) {
         ServeEnrollChild(pipe, in);
+#ifdef GESHER_RECORD_LOCK_BROKER
+      } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
+        ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
+#endif
       }
     }
   }

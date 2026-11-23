@@ -9,6 +9,7 @@ set(_uapi "${AOSP_DIR}/bionic/libc/kernel/uapi")
 # searched after gesher-base's <linux/*.h>.
 add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+target_compile_definitions(binderd PRIVATE GESHER_RECORD_LOCK_BROKER=1)
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 # The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom; the
 # sandboxed pipe's security descriptor (ADR 0090) from app_container.cc.
