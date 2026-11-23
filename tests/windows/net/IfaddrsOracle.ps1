@@ -1,7 +1,7 @@
 # Match GetAdaptersAddresses(AF_UNSPEC) without GAA_FLAG_INCLUDE_ALL_INTERFACES:
 # only interfaces bound to IPv4 or IPv6 are in the backend's enumeration.
 # https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getadaptersaddresses
-function Get-Net4IfaddrsOracleRows {
+function Get-Net4IfaddrsOracleRows([switch] $AddressOnly) {
   $rows = [Collections.Generic.List[string]]::new()
   foreach ($adapter in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
     if ($adapter.OperationalStatus -ne [Net.NetworkInformation.OperationalStatus]::Up) { continue }
@@ -14,9 +14,11 @@ function Get-Net4IfaddrsOracleRows {
     $properties = $adapter.GetIPProperties()
     $index = if ($supports4) { $properties.GetIPv4Properties().Index } else { $properties.GetIPv6Properties().Index }
     if ($index -le 0) { throw "An IP-bound active Windows interface has no index: $($adapter.Name) [$($adapter.Id)]" }
-    $hardware = $adapter.GetPhysicalAddress().ToString().ToLowerInvariant()
-    if (-not $hardware) { $hardware = '-' }
-    $rows.Add("P $index $hardware")
+    if (-not $AddressOnly) {
+      $hardware = $adapter.GetPhysicalAddress().ToString().ToLowerInvariant()
+      if (-not $hardware) { $hardware = '-' }
+      $rows.Add("P $index $hardware")
+    }
     foreach ($unicast in $properties.UnicastAddresses) {
       $address = $unicast.Address
       $scope = 0
@@ -28,7 +30,8 @@ function Get-Net4IfaddrsOracleRows {
       $numeric = [Net.IPAddress]::new($address.GetAddressBytes()).ToString()
       $rows.Add("A $index $family $($unicast.PrefixLength) $numeric $scope")
     }
-    Write-Host "INFO net4 oracle: IP-bound interface $($adapter.Name); index=$index; MAC=$hardware; addresses=$($properties.UnicastAddresses.Count)"
+    $link = if ($AddressOnly) { '' } else { " MAC=$hardware;" }
+    Write-Host "INFO net4 oracle: IP-bound interface $($adapter.Name); index=$index;$link addresses=$($properties.UnicastAddresses.Count)"
   }
   $rows.ToArray()
 }

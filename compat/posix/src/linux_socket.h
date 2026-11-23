@@ -89,5 +89,7 @@ inline int FromType(ws::Type type) {
 
 // Network interface ioctls on ifreq/ifconf; false for unhandled requests.
 bool InterfaceIoctl(unsigned long request, void* arg, int* result);
+bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces);
+unsigned ToIfFlags(unsigned flags);
 
 }  // namespace gesher::sock

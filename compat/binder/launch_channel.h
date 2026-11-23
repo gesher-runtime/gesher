@@ -24,7 +24,7 @@ using binder_bootstrap::ReadStartup;
 using binder_bootstrap::Transfer;
 
 enum class Action : uint32_t { kEnroll = 1, kHandoff, kRetire, kRevokeInstallation,
-                              kRestoreInstallation, kAttachJob,
+                              kRestoreInstallation, kAttachJob, kEnableNetlinkInspection,
                               kAttachCaptureSessions = 9 };
 
 struct Request {

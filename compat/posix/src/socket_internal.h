@@ -18,6 +18,10 @@
 #include <string>
 #include <vector>
 
+namespace gesher {
+struct NetlinkState;
+}  // namespace gesher
+
 namespace gesher::ws {
 
 using Socket = uintptr_t;
@@ -70,6 +74,7 @@ enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
 enum class Provider { kOther, kNativeIpv4Tcp, kNativeIpv4Udp };
 struct ConnectOperation;
 struct SocketDescription {
+  std::shared_ptr<gesher::NetlinkState> netlink;
   std::atomic<ConnectState> state{ConnectState::kInitial};
   Provider provider = Provider::kOther;  // exact base-provider identity before publication
   bool native_nonblocking_datagram = false;  // immutable after ownership registration
@@ -292,9 +297,14 @@ inline constexpr unsigned kIfPointToPoint = 32;
 struct InterfaceAddress {
   Address address;
   int prefix_len;
+  enum class State { kPreferred, kDeprecated, kTentative, kDuplicate };
+  State state = State::kPreferred;
+  bool permanent = false;
+  bool temporary = false;
 };
 
 struct Interface {
+  enum class LinkKind { kOther, kLoopback, kEthernet, kPpp };
   std::string name;
   uint32_t index = 0;
   unsigned flags = 0;
@@ -302,9 +312,15 @@ struct Interface {
   uint8_t hardware[8] = {};
   size_t hardware_len = 0;
   std::vector<InterfaceAddress> addresses;
+  LinkKind kind = LinkKind::kOther;
 };
 
 bool ListInterfaces(std::vector<Interface>* interfaces);
+struct InterfaceChangeWatch;
+enum class InterfaceChangeKind { kLink, kAddress };
+InterfaceChangeWatch* WatchInterfaceChanges(InterfaceChangeKind kind, void (*changed)(void*),
+                                             void* context);
+void StopInterfaceChanges(InterfaceChangeWatch* watch);
 
 }  // namespace gesher::ws
 
@@ -365,6 +381,8 @@ uint64_t AdvanceStream(uint16_t port, bool sent, uint64_t bytes);
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).
 int RegisterSocket(const SocketFd& state);
+// Registers an in-process AF_NETLINK descriptor backed by `netlink`.
+int RegisterNetlinkSocket(bool nonblocking, int sock_type);
 // False if fd is not a socket.
 bool LookupSocket(int fd, SocketFd* state);
 

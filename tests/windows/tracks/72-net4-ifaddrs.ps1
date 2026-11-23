@@ -1,7 +1,7 @@
 # JNI/APK paths are required by 44-native2's new ifaddrs part in both ABIs
 # and both app modes. This standalone ELF uses an independent Windows snapshot.
 . (Join-Path $PSScriptRoot '../net/IfaddrsOracle.ps1')
-[string[]]$oracleRows = @(Get-Net4IfaddrsOracleRows)
+[string[]]$oracleRows = @(Get-Net4IfaddrsOracleRows -AddressOnly)
 $oracle = Join-Path $env:RUNNER_TEMP "net4-ifaddrs-$([guid]::NewGuid()).txt"
 [IO.File]::WriteAllLines($oracle, $oracleRows, [Text.UTF8Encoding]::new($false))
 try {
@@ -12,8 +12,8 @@ try {
     $code = $LASTEXITCODE
     Write-Host $out
     if ($code -eq 0 -and $out -notmatch '(?m)^FAIL' -and
-        $out -match 'net4 ifaddrs: all passed; .*host oracle ([0-9]+)' -and [int]$Matches[1] -ge 3) {
-      Write-Host "PASS  net4 ifaddrs ($abi): standalone ELF matches actual Windows addresses, prefixes, scopes, hardware/index and independent allocation lifetime"
+        $out -match 'net4 ifaddrs: all passed; .*host oracle ([0-9]+)' -and [int]$Matches[1] -ge 2) {
+      Write-Host "PASS  net4 ifaddrs ($abi): standalone ELF matches Windows IP addresses, prefixes and scopes, keeps link-layer rows private, and owns independent lists"
     } else {
       Write-Host "FAIL  net4 ifaddrs ($abi): standalone ELF/oracle (exit $code)"
       $script:failed++

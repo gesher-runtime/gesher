@@ -21,6 +21,7 @@
 #include <new>
 
 #include "internal.h"
+#include "netlink_internal.h"
 #include "socket_internal.h"
 #include "socket_user_copy.h"
 
@@ -447,6 +448,19 @@ int BindInterface(Socket s, uint32_t ifindex) {
 }
 
 int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool retain_failure) {
+  if (description && description->netlink) {
+    {
+      std::lock_guard<std::mutex> lock(description->error_mutex);
+      description->native_closing = true;
+    }
+    gesher::NetlinkClose(*description->netlink);
+    {
+      std::lock_guard<std::mutex> lock(description->error_mutex);
+      description->native_closed = true;
+      description->native_closing = false;
+    }
+    return 0;
+  }
   if (!description) return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
   {
     std::lock_guard<std::mutex> lock(description->error_mutex);
@@ -1206,6 +1220,10 @@ bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
                     const RightsToken* rights) {
+  if (description && description->netlink) {
+    if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
+    return gesher::NetlinkSend(*description->netlink, buffers, count, 0, nullptr, 0);
+  }
   if (description->unix_datagram_pair.load()) {
     return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
   }
@@ -1225,6 +1243,12 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
                     int* result_flags, UnixCredentials* credentials, RightsToken* rights,
                     std::vector<int>* stream_rights) {
+  if (description && description->netlink) {
+    if (rights != nullptr) *rights = {};
+    if (credentials != nullptr) *credentials = {};
+    return gesher::NetlinkRecv(*description->netlink, buffers, count, 0, nullptr, nullptr,
+                               description->nonblocking.load() || dont_wait, result_flags);
+  }
   if (description->unix_datagram_pair.load()) {
     return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
                             credentials, rights);
@@ -1479,6 +1503,8 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   closed.assign(count, false);
   bool has_lifecycle_hup = false;
   bool has_owned_pending = false;
+  bool has_netlink = false;
+  bool has_netlink_ready = false;
   for (size_t i = 0; i < count; ++i) {
     if (entries[i].description) {
       RefreshConnect(entries[i].description);
@@ -1486,6 +1512,13 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
       owned_pending[i] = entries[i].description->connect_operation != nullptr;
       closed[i] = entries[i].description->native_closed || entries[i].description->native_closing;
       has_owned_pending |= owned_pending[i];
+    }
+    if (entries[i].description && entries[i].description->netlink) {
+      has_netlink = true;
+      fds[i].fd = INVALID_SOCKET;
+      has_netlink_ready |= closed[i] ||
+          gesher::NetlinkPoll(*entries[i].description->netlink, entries[i].events) != 0;
+      continue;
     }
     fds[i].fd = static_cast<SOCKET>(entries[i].socket);
     // Winsock rejects its POLLPRI, but supports POLLRDBAND for TCP OOB.
@@ -1533,7 +1566,12 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   }
   // Band-only WSAPoll never wakes for failed ConnectEx. Sample its owned
   // completion on the same bounded slices already used for mixed poll sources.
-  const int wait = has_lifecycle_hup ? 0 : has_owned_pending && (timeout_ms < 0 || timeout_ms > 10) ? 10 : timeout_ms;
+  const int wait = (has_lifecycle_hup || has_netlink_ready)
+                       ? 0
+                       : (has_owned_pending || (has_netlink && wake == kInvalidSocket)) &&
+                                 (timeout_ms < 0 || timeout_ms > 10)
+                             ? 10
+                             : timeout_ms;
   // An owned pending connection has no usable connected context yet. Its
   // completion is the readiness source; a native write wake could precede
   // context publication and otherwise spin or expose a premature success.
@@ -1544,7 +1582,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   active.reserve(count + (wake != kInvalidSocket ? 1 : 0));
   active_index.reserve(count);
   for (size_t i = 0; i < count; ++i) {
-    if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
+    if (!owned_pending[i] && !closed[i] &&
+        !(entries[i].description && entries[i].description->netlink)) {
+      active.push_back(fds[i]);
+      active_index.push_back(i);
+    }
   }
   if (!active.empty() || wake != kInvalidSocket) {
     if (observer) observer(true, 0, 0, context);  // finalized real native inputs; no locks
@@ -1600,7 +1642,17 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   bool suppressed_datagram_read = false;
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
-    if (entries[i].description) {
+    if (entries[i].description && entries[i].description->netlink) {
+      auto& description = *entries[i].description;
+      std::lock_guard<std::mutex> lock(description.error_mutex);
+      const int change = description.native_closed || description.native_closing
+          ? kPollNval : gesher::NetlinkPoll(*description.netlink, entries[i].events);
+      r = 0;
+      if (change & kPollIn) r |= POLLRDNORM;
+      if (change & kPollOut) r |= POLLWRNORM;
+      if (change & kPollErr) r |= POLLERR;
+      if (change & kPollNval) r |= POLLNVAL;
+    } else if (entries[i].description) {
       RefreshConnect(entries[i].description);
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
@@ -2012,11 +2064,16 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
     iface.index = a->IfIndex != 0 ? a->IfIndex : a->Ipv6IfIndex;
     iface.mtu = a->Mtu;
     if (a->OperStatus == IfOperStatusUp) iface.flags |= kIfUp | kIfRunning;
-    if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) iface.flags |= kIfLoopback;
+    if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+      iface.flags |= kIfLoopback;
+      iface.kind = Interface::LinkKind::kLoopback;
+    }
     if ((a->Flags & IP_ADAPTER_NO_MULTICAST) == 0) iface.flags |= kIfMulticast;
     if (a->IfType == IF_TYPE_ETHERNET_CSMACD || a->IfType == IF_TYPE_IEEE80211) {
       iface.flags |= kIfBroadcast;
+      iface.kind = Interface::LinkKind::kEthernet;
     }
+    if (a->IfType == IF_TYPE_PPP) iface.kind = Interface::LinkKind::kPpp;
     if (a->IfType == IF_TYPE_PPP || a->IfType == IF_TYPE_TUNNEL) iface.flags |= kIfPointToPoint;
     iface.hardware_len = a->PhysicalAddressLength <= sizeof(iface.hardware)
                              ? a->PhysicalAddressLength : 0;
@@ -2025,11 +2082,68 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
       InterfaceAddress address;
       FromWin(u->Address.lpSockaddr, u->Address.iSockaddrLength, &address.address);
       address.prefix_len = u->OnLinkPrefixLength;
+      using State = InterfaceAddress::State;
+      switch (u->DadState) {
+        case IpDadStateDeprecated: address.state = State::kDeprecated; break;
+        case IpDadStateTentative: address.state = State::kTentative; break;
+        case IpDadStateDuplicate: address.state = State::kDuplicate; break;
+        default: break;
+      }
+      address.permanent = u->ValidLifetime == 0xffffffffu;
+      address.temporary = (u->Flags & IP_ADAPTER_ADDRESS_TRANSIENT) != 0;
       if (address.address.family != Family::kOther) iface.addresses.push_back(address);
     }
     interfaces->push_back(std::move(iface));
   }
   return true;
+}
+
+struct InterfaceChangeWatch {
+  std::mutex callback_mutex;
+  void (*changed)(void*);
+  void* context;
+  HANDLE handle = nullptr;
+
+  void OnChange(MIB_NOTIFICATION_TYPE event) {
+    if (event == MibInitialNotification) return;
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    if (changed != nullptr) changed(context);
+  }
+};
+
+namespace {
+void CALLBACK OnLinkChange(void* context, MIB_IPINTERFACE_ROW*, MIB_NOTIFICATION_TYPE event) {
+  static_cast<InterfaceChangeWatch*>(context)->OnChange(event);
+}
+void CALLBACK OnAddressChange(void* context, MIB_UNICASTIPADDRESS_ROW*, MIB_NOTIFICATION_TYPE event) {
+  static_cast<InterfaceChangeWatch*>(context)->OnChange(event);
+}
+}  // namespace
+
+InterfaceChangeWatch* WatchInterfaceChanges(InterfaceChangeKind kind, void (*changed)(void*),
+                                             void* context) {
+  auto watch = std::unique_ptr<InterfaceChangeWatch>(
+      new (std::nothrow) InterfaceChangeWatch{{}, changed, context});
+  if (!watch) return errno = ENOMEM, nullptr;
+  const DWORD error = kind == InterfaceChangeKind::kLink
+      ? NotifyIpInterfaceChange(AF_UNSPEC, OnLinkChange, watch.get(), FALSE, &watch->handle)
+      : NotifyUnicastIpAddressChange(AF_UNSPEC, OnAddressChange, watch.get(), FALSE, &watch->handle);
+  if (error != NO_ERROR) {
+    errno = error == ERROR_NOT_SUPPORTED ? EOPNOTSUPP : error == ERROR_ACCESS_DENIED ? EACCES : EIO;
+    return nullptr;
+  }
+  return watch.release();
+}
+
+void StopInterfaceChanges(InterfaceChangeWatch* watch) {
+  if (watch == nullptr) return;
+  {
+    std::lock_guard<std::mutex> lock(watch->callback_mutex);
+    watch->changed = nullptr;
+    watch->context = nullptr;
+  }
+  // A failed cancellation leaves a disabled callback context for the OS.
+  if (CancelMibChangeNotify2(watch->handle) == NO_ERROR) delete watch;
 }
 
 }  // namespace gesher::ws

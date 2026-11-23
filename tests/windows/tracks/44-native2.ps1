@@ -202,7 +202,7 @@ $n2Lines = @('Native2Activity: native2 extras: ok', 'Native2Activity: native2 dl
   'Native2Activity: native2 binary128: ok; 86 Android cases; four APIs and modes; binary128 bits/end/errno; sticky flags; imports and dlsym',
   'Native2Activity: native2 pthread_cpu_clock: ok',
   'Native2Activity: native2 varargs: ok; literal/few/many GP/FP; ordered shared overflow; va_copy; nested/thread; wide and binary128 source; gzvprintf retry',
-  'Native2Activity: native2 ifaddrs: ok; LP64; IPv4/IPv6 loopback; netmasks/broadcast; packet index/hardware; independent lists',
+  'Native2Activity: native2 ifaddrs: ok; LP64; IPv4/IPv6 loopback; netmasks/broadcast; Android app link privacy; independent lists',
   'Native2Activity: native2 unicode: ok; pinned ICU4X boundaries; plain/_l/wctype/wctrans and errors; pinned wcwidth/wcswidth: 33 boundaries, full-width strings and bounds',
   'Native2Activity: native2 bitmap: ok; direct pixels and PNG callback round trip',
   'Native2Activity: native3 Java Bitmap sees native pixels: true',

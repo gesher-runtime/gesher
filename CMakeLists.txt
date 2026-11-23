@@ -173,6 +173,10 @@ add_executable(pipe_kernel_test tests/native/pipe_kernel_test.cc)
 target_compile_options(pipe_kernel_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pipe_kernel_test PRIVATE gesher_posix)
 
+add_executable(netlink_route_test tests/native/netlink_route_test.cc)
+target_compile_options(netlink_route_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(netlink_route_test PRIVATE gesher_posix)
+
 add_executable(revocable_file_test tests/native/revocable_file_test.cc)
 target_compile_options(revocable_file_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(revocable_file_test PRIVATE gesher_posix)

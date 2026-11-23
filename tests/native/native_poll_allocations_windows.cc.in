@@ -15,6 +15,11 @@
 #include <vector>
 #include "@HEADER@"
 
+namespace gesher {
+// This extracted fixture exercises real Winsock descriptors only.
+int NetlinkPoll(NetlinkState&, int) { std::abort(); }
+}  // namespace gesher
+
 static thread_local bool tracking = false;
 static thread_local size_t allocations = 0, allocated_bytes = 0;
 static std::atomic<size_t> live_tracked_bytes{0};

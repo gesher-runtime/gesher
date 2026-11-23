@@ -1,0 +1,417 @@
+diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
+index 4a2bde46d..dd824c771 100644
+--- a/compat/binder/binderd.cc
++++ b/compat/binder/binderd.cc
+@@ -80,0 +81 @@ bool g_record_only = false;
++std::atomic<bool> g_netlink_inspection = false;
+@@ -1661,0 +1663 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
++  bool device_attached = false;
+@@ -1718,0 +1721,8 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
++        device_attached |= accepted;
++        break;
++      }
++      case launch::Action::kEnableNetlinkInspection: {
++        // Only the private, handed-off system server lane can enable this mode.
++        accepted = !g_record_only && device_attached && system &&
++            request.pid == system->generation.pid && request.birth == system->generation.birth;
++        if (accepted) g_netlink_inspection.store(true, std::memory_order_release);
+@@ -1801,3 +1811,24 @@ void ServeProc(HANDLE pipe, In in, bool operator_hello) {
+-#ifdef GESHER_RECORD_LOCK_BROKER
+-bool WaitRecordClient(HANDLE pipe, bool accept_ack);
+-#endif
++bool WaitForClient(HANDLE pipe, bool accept_ack) {
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  while (GetTickCount64() < deadline) {
++    DWORD bytes = 0;
++    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr)) return false;
++    if (accept_ack && bytes >= 2 * sizeof(uint32_t)) {
++      uint32_t acknowledgment[2];
++      return ReadExact(pipe, acknowledgment, sizeof(acknowledgment)) &&
++          acknowledgment[0] == sizeof(uint32_t) && acknowledgment[1] == 1;
++    }
++    Sleep(1);
++  }
++  return false;
++}
++
++void ServeNetlinkInspection(HANDLE pipe, In in) {
++  uint32_t version = 0;
++  if (!in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
++  const auto client = !g_record_only && g_peer_registry &&
++      g_netlink_inspection.load(std::memory_order_acquire) ? g_peer_registry->Authenticate(pipe) : nullptr;
++  WireReply reply;
++  reply.Put<int32_t>(client && client->role == peer::Role::kSystemServer ? 0 : -EACCES);
++  if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
++}
+@@ -1821 +1852 @@ void ServeEnrollChild(HANDLE pipe, In in) {
+-    WaitRecordClient(pipe, false);
++    WaitForClient(pipe, false);
+@@ -1864,16 +1894,0 @@ bool ReplyRecordLock(HANDLE pipe, int error, const locks::LinuxFlock* result = n
+-bool WaitRecordClient(HANDLE pipe, bool expect_acknowledgment) {
+-  // A guest cannot keep a broker thread or a temporary file pin indefinitely.
+-  const ULONGLONG deadline = GetTickCount64() + 5000;
+-  while (GetTickCount64() < deadline) {
+-    DWORD bytes = 0;
+-    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr)) return false;
+-    if (expect_acknowledgment && bytes >= 2 * sizeof(uint32_t)) {
+-      uint32_t acknowledgment[2];
+-      return ReadExact(pipe, acknowledgment, sizeof(acknowledgment)) &&
+-          acknowledgment[0] == sizeof(uint32_t) && acknowledgment[1] == 1;
+-    }
+-    Sleep(1);
+-  }
+-  return false;
+-}
+-
+@@ -1883 +1898 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
+-  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
++  if (ReplyRecordLock(pipe, error, result)) WaitForClient(pipe, false);
+@@ -2004 +2019 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
+-  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
++  if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
+@@ -2131 +2146 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
+-  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
++  if (!ReplyRecordLock(pipe, 0) || !WaitForClient(pipe, true)) return;
+@@ -2571,0 +2587,2 @@ void Serve(HANDLE pipe) {
++        } else if (op == wire::kNetlinkInspection) {
++          ServeNetlinkInspection(pipe, in);
+diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
+index 93f84db15..be60c941b 100644
+--- a/compat/posix/posix.cmake
++++ b/compat/posix/posix.cmake
+@@ -29,0 +30 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/src/netlink.cc
+diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
+index 6164b28ac..92d12bc4a 100644
+--- a/compat/posix/src/binder.cc
++++ b/compat/posix/src/binder.cc
+@@ -776,0 +777,19 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
++bool binder_endpoint::MayInspectNetlink() {
++  auto& binding = Current();
++  if (!binding.PinsTrustedHost()) return false;
++  const std::wstring name = PipeName();
++  if (name.empty()) return false;
++  HANDLE pipe = ConnectPipe(name);
++  if (pipe == INVALID_HANDLE_VALUE) return false;
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  uint32_t request[] = {3 * sizeof(uint32_t), wire::kNetlinkInspection, wire::kMagic, wire::kVersion};
++  uint32_t reply[2]{};
++  const bool accepted = SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) &&
++      binder_bootstrap::Transfer(pipe, request, sizeof(request), true, deadline) &&
++      binder_bootstrap::Transfer(pipe, reply, sizeof(reply), false, deadline) &&
++      reply[0] == sizeof(reply[1]) && reply[1] == 0 && binding.VerifyPipe(pipe);
++  CloseHandle(pipe);
++  return accepted;
++}
++
+diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
+index 2226e6903..494b383d6 100644
+--- a/compat/posix/src/binder_wire.h
++++ b/compat/posix/src/binder_wire.h
+@@ -125,0 +126,2 @@ enum Op : uint32_t {
++  // -> {magic, version}; <- {status}. Requires a live protected system_server.
++  kNetlinkInspection = 16,
+diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
+index 5660333f2..b047f7baf 100644
+--- a/compat/posix/src/fd.cc
++++ b/compat/posix/src/fd.cc
+@@ -32,0 +33 @@
++#include "netlink_internal.h"
+@@ -270,0 +272,15 @@ int RegisterSocket(const SocketFd& state) {
++int RegisterNetlinkSocket(bool nonblocking, int sock_type) {
++  auto netlink = CreateNetlinkState(sock_type);
++  record_locks::DescriptorGuard descriptor_guard;
++  int fd = ReserveFd();
++  if (fd < 0) return -1;
++  SocketFd registered;
++  registered.socket = ws::kInvalidSocket;
++  registered.initial_nonblocking = nonblocking;
++  registered.description = std::make_shared<ws::SocketDescription>();
++  registered.description->nonblocking.store(nonblocking);
++  registered.description->netlink = std::move(netlink);
++  Insert(fd, registered);
++  return fd;
++}
++
+diff --git a/compat/posix/src/socket.cc b/compat/posix/src/socket.cc
+index 6683c8c5a..56312a162 100644
+--- a/compat/posix/src/socket.cc
++++ b/compat/posix/src/socket.cc
+@@ -3,0 +4 @@
++#include <linux/netlink.h>
+@@ -22,0 +24 @@
++#include "netlink_internal.h"
+@@ -134,0 +137,4 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
++  if (!Lookup(fd, &state)) return -1;
++  if (state.description->netlink) {
++    return gesher::NetlinkConnect(*state.description->netlink, raw, length);
++  }
+@@ -136 +142 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
+-  if (!Lookup(fd, &state) || !ToAddress(static_cast<const sockaddr*>(raw), length, &address) || !MapUnixPath(&address, false)) return -1;
++  if (!ToAddress(static_cast<const sockaddr*>(raw), length, &address) || !MapUnixPath(&address, false)) return -1;
+@@ -226,0 +233 @@ int gesher_bind_socket_interface(int fd, uint32_t if_index) {
++  if (state.description->netlink) return EOPNOTSUPP;
+@@ -233,0 +241 @@ int gesher_socket_interface(int fd, uint32_t* if_index) {
++  if (state.description->netlink) return EOPNOTSUPP;
+@@ -244,0 +253,12 @@ int socket(int domain, int type, int protocol) {
++  if (domain == AF_NETLINK) {
++    const int base_type = type & ~kTypeFlags;
++    if (base_type != SOCK_RAW && base_type != SOCK_DGRAM) {
++      return errno = (base_type == SOCK_STREAM || base_type == SOCK_SEQPACKET ||
++                      base_type == SOCK_RDM || base_type == SOCK_PACKET)
++                         ? ESOCKTNOSUPPORT
++                         : EINVAL,
++             -1;
++    }
++    if (protocol != NETLINK_ROUTE) return errno = EPROTONOSUPPORT, -1;
++    return gesher::RegisterNetlinkSocket((type & SOCK_NONBLOCK) != 0, base_type);
++  }
+@@ -365,0 +386,4 @@ int bind(int fd, const struct sockaddr* addr, socklen_t len) {
++  if (!Lookup(fd, &state)) return -1;
++  if (state.description->netlink) {
++    return gesher::NetlinkBind(*state.description->netlink, addr, static_cast<uint32_t>(len));
++  }
+@@ -367 +391 @@ int bind(int fd, const struct sockaddr* addr, socklen_t len) {
+-  if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, true)) {
++  if (!ToAddress(addr, len, &address) || !MapUnixPath(&address, true)) {
+@@ -381,0 +406 @@ int listen(int fd, int backlog) {
++  if (state.description->netlink) return errno = EOPNOTSUPP, -1;
+@@ -390,0 +416 @@ int accept4(int fd, struct sockaddr* addr, socklen_t* len, int flags) {
++  if (state.description->netlink) return errno = EOPNOTSUPP, -1;
+@@ -402,0 +429,3 @@ int getsockname(int fd, struct sockaddr* addr, socklen_t* len) {
++  if (state.description->netlink) {
++    return gesher::NetlinkGetSockName(*state.description->netlink, addr, len, false);
++  }
+@@ -411,0 +441,3 @@ int getpeername(int fd, struct sockaddr* addr, socklen_t* len) {
++  if (state.description->netlink) {
++    return gesher::NetlinkGetSockName(*state.description->netlink, addr, len, true);
++  }
+@@ -420,0 +453 @@ int shutdown(int fd, int how) {
++  if (state.description->netlink) return errno = EOPNOTSUPP, -1;
+@@ -457,0 +491,5 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
++  if (state.description->netlink) {
++    if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
++    return gesher::NetlinkSend(*state.description->netlink, buffers, count, flags, addr,
++                               static_cast<uint32_t>(addrlen));
++  }
+@@ -472,0 +511,19 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
++  if (state.description->netlink) {
++    if (pass_credentials != nullptr) *pass_credentials = false;
++    socklen_t capacity = 0;
++    uint32_t actual = 0;
++    if (addr != nullptr) {
++      if (addrlen == nullptr || !ws::CopyFromUser(&capacity, addrlen, sizeof(capacity))) {
++        return errno = EFAULT, -1;
++      }
++      actual = static_cast<uint32_t>(capacity);
++    }
++    const ssize_t n = gesher::NetlinkRecv(
++        *state.description->netlink, buffers, count, flags, addr,
++        addr != nullptr ? &actual : nullptr, state.description->nonblocking.load(), result_flags);
++    if (n >= 0 && addr != nullptr && addrlen != nullptr) {
++      const socklen_t out_len = static_cast<socklen_t>(actual);
++      if (!ws::CopyToUser(addrlen, &out_len, sizeof(out_len))) return errno = EFAULT, -1;
++    }
++    return n;
++  }
+@@ -606,0 +664 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
++    if (state.description->netlink) return errno = EOPNOTSUPP, -1;
+@@ -923,0 +982,4 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
++  if (state.description->netlink) {
++    return gesher::NetlinkSetSockOpt(*state.description->netlink, level, name, value,
++                                     static_cast<uint32_t>(len));
++  }
+@@ -999,0 +1062,11 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
++  if (state.description->netlink) {
++    socklen_t capacity = 0;
++    if (!ws::CopyFromUser(&capacity, len, sizeof(capacity))) return errno = EFAULT, -1;
++    uint32_t actual = static_cast<uint32_t>(capacity);
++    if (gesher::NetlinkGetSockOpt(*state.description->netlink, level, name, value, &actual) < 0) {
++      return -1;
++    }
++    const socklen_t out_len = static_cast<socklen_t>(actual);
++    if (!ws::CopyToUser(len, &out_len, sizeof(out_len))) return errno = EFAULT, -1;
++    return 0;
++  }
+@@ -1115,0 +1189 @@ bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
++  if (d.netlink) return false;
+diff --git a/compat/posix/src/socket_internal.h b/compat/posix/src/socket_internal.h
+index b715fa5c7..035236528 100644
+--- a/compat/posix/src/socket_internal.h
++++ b/compat/posix/src/socket_internal.h
+@@ -20,0 +21,4 @@
++namespace gesher {
++struct NetlinkState;
++}  // namespace gesher
++
+@@ -72,0 +77 @@ struct SocketDescription {
++  std::shared_ptr<gesher::NetlinkState> netlink;
+@@ -294,0 +300,4 @@ struct InterfaceAddress {
++  enum class State { kPreferred, kDeprecated, kTentative, kDuplicate };
++  State state = State::kPreferred;
++  bool permanent = false;
++  bool temporary = false;
+@@ -297,0 +307 @@ struct Interface {
++  enum class LinkKind { kOther, kLoopback, kEthernet, kPpp };
+@@ -304,0 +315 @@ struct Interface {
++  LinkKind kind = LinkKind::kOther;
+@@ -307,0 +319,5 @@ bool ListInterfaces(std::vector<Interface>* interfaces);
++struct InterfaceChangeWatch;
++enum class InterfaceChangeKind { kLink, kAddress };
++InterfaceChangeWatch* WatchInterfaceChanges(InterfaceChangeKind kind, void (*changed)(void*),
++                                             void* context);
++void StopInterfaceChanges(InterfaceChangeWatch* watch);
+@@ -367,0 +384,2 @@ int RegisterSocket(const SocketFd& state);
++// Registers an in-process AF_NETLINK descriptor backed by `netlink`.
++int RegisterNetlinkSocket(bool nonblocking, int sock_type);
+diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
+index 0a7af110a..4cd5bc492 100644
+--- a/compat/posix/src/system.cc
++++ b/compat/posix/src/system.cc
+@@ -372,0 +373 @@ int ioctl(int fd, unsigned long request, ...) {
++    if (state.description->netlink) return errno = EACCES, -1;
+@@ -472 +473,2 @@ int fcntl(int fd, int cmd, ...) {
+-              if (!state.description->native_nonblocking_datagram &&
++              if (!state.description->netlink &&
++                  !state.description->native_nonblocking_datagram &&
+diff --git a/compat/posix/src/winsock.cc b/compat/posix/src/winsock.cc
+index 91662df88..c3807d812 100644
+--- a/compat/posix/src/winsock.cc
++++ b/compat/posix/src/winsock.cc
+@@ -23,0 +24 @@
++#include "netlink_internal.h"
+@@ -449,0 +451,13 @@ int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool
++  if (description && description->netlink) {
++    {
++      std::lock_guard<std::mutex> lock(description->error_mutex);
++      description->native_closing = true;
++    }
++    gesher::NetlinkClose(*description->netlink);
++    {
++      std::lock_guard<std::mutex> lock(description->error_mutex);
++      description->native_closed = true;
++      description->native_closing = false;
++    }
++    return 0;
++  }
+@@ -1208,0 +1223,4 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
++  if (description && description->netlink) {
++    if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
++    return gesher::NetlinkSend(*description->netlink, buffers, count, 0, nullptr, 0);
++  }
+@@ -1227,0 +1246,6 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
++  if (description && description->netlink) {
++    if (rights != nullptr) *rights = {};
++    if (credentials != nullptr) *credentials = {};
++    return gesher::NetlinkRecv(*description->netlink, buffers, count, 0, nullptr, nullptr,
++                               description->nonblocking.load() || dont_wait, result_flags);
++  }
+@@ -1481,0 +1506,2 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
++  bool has_netlink = false;
++  bool has_netlink_ready = false;
+@@ -1489,0 +1516,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
++    if (entries[i].description && entries[i].description->netlink) {
++      has_netlink = true;
++      fds[i].fd = INVALID_SOCKET;
++      has_netlink_ready |= closed[i] ||
++          gesher::NetlinkPoll(*entries[i].description->netlink, entries[i].events) != 0;
++      continue;
++    }
+@@ -1536 +1569,6 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+-  const int wait = has_lifecycle_hup ? 0 : has_owned_pending && (timeout_ms < 0 || timeout_ms > 10) ? 10 : timeout_ms;
++  const int wait = (has_lifecycle_hup || has_netlink_ready)
++                       ? 0
++                       : (has_owned_pending || (has_netlink && wake == kInvalidSocket)) &&
++                                 (timeout_ms < 0 || timeout_ms > 10)
++                             ? 10
++                             : timeout_ms;
+@@ -1547 +1585,5 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+-    if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
++    if (!owned_pending[i] && !closed[i] &&
++        !(entries[i].description && entries[i].description->netlink)) {
++      active.push_back(fds[i]);
++      active_index.push_back(i);
++    }
+@@ -1603 +1645,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+-    if (entries[i].description) {
++    if (entries[i].description && entries[i].description->netlink) {
++      auto& description = *entries[i].description;
++      std::lock_guard<std::mutex> lock(description.error_mutex);
++      const int change = description.native_closed || description.native_closing
++          ? kPollNval : gesher::NetlinkPoll(*description.netlink, entries[i].events);
++      r = 0;
++      if (change & kPollIn) r |= POLLRDNORM;
++      if (change & kPollOut) r |= POLLWRNORM;
++      if (change & kPollErr) r |= POLLERR;
++      if (change & kPollNval) r |= POLLNVAL;
++    } else if (entries[i].description) {
+@@ -2015 +2067,4 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
+-    if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) iface.flags |= kIfLoopback;
++    if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
++      iface.flags |= kIfLoopback;
++      iface.kind = Interface::LinkKind::kLoopback;
++    }
+@@ -2018,0 +2074 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
++      iface.kind = Interface::LinkKind::kEthernet;
+@@ -2019,0 +2076 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
++    if (a->IfType == IF_TYPE_PPP) iface.kind = Interface::LinkKind::kPpp;
+@@ -2027,0 +2085,9 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
++      using State = InterfaceAddress::State;
++      switch (u->DadState) {
++        case IpDadStateDeprecated: address.state = State::kDeprecated; break;
++        case IpDadStateTentative: address.state = State::kTentative; break;
++        case IpDadStateDuplicate: address.state = State::kDuplicate; break;
++        default: break;
++      }
++      address.permanent = u->ValidLifetime == 0xffffffffu;
++      address.temporary = (u->Flags & IP_ADAPTER_ADDRESS_TRANSIENT) != 0;
+@@ -2034,0 +2101,48 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
++struct InterfaceChangeWatch {
++  std::mutex callback_mutex;
++  void (*changed)(void*);
++  void* context;
++  HANDLE handle = nullptr;
++
++  void OnChange(MIB_NOTIFICATION_TYPE event) {
++    if (event == MibInitialNotification) return;
++    std::lock_guard<std::mutex> lock(callback_mutex);
++    if (changed != nullptr) changed(context);
++  }
++};
++
++namespace {
++void CALLBACK OnLinkChange(void* context, MIB_IPINTERFACE_ROW*, MIB_NOTIFICATION_TYPE event) {
++  static_cast<InterfaceChangeWatch*>(context)->OnChange(event);
++}
++void CALLBACK OnAddressChange(void* context, MIB_UNICASTIPADDRESS_ROW*, MIB_NOTIFICATION_TYPE event) {
++  static_cast<InterfaceChangeWatch*>(context)->OnChange(event);
++}
++}  // namespace
++
++InterfaceChangeWatch* WatchInterfaceChanges(InterfaceChangeKind kind, void (*changed)(void*),
++                                             void* context) {
++  auto watch = std::unique_ptr<InterfaceChangeWatch>(
++      new (std::nothrow) InterfaceChangeWatch{{}, changed, context});
++  if (!watch) return errno = ENOMEM, nullptr;
++  const DWORD error = kind == InterfaceChangeKind::kLink
++      ? NotifyIpInterfaceChange(AF_UNSPEC, OnLinkChange, watch.get(), FALSE, &watch->handle)
++      : NotifyUnicastIpAddressChange(AF_UNSPEC, OnAddressChange, watch.get(), FALSE, &watch->handle);
++  if (error != NO_ERROR) {
++    errno = error == ERROR_NOT_SUPPORTED ? EOPNOTSUPP : error == ERROR_ACCESS_DENIED ? EACCES : EIO;
++    return nullptr;
++  }
++  return watch.release();
++}
++
++void StopInterfaceChanges(InterfaceChangeWatch* watch) {
++  if (watch == nullptr) return;
++  {
++    std::lock_guard<std::mutex> lock(watch->callback_mutex);
++    watch->changed = nullptr;
++    watch->context = nullptr;
++  }
++  // A failed cancellation leaves a disabled callback context for the OS.
++  if (CancelMibChangeNotify2(watch->handle) == NO_ERROR) delete watch;
++}
++
