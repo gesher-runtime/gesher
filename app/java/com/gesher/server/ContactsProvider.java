@@ -142,6 +142,8 @@ final class ContactsProvider extends ContentProvider {
     private static final int RAW_DISPLAY_PHOTO = 96;
     private static final int DISPLAY_PHOTO_FILE = 97;
     private static final int PHOTO_DIMENSIONS = 98;
+    private static final int PROFILE_STATUS = 99;
+    private static final int PROFILE_STATUS_ID = 100;
     private static final Executor sProfilePhotoWriters = new ThreadPoolExecutor(
             0, 2, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), task -> {
                 Thread worker = new Thread(task, "ContactsProfilePhoto");
@@ -244,6 +246,9 @@ final class ContactsProvider extends ContentProvider {
         sUriMatcher.addURI(auth, "profile/data/#", DATA_ID);
         sUriMatcher.addURI(auth, "profile/syncstate", PROFILE_SYNC_STATE);
         sUriMatcher.addURI(auth, "profile/syncstate/#", PROFILE_SYNC_STATE_ID);
+        sUriMatcher.addURI(auth, "profile/status_updates", PROFILE_STATUS);
+        sUriMatcher.addURI(auth, "profile/status_updates/#", PROFILE_STATUS_ID);
+        sUriMatcher.addURI(auth, "status_updates/#", PROFILE_STATUS_ID);
         sUriMatcher.addURI(auth, "profile/as_vcard", PROFILE_VCARD);
         sUriMatcher.addURI(auth, "contacts/as_vcard/*", PROFILE_VCARD);
         sUriMatcher.addURI(auth, "profile/photo", CONTACT_THUMBNAIL);
@@ -267,7 +272,7 @@ final class ContactsProvider extends ContentProvider {
                 "phonebook_bucket_alt", "in_visible_group", "in_default_directory",
                 "has_phone_number", "times_contacted", "times_used",
                 "last_time_contacted", "last_time_used", "starred", "pinned",
-                "custom_ringtone", "send_to_voicemail", "contact_presence",
+                "custom_ringtone", "send_to_voicemail", "contact_presence", "contact_chat_capability",
                 "contact_status", "contact_status_ts", "contact_status_res_package",
                 "contact_status_label", "contact_status_icon",
                 "contact_last_updated_timestamp", "is_user_profile");
@@ -284,7 +289,7 @@ final class ContactsProvider extends ContentProvider {
                 "sync3", "sync4", "lookup", "has_phone_number", "in_visible_group",
                 "in_default_directory", "is_user_profile", "photo_id",
                 "photo_file_id", "photo_uri", "photo_thumb_uri",
-                "contact_presence", "contact_status",
+                "contact_presence", "contact_chat_capability", "contact_status",
                 "contact_last_updated_timestamp");
 
         sDataProjectionMap = identityMap(
@@ -300,8 +305,11 @@ final class ContactsProvider extends ContentProvider {
                 "photo_thumb_uri", "in_visible_group", "in_default_directory",
                 "has_phone_number", "starred", "pinned", "custom_ringtone",
                 "send_to_voicemail", "times_contacted", "times_used",
-                "last_time_contacted", "last_time_used", "contact_presence",
-                "contact_status", "contact_status_ts", "contact_last_updated_timestamp",
+                "last_time_contacted", "last_time_used", "contact_presence", "contact_chat_capability",
+                "contact_status", "contact_status_ts", "contact_status_res_package",
+                "contact_status_label", "contact_status_icon",
+                "mode", "chat_capability", "status", "status_ts", "status_res_package", "status_label",
+                "status_icon", "contact_last_updated_timestamp",
                 "account_name", "account_type", "data_set", "sourceid", "version",
                 "dirty", "deleted", "name_raw_contact_id",
                 "raw_contact_is_user_profile", "is_user_profile");
@@ -494,6 +502,7 @@ final class ContactsProvider extends ContentProvider {
                         db.endTransaction();
                     }
                 }
+                ProfileStatusUpdates.clearPresence(db);
             } catch (RuntimeException | Error failure) {
                 db.close();
                 throw failure;
@@ -534,6 +543,7 @@ final class ContactsProvider extends ContentProvider {
                 + "custom_ringtone TEXT,"
                 + "send_to_voicemail INTEGER DEFAULT 0,"
                 + "contact_presence INTEGER,"
+                + "contact_chat_capability INTEGER,"
                 + "contact_status TEXT,"
                 + "contact_status_ts INTEGER,"
                 + "contact_status_res_package TEXT,"
@@ -643,6 +653,7 @@ final class ContactsProvider extends ContentProvider {
         db.execSQL("CREATE TABLE IF NOT EXISTS profile_sync_state ("
                 + " _id INTEGER PRIMARY KEY, account_name TEXT NOT NULL, account_type TEXT NOT NULL,"
                 + " data BLOB, UNIQUE(account_name, account_type))");
+        ProfileStatusUpdates.createTables(db);
         createIndexesAndViews(db);
     }
 
@@ -676,7 +687,7 @@ final class ContactsProvider extends ContentProvider {
                 + "phonebook_bucket_alt, in_visible_group, in_default_directory, "
                 + "has_phone_number, times_contacted, times_used, "
                 + "last_time_contacted, last_time_used, starred, pinned, "
-                + "custom_ringtone, send_to_voicemail, contact_presence, "
+                + "custom_ringtone, send_to_voicemail, contact_presence, contact_chat_capability, "
                 + "contact_status, contact_status_ts, contact_status_res_package, "
                 + "contact_status_label, contact_status_icon, "
                 + "contact_last_updated_timestamp, is_user_profile "
@@ -726,6 +737,7 @@ final class ContactsProvider extends ContentProvider {
                 + "contacts.photo_uri AS photo_uri,"
                 + "contacts.photo_thumb_uri AS photo_thumb_uri,"
                 + "contacts.contact_presence AS contact_presence,"
+                + "contacts.contact_chat_capability AS contact_chat_capability,"
                 + "contacts.contact_status AS contact_status,"
                 + "contacts.contact_last_updated_timestamp AS contact_last_updated_timestamp "
                 + "FROM raw_contacts "
@@ -778,8 +790,16 @@ final class ContactsProvider extends ContentProvider {
                 + "contacts.last_time_contacted AS last_time_contacted,"
                 + "contacts.last_time_used AS last_time_used,"
                 + "contacts.contact_presence AS contact_presence,"
+                + "contacts.contact_chat_capability AS contact_chat_capability,"
                 + "contacts.contact_status AS contact_status,"
                 + "contacts.contact_status_ts AS contact_status_ts,"
+                + "contacts.contact_status_res_package AS contact_status_res_package,"
+                + "contacts.contact_status_label AS contact_status_label,"
+                + "contacts.contact_status_icon AS contact_status_icon,"
+                + "profile_presence.mode AS mode, profile_presence.chat_capability AS chat_capability,"
+                + "profile_status.status AS status, profile_status.status_ts AS status_ts,"
+                + "profile_status.status_res_package AS status_res_package,"
+                + "profile_status.status_label AS status_label, profile_status.status_icon AS status_icon,"
                 + "contacts.contact_last_updated_timestamp AS contact_last_updated_timestamp,"
                 + "raw_contacts.account_name AS account_name,"
                 + "raw_contacts.account_type AS account_type,"
@@ -793,6 +813,8 @@ final class ContactsProvider extends ContentProvider {
                 + "contacts.name_raw_contact_id AS name_raw_contact_id "
                 + "FROM data "
                 + "LEFT JOIN profile_display_photos ON profile_display_photos.data_id = data._id "
+                + "LEFT JOIN profile_presence ON profile_presence.presence_data_id = data._id "
+                + "LEFT JOIN profile_status ON profile_status.presence_data_id = data._id "
                 + "JOIN mimetypes ON data.mimetype_id = mimetypes._id "
                 + "JOIN raw_contacts ON data.raw_contact_id = raw_contacts._id "
                 + "LEFT JOIN contacts ON raw_contacts.contact_id = contacts._id "
@@ -931,6 +953,7 @@ final class ContactsProvider extends ContentProvider {
             case RAW_DISPLAY_PHOTO:
             case DATA_ID:
             case PROFILE_SYNC_STATE_ID:
+            case PROFILE_STATUS_ID:
                 return uri.getPathSegments().get(hasProfilePath(uri) ? 2 : 1);
             case PHONES_ID:
             case EMAILS_ID:
@@ -1060,6 +1083,11 @@ final class ContactsProvider extends ContentProvider {
             case PROFILE_SYNC_STATE:
             case PROFILE_SYNC_STATE_ID:
                 return "vnd.android.cursor.item/syncstate";
+            case PROFILE_STATUS:
+                return ContactsContract.StatusUpdates.CONTENT_TYPE;
+            case PROFILE_STATUS_ID:
+                if (isProfileRequest(uri, PROFILE_STATUS_ID)) return ContactsContract.StatusUpdates.CONTENT_ITEM_TYPE;
+                throw new IllegalArgumentException("Unknown URL " + uri);
             case PROFILE_VCARD:
                 if (isProfileRequest(uri, PROFILE_VCARD)) return ContactsContract.Contacts.CONTENT_VCARD_TYPE;
                 throw new IllegalArgumentException("Unknown URL " + uri);
@@ -1319,6 +1347,16 @@ final class ContactsProvider extends ContentProvider {
                 qb.appendWhereStandalone("_id = photo_id");
                 if (id != null) {
                     effSelection = scopedSelection(selection, "contact_id = ?");
+                    effArgs = ContactsProviderSupport.prependArgs(selectionArgs, id);
+                }
+                break;
+            case PROFILE_STATUS:
+            case PROFILE_STATUS_ID:
+                if (!profile) throw new IllegalArgumentException("Unknown URL " + uri);
+                qb.setTables(ProfileStatusUpdates.VIEW);
+                qb.setProjectionMap(ProfileStatusUpdates.PROJECTION);
+                if (id != null) {
+                    effSelection = scopedSelection(selection, ContactsContract.StatusUpdates.DATA_ID + " = ?");
                     effArgs = ContactsProviderSupport.prependArgs(selectionArgs, id);
                 }
                 break;
@@ -1683,6 +1721,12 @@ final class ContactsProvider extends ContentProvider {
                 return insertSettings(db, copy, account);
             case PROFILE_SYNC_STATE:
                 return insertProfileSyncState(db, uri, copy);
+            case PROFILE_STATUS: {
+                long dataId = ProfileStatusUpdates.upsert(db, copy, now);
+                if (dataId == 0) return null;
+                refreshProfileStatus(db);
+                return ContentUris.withAppendedId(uri, dataId);
+            }
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
@@ -1834,6 +1878,9 @@ final class ContactsProvider extends ContentProvider {
         if (match == PROFILE_SYNC_STATE || match == PROFILE_SYNC_STATE_ID) {
             return mutateProfileSyncState(db, match, uri, copy, selection, selectionArgs);
         }
+        if (match == PROFILE_STATUS || match == PROFILE_STATUS_ID) {
+            return mutateProfileStatus(db, match, uri, copy, selection, selectionArgs);
+        }
         String rows = mutationRows(db, match, uri, selection, selectionArgs, syncAdapter);
         switch (match) {
             case CONTACTS:
@@ -1905,6 +1952,27 @@ final class ContactsProvider extends ContentProvider {
         for (String key : values.keySet()) {
             if (!writable.contains(key)) throw new IllegalArgumentException("Invalid column " + key);
         }
+    }
+
+    private static int mutateProfileStatus(SQLiteDatabase db, int match, Uri uri,
+            ContentValues update, String selection, String[] selectionArgs) {
+        if (!isProfileRequest(uri, match)) throw new IllegalArgumentException("Unknown URL " + uri);
+        String id = itemId(uri, match);
+        if (id != null) {
+            selection = scopedSelection(selection, ContactsContract.StatusUpdates.DATA_ID + " = ?");
+            selectionArgs = ContactsProviderSupport.prependArgs(selectionArgs, id);
+        }
+        int count = ProfileStatusUpdates.mutate(db, update, selection, selectionArgs);
+        if (count > 0) refreshProfileStatus(db);
+        return count;
+    }
+
+    private static void refreshProfileStatus(SQLiteDatabase db) {
+        long id = findProfileId(db);
+        if (id == 0) return;
+        ContentValues status = new ContentValues();
+        ProfileStatusUpdates.applyAggregate(db, id, status);
+        db.update("contacts", status, "_id = ?", new String[] {Long.toString(id)});
     }
 
     private static int mutateProfileSyncState(SQLiteDatabase db, int match, Uri uri,
@@ -2131,6 +2199,9 @@ final class ContactsProvider extends ContentProvider {
         if (match == PROFILE_SYNC_STATE || match == PROFILE_SYNC_STATE_ID) {
             return mutateProfileSyncState(db, match, uri, null, selection, selectionArgs);
         }
+        if (match == PROFILE_STATUS || match == PROFILE_STATUS_ID) {
+            return mutateProfileStatus(db, match, uri, null, selection, selectionArgs);
+        }
         if (match == PROFILE) {
             throw new UnsupportedOperationException("Delete the raw contacts that make up the profile");
         }
@@ -2230,7 +2301,7 @@ final class ContactsProvider extends ContentProvider {
     private static boolean shouldSyncToNetwork(Uri uri) {
         int match = sUriMatcher.match(uri);
         return match != PROFILE_SYNC_STATE && match != PROFILE_SYNC_STATE_ID
-                && !isCallerSyncAdapter(uri);
+                && match != PROFILE_STATUS && match != PROFILE_STATUS_ID && !isCallerSyncAdapter(uri);
     }
 
     private void notifyObservers(boolean syncToNetwork, boolean profileChanged) {
@@ -2244,7 +2315,9 @@ final class ContactsProvider extends ContentProvider {
             }
             if (profileChanged) {
                 try {
-                    getContext().sendBroadcast(new Intent(ContactsContract.Intents.ACTION_PROFILE_CHANGED),
+                    Intent changed = new Intent(ContactsContract.Intents.ACTION_PROFILE_CHANGED);
+                    getContext().sendBroadcast(changed, ContactsProviderSupport.READ_CONTACTS);
+                    getContext().sendBroadcast(new Intent(changed).setPackage("com.android.settings"),
                             ContactsProviderSupport.READ_CONTACTS);
                 } catch (RuntimeException failure) {
                     SystemServer.log("contacts: Profile change broadcast failed: " + failure);
@@ -2373,6 +2446,7 @@ final class ContactsProvider extends ContentProvider {
             if (bestRawId != 0) update.put("name_raw_contact_id", bestRawId);
             if (ContactsContract.isProfileId(contactId)) {
                 updateProfilePhotoMetadata(db, contactId, update);
+                ProfileStatusUpdates.applyAggregate(db, contactId, update);
             }
             applyNameDerivedFields(update, best.displayName, best.displayNameAlt, best.source);
             db.update("contacts", update, "_id = ?", new String[] { Long.toString(contactId) });

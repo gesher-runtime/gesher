@@ -614,11 +614,13 @@ public final class ContactsProviderContractTest {
         try {
             rejects(FileNotFoundException.class, () -> provider.openAssetFile(vcard, "r"));
             Uri raw = provider.insert(ContactsContract.Profile.CONTENT_RAW_CONTACTS_URI, new ContentValues());
-            check(broadcasts.size() == 1 && ContactsContract.Intents.ACTION_PROFILE_CHANGED.equals(
-                            broadcasts.get(0).getAction()),
-                    "A committed Profile mutation broadcasts the Android Profile action");
+            check(broadcasts.size() == 2 && ContactsContract.Intents.ACTION_PROFILE_CHANGED.equals(
+                            broadcasts.get(0).getAction()) && broadcasts.get(0).getPackage() == null
+                            && ContactsContract.Intents.ACTION_PROFILE_CHANGED.equals(broadcasts.get(1).getAction())
+                            && "com.android.settings".equals(broadcasts.get(1).getPackage()),
+                    "A committed Profile change notifies Contacts readers and the dedicated Settings receiver");
             provider.insert(ContactsContract.RawContacts.CONTENT_URI, new ContentValues());
-            check(broadcasts.size() == 1, "An ordinary mutation does not broadcast a Profile change");
+            check(broadcasts.size() == 2, "An ordinary mutation does not broadcast a Profile change");
             int beforeRollback = broadcasts.size();
             ArrayList<ContentProviderOperation> abort = new ArrayList<>();
             abort.add(ContentProviderOperation.newUpdate(profile)
@@ -738,6 +740,116 @@ public final class ContactsProviderContractTest {
             rejects(FileNotFoundException.class, () -> provider.openAssetFile(display, "r"));
         } finally {
             provider.shutdown();
+        }
+    }
+
+    private static void testProfileStatusUpdates(File directory) throws Exception {
+        File database = new File(directory, "contacts-profile-status.db");
+        Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
+        ProviderInfo info = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
+        Uri profile = ContactsContract.Profile.CONTENT_URI;
+        Uri status = ContactsContract.StatusUpdates.PROFILE_CONTENT_URI;
+        String dataKey = ContactsContract.StatusUpdates.DATA_ID;
+        String presence = ContactsContract.StatusUpdates.PRESENCE;
+        String message = ContactsContract.StatusUpdates.STATUS;
+        String timestamp = ContactsContract.StatusUpdates.STATUS_TIMESTAMP;
+        ContentProvider provider = newContactsProvider(null, null, database);
+        List<Boolean> sync = new ArrayList<>();
+        provider.attachInfo(observerRecordingContext(provider, new ArrayList<>(), sync), info);
+        Uri latest;
+        long secondId;
+        try {
+            Uri raw = provider.insert(ContactsContract.Profile.CONTENT_RAW_CONTACTS_URI, new ContentValues());
+            Uri ordinary = provider.insert(ContactsContract.RawContacts.CONTENT_URI, new ContentValues());
+            ContentValues im = new ContentValues();
+            im.put("mimetype", ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE);
+            im.put("data1", "profile-im");
+            im.put("data5", ContactsContract.CommonDataKinds.Im.PROTOCOL_JABBER);
+            long ordinaryId = ContentUris.parseId(provider.insert(Uri.withAppendedPath(ordinary, "data"), im));
+            Uri profileData = Uri.withAppendedPath(raw, "data");
+            long firstId = ContentUris.parseId(provider.insert(profileData, im));
+            im.put("data1", "profile-second");
+            Uri dataUri = provider.insert(profileData, im);
+            secondId = ContentUris.parseId(dataUri);
+
+            check(ContactsContract.StatusUpdates.CONTENT_TYPE.equals(provider.getType(status)),
+                    "Profile status has the Android collection MIME type");
+            ContentValues first = new ContentValues();
+            first.put(dataKey, ordinaryId);
+            first.put(message, "Must not attach to an ordinary contact");
+            check(provider.insert(status, first) == null, "Profile status cannot target ordinary Contacts data");
+
+            int beforeStatus = sync.size();
+            first.remove(dataKey);
+            first.put(ContactsContract.StatusUpdates.IM_HANDLE, "profile-im");
+            first.put(ContactsContract.StatusUpdates.PROTOCOL, ContactsContract.CommonDataKinds.Im.PROTOCOL_JABBER);
+            first.put(presence, ContactsContract.StatusUpdates.AVAILABLE);
+            first.put(message, "First status");
+            first.put(timestamp, 100L);
+            Uri firstStatus = provider.insert(status, first);
+            check(ContentUris.parseId(firstStatus) == firstId, "IM lookup attaches status to its Profile data row");
+            check(ContactsContract.StatusUpdates.CONTENT_ITEM_TYPE.equals(provider.getType(firstStatus)),
+                    "Profile status item advertises its MIME type");
+
+            ContentValues second = new ContentValues();
+            second.put(dataKey, secondId);
+            second.put(ContactsContract.StatusUpdates.PROTOCOL, ContactsContract.CommonDataKinds.Im.PROTOCOL_JABBER);
+            second.put(presence, ContactsContract.StatusUpdates.AWAY);
+            second.put(message, "Most recent status");
+            second.put(timestamp, 200L);
+            second.put(ContactsContract.StatusUpdates.CHAT_CAPABILITY, ContactsContract.StatusUpdates.CAPABILITY_HAS_VIDEO);
+            latest = provider.insert(status, second);
+            check(ContentUris.parseId(latest) == secondId, "Explicit Data ID targets a second Profile status");
+            Uri generic = ContentUris.withAppendedId(ContactsContract.StatusUpdates.CONTENT_URI, secondId);
+            try (Cursor c = provider.query(generic, new String[] {dataKey, presence, message}, null, null, null)) {
+                check(c.moveToFirst() && c.getLong(0) == secondId
+                                && c.getInt(1) == ContactsContract.StatusUpdates.AWAY
+                                && "Most recent status".equals(c.getString(2)),
+                        "High-ID StatusUpdates item routes to its Profile data");
+            }
+            try (Cursor c = provider.query(dataUri, new String[] {presence, message, "contact_presence", "contact_status"},
+                    null, null, null)) {
+                check(c.moveToFirst() && c.getInt(0) == ContactsContract.StatusUpdates.AWAY
+                                && "Most recent status".equals(c.getString(1))
+                                && c.getInt(2) == ContactsContract.StatusUpdates.AVAILABLE
+                                && "Most recent status".equals(c.getString(3)),
+                        "Profile Data exposes its status and the independent aggregate presence winner");
+            }
+            ContentValues update = new ContentValues();
+            update.put(message, "Edited status");
+            check(provider.update(status, update, dataKey + " = ?", new String[] {Long.toString(secondId)}) == 1,
+                    "Bound selection updates only the requested Profile status");
+            check(provider.delete(firstStatus, null, null) == 1, "Deleting the first status removes its presence");
+            try (Cursor c = provider.query(profile,
+                    new String[] {"contact_presence", "contact_chat_capability", "contact_status", "contact_status_ts"},
+                    null, null, null)) {
+                check(c.moveToFirst() && c.getInt(0) == ContactsContract.StatusUpdates.AWAY
+                                && c.getInt(1) == ContactsContract.StatusUpdates.CAPABILITY_HAS_VIDEO
+                                && "Edited status".equals(c.getString(2)) && c.getLong(3) == 200L,
+                        "Profile aggregates fall back to the remaining status and its chat capability");
+            }
+            check(sync.subList(beforeStatus, sync.size()).equals(List.of(false, false, false, false)),
+                    "Status and presence changes do not request account synchronization");
+        } finally {
+            provider.shutdown();
+        }
+
+        ContentProvider reopened = newContactsProvider(null, null, database);
+        reopened.attachInfo(observerRecordingContext(reopened, new ArrayList<>()), info);
+        try {
+            try (Cursor c = reopened.query(latest, new String[] {presence, message}, null, null, null)) {
+                check(c.moveToFirst() && c.isNull(0) && "Edited status".equals(c.getString(1)),
+                        "Status text persists while presence resets on database reopen");
+            }
+            Uri target = ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI, secondId);
+            check(reopened.delete(target, null, null) == 1 && count(reopened, latest) == 0,
+                    "Removing Data also removes its associated Profile status");
+            try (Cursor c = reopened.query(profile, new String[] {"contact_presence", "contact_status"},
+                    null, null, null)) {
+                check(c.moveToFirst() && c.isNull(0) && c.isNull(1), "Profile does not expose stale status after deletion");
+            }
+        } finally {
+            reopened.shutdown();
         }
     }
 
@@ -1121,6 +1233,7 @@ public final class ContactsProviderContractTest {
             testContactsSchemaViewsStrictAndFallback(dbDir);
             testProfileNamespaceAndLifecycle(dbDir);
             testProfileAssetsAndSyncState(dbDir);
+            testProfileStatusUpdates(dbDir);
             testFreshSchemaAndPersistence(dbDir);
             testApplyBatchAndSyncAdapterSemantics(dbDir);
 
@@ -1254,6 +1367,9 @@ public final class ContactsProviderContractTest {
                         ContactsContract.Profile.CONTENT_URI, new String[] {"_id"}, null, null));
                 rejects(SecurityException.class, () -> h.provider.openAssetFile(caller,
                         ContactsContract.Profile.CONTENT_VCARD_URI, "r", null));
+                rejects(SecurityException.class, () -> h.provider.query(caller,
+                        ContactsContract.StatusUpdates.PROFILE_CONTENT_URI,
+                        new String[] {ContactsContract.StatusUpdates.STATUS}, null, null));
             });
         } finally {
             contactsProv.shutdown();
