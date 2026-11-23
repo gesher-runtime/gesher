@@ -70,7 +70,9 @@ def main() -> None:
                 main_classes = ['com.gesher.server.SettingsStoreHost']
             elif component == 'standin':
                 write('android/os/IInterface.java', 'package android.os; public interface IInterface { IBinder asBinder(); }')
-                write('android/os/IBinder.java', 'package android.os; public interface IBinder {}')
+                write('android/os/IBinder.java', 'package android.os; public interface IBinder { int FIRST_CALL_TRANSACTION = 1; }')
+                write('android/os/Parcel.java', 'package android.os; public class Parcel {}')
+                write('android/os/RemoteException.java', 'package android.os; public class RemoteException extends Exception {}')
                 write('android/os/Binder.java', 'package android.os; public class Binder implements IBinder { public void attachInterface(IInterface impl, String descriptor) {} }')
                 write('android/content/pm/ParceledListSlice.java', 'package android.content.pm; public class ParceledListSlice<T> { private final java.util.List<T> values; public ParceledListSlice(java.util.List<T> values) { this.values=values; } public java.util.List<T> getList() { return values; } }')
                 sources += [str(ROOT / 'tests/dex-services/gesher/services/StandInDispatchTest.java'),
