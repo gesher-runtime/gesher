@@ -66,6 +66,8 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
+# AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
+Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
 $here = $scriptRoot
@@ -255,6 +257,22 @@ $bcp = ($jars | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # the boot image's AOT code without the JIT; app processes add the JIT (ADR 0081, 0054).
 $dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xusejit:false')
 $dalvikvm = Join-Path $here 'dalvikvm.exe'
+# Runs the VM; its exit code ($LASTEXITCODE) is the result. ART writes ordinary
+# diagnostics to stderr (always "setting boot class path" at INFO). When that
+# stream is redirected - the control panel, a caller's 2>, a host without a
+# visible console - Windows PowerShell turns each line into an ErrorRecord,
+# which this script's ErrorActionPreference=Stop would make terminating: a
+# successful start or install would be reported with ART's first log line.
+# A VM that could not be started at all (missing or damaged dalvikvm.exe) sets
+# no exit code under Continue, so that case still fails here.
+# Pass '-X...:value' options inside an array (@dvm): a literal colon argument
+# written directly to this function is split in two by PowerShell's binder.
+function Invoke-Dalvikvm {
+  $ErrorActionPreference = 'Continue'
+  $global:LASTEXITCODE = $null
+  & $dalvikvm @args
+  if ($null -eq $global:LASTEXITCODE) { throw "gesher-app: could not start $dalvikvm" }
+}
 
 # Keep the profile choice local to child processes, so disabling the marker in
 # this PowerShell session cannot inherit a previous launcher's automatic opt-in.
@@ -275,7 +293,7 @@ try {
     catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { }
   }
   if ($command -eq 'cameras') {
-    & $dalvikvm @dvm com.gesher.server.CameraSelection (NoDrive $rearCameraFile) @rest
+    Invoke-Dalvikvm @dvm com.gesher.server.CameraSelection (NoDrive $rearCameraFile) @rest
     $code = $LASTEXITCODE
     if ($code -eq 0 -and $rest.Count -gt 0) {
       $state = DeviceState
@@ -289,18 +307,18 @@ try {
   if ($commands -contains $command) {
     $launcherArgs = @($command)
     if ($apkFull) { $launcherArgs += UserPath $apkFull }
-    & $dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments @launcherArgs @rest
+    Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments @launcherArgs @rest
     exit $LASTEXITCODE
   }
   if ($rest -notcontains '--single-process' -and $rest -notcontains '--system-server') {
-    & $dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch (UserPath $apkFull) @rest
+    Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch (UserPath $apkFull) @rest
     exit $LASTEXITCODE
   }
 
   # Single process: the app alone, with stand-in services in its own process.
   $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
   if ($DriverArgs -notcontains '--system-server') {
-    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
+    Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     exit $LASTEXITCODE
   }
 
@@ -308,13 +326,15 @@ try {
   # the APK, then the app in this console's process; the three are stopped when it exits.
   $logs = Join-Path $root 'logs'
   New-Item -ItemType Directory -Force $logs | Out-Null
-  $env:GESHER_BINDER = "gesher-app-$PID"
+  # Unique per run, not only per PID: a reused PID must not name an earlier run's device
+  # (its binder pipe, property session and /proc/sys/kernel/random/boot_id).
+  $env:GESHER_BINDER = "gesher-app-$PID-" + [Convert]::ToString([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(), 16)
   $started = @()
   try {
     $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `
       -RedirectStandardOutput "$logs/run-binderd.out" -RedirectStandardError "$logs/run-binderd.log"
     # A successful protocol connection to this broker must precede ProcessState.
-    & $dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
+    Invoke-Dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
     if ($LASTEXITCODE -ne 0) { throw ('gesher-app: ' + (Get-GesherText 'binder_failed')) }
     $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
       -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
@@ -329,7 +349,7 @@ try {
       if ($text.Contains('with servicemanager')) { break }
       Start-Sleep -Milliseconds 100
     }
-    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
+    Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     $code = $LASTEXITCODE
     if ($code -ne 0) { Write-Host ('gesher-app: ' + (Get-GesherText 'server_logs' @($logs))) }
   } finally {

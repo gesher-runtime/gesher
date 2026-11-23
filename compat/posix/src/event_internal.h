@@ -47,6 +47,9 @@ void DupEventObject(int fd, int fd2);
 // (counter 1 while events are queued), so poll and epoll take it as one.
 struct Inotify;
 std::shared_ptr<EventFd> NewReadiness(bool nonblocking);
+// True publishes a producer notification, even if already readable. Inotify
+// calls this for each newly queued record; timerfd for an armed expiration,
+// not for accounting additional unread periodic ticks. False clears the level.
 void SetReadable(EventFd& readiness, bool readable);
 int RegisterInotify(std::shared_ptr<Inotify> inotify, std::shared_ptr<EventFd> readiness);
 int ReadInotify(Inotify& inotify, void* buf, unsigned int count);

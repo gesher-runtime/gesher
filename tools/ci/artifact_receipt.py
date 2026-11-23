@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from artifact_candidates import read_artifacts, select_artifact
+from artifact_candidates import _timestamp, read_artifacts, select_artifact
 from github_read import get_json
 from github_jobs import get_jobs
 from receipt_identity import (exact_run, failed_installer_allowed, installer_uploaded,
@@ -56,7 +56,7 @@ def read_jobs(value):
     return jobs
 
 
-def select_producer(value, jobs, name, suffix=False, allow_failed=False):
+def producer_record(value, jobs, name, suffix, allow_failed):
     rows = [x for x in jobs['jobs'] if x['name'] == name or (suffix and x['name'].endswith(' / ' + name))]
     allowed = {'success', 'failure'} if allow_failed else {'success'}
     identity_record('producer', {'run_id': value['run_id'], 'attempt': value['attempt'],
@@ -72,6 +72,11 @@ def select_producer(value, jobs, name, suffix=False, allow_failed=False):
     if (job['status'] != 'completed' or job['conclusion'] not in allowed or job['head_sha'] != value['head']
             or str(job['run_id']) != value['run_id'] or str(job['run_attempt']) != value['attempt']):
         raise RuntimeError('Producer source/attempt/conclusion mismatch')
+    return job
+
+
+def select_producer(value, jobs, name, suffix=False, allow_failed=False):
+    job = producer_record(value, jobs, name, suffix, allow_failed)
     if allow_failed and not installer_uploaded(job):
         raise RuntimeError('Installer upload did not complete successfully')
     return job
@@ -99,7 +104,7 @@ def select_supplier(value, inventory, name, job, *, total_count_max=100):
 def download(item, destination):
     subprocess.run([sys.executable, 'tools/surface/download-verified-artifact.py',
                     '--id', str(item['id']), '--digest', item['digest'],
-                    '--destination', str(destination)], check=True)
+                    '--destination', str(destination)], check=True, stdout=sys.stdout)
 
 
 def receipt(value, item, job):
@@ -109,6 +114,64 @@ def receipt(value, item, job):
           f"attempt={value['attempt']}", flush=True)
 
 
+def original_installer_execution(value, copied):
+    """Resolve the copied job to its exact original execution with upload steps."""
+    endpoint = f"repos/{value['repo']}/actions/runs/{value['run_id']}"
+    ids = {copied['id']}
+    execution = ('name', 'status', 'conclusion', 'head_sha', 'started_at', 'completed_at')
+    for attempt in range(int(value['attempt']) - 1, 0, -1):
+        original = {**value, 'attempt': str(attempt)}
+        run = get_json(f'{endpoint}/attempts/{attempt}')
+        if (not exact_run(run, original['run_id'], original['attempt'], original['head'],
+                          original['repo_id'], original['head_repo'], original['repo'], original['workflow'])
+                or run.get('status') != 'completed' or run.get('path') != '.github/workflows/ci.yml'
+                or run.get('event') != os.environ['GITHUB_EVENT_NAME']):
+            raise RuntimeError('Original installer run identity mismatch')
+        job = producer_record(original, read_jobs(original), 'package', False, True)
+        if (type(job['id']) is not int or job['id'] <= 0 or job['id'] in ids
+                or any(job[key] != copied[key] for key in execution)):
+            raise RuntimeError('Copied package does not match the original installer execution')
+        ids.add(job['id'])
+        if job['steps'] == []:
+            continue
+        if not installer_uploaded(job):
+            break
+        return original, job
+    raise RuntimeError('Installer upload did not complete successfully')
+
+
+def retained_installer_snapshot(value, copied):
+    original, job = original_installer_execution(value, copied)
+    inventory = read_artifacts(f"repos/{value['repo']}/actions/runs/{value['run_id']}/artifacts", name='gesher-setup')
+    item = select_supplier(value, inventory, 'gesher-setup', copied)
+    if select_supplier(original, inventory, 'gesher-setup', job) != item:
+        raise RuntimeError('Copied package selected a different installer artifact')
+    upload = next(step for step in job['steps'] if step['name'] == 'Upload tested installer artifact')
+    if not (_timestamp(job['started_at']) <= _timestamp(upload['started_at']) <= _timestamp(item['created_at'])
+            <= _timestamp(upload['completed_at']) <= _timestamp(job['completed_at'])):
+        raise RuntimeError('Installer artifact was created outside the original successful upload step')
+    return original, job, item
+
+
+def stage_retained_installer(value, copied, destination):
+    original, job, item = retained_installer_snapshot(value, copied)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=destination.name + '-stage-', dir=destination.parent) as temporary:
+        staged = Path(temporary) / 'installer'
+        download(item, staged)
+        live = producer_record(value, read_jobs(value), 'package', False, True)
+        if live != copied or retained_installer_snapshot(value, live) != (original, job, item):
+            raise RuntimeError('Retained installer evidence changed before publication')
+        check_run(value)
+        check_checkout(value)
+        if os.path.lexists(destination):
+            raise RuntimeError('Installer destination already exists')
+        os.rename(staged, destination)
+    print(f"CI_RETAINED_INSTALLER original_attempt={original['attempt']} original_producer_id={job['id']}", flush=True)
+    receipt(value, item, copied)
+
+
 def single(args):
     if args.allow_failed_producer and not failed_installer_allowed(
             os.environ.get('GITHUB_WORKFLOW'), os.environ.get('GITHUB_JOB'),
@@ -116,8 +179,12 @@ def single(args):
         raise RuntimeError('Failed producer exception is restricted to canonical e2e installer')
     value = context()
     check_run(value)
-    job = select_producer(value, read_jobs(value), args.producer,
+    job = producer_record(value, read_jobs(value), args.producer,
                           args.producer_suffix, args.allow_failed_producer)
+    if args.allow_failed_producer and not installer_uploaded(job):
+        if job['steps'] == [] and int(value['attempt']) > 1:
+            return stage_retained_installer(value, job, args.destination)
+        raise RuntimeError('Installer upload did not complete successfully')
     inventory = read_artifacts(f"repos/{value['repo']}/actions/runs/{value['run_id']}/artifacts", name=args.name)
     item = select_supplier(value, inventory, args.name, job)
     download(item, args.destination)
@@ -235,6 +302,7 @@ def batch(args):
     print(f'CI_ARTIFACT_BATCH version=1 count={len(specs)} manifest_sha256={hashlib.sha256(committed).hexdigest()} '
           f'source={value["head"]} checkout={value["checkout"]} run={value["run_id"]} '
           f'attempt={value["attempt"]} destination={destination / "artifacts"}', flush=True)
+    return current
 
 
 def main(argv=None):

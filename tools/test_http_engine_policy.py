@@ -16,6 +16,8 @@ parser.add_argument('--java-home',type=Path,required=True)
 parser.add_argument('--okhttp-source',type=Path,required=True)
 parser.add_argument('--cache-only',action='store_true',help='Run private-cache contracts only')
 parser.add_argument('--cache-workload',action='store_true',help='Run just the network-work gate')
+parser.add_argument('--read-only',action='store_true',help='Run request read-buffer contracts and work gate only')
+parser.add_argument('--read-baseline',action='store_true',help='Report prior production allocation work without candidate budget')
 parser.add_argument('--source-ref',help='Compile the unchanged HTTP module at a prior Git revision')
 parser.add_argument('--mode',action='append',choices=['ordinary', 'global-enabled', 'global-disabled'],
                     help='Run selected provider fixture mode(s), instead of all modes')
@@ -98,8 +100,15 @@ else:
  sources+=sorted((root/'app/java/android/net/http').glob('*.java'))
 sources+=[root/'tests/net/HttpEngineProtocolPolicyTest.java', root/'tests/net/HttpEngineTlsPolicyHostTest.java']
 sources+=[root/'tests/net/HttpEngineCacheTest.java',root/'tests/net/HttpEngineConnectionLifetimeTest.java']
+sources+=[root/'tests/net/HttpEngineReadBufferTest.java']
 command=[str(jdk/'javac'),'--release','17','-encoding','UTF-8','-d',str(classes),*map(str,sources)]
 subprocess.run(command,check=True,timeout=60)
+if not args.cache_only and not args.cache_workload:
+ subprocess.run([str(jdk/'java'),'-cp',str(classes),'HttpEngineReadBufferTest','--host',
+                 *(['--baseline'] if args.read_baseline else [])],check=True,timeout=90)
+if args.read_only:
+ temporary.cleanup()
+ raise SystemExit(0)
 subprocess.run([str(jdk/'java'),'-cp',str(classes),'HttpEngineCacheTest','--host',
                 *(['--workload'] if args.cache_workload else [])],check=True,timeout=90)
 if not args.cache_workload:

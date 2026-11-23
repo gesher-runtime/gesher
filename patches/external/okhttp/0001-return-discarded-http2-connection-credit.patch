@@ -1,0 +1,239 @@
+diff --git a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FrameReader.java b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FrameReader.java
+index f17ed42..49ee02d 100644
+--- a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FrameReader.java
++++ b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FrameReader.java
+@@ -33,6 +33,9 @@ public interface FrameReader extends Closeable {
+     void data(boolean inFinished, int streamId, BufferedSource source, int length)
+         throws IOException;
+ 
++    /** HTTP/2 flow-control bytes removed from DATA before application delivery. */
++    default void dataPadding(int streamId, int length) {}
++
+     /**
+      * Create or update incoming headers, creating the corresponding streams
+      * if necessary. Frames that trigger this are SPDY SYN_STREAM, HEADERS, and
+diff --git a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java
+index 2945e65..80c2743 100644
+--- a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java
++++ b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java
+@@ -215,6 +215,19 @@ public final class FramedConnection implements Closeable {
+     return peerSettings.getMaxConcurrentStreams(Integer.MAX_VALUE);
+   }
+ 
++  /** Return bytes consumed or discarded by a stream to the shared receive window. */
++  void updateConnectionFlowControl(long read) {
++    if (read <= 0) return;
++    synchronized (this) {
++      unacknowledgedBytesRead += read;
++      if (unacknowledgedBytesRead
++          >= okHttpSettings.getInitialWindowSize(Settings.DEFAULT_INITIAL_WINDOW_SIZE) / 2) {
++        writeWindowUpdateLater(0, unacknowledgedBytesRead);
++        unacknowledgedBytesRead = 0;
++      }
++    }
++  }
++
+   /**
+    * Returns the time in ns when this connection became idle or Long.MAX_VALUE
+    * if connection is not idle.
+@@ -634,6 +647,7 @@ public final class FramedConnection implements Closeable {
+       if (dataStream == null) {
+         writeSynResetLater(streamId, ErrorCode.INVALID_STREAM);
+         source.skip(length);
++        updateConnectionFlowControl(length);
+         return;
+       }
+       dataStream.receiveData(source, length);
+@@ -642,6 +656,12 @@ public final class FramedConnection implements Closeable {
+       }
+     }
+ 
++    @Override public void dataPadding(int streamId, int length) {
++      FramedStream stream = getStream(streamId);
++      if (stream != null) stream.receivePadding(length);
++      else updateConnectionFlowControl(length);
++    }
++
+     @Override public void headers(boolean outFinished, boolean inFinished, int streamId,
+         int associatedStreamId, List<Header> headerBlock, HeadersMode headersMode) {
+       if (pushedStream(streamId)) {
+@@ -900,6 +920,9 @@ public final class FramedConnection implements Closeable {
+             }
+           }
+         } catch (IOException ignored) {
++        } finally {
++          buffer.clear();
++          updateConnectionFlowControl(byteCount);
+         }
+       }
+     });
+diff --git a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedStream.java b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedStream.java
+index 9339acf..60e54df 100644
+--- a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedStream.java
++++ b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedStream.java
+@@ -238,6 +238,7 @@ public final class FramedStream {
+   /** Returns true if this stream was closed. */
+   private boolean closeInternal(ErrorCode errorCode) {
+     assert (!Thread.holdsLock(this));
++    long discarded;
+     synchronized (this) {
+       if (this.errorCode != null) {
+         return false;
+@@ -246,9 +247,12 @@ public final class FramedStream {
+         return false;
+       }
+       this.errorCode = errorCode;
++      discarded = source.readBuffer.size();
++      source.readBuffer.clear();
+       notifyAll();
+     }
+     connection.removeStream(id);
++    connection.updateConnectionFlowControl(discarded);
+     return true;
+   }
+ 
+@@ -301,11 +305,32 @@ public final class FramedStream {
+     }
+   }
+ 
+-  synchronized void receiveRstStream(ErrorCode errorCode) {
+-    if (this.errorCode == null) {
+-      this.errorCode = errorCode;
+-      notifyAll();
++  void receiveRstStream(ErrorCode errorCode) {
++    long discarded = 0;
++    synchronized (this) {
++      if (this.errorCode == null) {
++        this.errorCode = errorCode;
++        discarded = source.readBuffer.size();
++        source.readBuffer.clear();
++        notifyAll();
++      }
+     }
++    connection.updateConnectionFlowControl(discarded);
++  }
++
++  /** Padding consumes flow-control credit but is never an application byte. */
++  void receivePadding(long byteCount) {
++    synchronized (this) {
++      if (!source.finished && !source.closed && errorCode == null) {
++        unacknowledgedBytesRead += byteCount;
++        if (unacknowledgedBytesRead
++            >= connection.okHttpSettings.getInitialWindowSize(DEFAULT_INITIAL_WINDOW_SIZE) / 2) {
++          connection.writeWindowUpdateLater(id, unacknowledgedBytesRead);
++          unacknowledgedBytesRead = 0;
++        }
++      }
++    }
++    connection.updateConnectionFlowControl(byteCount);
+   }
+ 
+   /**
+@@ -359,14 +384,7 @@ public final class FramedStream {
+       }
+ 
+       // Update connection.unacknowledgedBytesRead outside the stream lock.
+-      synchronized (connection) { // Multiple application threads may hit this section.
+-        connection.unacknowledgedBytesRead += read;
+-        if (connection.unacknowledgedBytesRead
+-            >= connection.okHttpSettings.getInitialWindowSize(DEFAULT_INITIAL_WINDOW_SIZE) / 2) {
+-          connection.writeWindowUpdateLater(0, connection.unacknowledgedBytesRead);
+-          connection.unacknowledgedBytesRead = 0;
+-        }
+-      }
++      connection.updateConnectionFlowControl(read);
+ 
+       return read;
+     }
+@@ -387,23 +405,25 @@ public final class FramedStream {
+       assert (!Thread.holdsLock(FramedStream.this));
+ 
+       while (byteCount > 0) {
+-        boolean finished;
++        boolean discard;
+         boolean flowControlError;
+         synchronized (FramedStream.this) {
+-          finished = this.finished;
+-          flowControlError = byteCount + readBuffer.size() > maxByteCount;
++          discard = this.finished || closed || errorCode != null;
++          flowControlError = !discard && byteCount + readBuffer.size() > maxByteCount;
+         }
+ 
+         // If the peer sends more data than we can handle, discard it and close the connection.
+         if (flowControlError) {
+           in.skip(byteCount);
++          connection.updateConnectionFlowControl(byteCount);
+           closeLater(ErrorCode.FLOW_CONTROL_ERROR);
+           return;
+         }
+ 
+         // Discard data received after the stream is finished. It's probably a benign race.
+-        if (finished) {
++        if (discard) {
+           in.skip(byteCount);
++          connection.updateConnectionFlowControl(byteCount);
+           return;
+         }
+ 
+@@ -413,13 +433,22 @@ public final class FramedStream {
+         byteCount -= read;
+ 
+         // Move the received data to the read buffer to the reader can read it.
++        long discarded = 0;
+         synchronized (FramedStream.this) {
+-          boolean wasEmpty = readBuffer.size() == 0;
+-          readBuffer.writeAll(receiveBuffer);
+-          if (wasEmpty) {
+-            FramedStream.this.notifyAll();
++          if (closed || errorCode != null || this.finished) {
++            // Reset/close can race the socket read above. The reader alone owns
++            // receiveBuffer; do not leave new bytes stranded after retirement.
++            discarded = receiveBuffer.size();
++            receiveBuffer.clear();
++          } else {
++            boolean wasEmpty = readBuffer.size() == 0;
++            readBuffer.writeAll(receiveBuffer);
++            if (wasEmpty) {
++              FramedStream.this.notifyAll();
++            }
+           }
+         }
++        connection.updateConnectionFlowControl(discarded);
+       }
+     }
+ 
+@@ -428,11 +457,14 @@ public final class FramedStream {
+     }
+ 
+     @Override public void close() throws IOException {
++      long discarded;
+       synchronized (FramedStream.this) {
+         closed = true;
++        discarded = readBuffer.size();
+         readBuffer.clear();
+         FramedStream.this.notifyAll();
+       }
++      connection.updateConnectionFlowControl(discarded);
+       cancelStreamIfNecessary();
+     }
+ 
+diff --git a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/Http2.java b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/Http2.java
+index 882d7e8..5219e54 100644
+--- a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/Http2.java
++++ b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/Http2.java
+@@ -224,11 +224,15 @@ public final class Http2 implements Variant {
+         throw ioException("PROTOCOL_ERROR: FLAG_COMPRESSED without SETTINGS_COMPRESS_DATA");
+       }
+ 
++      int flowControlledLength = length;
+       short padding = (flags & FLAG_PADDED) != 0 ? (short) (source.readByte() & 0xff) : 0;
+       length = lengthWithoutPadding(length, flags, padding);
+ 
+       handler.data(inFinished, streamId, source, length);
+       source.skip(padding);
++      if (flowControlledLength != length) {
++        handler.dataPadding(streamId, flowControlledLength - length);
++      }
+     }
+ 
+     private void readPriority(Handler handler, int length, byte flags, int streamId)

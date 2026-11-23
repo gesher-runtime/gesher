@@ -44,6 +44,8 @@ import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IRemoteCallback;
@@ -222,6 +224,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         Configuration config;
         /** Actual manual-driver lifecycle; null for a server-driven application. */
         State inProcessActivityState;
+        InProcessActivity inProcessActivity;
+        /** Actual activity-start history for BIND_ALLOW_OOM_MANAGEMENT; owned by this process. */
+        boolean shortcutHasShownUi;
         final List<ActivityRecord> activities = new ArrayList<>();
 
         ProcessRecord(int pid, IApplicationThread thread) {
@@ -279,6 +284,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean idle;
         boolean finishing;
         boolean preserveProcessOnFinish;
+        int exactAlarmSettings;
+        boolean resumeAfterExactAlarmSettings;
         int nativeUiCount;
         boolean resumeAfterNativeUi;
         /** Only an authenticated server chooser may consume its authenticator UI result. */
@@ -380,6 +387,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Work for a package's process once it is attached and bound (services, broadcasts). */
     private final List<PendingWork> mPendingWork = new ArrayList<>();
     private final PermissionRequests mPermissionRequests;
+    private final ExactAlarmAccessRequests mExactAlarmRequests;
+    /** Accepted system Settings requests, including queued/headless windows. Guarded by this. */
+    private final java.util.Set<ExactAlarmSettingsSession> mExactAlarmSettingsSessions = new java.util.HashSet<>();
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
     private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
@@ -469,6 +479,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final ProcessExitStatus mExitStatus = new ProcessExitStatus();
     /** Since when (uptimeMillis) no app process runs or starts; 0 while some do. */
     private long mIdleSince = SystemClock.uptimeMillis();
+    private boolean mDexoptBusy;
 
     /** Starts a process for a package and returns its pid (ProcessList's zygote request). */
     interface ProcessStarter {
@@ -554,11 +565,72 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     ActivityTaskManagerService(PackageManagerService pm) {
         mPm = pm;
         mPermissionRequests = new PermissionRequests(pm);
+        mExactAlarmRequests = pm.exactAlarmAccessRequests();
         mBluetoothRequests = new BluetoothRequests(pm);
     }
 
     void setActivityManager(ActivityManagerService am) {
         mAm = am;
+    }
+
+    void attachShortcuts(DesktopShortcutService shortcuts) {
+        if (mAm != null) mAm.attachShortcuts(shortcuts);
+    }
+
+    synchronized boolean shortcutForeground(int uid) {
+        if (mAm == null) return false;
+        return mAm.shortcutState(uid, shortcutRoots(), mProcesses, this::shortcutCodeCurrent);
+    }
+
+    /** Record real visits even when the process returns to background between API calls. */
+    synchronized void noteShortcutForeground(ProcessRecord visited, int state) {
+        if (mAm == null) return;
+        java.util.Map<ProcessRecord, Integer> roots = shortcutRoots();
+        if (visited != null && shortcutProcessCurrent(visited)) {
+            roots = new java.util.HashMap<>(roots);
+            roots.merge(visited, state, Math::min);
+        }
+        mAm.shortcutState(-1, roots, mProcesses, this::shortcutCodeCurrent);
+    }
+
+    private boolean shortcutProcessCurrent(ProcessRecord app) {
+        return app != null && mProcesses.contains(app) && shortcutCodeCurrent(app);
+    }
+
+    private boolean shortcutCodeCurrent(ProcessRecord app) {
+        return app.ready && !app.dead && !app.exiting
+                && !app.pidSuperseded && app.packageCode != null && app.packageCode.uid() == app.uid
+                && mPm.get(app.packageName) == app.packageCode && !mPm.isRemovalPending(app.packageName);
+    }
+
+    private java.util.Map<ProcessRecord, Integer> shortcutRoots() {
+        java.util.Map<ProcessRecord, Integer> roots = null;
+        for (ProcessRecord app : mProcesses) {
+            if (!app.ready || app.dead || app.exiting || app.pidSuperseded || app.packageCode == null
+                    || app.packageCode.uid() != app.uid || mPm.get(app.packageName) != app.packageCode
+                    || mPm.isRemovalPending(app.packageName)) continue;
+            // OomAdjuster: a process with a visible activity, or one pausing or paused
+            // (an activity Gesher keeps paused under a translucent one), is TOP.
+            State own = app.inProcessActivityState;
+            boolean top = own == State.RESUMED || own == State.RESUMING
+                    || own == State.PAUSING || own == State.PAUSED;
+            for (ActivityRecord activity : app.activities) {
+                if (top) break;
+                if (activity.finishing || !mActivities.contains(activity)
+                        || !activityCodeCurrent(activity)) continue;
+                State state = activity.state;
+                boolean visibleState = state == State.RESUMED || state == State.RESUMING
+                        || state == State.STARTED
+                        || state == State.LAUNCHING && !activity.launchingPaused;
+                top = state == State.PAUSING || state == State.PAUSED
+                        || visibleState && isVisible(activity);
+            }
+            if (top) {
+                if (roots == null) roots = new java.util.HashMap<>();
+                roots.put(app, ActivityManager.PROCESS_STATE_TOP);
+            }
+        }
+        return roots == null ? java.util.Map.of() : roots;
     }
 
     /** Snapshot actual process/activity state without nesting a service-controller monitor. */
@@ -650,12 +722,40 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return app;
     }
 
+    private record InProcessActivity(Binder token, Handler handler,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {}
+
+    private boolean isCurrentInProcessApplication(ProcessRecord app) {
+        return app != null && app.inProcessActivityState != null && app.ready
+                && !app.dead && !app.exiting && !app.pidSuperseded
+                && attachedProcessByPid(app.pid) == app
+                && app.packageCode != null && mPm.get(app.packageName) == app.packageCode
+                && !mPm.isRemovalPending(app.packageName)
+                && app.packageCode.matchesEnabledApplication(0)
+                && (app.enabledProcessLifetime == null || app.enabledProcessLifetime.getAsBoolean());
+    }
+
+    synchronized Binder registerInProcessActivity(ProcessRecord app,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {
+        if (!isCurrentInProcessApplication(app) || app.inProcessActivity != null
+                || app.pid != Binder.getCallingPid() || app.uid != Binder.getCallingUid()) {
+            throw new SecurityException("Standalone activity requires its admitted process");
+        }
+        Binder token = new Binder("Standalone activity");
+        app.inProcessActivity = new InProcessActivity(token, new Handler(Looper.getMainLooper()),
+                Objects.requireNonNull(active), Objects.requireNonNull(result));
+        return token;
+    }
+
     /** Manual-driver lifecycle is used for AppOps state, never as proof of Windows focus. */
     synchronized void inProcessActivityState(ProcessRecord app, State state) {
         if (app.inProcessActivityState == null || app.dead || app.exiting
                 || !mProcesses.contains(app) || app.packageCode != mPm.get(app.packageName)
                 || mPm.isRemovalPending(app.packageName)) return;
         app.inProcessActivityState = state;
+        if (app.ready && !app.pidSuperseded && (state == State.RESUMED || state == State.RESUMING)) {
+            app.shortcutHasShownUi = true;
+        }
         updateIdle();
     }
 
@@ -667,6 +767,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.ready = false;
             app.exiting = true;
             app.inProcessActivityState = State.STOPPED;
+            app.inProcessActivity = null;
         }
         processDied(app);
     }
@@ -682,6 +783,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void recordUsage(ActivityRecord record, ActivityUsageHistory.State state) {
+        if (state == ActivityUsageHistory.State.RESUMED && record.app != null
+                && record.app.ready && !record.app.dead && !record.app.exiting && !record.app.pidSuperseded
+                && mProcesses.contains(record.app) && mActivities.contains(record)
+                && record.app.activities.contains(record) && activityCodeCurrent(record)
+                && record.app.uid == record.targetCode.uid()) {
+            record.app.shortcutHasShownUi = true;
+            noteShortcutForeground(record.app, ActivityManager.PROCESS_STATE_TOP);
+        }
         if (mUsageStats != null) {
             mUsageStats.transition(record.token, record.info.packageName, record.info.name, state);
         }
@@ -712,6 +821,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             process = source.app; code = mPm.get(callingPackage);
             if (code == null) throw new SecurityException("Unknown chooser package");
             mAccountChoosers.put(token, reservation);
+            updateIdle();
         }
         AccountChooser.Lifetime lifetime = new AccountChooser.Lifetime() {
             private boolean valid() {
@@ -736,6 +846,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 synchronized (ActivityTaskManagerService.this) {
                     deliver = lifetime.active();
                     mAccountChoosers.remove(token, reservation);
+                    updateIdle();
+                    ActivityTaskManagerService.this.notifyAll();
                 }
                 if (deliver) deliverResult(source, resultWho, requestCode, data == null
                         ? android.app.Activity.RESULT_CANCELED : android.app.Activity.RESULT_OK, data);
@@ -764,7 +876,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             chooser.start();
             return ActivityManager.START_SUCCESS;
         } catch (RuntimeException | Error e) {
-            synchronized (this) { mAccountChoosers.remove(token, reservation); }
+            synchronized (this) {
+                mAccountChoosers.remove(token, reservation);
+                updateIdle();
+                notifyAll();
+            }
             throw e;
         }
     }
@@ -2100,24 +2216,50 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         mAm.callers().requirePackage(callingPackage);
         final ActivityRecord source;
         final ProcessRecord process;
+        final InProcessActivity standalone;
         final ApkPackage captured;
         synchronized (this) {
             source = forToken(resultToToken);
-            if (source == null || source.app == null || source.finishing
-                    || source.state == State.DESTROYED || caller == null
-                    || source.app.pid != Binder.getCallingPid()
-                    || !caller.asBinder().equals(source.app.thread.asBinder())
-                    || !source.info.packageName.equals(callingPackage)) {
-                throw new SecurityException("Permission request must come from its own activity");
+            if (source == null) {
+                process = attachedProcessByPid(Binder.getCallingPid());
+                if (!isCurrentInProcessApplication(process) || process.inProcessActivity == null
+                        || process.inProcessActivity.token() != resultToToken || caller == null
+                        || Binder.getCallingUid() != process.uid
+                        || !caller.asBinder().equals(process.thread.asBinder())
+                        || !process.packageName.equals(callingPackage)
+                        || !process.inProcessActivity.active().getAsBoolean()) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                standalone = process.inProcessActivity;
+                captured = process.packageCode;
+            } else {
+                if (source.app == null || source.finishing || source.state == State.DESTROYED
+                        || caller == null || source.app.pid != Binder.getCallingPid()
+                        || !caller.asBinder().equals(source.app.thread.asBinder())
+                        || !source.info.packageName.equals(callingPackage)) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                process = source.app;
+                standalone = null;
+                captured = mPm.get(callingPackage);
             }
-            process = source.app;
-            captured = mPm.get(callingPackage);
         }
         if (intent.getIntExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_DEVICE_ID, 0) != 0) {
             throw new SecurityException("Only the default permission device is supported");
         }
         mPermissionRequests.request(captured,
                 intent.getStringArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_NAMES), data -> {
+                    if (standalone != null) {
+                        standalone.handler().post(() -> {
+                            synchronized (ActivityTaskManagerService.this) {
+                                if (!isCurrentInProcessApplication(process)
+                                        || process.inProcessActivity != standalone
+                                        || process.packageCode != captured) return;
+                            }
+                            standalone.result().dispatch(standalone.token(), resultWho, requestCode, data);
+                        });
+                        return;
+                    }
                     synchronized (ActivityTaskManagerService.this) {
                         if (source.app != process || source.finishing
                                 || source.state == State.DESTROYED || !mActivities.contains(source)
@@ -2126,6 +2268,217 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     deliverResult(source, resultWho, requestCode, android.app.Activity.RESULT_OK, data);
                 });
         return ActivityManager.START_SUCCESS;
+    }
+
+    private record ActivityResultRoute(ActivityRecord recipient, String who, int requestCode) {}
+
+    /** ActivityStarter's forward-result transfer. Caller holds the lifecycle monitor. */
+    private ActivityResultRoute takeForwardResultLocked(ActivityRecord source) {
+        ActivityRecord recipient = source.resultTo;
+        if (recipient != null && isActivityRetired(recipient)) recipient = null;
+        ActivityResultRoute route = new ActivityResultRoute(recipient, source.resultWho, source.requestCode);
+        source.resultTo = null;
+        if (recipient != null) {
+            // A finishing trampoline may already have queued its result. Preserve
+            // results from other children, even with identical who/request codes.
+            recipient.pendingResults.removeIf(result -> result instanceof PendingActivityResult pending
+                    && pending.source == source && result.mRequestCode == source.requestCode
+                    && java.util.Objects.equals(result.mResultWho, source.resultWho));
+        }
+        return route;
+    }
+
+    private void cancelActivityResult(ActivityResultRoute route) {
+        if (route.recipient != null) deliverResult(route.recipient,
+                new ResultInfo(route.who, route.requestCode, android.app.Activity.RESULT_CANCELED, null, null),
+                null, null, null);
+    }
+
+    /**
+     * The Settings window has its own lifetime, like an activity in the Settings
+     * process. Retiring the caller or its activity must not release an open window's
+     * device use. The coordinator releases this reservation after the host call exits.
+     */
+    private static final class ExactAlarmSettingsSession {
+        final ActivityRecord covered, resultRecipient;
+        final ProcessRecord coveredProcess;
+        final AppTaskRecord task;
+        final String resultWho;
+        final int requestCode, taskId;
+
+        ExactAlarmSettingsSession(ActivityRecord covered, AppTaskRecord task, ActivityResultRoute route) {
+            this.covered = covered;
+            coveredProcess = covered == null ? null : covered.app;
+            this.task = task;
+            this.resultRecipient = route == null ? null : route.recipient;
+            this.resultWho = route == null ? null : route.who;
+            this.requestCode = route == null ? -1 : route.requestCode;
+            taskId = task == null ? -1 : task.id;
+        }
+    }
+
+    /** Settings is opaque even when the covered task's top activity is translucent. Guarded by this. */
+    private boolean exactAlarmSettingsCoversTask(int taskId) {
+        AppTaskRecord task = mAppTasks.get(taskId);
+        if (task == null || !hasAppTaskLocked(task)) return false;
+        for (ExactAlarmSettingsSession session : mExactAlarmSettingsSessions) {
+            if (session.task == task) return true;
+        }
+        return false;
+    }
+
+    private void finishExactAlarmSettings(ExactAlarmSettingsSession session, int activityResult) {
+        synchronized (this) {
+            // Completion, rejected submission and a synchronous executor failure may
+            // meet here. Only the accepted reservation owns the release.
+            if (!mExactAlarmSettingsSessions.remove(session)) return;
+            ActivityRecord covered = session.covered;
+            if (covered != null) {
+                covered.exactAlarmSettings--;
+                if (covered.exactAlarmSettings == 0 && covered.state != State.PAUSING) {
+                    covered.resumeAfterExactAlarmSettings = false;
+                }
+            }
+            updateIdle();
+            notifyAll();
+        }
+        // A stopped recipient keeps its result for its own eventual resume. If its
+        // process died, ordinary saved history/result rules still apply.
+        try {
+            if (session.resultRecipient != null) deliverResult(session.resultRecipient,
+                    session.resultWho, session.requestCode, activityResult, null);
+        } finally {
+            try { restoreExactAlarmTask(session); }
+            finally { updateTopResumed(); }
+        }
+    }
+
+    private void restoreExactAlarmTask(ExactAlarmSettingsSession session) {
+        // Result delivery can reenter and remove the task. Serialize restoration
+        // with new launches and recheck its actual generation after that delivery.
+        synchronized (mLaunchLock) {
+            ActivityRecord restore = null;
+            boolean restoreProcess = false;
+            List<ActivityRecord> toStart;
+            synchronized (this) {
+                if (session.task == null || !hasAppTaskLocked(session.task)) return;
+                if (!exactAlarmSettingsCoversTask(session.taskId) && !mHiddenTasks.contains(session.taskId)) {
+                    ActivityRecord top = topOf(session.taskId);
+                    if (top != null && top.state != State.PAUSING && activityEnabled(top)) {
+                        if (top.app != null && top.chooserCoverCount == 0 && top.nativeUiCount == 0) restore = top;
+                        else if (top.app == null && !mTaskOrder.isEmpty()
+                                && mTaskOrder.get(mTaskOrder.size() - 1) == session.taskId) {
+                            restore = top;
+                            restoreProcess = true;
+                        }
+                    }
+                }
+                toStart = starting();
+                toStart.removeIf(activity -> activity.taskId != session.taskId);
+                toStart.remove(restore);
+            }
+            if (restoreProcess) moveTaskToFront(session.taskId, session.task);
+            else if (restore != null) { realStartActivity(restore); resume(restore); }
+            for (ActivityRecord activity : toStart) makeVisible(activity);
+            synchronized (this) {
+                if (!hasAppTaskLocked(session.task)) return;
+            }
+            realizeTaskHistory(session.taskId);
+        }
+    }
+
+    private int requestExactAlarmAccess(Intent intent, String callingPackage,
+            IBinder resultToToken, String resultWho, int requestCode, int launchTaskId,
+            AppTaskRecord requiredTask) {
+        String target = ExactAlarmAccessRequests.target(intent);
+        if (!mExactAlarmRequests.available()) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        final ActivityRecord origin;
+        final ActivityRecord covered;
+        final ExactAlarmSettingsSession session;
+        final boolean cancelResult;
+        final ActivityResultRoute resultRoute;
+        List<ActivityRecord> toStop = new ArrayList<>();
+        boolean pauseCovered = false;
+        synchronized (this) {
+            if (requiredTask != null && !hasAppTaskLocked(requiredTask)) return ActivityManager.START_CANCELED;
+            ProcessRecord callerProcess = callerProcess(Binder.getCallingPid());
+            origin = resultToToken == null ? null : forToken(resultToToken);
+            boolean delegatedResult = mVerifiedCreator.get() != null;
+            boolean forward = origin != null && (intent.getFlags() & Intent.FLAG_ACTIVITY_FORWARD_RESULT) != 0;
+            if (resultToToken != null && (origin == null || origin.app == null
+                    || !delegatedResult && (origin.app != callerProcess || callerProcess == null)
+                    || origin.finishing && !forward || origin.state == State.DESTROYED
+                    || !activityCodeCurrent(origin))) {
+                throw new SecurityException("Settings result must belong to its live caller activity");
+            }
+            if (forward && requestCode >= 0) return ActivityManager.START_FORWARD_AND_REQUEST_CONFLICT;
+            if (mExactAlarmSettingsSessions.size() >= 16) return ActivityManager.START_CANCELED;
+            resultRoute = forward ? takeForwardResultLocked(origin)
+                    : new ActivityResultRoute(origin != null && requestCode >= 0 ? origin : null, resultWho, requestCode);
+            boolean newTask = requiredTask == null && origin == null
+                    || (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
+                    || origin != null && origin.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE
+                    || resultRoute.recipient == null && (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0;
+            cancelResult = resultRoute.recipient != null && newTask;
+            int taskId = launchTaskId >= 0 && topOf(launchTaskId) != null ? launchTaskId
+                    : !newTask ? origin.taskId : -1;
+            // ActivityStarter selects the source task; TaskFragment pauses that
+            // task's resumed activity. The result recipient can be stopped below it.
+            covered = taskId >= 0 ? topOf(taskId) : focusedTaskTopLocked();
+            AppTaskRecord coveredTask = covered == null ? null : mAppTasks.get(covered.taskId);
+            if (covered != null && (coveredTask == null || !hasAppTaskLocked(coveredTask))) {
+                return ActivityManager.START_CANCELED;
+            }
+            session = new ExactAlarmSettingsSession(covered, coveredTask, newTask ? null : resultRoute);
+            if (taskId >= 0) {
+                mHiddenTasks.remove(taskId);
+                focusTaskLocked(taskId);
+            }
+            if (covered != null) {
+                covered.exactAlarmSettings++;
+                pauseCovered = covered.state == State.RESUMED || covered.state == State.RESUMING
+                        || covered.state == State.LAUNCHING;
+                covered.resumeAfterExactAlarmSettings = true;
+                for (ActivityRecord activity : mActivities) {
+                    if (activity.taskId == covered.taskId && !activity.finishing && activity.app != null
+                            && (activity.state == State.PAUSED || activity.state == State.STARTED)) {
+                        toStop.add(activity);
+                    }
+                }
+            }
+            mExactAlarmSettingsSessions.add(session);
+            updateIdle();
+        }
+        java.util.function.IntConsumer complete = result -> finishExactAlarmSettings(session, result);
+        try {
+            // A new-task launch has no result dependency on its originator (AOSP
+            // ActivityStarter.sendNewTaskResultRequestIfNeeded).
+            if (cancelResult) cancelActivityResult(resultRoute);
+            if (pauseCovered) pause(covered, false,
+                    (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+            for (ActivityRecord activity : toStop) stop(activity);
+            updateTopResumed();
+            boolean queued = mExactAlarmRequests.request(target, () -> {
+                // Preserve pause-before-Settings ordering without holding a Binder
+                // transaction open. Android also bounds a missing pause acknowledgment.
+                if (covered == null) return;
+                synchronized (ActivityTaskManagerService.this) {
+                    long until = SystemClock.uptimeMillis() + 500;
+                    while (covered.app == session.coveredProcess && session.coveredProcess != null
+                            && !session.coveredProcess.exiting && covered.state == State.PAUSING) {
+                        long left = until - SystemClock.uptimeMillis();
+                        if (left <= 0) break;
+                        try { ActivityTaskManagerService.this.wait(left); }
+                        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
+                    }
+                }
+            }, complete);
+            if (!queued) { complete.accept(android.app.Activity.RESULT_CANCELED); return ActivityManager.START_CANCELED; }
+            return ActivityManager.START_SUCCESS;
+        } catch (RuntimeException | Error failure) {
+            complete.accept(android.app.Activity.RESULT_CANCELED);
+            throw failure;
+        }
     }
 
     /** A native consent activity covers the app and keeps a headless device alive. */
@@ -2418,6 +2771,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
             return requestPermissions(caller, callingPackage, intent, resultToToken,
                     resultWho, requestCode);
+        }
+        if (ExactAlarmAccessRequests.handles(intent, resolvedType)
+                && mPm.get(ExactAlarmAccessRequests.PACKAGE) == null) {
+            ResolveInfo settings = mPm.resolveIntent(intent, resolvedType, PackageManager.MATCH_DEFAULT_ONLY, 0);
+            if (settings != null && ExactAlarmAccessRequests.isActivity(settings.activityInfo)) {
+                return requestExactAlarmAccess(intent, callingPackage, resultToToken, resultWho,
+                        requestCode, launchTaskId, requiredTask);
+            }
         }
         if (AccountChooser.handles(intent)) {
             return chooseAccount(caller, callingPackage, intent, resultToToken, resultWho, requestCode);
@@ -3492,25 +3853,33 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /**
-     * Activities and outstanding native chooser/picker sessions restart the idle clock.
+     * Activities and outstanding native UI sessions restart the idle clock.
      * Reservations remain busy even after owner retirement until native cleanup returns.
      * Whether a background process keeps the device busy is asked by {@link #idleSince}.
      * Guarded by this.
      */
     private void updateIdle() {
+        noteShortcutForeground(null, 0);
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
-        if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mDocumentPickers.isEmpty()
+        if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mAccountChoosers.isEmpty()
+                || !mExactAlarmSettingsSessions.isEmpty() || !mDocumentPickers.isEmpty()
                 || !mBluetoothActivities.isEmpty()) {
             mIdleSince = 0;
         } else if (mIdleSince == 0) {
             mIdleSince = SystemClock.uptimeMillis();
+        }
+        boolean busy = mIdleSince == 0 || startingLocked();
+        if (busy != mDexoptBusy) {
+            mDexoptBusy = busy;
+            // Publish/wake only: never wait for a compiler while holding ATM.
+            Dexopt.activityChanged();
         }
     }
 
     /**
      * Since when the device is idle (for its idle shutdown); 0 while it is busy.
      *
-     * <p>Busy: some activity, native intent chooser or document picker exists, or an app process (GMS's
+     * <p>Busy: some activity or native UI session exists, or an app process (GMS's
      * aside, as before) is perceptible to the user without one: it runs a foreground service
      * ({@link ActivityManagerService#keepsDeviceBusy}). Both restart the idle clock. An app
      * process with neither is cached, as Android ranks a process whose activities are gone:
@@ -4283,7 +4652,6 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.dead = true;
             retireAppWindowModeLocked(app.packageName);
             for (ActivityRecord r : new ArrayList<>(app.activities)) {
-                recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 for (ActivityRecord a : mActivities) {
                     if (a.waitingFor == r) {
                         a.waitingFor = null;
@@ -4291,6 +4659,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                 && a.app != null && a.app != app && a.app.ready) released.add(a);
                     }
                 }
+                if (app.spawned && app.ready && !app.exiting && !r.finishing
+                        && r.state == State.INITIALIZING && !r.launchScheduled) {
+                    // The accepted start is still in server history, for example while
+                    // it waits for the old activity's pause. Only its process is gone.
+                    r.app = null;
+                    r.launchGeneration = null;
+                    r.deferredHistory = true;
+                    affectedTasks.add(r.taskId);
+                    continue;
+                }
+                recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
                     r.state = State.DESTROYED;
@@ -4523,7 +4902,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             ProcessRecord app = r.app;
             if (app == null) app = processFor(r.info.packageName,
                     componentProcess(r.info.packageName, r.info.processName));
-            if (app == null) {
+            if (app == null && r.historyEntry) {
                 app = unassignedProcess(r.launchedFromPid);
                 if (app != null) {
                     assignPackage(app, r.info.packageName,
@@ -4610,7 +4989,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             newIntents = r.pendingNewIntents.isEmpty() ? null : new ArrayList<>(r.pendingNewIntents);
             r.pendingNewIntents.clear();
-            andResume = r.chooserCoverCount == 0 && r.nativeUiCount == 0
+            andResume = !exactAlarmSettingsCoversTask(r.taskId) && r.chooserCoverCount == 0
+                    && r.nativeUiCount == 0
                     && (!r.historyEntry || topOf(r.taskId) == r);
         }
         ClientTransaction t = new ClientTransaction(r.app.thread);
@@ -4637,6 +5017,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             r.launchingPaused = !andResume;
             setState(r, State.LAUNCHING);
+            if (r.app != null && shortcutProcessCurrent(r.app)) r.app.shortcutHasShownUi = true;
         }
         schedule(r, t, andResume ? "LaunchActivityItem, ResumeActivityItem"
                 : "LaunchActivityItem, PauseActivityItem");
@@ -4891,8 +5272,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private ActivityRecord topResumedCandidateLocked() {
         ActivityRecord top = focusedTaskTopLocked();
-        return top != null && top.app != null && top.nativeUiCount == 0
-                && top.chooserCoverCount == 0 ? top : null;
+        return top != null && top.app != null && !exactAlarmSettingsCoversTask(top.taskId)
+                && top.nativeUiCount == 0 && top.chooserCoverCount == 0 ? top : null;
     }
 
     /** The focused task remains the target of detached native UI while covered. Guarded by this. */
@@ -4915,6 +5296,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * resumed (multi-resume).
      */
     private void updateTopResumed() {
+        noteShortcutForeground(null, 0);
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
         ActivityRecord lose = null;
         ActivityRecord gain = null;
@@ -5021,7 +5403,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || r.nativeUiCount > 0
                     || r.app.exiting || r.app.dead
                     || r.app.enabledProcessLifetime != null && !r.app.enabledProcessLifetime.getAsBoolean()
-                    || !activityCodeCurrent(r) || r.waitingFor != null || r.chooserCoverCount > 0
+                    || !activityCodeCurrent(r) || r.waitingFor != null
+                    || exactAlarmSettingsCoversTask(r.taskId) || r.chooserCoverCount > 0
                     || mHiddenTasks.contains(r.taskId) || topOf(r.taskId) != r
                     || (r.state != State.PAUSED && r.state != State.STARTED
                         && r.state != State.STOPPING && r.state != State.STOPPED)) return;
@@ -5537,6 +5920,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void setState(ActivityRecord r, State state) {
         synchronized (this) {
             r.state = state;
+            noteShortcutForeground(null, 0);
             notifyAll();
         }
     }
@@ -5797,7 +6181,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private boolean isVisible(ActivityRecord a) {
         if (a.finishing || a.state == State.DESTROYED || a.state == State.DESTROYING) return false;
-        if (mHiddenTasks.contains(a.taskId)) return false;
+        if (mHiddenTasks.contains(a.taskId) || exactAlarmSettingsCoversTask(a.taskId)) return false;
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord above = mActivities.get(i);
             if (above == a) return true;
@@ -5836,7 +6220,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private void makeVisible(ActivityRecord r) {
         synchronized (this) {
-            if (r.state != State.STOPPED || r.finishing || r.app == null || r.app.thread == null) return;
+            if (r.state != State.STOPPED || r.finishing || r.app == null || !r.app.ready
+                    || r.app.thread == null || !mActivities.contains(r) || !isVisible(r)) return;
             r.state = State.STARTED;
             notifyAll();
         }
@@ -6076,10 +6461,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             r.launchingPaused = false;
             r.state = State.PAUSED;
+            noteShortcutForeground(null, 0);
             finishing = r.finishing;
             // Paused as its task went to the back: stopped now (nothing in front of it will
             // report idle).
-            stopNow = !finishing && mHiddenTasks.contains(r.taskId);
+            stopNow = !finishing && (mHiddenTasks.contains(r.taskId) || exactAlarmSettingsCoversTask(r.taskId));
             if (stopNow) r.stopWhenIdle = false;
             for (ActivityRecord a : mActivities) {
                 if (a.waitingFor == r) {
@@ -6140,11 +6526,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     }
                 }
             }
-            boolean resumeNativeUi = r.nativeUiCount == 0 && r.resumeAfterNativeUi
+            boolean settingsCovered = exactAlarmSettingsCoversTask(r.taskId);
+            boolean resumeNativeUi = !settingsCovered && r.resumeAfterExactAlarmSettings
+                    || r.nativeUiCount == 0 && r.resumeAfterNativeUi
                     || r.chooserCoverCount == 0 && r.resumeAfterChooser;
+            if (!settingsCovered) r.resumeAfterExactAlarmSettings = false;
             if (r.nativeUiCount == 0) r.resumeAfterNativeUi = false;
             if (r.chooserCoverCount == 0) r.resumeAfterChooser = false;
-            if (resumeNativeUi && r.nativeUiCount == 0 && r.chooserCoverCount == 0
+            if (resumeNativeUi && !settingsCovered && r.nativeUiCount == 0 && r.chooserCoverCount == 0
                     && !finishing && !stopNow && r.app != null && !r.app.pidSuperseded
                     && mProcesses.contains(r.app) && mActivities.contains(r) && activityEnabled(r)
                     && topOf(r.taskId) == r) {
@@ -6180,6 +6569,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (r.state == State.STOPPING) {
                 if (r.app != null && !r.app.dead) recordUsage(r, ActivityUsageHistory.State.STOPPED);
                 r.state = State.STOPPED;
+                noteShortcutForeground(null, 0);
             }
             destroy = r.finishing;
             notifyAll();

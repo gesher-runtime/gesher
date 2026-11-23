@@ -1,0 +1,38 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Test-only wrapper; the shared-method placeholder receives the pinned method.
+// Real hwui Bitmap storage and native Parcel implementations execute underneath.
+package android.graphics;
+import bitmaphost.Host;
+import android.os.Parcel;
+import android.os.Parcelable;
+public final class Bitmap implements AutoCloseable {
+    public long mNativePtr;
+    public final int width, height;
+    public int density;
+    public Bitmap(long handle, int width, int height, int density) {
+        this.mNativePtr = handle; this.width = width; this.height = height; this.density = density;
+    }
+    private static native boolean nativeWriteToParcel(long handle, int density, Parcel parcel);
+    private static native Bitmap nativeCreateFromParcel(Parcel parcel);
+    private static boolean nativeIsBackedByAshmem(long handle) { return Host.isShared(handle); }
+    private static boolean nativeIsImmutable(long handle) { return Host.immutable(handle); }
+    public Bitmap createAshmemBitmap() {
+        if (mNativePtr == 0) throw new IllegalStateException("recycled");
+        Bitmap result = Host.shared(mNativePtr); result.density = density; return result;
+    }
+    public boolean hasGainmap() { return false; }
+    public Gainmap getGainmap() { return null; }
+    public static final class Gainmap { public Gainmap asShared() { return this; } }
+    @AS_SHARED@
+    public void writeToParcel(Parcel parcel, int flags) {
+        if (mNativePtr == 0) throw new IllegalStateException("recycled");
+        if (!nativeWriteToParcel(mNativePtr, density, parcel)) throw new RuntimeException("write failed");
+    }
+    public boolean isMutable() { return !Host.immutable(mNativePtr); }
+    public boolean isShared() { return Host.isShared(mNativePtr); }
+    public long checksum() { return Host.checksum(mNativePtr); }
+    public void change(int value) { Host.change(mNativePtr, value); }
+    public void recycle() { long handle = mNativePtr; mNativePtr = 0; Host.recycle(handle); }
+    public void close() { recycle(); }
+    public static final Parcelable.Creator<Bitmap> CREATOR = Bitmap::nativeCreateFromParcel;
+}

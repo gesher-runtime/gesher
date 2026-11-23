@@ -29,6 +29,7 @@ import com.gesher.server.NotificationManagerService;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.StandIn;
 import java.io.File;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -40,11 +41,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.ToIntBiFunction;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -516,6 +520,105 @@ public final class NotificationDelegationTest {
         } finally { last.set(null, before); }
     }
 
+    /** Production image/file ownership with a declared synthetic encoder boundary. */
+    private static final class Images {
+        final AtomicInteger encodes = new AtomicInteger();
+        final AtomicReference<File> path = new AtomicReference<>();
+        int revision;
+        byte[] content() { return Integer.toString(revision).getBytes(java.nio.charset.StandardCharsets.UTF_8); }
+        void attach(Harness h) throws Exception {
+            Class<?> imageType = type("NotificationImageStore$Image");
+            Class<?> storeType = type("NotificationImageStore");
+            BiFunction<StatusBarNotification, Object, Object> prepare = (notification, owner) -> {
+                try {
+                    File target = (File)invoke(type("NotificationIcons"), null, "largeFile",
+                            new Class<?>[]{String.class, String.class}, notification.getPackageName(), notification.getKey());
+                    path.set(target);
+                    byte[] body = content();
+                    Object image = Proxy.newProxyInstance(imageType.getClassLoader(), new Class<?>[]{imageType},
+                            (self, method, arguments) -> switch (method.getName()) {
+                                case "signature" -> java.security.MessageDigest.getInstance("SHA-256").digest(body);
+                                case "unchanged" -> true;
+                                case "encode" -> { encodes.incrementAndGet(); ((OutputStream)arguments[0]).write(body); yield true; }
+                                default -> throw new AssertionError("Unexpected image boundary " + method.getName());
+                            });
+                    return invoke(storeType, null, "prepare", new Class<?>[]{File.class, Object.class, imageType}, target, owner, image);
+                } catch (Exception failure) { throw new AssertionError("Image preparation fixture failed", failure); }
+            };
+            set(h.service, "mTestImagePreparation", prepare);
+        }
+    }
+
+    private record PendingCancellation(int id, String poster, String cancelling, String existing,
+            boolean remains, boolean rejected, boolean changedImage) { }
+
+    private static void pendingCancellation(Harness h, Images images, PendingCancellation test) throws Exception {
+        images.revision = test.id();
+        int before = images.encodes.get();
+        if (test.existing() != null) h.post(test.existing(), OWNER, test.id());
+        if (test.changedImage()) images.revision += 1000;
+        byte[] expectedImage = images.content();
+        CountDownLatch entered = new CountDownLatch(1), resume = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        set(h.service, "mBeforePostPublication", (Runnable)() -> {
+            entered.countDown();
+            try { if (!resume.await(5, TimeUnit.SECONDS)) throw new AssertionError("Pending notification did not resume"); }
+            catch (InterruptedException interrupted) { throw new AssertionError(interrupted); }
+        });
+        Thread post = new Thread(() -> {
+            try { h.post(test.poster(), OWNER, test.id()); }
+            catch (Throwable problem) { failure.set(problem); }
+        }, "delegated-pending-image");
+        post.setDaemon(true); post.start();
+        boolean rejected = false;
+        try {
+            check(entered.await(5, TimeUnit.SECONDS), "Pending notification did not reach publication barrier");
+            try {
+                if (test.cancelling() != null) h.cancel(test.cancelling(), OWNER, test.id());
+                else h.identity(android.os.Process.myPid(), android.os.Process.SYSTEM_UID,
+                        () -> h.wire.cancelNotificationWithTag(OWNER, OTHER, null, test.id(), 0));
+            } catch (SecurityException denied) { rejected = true; }
+            if (test.existing() != null && test.remains() && !rejected && !test.changedImage()) {
+                check(images.path.get().isFile(), "Cancellation deleted the file owned by a pending cache hit");
+            }
+        } finally {
+            resume.countDown(); post.join(5000);
+            set(h.service, "mBeforePostPublication", null);
+        }
+        check(!post.isAlive(), "Pending notification did not retire");
+        if (failure.get() != null) throw new AssertionError("Pending notification failed", failure.get());
+        check(rejected == test.rejected(), "Published-poster rejection changed for " + test.id());
+        StatusBarNotification remaining = h.active(OWNER).stream().filter(value -> value.getId() == test.id()).findFirst().orElse(null);
+        check((remaining != null) == test.remains(), "Pending-poster cancellation crossed ownership for " + test.id());
+        if (remaining != null) {
+            check(test.poster().equals(remaining.getOpPkg()), "Wrong pending poster survived cancellation");
+            check(java.util.Arrays.equals(Files.readAllBytes(images.path.get().toPath()), expectedImage),
+                    "Cancellation deleted or replaced the surviving poster's prepared image");
+        }
+        check(images.encodes.get() - before == (test.existing() != null && test.changedImage() ? 2 : 1),
+                "Fixture did not exercise the expected prepared-image cache path");
+        h.cancel(OWNER, OWNER, test.id());
+        check(!images.path.get().exists(), "Image ownership survived final owner cancellation");
+    }
+
+    private static void pendingCancellations(Harness h) throws Exception {
+        h.grant(DELEGATE);
+        Images images = new Images(); images.attach(h);
+        try {
+            for (PendingCancellation test : List.of(
+                    new PendingCancellation(191, OWNER, DELEGATE, null, true, false, false),
+                    new PendingCancellation(192, DELEGATE, DELEGATE, null, false, false, false),
+                    new PendingCancellation(193, DELEGATE, OWNER, null, false, false, false),
+                    new PendingCancellation(194, OWNER, OWNER, null, false, false, false),
+                    new PendingCancellation(195, OWNER, DELEGATE, DELEGATE, true, false, false),
+                    new PendingCancellation(196, OWNER, DELEGATE, DELEGATE, true, false, true),
+                    new PendingCancellation(197, DELEGATE, DELEGATE, OWNER, true, true, false),
+                    new PendingCancellation(198, OWNER, null, null, false, false, false))) {
+                pendingCancellation(h, images, test);
+            }
+        } finally { set(h.service, "mTestImagePreparation", null); }
+    }
+
     public static int run(boolean useParcel, String signedApk) throws Exception {
         return run(useParcel, useParcel, signedApk);
     }
@@ -532,7 +635,7 @@ public final class NotificationDelegationTest {
         parcel = useParcel; storage = useStorage; checks = 0;
         PropertyInvalidatedCache.setTestMode(true);
         try (Harness h = new Harness()) {
-            ownership(h); channelOwnership(h); posting(h); retained(h); lifecycle(h, signedApk);
+            ownership(h); channelOwnership(h); posting(h); pendingCancellations(h); retained(h); lifecycle(h, signedApk);
         }
         return checks;
     }

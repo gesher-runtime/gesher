@@ -54,6 +54,13 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"
 
 $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
+# The VM's exit code is the result: ART's stderr diagnostics, which Windows
+# PowerShell turns into ErrorRecords when that stream is redirected, must not
+# stop the script (as gesher-app.ps1's Invoke-Dalvikvm). A VM that could not be
+# started sets no exit code.
+$ErrorActionPreference = 'Continue'
+$global:LASTEXITCODE = $null
 & (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$here/framework/boot.art")" `
   -Xint '-Xusejit:false' -cp (UserPath $dexFull) $Class @ProgramArgs
+if ($null -eq $global:LASTEXITCODE) { throw "gesher: could not start $(Join-Path $here 'dalvikvm.exe')" }
 exit $LASTEXITCODE

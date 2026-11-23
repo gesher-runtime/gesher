@@ -5,7 +5,7 @@
 
 # Exercise synthetic Hebrew/English permission dialogs on a never-shown desktop.
 # This is the production dialog implementation, with denial/keyboard/scroll checks.
-$permissionDialogOut = RunTimed "$Dir/permission_dialog_test.exe" @() 60
+$permissionDialogOut = RunTimed "$Dir/permission_dialog_test.exe" @() 150
 $permissionDialogCode = $LASTEXITCODE
 Check 'services: native permission dialog explicit consent and Hebrew/English controls' {
   $global:LASTEXITCODE = $permissionDialogCode

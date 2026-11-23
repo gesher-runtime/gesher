@@ -1,0 +1,375 @@
+{
+  "schema": "gesher.spell-checker-provider-groups.v1",
+  "date": "2026-11-22",
+  "issue": 56,
+  "scope": [
+    "F38 provider binding groups",
+    "T12 session ownership and resource work"
+  ],
+  "baseline_git": "452372561e0a50c63f072a5ae1e7ca5aa81354b8",
+  "source_sha256": {
+    "app/java/com/gesher/server/SpellCheckerSessions.java": "a268b2eae617c7ff5db16fc5f6c72d5c0137296a0ca8df63aca2836a94ce1f85",
+    "app/java/com/gesher/server/SpellCheckerCatalog.java": "b46ac0413d5434498ab03ac628da749eb9492032988e0f92896748a935c7ff4a",
+    "tests/dex-services/gesher/services/SpellCheckerBindingContractTest.java": "ab9335fd87ea2003fed7f7d12c3ef1ae2c8d034aeff2b188cd174602f54a7c7a",
+    "tests/spell-checker/SpellCheckerBindingsHost.java": "894a36e098409dd4e492c4079c596f80dfd90f64bd553761b91af630a8e8f0e2",
+    "tools/test_spell_checker_bindings.py": "7ab4b66df2af339a19aa17b9f25e1c29fa1ecb99b6219413ffd9f2bb3eda6fc2",
+    "tools/test_service_rebinding.py": "0c768af868b63410c00a0969c3da0c86886e904bbea3e8eb24c6509a96d81358",
+    "tests/dex-services/gesher/services/TextServicesContractTest.java": "8dcab9d9eb922768d0bacabbd88e66fe4c37debd7c55afbfeb5f6ab39dc2f873"
+  },
+  "android_sources": [
+    {
+      "path": "TextServicesManagerService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/textservices/TextServicesManagerService.java",
+      "sha256": "b6c666cb350da9dcd3a48a4004d7e4b08ecc9df6b8c47a19e35cc7f91e720742"
+    },
+    {
+      "path": "SpellCheckerSession.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/java/android/view/textservice/SpellCheckerSession.java",
+      "sha256": "96c998324f092b02cee2f79b56e340992156f0c58b8ce804dde8bde143b3b8b3"
+    }
+  ],
+  "dependencies": {
+    "framework_classes_sha256": "e471430ab21b951db4d6dc10c8b4512d5bce7868c437a313e7e1585e9687c31a",
+    "app_classes_sha256": "186fd5faaee2bcaea01eee0509bcad9b9e924f1bbbbd831b6e827d9a5b5472ec",
+    "apksig_sha256": "c070ed1394629d74641aa0906f60b2ffa1ee77e6366a1f93437f59717b1aeb89",
+    "r8_sha256": "3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad",
+    "host_native_boundary_sha256": "d9a6eaaba10d27fc5811cf6493525d7a88baabbde7337a109e3154e9fd927320",
+    "coremod": {
+      "files": 5879,
+      "manifest_sha256": "4aa3d9e5013ce6d6d76bec840bdd539de4141dde5be3dd3c032921ac6574d6bb",
+      "algorithm": "sorted relative path, NUL, SHA256(file), newline"
+    },
+    "jdk": "21.0.13.1+2"
+  },
+  "measurement": {
+    "order": "candidate, baseline, baseline, candidate",
+    "fresh_jvm_per_run": true,
+    "mode": "work only in every measured process; constructed selected metadata and client binders precede interval",
+    "counters": "ThreadMXBean main caller + actual production spell-checker worker allocated bytes and CPU; wall interval also retained",
+    "concurrent_interval": "admission through distinct provider creation callbacks and client delivery; excludes final cleanup",
+    "churn_interval": "1000 per-client admissions, completions, onClose and finish; one preexisting independent anchor remains alive",
+    "service_instances_already_shared": true,
+    "medians": {
+      "concurrent": {
+        "baseline": {
+          "allocated_bytes": 7486576.0,
+          "thread_cpu_ns": 110799614.0,
+          "elapsed_ns": 99030359.0
+        },
+        "candidate": {
+          "allocated_bytes": 1686856.0,
+          "thread_cpu_ns": 31318800.0,
+          "elapsed_ns": 25493607.0
+        },
+        "reduction_percent": {
+          "allocated_bytes": 77.46825785245484,
+          "thread_cpu_ns": 71.73383654567606,
+          "elapsed_ns": 74.25677614679758
+        }
+      },
+      "churn": {
+        "baseline": {
+          "allocated_bytes": 9136868.0,
+          "thread_cpu_ns": 196153266.0,
+          "elapsed_ns": 215172807.0
+        },
+        "candidate": {
+          "allocated_bytes": 3347100.0,
+          "thread_cpu_ns": 179252962.5,
+          "elapsed_ns": 235829412.0
+        },
+        "reduction_percent": {
+          "allocated_bytes": 63.367096908918896,
+          "thread_cpu_ns": 8.615866482692159,
+          "elapsed_ns": -9.600007216525274
+        }
+      }
+    },
+    "runs": [
+      {
+        "ordinal": 0,
+        "variant": "candidate",
+        "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work"],
+        "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-sealed-work-0.log",
+        "exit_code": 0,
+        "sha256": "17bfdc7337dc6366d568f3d72e89ff800ee56d512eacb0d7fa8361ceb58ee4d8",
+        "work": [
+          {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 822072, "thread_cpu_ns": 19322145, "elapsed_ns": 28797401},
+          {"workload": "concurrent", "sessions": 10, "connections": 1, "provider_death_links": 1, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 31168, "thread_cpu_ns": 2218439, "elapsed_ns": 1943684},
+          {"workload": "concurrent", "sessions": 100, "connections": 1, "provider_death_links": 1, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 182496, "thread_cpu_ns": 5226389, "elapsed_ns": 3707376},
+          {"workload": "concurrent", "sessions": 1000, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 1687328, "thread_cpu_ns": 32239770, "elapsed_ns": 32311096},
+          {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 1, "provider_death_links": 1, "provider_death_unlinks": 0, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 3301704, "thread_cpu_ns": 186953953, "elapsed_ns": 280686310}
+        ]
+      },
+      {
+        "ordinal": 1,
+        "variant": "baseline",
+        "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work", "--source-ref", "452372561e0a50c63f072a5ae1e7ca5aa81354b8"],
+        "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-sealed-work-1.log",
+        "exit_code": 0,
+        "sha256": "23e77ef73520db318d28265702fef53cc4d89a6d1a2f41cf086485aab0bedf87",
+        "work": [
+          {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 805880, "thread_cpu_ns": 20774865, "elapsed_ns": 21006973},
+          {"workload": "concurrent", "sessions": 10, "connections": 10, "provider_death_links": 10, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 83288, "thread_cpu_ns": 3031302, "elapsed_ns": 2825249},
+          {"workload": "concurrent", "sessions": 100, "connections": 100, "provider_death_links": 100, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 773208, "thread_cpu_ns": 19180744, "elapsed_ns": 17520540},
+          {"workload": "concurrent", "sessions": 1000, "connections": 1000, "provider_death_links": 1000, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 7487768, "thread_cpu_ns": 117898216, "elapsed_ns": 104092419},
+          {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 2, "provider_death_links": 1001, "provider_death_unlinks": 1000, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 9141136, "thread_cpu_ns": 193087307, "elapsed_ns": 212878138}
+        ]
+      },
+      {
+        "ordinal": 2,
+        "variant": "baseline",
+        "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work", "--source-ref", "452372561e0a50c63f072a5ae1e7ca5aa81354b8"],
+        "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-sealed-work-2.log",
+        "exit_code": 0,
+        "sha256": "1a78235828f1f2e090a242f56ffa79bdccf21c7cbb8777c0840b33542fd03ad7",
+        "work": [
+          {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 805912, "thread_cpu_ns": 22953279, "elapsed_ns": 22819980},
+          {"workload": "concurrent", "sessions": 10, "connections": 10, "provider_death_links": 10, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 83320, "thread_cpu_ns": 3609630, "elapsed_ns": 3364620},
+          {"workload": "concurrent", "sessions": 100, "connections": 100, "provider_death_links": 100, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 773808, "thread_cpu_ns": 24225745, "elapsed_ns": 22100198},
+          {"workload": "concurrent", "sessions": 1000, "connections": 1000, "provider_death_links": 1000, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 7485384, "thread_cpu_ns": 103701012, "elapsed_ns": 93968299},
+          {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 2, "provider_death_links": 1001, "provider_death_unlinks": 1000, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 9132600, "thread_cpu_ns": 199219225, "elapsed_ns": 217467476}
+        ]
+      },
+      {
+        "ordinal": 3,
+        "variant": "candidate",
+        "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work"],
+        "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-sealed-work-3.log",
+        "exit_code": 0,
+        "sha256": "0b355159c3992e66f2f027f388a0f39cbb417bba1733ab78da33d010bd42f079",
+        "work": [
+          {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 822040, "thread_cpu_ns": 17776809, "elapsed_ns": 18209656},
+          {"workload": "concurrent", "sessions": 10, "connections": 1, "provider_death_links": 1, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 31072, "thread_cpu_ns": 1567288, "elapsed_ns": 1359765},
+          {"workload": "concurrent", "sessions": 100, "connections": 1, "provider_death_links": 1, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 180744, "thread_cpu_ns": 5407804, "elapsed_ns": 3937151},
+          {"workload": "concurrent", "sessions": 1000, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 1686384, "thread_cpu_ns": 30397830, "elapsed_ns": 18676118},
+          {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 1, "provider_death_links": 1, "provider_death_unlinks": 0, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 3392496, "thread_cpu_ns": 171551972, "elapsed_ns": 190972514}
+        ]
+      }
+    ],
+    "earlier_same_work_pass": {
+      "fixture_sha256": "5ef2f79a59b02739757102a2f02857208cdc3e8dca1fe40f169db11ae73d5d98",
+      "difference_from_final": "Only the three-check null-session-result contract was subsequently added; neither measured work method changed and all measured processes used work-only mode.",
+      "runs": [
+        {
+          "ordinal": 0,
+          "variant": "candidate",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-work-0.log",
+          "exit_code": 0,
+          "sha256": "0f3abbaafb378266b665ed4db7107bef967d5badf85a05583d29a1f96e3bc3ce"
+        },
+        {
+          "ordinal": 1,
+          "variant": "baseline",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work", "--source-ref", "452372561e0a50c63f072a5ae1e7ca5aa81354b8"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-work-1.log",
+          "exit_code": 0,
+          "sha256": "50f39e46eaec7c0bf0f472d44e299783fb2853c1cac543005e24c68730f0284f"
+        },
+        {
+          "ordinal": 2,
+          "variant": "baseline",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work", "--source-ref", "452372561e0a50c63f072a5ae1e7ca5aa81354b8"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-work-2.log",
+          "exit_code": 0,
+          "sha256": "155c1f05af29d5c54fb457da2305880767fd80a0db4e0698547e8bc72de2bc23"
+        },
+        {
+          "ordinal": 3,
+          "variant": "candidate",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-work-3.log",
+          "exit_code": 0,
+          "sha256": "7c451bd5ef9ca89ca132af826566fa68c7dc0d958acb98c70185522927cf9ded"
+        }
+      ],
+      "parsed": [
+        {
+          "run": 0,
+          "variant": "candidate",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 822040, "thread_cpu_ns": 19763603, "elapsed_ns": 19702410},
+            {"workload": "concurrent", "sessions": 10, "connections": 1, "provider_death_links": 1, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 31104, "thread_cpu_ns": 1740877, "elapsed_ns": 1556446},
+            {"workload": "concurrent", "sessions": 100, "connections": 1, "provider_death_links": 1, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 182040, "thread_cpu_ns": 5708015, "elapsed_ns": 4275811},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 1683504, "thread_cpu_ns": 30636510, "elapsed_ns": 19328567},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 1, "provider_death_links": 1, "provider_death_unlinks": 0, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 3387280, "thread_cpu_ns": 200317485, "elapsed_ns": 227819765}
+          ]
+        },
+        {
+          "run": 1,
+          "variant": "baseline",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 807088, "thread_cpu_ns": 21140086, "elapsed_ns": 21200188},
+            {"workload": "concurrent", "sessions": 10, "connections": 10, "provider_death_links": 10, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 83352, "thread_cpu_ns": 2732381, "elapsed_ns": 2568492},
+            {"workload": "concurrent", "sessions": 100, "connections": 100, "provider_death_links": 100, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 774424, "thread_cpu_ns": 22578093, "elapsed_ns": 20750820},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1000, "provider_death_links": 1000, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 7477888, "thread_cpu_ns": 139110494, "elapsed_ns": 128503865},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 2, "provider_death_links": 1001, "provider_death_unlinks": 1000, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 9018304, "thread_cpu_ns": 189996839, "elapsed_ns": 241669782}
+          ]
+        },
+        {
+          "run": 2,
+          "variant": "baseline",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 806816, "thread_cpu_ns": 20023756, "elapsed_ns": 19844815},
+            {"workload": "concurrent", "sessions": 10, "connections": 10, "provider_death_links": 10, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 83320, "thread_cpu_ns": 2776568, "elapsed_ns": 2416392},
+            {"workload": "concurrent", "sessions": 100, "connections": 100, "provider_death_links": 100, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 775712, "thread_cpu_ns": 18086317, "elapsed_ns": 16023896},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1000, "provider_death_links": 1000, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 7484120, "thread_cpu_ns": 137044180, "elapsed_ns": 126563018},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 2, "provider_death_links": 1001, "provider_death_unlinks": 1000, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 9146648, "thread_cpu_ns": 209060968, "elapsed_ns": 232326760}
+          ]
+        },
+        {
+          "run": 3,
+          "variant": "candidate",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 822952, "thread_cpu_ns": 23147372, "elapsed_ns": 22871878},
+            {"workload": "concurrent", "sessions": 10, "connections": 1, "provider_death_links": 1, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 31168, "thread_cpu_ns": 1676125, "elapsed_ns": 1434843},
+            {"workload": "concurrent", "sessions": 100, "connections": 1, "provider_death_links": 1, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 181152, "thread_cpu_ns": 4941084, "elapsed_ns": 3343600},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 1704904, "thread_cpu_ns": 37107670, "elapsed_ns": 26204582},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 1, "provider_death_links": 1, "provider_death_unlinks": 0, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 3386816, "thread_cpu_ns": 193754720, "elapsed_ns": 215428061}
+          ]
+        }
+      ]
+    },
+    "previous_final_work_pass": {
+      "fixture_sha256": "82ea889cb678977dfd90a8a7b792b5ddac73f7148c104eada6edc36a8fe3ad6a",
+      "difference_from_final": "Only the GC retention contract changed get() to refersTo(null); neither measured work method changed and every measured process used work-only mode.",
+      "runs": [
+        {
+          "ordinal": 0,
+          "variant": "candidate",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-final-work-0.log",
+          "exit_code": 0,
+          "sha256": "1457b9e6b8f87d174ecb2d4555a34854b87b5e5b683f9caae7deeba54e6bd801",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 822072, "thread_cpu_ns": 24393919, "elapsed_ns": 24255788},
+            {"workload": "concurrent", "sessions": 10, "connections": 1, "provider_death_links": 1, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 31168, "thread_cpu_ns": 2030278, "elapsed_ns": 1917792},
+            {"workload": "concurrent", "sessions": 100, "connections": 1, "provider_death_links": 1, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 181248, "thread_cpu_ns": 6084353, "elapsed_ns": 4797185},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 1687712, "thread_cpu_ns": 31496008, "elapsed_ns": 20358352},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 1, "provider_death_links": 1, "provider_death_unlinks": 0, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 3389704, "thread_cpu_ns": 157076678, "elapsed_ns": 177904633}
+          ]
+        },
+        {
+          "ordinal": 1,
+          "variant": "baseline",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work", "--source-ref", "452372561e0a50c63f072a5ae1e7ca5aa81354b8"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-final-work-1.log",
+          "exit_code": 0,
+          "sha256": "95f8da747a35ff0dd8fd3596758ea566267b45795e3131c37f96b6a7761150e5",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 805880, "thread_cpu_ns": 22209387, "elapsed_ns": 22288705},
+            {"workload": "concurrent", "sessions": 10, "connections": 10, "provider_death_links": 10, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 83288, "thread_cpu_ns": 3617888, "elapsed_ns": 3330625},
+            {"workload": "concurrent", "sessions": 100, "connections": 100, "provider_death_links": 100, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 774416, "thread_cpu_ns": 20889785, "elapsed_ns": 25083888},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1000, "provider_death_links": 1000, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 7496992, "thread_cpu_ns": 114422959, "elapsed_ns": 102669161},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 2, "provider_death_links": 1001, "provider_death_unlinks": 1000, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 9126880, "thread_cpu_ns": 276622479, "elapsed_ns": 308558452}
+          ]
+        },
+        {
+          "ordinal": 2,
+          "variant": "baseline",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work", "--source-ref", "452372561e0a50c63f072a5ae1e7ca5aa81354b8"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-final-work-2.log",
+          "exit_code": 0,
+          "sha256": "15cbd53aabd1117c15cf6c072551bfb2efd648869f87721380c6b5215fd22a4f",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 807312, "thread_cpu_ns": 19727657, "elapsed_ns": 19606697},
+            {"workload": "concurrent", "sessions": 10, "connections": 10, "provider_death_links": 10, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 83352, "thread_cpu_ns": 3475646, "elapsed_ns": 3131766},
+            {"workload": "concurrent", "sessions": 100, "connections": 100, "provider_death_links": 100, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 775344, "thread_cpu_ns": 20447846, "elapsed_ns": 18893797},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1000, "provider_death_links": 1000, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 7472376, "thread_cpu_ns": 139727628, "elapsed_ns": 127387884},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 2, "provider_death_links": 1001, "provider_death_unlinks": 1000, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 9148176, "thread_cpu_ns": 229425108, "elapsed_ns": 255026620}
+          ]
+        },
+        {
+          "ordinal": 3,
+          "variant": "candidate",
+          "command": ["python3", "tools/test_spell_checker_bindings.py", "--java-home", "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2", "--framework-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip", "--core-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/coremod", "--app-classes", "/workspace/scratch/9dcd1b3daa63/java-deps/r6-app/gesher-app-classes.jar", "--apksig", "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar", "--case", "work"],
+          "log": "/workspace/scratch/9dcd1b3daa63/java-r6-spell-final-work-3.log",
+          "exit_code": 0,
+          "sha256": "82baa86cb1b647978c5c4cafe97d8c48a1b2cdb082a53d5f6d15d8cdf252b197",
+          "work": [
+            {"workload": "concurrent", "sessions": 1, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1, "delivered_sessions": 1, "service_on_bind_calls": 1, "allocated_bytes": 822976, "thread_cpu_ns": 21525852, "elapsed_ns": 21347092},
+            {"workload": "concurrent", "sessions": 10, "connections": 1, "provider_death_links": 1, "provider_session_calls": 10, "delivered_sessions": 10, "service_on_bind_calls": 1, "allocated_bytes": 31168, "thread_cpu_ns": 1684753, "elapsed_ns": 1394523},
+            {"workload": "concurrent", "sessions": 100, "connections": 1, "provider_death_links": 1, "provider_session_calls": 100, "delivered_sessions": 100, "service_on_bind_calls": 1, "allocated_bytes": 181600, "thread_cpu_ns": 5068482, "elapsed_ns": 3567791},
+            {"workload": "concurrent", "sessions": 1000, "connections": 1, "provider_death_links": 1, "provider_session_calls": 1000, "delivered_sessions": 1000, "service_on_bind_calls": 1, "allocated_bytes": 1701080, "thread_cpu_ns": 38825185, "elapsed_ns": 27290535},
+            {"workload": "churn", "sessions": 1000, "anchor_sessions": 1, "peak_connections": 1, "provider_death_links": 1, "provider_death_unlinks": 0, "provider_session_calls": 1001, "service_on_bind_calls": 1, "allocated_bytes": 3389080, "thread_cpu_ns": 184367861, "elapsed_ns": 207208506}
+          ]
+        }
+      ]
+    }
+  },
+  "validation": [
+    {
+      "name": "full app Java/DEX",
+      "log": "java-r6-app.log",
+      "sha256": "bcccc51c73750e458a4c6fe7cd11f9d491d2be24a8277c14e8260f50cfbddf32",
+      "exit_code": 0,
+      "contract_checks": null
+    },
+    {
+      "name": "final full services Java/DEX",
+      "log": "java-r6-services-sealed.log",
+      "sha256": "9098ba8fcb0bd8a88b8fdbd502e388d43930c11fa68688c22dfe6379a5f0ec78",
+      "exit_code": 0,
+      "contract_checks": null
+    },
+    {
+      "name": "maintained service-rebinding and spell-checker gate",
+      "log": "java-r6-maintained-sealed.log",
+      "sha256": "fc93f3600827537bd782c9fd93fede441745e9799ffcf19f9ec6cef39a910ad0",
+      "exit_code": 0,
+      "contract_checks": [
+        431,
+        105
+      ]
+    },
+    {
+      "name": "historical production resource negative control",
+      "log": "java-r6-spell-sealed-negative.log",
+      "sha256": "28150dc411efa8768fc7b714e6a3e293bf9a8d8c7ce30bc017223439e50e57c5",
+      "exit_code": 1,
+      "contract_checks": null
+    },
+    {
+      "name": "independent maintained-gate review before null-result-only test addition",
+      "log": "native-review-java-r6-spell.log",
+      "sha256": "7d84f191e06aeb431e6379deb8803b2790fb6021543da9e78ebb7efd6cd0ce96",
+      "exit_code": 0,
+      "contract_checks": [
+        431,
+        102
+      ]
+    },
+    {
+      "name": "independent final session contract replay before refersTo-only fixture improvement",
+      "log": "native-review-java-r6-spell-final.log",
+      "sha256": "93104284785fe47c58a3edfcb5a300bda500bc2136c1526967ba25e2a994cd6d",
+      "exit_code": 0,
+      "contract_checks": [
+        105
+      ]
+    },
+    {
+      "name": "final interpreter contracts",
+      "log": "java-r6-spell-interpreter.log",
+      "sha256": "121a98e562370685ea8e5536c3dcd0179906c70a53c1fa9635ba17215b7c225b",
+      "exit_code": 0,
+      "contract_checks": [
+        105
+      ]
+    }
+  ],
+  "negative_control_expected": "historical code fails at expected 1 actual ActiveServices connection, observed 10",
+  "ci_binding": {
+    "framework_recipe": "972c2b42b40c4ac799e147f5e352d07ba615d0fb",
+    "host_entrypoint": "tools/test_service_rebinding.py default scenario all -> tools/test_spell_checker_bindings.py",
+    "windows_entrypoint": "tests/windows/tracks/99-android-windows-contracts.ps1 -> TextServicesContractTest -> SpellCheckerBindingContractTest.contracts(true)"
+  },
+  "limits": [
+    "Host constructs already-selected manifest metadata and provider/application-thread endpoints; it does not perform APK installation or native service discovery.",
+    "Host JNI substitutes Android identity/clock platform boundaries, uses explicit Binder death delivery, and initializes the Android property-cache test namespace.",
+    "Native Parcel/ART/Windows target fixture is compiled to DEX and wired into the existing track but was not executed locally.",
+    "Allocation/CPU results are bounded component measurements, not app throughput or startup claims.",
+    "Provider reconnection policy, duplicate-listener policy, user support and public selection/visibility checks remain the preexisting implementation."
+  ]
+}

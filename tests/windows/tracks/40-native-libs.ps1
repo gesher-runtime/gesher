@@ -181,6 +181,10 @@ Check 'bionic shim: ftruncate rights, cursor and same-size final-page invalidati
   & "$Dir/bionic_ftruncate_test.exe"
 } @('bionic_ftruncate_test all passed')
 
+Check 'bionic shim: creat and creat64 create or truncate a write-only file' {
+  & "$Dir/bionic_creat_test.exe"
+} @('bionic_creat_test all passed')
+
 Check 'bionic shim: shared CRT stream ownership and wide stdio' {
   & "$Dir/bionic_stdio_contract_test.exe"
 } @('bionic_stdio_contract_test all passed')
@@ -196,6 +200,7 @@ Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
 } @('JNI_OnLoad ran: ok', 'a native thread that ends attached only warns, as on Android: ok',
+    'GetEnv guest boundary: all passed', 'GetEnv attach/detach: all passed',
     'JniTest all passed')
 
 # Step 5, libc++: a C++ .so against the NDK's libc++_shared.so, which the

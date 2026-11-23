@@ -50,6 +50,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
+#include "../windows/host_dialog_theme.h"
 
 #include <algorithm>
 #include <cstring>
@@ -171,9 +172,9 @@ void ShowLaunchFailure(const std::wstring& reason) {
   const size_t at = text.find(L"{0}");
   if (at != std::wstring::npos) text.replace(at, 3, reason);
   else text = reason;
-  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
-  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
-  MessageBoxW(nullptr, text.c_str(), GesherUiText(language, "brand"), flags);
+  GesherHostPrompt(GesherUiText(language, "brand"), text.c_str(),
+                   GesherUiText(language, "cp_dialog_ok"), nullptr,
+                   GesherUiRtl(language), nullptr);
 }
 
 // A failing app starts this short-lived host process rather than waiting inside
@@ -198,9 +199,9 @@ int ShowAppCrash(int argc, LPWSTR* argv) {
     else if (pattern.compare(i, 3, L"{2}") == 0) { message += argv[5]; i += 3; }
     else message += pattern[i++];
   }
-  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
-  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
-  MessageBoxW(nullptr, message.c_str(), GesherUiText(language, "brand"), flags);
+  GesherHostPrompt(GesherUiText(language, "brand"), message.c_str(),
+                   GesherUiText(language, "cp_dialog_ok"), nullptr,
+                   GesherUiRtl(language), nullptr);
   return 0;
 }
 
@@ -543,7 +544,10 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     HDC dc = BeginPaint(hwnd, &ps);
     RECT client;
     GetClientRect(hwnd, &client);
-    FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
+    // Match the Control Center's light surface and semantic text hierarchy.
+    const bool high_contrast = GesherHostHighContrast() != FALSE;
+    FillRect(dc, &client, high_contrast ? GetSysColorBrush(COLOR_WINDOW)
+        : static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
     const int w = client.right, h = client.bottom;
     const int size = std::min(kIconSize, w / 2);
     const int top = std::max(16, h * 2 / 5 - size / 2);
@@ -552,12 +556,12 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ old = SelectObject(dc, g_splash->title_font);
-    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_WINDOWTEXT) : RGB(16, 24, 40));
     RECT label = {16, top + size + 24, w - 16, top + size + 24 + 64};
     DrawTextW(dc, g_splash->label.c_str(), -1, &label,
               DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
     SelectObject(dc, g_splash->text_font);
-    SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_GRAYTEXT) : RGB(102, 112, 133));
     RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
     const auto language = GesherUiCurrentLanguage();
     DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
@@ -626,6 +630,7 @@ HWND ShowSplash(Splash* splash) {
   HWND hwnd = CreateWindowExW(ex_style, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
                               nullptr, instance, nullptr);
   if (hwnd == nullptr) return nullptr;
+  GesherHostApplyCaption(hwnd);
   // Before it is shown: its taskbar button is the app's (the shortcut's icon).
   if (!splash->app_id.empty()) SetWindowAppUserModelId(hwnd, splash->app_id);
   if (splash->big != nullptr) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(splash->big));

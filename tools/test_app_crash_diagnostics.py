@@ -66,8 +66,11 @@ def native_test(launcher):
     u.EnumWindows.argtypes = [callback, w.LPARAM]
     u.EnumChildWindows.argtypes = [w.HWND, callback, w.LPARAM]
     u.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
-    u.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    u.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
+                                    w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    u.SendMessageTimeoutW.restype = w.LPARAM
     u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    u.IsWindowVisible.argtypes = [w.HWND]
     u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
     expected = {'generic': ('because of an error', 'עקב שגיאה'),
                 'bluetooth': ('Windows currently reports no Bluetooth adapter', 'Windows מדווח כרגע שאין מתאם'),
@@ -85,31 +88,47 @@ def native_test(launcher):
                 u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                 name = ctypes.create_unicode_buffer(256)
                 u.GetClassNameW(hwnd, name, len(name))
-                if pid.value == p.pid and name.value == '#32770':
+                if pid.value == p.pid and name.value == '#32770' and u.IsWindowVisible(hwnd):
                     found.append(hwnd)
                 return True
             try:
                 deadline = time.monotonic() + 10
-                while not found and time.monotonic() < deadline and p.poll() is None:
+                text = ''
+                ready = False
+                required = (package, log, event, texts[lang == 'he'])
+                while time.monotonic() < deadline and p.poll() is None:
+                    found.clear()
                     u.EnumWindows(visit, 0)
+                    if found:
+                        hwnd = found[0]
+                        labels, unreadable = [], []
+                        @callback
+                        def child(ch, unused):
+                            buffer = ctypes.create_unicode_buffer(16384)
+                            result = ctypes.c_size_t()
+                            # GetWindowTextW cannot read another process's EDIT
+                            # contents. WM_GETTEXT is marshalled by Windows;
+                            # bound the send in case the launcher is unresponsive.
+                            if u.SendMessageTimeoutW(ch, 0x000D, len(buffer),
+                                    ctypes.addressof(buffer), 0x3, 1000,
+                                    ctypes.byref(result)):  # SMTO_BLOCK | SMTO_ABORTIFHUNG
+                                labels.append(buffer.value)
+                            else:
+                                unreadable.append(ch)
+                            return True
+                        u.EnumChildWindows(hwnd, child, 0)
+                        text = '\n'.join(labels)
+                        # The dialog HWND exists before WM_INITDIALOG finishes
+                        # creating its body and buttons. Wait for the real text.
+                        if not unreadable and all(part in text for part in required):
+                            ready = True
+                            break
                     time.sleep(.02)
                 assert found, (lang, kind, 'dialog not shown')
-                hwnd = found[0]
-                labels = []
-                @callback
-                def child(ch, unused):
-                    text = ctypes.create_unicode_buffer(16384)
-                    u.GetWindowTextW(ch, text, len(text))
-                    labels.append(text.value)
-                    return True
-                u.EnumChildWindows(hwnd, child, 0)
-                text = '\n'.join(labels)
-                assert package in text and log in text and event in text and texts[lang == 'he'] in text, (lang, kind, text)
-                # MessageBox implements MB_RTLREADING internally; Windows builds
-                # differ in whether that flag appears on the child HWND styles.
-                # Verify the real Hebrew text here; generated catalog tests also
-                # check GesherUiRtl's language selection.
-                u.PostMessageW(hwnd, 0x10, 0, 0)  # WM_CLOSE: dismiss MB_OK
+                assert ready and all(part in text for part in required), (lang, kind, text)
+                # Verify the real Hebrew text here; the native prompt and
+                # generated catalog tests also check RTL language selection.
+                assert u.PostMessageW(hwnd, 0x10, 0, 0)  # WM_CLOSE: dismiss the notice
                 assert p.wait(timeout=5) == 0
             finally:
                 if p.poll() is None:

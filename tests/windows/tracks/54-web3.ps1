@@ -16,6 +16,8 @@ $env:GESHER_LOCALES = 'en-US'
 $Web3RuntimeExe = (Resolve-Path -LiteralPath $Web3RuntimeExe -ErrorAction Stop).Path
 . "$PSScriptRoot/../webview/Runtime.ps1"
 . "$PSScriptRoot/../web3/Web3Servers.ps1"
+. "$PSScriptRoot/../web3/LocationConsent.ps1"
+& "$PSScriptRoot/../web3/LocationConsentChecks.ps1"
 if (-not ('GesherWeb3Win32' -as [type])) {
   Add-Type -TypeDefinition @'
 using System;
@@ -65,7 +67,8 @@ function Web3ProcessState([int] $LauncherId, [string] $Text) {
 
 function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [string] $Done,
                  [string] $Ready = '', [scriptblock] $During = $null, [int] $Seconds = 400,
-                 [string] $NativeLibrary = 'web3_network.so') {
+                 [string] $NativeLibrary = 'web3_network.so',
+                 [ValidateSet('', 'Allow', 'Deny')] [string] $LocationConsent = '') {
   if (-not (Test-Path "$Dir/web3app.apk")) {
     Write-Host "FAIL  web3: $Name (web3app.apk is missing)"
     $script:failed++
@@ -87,8 +90,28 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $deadline = (Get-Date).AddSeconds($Seconds)
   $hwnd = [IntPtr]::Zero
   $ran = $false
+  $consentResponded = $false
+  $consentOwner = 0
+  $consentStarted = 0L
   while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
     $text = & $read
+    if ($LocationConsent -and -not $consentResponded -and $text.Contains('Web3 geo requesting location permissions')) {
+      if ($Arguments -contains 'com.gesher.app.Launcher') {
+        # The dialog belongs to the system server of this isolated test device.
+        $consentReadyFile = Join-Path $root 'data-web3/system/gesher-device.ready'
+        if (Test-Path -LiteralPath $consentReadyFile) {
+          [void][int]::TryParse((Get-Content -LiteralPath $consentReadyFile -Raw).Trim(), [ref]$consentOwner)
+        }
+      } else {
+        $owner = Get-Web3StandaloneConsentOwner $p $Web3RuntimeExe
+        $consentOwner = if ($owner) { $owner.Id } else { 0 }
+        $consentStarted = if ($owner) { $owner.Started } else { 0L }
+      }
+      if ([Web3LocationConsent]::Respond($consentOwner, $LocationConsent -eq 'Allow', $consentStarted)) {
+        $consentResponded = $true
+        Write-Host "INFO  web3: fixture location consent $LocationConsent, owner $consentOwner"
+      }
+    }
     if ($hwnd -eq [IntPtr]::Zero) {
       $m = [regex]::Match($text, 'first frame drawn \((\d+) presented\), \w+, hwnd 0x([0-9a-f]+)')
       if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16) }
@@ -202,47 +225,30 @@ CompatProxied 'the single process''s WebView' $before
 
 # --- navigator.geolocation ---------------------------------------------------------
 $geoExpect = @(
+  'Web3 geo location permissions granted',
   'Web3 geo test location set: 31.7683 35.2137',
   'Web3 geo onGeolocationPermissionsShowPrompt: file:///',
   'Web3 geo getCurrentPosition: "31.7683 35.2137 accuracy 7 altitude 754"',
   'Web3 geo watchPosition: [', '32.0853 34.7818 accuracy 7',
   'Web3 geo with geolocation disabled: "error 1',
   'Web3 geo done')
-
-function GrantWeb3Location {
-  # The modern fixture APK needs a platform grant before WebView can ask about the page's origin.
-  # Use the real host shell grant in the existing isolated device profile. The standalone launcher
-  # also reads this profile, so wait for both decisions to reach disk before starting either view.
-  $deviceState = Get-Content -LiteralPath "$root/data-web3/system/gesher-device" -Raw
-  $device = [regex]::Match($deviceState, '(?m)^device=(gesher-[a-z0-9]+)\r?$')
-  if (-not $device.Success) { throw 'Web3 fixture device namespace is missing' }
-  $savedBinder = $env:GESHER_BINDER
-  try {
-    $env:GESHER_BINDER = $device.Groups[1].Value
-    $granted = 'Permission grant completed for com.gesher.web3app'
-    foreach ($permission in 'ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION') {
-      $result = Web3Run "grant $permission to the Web3 fixture" @(
-        'com.gesher.server.RuntimeCommands', 'pm', 'grant', 'com.gesher.web3app',
-        "android.permission.$permission") @($granted) $granted -Seconds 30
-      if (-not $result.Contains($granted)) { throw "Could not grant $permission to the Web3 fixture" }
-    }
-  } finally {
-    $env:GESHER_BINDER = $savedBinder
-  }
-  $deadline = [DateTime]::UtcNow.AddSeconds(15)
-  $path = "$root/data-web3/system/runtime-permissions"
-  do {
-    if (Test-Path -LiteralPath $path) {
-      $saved = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
-      $coarse = [regex]::Match([string]$saved, '(?m)^uid\\:(\d+)\\:android\.permission\.ACCESS_COARSE_LOCATION=granted\r?$')
-      if ($coarse.Success -and $saved -match "(?m)^uid\\:$($coarse.Groups[1].Value)\\:android\.permission\.ACCESS_FINE_LOCATION=granted\r?$") {
-        return
-      }
-    }
-    Start-Sleep -Milliseconds 100
-  } while ([DateTime]::UtcNow -lt $deadline)
-  throw 'The Web3 fixture location grants did not reach its device profile'
+$geoSavedData = $env:ANDROID_DATA
+$geoData = Join-Path $root ("data-web3-geo-" + [guid]::NewGuid().ToString('N'))
+$env:ANDROID_DATA = NoDrive $geoData
+New-Item -ItemType Directory -Path $geoData | Out-Null
+try {
+$geoArgs = @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
+  'com.gesher.web3app.GeoActivity', (NoDrive "$Dir/web3app.apk"))
+$denied = Web3Run 'geolocation fixture: denying runtime location consent finishes without starting providers or WebViews' `
+  $geoArgs @('Web3 geo location permissions denied', 'Web3 geo done', 'gesher-app: done') 'Web3 geo done' -LocationConsent Deny
+if ($denied.Contains('Web3 geo test location set:') -or $denied.Contains('Web3 geo onGeolocationPermissionsShowPrompt:')) {
+  Write-Host 'FAIL  web3: denied runtime consent started geolocation'
+  $failed++
 }
+$null = Web3Run 'web3app.apk''s GeoActivity: navigator.geolocation in a WebView answered from LocationManager (test providers): getCurrentPosition after onGeolocationPermissionsShowPrompt, watchPosition following the test location, error 1 with geolocation disabled (single process)' @(
+  'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.GeoActivity',
+  (NoDrive "$Dir/web3app.apk")) ($geoExpect + 'gesher-app: done') 'Web3 geo done' -LocationConsent Allow
+} finally { $env:ANDROID_DATA = $geoSavedData }
 
 # --- Accessibility -------------------------------------------------------------------
 # A UI Automation client, as Narrator: the app's window's tree has the Android views (and
@@ -378,11 +384,7 @@ try {
   $null = Web3Run "the Gesher device: $compatName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.CompatActivity') ($compatExpect + 'gesher-app: app process for com.gesher.web3app: pid ') 'Web3 compat done'
   CompatProxied 'the app process''s WebView' $before
 
-  GrantWeb3Location
-  $null = Web3Run 'web3app.apk''s GeoActivity: navigator.geolocation in a WebView answered from LocationManager (test providers): getCurrentPosition after onGeolocationPermissionsShowPrompt, watchPosition following the test location, error 1 with geolocation disabled (single process)' @(
-    'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.GeoActivity',
-    (NoDrive "$Dir/web3app.apk")) ($geoExpect + 'gesher-app: done') 'Web3 geo done'
-  $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
+  $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done' -LocationConsent Allow
   $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
 
   Web3ScreenReader $true
@@ -414,8 +416,9 @@ try {
       'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
       'Web3 net done') 'Web3 net done'
 
-    if (-not [GesherWeb3Proxy]::SetPac("http://127.0.0.1:$web3Http/proxy.pac")) { Write-Host 'INFO  web3: InternetSetOption (PAC) failed' }
+    # Windows may fetch the script as soon as PAC is enabled, before the app starts.
     $before = ([GesherWeb3Servers]::Log -split "`n").Count - 1
+    if (-not [GesherWeb3Proxy]::SetPac("http://127.0.0.1:$web3Http/proxy.pac")) { Write-Host 'INFO  web3: InternetSetOption (PAC) failed' }
     $null = Web3Run 'the Gesher device: web3app.apk''s NetActivity with a PAC script in Windows'' settings: a PAC default proxy, PacProxySelector answered by Windows'' evaluation of the script (one host through the proxy, the rest direct)' ($launch + '--activity', 'com.gesher.web3app.NetActivity', '--ez', 'pac', 'true') @(
       "pac http://127.0.0.1:$web3Http/proxy.pac",
       'Web3 net http://pac-proxied.test/net: 200 proxied by the test proxy for pac-proxied.test',
@@ -451,6 +454,48 @@ try {
     "Web3 net Proxy.getDefaultHost 127.0.0.1 port $web3Proxy",
     'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
     'Web3 net done') 'Web3 net done'
+
+  # The control panel's proxy settings (tools/package/gesher-control-panel.ps1's production
+  # Set-ProxySetting, as its dialogs save them), each followed by a fresh app process: every
+  # app's proxy, the package's own direct over it, then "Same as every app" again.
+  $panelSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../../tools/package/gesher-control-panel.ps1'))
+  $panelTokens = $null; $panelErrors = $null
+  $panelAst = [Management.Automation.Language.Parser]::ParseInput($panelSource, [ref]$panelTokens, [ref]$panelErrors)
+  foreach ($name in 'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes',
+          'ConvertTo-PropertiesValue', 'Get-ProxySettings', 'Set-ProxySetting') {
+    $definition = $panelAst.Find({ param($node)
+      $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $false)
+    . ([scriptblock]::Create($definition.Extent.Text))
+  }
+  $script:ProxyFile = $saved
+  $proxiedGet = 'proxy GET http://web3-proxied.test/net'
+  function PanelProxyRun([string] $Name, [string[]] $Expect, [bool] $Proxied) {
+    Write-Host "INFO  web3: the control panel saved proxy.properties: $((Get-Content -LiteralPath $script:ProxyFile) -join ' | ')"
+    $before = ([GesherWeb3Servers]::Log -split "`n").Count - 1
+    $null = Web3Run $Name ($launch + '--activity', 'com.gesher.web3app.NetActivity') ($Expect + 'Web3 net done') 'Web3 net done'
+    $seen = ([GesherWeb3Servers]::Log -split "`n" | Select-Object -Skip $before) -join "`n"
+    if ($seen.Contains($proxiedGet) -eq $Proxied) {
+      Write-Host "PASS  web3: the test proxy $(if ($Proxied) { 'served' } else { 'did not see' }) the fresh process's request ($Name)"
+    } else {
+      Write-Host "FAIL  web3: the test proxy's requests for $Name ($($seen -replace "`n", ' | '))"
+      $script:failed++
+    }
+  }
+  $panelProxy = "127.0.0.1:$web3Proxy"
+  Set-ProxySetting '' $panelProxy
+  Set-ProxySetting 'com.gesher.web3app' $null
+  PanelProxyRun 'the Gesher device: the control panel''s proxy for every app, in a fresh NetActivity process' @(
+    "gesher-net: Gesher's proxy (GESHER_PROXY=$panelProxy)",
+    "Web3 net Proxy.getDefaultHost 127.0.0.1 port $web3Proxy",
+    'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test') $true
+  Set-ProxySetting 'com.gesher.web3app' 'direct'
+  PanelProxyRun 'the Gesher device: the control panel''s direct for the package over every app''s proxy, in a fresh process' @(
+    "gesher-net: Gesher's proxy (GESHER_PROXY=direct)",
+    'Web3 net http://web3-proxied.test/net: failed: ') $false
+  Set-ProxySetting 'com.gesher.web3app' $null
+  PanelProxyRun 'the Gesher device: the control panel''s "Same as every app" for the package, in a fresh process' @(
+    "gesher-net: Gesher's proxy (GESHER_PROXY=$panelProxy)",
+    'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test') $true
 } finally {
   $shutdownLog = Join-Path $env:RUNNER_TEMP 'web3-device-shutdown.log'
   $sd = Start-Process "$Web3RuntimeExe" -ArgumentList (@($dvmWeb3) + 'com.gesher.app.Launcher', 'shutdown') `

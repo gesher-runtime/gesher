@@ -65,6 +65,36 @@ public final class SystemServer {
         System.out.flush();
     }
 
+    /**
+     * Whether each package has an enabled launcher activity, for the Control Center
+     * (AppShell's no-launcher-activity record): kept current on installs and enabled-state
+     * changes (PackageManagerService calls the listener outside its monitor),
+     * and brought up to date now from the installed packages, in the background, for packages
+     * installed before the record existed. Returns that background thread, started.
+     */
+    static Thread trackLauncherRecords(PackageManagerService pm) {
+        Object recordsLock = new Object();
+        java.util.function.Consumer<ApkPackage> update = p -> {
+            synchronized (recordsLock) {
+                if (pm.get(p.packageName) == p && !pm.isRemovalPending(p.packageName)) {
+                    com.gesher.app.shell.AppShell.updateLauncherRecordQuietly(p.packageName, p);
+                }
+            }
+        };
+        pm.setDesktopEnabledStateListener(update);
+        Thread records = new Thread(() -> {
+            List<ApkPackage> installed;
+            synchronized (pm) {
+                installed = new ArrayList<>(pm.packages());
+            }
+            // Use the same lock and current generation check as package events.
+            for (ApkPackage p : installed) update.accept(p);
+        }, "launcher-records");
+        records.setDaemon(true);
+        records.start();
+        return records;
+    }
+
     /** Select an explicit APK while the previous record still supplies its system trust policy. */
     static void selectCommandLinePackage(List<ApkPackage> selected, ApkPackage current) {
         for (ApkPackage previous : selected) {
@@ -77,6 +107,41 @@ public final class SystemServer {
         }
         selected.removeIf(p -> p.packageName.equals(current.packageName));
         selected.add(current);
+    }
+
+    /**
+     * The package for the staged microG addon slot {@code name}: the staged addon, or a
+     * valid microG-signed installed update at least as new (both as system addons), or
+     * null when an installed package of that name is verifiably signed by another
+     * signer. Such a package is an ordinary installed app (Google's own Play Store, say):
+     * it keeps its name, data and lack of privileges, the staged addon is not published,
+     * and nothing else of the device changes. (AOSP's scan instead deletes a user app
+     * whose signer differs from a new system package's, with its data; this optional
+     * addon does not justify that.) Any other verification failure, such as changed
+     * content of a microG update, still fails startup: it is not a different signer.
+     */
+    static ApkPackage selectStagedAddon(List<ApkPackage> installed, String name, ApkPackage staged) {
+        List<ApkPackage> updates = new ArrayList<>();
+        for (ApkPackage current : installed) {
+            if (!name.equals(current.packageName)) continue;
+            if (GmsSignatureSpoofing.verifyAddonApk(name, current.apkPath)) {
+                updates.add(current);
+            } else if (current.hasVerifiedSigningIdentity() && !current.hasVerifiedMicrogSigner()) {
+                return null;
+            } else {
+                throw new SecurityException("Untrusted installed microG addon override: " + name);
+            }
+        }
+        ApkPackage selected = staged;
+        for (ApkPackage current : updates) {
+            // Even when selecting the bundled fallback, the old committed
+            // manifest is the authority for any legacy storage migration.
+            current.setSystemAddon(true);
+            // As an updated system app: preserve a valid newer user-installed
+            // release and its privileges, with the staged APK as fallback.
+            if (current.versionCode() >= selected.versionCode()) selected = current;
+        }
+        return selected;
     }
 
     /** Prepare only the final selection, retaining the committed records' migration authority. */
@@ -181,24 +246,15 @@ public final class SystemServer {
             for (String name : MicrogAddons.PACKAGES) {
                 File apk = new File(androidRoot, "priv-app/" + name + "/base.apk");
                 if (!apk.isFile()) continue;
-                ApkPackage p = MicrogAddons.load(apk, name);
-                boolean fromPrivApp = true;
-                for (ApkPackage installed : packages) {
-                    if (!name.equals(installed.packageName)) continue;
-                    if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
-                        throw new SecurityException("Untrusted installed microG addon override: " + name);
-                    }
-                    // Even when selecting the bundled fallback, the old committed
-                    // manifest is the authority for any legacy storage migration.
-                    installed.setSystemAddon(true);
-                    // As an updated system app: preserve a valid newer user-installed
-                    // release and its privileges, with the staged APK as fallback.
-                    if (installed.versionCode() >= p.versionCode()) {
-                        p = installed;
-                        fromPrivApp = false;
-                    }
+                ApkPackage staged = MicrogAddons.load(apk, name);
+                ApkPackage p = selectStagedAddon(packages, name, staged);
+                if (p == null) {
+                    log("microg addon " + name + ": not loaded, the installed " + name
+                            + " has another signer and stays an ordinary app (uninstall it"
+                            + " to use the microG addon)");
+                    continue;
                 }
-                if (fromPrivApp) {
+                if (p == staged) {
                     // As the package manager's scan of a system package: its libraries
                     // on disk for every process that loads its code (Dynamite modules).
                     try {
@@ -331,9 +387,15 @@ public final class SystemServer {
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             // One window for the app's tasks, or one each (ADR 0088).
             env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
-            return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
+            String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk))), env, logFile.getPath(), false);
+                    String.valueOf(targetSdk)));
+            // Experimental (ADR 0090): the package's own AppContainer.
+            if (AppSandbox.enabled()) {
+                return AppSandbox.spawn(command, env, logFile, pkg, packageName,
+                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
+            }
+            return Zygote.spawn(command, env, logFile.getPath(), false);
             }
         });
     }
@@ -404,6 +466,7 @@ public final class SystemServer {
             ControlCenter.clearResults(Device.dataDir());
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
+            trackLauncherRecords(mServices.pm);
             // The launcher waits for this file: the services are registered.
             File ready = Device.readyFile();
             ready.getParentFile().mkdirs();
@@ -527,6 +590,7 @@ public final class SystemServer {
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
                 mServices.atm.flushUsageStats();
+                mServices.am.flushShortcutQuota();
                 java.util.Properties state = Device.read(Device.stateFile());
                 if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
                     Device.stateFile().delete();
