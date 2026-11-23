@@ -69,6 +69,26 @@ static int child_main(int argc, char** argv) {
     const char* marker = getenv("SPAWN_MARKER");
     okay = strcmp(argv[0], child_name) == 0 && path && strcmp(path, "/missing-spawn-path") == 0 &&
            marker && strcmp(marker, "exact replacement environment") == 0;
+  } else if (strcmp(argv[1], "--list-args") == 0) {
+    // What execl/execlp/execle passed: argv[0] and the list up to its null.
+    okay = argc == 4 && strcmp(argv[0], child_name) == 0 && strcmp(argv[2], "one") == 0 &&
+           strcmp(argv[3], "two words \xd7\x92") == 0;
+  } else if (strcmp(argv[1], "--execl") == 0 && argc == 3) {
+    execl(argv[2], child_name, "--list-args", "one", "two words \xd7\x92", (char*)NULL);
+    perror("execl");
+  } else if (strcmp(argv[1], "--execlp") == 0 && argc == 4) {
+    if (setenv("PATH", argv[3], 1) == 0)
+      execlp(argv[2], child_name, "--list-args", "one", "two words \xd7\x92", (char*)NULL);
+    perror("execlp");
+  } else if (strcmp(argv[1], "--execle") == 0 && argc == 3) {
+    char* env[] = {"EXECLE_MARKER=list environment", NULL};
+    if (setenv("EXECLE_INHERITED", "must not reach the program", 1) == 0)
+      execle(argv[2], child_name, "--execle-env", (char*)NULL, env);
+    perror("execle");
+  } else if (strcmp(argv[1], "--execle-env") == 0) {
+    const char* marker = getenv("EXECLE_MARKER");
+    okay = argc == 2 && strcmp(argv[0], child_name) == 0 && marker &&
+           strcmp(marker, "list environment") == 0 && getenv("EXECLE_INHERITED") == NULL;
   }
   if (!okay) fprintf(stderr, "FAIL  exec4 spawn child: %s (pid%d)\n", argv[1], (int)getpid());
   return okay ? 42 : 41;
@@ -229,6 +249,18 @@ int main(int argc, char** argv) {
   run_child(base, env_args, replacement, NULL, 1, 42,
             "spawnp searches caller PATH while passing exact argv and replacement envp");
   if (saved_path) { setenv("PATH", saved_path, 1); free(saved_path); } else unsetenv("PATH");
+
+  // execl, execlp and execle: a child replaces itself with this program through
+  // the list form, and the program it becomes checks what the list carried.
+  char* via_execl[] = {(char*)child_name, "--execl", argv[1], NULL};
+  run_child(argv[1], via_execl, environ, NULL, 0, 42, "execl passes its variadic argv to the program");
+  char* via_execlp[] = {(char*)child_name, "--execlp", base, self_dir, NULL};
+  run_child(argv[1], via_execlp, environ, NULL, 0, 42, "execlp searches PATH and passes its variadic argv");
+  char* via_execle[] = {(char*)child_name, "--execle", argv[1], NULL};
+  run_child(argv[1], via_execle, environ, NULL, 0, 42, "execle passes the envp after the argv null, not environ");
+  errno = 0;
+  int missing = execl("/missing-execl-program", "missing", "--plain", (char*)NULL);
+  check(missing == -1 && errno == ENOENT, "execl of a missing program returns -1 with ENOENT");
   check(getcwd(after, sizeof(after)) && strcmp(before, after) == 0 &&
             fcntl(parent_fd, F_GETFD) == parent_flags,
         "every child preserves the parent directory and descriptor flags");

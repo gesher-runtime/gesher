@@ -588,7 +588,54 @@ void BIONIC_SYSV Closefrom(int lowest) {
   CloseRange(static_cast<unsigned>(lowest), ~0u, 0);
 }
 
+// The list forms take argv as variadic pointers up to a null one; execle's
+// envp follows that null (bionic's execl.cpp). Each va_list form receives the
+// System V va_list a trampoline builds, or the tagged one the arm64 translator
+// passes for a guest's call (shim_internal.h: NextGp reads either).
+std::vector<char*> ListArgv(const char* arg0, SysvVaList* ap) {
+  std::vector<char*> argv;
+  argv.push_back(const_cast<char*>(arg0));
+  if (arg0 != nullptr) {
+    for (;;) {
+      char* next = reinterpret_cast<char*>(NextGp(ap));
+      argv.push_back(next);
+      if (next == nullptr) break;
+    }
+  }
+  return argv;
+}
+
 }  // namespace
+
+extern "C" {
+
+int BIONIC_SYSV gesher_bionic_vexecl(const char* path, const char* arg0, SysvVaList* ap) {
+  std::vector<char*> argv = ListArgv(arg0, ap);
+  return DoExec(path, argv.data(), nullptr, false);
+}
+int BIONIC_SYSV gesher_bionic_vexeclp(const char* file, const char* arg0, SysvVaList* ap) {
+  std::vector<char*> argv = ListArgv(arg0, ap);
+  return DoExec(file, argv.data(), nullptr, true);
+}
+int BIONIC_SYSV gesher_bionic_vexecle(const char* path, const char* arg0, SysvVaList* ap) {
+  std::vector<char*> argv = ListArgv(arg0, ap);
+  auto envp = reinterpret_cast<char* const*>(NextGp(ap));
+  // A null envp is an empty environment for execve, not the caller's.
+  static char* const kEmpty[] = {nullptr};
+  return DoExec(path, argv.data(), envp != nullptr ? envp : kEmpty, false);
+}
+void gesher_bionic_execl();
+void gesher_bionic_execlp();
+void gesher_bionic_execle();
+
+}  // extern "C"
+
+// The trampolines (GESHER_VA_TRAMPOLINE, shim_internal.h): two fixed
+// arguments (path or file, arg0), the va_list in %rdx.
+asm(".text\n"
+    GESHER_VA_TRAMPOLINE("gesher_bionic_execl", "gesher_bionic_vexecl", "16", "%rdx")
+    GESHER_VA_TRAMPOLINE("gesher_bionic_execlp", "gesher_bionic_vexeclp", "16", "%rdx")
+    GESHER_VA_TRAMPOLINE("gesher_bionic_execle", "gesher_bionic_vexecle", "16", "%rdx"));
 
 int KillOtherProcess(int pid, int sig) {
   // A child that already exited is a zombie: it exists (for any signal, a no-op)
@@ -619,6 +666,13 @@ void RegisterProcess(SymbolTable& t) {
   E("execv", Execv);
   E("execvp", Execvp);
   E("execvpe", Execvpe);
+  E("execl", gesher_bionic_execl);
+  E("execlp", gesher_bionic_execlp);
+  E("execle", gesher_bionic_execle);
+  // The va_list forms, for the arm64 translator (guest_libc.cc).
+  E("__gesher_arm64_vexecl", gesher_bionic_vexecl);
+  E("__gesher_arm64_vexeclp", gesher_bionic_vexeclp);
+  E("__gesher_arm64_vexecle", gesher_bionic_vexecle);
   E("waitpid", Waitpid);
   E("wait", Wait);
   E("wait4", Wait4);
