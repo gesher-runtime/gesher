@@ -345,12 +345,15 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private boolean mAttached;
     private final long[] mPlaced = new long[10];
     private boolean mPlacedOnce;
-    private final int[] mLocation = new int[2];
-    private final Rect mClip = new Rect();
-    private final Rect mHoleRect = new Rect();
-    private int[] mHoles = new int[0];
-    private int mHoleCount;
-    private int[] mPlacedHoles = new int[0];
+    private static final int[] NO_SHAPES = new int[0];
+    private static final int MAX_RETAINED_NESTED_SHAPE_INTS = 4096;
+    private int[] mPlacedHoles = NO_SHAPES;
+    // Outline providers are application callbacks: even one Looper may have nested
+    // collections. Cache the ordinary pass and one nested pass; deeper reentry owns
+    // temporary scratch. Do not retain a large exceptional nested polygon buffer.
+    private final BoundsScratch[] mBoundsScratch = new BoundsScratch[2];
+    private int mBoundsDepth;
+    private long mBoundsCompletion;
     private volatile CountDownLatch mParked;
 
     private final ViewTreeObserver.OnPreDrawListener mPreDraw = () -> {
@@ -1438,45 +1441,100 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     /** Moves the WebView2 window to the view's place in its Win32 window (if it moved). */
     private void updateBounds() {
-        if (mHost == null || mDestroyed || !mAttached) return;
-        long hwnd = GesherWebView.hwndOf(mView);
-        mView.getLocationInWindow(mLocation);
-        int w = mView.getWidth();
-        int h = mView.getHeight();
-        boolean visible = hwnd != 0 && mView.isShown()
-                && mView.getWindowVisibility() == View.VISIBLE
-                && mView.getGlobalVisibleRect(mClip);
-        if (!visible) mClip.setEmpty();
-        long[] now = {hwnd, mLocation[0], mLocation[1], w, h, mClip.left, mClip.top,
-                mClip.width(), mClip.height(), visible ? 1 : 0};
-        mHoleCount = 0;
-        int[] holes = visible ? findHoles() : new int[0];
-        if (mPlacedOnce && Arrays.equals(now, mPlaced) && Arrays.equals(holes, mPlacedHoles)) {
-            return;
-        }
-        System.arraycopy(now, 0, mPlaced, 0, now.length);
-        if (!Arrays.equals(holes, mPlacedHoles)) {
-            StringBuilder what = new StringBuilder();
-            what.append(mHoleCount).append(" view(s) over the WebView cut out of its window");
-            for (int i = 0; i + 6 < holes.length; i += 7 + 2 * holes[i + 6]) {
-                what.append(i == 0 ? ": " : "; ").append(shapeName(holes[i])).append(' ')
-                        .append(holes[i + 1]).append(',').append(holes[i + 2]).append('-')
-                        .append(holes[i + 3]).append(',').append(holes[i + 4]);
+        WebView2Host host = mHost;
+        if (host == null || mDestroyed || !mAttached) return;
+        int depth = mBoundsDepth++;
+        long completion = mBoundsCompletion;
+        try {
+            BoundsScratch bounds = depth < mBoundsScratch.length ? mBoundsScratch[depth] : null;
+            if (bounds == null) {
+                bounds = new BoundsScratch();
+                if (depth < mBoundsScratch.length) mBoundsScratch[depth] = bounds;
             }
-            String line = what.toString();
-            if (!line.equals(mPlacedHolesLog)) GesherWebView.log(line);
-            mPlacedHolesLog = line;
+            long hwnd = GesherWebView.hwndOf(mView);
+            mView.getLocationInWindow(bounds.location);
+            int x = bounds.location[0], y = bounds.location[1];
+            int w = mView.getWidth(), h = mView.getHeight();
+            Rect clip = bounds.clip;
+            boolean visible = hwnd != 0 && mView.isShown()
+                    && mView.getWindowVisibility() == View.VISIBLE
+                    && mView.getGlobalVisibleRect(clip);
+            if (!visible) clip.setEmpty();
+            bounds.holeCount = 0;
+            bounds.shapeLength = 0;
+            // Keep the complete scan: Z, alpha, outline, clipping and animation may
+            // change without layout/scroll notifications, including inside callbacks.
+            if (visible) findHoles(bounds);
+            // Only a completed nested pass supersedes this collection. A failed
+            // nested getter can be recovered by the outline provider or addShape's
+            // fallback; it must not suppress the still-valid outer result. Keep an
+            // earlier deeper completion even if its caller subsequently fails.
+            if (completion != mBoundsCompletion || mHost != host || mDestroyed || !mAttached) return;
+            int clipWidth = clip.width(), clipHeight = clip.height();
+            boolean sameHoles = sameShapes(bounds.holes, bounds.shapeLength, mPlacedHoles);
+            if (mPlacedOnce && mPlaced[0] == hwnd && mPlaced[1] == x && mPlaced[2] == y
+                    && mPlaced[3] == w && mPlaced[4] == h && mPlaced[5] == clip.left
+                    && mPlaced[6] == clip.top && mPlaced[7] == clipWidth
+                    && mPlaced[8] == clipHeight && mPlaced[9] == (visible ? 1 : 0)
+                    && sameHoles) {
+                // An unchanged result is a valid completed collection too.
+                mBoundsCompletion++;
+                return;
+            }
+            int[] holes = mPlacedHoles;
+            if (!sameHoles) {
+                // Only a changed shape set needs an exact-length JNI snapshot. Keep
+                // the previous snapshot for a placement-only change and stable frames.
+                holes = bounds.shapeLength == 0 ? NO_SHAPES
+                        : Arrays.copyOf(bounds.holes, bounds.shapeLength);
+                StringBuilder what = new StringBuilder();
+                what.append(bounds.holeCount).append(" view(s) over the WebView cut out of its window");
+                for (int i = 0; i + 6 < holes.length; i += 7 + 2 * holes[i + 6]) {
+                    what.append(i == 0 ? ": " : "; ").append(shapeName(holes[i])).append(' ')
+                            .append(holes[i + 1]).append(',').append(holes[i + 2]).append('-')
+                            .append(holes[i + 3]).append(',').append(holes[i + 4]);
+                }
+                String line = what.toString();
+                if (!line.equals(mPlacedHolesLog)) GesherWebView.log(line);
+                mPlacedHolesLog = line;
+            }
+            mPlaced[0] = hwnd;
+            mPlaced[1] = x;
+            mPlaced[2] = y;
+            mPlaced[3] = w;
+            mPlaced[4] = h;
+            mPlaced[5] = clip.left;
+            mPlaced[6] = clip.top;
+            mPlaced[7] = clipWidth;
+            mPlaced[8] = clipHeight;
+            mPlaced[9] = visible ? 1 : 0;
+            mPlacedHoles = holes;
+            mPlacedOnce = true;
+            // nSetBounds copies the records before returning; neither native work nor
+            // later Java collections retain mutable collection scratch.
+            host.setBounds(hwnd, x, y, w, h, clip.left, clip.top, clipWidth, clipHeight,
+                    visible, holes.length > 0 ? holes : null);
+            mBoundsCompletion++;
+            if (GesherWebView.DEBUG) {
+                GesherWebView.log("bounds: hwnd 0x" + Long.toHexString(hwnd) + " view "
+                        + x + "," + y + " " + w + "x" + h + ", visible "
+                        + (visible ? clip.toShortString() : "no"));
+            }
+        } finally {
+            if (depth > 0 && depth < mBoundsScratch.length && mBoundsScratch[depth] != null
+                    && mBoundsScratch[depth].holes.length > MAX_RETAINED_NESTED_SHAPE_INTS) {
+                mBoundsScratch[depth] = null;
+            }
+            mBoundsDepth--;
         }
-        mPlacedHoleCount = mHoleCount;
-        mPlacedHoles = holes;
-        mPlacedOnce = true;
-        mHost.setBounds(hwnd, mLocation[0], mLocation[1], w, h, mClip.left, mClip.top,
-                mClip.width(), mClip.height(), visible, holes.length > 0 ? holes : null);
-        if (GesherWebView.DEBUG) {
-            GesherWebView.log("bounds: hwnd 0x" + Long.toHexString(hwnd) + " view "
-                    + mLocation[0] + "," + mLocation[1] + " " + w + "x" + h + ", visible "
-                    + (visible ? mClip.toShortString() : "no"));
+    }
+
+    private static boolean sameShapes(int[] scratch, int length, int[] placed) {
+        if (length != placed.length) return false;
+        for (int i = 0; i < length; i++) {
+            if (scratch[i] != placed[i]) return false;
         }
+        return true;
     }
 
     /**
@@ -1485,13 +1543,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
      * and the app's pixels show there. Siblings after the WebView's branch (or with a higher
      * Z) in each ancestor, down to views with a background or without children.
      */
-    private int[] findHoles() {
-        mHoleCount = 0;
-        mShapeLength = 0;
+    private void findHoles(BoundsScratch bounds) {
         // The WebView's own outline and its ancestors' when they clip to it (rounded
         // corners): the WebView2 window keeps only that shape.
         for (View v = mView; v != null; ) {
-            if (v.getClipToOutline()) addShape(v, true);
+            if (v.getClipToOutline()) addShape(v, true, bounds);
             android.view.ViewParent p = v.getParent();
             v = p instanceof View ? (View) p : null;
         }
@@ -1505,28 +1561,26 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 View v = g.getChildAt(i);
                 if (v == child) continue;
                 float vz = v.getZ();
-                if (vz > z || (i > index && vz >= z)) addHoles(v, 0);
+                if (vz > z || (i > index && vz >= z)) addHoles(v, 0, bounds);
             }
             child = g;
             parent = g.getParent();
         }
-        return Arrays.copyOf(mHoles, mShapeLength);
     }
 
-    private void addHoles(View v, int depth) {
-        if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0f || mHoleCount >= 32) return;
-        if (!v.getGlobalVisibleRect(mHoleRect) || !Rect.intersects(mHoleRect, mClip)) return;
+    private void addHoles(View v, int depth, BoundsScratch bounds) {
+        if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0f || bounds.holeCount >= 32) return;
+        if (!v.getGlobalVisibleRect(bounds.holeRect) || !Rect.intersects(bounds.holeRect, bounds.clip)) return;
         if (v instanceof ViewGroup && v.getBackground() == null && depth < 16
                 && ((ViewGroup) v).getChildCount() > 0) {
             ViewGroup g = (ViewGroup) v;
-            for (int i = 0; i < g.getChildCount(); i++) addHoles(g.getChildAt(i), depth + 1);
+            for (int i = 0; i < g.getChildCount(); i++) addHoles(g.getChildAt(i), depth + 1, bounds);
             return;
         }
-        addShape(v, false);
-        mHoleCount++;
+        addShape(v, false, bounds);
+        bounds.holeCount++;
     }
 
-    private int mPlacedHoleCount;
     private String mPlacedHolesLog = "";
 
     private static String shapeName(int kind) {
@@ -1541,19 +1595,29 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         }
     }
 
-    private final android.graphics.Outline mOutline = new android.graphics.Outline();
-    private final Rect mOutlineRect = new Rect();
-    private int mShapeLength;
+    private static final class BoundsScratch {
+        final int[] location = new int[2];
+        final int[] shapeLocation = new int[2];
+        final Rect clip = new Rect();
+        final Rect holeRect = new Rect();
+        final android.graphics.Outline outline = new android.graphics.Outline();
+        final Rect outlineRect = new Rect();
+        final android.graphics.RectF pathBounds = new android.graphics.RectF();
+        int[] holes = NO_SHAPES;
+        int holeCount;
+        int shapeLength;
+    }
 
     /**
      * A view's shape in window coordinates (WebView2Host.setBounds' records): its outline
      * (ViewOutlineProvider: a round button is an oval or a round rect, a path is a polygon),
      * else its visible rectangle. Scale and rotation of the view are not applied.
      */
-    private void addShape(View v, boolean clip) {
-        int[] at = new int[2];
+    private void addShape(View v, boolean clip, BoundsScratch bounds) {
+        int[] at = bounds.shapeLocation;
         v.getLocationInWindow(at);
-        mOutline.setEmpty();
+        android.graphics.Outline outline = bounds.outline;
+        outline.setEmpty();
         android.view.ViewOutlineProvider provider = v.getOutlineProvider();
         try {
             if (provider != null && v.getWidth() > 0 && v.getHeight() > 0) {
@@ -1561,18 +1625,18 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 // come after this (pre-draw): as View.drawBackground sets them.
                 android.graphics.drawable.Drawable bg = v.getBackground();
                 if (bg != null && bg.getBounds().isEmpty()) bg.setBounds(0, 0, v.getWidth(), v.getHeight());
-                provider.getOutline(v, mOutline);
+                provider.getOutline(v, outline);
             }
         } catch (RuntimeException e) {
-            mOutline.setEmpty();
+            outline.setEmpty();
         }
         int kind = clip ? -1 : WebView2Host.HOLE_RECT;
         int radius = 0;
         float[] points = null;
-        Rect r = mOutlineRect;
-        if (!mOutline.isEmpty() && mOutline.getRect(r)) {
+        Rect r = bounds.outlineRect;
+        if (!outline.isEmpty() && outline.getRect(r)) {
             r.offset(at[0], at[1]);
-            float rad = mOutline.getRadius();
+            float rad = outline.getRadius();
             radius = Math.max(0, Math.round(rad));
             if (radius > 0) {
                 boolean oval = radius * 2 >= Math.min(r.width(), r.height());
@@ -1586,17 +1650,17 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                     radius = r.width() / 2;
                 }
             }
-        } else if (!mOutline.isEmpty() && mOutline.mMode == android.graphics.Outline.MODE_PATH
-                && mOutline.mPath != null) {
+        } else if (!outline.isEmpty() && outline.mMode == android.graphics.Outline.MODE_PATH
+                && outline.mPath != null) {
             try {
-                points = mOutline.mPath.approximate(0.5f);
+                points = outline.mPath.approximate(0.5f);
             } catch (RuntimeException | UnsatisfiedLinkError e) {
                 points = null;
             }
-            android.graphics.RectF bounds = new android.graphics.RectF();
-            mOutline.mPath.computeBounds(bounds, true);
-            r.set((int) Math.floor(bounds.left) + at[0], (int) Math.floor(bounds.top) + at[1],
-                    (int) Math.ceil(bounds.right) + at[0], (int) Math.ceil(bounds.bottom) + at[1]);
+            android.graphics.RectF pathBounds = bounds.pathBounds;
+            outline.mPath.computeBounds(pathBounds, true);
+            r.set((int) Math.floor(pathBounds.left) + at[0], (int) Math.floor(pathBounds.top) + at[1],
+                    (int) Math.ceil(pathBounds.right) + at[0], (int) Math.ceil(pathBounds.bottom) + at[1]);
             if (points != null && points.length >= 9) {
                 kind = clip ? WebView2Host.CLIP_POLYGON : WebView2Host.HOLE_POLYGON;
             } else {
@@ -1604,29 +1668,32 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             }
         } else {
             if (clip) return;  // nothing to keep but the rectangle
-            r.set(mHoleRect);
+            r.set(bounds.holeRect);
         }
         if (kind == -1) return;  // a clip to a plain rectangle: the clip rect does it
         if (kind == WebView2Host.HOLE_RECT) {
-            r.intersect(mHoleRect);
-            r.intersect(mClip);
+            r.intersect(bounds.holeRect);
+            r.intersect(bounds.clip);
         }
         int n = points != null ? points.length / 3 : 0;
-        int need = mShapeLength + 7 + 2 * n;
-        if (mHoles.length < need) mHoles = Arrays.copyOf(mHoles, Math.max(need, mHoles.length * 2));
-        int i = mShapeLength;
-        mHoles[i++] = kind;
-        mHoles[i++] = r.left;
-        mHoles[i++] = r.top;
-        mHoles[i++] = r.right;
-        mHoles[i++] = r.bottom;
-        mHoles[i++] = radius;
-        mHoles[i++] = n;
-        for (int k = 0; k < n; k++) {
-            mHoles[i++] = Math.round(points[k * 3 + 1]) + at[0];
-            mHoles[i++] = Math.round(points[k * 3 + 2]) + at[1];
+        int need = bounds.shapeLength + 7 + 2 * n;
+        if (bounds.holes.length < need) {
+            bounds.holes = Arrays.copyOf(bounds.holes, Math.max(need, bounds.holes.length * 2));
         }
-        mShapeLength = i;
+        int[] holes = bounds.holes;
+        int i = bounds.shapeLength;
+        holes[i++] = kind;
+        holes[i++] = r.left;
+        holes[i++] = r.top;
+        holes[i++] = r.right;
+        holes[i++] = r.bottom;
+        holes[i++] = radius;
+        holes[i++] = n;
+        for (int k = 0; k < n; k++) {
+            holes[i++] = Math.round(points[k * 3 + 1]) + at[0];
+            holes[i++] = Math.round(points[k * 3 + 2]) + at[1];
+        }
+        bounds.shapeLength = i;
     }
 
     // ---- ViewDelegate ----

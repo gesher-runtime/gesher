@@ -4,6 +4,7 @@
 #include <gesher/system_properties.h>
 #include <windows.h>
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
@@ -101,6 +102,22 @@ Cache& Cached() {
   return *cache;
 }
 std::shared_ptr<Destination> CurrentDestination(std::string* error) {
+  // Common absolute destinations need no temporary string after warmup.
+  // Relative paths and long environment values retain FullPath's semantics.
+  wchar_t configured[1024];
+  DWORD length = GetEnvironmentVariableW(L"GESHER_LOG_FILE", configured, 1024);
+  if (length && length < 1024) {
+    Cache& cache = Cached();
+    std::shared_ptr<Destination> found;
+    AcquireSRWLockShared(&cache.lock);
+    if (cache.destination && cache.variable.size() == length && Absolute(cache.variable) &&
+        std::equal(configured, configured + length, cache.variable.begin(),
+                   [](wchar_t a, wchar_t b) { return (a == L'/' ? L'\\' : a) == b; })) {
+      found = cache.destination;
+    }
+    ReleaseSRWLockShared(&cache.lock);
+    if (found) return found;
+  }
   std::wstring variable;
   if (!LogVariable(&variable)) {
     if (error) *error = "GESHER_LOG_FILE is unset or invalid";
@@ -160,6 +177,68 @@ int PropertyPriority(const std::string& persistent, const std::string& transient
   // Android accepts the first priority letter, case-insensitively.
   return Priority(value.front());
 }
+// Fixed process-wide storage, never one retained buffer per thread/tag. Longer
+// explicit tags use the uncached lookup and retain the same property semantics.
+constexpr size_t kPrioritySlots = 64, kCachedTagLength = 247;
+struct PriorityEntry {
+  properties::Revision revision;
+  size_t length = 0;
+  int priority = -1;
+  std::array<char, kCachedTagLength> tag{};
+};
+struct PriorityCache {
+  SRWLOCK lock = SRWLOCK_INIT;
+  std::array<PriorityEntry, kPrioritySlots> entries;
+};
+static_assert(sizeof(PriorityCache) <= 20 * 1024);
+PriorityCache& Priorities() {
+  // Like the destination, the bounded cache remains usable in destructors.
+  static auto* cache = new PriorityCache;
+  return *cache;
+}
+int TagPriority(const char* tag, size_t length) {
+  if (!tag) length = 0;
+  properties::Revision revision = properties::CurrentRevision();
+  bool cacheable = revision.area && length <= kCachedTagLength;
+  size_t slot = 0;
+  if (cacheable) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (size_t i = 0; i < length; ++i) hash = (hash ^ static_cast<unsigned char>(tag[i])) * 1099511628211ULL;
+    slot = hash % kPrioritySlots;
+    PriorityCache& cache = Priorities();
+    AcquireSRWLockShared(&cache.lock);
+    const PriorityEntry& entry = cache.entries[slot];
+    bool hit = entry.revision == revision && entry.length == length &&
+               (!length || std::memcmp(entry.tag.data(), tag, length) == 0);
+    int priority = entry.priority;
+    ReleaseSRWLockShared(&cache.lock);
+    if (hit) return priority;
+  }
+  std::string names[4] = {"persist.log.tag", "log.tag"}, values[4];
+  size_t count = 2;
+  if (length) {
+    std::string name(tag, length);
+    names[2] = "persist.log.tag." + name;
+    names[3] = "log.tag." + name;
+    count = 4;
+  }
+  // CurrentRevision and GetAll may straddle a writer or device change. Cache
+  // only the revision returned with the values, never the earlier observation.
+  properties::GetAll(names, values, count, &revision);
+  int property = count == 4 ? PropertyPriority(values[2], values[3]) : -1;
+  if (property < 0) property = PropertyPriority(values[0], values[1]);
+  if (cacheable && revision.area) {
+    PriorityCache& cache = Priorities();
+    AcquireSRWLockExclusive(&cache.lock);
+    PriorityEntry& entry = cache.entries[slot];
+    entry.revision = revision;
+    entry.length = length;
+    entry.priority = property;
+    if (length) std::memcpy(entry.tag.data(), tag, length);
+    ReleaseSRWLockExclusive(&cache.lock);
+  }
+  return property;
+}
 }  // namespace
 
 int Priority(char letter) {
@@ -175,18 +254,7 @@ char PriorityLetter(int priority) {
   return priority >= 0 && priority <= 8 ? letters[priority] : '?';
 }
 bool IsLoggable(int priority, const char* tag, size_t length, int fallback, int minimum) {
-  // One property lookup per log line, for the tag's and the global settings.
-  std::string names[4] = {"persist.log.tag", "log.tag"}, values[4];
-  size_t count = 2;
-  if (tag && length) {
-    std::string name(tag, length);
-    names[2] = "persist.log.tag." + name;
-    names[3] = "log.tag." + name;
-    count = 4;
-  }
-  properties::GetAll(names, values, count);
-  int property = count == 4 ? PropertyPriority(values[2], values[3]) : -1;
-  if (property < 0) property = PropertyPriority(values[0], values[1]);
+  int property = TagPriority(tag, length);
   constexpr int kAndroidLogDefault = 1;  // android_LogPriority's default sentinel
   int threshold = property >= 0 ? property : minimum != kAndroidLogDefault ? minimum : fallback;
   if (property >= 0 && minimum != kAndroidLogDefault) threshold = std::min(property, minimum);
@@ -199,11 +267,11 @@ void Record(int buffer, int priority, const char* tag, const char* text) {
   Header header{kMagic, static_cast<uint32_t>(sizeof(Header) + tag_size + text_size), 0,
                 GetCurrentProcessId(), GetCurrentThreadId(), priority, buffer,
                 static_cast<uint32_t>(tag_size), static_cast<uint32_t>(text_size)};
-  std::string data;
-  data.reserve(header.size);
-  data.append(reinterpret_cast<const char*>(&header), sizeof(header));
-  if (tag_size) data.append(tag, tag_size);
-  if (text_size) data.append(text, text_size);
+  // The existing wire format bounds each field to 4096 bytes. Keep the one
+  // atomic append and rollback path without a heap allocation per record.
+  std::array<char, sizeof(Header) + 2 * 4096> data;
+  if (tag_size) std::memcpy(data.data() + sizeof(header), tag, tag_size);
+  if (text_size) std::memcpy(data.data() + sizeof(header) + tag_size, text, text_size);
   Lock lock(destination->mutex.value);
   if (!lock.held) return;
   // Declared after Lock: close the data handle before releasing the mutex.
@@ -211,7 +279,7 @@ void Record(int buffer, int priority, const char* tag, const char* text) {
   if (!OpenFile(*destination, &file, nullptr)) return;
   LARGE_INTEGER size{};
   if (!GetFileSizeEx(file.value, &size) || size.QuadPart < 0) return;
-  if (size.QuadPart > kLimit - static_cast<int64_t>(data.size())) {
+  if (size.QuadPart > kLimit - static_cast<int64_t>(header.size)) {
     if (!Truncate(file.value)) return;
     size.QuadPart = 0;
   }
@@ -224,8 +292,8 @@ void Record(int buffer, int priority, const char* tag, const char* text) {
   at.Offset = static_cast<DWORD>(size.QuadPart);
   at.OffsetHigh = static_cast<DWORD>(static_cast<uint64_t>(size.QuadPart) >> 32);
   DWORD written = 0;
-  if (!WriteFile(file.value, data.data(), static_cast<DWORD>(data.size()), &written, &at) ||
-      written != data.size()) {
+  if (!WriteFile(file.value, data.data(), header.size, &written, &at) ||
+      written != header.size) {
     // Best effort: roll back a partial append so later reads keep valid records.
     Resize(file.value, size.QuadPart);
   }
