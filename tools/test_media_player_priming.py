@@ -2,7 +2,8 @@
 """Exercise production Playback and real Track with a controlled decoder schedule.
 
 The full Playback class and all Track state/ring/resampler methods are compiled
-unchanged apart from private visibility and observable condition-variable waits.
+with explicit visibility and wait-observation seams. The real clocked sink's
+backlog loop uses a controlled clock; notification cases withhold wait timeouts.
 Scripted source/decoder/renderer, event delivery and engine attachment boundaries
 make startup, seeking and EOF interleavings deterministic. This is a host logic
 regression, not a substitute for the Windows codec and captured-output CI gates.
@@ -60,6 +61,11 @@ def generate(source_ref: str | None, control: str | None) -> str:
             raise ValueError("feeder room-wait boundary changed")
         playback = playback.replace(
             wait, "player_fixture::ObservedRoomWait(*full, room_frames, player_fixture::FeedSafetyMs(%s))" % production_ms)
+    sink = read("compat/media/audio/sink_file.cc", source_ref)
+    clocked = section(sink, "constexpr uint32_t kRate", "class NullSink :")
+    # Only the sink's clock transport is controlled; Tick's backlog/chunk logic
+    # and all Track/Playback bodies execute unchanged.
+    clocked = clocked.replace("gesher::MonotonicNanos()", "player_fixture::SinkNow()")
     # Explicit compiled mutation controls isolate the additional A/V and EOF
     # guards. The old-source control needs none of the new fields or helpers.
     if control:
@@ -76,6 +82,8 @@ def generate(source_ref: str | None, control: str | None) -> str:
         "@AUDIO_IMPLEMENTATION@": audio,
         "@PLAYER_EVENTS@": section(header, "constexpr int kMediaErrorIo", "\nclass Playback;\n"),
         "@PLAYBACK@": playback,
+        "@SINK_HEADER@": read("compat/media/audio/sink.h", source_ref).replace("#pragma once", ""),
+        "@CLOCKED_SINK@": clocked,
     }.items():
         if template.count(marker) != 1:
             raise ValueError("template marker changed: " + marker)

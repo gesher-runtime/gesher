@@ -168,6 +168,44 @@ The result is unavailable through these tested routes on these runtimes; no
 Fetch coverage or worker capability was established. This is not a claim that
 every possible browser-session route is impossible.
 
+### Cumulative media feeder causal regression
+
+The Windows 2022 media job `137899912583` in run `45230894563` captured a real
+mid-tone dropout on R2 `e909052a`: 1,967 stereo frames of digital silence at
+48 kHz, from 10.347750 to 10.388729 seconds. The AAC tone's local pitch on both
+sides remains approximately 587 Hz; the unchanged detector reports 559 Hz
+because its interval includes the gap. The exact CI merge `35b06261` has the
+same media sources as that R2 head. This is not a reason to relax the detector
+or its tolerances.
+
+The cumulative merge `9ff31dfb` carries reviewed R1 `b7b128d2`, including its
+room-notified `WritePcm`, seek flush and pre-join Track release. This follow-up
+adds only a causal regression and its documentation: the complete production
+`player.cc` remains byte-for-byte R1. The full R1 tests, clock/wait observations,
+timeout override and measurement mode are retained. The new cases share those
+existing boundaries and compile the real clocked sink's backlog loop with an
+explicit clock. The old timer is held by a predicate, so spurious notifications
+cannot bypass the controlled delay.
+
+The combined player entry passes 235 checks under ASan/UBSan. With timer expiry
+withheld, all three sink pieces refill, no underrun or interior silent run
+occurs, and seek/shutdown wake the feeder without its safety timeout. A separate
+scratch-generated control restores only the exact `e909052a` `WritePcm` body;
+the rest of R1 remains intact. It fails exactly seven expected assertions: the
+existing stalled-feeder wake-count check and six new refill/silence checks.
+It refills zero of three pieces, with one underrun and 1,981 interior zero
+frames. A held-decoder case retains one underrun and 1,737 interior zero frames
+with both versions. The unchanged captured-tone analyzer and tolerances pass
+in both runs. No production source, buffer size, capture timing or media
+acceptance threshold is changed by this regression addition.
+
+This demonstrates the missed-room-notification defect addressed by R1. The
+uninstrumented Windows recording cannot distinguish that mechanism from a
+decoder stall, which the correction does not eliminate. **Windows acceptance
+of the cumulative source remains pending**; the host result does not establish
+that the observed Windows dropout is fully resolved. LeakSanitizer is disabled
+locally for the tracing limitation described below; ASan/UBSan stay enabled.
+
 ## Limits
 
 The build uses actual prebuilt Android framework/core classes. The local AOSP

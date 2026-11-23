@@ -2,11 +2,18 @@
 // reader/decoder, renderer, event-delivery and mixer attachment boundaries.
 // No Windows codec, WASAPI endpoint or JNI VM runs in this host fixture.
 @AUDIO_IMPLEMENTATION@
+@SINK_HEADER@
 
 #include <cmath>
 #include <map>
 #include <limits>
 #include <sys/resource.h>
+
+namespace player_fixture {
+std::atomic<bool> withhold_feed_timer{false};
+std::atomic<int64_t> sink_now_ns{0};
+inline int64_t SinkNow() { return sink_now_ns.load(); }
+}
 
 class PlayerConditionVariable {
  public:
@@ -30,6 +37,12 @@ class PlayerConditionVariable {
       std::lock_guard<std::mutex> guard(mu_);
       timeouts_us_[std::this_thread::get_id()] =
           std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+    }
+    if (player_fixture::withhold_feed_timer &&
+        std::chrono::duration_cast<std::chrono::microseconds>(duration).count() == 5000) {
+      // A spurious notification cannot stand in for the withheld timer expiry.
+      cv_.wait(lock, [] { return !player_fixture::withhold_feed_timer.load(); });
+      return std::cv_status::no_timeout;
     }
     return cv_.wait_for(lock, duration);
   }
@@ -316,6 +329,10 @@ std::shared_ptr<Track> CreateTrack(const TrackParams& params, std::string*) {
 void RaiseAudioThreadPriority(bool) {}
 
 @PLAYBACK@
+void Sink::WaitForRefill(void*) {}  // Windows wait transport; Tick is driven explicitly.
+namespace clocked_fixture {
+@CLOCKED_SINK@
+}
 }  // namespace gesher::media
 
 namespace player_test {
@@ -694,11 +711,12 @@ void SeekAtAdmissionBoundaries() {
     plan->packet = plan->frames;
     if (phase == 1) plan->eos_gate.Arm();
     Fixture f(plan);
+    const auto id = f.playback->thread_.get_id();
+    const unsigned waits = f.Waits(id);
     auto track = f.Start();
     if (phase == 0) {
-      const auto id = f.playback->thread_.get_id();
       if (!Wait([&] { return track->Queued() == track->buffer_size_frames() &&
-                            f.Waits(id) != 0; },
+                            f.Waits(id) > waits; },
                 "seek interrupts a packet awaiting full-ring space")) continue;
     } else if (phase == 1) {
       if (!Wait([&] { return plan->eos_gate.Reached(); }, "seek is posted before partial EOS admission")) continue;
@@ -971,6 +989,126 @@ void AudioFeedWaitsForRoom() {
   }
 }
 
+// The real clocked sink catches up a delayed tick in 100 ms pieces. Keep timer
+// expiry withheld while allowing the mixer's room notifications to run, so a
+// ready producer must refill between pieces rather than insert digital silence.
+struct FeedSchedule {
+  explicit FeedSchedule(Fixture& fixture, bool withhold)
+      : fixture(fixture), previous_safety_ms(player_fixture::feed_safety_override_ms.load()) {
+    player_fixture::sink_now_ns = 0;
+    player_fixture::withhold_feed_timer = withhold;
+    if (withhold) player_fixture::feed_safety_override_ms = 600000;
+  }
+  void ReleaseTimers() {
+    player_fixture::withhold_feed_timer = false;
+    player_fixture::feed_safety_override_ms = previous_safety_ms;
+    // Serialize with the old feeder's predicate wait to avoid a lost release.
+    std::lock_guard<std::mutex> lock(fixture.playback->mu_);
+    fixture.playback->cv_.notify_all();
+  }
+  ~FeedSchedule() { ReleaseTimers(); gesher::fixture_playback_ns = -1; }
+  Fixture& fixture;
+  const int previous_safety_ms;
+};
+class RefillSink : public clocked_fixture::ClockedSink {
+ public:
+  explicit RefillSink(std::shared_ptr<Track> track) : track_(std::move(track)) {}
+  std::string Describe() const override { return "controlled refill schedule"; }
+  void Advance(int64_t milliseconds) {
+    player_fixture::sink_now_ns += milliseconds * 1000000;
+    Tick(nullptr);
+  }
+  std::function<void()> after_render;
+  std::vector<int16_t> pcm;
+ protected:
+  void Render(Mixer*, size_t frames) override {
+    std::vector<float> block(frames * 2, 0.0f);
+    gesher::fixture_playback_ns = player_fixture::sink_now_ns.load();
+    track_->MixInto(block.data(), frames, 48000, 2);
+    for (float value : block) pcm.push_back(static_cast<int16_t>(
+        std::lrint(std::clamp(value, -1.0f, 1.0f) * 32767)));
+    if (after_render) after_render();
+  }
+ private:
+  std::shared_ptr<Track> track_;
+};
+void FeederRoomNotifications() {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = plan->packet = 30000;
+  Fixture f(plan);
+  FeedSchedule schedule(f, true);
+  const auto id = f.playback->thread_.get_id();
+  const unsigned waits = f.Waits(id);
+  auto track = f.Start();
+  const size_t full = track->buffer_size_frames();
+  if (!Wait([&] { return track->Queued() == full && f.Waits(id) > waits; },
+            "ready feeder parks with a full ring before the delayed tick")) return;
+  RefillSink sink(track);
+  unsigned pieces = 0, refilled = 0;
+  sink.after_render = [&] {
+    ++pieces;
+    if (Wait([&] { return track->Queued() == full; },
+             "mixer room notifications refill ready PCM without timer expiry")) ++refilled;
+  };
+  sink.Advance(291);
+  sink.after_render = {};
+  const unsigned underruns = track->underrun_count();
+  // The old-source control may now resume, so its trailing gap becomes interior
+  // and cleanup stays bounded without disguising the failed notification checks.
+  if (refilled != 3) schedule.ReleaseTimers();
+  if (!Wait([&] { return track->Queued() == full; }, "producer can refill after the controlled tick")) return;
+  sink.Advance(10);
+  const size_t zeros = InteriorZeros(sink.pcm);
+  Check(pieces == 3 && refilled == 3, "all three exact clocked-sink pieces admit a real refill");
+  Check(underruns == 0, "available PCM has no underrun when only room notifications wake the feeder");
+  Check(zeros <= 1, "ready decoder produces no inserted interior silent run");
+  std::printf("room notifications: pieces %u, refills %u, underruns %u, interior zeros %zu\n",
+              pieces, refilled, underruns, zeros);
+  if (refilled != 3) return;
+  // The safety timeout is still withheld. A seek and then shutdown must wake
+  // the same parked feeder through Track's room boundary, not the player's cv.
+  plan->seek_gate.Arm();
+  f.playback->Seek(0, 0);
+  Wait([&] { return plan->seek_gate.Reached(); }, "seek wakes the feeder without a safety timeout");
+  const unsigned after_seek = f.Waits(id);
+  plan->seek_gate.Release();
+  Wait([&] { return track->Queued() == full && f.Waits(id) > after_seek; },
+       "post-seek feeder parks with its new full ring");
+  auto shutdown = std::async(std::launch::async, [&] { f.playback->Shutdown(); });
+  const bool stopped = shutdown.wait_for(2s) == std::future_status::ready;
+  Check(stopped, "shutdown releases a feeder whose safety timeout is withheld");
+  if (!stopped) std::abort();
+  shutdown.get();
+}
+
+void DecoderStarvationRemainsObservable() {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = 88200;
+  plan->gate_frame = 14336;
+  plan->read_gate.Arm();
+  Fixture f(plan);
+  FeedSchedule schedule(f, false);
+  auto track = f.Start();
+  const size_t full = track->buffer_size_frames();
+  if (!Wait([&] { return track->Queued() == full; }, "decoder-stall case primes normally")) return;
+  RefillSink sink(track);
+  sink.after_render = [&] {
+    Wait([&] { return track->Queued() == full || plan->read_gate.Reached(); },
+         "normal tick permits a refill or reaches the controlled decoder stall");
+  };
+  for (unsigned tick = 0; tick < 30 && !plan->read_gate.Reached(); ++tick) sink.Advance(10);
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "decoder is held after actual playback starts")) return;
+  sink.after_render = {};
+  sink.Advance(291);
+  const unsigned underruns = track->underrun_count();
+  plan->read_gate.Release();
+  if (!Wait([&] { return track->Queued() == full; }, "decoder resumes real PCM after its hold")) return;
+  sink.Advance(10);
+  const size_t zeros = InteriorZeros(sink.pcm);
+  Check(underruns > 0 && zeros > 48, "missing decoded PCM remains a real underrun and interior silence");
+  std::printf("held decoder: underruns %u, interior zeros %zu\n", underruns, zeros);
+}
+
 // --- Measurement (tools/test_media_player_priming.py --measure): what the same
 // production Playback does while idle, counted on the same scripted fixture, so
 // that two sources can be compared. Wake counts are waits entered by the worker
@@ -1161,6 +1299,8 @@ int main(int argc, char** argv) {
   player_test::EofDrainAtSpeed(1.5f);
   player_test::VideoIdleWakeups();
   player_test::AudioFeedWaitsForRoom();
+  player_test::FeederRoomNotifications();
+  player_test::DecoderStarvationRemainsObservable();
   std::printf("player priming: %d checks, %d failures\n", player_test::checks, player_test::failures);
   return player_test::failures ? 1 : 0;
 }
