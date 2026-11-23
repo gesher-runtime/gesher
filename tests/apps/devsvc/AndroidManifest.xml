@@ -13,7 +13,10 @@
     package="com.gesher.devsvc"
     android:versionCode="1"
     android:versionName="1.0">
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Exact clock scheduling is part of this fixture's purpose. Use its
+         install-time alarm-clock permission for the wakeup and resume tests.
+         ExactAlarmContractTest separately checks user-controlled special access. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

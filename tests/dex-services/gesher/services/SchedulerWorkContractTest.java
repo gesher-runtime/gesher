@@ -45,6 +45,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -160,7 +161,10 @@ public final class SchedulerWorkContractTest {
             var keepAlive = new com.android.internal.pm.pkg.component.ParsedActivityImpl();
             keepAlive.setPackageName(PACKAGE); keepAlive.setName(PACKAGE + ".FixtureKeepAlive"); keepAlive.setEnabled(true);
             parsed.addActivity(keepAlive);
-            parsed.addService(service); parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
+            parsed.addService(service);
+            parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                    "android.permission.USE_EXACT_ALARM", 0, Collections.emptySet()));
+            parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
             set(owner, "packageName", PACKAGE); set(owner, "mUid", UID); set(owner, "parsed", parsed);
             set(owner, "apkPath", "/fixture/" + PACKAGE + "/base.apk"); set(owner, "mDataDir", "/fixture/" + PACKAGE + "/data");
@@ -192,6 +196,11 @@ public final class SchedulerWorkContractTest {
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
             Object catalog = get(permissions, "mCatalog"); set(catalog, "mLoaded", true); set(catalog, "mFrameworkRead", true);
             ((Set<String>) get(catalog, "mProtectedBroadcasts")).add(AlarmManager.ACTION_NEXT_ALARM_CLOCK_CHANGED);
+            android.content.pm.PermissionInfo exactPermission = new android.content.pm.PermissionInfo();
+            exactPermission.name = "android.permission.USE_EXACT_ALARM"; exactPermission.packageName = "android";
+            exactPermission.protectionLevel = android.content.pm.PermissionInfo.PROTECTION_NORMAL;
+            ((Map<String, android.content.pm.PermissionInfo>) get(catalog, "mFramework"))
+                    .put(exactPermission.name, exactPermission);
             previousNotifications = field(notificationType, "sLast").get(null);
             ToIntBiFunction<StatusBarNotification, Boolean> toast = (value, update) -> 0;
             notifications = make(notificationType, new Class<?>[]{pmType, amType, ToIntBiFunction.class}, pm, am, toast);
@@ -201,6 +210,12 @@ public final class SchedulerWorkContractTest {
             set(am, "mBroadcasts", broadcasts);
             set(am, "mPendingIntents", make(type("PendingIntents"), new Class<?>[]{amType, pmType}, am, pm));
             invoke(atm, "setActivityManager", new Class<?>[]{amType}, am);
+            Object appOpsImpl = invoke(pm, "appOps", new Class<?>[0]);
+            java.util.function.Supplier<Map<?, ?>> uidStates = () -> {
+                try { return (Map<?, ?>)invoke(am, "appOpsUidStates", new Class<?>[0]); }
+                catch (Exception failure) { throw new AssertionError(failure); }
+            };
+            invoke(appOpsImpl, "attach", new Class<?>[]{callersType, java.util.function.Supplier.class}, callers, uidStates);
             Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");
             Object process = make(processType, new Class<?>[]{atmType, int.class, IApplicationThread.class}, atm, PID, thread);
             set(process, "uid", UID); set(process, "packageName", PACKAGE); set(process, "processName", PACKAGE); set(process, "ready", true);
@@ -455,32 +470,31 @@ public final class SchedulerWorkContractTest {
     private static void delivery(boolean wire) throws Exception {
         try (Harness h = new Harness(wire)) {
             HeldAlarm listener = new HeldAlarm(h.alarms);
-            Object first = listenerAlarm(h, listener, 60_000);
+            Object first = listenerAlarm(h, listener, 0);
             dispatchAlarm(h, first);
             check(alarmHolds(h) == 1 && listener.completions.size() == 1,
                     "Asynchronous listener lost its delivery hold");
             listener.completions.get(0).alarmComplete(new Binder());
             check(alarmHolds(h) == 1, "Wrong listener binder released an active alarm");
             listener.complete(0);
-            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Completed listener retained its hold/death link");
-            // Advance only the scheduled record, as the manual timer boundary does for jobs.
-            set(get(first, "alarm"), "when", 0L);
-            Object second = takeAlarm(h);
+            check(alarmHolds(h) == 0 && listener.unlinks == 2, "Completed listener retained its hold/death link");
+            // Listener alarms are one-shot. Re-register the same callback for a later firing.
+            Object second = listenerAlarm(h, listener, 0);
             dispatchAlarm(h, second);
             listener.complete(0);
-            check(alarmHolds(h) == 1, "An old completion released a newer repeating delivery");
+            check(alarmHolds(h) == 1, "An old completion released a newer delivery");
             ((IAlarmManager) h.alarms).remove(null, listener);
-            check(alarmHolds(h) == 1, "Cancelling future repeats released the active delivery");
+            check(alarmHolds(h) == 1, "Cancelling the listener released the active delivery");
             listener.complete(1);
             listener.complete(1);
-            check(alarmHolds(h) == 0 && listener.unlinks == 2 && listener.deaths.isEmpty(),
+            check(alarmHolds(h) == 0 && listener.unlinks == 4 && listener.deaths.isEmpty(),
                     "Duplicate completion repeated cleanup or leaked a death link");
         }
         try (Harness h = new Harness(wire)) {
             HeldAlarm listener = new HeldAlarm(h.alarms);
             listener.completeImmediately = true;
             dispatchAlarm(h, listenerAlarm(h, listener, 0));
-            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Synchronous listener completion was lost");
+            check(alarmHolds(h) == 0 && listener.unlinks == 2, "Synchronous listener completion was lost");
         }
         try (Harness h = new Harness(wire)) {
             HeldAlarm listener = new HeldAlarm(h.alarms);
@@ -490,16 +504,17 @@ public final class SchedulerWorkContractTest {
         }
         try (Harness h = new Harness(wire)) {
             HeldAlarm listener = new HeldAlarm(h.alarms);
+            Object token = listenerAlarm(h, listener, 0);
             listener.dieDuringLink = true;
-            dispatchAlarm(h, listenerAlarm(h, listener, 0));
-            check(alarmHolds(h) == 0 && listener.completions.isEmpty() && listener.unlinks == 1,
+            dispatchAlarm(h, token);
+            check(alarmHolds(h) == 0 && listener.completions.isEmpty() && listener.unlinks == 2,
                     "Death during registration dispatched or leaked a listener");
         }
         try (Harness h = new Harness(wire)) {
             HeldAlarm listener = new HeldAlarm(h.alarms);
             listener.fail = true;
             dispatchAlarm(h, listenerAlarm(h, listener, 0));
-            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Failed listener retained its hold/death link");
+            check(alarmHolds(h) == 0 && listener.unlinks == 2, "Failed listener retained its hold/death link");
         }
         try (Harness h = new Harness(wire)) {
             HeldAlarm listener = new HeldAlarm(h.alarms);
@@ -507,14 +522,14 @@ public final class SchedulerWorkContractTest {
             dispatchAlarm(h, token);
             set(token, "deadline", 0L); // Deterministic elapsed-time expiry; no wall-clock sleep.
             check((Long) invoke(h.alarms, "nextDueElapsed", new Class<?>[0]) == Long.MAX_VALUE
-                    && alarmHolds(h) == 0 && listener.unlinks == 1, "Expired listener retained its hold/death link");
+                    && alarmHolds(h) == 0 && listener.unlinks == 2, "Expired listener retained its hold/death link");
             listener.complete(0);
-            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Late completion repeated timeout cleanup");
+            check(alarmHolds(h) == 0 && listener.unlinks == 2, "Late completion repeated timeout cleanup");
             Object beforeLink = listenerAlarm(h, listener, 0);
             set(beforeLink, "deadline", 0L);
             invoke(h.alarms, "nextDueElapsed", new Class<?>[0]);
             dispatchAlarm(h, beforeLink);
-            check(listener.links == 1 && listener.completions.size() == 1,
+            check(listener.links == 3 && listener.completions.size() == 1,
                     "Expired reservation registered or dispatched a listener");
         }
         try (Harness h = new Harness(wire)) {
@@ -525,7 +540,7 @@ public final class SchedulerWorkContractTest {
                 catch (Exception failure) { throw new AssertionError(failure); }
             };
             dispatchAlarm(h, token);
-            check(alarmHolds(h) == 0 && listener.completions.isEmpty() && listener.unlinks == 1,
+            check(alarmHolds(h) == 0 && listener.completions.isEmpty() && listener.unlinks == 2,
                     "Expiry during registration dispatched or leaked a listener");
         }
         for (boolean expireAlarm : new boolean[]{false, true}) try (Harness h = new Harness(wire)) {
