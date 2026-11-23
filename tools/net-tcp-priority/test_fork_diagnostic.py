@@ -31,9 +31,10 @@ BASE = '0da2b7f18fa8013932a6cb77dac32423df9ef8ab'
 # compiler, source-preservation or runtime baseline below.
 CANONICAL_CONTEXT_BASE = '20252fde18db387b4d99d99f7050d6336f58bf6e'
 # The reviewed rerun change separately authenticated retained canonical producers.
-# Pin only those entry functions to its published commit; all supplier facts,
-# compiler inputs and Windows runtime bodies retain the earlier baseline below.
-RERUN_ENTRY_BASE = 'fb122083970e802f79993cda4f05146a85a687df'
+# Pin only those entry functions to the reachable #321 squash commit. Their
+# bodies match the reviewed branch; supplier facts, compiler inputs and Windows
+# runtime bodies retain the earlier baseline below.
+RERUN_ENTRY_BASE = 'fdf4861b608d7a5fe8c0fa6c8a285dfbdf573d91'
 
 
 def old_source(path):
@@ -533,6 +534,10 @@ class ScopeRoutingTest(unittest.TestCase):
 
 
 class SourcePreservationTest(unittest.TestCase):
+    def test_rerun_entry_baseline_is_reachable(self):
+        subprocess.run(['git', 'merge-base', '--is-ancestor', RERUN_ENTRY_BASE, 'HEAD'],
+                       cwd=ROOT, check=True)
+
     def test_canonical_entries_pins_and_shell_are_byte_exact(self):
         for path in ('tools/toolchain/coherent_tcp_context.py',
                      'tools/toolchain/test_coherent_tcp_context.py'):
