@@ -180,7 +180,7 @@ public final class ClipboardService extends IClipboard.Default
         checkPackage(identity.uid, identity.packageName);  // AOSP ownership check precedes privileges.
         if (!current(identity)) return false;
         // The Windows host checks and notes AppOps for actual cohost transfers.
-        if (mCohost != null) return mCohost.authorized(op);
+        if (mCohost != null) return mCohost.authorized(op, identity.attributionTag);
         if (op == AppOpsManager.OP_READ_CLIPBOARD && !backgroundPermission(identity)
                 && !defaultIme(identity.packageName)
                 && !mAtm.ownsForegroundProcess(identity.uid, mHost.foregroundProcess())) return false;
@@ -320,7 +320,8 @@ public final class ClipboardService extends IClipboard.Default
                 try {
                     // AOSP rechecks the saved UID/package/tag and notes a read for callbacks.
                     // Device lock gates getters, not the clipboard-change notification.
-                    if (current(callback.identity) && (mCohost != null ? mCohost.noteCallback()
+                    if (current(callback.identity) && (mCohost != null
+                            ? mCohost.noteCallback(callback.identity.attributionTag)
                             : access(callback.identity, AppOpsManager.OP_READ_CLIPBOARD, true))) {
                         callback.listener.dispatchPrimaryClipChanged();
                     }
@@ -429,7 +430,8 @@ public final class ClipboardService extends IClipboard.Default
         byte[] image = extractImage(saved);
         synchronized (mClipboardLock) {
             if (mClosed) return;
-            int writtenSequence = mHost.available() ? mHost.write(windows[0], windows[1], image) : 0;
+            int writtenSequence = mCohost != null ? mCohost.write(windows[0], windows[1], image, tag)
+                    : mHost.available() ? mHost.write(windows[0], windows[1], image) : 0;
             replaceLocked(saved, source, null);
             if (writtenSequence != 0) {
                 mSequence = writtenSequence; mHaveSequence = true;
@@ -457,7 +459,8 @@ public final class ClipboardService extends IClipboard.Default
         boolean changed;
         synchronized (mClipboardLock) {
             if (mClosed) return;
-            int writtenSequence = mHost.available() ? mHost.clear() : 0;
+            int writtenSequence = mCohost != null ? mCohost.clear(tag)
+                    : mHost.available() ? mHost.clear() : 0;
             changed = replaceLocked(null, null, null);
             if (writtenSequence != 0) {
                 mSequence = writtenSequence; mHaveSequence = true;
@@ -479,7 +482,7 @@ public final class ClipboardService extends IClipboard.Default
         if (mCohost != null) {
             synchronized (mClipboardLock) {
                 if (mClosed) return null;
-                Sample response = mCohost.read(mHaveSequence ? mSequence : 0);
+                Sample response = mCohost.read(mHaveSequence ? mSequence : 0, tag);
                 if (response == null) return null;
                 if (response.contents() != null) importLocked(response.contents());
                 return mClip == null ? null : new ClipData(mClip);
@@ -491,11 +494,11 @@ public final class ClipboardService extends IClipboard.Default
 
     private record MetadataView(ClipDescription description, boolean hasText, String source) { }
 
-    private MetadataView cohostMetadata() {
+    private MetadataView cohostMetadata(String tag) {
         start();
         synchronized (mClipboardLock) {
             if (mClosed) return null;
-            CohostClipboard.Metadata metadata = mCohost.metadata(mHaveSequence ? mSequence : 0);
+            CohostClipboard.Metadata metadata = mCohost.metadata(mHaveSequence ? mSequence : 0, tag);
             if (metadata == null) return null;
             if (mHaveSequence && metadata.sequence() == mSequence) {
                 return mClip == null ? null : new MetadataView(new ClipDescription(mClip.getDescription()),
@@ -519,7 +522,7 @@ public final class ClipboardService extends IClipboard.Default
     @Override public ClipDescription getPrimaryClipDescription(String packageName, String tag, int userId, int deviceId) {
         if (!readAllowed(packageName, tag, false)) return null;
         if (mCohost != null) {
-            MetadataView metadata = cohostMetadata();
+            MetadataView metadata = cohostMetadata(tag);
             return metadata == null ? null : metadata.description();
         }
         start(); syncFromWindows(true);
@@ -528,7 +531,7 @@ public final class ClipboardService extends IClipboard.Default
 
     @Override public boolean hasPrimaryClip(String packageName, String tag, int userId, int deviceId) {
         if (!readAllowed(packageName, tag, false)) return false;
-        if (mCohost != null) return cohostMetadata() != null;
+        if (mCohost != null) return cohostMetadata(tag) != null;
         start(); syncFromWindows(true);
         synchronized (mClipboardLock) { return mClip != null; }
     }
@@ -536,7 +539,7 @@ public final class ClipboardService extends IClipboard.Default
     @Override public boolean hasClipboardText(String packageName, String tag, int userId, int deviceId) {
         if (!readAllowed(packageName, tag, false)) return false;
         if (mCohost != null) {
-            MetadataView metadata = cohostMetadata();
+            MetadataView metadata = cohostMetadata(tag);
             return metadata != null && metadata.hasText();
         }
         start(); syncFromWindows(true);
@@ -553,7 +556,7 @@ public final class ClipboardService extends IClipboard.Default
         enforceClipSourcePermission();
         if (!readAllowed(packageName, tag, false)) return null;
         if (mCohost != null) {
-            MetadataView metadata = cohostMetadata();
+            MetadataView metadata = cohostMetadata(tag);
             return metadata == null ? null : metadata.source();
         }
         start(); syncFromWindows(true);

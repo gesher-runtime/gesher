@@ -168,15 +168,17 @@ public final class AppOpsService extends IAppOpsService.Default {
 
     /** Clipboard policy for a host-admitted signed APK, including transient APKs. */
     boolean scopedClipboardAllowed(PermissionPolicy.ScopedOwner owner, int op,
-            boolean foreground) {
+            boolean foreground, String tag, boolean checkOnly) {
         if (!owner.isCurrent() || (op != OP_READ_CLIPBOARD && op != OP_WRITE_CLIPBOARD)) {
             return false;
         }
-        return scopedClipboardMode(owner.code(), op, foreground) == MODE_ALLOWED;
+        ApkPackage code = owner.code();
+        return scopedClipboardMode(code, op, foreground, attribution(code, tag), checkOnly) == MODE_ALLOWED;
     }
 
-    private int scopedClipboardMode(ApkPackage code, int op, boolean foreground) {
-        if (restricted(op, code.uid(), code.packageName, null, false)) return MODE_IGNORED;
+    private int scopedClipboardMode(ApkPackage code, int op, boolean foreground,
+            String tag, boolean checkOnly) {
+        if (restricted(op, code.uid(), code.packageName, tag, checkOnly)) return MODE_IGNORED;
         int switchOp = switchOp(op);
         int mode = raw(mStore.state(), switchOp, code.uid(), code.packageName);
         if (mode != MODE_FOREGROUND) return mode;
@@ -190,14 +192,15 @@ public final class AppOpsService extends IAppOpsService.Default {
     }
 
     /** Note a transfer against the native lease's package and UID, even before installation. */
-    boolean noteScopedClipboard(PermissionPolicy.ScopedOwner owner, int op, boolean foreground) {
+    boolean noteScopedClipboard(PermissionPolicy.ScopedOwner owner, int op, boolean foreground,
+            String tag) {
         if (!owner.isCurrent() || (op != OP_READ_CLIPBOARD && op != OP_WRITE_CLIPBOARD)) {
             return false;
         }
         ApkPackage code = owner.code();
-        int mode = scopedClipboardMode(code, op, foreground);
+        OpKey key = new OpKey(op, code.uid(), code.packageName, attribution(code, tag), 0);
+        int mode = scopedClipboardMode(code, op, foreground, key.tag, false);
         if (!owner.isCurrent()) return false;
-        OpKey key = new OpKey(op, code.uid(), code.packageName, null, 0);
         synchronized (mLock) {
             long state = foreground ? AppOpsManager.makeKey(UID_STATE_TOP, OP_FLAG_SELF)
                     : eventKey(key.uid, OP_FLAG_SELF);
@@ -206,6 +209,7 @@ public final class AppOpsService extends IAppOpsService.Default {
         }
         return mode == MODE_ALLOWED;
     }
+
     @Override public int checkOperationRaw(int code, int uid, String name, String tag) {
         return checkOperationRawForDevice(code, uid, name, tag, 0);
     }

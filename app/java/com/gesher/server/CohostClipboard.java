@@ -25,6 +25,8 @@ final class CohostClipboard implements ClipboardService.Host {
     // The existing 64 MiB image limit plus room for inline text and HTML.
     private static final int MAX_FRAME_BYTES = 72 * 1024 * 1024 + HEADER_BYTES;
     private static final int STATE_BYTES = 3 * Integer.BYTES;
+    private static final int MAX_ATTRIBUTION_TAG = 50;
+    private static final char NO_ATTRIBUTION_TAG = '\uffff';
     static final int CAN_READ = 1;
     static final int CAN_WRITE = 2;
     static final int PLAIN_PRESENT = 1;
@@ -56,6 +58,10 @@ final class CohostClipboard implements ClipboardService.Host {
     }
 
     static byte[] encode(ClipboardService.Snapshot clipboard) {
+        return encode(clipboard, null, false);
+    }
+
+    private static byte[] encode(ClipboardService.Snapshot clipboard, String tag, boolean request) {
         String text = clipboard.text(), html = clipboard.html();
         byte[] image = clipboard.image();
         int textUnits = text == null ? -1 : text.length();
@@ -63,7 +69,7 @@ final class CohostClipboard implements ClipboardService.Host {
         int imageBytes = image == null ? -1 : image.length;
         long size = HEADER_BYTES + payloadSize(textUnits, htmlUnits, imageBytes);
         if (size > MAX_FRAME_BYTES || imageBytes > ClipboardService.MAX_IMAGE_BYTES) return null;
-        ByteBuffer frame = ByteBuffer.allocate((int)size);
+        ByteBuffer frame = request ? request(tag, (int)size) : ByteBuffer.allocate((int)size);
         frame.putInt(clipboard.sequence()).putInt(textUnits).putInt(htmlUnits).putInt(imageBytes);
         writeText(frame, text);
         writeText(frame, html);
@@ -72,8 +78,11 @@ final class CohostClipboard implements ClipboardService.Host {
     }
 
     static ClipboardService.Snapshot decode(byte[] data) {
-        if (data == null || data.length < HEADER_BYTES || data.length > MAX_FRAME_BYTES) return null;
-        ByteBuffer frame = ByteBuffer.wrap(data);
+        return data == null ? null : decode(ByteBuffer.wrap(data));
+    }
+
+    static ClipboardService.Snapshot decode(ByteBuffer frame) {
+        if (frame.remaining() < HEADER_BYTES || frame.remaining() > MAX_FRAME_BYTES) return null;
         int sequence = frame.getInt();
         int textUnits = frame.getInt(), htmlUnits = frame.getInt(), imageBytes = frame.getInt();
         if (textUnits < -1 || htmlUnits < -1
@@ -112,42 +121,62 @@ final class CohostClipboard implements ClipboardService.Host {
         return ByteBuffer.allocate(Integer.BYTES).putInt(sequence).array();
     }
 
+    private static ByteBuffer request(String tag, int payloadBytes) {
+        if (tag != null && tag.length() > MAX_ATTRIBUTION_TAG) tag = null;
+        ByteBuffer frame = ByteBuffer.allocate(Character.BYTES + payloadBytes
+                + (tag == null ? 0 : Character.BYTES * tag.length()));
+        frame.putChar(tag == null ? NO_ATTRIBUTION_TAG : (char)tag.length());
+        writeText(frame, tag);
+        return frame;
+    }
+
+    static String readAttribution(ByteBuffer frame) {
+        int units = frame.getChar();
+        if (units == NO_ATTRIBUTION_TAG) return null;
+        if (units > MAX_ATTRIBUTION_TAG || frame.remaining() < Character.BYTES * units) {
+            throw new IllegalArgumentException("Invalid clipboard attribution tag frame");
+        }
+        return readText(frame, units);
+    }
+
     private static int sequenceFrom(byte[] data) {
         return data == null || data.length != Integer.BYTES ? 0 : ByteBuffer.wrap(data).getInt();
     }
 
-    private State state() {
-        byte[] data = Zygote.nativeCohostClipboardExchange(STATE, null);
+    private State state(String tag) {
+        byte[] data = Zygote.nativeCohostClipboardExchange(STATE, request(tag, 0).array());
         if (data == null || data.length != STATE_BYTES) return new State(0, -1, 0);
         ByteBuffer frame = ByteBuffer.wrap(data);
         return new State(frame.getInt(), frame.getInt(), frame.getInt());
     }
 
     @Override public boolean available() { return true; }
-    synchronized boolean authorized(int op) {
+    synchronized boolean authorized(int op, String tag) {
         int permission = switch (op) {
             case AppOpsManager.OP_READ_CLIPBOARD -> CAN_READ;
             case AppOpsManager.OP_WRITE_CLIPBOARD -> CAN_WRITE;
             default -> 0;
         };
-        return (state().permissions() & permission) != 0;
+        return (state(tag).permissions() & permission) != 0;
     }
-    @Override public synchronized int sessionLockState() { return state().locked(); }
+    @Override public synchronized int sessionLockState() { return state(null).locked(); }
     @Override public synchronized ClipboardService.Sample sample(int previousSequence) {
-        State state = state();
+        State state = state(null);
         if (state.sequence() == 0 || state.sequence() == previousSequence) return null;
         return new ClipboardService.Sample(state.sequence(), null);
     }
 
-    synchronized Metadata metadata(int cachedSequence) {
-        byte[] data = Zygote.nativeCohostClipboardExchange(METADATA, receipt(cachedSequence));
+    synchronized Metadata metadata(int cachedSequence, String tag) {
+        byte[] data = Zygote.nativeCohostClipboardExchange(METADATA,
+                request(tag, Integer.BYTES).putInt(cachedSequence).array());
         if (data == null || data.length != 2 * Integer.BYTES + Long.BYTES) return null;
         ByteBuffer frame = ByteBuffer.wrap(data);
         return new Metadata(frame.getInt(), frame.getInt(), frame.getLong());
     }
 
-    synchronized ClipboardService.Sample read(int cachedSequence) {
-        byte[] data = Zygote.nativeCohostClipboardExchange(READ, receipt(cachedSequence));
+    synchronized ClipboardService.Sample read(int cachedSequence, String tag) {
+        byte[] data = Zygote.nativeCohostClipboardExchange(READ,
+                request(tag, Integer.BYTES).putInt(cachedSequence).array());
         if (cachedSequence != 0 && sequenceFrom(data) == cachedSequence) {
             return new ClipboardService.Sample(cachedSequence, null);
         }
@@ -155,17 +184,25 @@ final class CohostClipboard implements ClipboardService.Host {
         return clip == null ? null : new ClipboardService.Sample(clip.sequence(), clip);
     }
 
-    synchronized boolean noteCallback() {
-        return sequenceFrom(Zygote.nativeCohostClipboardExchange(CALLBACK, null)) == 1;
+    synchronized boolean noteCallback(String tag) {
+        return sequenceFrom(Zygote.nativeCohostClipboardExchange(CALLBACK, request(tag, 0).array())) == 1;
     }
 
     @Override public synchronized int write(String text, String html, byte[] image) {
-        byte[] data = encode(new ClipboardService.Snapshot(0, text, html, image));
+        return write(text, html, image, null);
+    }
+
+    synchronized int write(String text, String html, byte[] image, String tag) {
+        byte[] data = encode(new ClipboardService.Snapshot(0, text, html, image), tag, true);
         return data == null ? 0 : sequenceFrom(Zygote.nativeCohostClipboardExchange(WRITE, data));
     }
 
     @Override public synchronized int clear() {
-        return sequenceFrom(Zygote.nativeCohostClipboardExchange(CLEAR, null));
+        return clear(null);
+    }
+
+    synchronized int clear(String tag) {
+        return sequenceFrom(Zygote.nativeCohostClipboardExchange(CLEAR, request(tag, 0).array()));
     }
 
     @Override public synchronized void addListener(WindowsHost.Listener listener) {

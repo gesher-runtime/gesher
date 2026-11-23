@@ -8,6 +8,7 @@ import android.Manifest;
 import android.app.AppOpsManager;
 import android.content.pm.PackageManager;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -151,16 +152,18 @@ final class CohostPermissionHost implements AutoCloseable {
                 && Zygote.nativeCohostMatchesProcess(mLease, foreground[0], foreground[1]);
     }
 
-    private boolean clipboardReadAllowed(boolean foreground) {
+    private boolean clipboardReadAllowed(boolean foreground, String tag, boolean checkOnly) {
         return mOwner.isCurrent() && (foreground
                 || mOwner.check(Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND)
                     == PackageManager.PERMISSION_GRANTED
                 || ClipboardService.defaultIme(mOwner.packageName()))
-                && mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground);
+                && mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_READ_CLIPBOARD,
+                        foreground, tag, checkOnly);
     }
 
-    private boolean canReadClipboard() {
-        return WindowsHost.sessionLockState() == 0 && clipboardReadAllowed(isForeground());
+    private boolean canReadClipboard(String tag, boolean checkOnly) {
+        return WindowsHost.sessionLockState() == 0
+                && clipboardReadAllowed(isForeground(), tag, checkOnly);
     }
 
     private ClipboardService.Snapshot readNativeClipboard(int sequence) {
@@ -173,29 +176,29 @@ final class CohostPermissionHost implements AutoCloseable {
         return WindowsHost.clipboardSequence() == sequence ? data : null;
     }
 
-    private byte[] readClipboard(int cachedSequence) {
+    private byte[] readClipboard(int cachedSequence, String tag) {
         boolean foreground = isForeground();
-        if (WindowsHost.sessionLockState() != 0 || !clipboardReadAllowed(foreground)
-                || !mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground)) {
+        if (WindowsHost.sessionLockState() != 0 || !clipboardReadAllowed(foreground, tag, false)
+                || !mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground, tag)) {
             return null;
         }
         int sequence = WindowsHost.clipboardSequence();
         if (sequence == 0) return null;
         if (sequence == cachedSequence) {
-            return canReadClipboard() ? CohostClipboard.receipt(sequence) : null;
+            return canReadClipboard(tag, false) ? CohostClipboard.receipt(sequence) : null;
         }
         ClipboardService.Snapshot data = readNativeClipboard(sequence);
         if (data == null) return null;
         byte[] encoded = CohostClipboard.encode(data);
-        return canReadClipboard() ? encoded : null;
+        return canReadClipboard(tag, false) ? encoded : null;
     }
 
-    private byte[] clipboardMetadata(int cachedSequence) {
-        if (!canReadClipboard()) return null;
+    private byte[] clipboardMetadata(int cachedSequence, String tag) {
+        if (!canReadClipboard(tag, true)) return null;
         int sequence = WindowsHost.clipboardSequence();
         if (sequence == 0) return null;
         if (sequence == cachedSequence) {
-            return canReadClipboard() ? new CohostClipboard.Metadata(sequence, 0, 0).encode() : null;
+            return canReadClipboard(tag, true) ? new CohostClipboard.Metadata(sequence, 0, 0).encode() : null;
         }
         if (sequence != mClipboardMetadataSequence) {
             ClipboardService.Snapshot clip = readNativeClipboard(sequence);
@@ -212,37 +215,45 @@ final class CohostPermissionHost implements AutoCloseable {
             mClipboardMetadata = new CohostClipboard.Metadata(sequence, formats, System.currentTimeMillis());
             mClipboardMetadataSequence = sequence;
         }
-        return canReadClipboard() ? mClipboardMetadata.encode() : null;
+        return canReadClipboard(tag, true) ? mClipboardMetadata.encode() : null;
     }
 
     /** The endpoint is tied to the exact APK and process. No caller identity comes over the wire. */
     private byte[] dispatchClipboard(int operation, byte[] input) {
         if (!mOwner.isCurrent() || !WindowsHost.available()) return null;
+        ByteBuffer frame = ByteBuffer.wrap(input);
+        String tag = CohostClipboard.readAttribution(frame);
+        int expected = switch (operation) {
+            case CohostClipboard.STATE, CohostClipboard.CLEAR, CohostClipboard.CALLBACK -> 0;
+            case CohostClipboard.METADATA, CohostClipboard.READ -> Integer.BYTES;
+            default -> frame.remaining();
+        };
+        if (frame.remaining() != expected) return null;
         switch (operation) {
             case CohostClipboard.STATE: {
                 boolean foreground = isForeground();
-                int policy = clipboardReadAllowed(foreground) ? CohostClipboard.CAN_READ : 0;
+                int policy = clipboardReadAllowed(foreground, tag, true) ? CohostClipboard.CAN_READ : 0;
                 if (mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
-                        foreground)) policy |= CohostClipboard.CAN_WRITE;
+                        foreground, tag, true)) policy |= CohostClipboard.CAN_WRITE;
                 int sequence = (policy & CohostClipboard.CAN_READ) != 0 ? WindowsHost.clipboardSequence() : 0;
                 return new CohostClipboard.State(sequence, WindowsHost.sessionLockState(), policy).encode();
             }
             case CohostClipboard.METADATA:
-                return clipboardMetadata(java.nio.ByteBuffer.wrap(input).getInt());
+                return clipboardMetadata(frame.getInt(), tag);
             case CohostClipboard.READ:
-                return readClipboard(java.nio.ByteBuffer.wrap(input).getInt());
+                return readClipboard(frame.getInt(), tag);
             case CohostClipboard.CALLBACK: {
                 boolean foreground = isForeground();
-                return clipboardReadAllowed(foreground)
-                        && mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground)
+                return clipboardReadAllowed(foreground, tag, false)
+                        && mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground, tag)
                         ? CohostClipboard.receipt(1) : null;
             }
             case CohostClipboard.WRITE:
             case CohostClipboard.CLEAR: {
                 if (!mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
-                        isForeground())) return null;
+                        isForeground(), tag, false)) return null;
                 ClipboardService.Snapshot contents = operation == CohostClipboard.WRITE
-                        ? CohostClipboard.decode(input) : null;
+                        ? CohostClipboard.decode(frame) : null;
                 if (operation == CohostClipboard.WRITE && (contents == null || contents.sequence() != 0)) {
                     return null;
                 }
@@ -251,7 +262,7 @@ final class CohostPermissionHost implements AutoCloseable {
                     mClipboardPublisher = true;
                 }
                 if (!mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
-                        isForeground())) return null;
+                        isForeground(), tag)) return null;
                 int sequence = contents == null ? WindowsHost.clearClipboardSequence()
                         : WindowsHost.setClipboardSequence(contents.text(), contents.html(), contents.image());
                 return CohostClipboard.receipt(sequence);

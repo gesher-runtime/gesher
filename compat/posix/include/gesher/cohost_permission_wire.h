@@ -20,6 +20,8 @@ constexpr uint32_t kMaxNames = 128;
 constexpr uint32_t kMaxName = 300;
 constexpr uint32_t kClipboardHeaderBytes = 4 * sizeof(uint32_t);
 constexpr uint32_t kMaxClipboardPayload = 72 * 1024 * 1024 + kClipboardHeaderBytes;
+constexpr uint32_t kClipboardTagLengthBytes = sizeof(uint16_t);
+constexpr uint32_t kMaxClipboardTagBytes = kClipboardTagLengthBytes + 50 * sizeof(char16_t);
 constexpr DWORD kClipboardTransferTimeout = 30000;
 enum class Operation : uint32_t {
   kCheck = 1, kRequest = 2, kFlags = 3, kCanRequest = 4, kAppOpMode = 5,
@@ -46,7 +48,7 @@ static_assert(sizeof(Reply) == 16);
 class ClipboardFrame {
  public:
   bool Allocate(uint32_t size) {
-    if (size > kMaxClipboardPayload) return false;
+    if (size > kMaxClipboardPayload + kMaxClipboardTagBytes) return false;
     data_.reset(size == 0 ? nullptr : new (std::nothrow) uint8_t[size]);
     size_ = data_ ? size : 0;
     return size_ == size;
@@ -86,12 +88,14 @@ inline bool Valid(const Header& head) {
     case Operation::kClipboardState:
     case Operation::kClipboardClear:
     case Operation::kClipboardCallback:
-      return head.count == 0;
+      return head.count >= kClipboardTagLengthBytes && head.count <= kMaxClipboardTagBytes;
     case Operation::kClipboardRead:
     case Operation::kClipboardMetadata:
-      return head.count == sizeof(uint32_t);
+      return head.count >= sizeof(uint32_t) + kClipboardTagLengthBytes &&
+          head.count <= sizeof(uint32_t) + kMaxClipboardTagBytes;
     case Operation::kClipboardWrite:
-      return head.count >= kClipboardHeaderBytes && head.count <= kMaxClipboardPayload;
+      return head.count >= kClipboardHeaderBytes + kClipboardTagLengthBytes &&
+          head.count <= kMaxClipboardPayload + kMaxClipboardTagBytes;
   }
   return false;
 }
