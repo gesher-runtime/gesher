@@ -296,6 +296,9 @@ static bool DefaultIgnores(int sig) { return sig == 17; }
 static std::atomic<bool> g_process_pending{false};
 struct Condition {
   void notify_all() {}
+  // This clock fixture invokes timed sleeps only; child-generation waits have
+  // their own fixture with real condition variables and competing waiters.
+  void wait(std::unique_lock<std::mutex>&) { std::abort(); }
   template<typename T> std::cv_status wait_for(std::unique_lock<std::mutex>& lock, T value) {
     return wait_until(lock, value);
   }

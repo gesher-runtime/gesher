@@ -948,7 +948,9 @@ void InstallSignalHook(bool authoritative) {
 namespace {
 bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
                           void (*observe)(void*), void* context, int* error,
-                          int64_t boottime_deadline = -1) {
+                          int64_t boottime_deadline = -1,
+                          const std::atomic<uint64_t>* generation = nullptr,
+                          uint64_t observed = 0) {
   if (error != nullptr) *error = 0;
   ThreadState* self = Self();
   if (self == nullptr) {
@@ -974,6 +976,7 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
   {
     std::unique_lock<std::mutex> lock(S().mutex);
     for (;;) {
+      if (generation != nullptr && generation->load(std::memory_order_acquire) != observed) break;
       uint64_t deliverable = (self->pending.Mask() | S().process_pending.Mask()) & ~self->mask;
       if (observe != nullptr && deliverable != 0) {
         // Ignored signals do not interrupt nanosleep. Discard these pending
@@ -1016,7 +1019,9 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
         break;
       }
       self->waiting_for = ~self->mask;
-      if (boottime_deadline >= 0) {
+      if (generation != nullptr) {
+        S().sent.wait(lock);
+      } else if (boottime_deadline >= 0) {
         const int64_t now = gesher::BoottimeNanos();
         if (now >= boottime_deadline) break;
         const int64_t left = boottime_deadline - now;
@@ -1051,6 +1056,18 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
 
 bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error = nullptr) {
   return SleepWithObservation(ms, left_ms, nullptr, nullptr, error);
+}
+
+bool InterruptibleWaitForChange(const std::atomic<uint64_t>& generation,
+                                uint64_t observed, int* error) {
+  return SleepWithObservation(0, nullptr, nullptr, nullptr, error, -1, &generation, observed);
+}
+
+void NotifyInterruptibleWaiters() {
+  // A notifier cannot pass the generation check and condition arming while
+  // the waiter holds this mutex. The owner must not hold its state lock here.
+  std::lock_guard<std::mutex> lock(S().mutex);
+  S().sent.notify_all();
 }
 
 bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context,

@@ -266,6 +266,44 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
 OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
+# Child wait notifications change these three complete sources. Reverse their
+# exact pinned transition before the original OFD preservation checks below;
+# retain the earlier receipt, all its digests and its runtime approval state.
+# Existing property/memmem normalizations still apply independently. This source
+# admission does not stand in for Windows execution or full wait-family parity.
+CHILD_WAIT_QUALIFICATION_SHA256='ca7dfd7ea98cdf44c00cb48272b628982f8c9f1ee1b138e0b87d171519556f95'
+CHILD_WAIT_PATHS=['compat/bionic/process_bionic.cc','compat/bionic/shim_internal.h',
+                 'compat/bionic/signal_bionic.cc']
+def preceding_child_wait_sources():
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'child-wait-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==CHILD_WAIT_QUALIFICATION_SHA256,'child wait source qualification changed'
+ qualification=json.loads(raw)
+ assert qualification['baseline']=='df3aff782e2d411aad2d07ca39f0b21ee2ddbfe2'
+ assert qualification['native_runtime_approval'] is False
+ assert qualification['paths']==CHILD_WAIT_PATHS
+ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==CHILD_WAIT_PATHS
+ patch=(folder/'child-wait-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'child wait transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==CHILD_WAIT_PATHS
+ current={path:(ROOT/path).read_bytes() for path in CHILD_WAIT_PATHS}
+ for path,actual in current.items():
+  assert hashlib.sha256(actual).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-child-wait-qualification-') as temporary:
+  work=Path(temporary)
+  for path,actual in current.items():
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(actual)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous={path:(work/path).read_bytes() for path in CHILD_WAIT_PATHS}
+  for path,actual in previous.items():
+   expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
+   assert actual==expected and hashlib.sha256(actual).hexdigest()==qualification['previous_sha256'][path],path
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'child wait forward reconstruction changed'
+ return previous
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -338,6 +376,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 '''),
 )
 def preceding_ofd_sources():
+ child_previous=preceding_child_wait_sources()
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'ofd-stream-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
@@ -349,7 +388,7 @@ def preceding_ofd_sources():
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  for path,digest in qualification['source_sha256'].items():
-  actual=(ROOT/path).read_bytes()
+  actual=child_previous[path] if path in child_previous else (ROOT/path).read_bytes()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
@@ -524,7 +563,7 @@ def check():
  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
- print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+ print('TCP_SELECTED_POLICY_PASS exact_child_wait_transition exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
@@ -550,6 +589,13 @@ def transition_negative_controls():
   ('compat/posix/src/system_properties.cc',b'SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str())',b'_wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str())'),
   ('compat/posix/include/gesher/system_properties.h',b'uint32_t generation = 0;',b'uint64_t generation = 0;'),
   ('tools/net-tcp-priority/qualified/native13-property-source.patch',b'@@',b'@x'),
+  ('compat/bionic/process_bionic.cc',b'g_children_generation.fetch_add(1, std::memory_order_release);',b'g_children_generation.fetch_add(1, std::memory_order_relaxed);'),
+  ('compat/bionic/process_bionic.cc',b'WaitForSingleObject(kv.second.process, 0)',b'WaitForSingleObject(kv.second.process, 1)'),
+  ('compat/bionic/process_bionic.cc',b'kv.second.status = ex::WaitStatus(code);',b'kv.second.status = 0;'),
+  ('compat/bionic/signal_bionic.cc',b'generation->load(std::memory_order_acquire) != observed',b'generation->load(std::memory_order_acquire) == observed'),
+  ('compat/bionic/shim_internal.h',b'void NotifyInterruptibleWaiters();',b'int NotifyInterruptibleWaiters();'),
+  ('tools/net-tcp-priority/qualified/child-wait-source.patch',b'@@',b'@x'),
+  ('tools/net-tcp-priority/qualified/child-wait-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
   # The memmem normalization admits its exact reviewed delta only. The old
   # whole-file digest must still reject any unrelated shim change afterwards.
   ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
@@ -573,7 +619,24 @@ def transition_negative_controls():
     try:check()
     except (AssertionError,subprocess.CalledProcessError):rejected=True
    assert rejected,'unqualified mutation accepted: '+name+' repin='+str(repin)
- print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4')
+ # Updating only a candidate hash and the manifest's own digest cannot admit
+ # altered behavior: the exact reverse transition and published baseline must
+ # still reject it before any of the unchanged OFD checks are reached.
+ manifest_path=ROOT/'tools/net-tcp-priority/qualified/child-wait-source.json'
+ for name,before,after in [case for case in cases if case[0] in CHILD_WAIT_PATHS]:
+  target=ROOT/name
+  altered=original(target).replace(before,after,1)
+  qualification=json.loads(original(manifest_path))
+  qualification['source_sha256'][name]=hashlib.sha256(altered).hexdigest()
+  raw=(json.dumps(qualification,indent=2)+'\n').encode()
+  def changed(path):
+   return altered if path==target else raw if path==manifest_path else original(path)
+  rejected=False
+  with patch.object(Path,'read_bytes',changed), patch.dict(globals(),CHILD_WAIT_QUALIFICATION_SHA256=hashlib.sha256(raw).hexdigest()):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'repinned child wait mutation accepted: '+name
+ print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4 repinned_child_wait_controls=5')
 if __name__=='__main__':
  import sys
  check()

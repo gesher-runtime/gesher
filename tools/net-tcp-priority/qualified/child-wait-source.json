@@ -1,0 +1,23 @@
+{
+  "baseline": "df3aff782e2d411aad2d07ca39f0b21ee2ddbfe2",
+  "paths": [
+    "compat/bionic/process_bionic.cc",
+    "compat/bionic/shim_internal.h",
+    "compat/bionic/signal_bionic.cc"
+  ],
+  "patch_sha256": "f60bde2bc5e7dff4bfd16ca4ee1820af59f0a986ead92554e5f26d4adb7fa463",
+  "previous_sha256": {
+    "compat/bionic/process_bionic.cc": "932ffba18b35e4c61838f53634f1da45e1261049bafd672dfe0fe9235eee7dca",
+    "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+    "compat/bionic/signal_bionic.cc": "40fad80aa5e51fc4de764794cd0890712bfe5ca33591deacd7053ac5f574d378"
+  },
+  "source_sha256": {
+    "compat/bionic/process_bionic.cc": "3886b10b49ab9658db02acf331f369651351ecf4414fe62dee8539f7aff3b9b9",
+    "compat/bionic/shim_internal.h": "ae38fba48a7ec7cf7c661a03a6e67e7d52ce9629bc46f179f6421b2793994fff",
+    "compat/bionic/signal_bionic.cc": "06fbaacca6a95e38e2e7b484b29d2678226c221a51a5e745be074cde7d5c959a"
+  },
+  "contract_evidence": [
+    "docs/research/child-wait-notifications-2026-11-23.md"
+  ],
+  "native_runtime_approval": false
+}
