@@ -456,6 +456,123 @@ public final class ContactsProviderContractTest {
         }
     }
 
+    private static void testProfileNamespaceAndLifecycle(File dbDir) throws Exception {
+        File dbFile = new File(dbDir, "contacts-profile.db");
+        Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
+        ProviderInfo info = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
+        ContentProvider provider = newContactsProvider(null, null, dbFile);
+        provider.attachInfo(observerRecordingContext(provider, new ArrayList<>()), info);
+        Uri profile = ContactsContract.Profile.CONTENT_URI;
+        Uri profileRaws = ContactsContract.Profile.CONTENT_RAW_CONTACTS_URI;
+        Uri profileData = Uri.withAppendedPath(profile, "data");
+        Uri ordinaryRaws = ContactsContract.RawContacts.CONTENT_URI;
+        String[] ids = { "_id" };
+        long aggregateId;
+        try {
+            check(count(provider, profile) == 0, "A new database has no profile");
+            rejects(UnsupportedOperationException.class, () -> provider.insert(profile, new ContentValues()));
+            Uri first = provider.insert(profileRaws, new ContentValues());
+            ContentValues account = new ContentValues();
+            account.put("account_name", "profile@example.test");
+            account.put("account_type", "fixture.contacts");
+            Uri second = provider.insert(profileRaws, account);
+            long firstId = ContentUris.parseId(first);
+            long secondId = ContentUris.parseId(second);
+            check(ContactsContract.isProfileId(firstId) && secondId > firstId,
+                    "Profile raw contacts have increasing profile IDs");
+
+            try (Cursor c = provider.query(profile, new String[] { "_id", "lookup", "is_user_profile" },
+                    null, null, null)) {
+                check(c.getCount() == 1 && c.moveToFirst(), "Two accounts contribute to one Profile contact");
+                aggregateId = c.getLong(0);
+                check(ContactsContract.isProfileId(aggregateId) && "profile".equals(c.getString(1))
+                                && c.getInt(2) == 1,
+                        "Profile has the Android ID range, lookup key and profile flag");
+            }
+            try (Cursor c = provider.query(profileRaws, new String[] { "contact_id", "raw_contact_is_user_profile" },
+                    null, null, "_id")) {
+                check(c.getCount() == 2 && c.moveToFirst() && c.getLong(0) == aggregateId && c.getInt(1) == 1
+                                && c.moveToNext() && c.getLong(0) == aggregateId && c.getInt(1) == 1,
+                        "Both account raws have the same profile parent");
+            }
+            Uri ordinary = provider.insert(ordinaryRaws, new ContentValues());
+            check(!ContactsContract.isProfileId(ContentUris.parseId(ordinary)) && count(provider, ordinaryRaws) == 1
+                            && count(provider, ContactsContract.Contacts.CONTENT_URI) == 1,
+                    "Ordinary IDs and collections exclude Profile after allocating high IDs");
+            check(count(provider, first) == 1 && count(provider, ContentUris.withAppendedId(ordinaryRaws, secondId)) == 1,
+                    "Explicit profile raw and ordinary URI targeting a Profile ID both resolve");
+            check(count(provider, ContentUris.withAppendedId(profileRaws, ContentUris.parseId(ordinary))) == 0,
+                    "An explicit Profile URI cannot reach an ordinary contact");
+
+            ContentValues name = new ContentValues();
+            name.put("mimetype", ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE);
+            name.put("data1", "Profile Only");
+            Uri nested = Uri.withAppendedPath(first, "data");
+            Uri nameUri = provider.insert(nested, name);
+            long dataId = ContentUris.parseId(nameUri);
+            check(ContactsContract.isProfileId(dataId) && count(provider, nested) == 1
+                            && count(provider, ContentUris.withAppendedId(profileData, dataId)) == 1
+                            && count(provider, ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI, dataId)) == 1
+                            && count(provider, ContactsContract.Data.CONTENT_URI) == 0,
+                    "Profile data is addressable by path or high ID and excluded from ordinary collections");
+            check(count(provider, Uri.withAppendedPath(profile, "entities")) == 2
+                            && count(provider, Uri.withAppendedPath(first, "entity")) == 1
+                            && count(provider, Uri.withAppendedPath(profile, "raw_contact_entities")) == 2,
+                    "Profile entity views expose every contributor, including the raw without data");
+            ContentValues update = new ContentValues();
+            update.put("data1", "Changed Profile");
+            check(provider.update(nested, update, "_id = ?", new String[] {Long.toString(dataId)}) == 1,
+                    "Updating through a raw Profile data URI respects its bound scope");
+            Uri aggregate = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, aggregateId);
+            try (Cursor c = provider.query(aggregate, new String[] { "display_name" }, null, null, null)) {
+                check(c.moveToFirst() && "Changed Profile".equals(c.getString(0)),
+                        "Aggregate Profile reflects the data mutation through its high-ID alias");
+            }
+            check(count(provider, Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, "profile")) == 1,
+                    "Android Profile lookup key resolves the Profile aggregate");
+            rejects(UnsupportedOperationException.class, () -> provider.delete(profile, null, null));
+            rejects(UnsupportedOperationException.class, () -> provider.delete(aggregate, null, null));
+            check(provider.delete(first, null, null) == 1, "Delete the local raw as a Profile contributor");
+            try (Cursor c = provider.query(profile, new String[] { "_id", "name_raw_contact_id", "display_name" },
+                    null, null, null)) {
+                check(c.moveToFirst() && c.getLong(0) == aggregateId && c.getLong(1) == secondId && c.isNull(2),
+                        "Removing one contributor keeps the same aggregate and recomputes derived fields");
+            }
+            check(provider.delete(second, null, null) == 1 && count(provider, profile) == 0,
+                    "Deleting the last contributor removes the Profile aggregate");
+            Uri syncSecond = second.buildUpon()
+                    .appendQueryParameter(ContactsContract.CALLER_IS_SYNCADAPTER, "true").build();
+            try (Cursor c = provider.query(syncSecond, new String[] { "deleted", "contact_id" }, null, null, null)) {
+                check(c.moveToFirst() && c.getInt(0) == 1 && c.isNull(1),
+                        "Profile account tombstone stays in its namespace for its sync adapter");
+            }
+            check(count(provider, ContactsContract.DeletedContacts.CONTENT_URI) == 0,
+                    "Ordinary deletion log never exposes the deleted Profile ID");
+        } finally {
+            provider.shutdown();
+        }
+
+        ContentProvider reopened = newContactsProvider(null, null, dbFile);
+        reopened.attachInfo(observerRecordingContext(reopened, new ArrayList<>()), info);
+        try {
+            reopened.insert(profileRaws, new ContentValues());
+            try (Cursor c = reopened.query(profile, ids, null, null, null)) {
+                check(c.moveToFirst() && c.getLong(0) > aggregateId,
+                        "A recreated Profile does not reuse its deleted ID after reopening");
+            }
+            check(!ContactsContract.isProfileId(ContentUris.parseId(reopened.insert(ordinaryRaws, new ContentValues()))),
+                    "Ordinary allocation resumes in its own range after reopening");
+        } finally {
+            reopened.shutdown();
+        }
+    }
+
+    private static int count(ContentProvider provider, Uri uri) {
+        try (Cursor c = provider.query(uri, null, null, null, null)) {
+            return c == null ? 0 : c.getCount();
+        }
+    }
+
     private static void testApplyBatchAndSyncAdapterSemantics(File dbDir) throws Exception {
         File dbFile = new File(dbDir, "contacts-batch-sync.db");
         List<Uri> notifications = new ArrayList<>();
@@ -821,6 +938,7 @@ public final class ContactsProviderContractTest {
 
         try {
             testContactsSchemaViewsStrictAndFallback(dbDir);
+            testProfileNamespaceAndLifecycle(dbDir);
             testFreshSchemaAndPersistence(dbDir);
             testApplyBatchAndSyncAdapterSemantics(dbDir);
 
