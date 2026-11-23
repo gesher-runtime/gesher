@@ -1,0 +1,7 @@
+[
+  {
+    "name": "tcp-coherent-selected-minimum",
+    "producer": "compile-selected-minimum",
+    "destination": "fixture"
+  }
+]

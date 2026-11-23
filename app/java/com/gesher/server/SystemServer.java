@@ -65,6 +65,36 @@ public final class SystemServer {
         System.out.flush();
     }
 
+    /**
+     * Whether each package has an enabled launcher activity, for the Control Center
+     * (AppShell's no-launcher-activity record): kept current on installs and enabled-state
+     * changes (PackageManagerService calls the listener outside its monitor),
+     * and brought up to date now from the installed packages, in the background, for packages
+     * installed before the record existed. Returns that background thread, started.
+     */
+    static Thread trackLauncherRecords(PackageManagerService pm) {
+        Object recordsLock = new Object();
+        java.util.function.Consumer<ApkPackage> update = p -> {
+            synchronized (recordsLock) {
+                if (pm.get(p.packageName) == p && !pm.isRemovalPending(p.packageName)) {
+                    com.gesher.app.shell.AppShell.updateLauncherRecordQuietly(p.packageName, p);
+                }
+            }
+        };
+        pm.setDesktopEnabledStateListener(update);
+        Thread records = new Thread(() -> {
+            List<ApkPackage> installed;
+            synchronized (pm) {
+                installed = new ArrayList<>(pm.packages());
+            }
+            // Use the same lock and current generation check as package events.
+            for (ApkPackage p : installed) update.accept(p);
+        }, "launcher-records");
+        records.setDaemon(true);
+        records.start();
+        return records;
+    }
+
     /** Select an explicit APK while the previous record still supplies its system trust policy. */
     static void selectCommandLinePackage(List<ApkPackage> selected, ApkPackage current) {
         for (ApkPackage previous : selected) {
@@ -357,9 +387,15 @@ public final class SystemServer {
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             // One window for the app's tasks, or one each (ADR 0088).
             env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
-            return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
+            String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk))), env, logFile.getPath(), false);
+                    String.valueOf(targetSdk)));
+            // Experimental (ADR 0090): the package's own AppContainer.
+            if (AppSandbox.enabled()) {
+                return AppSandbox.spawn(command, env, logFile, pkg, packageName,
+                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
+            }
+            return Zygote.spawn(command, env, logFile.getPath(), false);
             }
         });
     }
@@ -428,6 +464,7 @@ public final class SystemServer {
         void start() throws Exception {
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
+            trackLauncherRecords(mServices.pm);
             // The launcher waits for this file: the services are registered.
             File ready = Device.readyFile();
             ready.getParentFile().mkdirs();

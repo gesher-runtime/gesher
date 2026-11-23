@@ -28,7 +28,10 @@ They implement Android's real callback, scan result, advertisement parsing,
 transport data and parcel formats. They neither start scanning nor advertise a
 Bluetooth feature. `BluetoothDevice` supplies the address value/parcel and
 attribution contract those types need, while its hardware-dependent answers
-remain unavailable.
+remain unavailable. That includes the hidden `prepareToEnterProcess(AttributionSource)`
+framework.jar's `Intent.prepareToEnterProcess` calls on a Bluetooth broadcast's
+`EXTRA_DEVICE` (issue #303). `app/gen/BootLinkCheck.java` (run by `app/build.sh`) fails
+the build when framework.jar references a member these classes lack.
 
 The additional scan settings/filter, advertisement data/settings/parameters,
 periodic parameters/report, transport filter and advertising callback use the

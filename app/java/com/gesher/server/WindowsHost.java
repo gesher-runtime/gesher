@@ -83,7 +83,9 @@ public final class WindowsHost {
                 : "not available (no window)"));
         Thread t = new Thread(() -> {
             while (true) {
-                int events = nativeWaitEvents(60_000);
+                // This server-owned dispatcher has no housekeeping deadline.
+                // The native condition variable wakes on actual window/activation events.
+                int events = nativeWaitEvents(-1);
                 if (events == 0) continue;
                 for (Listener l : sListeners) {
                     try {

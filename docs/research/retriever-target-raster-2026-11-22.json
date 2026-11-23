@@ -1,0 +1,128 @@
+{
+  "baseline": "8b316aebf09ab46d5407e955bf86ed748a1e739f",
+  "date": "2026-11-22",
+  "skia_revision": "22f5edb6c1bf350d1d9d67bb429db1a5539f3c05",
+  "skia_library_sha256": "8cad7ab815e5dd458f35083af973b139a3b01da22982ea3377b03a0eb504cb2d",
+  "gn_args": "is_official_build = true\nskia_enable_gpu_debug_layers = false\nskia_enable_ganesh = false\nskia_enable_graphite = false\nskia_enable_pdf = false\nskia_enable_svg = false\nskia_enable_skottie = false\nskia_enable_tools = false\nskia_use_expat = false\nskia_use_fontconfig = false\nskia_use_freetype = false\nskia_use_harfbuzz = false\nskia_use_icu = false\nskia_use_libjpeg_turbo_decode = false\nskia_use_libjpeg_turbo_encode = false\nskia_use_libpng_decode = false\nskia_use_libpng_encode = true\nskia_use_libwebp_decode = false\nskia_use_libwebp_encode = false\nskia_use_piex = false\nskia_use_wuffs = false\nskia_use_zlib = true\nskia_use_perfetto = false\nskia_use_x11 = false\nskia_enable_fontmgr_empty = true\nextra_cflags = [ \"-USK_R32_SHIFT\", \"-DSK_R32_SHIFT=0\" ]\n\nskia_use_system_libpng = false\nskia_use_system_zlib = true\n",
+  "host_user_config": "#pragma once\n// Local CPU-raster oracle: pinned Android source, no platform UI or codecs.\n#define SK_SUPPORT_LEGACY_ALPHA_BITMAP_AS_COVERAGE\n#define SK_DEFAULT_FONT_CACHE_LIMIT (768 * 1024)\n#define SK_DEFAULT_GLOBAL_DISCARDABLE_MEMORY_POOL_SIZE (512 * 1024)\n",
+  "checks": 4648625,
+  "formats": {
+    "ARGB8888": {
+      "cases": 386,
+      "pixels": 4642840,
+      "different_pixels": 0,
+      "max_channel_step": 0
+    },
+    "RGB565": {
+      "cases": 386,
+      "pixels": 4642840,
+      "different_pixels": 85,
+      "max_channel_step": 1
+    }
+  },
+  "frame_regressions": 164,
+  "source_sha256": {
+    "compat/media/jni/media_jni_others.cc": "6253936216a545f78b24478cdc370de4ec0f8a614bc63612f875295102d38f12",
+    "compat/media/surface/retriever_bitmap.cc": "f654ac53f329d5ad865668d113e4225f137b483dde20baece59ad02f8a52dc62",
+    "compat/media/surface/retriever_bitmap.h": "76c28b3f648b4384c72d4071575bc0b3dd7132f1ffeff4225b1fe161010818aa",
+    "compat/media/video/retriever_pixels.cc": "3e5805335d729b4961c7e39c384294b2db1e0051e72d115fc713f7f4c1091f38",
+    "compat/media/video/retriever_pixels.h": "1214879f1fd8c1c0b969d4416cdbc4899315fac2cb160285f5ac1bccabbfad4f",
+    "tests/media/retriever_pixels_test.cc": "15d2b09abb36f97e5d66f10a0ef2ad05595f462a218bae7af974ff188fd94645",
+    "tests/apps/videoapp/java/com/gesher/videoapp/VideoActivity.java": "c9924a660043598308b64c995852c79e653a8a81bba4c1c0e6372900cbf0f4a3",
+    "tests/apps/videoapp/gen-media.sh": "0cda873d8f3a0c4bbac3985e923f2f488bf74cfac5312461a70b1303bcd139a8",
+    "tests/windows/tracks/38-media.ps1": "85fea17fb1d856fc2d5b207d9ca8462d10887fa4509b29de172752b2cbd74131"
+  },
+  "four_k_to_160x90_argb": {
+    "pixel_scratch_bytes": 46080,
+    "result_pixel_bytes": 57600,
+    "converted_source_pixels_max": 691200,
+    "repetitions": 100
+  },
+  "execution_limits": [
+    "Host CPU Skia only; library itself not sanitizer-instrumented",
+    "No RTTI/vptr sanitizer or LeakSanitizer coverage",
+    "Windows renderer compile-only; actual native Bitmap bridge link and ART tests pending",
+    "No machine-profile latency, whole-process working set or allocator-fault-injection claim",
+    "Extractor/decoder cache remains outside this round"
+  ],
+  "unscaled_host_probe": {
+    "fixture_sha256": "0b4981f34ce489ce3d7e4b7f6dd2e57831fef93c00303b90b8ed3e89186919dd",
+    "compiler": "GCC 14.2.0 -O2",
+    "samples_per_path": 10,
+    "statistic": "upper median of ten alternating samples per path",
+    "old_pipeline": "actual I420ToRgba + full native RGBA/ARGB arrays + simulated Java int copy + actual pinned Skia Bitmap write",
+    "new_pipeline": "complete production RenderRetrieverBitmap + final pinned Skia Bitmap allocation",
+    "output_check": "all unscaled pixels exact before timing",
+    "runs": {
+      "before": [
+        {
+          "width": 1280,
+          "height": 720,
+          "crop_offset": 0,
+          "old_ms": 6.69,
+          "new_ms": 8.509,
+          "ratio": 1.27
+        },
+        {
+          "width": 1280,
+          "height": 720,
+          "crop_offset": 1,
+          "old_ms": 9.727,
+          "new_ms": 8.664,
+          "ratio": 0.89
+        },
+        {
+          "width": 3840,
+          "height": 2160,
+          "crop_offset": 0,
+          "old_ms": 106.592,
+          "new_ms": 88.05,
+          "ratio": 0.83
+        },
+        {
+          "width": 3840,
+          "height": 2160,
+          "crop_offset": 1,
+          "old_ms": 95.792,
+          "new_ms": 83.297,
+          "ratio": 0.87
+        }
+      ],
+      "after": [
+        {
+          "width": 1280,
+          "height": 720,
+          "crop_offset": 0,
+          "old_ms": 6.508,
+          "new_ms": 6.318,
+          "ratio": 0.97
+        },
+        {
+          "width": 1280,
+          "height": 720,
+          "crop_offset": 1,
+          "old_ms": 9.792,
+          "new_ms": 6.163,
+          "ratio": 0.63
+        },
+        {
+          "width": 3840,
+          "height": 2160,
+          "crop_offset": 0,
+          "old_ms": 89.479,
+          "new_ms": 59.75,
+          "ratio": 0.67
+        },
+        {
+          "width": 3840,
+          "height": 2160,
+          "crop_offset": 1,
+          "old_ms": 88.465,
+          "new_ms": 56.17,
+          "ratio": 0.63
+        }
+      ]
+    },
+    "limits": "Host pipeline only; excludes decoder, JNI and Windows runtime; no machine-profile performance claim"
+  }
+}

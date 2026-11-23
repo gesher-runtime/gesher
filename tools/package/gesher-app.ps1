@@ -61,6 +61,8 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
+# AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
+Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
 $here = $scriptRoot
@@ -319,7 +321,9 @@ try {
   # the APK, then the app in this console's process; the three are stopped when it exits.
   $logs = Join-Path $root 'logs'
   New-Item -ItemType Directory -Force $logs | Out-Null
-  $env:GESHER_BINDER = "gesher-app-$PID"
+  # Unique per run, not only per PID: a reused PID must not name an earlier run's device
+  # (its binder pipe, property session and /proc/sys/kernel/random/boot_id).
+  $env:GESHER_BINDER = "gesher-app-$PID-" + [Convert]::ToString([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(), 16)
   $started = @()
   try {
     $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `

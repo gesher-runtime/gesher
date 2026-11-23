@@ -341,6 +341,10 @@ jlong CameraDevice_readResultMetadata(JNIEnv* env, jclass, jlong, jlong) {
 
 void CameraDevice_close(JNIEnv*, jclass, jlong) {}
 
+const JNINativeMethod gCameraCallbackBudgetMethods[] = {
+    {"nativeMetadataBytes", "(J)J", GESHER_JNI(CameraMetadata_getBufferSize)},
+};
+
 const JNINativeMethod gCameraDeviceImplMethods[] = {
     {"nativeCreateFMQReader", "(Landroid/os/Parcel;)J", GESHER_JNI(CameraDevice_createFMQReader)},
     {"nativeReadResultMetadata", "(JJ)J", GESHER_JNI(CameraDevice_readResultMetadata)},
@@ -350,6 +354,8 @@ const JNINativeMethod gCameraDeviceImplMethods[] = {
 }  // namespace
 
 int register_gesher_camera_metadata(JNIEnv* env) {
+  RegisterGesherNatives(env, "com/gesher/server/CameraCallbacks",
+                        gCameraCallbackBudgetMethods, NELEM(gCameraCallbackBudgetMethods));
   RegisterGesherNatives(env, "android/hardware/camera2/impl/CameraMetadataNative",
                         gCameraMetadataMethods, NELEM(gCameraMetadataMethods));
   RegisterGesherNatives(env, "android/hardware/camera2/impl/CameraDeviceImpl",

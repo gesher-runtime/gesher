@@ -26,6 +26,20 @@ public final class Zygote {
 
     static native int nativeSpawn(String commandLine, String[] setEnv, String[] unsetEnv,
             String logPath, boolean breakaway);
+    static native int nativeSpawnInAppContainer(String commandLine, String[] setEnv,
+            String[] unsetEnv, String logPath, String container, String displayName,
+            String[] capabilities);
+    static native int nativeEnsureAppContainer(String container, String displayName);
+    static native int nativeGrantToAppContainer(String path, String container, int access,
+            boolean inherit);
+    static native int nativeGrantToCapability(String path, String capability, int access,
+            boolean inherit);
+    static native int nativeDeleteAppContainer(String container);
+    static native int nativeSpawnCompiler(String commandLine, String[] setEnv, String[] unsetEnv,
+            String logPath, int memoryMiB, int cpuRate);
+    static native int nativeWaitChild(int pid, long identity, int timeoutMs, long cancel,
+            boolean stopOnLowMemory);
+    static native long nativeAvailableMemory();
     private static native int nativeRestartWithUid(int uid);
     static native long nativeStartTime(int pid);
     static native long nativeChildStartTime(int pid);
@@ -70,6 +84,23 @@ public final class Zygote {
         if (pid <= 0) {
             throw new IllegalStateException("starting " + commandLine + " failed: Win32 error "
                     + (-pid));
+        }
+        return pid;
+    }
+
+    /**
+     * {@link #spawn} in the AppContainer {@code container} (ADR 0090), never breaking
+     * away, its token with only these capabilities. Returns the pid.
+     */
+    static int spawnInAppContainer(String commandLine, List<String> setEnv, String logPath,
+            String container, String displayName, List<String> capabilities) {
+        new File(logPath).getParentFile().mkdirs();
+        int pid = nativeSpawnInAppContainer(commandLine, setEnv.toArray(new String[0]),
+                new String[] {"GESHER_BINDER_UID"}, windowsPath(logPath), container,
+                displayName, capabilities.toArray(new String[0]));
+        if (pid <= 0) {
+            throw new IllegalStateException("starting " + commandLine + " in AppContainer "
+                    + container + " failed: Win32 error " + (-pid));
         }
         return pid;
     }

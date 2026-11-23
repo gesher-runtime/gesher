@@ -132,7 +132,9 @@ jobs:
           for tool in clang clang++ bison flex ccache; do command -v "$tool"; done
       - name: Install build tools
         if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
-        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
 
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
@@ -726,6 +728,13 @@ jobs:
           python3 tools/test_audio_effect_contracts.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes
 
+      - name: Live microphone grant and native admission contracts
+        run: |
+          python3 tools/test_audio_recording_admission.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Media routing ownership and framework value contracts
         run: |
           python3 tools/test_media_routing_contracts.py \
@@ -753,6 +762,10 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
           python3 tools/test_scheduler_work_contracts.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_exact_alarm_contracts.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
