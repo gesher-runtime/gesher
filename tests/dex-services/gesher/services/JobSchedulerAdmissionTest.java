@@ -378,7 +378,6 @@ public final class JobSchedulerAdmissionTest {
 
     @SuppressWarnings("unchecked")
     private static void permitPersistence(JobSchedulerConstraintContractTest.Harness h) throws Exception {
-        h.parsed.addUsesPermission(new ParsedUsesPermissionImpl(android.Manifest.permission.RECEIVE_BOOT_COMPLETED, 0, Set.of()));
         Object permission = call(h.pm, "permissions", new Class<?>[0]);
         PermissionInfo definition = new PermissionInfo(); definition.name = android.Manifest.permission.RECEIVE_BOOT_COMPLETED;
         definition.packageName = "android"; definition.protectionLevel = PermissionInfo.PROTECTION_NORMAL;
@@ -388,7 +387,7 @@ public final class JobSchedulerAdmissionTest {
     private static void persistence() throws Exception {
         // This path is required by the real Windows/ART entrypoint. The host
         // adapter only accounts Parcel write sizes and explicitly does not run it.
-        try (var h = new JobSchedulerConstraintContractTest.Harness()) {
+        try (var h = new JobSchedulerConstraintContractTest.Harness(true, true)) {
             permitPersistence(h); IJobScheduler jobs = jobs(h);
             JobInfo normal = new JobInfo.Builder(20_000, info(20_000).getService()).setPersisted(true).setMinimumLatency(3_600_000).build();
             try (var identity = new Identity(PID, UID)) { jobs.schedule("restore", normal); }
@@ -425,7 +424,7 @@ public final class JobSchedulerAdmissionTest {
                         Files.write(file.toPath(), parcel.marshall()); legacyFiles.add(file);
                     } finally { parcel.recycle(); }
                 }
-                try (var restored = new JobSchedulerConstraintContractTest.Harness()) {
+                try (var restored = new JobSchedulerConstraintContractTest.Harness(true, true)) {
                     permitPersistence(restored);
                     Thread worker;
                     synchronized (restored.scheduler) {

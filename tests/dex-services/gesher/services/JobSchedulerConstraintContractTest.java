@@ -197,8 +197,12 @@ public final class JobSchedulerConstraintContractTest {
 
         Harness() throws Exception { this(true); }
 
+        Harness(boolean networkPermission) throws Exception { this(networkPermission, false); }
+
+        // The parsed package is sealed by hideAsFinal(), so permissions such as
+        // RECEIVE_BOOT_COMPLETED must be declared here rather than added later.
         @SuppressWarnings("unchecked")
-        Harness(boolean networkPermission) throws Exception {
+        Harness(boolean networkPermission, boolean bootPermission) throws Exception {
             parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".TestJobService");
@@ -213,6 +217,8 @@ public final class JobSchedulerConstraintContractTest {
                     android.Manifest.permission.ACCESS_NETWORK_STATE, 0, java.util.Set.of()));
             parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                     "android.permission.RUN_USER_INITIATED_JOBS", 0, java.util.Set.of()));
+            if (bootPermission) parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                    android.Manifest.permission.RECEIVE_BOOT_COMPLETED, 0, java.util.Set.of()));
             parsed.hideAsFinal();
 
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
