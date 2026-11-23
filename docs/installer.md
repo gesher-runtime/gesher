@@ -30,6 +30,20 @@ Setup passes with its own downloads, or the one `-AutoDownload` fetches when no
 APK is passed; staging other APKs or `-Remove` clears it. The update replaces only the verified APK slots, keeping
 microG's data and accounts.
 
+## Optional downloads that fail
+
+Setup downloads each optional component (WebView2, the three microG APKs as
+one component, Aurora Store) on its own when **Install** is clicked. If one
+cannot be downloaded (no connection, or a filtering proxy that refuses the
+host, for example with HTTP 418), Setup lists the components it could not get
+with the first error, skips only those, and installs everything else. Running
+Setup again offers them again; microG and Aurora Store can also be installed
+from the Gesher Control Center. Post-install passes the microG APKs only when
+all three are present, otherwise `-AutoDownload`.
+Cancelling the download still returns to the Ready page. A silent run shows
+nothing and keeps the earlier behavior: each post-install step retries or
+skips its own download.
+
 Setup's finish page does not offer to open the README; the Start menu entry
 does.
 

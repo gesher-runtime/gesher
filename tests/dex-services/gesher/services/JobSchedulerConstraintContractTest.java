@@ -118,7 +118,7 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static class TestService extends IJobService.Stub {
+    static class TestService extends IJobService.Stub {
         int starts;
         int stops;
         int networkChanges;
@@ -176,7 +176,7 @@ public final class JobSchedulerConstraintContractTest {
         public void getTransferredUploadBytes(JobParameters params, JobWorkItem item) { }
     }
 
-    private static final class TestRunHandle {
+    static final class TestRunHandle {
         final Object job;
         final Object run;
         final TestService service;
@@ -190,15 +190,19 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static final class Harness implements AutoCloseable {
+    static final class Harness implements AutoCloseable {
         final Object pm, atm, am, scheduler;
         final Class<?> schedulerType, jobType, runType;
         final PackageImpl parsed;
 
         Harness() throws Exception { this(true); }
 
+        Harness(boolean networkPermission) throws Exception { this(networkPermission, false); }
+
+        // The parsed package is sealed by hideAsFinal(), so permissions such as
+        // RECEIVE_BOOT_COMPLETED must be declared here rather than added later.
         @SuppressWarnings("unchecked")
-        Harness(boolean networkPermission) throws Exception {
+        Harness(boolean networkPermission, boolean bootPermission) throws Exception {
             parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".TestJobService");
@@ -213,6 +217,8 @@ public final class JobSchedulerConstraintContractTest {
                     android.Manifest.permission.ACCESS_NETWORK_STATE, 0, java.util.Set.of()));
             parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                     "android.permission.RUN_USER_INITIATED_JOBS", 0, java.util.Set.of()));
+            if (bootPermission) parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                    android.Manifest.permission.RECEIVE_BOOT_COMPLETED, 0, java.util.Set.of()));
             parsed.hideAsFinal();
 
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
@@ -1610,6 +1616,8 @@ public final class JobSchedulerConstraintContractTest {
         android.system.Os.unsetenv("GESHER_BINDER_UID");
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true);
         contracts();
+        JobSchedulerAdmissionTest.contracts(true);
+        JobSchedulerContentTriggerTest.contracts(true);
         System.out.println("JobSchedulerConstraintContractTest all passed: " + checks + " checks");
     }
 }

@@ -1,7 +1,8 @@
-"""Canonical native2 DNS suppliers; compilation and execution are CI only.
+"""Typed native2 DNS suppliers; compilation and execution are CI only.
 
 The enclosing native2 archive is independently checked by artifact_receipt.py.
 This manifest binds its DNS subset to source, attempt, compiler and ABI roles.
+Explicit fork diagnostics use a distinct schema and never canonical authority.
 """
 import argparse
 import copy
@@ -64,8 +65,18 @@ def context():
     return result
 
 
-def expected(folder):
-    return {'schema': 1, 'context': context(), 'producer': 'native2 / native2',
+def execution_context(diagnostic):
+    if diagnostic is None:
+        return context()
+    sys.path.insert(0, str(ROOT / 'tools/ci'))
+    from fork_diagnostic_context import assert_current
+    return assert_current(diagnostic)
+
+
+def expected(folder, diagnostic=None):
+    return {'schema': 1 if diagnostic is None else 'gesher-dns-fork-diagnostic-v1',
+            'context': execution_context(diagnostic),
+            'producer': 'native2 / native2' if diagnostic is None else 'native2 / native2 (fork diagnostic)',
             'sources': source_inventory(),
             'members': {name: {'role': role, 'sha256': digest(folder / name)}
                         for name, role in ROLES.items()}}
@@ -101,11 +112,11 @@ def command_record(command):
             'version': subprocess.check_output([str(driver), '--version'], text=True)}
 
 
-def build(folder):
-    context()
+def build(folder, diagnostic=None):
+    execution_context(diagnostic)
     out = folder / 'net-dns'
     out.mkdir()
-    records = {'context': context(), 'linux': [], 'aosp': [], 'guests': {}}
+    records = {'context': execution_context(diagnostic), 'linux': [], 'aosp': [], 'guests': {}}
     with tempfile.TemporaryDirectory(prefix='dns-full-') as temp:
         exe = Path(temp) / 'reference'
         command = [str(Path(shutil.which('g++')).resolve(strict=True)), '-std=c++20', '-O2',
@@ -138,7 +149,7 @@ def build(folder):
         subprocess.run(['unzip', '-q', str(archive), '-d', temporary], check=True, timeout=180)
         build_guests(folder, records, Path(temporary) / 'android-ndk-r27c')
     (out / 'compilers.json').write_text(json.dumps(records, sort_keys=True) + '\n')
-    (out / 'manifest.json').write_text(json.dumps(expected(folder), sort_keys=True) + '\n')
+    (out / 'manifest.json').write_text(json.dumps(expected(folder, diagnostic), sort_keys=True) + '\n')
 
 
 def build_guests(folder, records, ndk):
@@ -165,16 +176,16 @@ def build_guests(folder, records, ndk):
         records['guests'][abi] = record
 
 
-def verify(folder):
+def verify(folder, diagnostic=None):
     out = folder / 'net-dns'
     entries = list(out.iterdir())
     require(all(p.is_file() and not p.is_symlink() for p in entries) and
             {p.name for p in entries} == set(ASSETS) | {'manifest.json'}, 'Unexpected DNS asset members')
-    wanted = expected(folder)
+    wanted = expected(folder, diagnostic)
     controls(wanted)
     validate(read(out / 'manifest.json'), wanted)
     records = read(out / 'compilers.json')
-    require(records['context'] == context(), 'Compiler context differs')
+    require(records['context'] == execution_context(diagnostic), 'Compiler context differs')
     require(records['archive']['publisher_sha1'] == '090e8083a715fdb1a3e402d0763c388abb03fb4e' and
             records['archive']['size'] == 663987688 and len(records['archive']['sha256']) == 64,
             'Compiler publisher archive identity differs')
@@ -193,14 +204,22 @@ def verify(folder):
                 'DNS all done rows=174 failures=0', 'Missing AOSP extended oracle')
     rows = (out / 'linux-reference.log').read_text().splitlines()
     require(len(rows) == 97 and rows[-1] == 'DNS all done rows=96 failures=0', 'Missing Linux reference rows')
-    print('DNS_FULL_VERIFIED', json.dumps(wanted, sort_keys=True), flush=True)
+    label = 'DNS_FULL_VERIFIED' if diagnostic is None else 'DNS_FORK_DIAGNOSTIC_VERIFIED'
+    print(label, json.dumps(wanted, sort_keys=True), flush=True)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=('build', 'verify'))
     parser.add_argument('directory', type=Path)
+    parser.add_argument('--fork-diagnostic', action='store_true',
+                        help='manual real-fork diagnostics; cannot create canonical schema-1 evidence')
     args = parser.parse_args()
+    diagnostic = None
+    if args.fork_diagnostic:
+        sys.path.insert(0, str(ROOT / 'tools/ci'))
+        from fork_diagnostic_context import current_context
+        diagnostic = current_context(producer=args.mode == 'build')
     if args.mode == 'build':
-        build(args.directory.resolve())
-    verify(args.directory.resolve())
+        build(args.directory.resolve(), diagnostic)
+    verify(args.directory.resolve(), diagnostic)

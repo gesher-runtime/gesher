@@ -54,6 +54,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     {"size", "(J)V", GESHER_NATIVE(MR_setMaxFileSize)},
     {"parameter", "(Ljava/lang/String;)V", GESHER_NATIVE(MR_setParameter)},
     {"file", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setOutputFile)},
+    {"nextFile", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setNextOutputFile)},
     {"prepare", "()V", GESHER_NATIVE(MR_prepare)}, {"start", "()V", GESHER_NATIVE(MR_start)},
     {"pause", "()V", GESHER_NATIVE(MR_pause)}, {"resume", "()V", GESHER_NATIVE(MR_resume)},
     {"stop", "()V", GESHER_NATIVE(MR_stop)}, {"amplitude", "()I", GESHER_NATIVE(MR_getMaxAmplitude)},

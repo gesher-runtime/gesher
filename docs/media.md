@@ -114,6 +114,14 @@ the app's ELF code) or players.
   Surface, `releaseOutputBuffer(i, true)` draws the frame. Codec names
   `c2.gesher.<codec>.decoder`. MediaExtractor's H.264/H.265 formats carry
   csd-0/csd-1 as Annex B parameter sets (as NuMediaExtractor's do).
+  For QueueSurface-backed SurfaceView/TextureView outputs,
+  `setVideoScalingMode` switches between full-frame scale-to-fit and centered
+  aspect-preserving crop. The mode travels with the released frame, including
+  through Surface parcels; display resize recomputes the crop without modifying
+  its decoded pixels. TextureView's bitmap readback uses the view's crop before
+  scaling to the requested Bitmap size. Raw SurfaceTexture GL consumers and
+  ImageReader pixel storage remain unchanged. See the [contract and validation
+  report](research/codec-video-scaling-2026-11-22.md) for the bounded M05 scope.
 - **Surfaces without a compositor** (`compat/media/surface`, built into hwui):
   a SurfaceTexture's and a SurfaceView's Surface is a `QueueSurface` (frames
   stay in the process; a producer in another process, given the Surface in a
@@ -337,6 +345,17 @@ source evidence and validation boundaries.
 The [recorder contracts](media-recorder-contracts.md) pin lifecycle/error behavior,
 requested codec handling, complete-container size admission, callback ordering
 and the exact boundaries of host and Windows validation.
+
+`MediaRecorder.setNextOutputFile` now queues one caller-selected writable,
+seekable MP4 descriptor. At the size limit the writer finalizes the current
+file and reuses its track/CSD metadata and sample-table capacity for the next
+file, while the actual capture, encoder and input Surface remain connected.
+Each new video file begins at a real key frame; 802/803/801 callbacks are ordered
+across audio/video workers, and unused descriptors retire on stop/reset/error.
+See the [rollover contract and allocation evidence](research/recorder-rollover-2026-11-22.md)
+for pinned Android behavior, error distinctions, source-based measurements and
+the required public EGL/Recorder/decoder Windows gate. Host tests and Java/DEX
+compilation do not establish that Windows runtime gate.
 
 ## Status and next steps
 
