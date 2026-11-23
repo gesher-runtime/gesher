@@ -236,9 +236,11 @@ public final class TelephonyHost {
         check(properties.simStates.isEmpty(), "No telephony properties are written without a modem");
 
         callers.current = STATE;
-        // TelephonyManager.getSimState(int) is UNKNOWN for a slot without a phone, as it is
-        // on AOSP without the phone service; getSimState() is ABSENT with zero phones.
-        equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_UNKNOWN, "No phone in slot 0");
+        // ADR 0087: no SIM, not "still loading". getSimState() asks for
+        // DEFAULT_SIM_SLOT_INDEX (Integer.MAX_VALUE) without a default subscription.
+        equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_ABSENT, "No SIM in slot 0");
+        equal(t.phone.getSimStateForSlotIndex(SubscriptionManager.DEFAULT_SIM_SLOT_INDEX),
+                TelephonyManager.SIM_STATE_ABSENT, "getSimState()'s default slot");
         equal(t.phone.getSimStateForSlotIndex(-1), TelephonyManager.SIM_STATE_UNKNOWN, "Invalid slot");
         equal(t.phone.getDataNetworkTypeForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
                 STATE.name, null), TelephonyManager.NETWORK_TYPE_UNKNOWN, "No data network");

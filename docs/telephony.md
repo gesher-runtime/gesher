@@ -92,9 +92,12 @@ These rules apply only when a modem was present at boot. Without one the device 
 `TelephonyManager` and `SubscriptionManager` answer from their "service is null" paths,
 without any permission check. Gesher still registers the three services, and without a
 modem they give exactly those answers: `NETWORK_TYPE_UNKNOWN`, null identifiers and numbers,
-empty subscription lists, `SIM_STATE_UNKNOWN` from `getSimState(slot)` (`getSimState()` is
-`ABSENT` with zero phones) and `IllegalStateException` from `getPrimaryImei()` and
-`SubscriptionManager.getPhoneNumber()`, as the managers throw. `telephony.registry`
+empty subscription lists and `IllegalStateException` from `getPrimaryImei()` and
+`SubscriptionManager.getPhoneNumber()`, as the managers throw. One deliberate difference:
+the SIM state is `ABSENT` (ADR 0087), for `getSimState()` and `getSimState(slot)` alike,
+where AOSP without the phone service answers `UNKNOWN` ("still loading", which apps wait
+on). `getSimState()` asks the service for `DEFAULT_SIM_SLOT_INDEX` when there is no
+default subscription, so it does not depend on the phone count. `telephony.registry`
 (system_server, present on every Android device) keeps its listener permission checks with
 or without a modem.
 

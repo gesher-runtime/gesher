@@ -501,15 +501,17 @@ public final class TelephonyService {
         }
 
         /**
-         * The SIM state in a slot: UNKNOWN for a slot without a phone, as
-         * PhoneInterfaceManager answers and as TelephonyManager.getSimState(int) answers when
-         * the service is null. Without a modem there are no phones, so
-         * TelephonyManager.getSimState() is ABSENT without asking this service.
+         * The SIM state in a slot. Without a modem there is no SIM in any slot: ABSENT, as
+         * ADR 0087 decided (UNKNOWN means "still loading" to applications, which wait on
+         * it). TelephonyManager.getSimState() asks for DEFAULT_SIM_SLOT_INDEX when there is
+         * no default subscription, so this answer is also getSimState()'s. AOSP without the
+         * phone service answers UNKNOWN here (docs/telephony.md).
          */
         @Override
         public int getSimStateForSlotIndex(int slotIndex) {
-            if (slotIndex != 0 || !mCellular.present()) return TelephonyManager.SIM_STATE_UNKNOWN;
-            return mCellular.simState();
+            if (slotIndex < 0) return TelephonyManager.SIM_STATE_UNKNOWN;
+            if (!mCellular.present()) return TelephonyManager.SIM_STATE_ABSENT;
+            return slotIndex == 0 ? mCellular.simState() : TelephonyManager.SIM_STATE_UNKNOWN;
         }
 
         /** The registered network's country; "" without a phone or registration. */
