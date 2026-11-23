@@ -1,20 +1,47 @@
-# Service-worker interception and WebStorage measurements
+# Inert service-worker preparation and WebStorage measurements
 
 ## Delivered behavior and remaining scope
 
-This change replaces the service-worker client/settings no-op with a native
-WebView2 request path and replaces constant zero quota/usage answers with actual
-Chromium storage measurements. It does **not** close all of R2 W07/W08.
+This change replaces constant zero quota/usage answers with actual Chromium
+storage measurements. The prepared service-worker request bridge is unavailable:
+its WebView2 response API cannot preserve Android request-failure semantics.
+All worker feature flags are withheld, both provider controller getters throw
+before initialization, and native activation rejects admission before scheduling
+work or installing a filter. The retained dispatch code is inert preparation,
+exercised only by isolated component fixtures. R2 W07 remains blocked and W08
+remains incomplete.
 
 | Operation | Implementation and limit |
 | --- | --- |
-| Framework and AndroidX worker client | One framework singleton and AndroidX boundary adapters. Native service-worker requests carry their actual URL, method and headers to the application on a background thread. A supplied response carries its status, reason, headers and complete body; a null response resumes the original request. |
-| Worker lifetime | One hidden controller owns the `SERVICE_WORKER` filter for the app profile. Public WebView destruction does not remove it. Initialization verifies `ICoreWebView2_22`, filter installation and the existing request guard/timer before reporting support. |
-| Worker settings | Default cache mode is `LOAD_DEFAULT`. Unsupported cache modes throw; no successful cache-policy change is invented. File/content settings feed the actual Java loaders when those URLs reach interception. `INTERNET` permission is checked; enabling network without it throws. |
-| Worker capability reporting | Only `SERVICE_WORKER_BASIC_USAGE` and `SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST` are added, after native initialization succeeds. Cache, block-network, file and content flags are withheld. |
+| Framework and AndroidX worker client | `GesherServiceWorkers.get()` throws `UnsupportedOperationException` before configuring WebView or publishing a controller. Both provider entry points use this getter. No client is exposed as working. |
+| Worker activation | `Host::EnableServiceWorkers` returns false without posting work, creating a controller, registering the wildcard `SERVICE_WORKER` filter or calling back. The private initializer used only by that filter was removed. |
+| Prepared worker internals | The retained request/settings/response helpers have isolated component coverage. They do not establish a supported worker capability, faithful failures, complete streaming or working file/content routing. |
+| Worker capability reporting | All `SERVICE_WORKER_*` flags are withheld. `SupportLib.Factory.getSupportedFeatures()` returns a copy of the supported-feature list and performs no worker initialization. |
 | Storage usage/quota | `Storage.getUsageAndQuota` on a real controller, including the hidden controller when no public WebView exists. Native URLMON admission validates/canonicalizes HTTP(S) tuple origins. Java returns the requested numeric field once on the caller's Looper; malformed data, failed initialization, rejected admission and backend errors yield Android's zero query-failure value. |
 | Storage deletion | Existing origin admission and `Storage.clearDataForStorageKey` deletion are preserved; origin deletion still targets `file_systems,indexeddb`. Existing delete-all behavior is unchanged. |
 | Full origin enumeration | Still unsupported. `getOrigins` retains the previous empty result, which must not be interpreted as an audited empty profile. No visited-origin or cookie list is substituted for Chromium's storage-key registry. |
+
+### Why both provider and native activation are unavailable
+
+Installing a WebView2 filter proves that an interception event can be received;
+it does not prove that Android's response, permission and error contracts can be
+preserved. Previously, querying any AndroidX capability initialized that filter
+and exposed ordinary worker requests to the HTTP-error substitution described
+below. Capability discovery now has no such side effect.
+
+Removing provider feature strings alone is insufficient. AndroidX's
+`ServiceWorkerControllerImpl` prefers the framework controller when framework
+support exists, and `ApiFeature.isSupported()` combines framework and provider
+support with OR. On Gesher's framework level, an application can therefore reach
+the framework getter regardless of the provider list. Both controller getters
+now fail explicitly through the common Java gate, and the native entry also
+rejects activation. This does not make every AndroidX framework-derived feature
+query return false or establish API 37 worker compatibility. There is no runtime
+opt-in that exposes the incomplete bridge.
+
+`WithCoreWebView`, cookie operations, actual storage measurements/deletion and
+the reserved JavaScript-bridge request guard retain their independent behavior.
+Creating their hidden controller does not enable worker interception.
 
 ### Why cache mode support is withheld
 
@@ -24,28 +51,27 @@ flags. Chromium's `GetLoadFlagsForExtraHeaders` recognizes bypass/revalidation
 headers but does not turn `only-if-cached` into `LOAD_ONLY_FROM_CACHE` or supply
 `LOAD_SKIP_CACHE_VALIDATION`. Adding those headers cannot establish the Android
 contract. CDP's target-level cache disable switch cannot implement the full set
-of modes either. The implementation therefore rejects unsupported setters and
-withholds `SERVICE_WORKER_CACHE_MODE`.
+of modes either. The retained settings helper rejects unsupported setters;
+neither it nor `SERVICE_WORKER_CACHE_MODE` is exposed as available.
 
 ### Network failure is still an explicit limitation
 
 WebView2's stable `WebResourceRequested` args do not expose request cancellation.
-The native boundary installs an HTTP 403 before calling Java and retains it on
-queue rejection, callback/stream failure, timeout or missing INTERNET permission.
-This prevents a failed callback from releasing the original network request,
+The retained native dispatch helper installs an HTTP 403 before calling Java
+and retains it on queue rejection, callback/stream failure, timeout or missing
+INTERNET permission. That prevents an original request from escaping the helper,
 but its observable HTTP response differs from Android's network-error completion.
-Consequently `SERVICE_WORKER_BLOCK_NETWORK_LOADS` is withheld and an explicit
-attempt to enable blocking in an INTERNET-enabled process throws
-`UnsupportedOperationException` without changing the setting. Disabling it
-without INTERNET still throws `SecurityException`.
+This mismatch affects the interception contract itself, not just the separate
+block-network setting. The entire activation path and all worker flags, including
+basic usage and request interception, therefore remain unavailable.
 
 A faithful engine-level cancellation path, including redirect/error behavior,
 is a remaining W07 requirement. Returning HTTP 403 is not counted as that work's
 completion. Raw `content:` interception also requires scheme registration and
-Windows runtime evidence; the Java resolver path alone does not establish it.
-File/content feature flags remain withheld. The bounded synthetic-response
-bridge rejects bodies larger than 64 MiB instead of truncating them; unrestricted
-streaming needs a separate design and runtime validation.
+Windows runtime evidence; the retained Java resolver helper does not establish
+it. The prepared synthetic-response bridge rejects bodies larger than 64 MiB
+instead of truncating them; unrestricted streaming needs a separate design and
+runtime validation before worker support can be claimed.
 
 #### Independent check of a CDP alternative
 
@@ -96,29 +122,33 @@ not that registry. First-party HTTP(S) queries and deletion do not establish
 opaque-origin or partitioned third-party behavior. Complete enumeration and
 partition-aware origin deletion remain W08 requirements; neither is marked done.
 
-## Admission, callbacks and cleanup
+## Prepared admission, callbacks and cleanup
 
-Requests use two daemon callback workers, a queue of 64 and at most 128 native
-outstanding deferrals. Native deadlines expire after 30 seconds using the existing
-STA timer. A timeout retains denial, completes the deferral and releases its
-global-work lease. Duplicate and late completions are ignored. Callback execution
-never blocks the STA. Admitted responses can complete while shutdown is draining;
-new requests cannot enter during closure. Fatal service-controller closure scrubs
-outstanding original request destinations/upload bodies before completing them.
+These internal paths have component coverage but cannot be activated by the
+provider. They use two daemon callback workers, a queue of 64 and at most 128
+native outstanding deferrals. Native deadlines expire after 30 seconds using
+the existing STA timer. A timeout retains denial, completes the deferral and
+releases its global-work lease. Duplicate and late completions are ignored.
+Callback execution never blocks the STA. Admitted responses can complete while
+shutdown is draining; new requests cannot enter during closure. Fatal
+service-controller closure scrubs outstanding original request destinations and
+upload bodies before completing them. These resource controls do not repair the
+failure-contract mismatch.
 
-Java initialization waits at most five seconds after native submission. Native
-STA startup also has a five-second bound; calls from the STA itself cannot wait
-for worker initialization. Startup failure does not advertise worker support.
-The controller remains scoped to the process/profile, independent of public views.
+There is no successful worker initialization path. The Java startup/wait code
+was removed, and the native entry fails before global-work admission. Existing
+native STA initialization for other WebView operations is unchanged.
 
 ## Validation
 
-These checks exercise production Java methods and native admission/completion
-functions with explicit framework/COM/task recording seams. They are not Windows
-browser integration evidence.
+These checks exercise the unavailable provider boundaries, retained Java/native
+components and live storage-query methods with explicit framework/COM/task
+recording seams. Constructing an isolated worker fixture does not activate a
+worker in ordinary application use. The checks are not Windows browser
+integration evidence.
 
-- `tools/test_service_worker_contracts.py`: actual controller/settings, AndroidX
-  adapters/converters, response ownership and query parsing/callback logic;
+- `tools/test_service_worker_contracts.py`: provider availability boundaries,
+  prepared settings/adapters/converters, response ownership and query callbacks;
   supports `--core-classes` to run against actual Android `org.json` classes.
 - `tools/test_service_worker_native_contracts.py`: actual native request admission,
   response completion, expiration and controller-failure cleanup. Includes an
@@ -127,15 +157,26 @@ browser integration evidence.
   assertions. `tools/test_webstorage_native_contracts.py` additionally extracts
   the actual quota query and checks the method, origin, result, failure and
   once-only callback semantics using the real Windows URLMON origin parser.
-- Full `webview_host.cc` and `webview_jni.cc` compile checks use the repository's
-  pinned WebView2 SDK 1.0.4258.31 and AOSP JNI header for Windows x64 and ARM64.
+- Full `webview_host.cc` syntax checks pass for Windows x64 and ARM64 with the
+  repository's pinned WebView2 SDK 1.0.4258.31, global CMake definitions including
+  `NOGDI`, and `-Wall -Wextra -Werror` plus the target's existing
+  `-Wno-unused-parameter`. The now-unused worker-only initializer was removed.
+- Full `webview_jni.cc` builtin/shared syntax checks pass for Windows x64 using
+  a temporary AOSP JNI header with both repository `libnativehelper` JNI patches
+  applied. ARM64 rejects that existing patch's unconditional `sysv_abi` attribute
+  under `-Werror`; the JNI source is unchanged from the published pre-gate base.
+  Earlier ARM64 JNI checks used the original AOSP header and did not establish
+  Gesher's patched JNI ABI. No warning suppression or ABI patch change is part
+  of the worker gate. The canonical ARM64 toolchain/target supplies no ABI
+  override for this attribute; `tools/ci/build-arm64-windows.sh` currently builds
+  native probes and the ELF/bionic/POSIX subset, not WebView/JNI targets.
 - Existing SupportLib boundary and owned-stream contract suites remain applicable.
 
 The existing CI entry points also run the new suites: WebStorage Java forwarding
-invokes the worker/AndroidX/query contracts; owned-stream testing invokes native
-worker admission/completion checks with the same compiler/sanitizer settings and
-the missing-denial negative control. Historical-source and measurement-only runs
-remain isolated. No workflow changes are required.
+invokes the worker/AndroidX/query contracts; owned-stream testing invokes the
+prepared native worker admission/completion checks with the same compiler and
+sanitizer settings and the missing-denial negative control. Historical-source
+and measurement-only runs remain isolated. No workflow changes are required.
 
 The complete unchanged `app/build.sh` recipe compiled the integrated app against
 actual framework/core classes, generated AIDL delegates, passed BootLinkCheck
@@ -145,12 +186,14 @@ The locally available class artifacts are not a fresh framework build. The AOSP
 Java sources needed to regenerate the full SOURCE-retention compatibility table
 are absent; the generated local app package is for validation, not distribution.
 
-No performance improvement is claimed: the old no-op and constant-zero paths did
-not perform equivalent work, so an ABBA timing comparison would be misleading.
-The new suites verify bounded concurrency and resource ownership. Windows/ART
-execution with a real WebView2 runtime is still required for source-filter
-routing, browser response consumption during shutdown, exact redirect behavior,
-thread affinity, offline worker execution and actual storage usage/deletion.
+No worker performance improvement or functional availability is claimed. The
+old constant-zero storage paths did not perform equivalent work to real quota
+queries, so an ABBA comparison would also be misleading. The component suites
+verify bounded concurrency and resource ownership. A future worker backend
+needs Windows/ART execution with a real WebView2 runtime for source-filter
+routing, browser response consumption during shutdown, exact redirect/error
+behavior, thread affinity and offline worker execution. Actual storage usage
+and deletion also retain their Windows validation requirement.
 
 ## Primary contract references
 
@@ -160,6 +203,9 @@ thread affinity, offline worker execution and actual storage usage/deletion.
   settings defaults and INTERNET permission behavior.
 - [AndroidX converter boundary](https://chromium.googlesource.com/chromium/src/+/HEAD/android_webview/support_library/boundary_interfaces/src/org/chromium/support_lib_boundary/WebkitToCompatConverterBoundaryInterface.java):
   framework-to-boundary settings conversion in both directions.
+- [AndroidX controller](https://android.googlesource.com/platform/frameworks/support/+/androidx-main/webkit/webkit/src/main/java/androidx/webkit/internal/ServiceWorkerControllerImpl.java)
+  and [feature support](https://android.googlesource.com/platform/frameworks/support/+/androidx-main/webkit/webkit/src/main/java/androidx/webkit/internal/ApiFeature.java):
+  framework-first routing and framework/provider capability combination.
 - [WebView2 source filters](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_22):
   one service-worker filter owner per profile and runtime interface.
 - [WebView2 request handling](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/webresourcerequested):

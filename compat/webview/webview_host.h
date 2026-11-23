@@ -287,10 +287,11 @@ class Host {
   static bool ClearOriginData(const std::wstring& origin, int64_t callback_id);
   // A first-party HTTP(S) origin's actual Chromium quota-manager measurement.
   static bool QueryOriginStorage(const std::wstring& origin, int64_t callback_id);
-  // One worker interceptor for the shared profile, independent of public views.
+  // Prepared worker interceptor for the shared profile, independent of public views.
   using ServiceWorkerCallback = bool (*)(int64_t id, const std::wstring& url,
       const std::wstring& method, const std::wstring& headers);
   static void SetServiceWorkerCallback(ServiceWorkerCallback callback);
+  // Unavailable: rejects without scheduling work, installing a filter or calling back.
   static bool EnableServiceWorkers(int64_t callback_id);
   // Zero resumes the original Chromium request; negative retains its denial.
   static bool RespondToServiceWorker(int64_t id, int32_t status, const std::wstring& reason,

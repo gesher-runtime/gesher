@@ -153,15 +153,9 @@ public final class SupportLib {
         private final ProxyController mProxy = new ProxyController();
 
         public String[] getSupportedFeatures() {
-            try {
-                GesherServiceWorkers.get(); // Report support only after the native filter is installed.
-                String[] result = java.util.Arrays.copyOf(FEATURES, FEATURES.length + 2);
-                result[FEATURES.length] = "SERVICE_WORKER_BASIC_USAGE";
-                result[FEATURES.length + 1] = "SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST";
-                return result;
-            } catch (UnsupportedOperationException | IllegalStateException unavailable) {
-                return FEATURES.clone();
-            }
+            // Capability discovery must not activate a profile-wide request filter.
+            // Worker support remains unavailable until request failures match Android.
+            return FEATURES.clone();
         }
 
         public InvocationHandler createWebView(WebView webView) {

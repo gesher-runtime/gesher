@@ -588,8 +588,8 @@ std::map<Impl*, std::shared_ptr<Impl>> g_retiring;
 bool FinishDestroy(const std::shared_ptr<Impl>& impl);
 std::shared_ptr<Impl> g_service;  // a hidden host for cookies and data, when no WebView exists
 
-// WebView2 requires a single SERVICE_WORKER filter per profile. Keep it on the
-// hidden service controller so closing/replacing a public WebView cannot lose it.
+// Prepared worker routing stays inactive until Android request-failure semantics
+// are available. EnableServiceWorkers never installs the profile-wide filter.
 Host::ServiceWorkerCallback g_worker_callback = nullptr;
 bool g_workers_enabled = false;
 struct WorkerRequest {
@@ -1985,21 +1985,6 @@ void WithCoreWebView(std::function<void(ICoreWebView2*)> fn) {
   }
 }
 
-void WithServiceWebView(std::function<void(ICoreWebView2*)> fn) {
-  if (!g_service) {
-    g_service = std::make_shared<Impl>();
-    g_service->listener = &g_null_listener;
-    g_service->service_waiting.push_back(std::move(fn));
-    Start(g_service);
-  } else if (g_service->failed || g_service->destroyed) {
-    fn(nullptr);
-  } else if (g_service->ready) {
-    fn(g_service->webview.get());
-  } else {
-    g_service->service_waiting.push_back(std::move(fn));
-  }
-}
-
 void WithCookieManager(int64_t callback_id,
                        std::function<void(ICoreWebView2CookieManager*)> fn) {
   WithCoreWebView([callback_id, fn = std::move(fn)](ICoreWebView2* wv) {
@@ -3013,22 +2998,11 @@ bool Host::QueryOriginStorage(const std::wstring& origin, int64_t callback_id) {
 
 void Host::SetServiceWorkerCallback(ServiceWorkerCallback callback) { g_worker_callback = callback; }
 
-bool Host::EnableServiceWorkers(int64_t callback_id) {
-  return PostGlobal([callback_id](const GlobalWork& operation) {
-    WithServiceWebView([operation, callback_id](ICoreWebView2* wv) {
-      HRESULT hr = E_NOINTERFACE;
-      Com<ICoreWebView2_22> modern;
-      if (wv && g_service && !g_service->failed && g_workers_enabled) hr = S_OK;
-      else if (wv && g_service && g_service->bridge_guarded && !g_service->failed && g_worker_callback &&
-          Com<ICoreWebView2>(wv).As(IID_ICoreWebView2_22, &modern)) {
-        hr = modern->AddWebResourceRequestedFilterWithRequestSourceKinds(
-            L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-            COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_SERVICE_WORKER);
-        if (SUCCEEDED(hr)) g_workers_enabled = true;
-      }
-      ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
-    });
-  });
+bool Host::EnableServiceWorkers(int64_t /*callback_id*/) {
+  // WebResourceRequested can supply HTTP responses but cannot complete a load
+  // with Android's required network error. Reject before scheduling work or
+  // installing a filter; cookies and storage keep their independent controller.
+  return false;
 }
 
 bool Host::RespondToServiceWorker(int64_t id, int32_t status, const std::wstring& reason,

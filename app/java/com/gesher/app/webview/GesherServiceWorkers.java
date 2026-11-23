@@ -2,7 +2,6 @@
 package com.gesher.app.webview;
 
 import android.Manifest;
-import android.app.ActivityThread;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -21,18 +20,17 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-/** One profile-wide worker client, routed independently of any Android WebView. */
+/** Prepared worker dispatch; unavailable until request failures preserve Android semantics. */
 final class GesherServiceWorkers extends ServiceWorkerController {
+    // No provider entry point publishes a controller while activation is unavailable.
     private static volatile GesherServiceWorkers sInstance;
     private final Context mContext;
     private final Settings mSettings;
     private volatile ServiceWorkerClient mClient;
-    private boolean mStarted;
     private final ThreadPoolExecutor mRequests = new ThreadPoolExecutor(2, 2, 15,
             TimeUnit.SECONDS, new ArrayBlockingQueue<>(64), task -> {
                 Thread thread = new Thread(task, "WebView-service-worker");
@@ -48,43 +46,10 @@ final class GesherServiceWorkers extends ServiceWorkerController {
     }
 
     static GesherServiceWorkers get() {
-        GesherServiceWorkers controller = sInstance;
-        if (controller == null) {
-            synchronized (GesherServiceWorkers.class) {
-                controller = sInstance;
-                if (controller == null) {
-                    Context app = ActivityThread.currentApplication();
-                    if (app == null) throw new IllegalStateException("Application is not attached");
-                    GesherWebView.configure(app);
-                    controller = new GesherServiceWorkers(app);
-                    sInstance = controller;
-                }
-            }
-        }
-        controller.start();
-        return controller;
-    }
-
-    private synchronized void start() {
-        if (mStarted) return;
-        if (WebView2Host.onWebViewThread()) {
-            throw new IllegalStateException("Cannot initialize service workers on the WebView thread");
-        }
-        CountDownLatch ready = new CountDownLatch(1);
-        boolean[] result = {false};
-        if (!WebView2Host.enableServiceWorkers((type, hr, value) -> {
-            result[0] = hr >= 0;
-            ready.countDown();
-        })) throw new UnsupportedOperationException("WebView2 service-worker interception unavailable");
-        try {
-            if (!ready.await(5, TimeUnit.SECONDS) || !result[0]) {
-                throw new UnsupportedOperationException("WebView2 service-worker interception unavailable");
-            }
-        } catch (InterruptedException failure) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted starting service-worker interception", failure);
-        }
-        mStarted = true;
+        // Both framework and AndroidX controller access must fail before configuring
+        // WebView or publishing a client. An HTTP 403 is not an Android network error.
+        throw new UnsupportedOperationException(
+                "WebView2 service-worker interception lacks Android request-failure support");
     }
 
     static boolean dispatch(long id, String url, String method, String headers) {
