@@ -227,7 +227,9 @@ public final class TelephonyHost {
         check(properties.simStates.isEmpty(), "No telephony properties are written without a modem");
 
         callers.current = STATE;
-        equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_ABSENT, "No SIM in slot 0");
+        // TelephonyManager.getSimState(int) is UNKNOWN for a slot without a phone, as it is
+        // on AOSP without the phone service; getSimState() is ABSENT with zero phones.
+        equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_UNKNOWN, "No phone in slot 0");
         equal(t.phone.getSimStateForSlotIndex(-1), TelephonyManager.SIM_STATE_UNKNOWN, "Invalid slot");
         equal(t.phone.getDataNetworkTypeForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
                 STATE.name, null), TelephonyManager.NETWORK_TYPE_UNKNOWN, "No data network");
@@ -240,28 +242,57 @@ public final class TelephonyHost {
         equal(t.phone.getTypeAllocationCodeForSlot(0), null, "No TAC");
         equal(t.phone.getSubscriptionCarrierId(1), TelephonyManager.UNKNOWN_CARRIER_ID, "Unknown carrier");
         check(!t.phone.isRadioOnWithFeature(STATE.name, null), "No radio");
-        denied(() -> t.phone.getPrimaryImei(STATE.name, null), "Primary IMEI needs privileged access");
-        callers.current = PRIVILEGED;
-        throwsType(UnsupportedOperationException.class, () -> t.phone.getPrimaryImei(PRIVILEGED.name, null),
-                "No primary IMEI without phones");
-        // AOSP checks permissions before looking for the phone.
-        callers.current = PLAIN;
-        denied(() -> t.phone.getDataNetworkTypeForSubscriber(1, PLAIN.name, null), "Network type needs a permission");
-        denied(() -> t.phoneSubInfo.getSubscriberIdForSubscriber(1, PLAIN.name, null), "IMSI needs access");
-        denied(() -> t.phone.getLine1NumberForDisplay(1, PLAIN.name, null), "Number needs a permission");
-        callers.current = BASIC;
-        equal(t.phone.getDataNetworkTypeForSubscriber(1, BASIC.name, null),
-                TelephonyManager.NETWORK_TYPE_UNKNOWN, "READ_BASIC_PHONE_STATE suffices for the type");
-        callers.current = LEGACY;
-        equal(t.phoneSubInfo.getSubscriberIdForSubscriber(1, LEGACY.name, null), null,
-                "Pre-Q READ_PHONE_STATE gets placeholder null");
-        callers.current = PLAIN;
-        check(t.subscriptions.getActiveSubscriptionInfoList(PLAIN.name, null, false).isEmpty(),
-                "Empty list without permission");
-        denied(() -> t.subscriptions.getActiveSubInfoCount(PLAIN.name, null, false), "Count needs a permission");
+        // Without FEATURE_TELEPHONY AOSP publishes no phone, iphonesubinfo or isub service
+        // (PhoneGlobals.onCreate returns early), so the managers answer from their null-service
+        // paths: no permission check, no SecurityException, the same placeholder values, and
+        // IllegalStateException where the manager throws it.
+        for (App app : new App[] {PLAIN, STATE, PRIVILEGED}) {
+            callers.current = app;
+            String n = app.name;
+            String who = " (" + n + ")";
+            equal(t.phone.getDataNetworkTypeForSubscriber(1, n, null), TelephonyManager.NETWORK_TYPE_UNKNOWN,
+                    "Data network type without phone service" + who);
+            equal(t.phone.getDataNetworkType(n, null), TelephonyManager.NETWORK_TYPE_UNKNOWN,
+                    "Default data network type without phone service" + who);
+            equal(t.phone.getNetworkTypeForSubscriber(1, n, null), TelephonyManager.NETWORK_TYPE_UNKNOWN,
+                    "Network type without phone service" + who);
+            equal(t.phone.getVoiceNetworkTypeForSubscriber(1, n, null), TelephonyManager.NETWORK_TYPE_UNKNOWN,
+                    "Voice network type without phone service" + who);
+            check(!t.phone.isRadioOnWithFeature(n, null), "Radio off without phone service" + who);
+            equal(t.phone.getLine1NumberForDisplay(1, n, null), null, "Display number without phone service" + who);
+            equal(t.phone.getDeviceIdWithFeature(n, null), null, "Device ID without phone service" + who);
+            equal(t.phone.getImeiForSlot(0, n, null), null, "IMEI without phone service" + who);
+            equal(t.phone.getDeviceSoftwareVersionForSlot(0, n, null), null, "IMEISV without phone service" + who);
+            equal(t.phone.getServiceStateForSlot(0, false, false, n, null), null,
+                    "Service state without phone service" + who);
+            throwsType(IllegalStateException.class, () -> t.phone.getPrimaryImei(n, null),
+                    "TelephonyManager.getPrimaryImei's null-service exception" + who);
+            equal(t.phoneSubInfo.getDeviceIdForPhone(0, n, null), null, "Device ID (subinfo)" + who);
+            equal(t.phoneSubInfo.getDeviceIdWithFeature(n, null), null, "Default device ID (subinfo)" + who);
+            equal(t.phoneSubInfo.getImeiForSubscriber(1, n, null), null, "IMEI (subinfo)" + who);
+            equal(t.phoneSubInfo.getSubscriberIdForSubscriber(1, n, null), null, "IMSI" + who);
+            equal(t.phoneSubInfo.getIccSerialNumberForSubscriber(1, n, null), null, "ICCID" + who);
+            equal(t.phoneSubInfo.getIccSerialNumberWithFeature(n, null), null, "Default ICCID" + who);
+            equal(t.phoneSubInfo.getLine1NumberForSubscriber(1, n, null), null, "Line 1 number" + who);
+            equal(t.phoneSubInfo.getLine1Number(n, null), null, "Default line 1 number" + who);
+            check(t.subscriptions.getActiveSubscriptionInfoList(n, null, false).isEmpty(),
+                    "Empty subscription list without isub" + who);
+            equal(t.subscriptions.getActiveSubInfoCount(n, null, false), 0, "Zero subscriptions without isub" + who);
+            equal(t.subscriptions.getActiveSubscriptionInfo(1, n, null), null, "No subscription info" + who);
+            equal(t.subscriptions.getActiveSubscriptionInfoForSimSlotIndex(0, n, null), null,
+                    "No subscription in slot 0" + who);
+            check(t.subscriptions.getAllSubInfoList(n, null).isEmpty(), "No subscriptions at all" + who);
+            check(t.subscriptions.getAvailableSubscriptionInfoList(n, null).isEmpty(),
+                    "No available subscriptions" + who);
+            check(!t.subscriptions.isActiveSubId(1, n, null), "No active subscription ID" + who);
+            throwsType(IllegalStateException.class, () -> t.subscriptions.getPhoneNumber(1,
+                    SubscriptionManager.PHONE_NUMBER_SOURCE_UICC, n, null),
+                    "SubscriptionManager.getPhoneNumber's null-service exception" + who);
+            throwsType(IllegalStateException.class,
+                    () -> t.subscriptions.getPhoneNumberFromFirstAvailableSource(1, n, null),
+                    "getPhoneNumber(int)'s null-service exception" + who);
+        }
         callers.current = STATE;
-        check(t.subscriptions.getActiveSubscriptionInfoList(STATE.name, null, false).isEmpty(), "No subscriptions");
-        equal(t.subscriptions.getActiveSubInfoCount(STATE.name, null, false), 0, "Zero active");
         equal(t.subscriptions.getActiveSubInfoCountMax(), 0, "No modem slots");
         equal(t.subscriptions.getDefaultSubId(), SubscriptionManager.INVALID_SUBSCRIPTION_ID, "No default");
         equal(t.subscriptions.getActiveSubIdList(true).length, 0, "No active IDs");
@@ -273,6 +304,12 @@ public final class TelephonyHost {
                 null, listener, new int[] {TelephonyCallback.EVENT_SERVICE_STATE_CHANGED,
                         TelephonyCallback.EVENT_SIGNAL_STRENGTHS_CHANGED}, true);
         check(listener.events.isEmpty(), "Zero phones: no initial notifications");
+        App modern = new App("com.example.modern", 10114, 31);
+        callers.current = modern;
+        denied(() -> { t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                modern.name, null, new Listener(), new int[] {TelephonyCallback.EVENT_CALL_STATE_CHANGED}, true);
+                return null; }, "telephony.registry keeps READ_PHONE_STATE for call state without a modem");
+        callers.current = STATE;
         SubscriptionsListener subscriptions = new SubscriptionsListener();
         t.registry.addOnSubscriptionsChangedListener(STATE.name, null, subscriptions);
         equal(subscriptions.calls, 1, "Subscription listeners hear the initial (empty) state");
@@ -314,6 +351,19 @@ public final class TelephonyHost {
                 TelephonyManager.NETWORK_TYPE_UNKNOWN, "Revoked app op gives placeholder");
         callers.current = PLAIN;
         denied(() -> t.phone.getServiceStateForSlot(0, false, false, PLAIN.name, null), "Service state needs permission");
+        denied(() -> t.phone.getDataNetworkTypeForSubscriber(1, PLAIN.name, null), "Network type needs a permission");
+        denied(() -> t.phoneSubInfo.getSubscriberIdForSubscriber(1, PLAIN.name, null), "IMSI needs access");
+        denied(() -> t.phone.getLine1NumberForDisplay(1, PLAIN.name, null), "Number needs a permission");
+        denied(() -> t.subscriptions.getActiveSubInfoCount(PLAIN.name, null, false), "Count needs a permission");
+        check(t.subscriptions.getActiveSubscriptionInfoList(PLAIN.name, null, false).isEmpty(),
+                "Empty list without permission");
+        callers.current = BASIC;
+        equal(t.phone.getDataNetworkTypeForSubscriber(1, BASIC.name, null),
+                TelephonyManager.NETWORK_TYPE_LTE, "READ_BASIC_PHONE_STATE suffices for the type");
+        callers.current = LEGACY;
+        equal(t.phoneSubInfo.getSubscriberIdForSubscriber(1, LEGACY.name, null), null,
+                "Pre-Q READ_PHONE_STATE gets placeholder null");
+        callers.current = PLAIN;
         denied(() -> t.phone.getDataNetworkTypeForSubscriber(1, "com.example.other", null), "Package spoofing");
 
         // Location-sanitized ServiceState.

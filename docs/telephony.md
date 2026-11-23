@@ -86,8 +86,17 @@ without carrier privileges (there are no carrier apps):
   without phone-number access. Operator name and numeric in `ServiceState` need coarse
   location (permission, app op and the location switch).
 
-As in AOSP, permission checks run before the phone lookup, so a caller without permission
-gets `SecurityException` even on a machine without a modem.
+These rules apply only when a modem was present at boot. Without one the device has no
+`FEATURE_TELEPHONY`, and AOSP's `PhoneGlobals.onCreate` then returns before publishing
+`phone`, `iphonesubinfo` or `isub` (`config_force_phone_globals_creation` is false).
+`TelephonyManager` and `SubscriptionManager` answer from their "service is null" paths,
+without any permission check. Gesher still registers the three services, and without a
+modem they give exactly those answers: `NETWORK_TYPE_UNKNOWN`, null identifiers and numbers,
+empty subscription lists, `SIM_STATE_UNKNOWN` from `getSimState(slot)` (`getSimState()` is
+`ABSENT` with zero phones) and `IllegalStateException` from `getPrimaryImei()` and
+`SubscriptionManager.getPhoneNumber()`, as the managers throw. `telephony.registry`
+(system_server, present on every Android device) keeps its listener permission checks with
+or without a modem.
 
 `TelephonyCallback`/`PhoneStateListener` deliver, for phone 0: service state, signal
 strength(s), data connection state and the (always idle) call state, initially and on

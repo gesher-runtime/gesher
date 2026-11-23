@@ -39,8 +39,12 @@ import java.util.function.BooleanSupplier;
  * services. See docs/telephony.md.
  *
  * <p>Gesher models at most one modem, Android phone 0, and only when Windows reported a
- * WWAN interface at boot; otherwise there are no phones and every method takes AOSP's
- * "no phone" path (after the same permission checks). Data-only: there are no voice calls,
+ * WWAN interface at boot. Without one the device has no FEATURE_TELEPHONY, and AOSP then
+ * creates no PhoneGlobals: {@code phone}, {@code iphonesubinfo} and {@code isub} do not
+ * exist, so TelephonyManager and SubscriptionManager answer from their "service is null"
+ * paths without any permission check. Gesher's three services give exactly those answers
+ * (see {@link #NO_TELEPHONY_SERVICE}); {@code telephony.registry} (system_server, present
+ * on every device) keeps its checks. Data-only: there are no voice calls,
  * SMS, carrier privileges, carrier configuration or eUICC management. Identifier and phone
  * number access follow AOSP's TelephonyPermissions / LegacyPermissionManagerService rules.
  */
@@ -58,6 +62,16 @@ public final class TelephonyService {
     static final String FINE = "android.permission.ACCESS_FINE_LOCATION";
     static final String COARSE = "android.permission.ACCESS_COARSE_LOCATION";
     static final String READ_ACTIVE_EMERGENCY_SESSION = "android.permission.READ_ACTIVE_EMERGENCY_SESSION";
+
+    /**
+     * Without FEATURE_TELEPHONY, AOSP's PhoneGlobals.onCreate returns before publishing
+     * {@code phone}, {@code iphonesubinfo} or {@code isub} (config_force_phone_globals_creation
+     * is false). Gesher still registers them, so without a boot modem each method answers as
+     * the manager does when the service is null: the same value, the same
+     * IllegalStateException where the manager throws one, and no permission check.
+     */
+    static final String NO_TELEPHONY_SERVICE = "Telephony service not available.";
+    static final String NO_SUBSCRIPTION_SERVICE = "subscription service unavailable.";
 
     // ---------------------------------------------------------------------------------
     // The modem's state, polled by one daemon worker, and the boot probe for features.
@@ -485,15 +499,15 @@ public final class TelephonyService {
         }
 
         /**
-         * The SIM state in a slot. Without a modem there is no SIM in any slot: ABSENT,
-         * as Gesher has always answered (TelephonyManager.getSimState() is ABSENT on a
-         * device without phones; UNKNOWN would mean "still loading" to applications).
+         * The SIM state in a slot: UNKNOWN for a slot without a phone, as
+         * PhoneInterfaceManager answers and as TelephonyManager.getSimState(int) answers when
+         * the service is null. Without a modem there are no phones, so
+         * TelephonyManager.getSimState() is ABSENT without asking this service.
          */
         @Override
         public int getSimStateForSlotIndex(int slotIndex) {
-            if (slotIndex < 0) return TelephonyManager.SIM_STATE_UNKNOWN;
-            if (!mCellular.present()) return TelephonyManager.SIM_STATE_ABSENT;
-            return slotIndex == 0 ? mCellular.simState() : TelephonyManager.SIM_STATE_UNKNOWN;
+            if (slotIndex != 0 || !mCellular.present()) return TelephonyManager.SIM_STATE_UNKNOWN;
+            return mCellular.simState();
         }
 
         /** The registered network's country; "" without a phone or registration. */
@@ -509,6 +523,7 @@ public final class TelephonyService {
         @Override
         public int getDataNetworkTypeForSubscriber(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return TelephonyManager.NETWORK_TYPE_UNKNOWN;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readNonDangerousPhoneState(c)
                     && !mRules.readPhoneState(c, "getDataNetworkTypeForSubscriber")) {
@@ -526,6 +541,7 @@ public final class TelephonyService {
         @Override
         public int getNetworkTypeForSubscriber(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return TelephonyManager.NETWORK_TYPE_UNKNOWN;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (c.targetSdk() > Build.VERSION_CODES.Q) {
                 return getDataNetworkTypeForSubscriber(subId, callingPackage, callingFeatureId);
@@ -541,6 +557,7 @@ public final class TelephonyService {
         @Override
         public int getVoiceNetworkTypeForSubscriber(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return TelephonyManager.NETWORK_TYPE_UNKNOWN;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readPhoneState(c, "getVoiceNetworkTypeForSubscriber")) {
                 return TelephonyManager.NETWORK_TYPE_UNKNOWN;
@@ -578,6 +595,7 @@ public final class TelephonyService {
 
         @Override
         public boolean isRadioOnWithFeature(String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return false;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readPhoneStateNoThrow(c, "isRadioOnWithFeature")) return false;
             WindowsCellular.Modem modem = mCellular.phone(0) ? mCellular.modem() : null;
@@ -594,6 +612,8 @@ public final class TelephonyService {
 
         @Override
         public String getPrimaryImei(String callingPackage, String callingFeatureId) {
+            // TelephonyManager.getPrimaryImei throws this when the service is null.
+            if (!mCellular.present()) throw new IllegalStateException(NO_TELEPHONY_SERVICE);
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readIdentifiersNoThrow(c, "getPrimaryImei")) {
                 throw new SecurityException("Caller does not have permission");
@@ -605,8 +625,8 @@ public final class TelephonyService {
 
         @Override
         public String getDeviceIdWithFeature(String callingPackage, String callingFeatureId) {
-            Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mCellular.phone(0)) return null;
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readIdentifiers(c, "getDeviceId")) return null;
             return WindowsCellular.imei(mCellular.modem());
         }
@@ -631,6 +651,7 @@ public final class TelephonyService {
         @Override
         public String getLine1NumberForDisplay(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             mRules.readPhoneNumber(c, "getLine1NumberForDisplay");
             return null;
@@ -677,6 +698,7 @@ public final class TelephonyService {
 
         @Override
         public String getDeviceIdForPhone(int phoneId, String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readIdentifiers(c, "getDeviceId")) return null;
             return mCellular.phone(phoneId) ? WindowsCellular.imei(mCellular.modem()) : null;
@@ -690,6 +712,7 @@ public final class TelephonyService {
 
         @Override
         public String getImeiForSubscriber(int subId, String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readIdentifiers(c, "getImei")) return null;
             return WindowsCellular.imei(modemForSub(subId));
@@ -698,6 +721,7 @@ public final class TelephonyService {
         @Override
         public String getSubscriberIdForSubscriber(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readIdentifiers(c, "getSubscriberIdForSubscriber")) return null;
             WindowsCellular.Modem modem = modemForSub(subId);
@@ -708,6 +732,7 @@ public final class TelephonyService {
         @Override
         public String getIccSerialNumberForSubscriber(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readIdentifiers(c, "getIccSerialNumber")) return null;
             return WindowsCellular.iccId(modemForSub(subId));
@@ -722,6 +747,7 @@ public final class TelephonyService {
         @Override
         public String getLine1NumberForSubscriber(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readPhoneNumber(c, "getLine1Number")) return null;
             return WindowsCellular.number(modemForSub(subId));
@@ -801,6 +827,7 @@ public final class TelephonyService {
         @Override
         public List<SubscriptionInfo> getActiveSubscriptionInfoList(String callingPackage,
                 String callingFeatureId, boolean isForAllProfiles) {
+            if (!mCellular.present()) return Collections.emptyList();
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!readPhoneStateOnAnySub(c, "getActiveSubscriptionInfoList")) {
                 return Collections.emptyList();
@@ -813,6 +840,7 @@ public final class TelephonyService {
         @Override
         public int getActiveSubInfoCount(String callingPackage, String callingFeatureId,
                 boolean isForAllProfiles) {
+            if (!mCellular.present()) return 0;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!readPhoneStateOnAnySub(c, "getAllSubInfoList")) {
                 throw new SecurityException("Need READ_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE, or "
@@ -829,6 +857,7 @@ public final class TelephonyService {
         @Override
         public SubscriptionInfo getActiveSubscriptionInfo(int subId, String callingPackage,
                 String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readPhoneState(c, "getActiveSubscriptionInfo")) {
                 throw new SecurityException("Need READ_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE, or "
@@ -842,6 +871,7 @@ public final class TelephonyService {
         @Override
         public SubscriptionInfo getActiveSubscriptionInfoForSimSlotIndex(int slotIndex,
                 String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readPhoneState(c, "getActiveSubscriptionInfoForSimSlotIndex")) {
                 throw new SecurityException("Need READ_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE, or "
@@ -854,7 +884,10 @@ public final class TelephonyService {
             return info == null ? null : redact(info, c, "getActiveSubscriptionInfoForSimSlotIndex");
         }
 
-        private List<SubscriptionInfo> privileged(Caller c, String message) {
+        private List<SubscriptionInfo> privileged(String callingPackage, String callingFeatureId,
+                String message) {
+            if (!mCellular.present()) return Collections.emptyList();
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.granted(c, READ_PRIVILEGED_PHONE_STATE)) {
                 throw new SecurityException(message + " requires " + READ_PRIVILEGED_PHONE_STATE);
             }
@@ -864,14 +897,13 @@ public final class TelephonyService {
 
         @Override
         public List<SubscriptionInfo> getAllSubInfoList(String callingPackage, String callingFeatureId) {
-            return privileged(mRules.caller(callingPackage, callingFeatureId), "getAllSubInfoList");
+            return privileged(callingPackage, callingFeatureId, "getAllSubInfoList");
         }
 
         @Override
         public List<SubscriptionInfo> getAvailableSubscriptionInfoList(String callingPackage,
                 String callingFeatureId) {
-            return privileged(mRules.caller(callingPackage, callingFeatureId),
-                    "getAvailableSubscriptionInfoList");
+            return privileged(callingPackage, callingFeatureId, "getAvailableSubscriptionInfoList");
         }
 
         @Override
@@ -932,6 +964,7 @@ public final class TelephonyService {
 
         @Override
         public boolean isActiveSubId(int subId, String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return false;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readPhoneState(c, "isActiveSubId")) {
                 throw new SecurityException("Need READ_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE, or "
@@ -942,6 +975,8 @@ public final class TelephonyService {
 
         private String phoneNumber(int subId, String callingPackage, String callingFeatureId,
                 String message) {
+            // SubscriptionManager.getPhoneNumber throws this when the service is null.
+            if (!mCellular.present()) throw new IllegalStateException(NO_SUBSCRIPTION_SERVICE);
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.granted(c, READ_PHONE_NUMBERS) && !mRules.granted(c, READ_PRIVILEGED_PHONE_STATE)) {
                 throw new SecurityException(message + ": uid " + c.uid() + " has neither "
