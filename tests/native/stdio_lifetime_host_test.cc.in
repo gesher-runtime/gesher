@@ -1,5 +1,6 @@
 // Exact production state/close/reopen methods; declared Windows host boundaries.
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>

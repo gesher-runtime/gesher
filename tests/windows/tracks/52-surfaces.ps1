@@ -71,6 +71,13 @@ function InOrder([string] $text, [string[]] $lines) {
 # Runs surfaceapp with $Arguments; returns @{ Text; Shots = @{ phase -> pixels } }.
 function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [string] $Prefix = 'surfaces', [int] $Phases = 7) {
   $log = Join-Path $env:RUNNER_TEMP "surfaces-$Tag-$(Get-Random).log"
+  # The scaling Activity reuses surfaceapp after SurfaceActivity. Keep earlier
+  # evidence on disk, but never capture a prior launch's HWND or phase markers.
+  $starts = @{}
+  foreach ($f in $AppLogs) {
+    $prior = Get-Content -Raw $f -ErrorAction SilentlyContinue
+    $starts[$f] = if ($prior) { $prior.Length } else { 0 }
+  }
   $quoted = (@($dvmSurfaces) + $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
@@ -80,7 +87,11 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
   try {
   $read = {
     $t = Get-Content -Raw $log -ErrorAction SilentlyContinue
-    foreach ($f in $AppLogs) { $t += "`n" + (Get-Content -Raw $f -ErrorAction SilentlyContinue) }
+    foreach ($f in $AppLogs) {
+      $current = Get-Content -Raw $f -ErrorAction SilentlyContinue
+      if ($current -and $current.Length -ge $starts[$f]) { $current = $current.Substring($starts[$f]) }
+      $t += "`n" + $current
+    }
     "$t"
   }.GetNewClosure()
   $shots = @{}
@@ -244,6 +255,54 @@ function SurfaceGlChecks([string] $Mode, $r) {
   }
 }
 
+# Real MediaCodec -> SurfaceView/TextureView display, including a separate decoder
+# process in the device run. Pixel checks are mandatory; log markers alone fail.
+function CodecScalingChecks([string] $Mode, $r, [bool] $RemoteProducer) {
+  $t = $r.Text
+  SurfaceCheck "video scaling ($Mode): process completion and JNI errors" @(
+    if ($r.Exit -ne 0) { "actual process exit $($r.Exit)" }
+    if ($t -match 'scaling: FAILED') { ([regex]::Match($t, 'scaling: FAILED[^\r\n]*').Value) }
+    InOrder $t @('scaling: invalid modes and released state verified',
+      'scaling: phase 1 bitmap verified: default fit after no-Surface call',
+      'scaling: phase 2 bitmap verified: live centered crop',
+      'scaling: phase 3 bitmap verified: resize same frame, no new decoded input',
+      'scaling: phase 4 bitmap verified: setOutputSurface keeps mode for next frame',
+      'scaling: phase 5 bitmap verified: live fit clears prior crop',
+      'scaling: phase 6 bitmap verified: reset and reconfigure restore default fit', 'scaling: done'))
+  SurfaceCheck "video scaling ($Mode): producer process identity" @(
+    if ($RemoteProducer) {
+      $identity = [regex]::Match($t, 'scaling: separate producer pid (\d+) consumer pid (\d+)')
+      if (-not $identity.Success -or $identity.Groups[1].Value -eq $identity.Groups[2].Value) {
+        'no independently verified separate decoder process'
+      }
+    } elseif ($t -notmatch 'scaling: local producer pid \d+') { 'no local decoder process' })
+  foreach ($phase in 1..6) {
+    $regions = @()
+    $wide = $phase -eq 3
+    $cropped = $phase -eq 2 -or $phase -eq 4
+    foreach ($offset in $(if ($wide) { @(0, 208) } else { @(0, 120) })) {
+      $name = if ($offset -eq 0) { 'SurfaceView' } else { 'TextureView' }
+      if ($cropped) {
+        $regions += ,@("$name centered green", ($offset + 6), 6, ($offset + 90), 90, 0x00ff00)
+      } elseif ($wide) {
+        $regions += ,@("$name red restored", ($offset + 8), 8, ($offset + 52), 56, 0xff0000)
+        $regions += ,@("$name green", ($offset + 72), 8, ($offset + 116), 56, 0x00ff00)
+        $regions += ,@("$name blue restored", ($offset + 136), 8, ($offset + 180), 56, 0x0000ff)
+      } else {
+        $regions += ,@("$name red", ($offset + 6), 6, ($offset + 26), 90, 0xff0000)
+        $regions += ,@("$name green", ($offset + 38), 6, ($offset + 58), 90, 0x00ff00)
+        $regions += ,@("$name blue", ($offset + 70), 6, ($offset + 90), 90, 0x0000ff)
+      }
+    }
+    SurfaceCheck "video scaling ($Mode): phase $phase actual window pixels" @(
+      if ($null -eq $r.Shots[$phase]) { "no window read-back at phase $phase" }
+      else { Regions $r.Shots[$phase] $regions })
+  }
+  if ($script:failed -gt $script:surfacesFailedBefore) {
+    ("$t" -split "`n" | Where-Object { $_ -match 'scaling|Surface|Texture|Exception|FATAL| at |killed' } | Select-Object -Last 200) | Out-Host
+  }
+}
+
 if (-not (Test-Path "$Dir/surfacegl.apk")) {
   Write-Host 'FAIL  surfaces: surfacegl.apk is missing'
   $failed++
@@ -263,6 +322,9 @@ if (-not (Test-Path "$Dir/surfaceapp.apk")) {
   $script:surfacesFailedBefore = $failed
   $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/surfaceapp.apk")) 'single' @()
   SurfaceChecks 'single process' $r
+  $script:surfacesFailedBefore = $failed
+  $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', '--activity', 'com.gesher.surfaceapp.CodecScalingActivity', (NoDrive "$Dir/surfaceapp.apk")) 'scaling-single' @() 'scaling' 6
+  CodecScalingChecks 'single process' $r $false
 
   # 2. The Gesher device: surfaceapp's own app process, started by the system server.
   $savedData = $env:ANDROID_DATA
@@ -276,6 +338,9 @@ if (-not (Test-Path "$Dir/surfaceapp.apk")) {
     $script:surfacesFailedBefore = $failed
     $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--hidden-window') 'device' @("$root/logs-surfaces/com.gesher.surfaceapp.log")
     SurfaceChecks 'Gesher device' $r
+    $script:surfacesFailedBefore = $failed
+    $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--activity', 'com.gesher.surfaceapp.CodecScalingActivity', '--ez', 'scaling.remote', 'true', '--hidden-window') 'scaling-device' @("$root/logs-surfaces/com.gesher.surfaceapp.log") 'scaling' 6
+    CodecScalingChecks 'Gesher device with Binder producer' $r $true
     if (Test-Path "$Dir/surfacegl.apk") {
       $script:surfacesFailedBefore = $failed
       $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfacegl.apk"), '--hidden-window') 'gl-device' @("$root/logs-surfaces/com.gesher.surfacegl.log") 'surfacegl' 2

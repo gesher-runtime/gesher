@@ -344,6 +344,22 @@ Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP,
     'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
     'surface_control_test all passed')
 
+# Real pending GPU completion, independent-context CPU submission and immutable
+# completed native-fence descriptor transfer. The fixture checks the private
+# ANGLE synchronization ABI so an older cached SDK cannot silently pass.
+Check 'native libs: asynchronous local EGL fences and native descriptor lifetime' {
+  & "$Dir/egl_fence_test.exe"
+} @('this package contains the current ANGLE synchronization ABI', 'egl_fence_test all passed')
+
+Check 'native libs: the same pending EGL fence and native descriptor checks on WARP' {
+  $env:GESHER_EGL_DEVICE = 'warp'
+  try {
+    & "$Dir/egl_fence_test.exe"
+  } finally {
+    Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
+  }
+} @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'egl_fence_test all passed')
+
 # The GPU kept from sleeping between the frames Gesher reads back (child
 # surfaces, SurfaceControl composition; compat/bionic/gpu_keepalive.h): on a
 # hardware adapter it gives the GPU work in the gaps of frames coming 25 a

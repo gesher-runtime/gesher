@@ -134,6 +134,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         final java.util.LinkedHashSet<String> changedAuthorities = new java.util.LinkedHashSet<>();
         long firstChange;
         long lastChange;
+        boolean contentTriggerReady;
 
         Job(String packageName, String namespace, JobInfo info) {
             this.packageName = packageName;
@@ -224,14 +225,15 @@ final class JobSchedulerService extends IJobScheduler.Default
                 triggeredUris = null;
                 triggeredAuthorities = null;
             } else {
-                // JobStatus.MAX_URIS_TO_REPORT: more than that and only the authorities.
-                triggeredUris = job.changedUris.size() <= 50
-                        ? job.changedUris.toArray(new android.net.Uri[0]) : null;
+                // New notifications are bounded in contentChanged. Android carries
+                // the full union of failed and newly pending batches into a retry.
+                triggeredUris = job.changedUris.toArray(new android.net.Uri[0]);
                 triggeredAuthorities = job.changedAuthorities.toArray(new String[0]);
                 job.changedUris.clear();
                 job.changedAuthorities.clear();
                 job.firstChange = 0;
                 job.lastChange = 0;
+                job.contentTriggerReady = false;
             }
         }
 
@@ -687,6 +689,17 @@ final class JobSchedulerService extends IJobScheduler.Default
                     mJobs.remove(old);
                     job.work.addAll(old.work);
                     job.nextWorkId = old.nextWorkId;
+                    if (hasTriggers(info) && !old.changedAuthorities.isEmpty()) {
+                        // ContentObserverController transfers only the pending
+                        // batch, not changes already owned by the replaced Run.
+                        job.changedUris.addAll(old.changedUris);
+                        job.changedAuthorities.addAll(old.changedAuthorities);
+                        job.firstChange = old.firstChange;
+                        job.lastChange = old.lastChange;
+                        job.contentTriggerReady = true;
+                        old.changedUris.clear();
+                        old.changedAuthorities.clear();
+                    }
                     if (old.run != null && !old.run.stopping) stop = old.run;
                 }
                 mJobs.add(job);
@@ -1080,7 +1093,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (job.earliest > now) next = Math.min(next, job.earliest);
                 if (job.latest > now) next = Math.min(next, job.latest);
                 if (hasTriggers(job.info)) {
-                    long at = triggerReadyAt(job);
+                    long at = triggerReadyAt(job, now);
                     if (at > now) next = Math.min(next, at);
                 }
             }
@@ -1156,7 +1169,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         if (needsNetwork(info) && satisfyingNetwork(info, state) == null) {
             reasons |= reasonBit(JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY);
         }
-        if (hasTriggers(info) && triggerReadyAt(job) > now) {
+        if (hasTriggers(info) && triggerReadyAt(job, now) > now) {
             reasons |= reasonBit(JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONTENT_TRIGGER);
         }
         if (info.isRequireStorageNotLow() && !state.storageNotLow) {
@@ -1318,6 +1331,10 @@ final class JobSchedulerService extends IJobScheduler.Default
     /** ContentObserverController's defaults for a trigger's update and maximum delays. */
     private static final long DEFAULT_TRIGGER_UPDATE_DELAY_MS = 10_000;
     private static final long DEFAULT_TRIGGER_MAX_DELAY_MS = 2 * 60_000;
+    private static final long MIN_TRIGGER_UPDATE_DELAY_MS = 500;
+    private static final long MIN_TRIGGER_MAX_DELAY_MS = 1_000;
+    private static final int MAX_TRIGGER_URIS = 50;
+    private static final int URGENT_TRIGGER_URIS = 40;
 
     private static boolean hasTriggers(JobInfo info) {
         JobInfo.TriggerContentUri[] t = info.getTriggerContentUris();
@@ -1329,23 +1346,40 @@ final class JobSchedulerService extends IJobScheduler.Default
      * for its update delay, or its maximum delay after the first change; never without a
      * change (Long.MAX_VALUE). Guarded by this.
      */
-    private long triggerReadyAt(Job j) {
+    private long triggerReadyAt(Job j, long now) {
         if (j.changedAuthorities.isEmpty()) return Long.MAX_VALUE;
+        if (j.contentTriggerReady) return 0;
         long update = j.info.getTriggerContentUpdateDelay();
         long max = j.info.getTriggerContentMaxDelay();
         if (update < 0) update = DEFAULT_TRIGGER_UPDATE_DELAY_MS;
+        else update = Math.max(update, MIN_TRIGGER_UPDATE_DELAY_MS);
         if (max < 0) max = DEFAULT_TRIGGER_MAX_DELAY_MS;
-        return Math.min(j.lastChange + update, j.firstChange + max);
+        else max = Math.max(max, MIN_TRIGGER_MAX_DELAY_MS);
+        long ready = Math.min(triggerDeadline(j.lastChange, update), triggerDeadline(j.firstChange, max));
+        if (j.changedUris.size() >= URGENT_TRIGGER_URIS || ready <= now) {
+            // Once the content constraint is satisfied, later notifications must
+            // not make it false while another constraint still prevents execution.
+            j.contentTriggerReady = true;
+            return 0;
+        }
+        return ready;
+    }
+
+    private static long triggerDeadline(long since, long delay) {
+        return delay > Long.MAX_VALUE - since ? Long.MAX_VALUE : since + delay;
     }
 
     /** ContentService's changes: jobs whose triggers they match take note, and may run. */
     private void contentChanged(android.net.Uri[] uris, int flags) {
         boolean any = false;
+        boolean wake = false;
         long now = SystemClock.elapsedRealtime();
         synchronized (this) {
             for (Job j : mJobs) {
                 JobInfo.TriggerContentUri[] triggers = j.info.getTriggerContentUris();
                 if (triggers == null) continue;
+                long previousReady = triggerReadyAt(j, now);
+                boolean matched = false;
                 for (android.net.Uri uri : uris) {
                     for (JobInfo.TriggerContentUri t : triggers) {
                         boolean descendants = (t.getFlags()
@@ -1355,14 +1389,23 @@ final class JobSchedulerService extends IJobScheduler.Default
                         }
                         if (j.changedAuthorities.isEmpty()) j.firstChange = now;
                         j.lastChange = now;
-                        j.changedUris.add(uri);
+                        // Match ContentObserverController: cap newly observed
+                        // URIs, but keep every authority and any carried retry union.
+                        if (j.changedUris.size() < MAX_TRIGGER_URIS) j.changedUris.add(uri);
                         j.changedAuthorities.add(uri.getAuthority());
-                        any = true;
+                        matched = true;
                         break;
                     }
                 }
+                if (matched) {
+                    any = true;
+                    // Extending the quiet period cannot bring work forward. The
+                    // existing wake will resample it; notify only for an earlier
+                    // due time (including the first change or urgent threshold).
+                    if (j.run == null && triggerReadyAt(j, now) < previousReady) wake = true;
+                }
             }
-            if (any) notifyAll();
+            if (wake) notifyAll();
         }
         if (any) SystemServer.log("jobscheduler: content changed: " + java.util.Arrays.toString(uris));
     }
@@ -1662,6 +1705,9 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (run.triggeredUris != null) java.util.Collections.addAll(j.changedUris, run.triggeredUris);
                 j.lastChange = now;
             }
+            // The retry also takes pending notifications received during a run
+            // that originally started without content (for example, a deadline).
+            if (!j.changedAuthorities.isEmpty()) j.contentTriggerReady = true;
             rescheduleForFailure(j, run, now);
             keep = true;
         } else if (j.info.isPeriodic()) {

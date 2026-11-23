@@ -30,6 +30,20 @@ Setup passes with its own downloads, or the one `-AutoDownload` fetches when no
 APK is passed; staging other APKs or `-Remove` clears it. The update replaces only the verified APK slots, keeping
 microG's data and accounts.
 
+## Optional downloads that fail
+
+Setup downloads each optional component (WebView2, the three microG APKs as
+one component, Aurora Store) on its own when **Install** is clicked. If one
+cannot be downloaded (no connection, or a filtering proxy that refuses the
+host, for example with HTTP 418), Setup lists the components it could not get
+with the first error, skips only those, and installs everything else. Running
+Setup again offers them again; microG and Aurora Store can also be installed
+from the Gesher Control Center. Post-install passes the microG APKs only when
+all three are present, otherwise `-AutoDownload`.
+Cancelling the download still returns to the Ready page. A silent run shows
+nothing and keeps the earlier behavior: each post-install step retries or
+skips its own download.
+
 Setup's finish page does not offer to open the README; the Start menu entry
 does.
 
@@ -166,9 +180,12 @@ menu shortcut, as a launcher lists it
   updated (new label or icon) or the shortcut is missing; it says so in the
   console (`gesher-app: Start menu shortcut ...`). `gesher-app uninstall
   PACKAGE` removes it and its icon, and the `Gesher Apps` folder once it is
-  empty. A failure never fails the install or the launch. `GESHER_SHORTCUTS=0`
-  turns shortcuts off; runs from a build folder without `gesher-app.cmd` make
-  none.
+  empty. An install committed through Android's `PackageInstaller` session API
+  (an app store such as Aurora Store) makes the shortcut and URL protocols too,
+  from the system server, once the install is published; a removal committed
+  through `PackageInstaller` removes them (ADR 0028's amendment). A failure never
+  fails the install, the removal or the launch. `GESHER_SHORTCUTS=0` turns
+  shortcuts off; runs from a build folder without `gesher-app.cmd` make none.
 - **Window icon without a shortcut**: the app's windows take the shortcut's
   `icon.ico`. A package with no launcher activity, and a staged microG addon
   (its verified `system\priv-app\<package>` slot, which `gesher-app-microg.ps1`

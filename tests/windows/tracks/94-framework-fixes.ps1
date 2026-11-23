@@ -23,6 +23,15 @@ Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
   $httpEngineOut
 } @('HttpEngineDeviceSmoke passed:')
 
+foreach ($httpCacheTest in @('HttpEngineCacheTest', 'HttpEngineConnectionLifetimeTest', 'HttpEngineReadBufferTest')) {
+  $httpCacheOut = FixesRun ($dvmFixes + $httpCacheTest) 90
+  $httpCacheCode = $LASTEXITCODE
+  Check "network: $httpCacheTest real-provider contracts on ART" {
+    if ($httpCacheCode -ne 0) { throw "HTTP engine contract failed: $httpCacheOut" }
+    $httpCacheOut
+  } @("${httpCacheTest} passed:")
+}
+
 foreach ($httpPolicyMode in @('ordinary', 'global-enabled', 'global-disabled')) {
   $httpPolicyOut = FixesRun ($dvmFixes + 'HttpEngineProtocolPolicyTest' + $httpPolicyMode) 45
   $httpPolicyCode = $LASTEXITCODE
@@ -400,7 +409,7 @@ $appOpsCode = $LASTEXITCODE
 Check 'services: AppOps defaults, authority, attributed delivery, foreground lifecycle and signed persistence' {
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
-} @('AppOpsContractTest all passed: 482 checks; binder=true')
+} @('AppOpsContractTest all passed: 489 checks; binder=true')
 
 $uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'PackageUidIsolationContractTest' +
