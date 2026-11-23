@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "webview_host.h"
+#include "browser_session_probe.h"
 
 using gesher::webview::Host;
 using gesher::webview::HostOptions;
@@ -267,6 +268,8 @@ int wmain(int argc, wchar_t** argv) {
                               r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
   ShowWindow(hwnd, SW_SHOWNOACTIVATE);
   UpdateWindow(hwnd);
+
+  if (!browser_session_probe::Run(hwnd)) ++failures;
 
   ProbeListener listener;
   HostOptions options;

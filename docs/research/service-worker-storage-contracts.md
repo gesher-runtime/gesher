@@ -89,7 +89,7 @@ worker session. It cannot safely retrofit cancellation onto an unrelated
 `WebResourceRequested` deferral: URL/method/order matching is ambiguous for
 concurrent identical requests and redirects.
 
-The Chromium 146.0.7647.2 source reveals the remaining attachment problem:
+The Chromium 146.0.7647.2 source distinguishes worker and browser session routes:
 
 - [FrameAutoAttacher](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/frame_auto_attacher.cc)
   matches workers to the page's frame origins. The hidden blank controller does
@@ -103,15 +103,43 @@ The Chromium 146.0.7647.2 source reveals the remaining attachment problem:
 - [DevToolsURLLoaderInterceptor](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/devtools_url_loader_interceptor.cc)
   resumes an outstanding intercepted request on detachment. Detach is not
   denial; pending failures must be acknowledged before removing interception.
+- [BrowserDevToolsAgentHost](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/browser_devtools_agent_host.cc)
+  installs Fetch for trusted, non-discovery browser sessions.
+  [Loader-factory instrumentation](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/devtools_instrumentation.cc)
+  applies it to worker requests and main scripts without a worker debugger
+  attachment. Its patterns have no profile/worker predicate, and the browser
+  handler's enable callback does not refresh existing loader factories.
+- `Target.attachToTarget` can attach an existing browser ID from a trusted root,
+  but `Target.getTargets` uses
+  [GetOrCreateAll](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/devtools_agent_host_impl.cc),
+  which does not enumerate browser hosts even with an explicit browser filter.
+  Discovery notifications might expose an existing browser host; documented
+  WebView2 COM does not supply a browser-session creation guarantee.
 
-Discovery followed by attachment leaves first-request races. A faithful CDP
-replacement therefore needs independent profile-scoped ownership before worker
+Per-worker discovery followed by attachment leaves first-request races. A browser
+session avoids that attachment requirement but still needs supported acquisition,
+request/profile isolation and coverage of existing factories. A faithful CDP
+replacement needs independent profile-scoped ownership before worker
 execution, a table keyed by session and Fetch request ID, and terminal
 continue/fulfill/fail operations. Its Windows acceptance probe must cover cold
 and persisted workers, background restarts, identical concurrent URLs, redirects,
 callback/stream failures, INTERNET denial, closure of the last public WebView,
 teardown acknowledgements and unchanged page requests. That architecture and
 runtime evidence are not provided by the current COM request-filter design.
+
+The existing [Windows probe](../../probes/webview/webview2_probe.cc) now includes a
+[session-access diagnostic](../../probes/webview/browser_session_probe.h) with a
+fresh GUID profile, actual user-data-folder verification and a 15-second total
+budget including cleanup. It records SDK/runtime/loader, HRESULTs and JSON,
+enumerates/discovers browser targets, attaches only structurally observed browser
+IDs, and calls `Target.getBrowserContexts` through the flattened COM session.
+Explicit unsupported/access denial or no observed browser is an unavailable
+finding; malformed results, timeouts, setup and cleanup failures fail the probe.
+It adds no Fetch interception, worker activation, external navigation, debugger
+port or production API. Existing Windows CI runs it in the probe executable;
+cross-compilation alone supplies no session-access evidence. A successful session
+result would establish neither Fetch coverage nor W07 completion; all worker
+capability gates remain closed.
 
 ### WebStorage scope
 
