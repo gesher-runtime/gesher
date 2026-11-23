@@ -317,9 +317,7 @@ public final class AppShell {
         try {
             byte[] bytes = java.security.MessageDigest.getInstance("SHA-256").digest(
                     (pkg + "\u0000" + id).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder result = new StringBuilder();
-            for (byte b : bytes) result.append(String.format(Locale.ROOT, "%02x", b & 255));
-            return result.toString();
+            return libcore.util.HexEncoding.encodeToString(bytes, false);
         } catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
     }
 
