@@ -18,14 +18,16 @@
 //                                 then data_size bytes and offsets_size bytes
 //   BC_TRANSACTION_SG, BC_REPLY_SG  the same with binder_transaction_data_sg
 //   every transaction header is followed by copy_error (s32); on success,
-//   owned data/offset bytes and buffers_size extra bytes follow. PTR buffer
+//   fd_description_count, owned data/offset bytes, buffers_size extra bytes
+//   and the FileDescription side table follow. PTR buffer
 //   addresses are relative offsets in extra bytes. A failed user copy sends
 //   no body and is reported through the ordinary BR_FAILED_REPLY path.
 //   BC_FREE_BUFFER                cmd, the broker's 64-bit buffer id
 // and the return stream likewise:
 //   BR_TRANSACTION, BR_REPLY      cmd, binder_transaction_data (pointers 0),
 //                                 the 64-bit buffer id, extra_size (u64),
-//                                 then data, offsets and owned extra bytes;
+//                                 fd_description_count (u32), then data,
+//                                 offsets, owned extra bytes and FD table;
 //                                 binder.cc copies them
 //                                 into one transaction allocation and rebases
 //                                 PTR objects and their parent pointer slots
@@ -39,7 +41,31 @@ namespace binder_wire {
 
 constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
 // Both endpoints must change together; an old endpoint rejects the hello.
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 4;
+
+// One entry for every FD object, in object-offset order. The file HANDLE still
+// occupies pad_binder on the wire; this side table carries the exact shared
+// open description without reusing Android's cookie or pad_flags fields.
+// A successful transaction body begins with count (u32); these entries follow
+// data, offsets and extra bytes. A delivered reply uses the same representation.
+struct FileDescription {
+  uint64_t object_offset;
+  uint64_t shared_handle;
+  uint32_t kind;
+  uint32_t reserved;
+};
+// Socket handles carry their existing ADR 0088 metadata in the FD object,
+// not an OFD mapping. Keep this distinct from the unshareable-resource kind.
+constexpr uint32_t kSocketFileDescription = 4;
+// A completed Android native fence travels as its read-only Gesher completion
+// event, not an OFD mapping: no shared handle, and the FD object's pad_flags
+// (or a rights entry's metadata) is exactly kCompletedNativeFenceMetadata.
+// The receiver revalidates the event itself before adopting it.
+constexpr uint32_t kNativeFenceFileDescription = 5;
+constexpr uint32_t kCompletedNativeFenceMetadata = 0x4;
+// One transaction cannot install more than the receiver's UCRT descriptor
+// ceiling. Bound metadata and native pin allocations before capturing handles.
+constexpr uint32_t kMaxFileDescriptions = 8192;
 
 enum Op : uint32_t {
   // -> {magic, version, pid, uid}; <- {status, proc id, key (u64)}
@@ -68,17 +94,17 @@ enum Op : uint32_t {
   // -> {queue (u64): 0, or a stream connection's key; position (u64): with a
   //     queue, where the bytes sent with the group begin in that direction of
   //     the connection (kStreamPositionsPrefix); count (u32);
-  //     count x {handle (u64), metadata (u64)}}
+  //     count x {handle (u64), metadata (u64), shared_handle (u64), kind (u32)}}
   // <- {status, token (2 x u64)}. With a queue, the group also waits in that
   // connection's queue (kRightsTake), in order.
   kRightsDeposit = 8,
   // Moves a deposited group into the caller (closing the broker's handles).
-  // -> {token}; <- {status, count, count x {handle, metadata}}
+  // -> {token}; <- {status, count, count x {handle, metadata, shared_handle, kind}}
   kRightsClaim = 9,
   // Moves the groups waiting in a stream connection's queue whose position is
   // below `limit` (what the receiver has read) into the caller, in order; the
   // others keep waiting.
-  // -> {queue, limit (u64)}; <- {status, count, count x {handle, metadata}}
+  // -> {queue, limit (u64)}; <- {status, count, count x {handle, metadata, shared_handle, kind}}
   kRightsTake = 10,
   // Takes a group back out of its queue (its sendmsg failed) and closes it.
   // -> {token}; <- {status}: -ENOENT if a receiver already took it.
@@ -88,7 +114,7 @@ enum Op : uint32_t {
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
 // binderd and the processes that send or receive descriptors must agree on it;
 // other binder clients need not.
-constexpr uint32_t kRightsVersion = 4;
+constexpr uint32_t kRightsVersion = 5;
 
 // The broker's doorbell for stream queues: a shared section named
 // kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint64 values, one

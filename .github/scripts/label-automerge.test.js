@@ -1194,7 +1194,9 @@ for (const source of ['schedule', 'bulk manual', 'fork CI']) {
       event: 'pull_request', head_sha: HEAD, head_repository: {id: w.pr.head.repo.id},
     }});
     assert.deepEqual(w.dispatches, [{action: 'gesher-automerge-reconcile',
-      client_payload: {pull_request_number: 7, head_sha: HEAD}}]);
+      // Only CI completion starts a release retry chain.
+      client_payload: {pull_request_number: 7, head_sha: HEAD,
+        ...(source === 'fork CI' ? {release_retry: 0} : {})}}]);
     for (const action of ['status', 'app-status', 'nativeWait', 'nativeCancel', 'app-approve'])
       assert.equal(w.did(action).length, 0);
     await w.drainDispatches();

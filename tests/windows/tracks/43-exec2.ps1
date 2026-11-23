@@ -1,4 +1,4 @@
-# Native processes from native code (docs/exec.md, ADR 0055): fork()+exec*(),
+# Native processes from native code (docs/exec.md, ADR 0055): exec*(),
 # system(), popen(), posix_spawn(), signals between processes, and waitpid's
 # status decoding, plus the /system/bin tools gesher-exec provides. Dot-sourced
 # by run-tests.ps1 (Check, NoDrive, $Dir, $failed are in scope). The test
@@ -17,17 +17,18 @@ $env:LD_LIBRARY_PATH = NoDrive $Dir
 
 # The driver runs the whole suite and prints one PASS line per feature and a
 # SUMMARY; it exits 0 only if every check passed.
-Check 'exec2: native processes from native code (fork+exec, system, popen, posix_spawn, signals, waitpid)' {
+Check 'exec2: native processes from native code (system, popen, posix_spawn, signals, waitpid)' {
   & "$Dir/gesher-exec.exe" --elf $driver 'libexec2test.so' (NoDrive $child)
 } @('exec2: PASS system runs the shell and returns its status',
     'exec2: PASS popen reads a command''s output',
+    'exec2: PASS popen writes actual bytes to the shell read builtin',
+    'exec2: PASS shell pipeline preserves bytes for the read builtin',
     'exec2: PASS posix_spawn with a dup2 file action, output captured',
-    'exec2: PASS fork+dup2+execv runs the child with a redirected pipe',
     'exec2: PASS waitpid decodes an exit code',
     'exec2: PASS kill() to another process runs its SIGUSR1 and SIGTERM handlers',
     'exec2: PASS signal 0 finds a running process',
     'exec2: PASS SIGKILL ends a process (WIFSIGNALED)',
-    'exec2: SUMMARY pass=9 fail=0')
+    'exec2: SUMMARY pass=10 fail=0')
 
 # exec*() outside a fork replaces the image: the launcher process exits with the
 # child's status (17).
@@ -39,45 +40,24 @@ if ($LASTEXITCODE -eq 17) {
   $failed++
 }
 
-# fork()+exec as dart:io's Process.start does it (a Flutter app's UI thread): the
-# fork child waits for its parent's byte before exec, exec closes the O_CLOEXEC
-# fds; a child whose exec fails is not waited for before that byte. A regression
-# hangs, so this runs with a time limit.
-$dartLog = Join-Path $env:RUNNER_TEMP "exec2-dart-start-$(Get-Random).log"
-$dart = Start-Process "$Dir/gesher-exec.exe" -ArgumentList @('--elf', "`"$driver`"", 'libexec2test.so', '--dart-start', "`"$(NoDrive $child)`"") `
-  -NoNewWindow -PassThru -RedirectStandardOutput $dartLog -RedirectStandardError "$dartLog.err"
-$dartExited = $dart.WaitForExit(60000)
-if (-not $dartExited) { $dart.Kill($true); $dart.WaitForExit() }
-$dartOut = (Get-Content -Raw $dartLog -ErrorAction SilentlyContinue) + (Get-Content -Raw "$dartLog.err" -ErrorAction SilentlyContinue)
-$dartExpect = @('exec2: PASS a fork child waits for its parent''s byte before exec (dart:io Process.start)',
-  'exec2: PASS exec closes the O_CLOEXEC fds: the exec-status pipe ends while the program runs',
-  'exec2: PASS the parent''s byte for the child is not in the program''s output',
-  'exec2: PASS a fork child whose exec fails is not waited for before its parent''s byte',
-  'exec2: PASS then it is, with exit 127 and exec''s errno',
-  'exec2: PASS a fork child''s environ is the program''s environment',
-  'exec2: PASS and not this process''s: environ and getenv are as before the fork',
-  'exec2: SUMMARY pass=7 fail=0')
-$dartMissing = $dartExpect | Where-Object { -not "$dartOut".Contains($_) }
-if ($dartExited -and $dart.ExitCode -eq 0 -and -not $dartMissing) {
-  Write-Host 'PASS  exec2: fork+exec as dart:io''s Process.start (the child waits for its parent''s byte; exec closes O_CLOEXEC fds)'
-} else {
-  $why = if (-not $dartExited) { 'hung for 60 s' } else { "exit $($dart.ExitCode); missing: $($dartMissing -join ', ')" }
-  Write-Host "FAIL  exec2: fork+exec as dart:io's Process.start ($why)"
-  Write-Host $dartOut
-  $failed++
-}
+# The runtime cannot clone a Windows address space with Linux fork/vfork
+# semantics. Unsupported calls must fail honestly and leave real I/O alone.
+Check 'exec2: fork and vfork report ENOSYS without synthetic children or input' {
+  & "$Dir/gesher-exec.exe" --elf $driver 'libexec2test.so' '--fork-unsupported'
+} @('exec2: PASS fork reports ENOSYS without creating a child',
+    'exec2: PASS vfork reports ENOSYS without creating a child',
+    'exec2: PASS unsupported fork leaves no waitable child',
+    'exec2: PASS unsupported fork leaves the caller and real pipe bytes unchanged',
+    'exec2: SUMMARY pass=4 fail=0')
 
-# A fork child that closes every fd above 2 (a close loop, closefrom, close_range),
-# dup2s onto an fd and flips FD_CLOEXEC before an exec that fails, as Java's
-# childproc and root checkers do: the vfork-style child runs in this process, so
-# all of it must stay in the child's own fd table, and the failed exec must
-# return to the child, which exits 127 (docs/exec.md).
-Check 'exec2: a fork child''s fd calls and failed exec leave the parent''s fds open (close loop, closefrom, close_range, dup2, F_SETFD; exit 127)' {
-  & "$Dir/gesher-exec.exe" --elf $driver 'libexec2test.so' '--fork-fds'
-} @('exec2: PASS a fork child''s failed exec returns to the child (ENOENT), which exits 127',
-    'exec2: PASS a fork child''s close loop, closefrom, close_range and dup2 leave the parent''s fds open',
-    'exec2: PASS a fork child''s fcntl(F_SETFD) leaves the parent''s FD_CLOEXEC alone',
-    'exec2: SUMMARY pass=3 fail=0')
+# Real child/grandchild descriptor sharing and separate-open atomic append.
+# The expected count includes every public contract assertion in the corpus.
+Check 'exec2: OFDs survive real spawn and independent processes append atomically' {
+  & "$Dir/gesher-exec.exe" --elf $driver 'libexec2test.so' '--ofd-process' (NoDrive $child)
+} @('exec2: PASS spawn preserves flags, aliases, shared position and CLOEXEC',
+    'exec2: PASS parent F_SETFL reaches the child and a real grandchild',
+    'exec2: PASS atomic append loses or overwrites no complete record across processes',
+    'exec2: SUMMARY pass=11 fail=0')
 
 # The /system/bin programs gesher-exec provides (docs/exec.md): the minimal
 # shell runs them as external commands.

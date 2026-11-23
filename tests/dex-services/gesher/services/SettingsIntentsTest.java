@@ -443,6 +443,15 @@ public final class SettingsIntentsTest {
                 "external stats: total " + shared.getTotalBytes() + " image "
                         + shared.getImageBytes() + " audio " + shared.getAudioBytes()
                         + " app " + shared.getAppBytes());
+        // Completed scans must never serve as a stale size cache. This service
+        // fixture also runs on Windows/ART with actual package/storage objects.
+        File changed = new File(appData, "files/after-query.bin");
+        write(changed, 123);
+        require(stats.queryStatsForPackage(null, PACKAGE, 0, "gesher.services")
+                .getDataBytes() == 4623, "storage stats reused a completed scan after write");
+        require(changed.delete(), "cannot remove storage freshness fixture");
+        require(stats.queryStatsForPackage(null, PACKAGE, 0, "gesher.services")
+                .getDataBytes() == 4500, "storage stats reused a completed scan after delete");
         System.out.println("SettingsIntentsTest: storage stats measure the app's files");
     }
 

@@ -1,0 +1,761 @@
+{
+  "baseline": "bf7c6e2f1adac284bd00971734f7b50c63d72a94",
+  "measurement": "actual registry visits and declaration-list reads; each scenario array is [visits, reads]",
+  "queries_per_scenario": 32,
+  "samples": {
+    "baseline": {
+      "source_sha256": {
+        "PackageManagerService": "c103cfc9fbb0716fd2a4edc376e349268cdde08f157d64c970ab3db3f83a1938",
+        "ApkPackage": "3e32a8d35f7933d7497561f4fb2ba0eef15a4f8b7f6ce464a64524e205bbbacb"
+      },
+      "contract_checks": 751,
+      "work": [
+        {
+          "packages": 1,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 3,
+          "hit": [
+            32,
+            96
+          ],
+          "miss": [
+            32,
+            32
+          ],
+          "explicit": [
+            32,
+            64
+          ],
+          "package": [
+            32,
+            96
+          ]
+        },
+        {
+          "packages": 1,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 3,
+          "hit": [
+            32,
+            96
+          ],
+          "miss": [
+            32,
+            32
+          ],
+          "explicit": [
+            32,
+            64
+          ],
+          "package": [
+            32,
+            96
+          ]
+        },
+        {
+          "packages": 1,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 3,
+          "hit": [
+            32,
+            96
+          ],
+          "miss": [
+            32,
+            32
+          ],
+          "explicit": [
+            32,
+            64
+          ],
+          "package": [
+            32,
+            96
+          ]
+        },
+        {
+          "packages": 1,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 3,
+          "hit": [
+            32,
+            96
+          ],
+          "miss": [
+            32,
+            96
+          ],
+          "explicit": [
+            32,
+            64
+          ],
+          "package": [
+            32,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 52,
+          "hit": [
+            1600,
+            1664
+          ],
+          "miss": [
+            1600,
+            1600
+          ],
+          "explicit": [
+            1600,
+            64
+          ],
+          "package": [
+            1600,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 52,
+          "hit": [
+            1600,
+            1664
+          ],
+          "miss": [
+            1600,
+            1600
+          ],
+          "explicit": [
+            1600,
+            64
+          ],
+          "package": [
+            1600,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 52,
+          "hit": [
+            1600,
+            1664
+          ],
+          "miss": [
+            1600,
+            1600
+          ],
+          "explicit": [
+            1600,
+            64
+          ],
+          "package": [
+            1600,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 150,
+          "hit": [
+            1600,
+            4800
+          ],
+          "miss": [
+            1600,
+            4800
+          ],
+          "explicit": [
+            1600,
+            3200
+          ],
+          "package": [
+            1600,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 502,
+          "hit": [
+            16000,
+            16064
+          ],
+          "miss": [
+            16000,
+            16000
+          ],
+          "explicit": [
+            16000,
+            64
+          ],
+          "package": [
+            16000,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 502,
+          "hit": [
+            16000,
+            16064
+          ],
+          "miss": [
+            16000,
+            16000
+          ],
+          "explicit": [
+            16000,
+            64
+          ],
+          "package": [
+            16000,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 502,
+          "hit": [
+            16000,
+            16064
+          ],
+          "miss": [
+            16000,
+            16000
+          ],
+          "explicit": [
+            16000,
+            64
+          ],
+          "package": [
+            16000,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 1500,
+          "hit": [
+            16000,
+            48000
+          ],
+          "miss": [
+            16000,
+            48000
+          ],
+          "explicit": [
+            16000,
+            32000
+          ],
+          "package": [
+            16000,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 1002,
+          "hit": [
+            32000,
+            32064
+          ],
+          "miss": [
+            32000,
+            32000
+          ],
+          "explicit": [
+            32000,
+            64
+          ],
+          "package": [
+            32000,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 1002,
+          "hit": [
+            32000,
+            32064
+          ],
+          "miss": [
+            32000,
+            32000
+          ],
+          "explicit": [
+            32000,
+            64
+          ],
+          "package": [
+            32000,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 1002,
+          "hit": [
+            32000,
+            32064
+          ],
+          "miss": [
+            32000,
+            32000
+          ],
+          "explicit": [
+            32000,
+            64
+          ],
+          "package": [
+            32000,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 3000,
+          "hit": [
+            32000,
+            96000
+          ],
+          "miss": [
+            32000,
+            96000
+          ],
+          "explicit": [
+            32000,
+            64000
+          ],
+          "package": [
+            32000,
+            96
+          ]
+        }
+      ]
+    },
+    "candidate": {
+      "source_sha256": {
+        "PackageManagerService": "7f84494ebba7902f338e83f576470229fa4f3e7d5f235874bc04f1020ad00bde",
+        "ApkPackage": "3e32a8d35f7933d7497561f4fb2ba0eef15a4f8b7f6ce464a64524e205bbbacb"
+      },
+      "contract_checks": 763,
+      "work": [
+        {
+          "packages": 1,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 4,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 1,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 4,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 1,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 4,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 1,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 1,
+          "cold_declaration_reads": 4,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 53,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 53,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 53,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 50,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 50,
+          "cold_declaration_reads": 53,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 503,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 503,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 503,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 500,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 500,
+          "cold_declaration_reads": 503,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "ACTIVITY",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 1003,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "SERVICE",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 1003,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "RECEIVER",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 1003,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        },
+        {
+          "packages": 1000,
+          "family": "PROVIDER",
+          "queries": 32,
+          "cold_registry_visits": 1000,
+          "cold_declaration_reads": 1003,
+          "hit": [
+            0,
+            96
+          ],
+          "miss": [
+            0,
+            0
+          ],
+          "explicit": [
+            0,
+            64
+          ],
+          "package": [
+            0,
+            96
+          ]
+        }
+      ]
+    }
+  }
+}
