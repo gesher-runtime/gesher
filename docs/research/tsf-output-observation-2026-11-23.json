@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "date": "2026-11-23",
+  "public_main": "3b2eaca95b5ddd9cee3c3db4e430460e512eb355",
+  "motivating_pr": 298,
+  "original_run": 45178885879,
+  "original_attempt": 2,
+  "failed_job": 137715173763,
+  "paired_success_job": 137715173749,
+  "observations": {
+    "failed": {
+      "MainMilliseconds": 6666,
+      "CleanupMilliseconds": 18,
+      "StdoutBytes": 1552,
+      "StderrBytes": 16,
+      "Reason": "timeout",
+      "ExitCode": 124,
+      "OwnedHandles": 8,
+      "ClosedHandles": 8,
+      "RootSignaled": true,
+      "JobEmpty": true,
+      "OutputRead": true,
+      "CapturedBytes": 1568,
+      "ExclusiveSnapshot": true
+    },
+    "paired_success": {
+      "MainMilliseconds": 88,
+      "CleanupMilliseconds": 13,
+      "StdoutBytes": 1100016,
+      "StderrBytes": 16,
+      "Reason": "output-limit",
+      "ExitCode": 124,
+      "OwnedHandles": 8,
+      "ClosedHandles": 8,
+      "RootSignaled": true,
+      "JobEmpty": true,
+      "OutputRead": false,
+      "CapturedBytes": 0,
+      "ExclusiveSnapshot": false
+    }
+  },
+  "scope": "Common CI-controller file-object ownership repair; no Android runtime or threshold changes",
+  "candidate_source_sha256": {
+    "tools/windows4/TsfJobSupervisor.cs": "15dd6752990656078caf08aa20f45dbce3fca734847cbe5948f27871cc05f20e",
+    "tools/windows4/TsfOutputMetadataChecks.cs": "d1e37f5f6dd8df17e562fba08785a8cad1d78dcc81a9775db4432d76579d3b00",
+    "tools/windows4/test-tsf-job-supervisor.ps1": "2a87580b1c5cb7af735c9536807798854f439e0601bf648f1d59b580c07bdf05"
+  },
+  "source_preservation": "Full old controller restored by reversing only observer additions/query handles; full original PS entry restored by removing only three additive integration edits; worker and complete public-main workflows unchanged",
+  "source_preservation_checks": 37,
+  "resource_cost": {
+    "additional_owned_handles_per_invocation": 2,
+    "new_controller_threads": 0
+  },
+  "host": {
+    "positive_exit_code": 0,
+    "negative_exit_code": 1,
+    "actual_native_execution": false,
+    "positive_log_sha256": "70beb568eaab422b9a1256cc6ac6e4ebde95f9a64b1777170bc4111111da4f42",
+    "negative_log_sha256": "dd3e3d49eac3a61fb2f875e8b8c26174d9e20bf79a9a0f1c8fd40faf10330df6"
+  },
+  "windows_runtime": "Pending actual existing Windows controller/full manual CI execution; no local Windows result",
+  "limits": [
+    "Original6666ms syscall/scheduler cause remains unproven",
+    "Old250ms reader condition is only a bounded armed-query observation",
+    "Actual Win32 pending-I/O and full manual CI acceptance are pending",
+    "No universal bound for arbitrary filesystem or scheduling delay"
+  ],
+  "archive": {
+    "path": "data/tsf-output-observation-2026-11-23.tar.gz",
+    "sha256": "5d77bb339cc968a07080cb2eac9a39f50991c536ed2c7b385a4cad330ff645c1",
+    "bytes": 57198,
+    "members": 21,
+    "manifest_sha256": "0a025b4d65358b67859f7b5ab0b95a0ad0b1af00e733150ade59ecca2c93f1c2"
+  },
+  "references": [
+    "https://learn.microsoft.com/en-us/windows/win32/fileio/file-handles",
+    "https://devblogs.microsoft.com/oldnewthing/20140711-00/?p=523",
+    "https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfilesizeex",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex",
+    "https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadiopendingflag"
+  ]
+}
