@@ -666,7 +666,20 @@ see "After that" for what is left._
   the loader's vectored handler.
 - **JNI** ([0017](decisions/0017-native-libs-jni-bridge.md)): `@CriticalNative`
   natives in an app library pass the entry stub untouched, but that is not
-  tested. JVMTI environments from `GetEnv` are not wrapped. `dlsym` results
+  tested. `GetEnv` bridges only the existing JNI `0x0001xxxx` version family;
+  the host VM validates individual versions, including older JNI versions.
+  JVMTI, ART tooling interfaces and all other families (including later
+  standard JNI versions such as JNI 9) return `JNI_EVERSION` and null output
+  before any host call. JVMTI remains unimplemented: successful host
+  [`GetEnv`](https://docs.oracle.com/en/java/javase/24/docs/specs/jvmti.html#environments)
+  calls create environments requiring disposal, and their host tables are
+  not guest-callable. This uses the
+  [unsupported-version contract](https://docs.oracle.com/en/java/javase/21/docs/specs/jni/invocation.html#getenv),
+  without advertising a tooling capability. `tools/test_jni_getenv_boundary.py`
+  tests the exact production body against an accepting host; `--source-ref`
+  retains identical assertions for a negative control. The guest checks run
+  in Windows tracks 40 and 47; the host fixture is not ART/ARM execution.
+  `dlsym` results
   other than `JNI_OnLoad`/`JNI_OnUnload`/`Java_*` are raw System V
   addresses. [Classloader namespaces](native-namespaces.md) govern app loads
   and lookup. Complete `dlclose`/classloader unloading remains separate work;
@@ -689,12 +702,14 @@ see "After that" for what is left._
   (`ucontext` is zeroed); `alarm`/`setitimer` timers; `sigaltstack` is only
   recorded; `kill` of other processes is `ESRCH`. A `SIG_DFL` that would
   terminate does (`abort()` for the core-dumping signals).
-- **libandroid stand-ins**: sensors (none), tracing (off), OBB mounting
-  (unsupported; scanning works), AChoreographer's vsync (a 60 Hz clock, not
-  the display's). Unavailable strong imports fail ordinary loading:
+- **libandroid stand-ins**: sensors (none), tracing (off), performance hints
+  (unsupported; `APerformanceHint_getManager` returns `nullptr`, sessions
+  fail cleanly), OBB mounting (unsupported; scanning works), and
+  AChoreographer's vsync (a 60 Hz clock, independent of the display).
+  Unavailable strong imports fail ordinary loading:
   `ASurfaceTexture_*`, `AHardwareBuffer_fromHardwareBuffer`/`toHardwareBuffer`
   (Java HardwareBuffer has no natives), `ASurfaceTransaction_fromJava`,
-  `ASurfaceTransaction_setLuts`, `AThermal_*`, `APerformanceHint_*`,
+  `ASurfaceTransaction_setLuts`, `AThermal_*`,
   `ASharedMemory_dupFromJava`, `android_getaddrinfofornetwork` & co.
   AInputReceivers are refused (null): no input channels for layers.
 - **NativeActivity** (0032): `onConfigurationChanged`, `onLowMemory` and
@@ -715,10 +730,12 @@ see "After that" for what is left._
   drivers may do). GLES 1 (`libGLESv1_CM.so`) resolves but is untested.
   `ASurfaceTexture` is not provided. `eglDestroySurface` of a surface that is
   still current releases the window at once (Android defers it).
-- **AHardwareBuffer and ASurfaceControl limits** (ADR 0089): a native fence
-  made without an fd waits for its context's commands when it is made
-  (glFinish) and its fd is a signaled `/dev/null` descriptor without
-  `sync_file` ioctls; GPU writes to a buffer reach another process's mapping
+- **AHardwareBuffer and ASurfaceControl limits** (ADR 0089): local fence
+  creation records asynchronous DXGI completion. Exporting a native fd waits
+  for completion outside ANGLE's mutex and returns an immutable native event;
+  this preserves server-wait isolation with ANGLE's shared immediate queue,
+  but native export still costs CPU/GPU overlap. `sync_file` ioctls remain
+  unsupported. GPU writes to a buffer reach another process's mapping
   only after the writing process reads the buffer back (a CPU lock there, or
   when it sends the buffer); a window's layers and frames the app posts to
   the same window directly replace each other; damage regions, data spaces,

@@ -5,20 +5,20 @@
     "compat/bionic/include/gesher/bionic_shim.h": "09bf290c5c0b842cd73a5be0d498e900d46bbb87226215a52bc80834b23e3340",
     "compat/bionic/shim.cc": "e4db4af58cb2c4526a236eb7bfb2e80c3b20d382c32df90859aa258676760266",
     "compat/bionic/shim_internal.h": "69dd64701b4fbe446e59121f2bb5428ab8212d60d2e26eaea6ad6970775880c3",
-    "compat/bionic/stdio_bionic.cc": "399a41b7c313d2e65c264b5acdfac2c068500de6ea8257e9e366c28c83be0a35",
+    "compat/bionic/stdio_bionic.cc": "cb58b2ec48dce00ce04cf0fa3627ec561fd393eac12d0e6080e0189ff175d70f",
     "compat/elf/exec/gesher_exec.cc": "a7dd6a1404b9d438c7ca8be895055495bd72664667fe4c442f214f5c04841f56",
     "compat/elf/include/gesher/elf_loader.h": "67520cfb5ce54cd424b10ac3219e7d6ecd735b338d14400d04fa3718504b76cd",
     "compat/posix/include/gesher/elf_dlopen.h": "1f35c46ac7d37656b7fedd471ad9e4a51005dfb5c12476ea902641f3f2bf96cd"
   },
-  "baseline": "751d82310f7c4c470c098ccebfd5d2d04699a0cd",
-  "baseline_policy_sha256": "2e30041395ec03b831b6a0a844b61a4f2c5dc1d8341d4f328dcecb803408335d",
+  "baseline": "b88d0083d6ded06365f24181355516f2a1ecfffe",
+  "baseline_policy_sha256": "a32bc8e65cf655635c04fb86f1ea23d668d125a79a8fef4732c86055b2985ac0",
   "before_sha256": {
     "compat/bionic/extra_bionic.cc": "0e0958142d26aa1dbe87acf44e416507d87969c5ba100e478356ffc9ba942bc3",
     "compat/bionic/extra_bionic.h": "d0107054021c62fd7edc2b14dcec7c408ad2568a76b3497d2d5b5c15860cdb8f",
     "compat/bionic/include/gesher/bionic_shim.h": "ee2f3fb2c6fea311f8a42c0547cd0765313fc1488a0a5c484ba1f54c070a99e2",
     "compat/bionic/shim.cc": "f62b6eda571010c22926ba109f81677125434d85eb1872354102c3fc717b2670",
     "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
-    "compat/bionic/stdio_bionic.cc": "9fedaef9b3bd5e658a74daa7199dff6d99711bcf1c5aca9204cdb5dd1e8e1777",
+    "compat/bionic/stdio_bionic.cc": "bb8aba18f5794919f0338eb42df7807b89203ffd3371f9e3a53aad40982ecfa1",
     "compat/elf/exec/gesher_exec.cc": "6c86da7c77affc2f18871d4e83adc3175552925c10bdeda3f40523e6e1b2199f",
     "compat/elf/include/gesher/elf_loader.h": "f89f251948f91bcca8b43f7a95410e39040016e38b649c35d45771b4fa50515a",
     "compat/posix/include/gesher/elf_dlopen.h": "513defa70be62aec8bb96704d0b786a2e7ffd09c7cdec799fc3495b6983b1ed3"
@@ -31,7 +31,7 @@
     "compat/posix/include/gesher/elf_dlopen.h"
   ],
   "feature_head": "1084f49a538187c69534e63e2de63a2890f6515e",
-  "patch_sha256": "88cfd1d6395f73250da90ba31ab2e7168dab675615e538ebdb7772a2fdce8c67",
+  "patch_sha256": "e10105b7d80d7004ee4df68551aad251252a45d6db4b614f803e9b63e1921e6b",
   "paths": [
     "compat/bionic/extra_bionic.cc",
     "compat/bionic/extra_bionic.h",

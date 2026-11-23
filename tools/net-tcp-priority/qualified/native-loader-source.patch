@@ -1,5 +1,5 @@
 diff --git a/compat/bionic/extra_bionic.cc b/compat/bionic/extra_bionic.cc
-index e80483cfbf9dbeeebec3ec16815ecb263237957e..5de6f48505cfc8681630748fb3cedd7fab9e1677 100644
+index e80483cfb..5de6f4850 100644
 --- a/compat/bionic/extra_bionic.cc
 +++ b/compat/bionic/extra_bionic.cc
 @@ -14 +14 @@
@@ -355,7 +355,7 @@ index e80483cfbf9dbeeebec3ec16815ecb263237957e..5de6f48505cfc8681630748fb3cedd7f
 -  RegisterExtraSys(t);
 -  RegisterZlib(t);
 diff --git a/compat/bionic/extra_bionic.h b/compat/bionic/extra_bionic.h
-index 04dc54e58801db7d44532dd2f007af1ba32e074d..ac99f9e9dd22d54b88adda21bd7ff32c74df8f73 100644
+index 04dc54e58..ac99f9e9d 100644
 --- a/compat/bionic/extra_bionic.h
 +++ b/compat/bionic/extra_bionic.h
 @@ -15 +15,4 @@ namespace gesher::bionic {
@@ -385,7 +385,7 @@ index 04dc54e58801db7d44532dd2f007af1ba32e074d..ac99f9e9dd22d54b88adda21bd7ff32c
 -std::vector<std::string> LibraryDirectories();
 -
 diff --git a/compat/bionic/include/gesher/bionic_shim.h b/compat/bionic/include/gesher/bionic_shim.h
-index c97b8f1759f99657feb62fc8b10e319dc595f8c7..7784f671652f9f08f8ced9dd7e720265f802b1be 100644
+index c97b8f175..7784f6716 100644
 --- a/compat/bionic/include/gesher/bionic_shim.h
 +++ b/compat/bionic/include/gesher/bionic_shim.h
 @@ -8,3 +8,3 @@ namespace gesher::bionic {
@@ -417,7 +417,7 @@ index c97b8f1759f99657feb62fc8b10e319dc595f8c7..7784f671652f9f08f8ced9dd7e720265
 +void AddBionicSymbol(const char* soname, const char* name, void* address);
 +
 diff --git a/compat/bionic/shim.cc b/compat/bionic/shim.cc
-index 9387904e0ca6f1a4c066502ecb5ee82606af52d6..3c9d11a8912adac0038b6587fc7458e3d5f306f4 100644
+index 9387904e0..3c9d11a89 100644
 --- a/compat/bionic/shim.cc
 +++ b/compat/bionic/shim.cc
 @@ -1024,15 +1024 @@ thread_local bool t_has_dlerror = false;
@@ -851,7 +851,7 @@ index 9387904e0ca6f1a4c066502ecb5ee82606af52d6..3c9d11a8912adac0038b6587fc7458e3
 +    InstallSignalHook(false);
 +  });
 diff --git a/compat/bionic/shim_internal.h b/compat/bionic/shim_internal.h
-index 036f65783949d56c5aa8245ed657bfc0eeb2366d..080caf69706b6eb65b517167316f0bb674fa06f7 100644
+index 036f65783..080caf697 100644
 --- a/compat/bionic/shim_internal.h
 +++ b/compat/bionic/shim_internal.h
 @@ -133,0 +134,2 @@ void RegisterLibc(SymbolTable& table);     // shim.cc
@@ -862,15 +862,15 @@ index 036f65783949d56c5aa8245ed657bfc0eeb2366d..080caf69706b6eb65b517167316f0bb6
 @@ -139,0 +143 @@ void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
 +void RegisterAndroidNetwork(SymbolTable& table); // libandroid exports in socket_bionic.cc
 diff --git a/compat/bionic/stdio_bionic.cc b/compat/bionic/stdio_bionic.cc
-index 6151d95ed3d838cfee196d48c68da5e69a9661a3..926ed8d5c1e6a3078ee6c8c0e55d7821fb027046 100644
+index 3848a9a10..570a37afd 100644
 --- a/compat/bionic/stdio_bionic.cc
 +++ b/compat/bionic/stdio_bionic.cc
-@@ -1527,0 +1528,3 @@ void RegisterStdio(SymbolTable& t) {
+@@ -1554,0 +1555,3 @@ void RegisterStdio(SymbolTable& t) {
 +}
 +
 +void RegisterLog(SymbolTable& t) {
 diff --git a/compat/elf/exec/gesher_exec.cc b/compat/elf/exec/gesher_exec.cc
-index cd785799f819e775fbcacbf21e138bd85bcec97c..b56b6069d9d863438a076f59a733c128416a97ca 100644
+index cd785799f..b56b6069d 100644
 --- a/compat/elf/exec/gesher_exec.cc
 +++ b/compat/elf/exec/gesher_exec.cc
 @@ -269,6 +269,6 @@ DWORD WINAPI ProgramThread(void*) {
@@ -887,7 +887,7 @@ index cd785799f819e775fbcacbf21e138bd85bcec97c..b56b6069d9d863438a076f59a733c128
 +  gesher::bionic::AddBionicSymbol("libc.so", "getauxval", reinterpret_cast<void*>(&Getauxval));
 +  gesher::bionic::AddBionicSymbol("libc.so", "__progname", &g_progname);
 diff --git a/compat/elf/include/gesher/elf_loader.h b/compat/elf/include/gesher/elf_loader.h
-index 04ec21b5402482b111f313c1efa5e31a5b5f75b9..3dc7106040304ebb17280f07537099255c52ec54 100644
+index 04ec21b54..3dc710604 100644
 --- a/compat/elf/include/gesher/elf_loader.h
 +++ b/compat/elf/include/gesher/elf_loader.h
 @@ -24 +24 @@ namespace gesher::elf {
@@ -1036,7 +1036,7 @@ index 04ec21b5402482b111f313c1efa5e31a5b5f75b9..3dc7106040304ebb17280f0753709925
 -// The soname (DT_SONAME, else the file base name) of a loaded object.
 +// Actual DT_SONAME; absent stays empty for target SDK >= 23.
 diff --git a/compat/posix/include/gesher/elf_dlopen.h b/compat/posix/include/gesher/elf_dlopen.h
-index 61605eb2e82b73d55158621db1d2e1d8a36d1675..43799fee125dd08353ae22a7dba3834fa1c292f4 100644
+index 61605eb2e..43799fee1 100644
 --- a/compat/posix/include/gesher/elf_dlopen.h
 +++ b/compat/posix/include/gesher/elf_dlopen.h
 @@ -31,0 +32,32 @@ void gesher_set_elf_dlopen(const struct gesher_elf_dlopen_ops* ops);

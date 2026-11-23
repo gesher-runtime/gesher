@@ -157,11 +157,64 @@ struct Trampoline {
   int pointer_variadic_fixed = -1;
   uint32_t* guest_code = nullptr;
 };
-Trampoline g_tramps[kMaxTramps];
+// Writers remain serialized by g_tramp_mutex. Readers copy one coherent
+// signature without taking that process-wide mutex on every imported call.
+// Every field is atomic: a seqlock over ordinary fields would still have C++
+// data races during retirement or variadic-signature replacement. Sequential
+// consistency gives the version and field accesses one order, so matching even
+// versions cannot enclose a partially published signature. No record is freed.
+class TrampolineSlot {
+ public:
+  void Publish(const Trampoline& value) {
+    const uint64_t before = sequence_.load();
+    // Saturation leaves an odd version forever. Such a slot uses the mutex
+    // fallback, rather than eventually accepting an ancient version after ABA.
+    if (before != UINT64_MAX) sequence_.store(before + 1);
+    host_fn_.store(value.host_fn);
+    va_list_index_.store(value.va_list_index);
+    pointer_variadic_fixed_.store(value.pointer_variadic_fixed);
+    guest_code_.store(value.guest_code);
+    if (before < UINT64_MAX - 1) sequence_.store(before + 2);
+  }
+
+  bool TryRead(Trampoline* value) const {
+    const uint64_t before = sequence_.load();
+    if ((before & 1) != 0) return false;
+    *value = ReadLocked();
+    return sequence_.load() == before;
+  }
+
+  // Either the caller owns g_tramp_mutex, or TryRead validates this copy.
+  Trampoline ReadLocked() const {
+    return {host_fn_.load(), va_list_index_.load(),
+            pointer_variadic_fixed_.load(), guest_code_.load()};
+  }
+
+ private:
+  std::atomic<uint64_t> sequence_{0};
+  std::atomic<void*> host_fn_{nullptr};
+  std::atomic<int> va_list_index_{-1};
+  std::atomic<int> pointer_variadic_fixed_{-1};
+  std::atomic<uint32_t*> guest_code_{nullptr};
+};
+static_assert(std::atomic<uint64_t>::is_always_lock_free &&
+              std::atomic<void*>::is_always_lock_free && std::atomic<int>::is_always_lock_free);
+TrampolineSlot g_tramps[kMaxTramps];
 std::atomic<size_t> g_tramp_count{0};
 std::mutex g_tramp_mutex;
 std::unordered_map<void*, size_t> g_tramp_by_fn;
 std::vector<size_t> g_free_tramps;  // reuse both the index and its code slot
+
+Trampoline ReadTrampoline(size_t index) {
+  Trampoline value{};
+  for (unsigned attempt = 0; attempt < 8; ++attempt) {
+    if (g_tramps[index].TryRead(&value)) return value;
+  }
+  // Bound retries if a publishing thread is descheduled, or the same slot is
+  // being changed repeatedly. Ordinary calls to stable slots take no mutex.
+  std::lock_guard<std::mutex> lock(g_tramp_mutex);
+  return g_tramps[index].ReadLocked();
+}
 
 // --- va_list host functions --------------------------------------------------
 std::mutex g_va_mutex;
@@ -829,13 +882,8 @@ class Env final : public A64::UserCallbacks {
       return;
     }
     Trampoline trampoline{};
-    {
-      // Bind, va_list updates and unbind mutate these records under this lock.
-      // Copy the record; never retain its reference across a host call.
-      std::lock_guard<std::mutex> lock(g_tramp_mutex);
-      if (swi - 1 < g_tramp_count.load(std::memory_order_relaxed)) {
-        trampoline = g_tramps[swi - 1];
-      }
+    if (swi - 1 < g_tramp_count.load(std::memory_order_acquire)) {
+      trampoline = ReadTrampoline(swi - 1);
     }
     if (trampoline.host_fn == nullptr) {
       GuestCrash(kSigSys, 1, "SYS_SECCOMP", jit->GetPC() - 4, "SVC with an unknown number");
@@ -1871,8 +1919,8 @@ void ApiUnbindHostFunction(void* fn) {
     auto entry = g_tramp_by_fn.find(fn);
     if (entry == g_tramp_by_fn.end()) return;
     const size_t index = entry->second;
-    uint32_t* code = g_tramps[index].guest_code;
-    g_tramps[index] = {nullptr, -1, -1, code};
+    uint32_t* code = g_tramps[index].ReadLocked().guest_code;
+    g_tramps[index].Publish({nullptr, -1, -1, code});
     std::fill(code, code + kTrampWords, kBrk);
     g_tramp_by_fn.erase(entry);
     g_free_tramps.push_back(index);
@@ -1986,7 +2034,9 @@ void AddVaListFunction(const void* fn, int index) {
   std::lock_guard<std::mutex> lock(g_tramp_mutex);
   auto it = g_tramp_by_fn.find(const_cast<void*>(fn));
   if (it != g_tramp_by_fn.end()) {
-    g_tramps[it->second].va_list_index = index;
+    Trampoline signature = g_tramps[it->second].ReadLocked();
+    signature.va_list_index = index;
+    g_tramps[it->second].Publish(signature);
   }
 }
 
@@ -2001,8 +2051,8 @@ void AddPointerVariadicFunction(const void* fn, void* va_fn, int fixed_arguments
   std::lock_guard<std::mutex> lock(g_tramp_mutex);
   auto it = g_tramp_by_fn.find(const_cast<void*>(fn));
   if (it != g_tramp_by_fn.end()) {
-    signature.guest_code = g_tramps[it->second].guest_code;
-    g_tramps[it->second] = signature;
+    signature.guest_code = g_tramps[it->second].ReadLocked().guest_code;
+    g_tramps[it->second].Publish(signature);
   }
 }
 
@@ -2011,15 +2061,15 @@ void* BindHost(void* fn, int va_list_index) {
   Trampoline signature = HostSignature(fn, va_list_index);
   std::lock_guard<std::mutex> lock(g_tramp_mutex);
   auto it = g_tramp_by_fn.find(fn);
-  if (it != g_tramp_by_fn.end()) return g_tramps[it->second].guest_code;
+  if (it != g_tramp_by_fn.end()) return g_tramps[it->second].ReadLocked().guest_code;
   size_t index = g_free_tramps.empty() ? g_tramp_count.load(std::memory_order_relaxed)
                                       : g_free_tramps.back();
   if (index >= kMaxTramps) return nullptr;
-  uint32_t* p = g_free_tramps.empty() ? AllocGuestCode(kTrampWords) : g_tramps[index].guest_code;
+  uint32_t* p = g_free_tramps.empty() ? AllocGuestCode(kTrampWords) : g_tramps[index].ReadLocked().guest_code;
   if (p == nullptr) return nullptr;
   if (!g_free_tramps.empty()) g_free_tramps.pop_back();
-  g_tramps[index] = signature;
-  g_tramps[index].guest_code = p;
+  signature.guest_code = p;
+  g_tramps[index].Publish(signature);
   p[0] = Svc(static_cast<uint32_t>(index + 1));
   p[1] = kRet;
   for (size_t i = 2; i < kTrampWords; ++i) p[i] = kBrk;

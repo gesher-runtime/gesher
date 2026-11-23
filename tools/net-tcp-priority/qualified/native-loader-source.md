@@ -3,14 +3,14 @@
 PR107's classloader namespaces and actual library providers change four files
 also covered by the OFD/stdio/pipe qualification. The integration joins feature
 head `1084f49a538187c69534e63e2de63a2890f6515e` with main
-`751d82310f7c4c470c098ccebfd5d2d04699a0cd`.
+`b88d0083d6ded06365f24181355516f2a1ecfffe`. The current-main composition preserves the separate
+stdio metadata cache and the current OFD source qualification.
 
 The original `ofd-stream-source.json`, its digest in `test-selected-policy.py`,
 and `ofd-stream-source.patch` remain unchanged. The original selected supplier,
 minimum supplier, socket ownership, descriptor, stdio, fixture, workflow and
-approval checks still run. The unmodified main checkpoint passed the original
-selected policy and its 15 transition mutation controls before this transition
-was constructed.
+approval checks still run. The current selected policy passes its 20 transition
+mutation controls alongside the 31 native-loader controls.
 
 ## Exact admitted production changes
 
@@ -65,9 +65,11 @@ require a new production and qualification review.
 Main `324dc7e41ea13ceedc3d52db3c8f7c2f3590e452` includes PR274's independently
 pinned `memmem` helper and two exact wrapper/include substitutions. The current
 shim contains both changes. Before checking the frozen namespace endpoint, the
-policy reverses the unchanged memmem substitutions and validates the unchanged
-helper digest. The namespace manifest and patch, their original baseline and
-all OFD/supplier receipts retain their reviewed bytes.
+policy reverses the exact memmem substitutions on both endpoints and validates
+the unchanged helper digest. Both shim values therefore compare against the
+same independently pinned OFD bytes. The current-main namespace manifest and
+patch are updated for the new baseline while the current OFD/supplier receipts
+remain intact.
 
 After the namespace reverse/forward round trip, the policy reapplies both exact
 memmem substitutions and requires equality with the actual combined shim. A

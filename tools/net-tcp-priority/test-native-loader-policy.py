@@ -93,9 +93,6 @@ rejected("the old namespace source without main's memmem change",
          {shim_path: policy.preceding_memmem_source(shim)}, "exact reviewed memmem substitution changed")
 only_memmem = subprocess.check_output(["git", "-C", str(ROOT), "show",
                                       policy.NATIVE_LOADER_BASE + ":" + shim_path])
-for before, after in policy.MEMMEM_REPLACEMENTS:
-    assert only_memmem.count(before) == 1
-    only_memmem = only_memmem.replace(before, after, 1)
 rejected("main's memmem source without the namespace ownership transition", {shim_path: only_memmem}, shim_path)
 scoped = b"return LookupOwnedSymbol(name, symbol);"
 assert shim.count(scoped) == 1

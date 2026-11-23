@@ -23,6 +23,7 @@
 #include <math.h>
 #include <mntent.h>
 #include <pthread.h>
+#include <regex.h>
 #include <search.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -83,6 +84,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "sleep_contract_test.inc"
 #include "bionic_signal_range_contracts.h"
 #include "stream_device_contract_test.inc"
+#include "regex_scaling_contract.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -957,6 +959,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_strings();
   test_memmem_contracts();
   test_fnmatch();
+  test_regex_scaling_contracts(regcomp, regexec, regfree);
   test_getrlimit_fault();
   test_ctype_table();
   test_urandom_stdio();
