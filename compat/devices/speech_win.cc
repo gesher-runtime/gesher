@@ -525,6 +525,8 @@ const std::vector<uint8_t>& Audio(const Synthesis* s) { return s->audio; }
 const std::vector<Word>& Words(const Synthesis* s) { return s->wordList; }
 
 void Cancel(Synthesis* s) {
+  // onStop arrives on a Binder thread that may never have joined the apartment.
+  winrt::EnsureApartment();
   std::lock_guard<std::mutex> guard(s->lock);
   if (s->cancel.exchange(true)) return;
   HRESULT r = s->info->Cancel();
