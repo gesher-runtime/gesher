@@ -828,6 +828,7 @@ final class Installer {
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);
+        AppSandbox.deleteContainer(packageName);
         mPm.packageRemoved(target, this);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;

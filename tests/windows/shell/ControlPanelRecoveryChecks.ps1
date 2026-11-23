@@ -1,5 +1,6 @@
 param([string] $PanelPath = (Join-Path $PSScriptRoot '../../../tools/package/gesher-control-panel.ps1'))
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName PresentationCore
 
 # Deliberately omit notifications. Real production parsers, app projection,
 # signatures, stamps and scheduling must recover every consumed metadata input.
@@ -82,6 +83,16 @@ try {
     [IO.File]::Delete($script:AppWindowsFile)
     Recover-Visible
     Assert-Recovery (-not $appsList.ItemsSource[0].SeparateWindows) 'Missed preference deletion retained the old separate-window state'
+
+    $launchMarker = Join-Path $root 'data/data/fixture.app/gesher-shell/no-launcher-activity'
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Visible) 'Initial launcher eligibility was lost'
+    Assert-Recovery ($script:ViewState.AppFiles -contains $launchMarker) 'Launcher metadata is absent from recovery inputs'
+    Write-Metadata $launchMarker 'no launcher'
+    Recover-Visible
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Collapsed) 'Missed marker creation kept Launch visible'
+    [IO.File]::Delete($launchMarker)
+    Recover-Visible
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Visible) 'Missed marker removal kept Launch hidden'
 
     Write-Metadata $shortcut "label=Fixture`nicon=$external`n"
     Write-Metadata $conventional 'declared conventional image'
