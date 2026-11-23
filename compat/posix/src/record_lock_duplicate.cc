@@ -2,6 +2,7 @@
 #include "record_lock_descriptors.h"
 #include "internal.h"
 #include "socket_internal.h"
+#include "startup_null.h"
 #include <array>
 #include <cstdio>
 #include <fcntl.h>
@@ -31,8 +32,7 @@ thread_local int publishing_target = -1;
 int WinError() { return gesher::ErrnoFromWin32(GetLastError()); }
 int EnsureNulIdentity() {
   if (!nul_identity) {
-    HANDLE candidate = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    HANDLE candidate = gesher::OpenDescriptorPlaceholder();
     if (candidate == INVALID_HANDLE_VALUE) return WinError();
     // Retain ownership even if flag setup fails; do not forget a live handle.
     nul_identity = candidate;

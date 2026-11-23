@@ -2,6 +2,7 @@
 
 #include "exec_spawn.h"
 #include "pe_exports.h"
+#include "../../posix/src/startup_null.h"
 
 #include <gesher/reserved_names.h>
 #include <gesher/environment.h>
@@ -596,10 +597,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     closed_stdio |= 1u << fd;
     // The CRT may need real standard handles during startup. The description
     // importer closes these temporary placeholders before application code.
-    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
-    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
-                             OPEN_EXISTING, 0, nullptr);
+    HANDLE nul = gesher::OpenDescriptorPlaceholder(true);
     if (nul == INVALID_HANDLE_VALUE) return GetLastError();
     owned.values.push_back(nul);
     by_fd[static_cast<size_t>(fd)] = nul;

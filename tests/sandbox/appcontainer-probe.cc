@@ -15,6 +15,7 @@
 
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -57,15 +58,15 @@ bool EventLoopDescriptors() {
   if (event < 0) std::printf("event-loop: eventfd errno=%d\n", errno);
   const int poller = epoll_create1(EPOLL_CLOEXEC);
   if (poller < 0) std::printf("event-loop: epoll_create1 errno=%d\n", errno);
-  const int alias = event >= 0 ? dup(event) : -1;
-  if (event >= 0 && alias < 0) std::printf("event-loop: dup errno=%d\n", errno);
+  const int alias = event >= 0 ? fcntl(event, F_DUPFD_CLOEXEC, 32) : -1;
+  if (event >= 0 && alias < 0) std::printf("event-loop: fcntl duplicate errno=%d\n", errno);
   epoll_event interest{};
   interest.events = EPOLLIN;
   interest.data.u64 = 19;
   epoll_event ready{};
   eventfd_t value = 0;
   const char* failure = nullptr;
-  if (event < 0 || poller < 0 || alias < 0) failure = "open";
+  if (event < 0 || poller < 0 || alias < 32 || fcntl(alias, F_GETFD) != FD_CLOEXEC) failure = "open";
   else if (epoll_ctl(poller, EPOLL_CTL_ADD, event, &interest) != 0) failure = "epoll_ctl";
   else if (eventfd_write(alias, 1) != 0) failure = "eventfd_write";
   else if (epoll_wait(poller, &ready, 1, 1000) != 1 ||

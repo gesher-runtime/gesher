@@ -153,18 +153,19 @@ class AppContainerNull {
     if (handle_ != nullptr) CloseHandle(handle_);
   }
 
-  HANDLE NewPlaceholder() const {
+  HANDLE NewPlaceholder(bool inheritable) const {
     if (!contained_) return INVALID_HANDLE_VALUE;
     HANDLE duplicate;
     if (handle_ != nullptr && DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(),
-                                              &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+                                              &duplicate, 0, inheritable, DUPLICATE_SAME_ACCESS)) {
       return duplicate;
     }
     // Child stdio can be redirected across exec. A closed private pipe
     // supplies a CRT slot while the descriptor's owner handles all I/O.
     HANDLE read_end;
     HANDLE write_end;
-    if (!CreatePipe(&read_end, &write_end, nullptr, 0)) return INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
+    if (!CreatePipe(&read_end, &write_end, &attributes, 0)) return INVALID_HANDLE_VALUE;
     CloseHandle(write_end);
     return read_end;
   }
@@ -178,18 +179,24 @@ const AppContainerNull app_container_null;
 
 }  // namespace
 
-int ReserveFd() {
+HANDLE OpenDescriptorPlaceholder(bool inheritable) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
   HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                         nullptr, OPEN_EXISTING, 0, nullptr);
+                         &attributes, OPEN_EXISTING, 0, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
     const DWORD error = GetLastError();
-    if (error != ERROR_ACCESS_DENIED) return FailWithLastError();
-    h = app_container_null.NewPlaceholder();
+    if (error != ERROR_ACCESS_DENIED) return h;
+    h = app_container_null.NewPlaceholder(inheritable);
     if (h == INVALID_HANDLE_VALUE) {
       SetLastError(error);
-      return FailWithLastError();
     }
   }
+  return h;
+}
+
+int ReserveFd() {
+  HANDLE h = OpenDescriptorPlaceholder();
+  if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
   record_locks::DescriptorGuard descriptor_guard;
   int fd = CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_NOINHERIT));
   if (fd < 0) CloseHandle(h);

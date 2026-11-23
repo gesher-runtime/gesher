@@ -9,6 +9,9 @@
 
 namespace gesher {
 
+// An inert CRT reservation, never a real application /dev/null descriptor.
+HANDLE OpenDescriptorPlaceholder(bool inheritable = false);
+
 inline HANDLE DuplicateVerifiedNull(HANDLE inherited) {
   HANDLE candidate = nullptr;
   if (!DuplicateHandle(GetCurrentProcess(), inherited, GetCurrentProcess(), &candidate,
