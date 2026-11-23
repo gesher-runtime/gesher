@@ -183,6 +183,7 @@ public final class SchedulerWorkContractTest {
             // Empty provider metadata lets the real post-broadcast process retirement
             // run without initializing unrelated settings/locale services on the host.
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mPm", pm); set(providers, "mAtm", atm);
             set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
             set(providers, "mClients", new HashMap<>());
             set(providers, "mPublished", new HashMap<>());

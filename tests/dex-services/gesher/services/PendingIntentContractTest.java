@@ -170,6 +170,8 @@ public final class PendingIntentContractTest {
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType,
                     type("NotificationManagerService")}, atm, pm, null));
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            // Real process retirement observes foreground state through these owners.
+            set(providers, "mPm", pm); set(providers, "mAtm", atm);
             set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
             for (String map : new String[]{"mPublished", "mPublishedBy", "mPublishedCode", "mClients", "mConnections", "mInstalling"}) set(providers, map, new LinkedHashMap<>());
             set(providers, "mRequests", new java.util.HashSet<>());
