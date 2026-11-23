@@ -255,7 +255,8 @@ public final class JobSchedulerContentTriggerTest {
                     Uri.parse("http://trigger-a/rows/item"), Uri.parse("content://trigger-b/rows/item"));
             check(retained(job).isEmpty(), "Unmatched URI triggered an exact observer");
             notify(h, ContentResolver.NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS, A);
-            check(retained(job).isEmpty(), "Skip-descendants flag was ignored");
+            check(retained(job).equals(Set.of(A)),
+                    "Skip-descendants incorrectly suppressed an exact-only descendant registration");
             notify(h, 0, A); notify(h, 0, exact);
             check(retained(job).equals(Set.of(A, exact)), "Parent or exact URI delivery changed");
         }

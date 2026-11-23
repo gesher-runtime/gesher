@@ -7,12 +7,14 @@ exercise real Parcel/Binder transport and native clipboard events.
 """
 from __future__ import annotations
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+from content_observer_reference import prepare as prepare_content_reference
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,7 +26,13 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'identity', 'fill', 'update', 'cancel', 'completion', 'public', 'clipboard', 'content'), default='all')
+    parser.add_argument('--case', choices=('all', 'identity', 'fill', 'update', 'cancel', 'completion', 'public', 'clipboard', 'content', 'content-work', 'content-reference'), default='all')
+    parser.add_argument('--content-work-kind', choices=('selective', 'miss', 'broad', 'ancestors'), default='selective')
+    parser.add_argument('--content-work-observers', type=int, default=4096)
+    parser.add_argument('--content-work-iterations', type=int, default=2000)
+    parser.add_argument('--content-reference-source', type=Path,
+                        default=ROOT / 'third_party/aosp/frameworks/base/services/core/java/com/android/server/content/ContentService.java',
+                        help='Pinned Android 16 r4 source for independent observer selection comparison')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc: parser.error('A C compiler is required for the declared native boundaries')
@@ -44,12 +52,22 @@ def main() -> None:
                 before = subprocess.run(['git', 'show', args.source_ref + ':' + relative], cwd=ROOT,
                                         capture_output=True, check=True)
                 source = work / (name + '.java'); source.write_bytes(before.stdout)
+            if name == 'ContentService':
+                print('ContentService SHA256 ' + hashlib.sha256(source.read_bytes()).hexdigest(), flush=True)
             sources.append(str(source))
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/PendingIntentContractTest.java',
             'tests/dex-services/gesher/services/ContentObserverLifecycleTest.java',
+            'tests/dex-services/gesher/services/ContentObserverDispatchTest.java',
+            'tests/java-performance/ContentObserverDispatchHost.java',
             'tests/dex-services/gesher/services/PowerWakeLockCallbackTest.java',
             'tests/pending-intent/CallbackContractsHost.java'))
+        reference = args.case in ('all', 'content', 'content-reference') and args.content_reference_source.is_file()
+        if args.case == 'content-reference' and not reference:
+            parser.error('--content-reference-source must name the pinned AOSP source')
+        if reference:
+            sources.append(str(prepare_content_reference(args.content_reference_source,
+                                                        work / 'ContentObserverReferenceHost.java')))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)
         # Binder's real NativeAllocationRegistry uses Android's Cleaner. Put those
@@ -75,11 +93,29 @@ def main() -> None:
             # PMS now persists enabled-state ownership during construction. Keep
             # every host case off the device's /data and isolated from other cases.
             case_environment['ANDROID_DATA'] = str(work / ('data-' + case))
-            if case == 'content': case_environment.pop('GESHER_MICROG_SPOOF', None)
+            if case in ('content', 'content-work', 'content-reference'): case_environment.pop('GESHER_MICROG_SPOOF', None)
+            if case == 'content-work':
+                main = ['ContentObserverDispatchHost', str(library), str(args.content_work_observers),
+                        args.content_work_kind, str(args.content_work_iterations)]
+            elif case == 'content-reference':
+                main = ['gesher.services.ContentObserverReferenceHost', str(library)]
+            else:
+                main = ['CallbackContractsHost', str(library), case]
             subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData',
+                            *(['-Xbatch', '-Xmx256m'] if case == 'content-work' else []),
                             '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
                             '--patch-module', 'jdk.unsupported=' + str(work / 'cleaner'),
                             '-cp', str(classes) + os.pathsep + classpath,
-                            'CallbackContractsHost', str(library), case], env=case_environment, check=True, timeout=90)
+                            *main], env=case_environment, check=True, timeout=90)
+            if case == 'content':
+                if reference:
+                    subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData',
+                                    '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
+                                    '--patch-module', 'jdk.unsupported=' + str(work / 'cleaner'),
+                                    '-cp', str(classes) + os.pathsep + classpath,
+                                    'gesher.services.ContentObserverReferenceHost', str(library)],
+                                   env=case_environment, check=True, timeout=90)
+                else:
+                    print('Android observer source comparison not run: supply --content-reference-source', flush=True)
 
 if __name__ == '__main__': main()

@@ -1,0 +1,655 @@
+{
+  "baseline_commit": "6afcb6e671fc4f2d08a4a98220f9d9a906a327bf",
+  "candidate_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "runtime": "Eclipse Temurin 21.0.13.1+2, -Xbatch -Xmx256m",
+  "measurement": "whole production ContentService.notifyChange; same unchanged Android framework URI and explicit existing JNI boundaries; seven samples per process; two processes per source; before/after/after/before order per workload",
+  "warmup": {
+    "selective": 20000,
+    "miss": 20000,
+    "broad": 2000,
+    "ancestors": 2000
+  },
+  "workloads": {
+    "selective": {
+      "before": {
+        "runs": [
+          {
+            "kind": "selective",
+            "registrations": 4096,
+            "iterations": 2000,
+            "callbacks_per_iteration": 1,
+            "setup_allocated_bytes": 4002568,
+            "wall_ns": [
+              397945910,
+              306108182,
+              334248961,
+              346584955,
+              314486563,
+              316357693,
+              315147119
+            ],
+            "cpu_ns": [
+              397651996,
+              306150786,
+              331033003,
+              337294151,
+              314311830,
+              316213130,
+              315084670
+            ],
+            "allocated_bytes": [
+              1568152,
+              1568000,
+              1568000,
+              1568000,
+              1568000,
+              1568000,
+              1568000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          },
+          {
+            "kind": "selective",
+            "registrations": 4096,
+            "iterations": 2000,
+            "callbacks_per_iteration": 1,
+            "setup_allocated_bytes": 4002568,
+            "wall_ns": [
+              274110138,
+              273208146,
+              271523420,
+              272494419,
+              329568215,
+              341140181,
+              313246688
+            ],
+            "cpu_ns": [
+              274016602,
+              273079310,
+              271438822,
+              272389492,
+              322368658,
+              339957696,
+              311540248
+            ],
+            "allocated_bytes": [
+              1568152,
+              1568000,
+              1568000,
+              1568000,
+              1568000,
+              1568000,
+              1568000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          }
+        ],
+        "medians": {
+          "wall_ns": 314816841.0,
+          "cpu_ns": 314698250.0,
+          "allocated_bytes": 1568000.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "selective",
+            "registrations": 4096,
+            "iterations": 2000,
+            "callbacks_per_iteration": 1,
+            "setup_allocated_bytes": 8689280,
+            "wall_ns": [
+              545435,
+              395754,
+              398718,
+              431150,
+              458389,
+              462793,
+              599521
+            ],
+            "cpu_ns": [
+              557010,
+              398309,
+              400612,
+              436031,
+              461727,
+              465745,
+              604648
+            ],
+            "allocated_bytes": [
+              1584152,
+              1584000,
+              1584000,
+              1584000,
+              1584000,
+              1584000,
+              1584000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          },
+          {
+            "kind": "selective",
+            "registrations": 4096,
+            "iterations": 2000,
+            "callbacks_per_iteration": 1,
+            "setup_allocated_bytes": 8689248,
+            "wall_ns": [
+              398792,
+              430928,
+              388954,
+              400321,
+              454399,
+              439062,
+              397163
+            ],
+            "cpu_ns": [
+              404831,
+              434143,
+              390776,
+              402006,
+              457799,
+              442358,
+              398793
+            ],
+            "allocated_bytes": [
+              1584152,
+              1584000,
+              1584000,
+              1584000,
+              1584000,
+              1584000,
+              1584000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          }
+        ],
+        "medians": {
+          "wall_ns": 431039.0,
+          "cpu_ns": 435087.0,
+          "allocated_bytes": 1584000.0
+        }
+      }
+    },
+    "miss": {
+      "before": {
+        "runs": [
+          {
+            "kind": "miss",
+            "registrations": 4096,
+            "iterations": 4000,
+            "callbacks_per_iteration": 0,
+            "setup_allocated_bytes": 4002568,
+            "wall_ns": [
+              412638726,
+              641134589,
+              630038006,
+              698065961,
+              680408799,
+              556346967,
+              365131721
+            ],
+            "cpu_ns": [
+              412237064,
+              638877834,
+              614898958,
+              645683229,
+              641182952,
+              543379960,
+              365163527
+            ],
+            "allocated_bytes": [
+              1184152,
+              1184000,
+              1184000,
+              1184000,
+              1184000,
+              1184000,
+              1184000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          },
+          {
+            "kind": "miss",
+            "registrations": 4096,
+            "iterations": 4000,
+            "callbacks_per_iteration": 0,
+            "setup_allocated_bytes": 4002568,
+            "wall_ns": [
+              392847409,
+              389150723,
+              379917130,
+              360309727,
+              384215917,
+              406798509,
+              377412280
+            ],
+            "cpu_ns": [
+              392619952,
+              389164426,
+              379830517,
+              360335334,
+              384259220,
+              406966633,
+              377436399
+            ],
+            "allocated_bytes": [
+              1184152,
+              1184000,
+              1184000,
+              1184000,
+              1184000,
+              1184000,
+              1184000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          }
+        ],
+        "medians": {
+          "wall_ns": 399822959.0,
+          "cpu_ns": 399793292.5,
+          "allocated_bytes": 1184000.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "miss",
+            "registrations": 4096,
+            "iterations": 4000,
+            "callbacks_per_iteration": 0,
+            "setup_allocated_bytes": 8689280,
+            "wall_ns": [
+              1365486,
+              1007343,
+              1026980,
+              1411878,
+              1112692,
+              1109430,
+              922851
+            ],
+            "cpu_ns": [
+              1375989,
+              1011553,
+              1031201,
+              1417445,
+              1116846,
+              1113477,
+              926507
+            ],
+            "allocated_bytes": [
+              864152,
+              864000,
+              864000,
+              864000,
+              864000,
+              864000,
+              864000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          },
+          {
+            "kind": "miss",
+            "registrations": 4096,
+            "iterations": 4000,
+            "callbacks_per_iteration": 0,
+            "setup_allocated_bytes": 8689280,
+            "wall_ns": [
+              1783017,
+              778827,
+              767267,
+              797838,
+              777428,
+              770128,
+              1033617
+            ],
+            "cpu_ns": [
+              1794383,
+              781575,
+              769602,
+              800456,
+              780114,
+              772489,
+              1037053
+            ],
+            "allocated_bytes": [
+              864152,
+              864000,
+              864000,
+              864000,
+              864000,
+              864000,
+              864000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          }
+        ],
+        "medians": {
+          "wall_ns": 1017161.5,
+          "cpu_ns": 1021377.0,
+          "allocated_bytes": 864000.0
+        }
+      }
+    },
+    "broad": {
+      "before": {
+        "runs": [
+          {
+            "kind": "broad",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 4002520,
+            "wall_ns": [
+              567861589,
+              587785046,
+              570587212,
+              726776974,
+              648277464,
+              655767393,
+              661940445
+            ],
+            "cpu_ns": [
+              560021347,
+              577234339,
+              561947107,
+              712310077,
+              638114184,
+              646472095,
+              650415058
+            ],
+            "allocated_bytes": [
+              836816152,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          },
+          {
+            "kind": "broad",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 4002520,
+            "wall_ns": [
+              1254458988,
+              1246165701,
+              1280245893,
+              1484768391,
+              1448857673,
+              764800509,
+              764213215
+            ],
+            "cpu_ns": [
+              1231766655,
+              1225961492,
+              1256956659,
+              1438059959,
+              1411670272,
+              736351642,
+              729115820
+            ],
+            "allocated_bytes": [
+              836816152,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          }
+        ],
+        "medians": {
+          "wall_ns": 745495094.5,
+          "cpu_ns": 720712948.5,
+          "allocated_bytes": 836816000.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "broad",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 8689232,
+            "wall_ns": [
+              665149974,
+              626316389,
+              566420754,
+              873940260,
+              923685679,
+              453705760,
+              1119249130
+            ],
+            "cpu_ns": [
+              588072061,
+              608285257,
+              559408958,
+              830688575,
+              902625481,
+              443643850,
+              1099200766
+            ],
+            "allocated_bytes": [
+              836872264,
+              836872000,
+              836872000,
+              836844000,
+              836840000,
+              836840000,
+              836840000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          },
+          {
+            "kind": "broad",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 8689232,
+            "wall_ns": [
+              693931841,
+              500194524,
+              501884418,
+              532427645,
+              546536728,
+              496726375,
+              508908010
+            ],
+            "cpu_ns": [
+              614036982,
+              491937209,
+              491487660,
+              495816906,
+              530573820,
+              488709814,
+              503423032
+            ],
+            "allocated_bytes": [
+              836872264,
+              836872000,
+              836872000,
+              836844000,
+              836840000,
+              836840000,
+              836840000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          }
+        ],
+        "medians": {
+          "wall_ns": 556478741.0,
+          "cpu_ns": 544991389.0,
+          "allocated_bytes": 836844000.0
+        }
+      }
+    },
+    "ancestors": {
+      "before": {
+        "runs": [
+          {
+            "kind": "ancestors",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 3589984,
+            "wall_ns": [
+              1028359743,
+              1503748711,
+              1125759017,
+              948198569,
+              893735709,
+              874047636,
+              871925421
+            ],
+            "cpu_ns": [
+              1010808712,
+              1491400511,
+              1115744856,
+              935075612,
+              879713304,
+              858468814,
+              854014516
+            ],
+            "allocated_bytes": [
+              836816152,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          },
+          {
+            "kind": "ancestors",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 3589984,
+            "wall_ns": [
+              518373346,
+              486591212,
+              491888960,
+              493561708,
+              487051421,
+              504451946,
+              514279001
+            ],
+            "cpu_ns": [
+              510167155,
+              479470685,
+              484743388,
+              485922549,
+              480335235,
+              491843260,
+              503879828
+            ],
+            "allocated_bytes": [
+              836816152,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000,
+              836816000
+            ],
+            "production_source_sha256": "2c42f0cbe2cf86ad4d74cf0371c15700bb88f10ca7cf3a35766647e838c72433"
+          }
+        ],
+        "medians": {
+          "wall_ns": 695149383.5,
+          "cpu_ns": 682090835.5,
+          "allocated_bytes": 836816000.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "ancestors",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 6766224,
+            "wall_ns": [
+              483270844,
+              482012098,
+              528100795,
+              615070661,
+              591481038,
+              584320376,
+              589751087
+            ],
+            "cpu_ns": [
+              475907803,
+              475099216,
+              484975712,
+              600600209,
+              582882775,
+              573754622,
+              578601584
+            ],
+            "allocated_bytes": [
+              836872152,
+              836872000,
+              836843232,
+              836840000,
+              836840000,
+              836840000,
+              836840000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          },
+          {
+            "kind": "ancestors",
+            "registrations": 4096,
+            "iterations": 1000,
+            "callbacks_per_iteration": 4096,
+            "setup_allocated_bytes": 6766192,
+            "wall_ns": [
+              610797480,
+              630716044,
+              681247005,
+              557351881,
+              567521648,
+              609120017,
+              571067361
+            ],
+            "cpu_ns": [
+              604045618,
+              618402131,
+              581231678,
+              550916881,
+              561671325,
+              586547980,
+              564729665
+            ],
+            "allocated_bytes": [
+              836872152,
+              836872000,
+              836843232,
+              836840000,
+              836840000,
+              836840000,
+              836840000
+            ],
+            "production_source_sha256": "93f5b3f51bed7975c17476998b45b28ba020fa0a83935570536c86ec8403862d"
+          }
+        ],
+        "medians": {
+          "wall_ns": 587035731.5,
+          "cpu_ns": 576178103.0,
+          "allocated_bytes": 836840000.0
+        }
+      }
+    }
+  }
+}
