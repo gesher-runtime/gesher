@@ -1270,6 +1270,16 @@ function Update-PanelVisitReports {
     $report.Worker = Start-PanelSpecialAccess $report.Arguments $report.Command
 }
 
+# The panel window is already closed; give a committed choice its terminal report
+# before the host process exits. A failed device cannot leave this process waiting.
+function Complete-PanelVisitReportsOnExit([int] $timeoutMs = (2 * $script:SpecialAccessTimeoutMs + 1000)) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ($script:PanelVisitReports.Count -gt 0 -and $watch.ElapsedMilliseconds -lt $timeoutMs) {
+        try { Update-PanelVisitReports } catch { Write-PanelLog "closing Settings visit: $($_.Exception.Message)" }
+        if ($script:PanelVisitReports.Count) { Start-Sleep -Milliseconds 50 }
+    }
+}
+
 # A request from the system server: one package name. $null for anything else.
 function ConvertFrom-PanelRequest([string] $text) {
     if ($null -eq $text) { return $null }
@@ -2800,6 +2810,7 @@ $script:LiveTimer.Start()
 try { $window.ShowDialog() | Out-Null }
 finally {
     $script:LiveTimer.Stop()
+    Complete-PanelVisitReportsOnExit
     Close-PanelMetadata
     Close-PanelUpdates
     # The window is already closed. Drain the cooperatively cancelled, bounded

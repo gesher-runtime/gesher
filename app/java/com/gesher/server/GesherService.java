@@ -45,6 +45,7 @@ public final class GesherService extends Binder {
     static final int SETTINGS_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 12;
     static final int SETTINGS_SHOWN = IBinder.FIRST_CALL_TRANSACTION + 13;
     static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
+    static final int SET_SPECIAL_ACCESS_VISIT = IBinder.FIRST_CALL_TRANSACTION + 15;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -141,7 +142,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > SETTINGS_VISIT_CLOSED) {
+        if (code < INSTALL || code > SET_SPECIAL_ACCESS_VISIT) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -222,11 +223,13 @@ public final class GesherService extends Binder {
                     reply.writeStringArray(rows);
                     return true;
                 }
-                case SET_SPECIAL_ACCESS: {
+                case SET_SPECIAL_ACCESS:
+                case SET_SPECIAL_ACCESS_VISIT: {
                     String pkg = data.readString(), op = data.readString();
                     boolean allowed = data.readBoolean();
                     String row;
-                    if (data.dataAvail() == 0) {
+                    if (code == SET_SPECIAL_ACCESS) {
+                        data.enforceNoDataAvail();
                         row = mDevice.setSpecialAccess(pkg, op, allowed);
                     } else {
                         int pid = data.readInt();
@@ -478,7 +481,8 @@ public final class GesherService extends Binder {
                     data.writeLong(startedAt);
                     data.writeStringArray(tokens);
                 }
-                if (!mBinder.transact(SET_SPECIAL_ACCESS, data, reply, 0)) throw olderDevice();
+                int code = tokens.length == 0 ? SET_SPECIAL_ACCESS : SET_SPECIAL_ACCESS_VISIT;
+                if (!mBinder.transact(code, data, reply, 0)) throw olderDevice();
                 reply.readException();
                 String row = reply.readString();
                 if (row == null) throw olderDevice();

@@ -24,7 +24,7 @@ foreach ($name in 'ConvertFrom-SpecialAccessOutput', 'Invoke-PanelSpecialAccess'
         'Test-PanelPackageName', 'Test-PanelSpecialAccessOp', 'Read-AppSpecialAccessResult',
         'Read-SetSpecialAccessResult', 'Get-AppSpecialAccess', 'Set-AppSpecialAccess', 'ConvertFrom-PanelRequest',
         'Receive-PanelResultTokens', 'Write-PanelLog', 'Get-PanelVisitIdentity',
-        'Send-PanelSettingsShown', 'Send-PanelSettingsClosed', 'Update-PanelVisitReports') {
+        'Send-PanelSettingsShown', 'Send-PanelSettingsClosed', 'Update-PanelVisitReports', 'Complete-PanelVisitReportsOnExit') {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -245,8 +245,7 @@ try {
     Assert-Access ($script:VisitCommands.Count -eq 1 -and
         $script:VisitCommands[0] -eq "settings-shown $identity $token") 'Visible visit carries the exact panel process'
     $mutation.Done = $true
-    Update-PanelVisitReports
-    Update-PanelVisitReports
+    Complete-PanelVisitReportsOnExit 1000
     Assert-Access ($script:VisitCommands.Count -eq 2 -and
         $script:VisitCommands[1] -eq "settings-closed $identity $token" -and
         $script:PanelVisitReports.Count -eq 0) 'Closing reports only after outstanding writes finish'
