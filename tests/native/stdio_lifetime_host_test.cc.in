@@ -18,6 +18,7 @@ static int checks, failures, lock_depth, descriptor_depth, admission_error, fini
 static bool close_error_after;
 static bool fail_allocations;
 static int allocation_attempts, io_calls;
+static bool expected_status_unlocked;
 // Only C++ allocations fail. The real FILE and its host CRT storage already
 // exist, so this targets the declared shared-owner allocation boundary.
 // The real owner allocation paths execute in test_stdio_contracts.py.
@@ -70,11 +71,13 @@ int Orient(FILE* stream, int mode, bool = false) {
   if (!state->orientation) state->orientation = mode > 0 ? 1 : mode < 0 ? -1 : 0;
   return state->orientation;
 }
-int Error(FILE* stream, bool = false) {
+int Error(FILE* stream, bool unlocked = false) {
+  check("guest status selects the requested shared lock boundary", unlocked == expected_status_unlocked);
   auto* state = Find(stream, false);
   return (state && state->bionic.conversion_error) || std::ferror(stream);
 }
-void Clear(FILE* stream, bool = false) {
+void Clear(FILE* stream, bool unlocked = false) {
+  check("guest clear selects the requested shared lock boundary", unlocked == expected_status_unlocked);
   if (auto* state = Find(stream, false)) state->bionic.conversion_error = false;
   std::clearerr(stream);
 }
@@ -82,6 +85,12 @@ int FlushOutput(FILE*) { return 0; }
 void Forget(FILE* stream) { states.erase(stream); }
 int PrepareReopenedStream(FILE* stream, int) { Forget(stream); return 0; }
 int Get(FILE* stream, bool) { ++io_calls; return getc_unlocked(stream); }
+int64_t ReadDelimited(char** bytes, size_t* size, int delimiter, FILE* stream, bool) {
+  ++io_calls; return ::getdelim(bytes, size, delimiter, stream);
+}
+char* ReadLine(char* bytes, int count, FILE* stream, bool) {
+  ++io_calls; return ::fgets_unlocked(bytes, count, stream);
+}
 int Put(int c, FILE* stream, bool) { ++io_calls; return putc_unlocked(c, stream); }
 size_t Write(const void* p, size_t size, size_t n, FILE* stream, bool) {
   ++io_calls; return fwrite_unlocked(p, size, n, stream);
@@ -243,6 +252,13 @@ static void allocation_contracts() {
   fail_allocations = false;
   check("status queries and no-op I/O do not allocate or change errno",
         queries_worked && allocation_attempts == 0 && errno == EDOM && !recorded(f));
+
+  // PR73 lets ordinary status entries lock through the owner, while the
+  // unlocked entries retain caller synchronization. Exercise both boundaries.
+  expected_status_unlocked = true;
+  check("unlocked guest status reads the same live stream", shim::FerrorUnlocked(f) == 0);
+  shim::ClearerrUnlocked(f);
+  expected_status_unlocked = false;
 
   check("allocation recovery can orient the same live stream", shim::Fwide(f, 1) > 0);
   auto* state = gesher::stdio::BionicMetadata(f, true);
