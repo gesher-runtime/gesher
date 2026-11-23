@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index 30bf93d5d..7df4bee88 100644
+index 30bf93d5d..9f8733cd5 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -72,0 +73 @@ bool g_record_only = false;
@@ -66,6 +66,9 @@ index 30bf93d5d..7df4bee88 100644
 @@ -1840 +1855 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
 -  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
 +  if (ReplyRecordLock(pipe, error, result)) WaitForClient(pipe, false);
+@@ -1920 +1935 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
+-  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
++  if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
 @@ -1960 +1975 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
 -  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
 +  if (!ReplyRecordLock(pipe, 0) || !WaitForClient(pipe, true)) return;

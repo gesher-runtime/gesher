@@ -1,5 +1,5 @@
 {
-  "patch_sha256": "e61f3053d6ec1bd5921a0bc7e73cf10a02981257ee16f4b26d0cf6f87d18cd2c",
+  "patch_sha256": "9bf79fe6a3f9ceeddfccc4251dad415a3e7f1f69cf0d8079b0fc04f69a0548ed",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/posix/posix.cmake",
@@ -13,7 +13,7 @@
   ],
   "source_sha256": {
     "CMakeLists.txt": "8431cd31ae8af2c944c41c9e815f9dbc4e74a94b60a1b52e63f2fc483570b38c",
-    "compat/binder/binderd.cc": "7fe3405db383849bb6b3b6302940554cd0e43c716f26907cd0ba3a70dd27289d",
+    "compat/binder/binderd.cc": "c71b65f3d6fa3abb1cbae22389c2edfcb8d66e631c4b2f64c334f96678d5ba4e",
     "compat/binder/launch_channel.h": "d0101deb6f5a4680c995b52b13ee72db8d1e930100e5349019d4c14bb4e9341b",
     "compat/elf/exec/exec.cmake": "8fa490c8269c49f642d90db90d66d9eca5ff5813d53357b0284ce70f7b0ab9c9",
     "compat/framework/services_zygote.cc": "eec6e22aad4e30bc36f6d090c34626bf34e5129a0ffed953264bb729b86fd559",

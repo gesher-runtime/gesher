@@ -1932,7 +1932,7 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
   WireReply reply;
   reply.Put<int32_t>(status);
   reply.Put<uint64_t>(result);
-  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
+  if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
 }
 
 void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
