@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <gesher/binder_endpoint.h>
 #include <io.h>
+#include <poll.h>
 #include <share.h>
 #include <unistd.h>
 
@@ -25,6 +26,7 @@ constexpr DWORD kSharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELET
 constexpr wchar_t kOwner[] = L"owner";
 constexpr wchar_t kObserver[] = L"observer";
 constexpr wchar_t kStandalone[] = L"standalone";
+constexpr char kPipeData[] = "contained pipe transfer";
 static_assert(sizeof(flock) == 32);
 std::u16string U16(const std::wstring& value) { return {value.begin(), value.end()}; }
 std::u16string Quote(const fs::path& path) { return u"\"" + U16(path.native()) + u"\""; }
@@ -228,8 +230,34 @@ int QueryInheritedFile() {
                "standalone descendant inherits the exact OFD owner") ? 0 : 1;
 }
 
+int ReadInheritedPipe() {
+  char data[sizeof(kPipeData)]{};
+  return Check(Lowbox() && read(STDIN_FILENO, data, sizeof(data)) == static_cast<ssize_t>(sizeof(data)) &&
+               std::string(data, sizeof(data)) == std::string(kPipeData, sizeof(kPipeData)),
+               "contained descendant reads the actual inherited pipe payload") ? 0 : 1;
+}
+
+bool CheckStandalonePipe() {
+  int ends[2] = {-1, -1};
+  if (!Check(pipe2(ends, O_CLOEXEC | O_NONBLOCK) == 0, "AppContainer creates a real anonymous pipe")) return false;
+  char byte = 0;
+  pollfd ready{ends[0], POLLIN, 0};
+  const bool transferred = (fcntl(ends[0], F_GETFD) & FD_CLOEXEC) != 0 &&
+      (fcntl(ends[1], F_GETFL) & O_NONBLOCK) != 0 &&
+      read(ends[0], &byte, 1) == -1 && errno == EAGAIN &&
+      write(ends[1], kPipeData, sizeof(kPipeData)) == static_cast<ssize_t>(sizeof(kPipeData)) &&
+      poll(&ready, 1, 1000) == 1 && (ready.revents & POLLIN) != 0 &&
+      StandaloneChild(L" --read-inherited-pipe", reinterpret_cast<HANDLE>(_get_osfhandle(ends[0])));
+  const bool closed_writer = close(ends[1]) == 0;
+  const bool eof = read(ends[0], &byte, 1) == 0;
+  const bool closed_reader = close(ends[0]) == 0;
+  return Check(transferred && closed_writer && eof && closed_reader,
+               "contained pipe keeps nonblocking, poll, inheritance and EOF semantics");
+}
+
 int StandaloneGuest(const fs::path& dir) {
   if (!Check(Lowbox(), "standalone runs in a real AppContainer")) return 1;
+  if (!CheckStandalonePipe()) return 1;
   const DWORD broker_pid = gesher::binder_endpoint::Current().StandaloneRecordBrokerPid();
   if (!Check(broker_pid != 0, "standalone can identify its retained broker process")) return 1;
   std::printf("broker-pid %lu\n", broker_pid);
@@ -422,6 +450,7 @@ int wmain(int argc, wchar_t** argv) {
   if (argc == 3 && std::wstring(argv[1]) == L"--read-pinned-source") return ReadPinnedSource(argv[2]);
   if (argc == 4 && std::wstring(argv[1]) == L"--scoped-supervisor") return ScopedSupervisor(argv[2], argv[3]);
   if (argc == 2 && std::wstring(argv[1]) == L"--query-inherited-file") return QueryInheritedFile();
+  if (argc == 2 && std::wstring(argv[1]) == L"--read-inherited-pipe") return ReadInheritedPipe();
   if (argc == 4 && std::wstring(argv[1]) == L"--observe") return Observe(argv[3], _wtoi(argv[2]));
   if (argc != 3) {
     std::puts("Usage: appcontainer_record_lock_probe <runtime dir> <scratch parent>");

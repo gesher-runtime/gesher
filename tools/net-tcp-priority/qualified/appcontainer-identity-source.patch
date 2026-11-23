@@ -854,6 +854,26 @@ index 09fd4596c..382933857 100644
 @@ -227 +233 @@ int ImportStartup(Table* state) try {
 -  if (crt_size > startup.cbReserved2 || startup.cbReserved2 - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
 +  if (crt_size > descriptor_bytes || descriptor_bytes - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
+diff --git a/compat/posix/src/pipe_io.cc b/compat/posix/src/pipe_io.cc
+index e5928dd91..f6e641b43 100644
+--- a/compat/posix/src/pipe_io.cc
++++ b/compat/posix/src/pipe_io.cc
+@@ -16,0 +17 @@
++#include <cwchar>
+@@ -147,0 +149,3 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
++  DWORD contained = 0, token_bytes = 0;
++  if (!GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
++                           &contained, sizeof(contained), &token_bytes)) return FailWithLastError();
+@@ -151 +155,6 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
+-  wchar_t name[100] = L"\\\\.\\pipe\\gesher-";
++  // Windows lets an AppContainer create NPFS instances in its own LOCAL
++  // namespace. Descriptor inheritance and transfer use the opened handles.
++  const wchar_t* pipe_directory = contained ? L"\\\\.\\pipe\\LOCAL\\gesher-" : L"\\\\.\\pipe\\gesher-";
++  const size_t prefix = std::wcslen(pipe_directory);
++  wchar_t name[100];
++  std::copy_n(pipe_directory, prefix, name);
+@@ -153 +161,0 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
+-  const size_t prefix = 16;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
 index 1f7b51ecc..d0edd9688 100644
 --- a/compat/posix/src/unistd.cc

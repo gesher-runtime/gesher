@@ -355,7 +355,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = '0d9341b586598091178e1104cbf6d16717137b94411951a3a685cc16e72c21f3'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = 'd25cd3772ae88bd1e2fa5dea887e19bfe15675bc88483bca7a6968c7ba202bb0'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/binder/binderd.cc': '3011ce2db55d2e129b7cf693064d1f89fbe8398089b7420a7fa88c47559cf8fb',
  'compat/elf/exec/exec_spawn.cc': '3ff40dc3d90219b7badb41733236c0c9dd10690d1257513ca76de45623d9d0be',
@@ -364,6 +364,7 @@ APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/posix/src/fd.cc': '4f7ab619d769b885e6f54be626567d4df8ec5a2739901b6beba8a2a5548305dc',
  'compat/posix/src/fsops.cc': '289d46740f0b4d45ae8c00117ee4c9ea0a24f6994b1f7ef070db1420da0dc51a',
  'compat/posix/src/ofd.cc': 'b1d9b541efbd27332d2ea1047f7a98b91101e586b5d04830cf17bfd1ebf4e079',
+ 'compat/posix/src/pipe_io.cc': '6df3e0ab8cae3afc9cf6cebc902c5950a7d612bea2745460cdd1447538e6e23b',
  'compat/posix/src/unistd.cc': '7529dd36a73bfe008fb027541bae21e19dd92ff7d78265aa1dbc45a2008e6e19',
  'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
 }
@@ -583,6 +584,7 @@ def transition_negative_controls():
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
   ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
   ('compat/posix/src/pipe_io.cc',b'if (!count) return 0;',b'if (!count) return 1;'),
+  ('compat/posix/src/pipe_io.cc',b'TokenIsAppContainer',b'TokenElevation'),
   ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
   ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
   ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
