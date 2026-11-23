@@ -15,6 +15,7 @@ int checks=0, opens=0, closes=0, frees=0, scans=0, events=0, guards=0;
 bool open_failure=false, query_failure=false, bss_failure=false, malformed=false;
 bool scan_failure=false, completion=true, precompletion=false, close_failure=false, radio_on=true;
 bool eligible=true, revoke_on_open=false, notify_in_guard=false;
+bool capability_failure=false, pairs_overflow=false, ihv_phy=false;
 bool index_failure=false, delay_after_bss=false, delay_close=false;
 int adapters=1; size_t ie_size=2;
 uint64_t clock=0, filetime=1'000'000'000'000ULL;
@@ -28,11 +29,12 @@ void reset() {
     open_failure=query_failure=bss_failure=malformed=scan_failure=precompletion=close_failure=revoke_on_open=false;
     completion=radio_on=eligible=true;notify_in_guard=false;
     index_failure=delay_after_bss=delay_close=false;
+    capability_failure=pairs_overflow=ihv_phy=false;
     adapters=1;ie_size=2;clock=0;filetime=1'000'000'000'000ULL;callback=nullptr;context=nullptr;last_context=nullptr;armed.clear();wlan_broken=false;
 }
-void notify(int index,DWORD code=wlan_notification_acm_scan_complete) {
+void notify(int index,DWORD code=wlan_notification_acm_scan_complete,DWORD source=WLAN_NOTIFICATION_SOURCE_ACM) {
     if(!callback)return;
-    WLAN_NOTIFICATION_DATA notification{}; notification.NotificationSource=WLAN_NOTIFICATION_SOURCE_ACM;
+    WLAN_NOTIFICATION_DATA notification{}; notification.NotificationSource=source;
     notification.NotificationCode=code; notification.InterfaceGuid.Data1=index;
     callback(&notification,context);
 }
@@ -41,7 +43,7 @@ Api api() {
     Api api;
     api.open=WlanOpenHandle;api.close=WlanCloseHandle;api.interfaces=WlanEnumInterfaces;
     api.query=WlanQueryInterface;api.bss=WlanGetNetworkBssList;api.notify=WlanRegisterNotification;
-    api.scan=WlanScan;api.free=WlanFreeMemory;
+    api.scan=WlanScan;api.free=WlanFreeMemory;api.capability=WlanGetInterfaceCapability;
     return api;
 }
 }
@@ -97,6 +99,13 @@ DWORD WlanQueryInterface(HANDLE,const GUID*,WLAN_INTF_OPCODE operation,PVOID,DWO
         association.dot11PhyType=10;association.ulRxRate=866000;association.ulTxRate=720000;
         connection->wlanSecurityAttributes.bSecurityEnabled=TRUE;connection->wlanSecurityAttributes.dot11AuthAlgorithm=11;
         *result=connection;
+    } else if(operation==wlan_intf_opcode_supported_infrastructure_auth_cipher_pairs) {
+        // WPA2-PSK/CCMP, SAE/CCMP, OWE/CCMP and open/WEP (DOT11_CIPHER_ALGO_WEP).
+        const DOT11_AUTH_CIPHER_PAIR pairs[]={{7,4},{9,4},{10,4},{1,0x101}};
+        *size=offsetof(WLAN_AUTH_CIPHER_PAIR_LIST,pAuthCipherPairList)+sizeof(pairs);
+        auto* list=static_cast<WLAN_AUTH_CIPHER_PAIR_LIST*>(calloc(1,*size));
+        list->dwNumberOfItems=fixture::pairs_overflow?1000:4;memcpy(list->pAuthCipherPairList,pairs,sizeof(pairs));
+        *result=list;
     } else {*size=sizeof(LONG);auto* rssi=static_cast<LONG*>(calloc(1,*size));*rssi=-58;*result=rssi;}
     return ERROR_SUCCESS;
 }
@@ -129,6 +138,29 @@ DWORD WlanScan(HANDLE,const GUID* guid,const DOT11_SSID*,const WLAN_RAW_DATA*,PV
     return ERROR_SUCCESS;
 }
 void WlanFreeMemory(PVOID value) {++fixture::frees;free(value);}
+DWORD WlanGetInterfaceCapability(HANDLE,const GUID*,PVOID,WLAN_INTERFACE_CAPABILITY** output) {
+    if(fixture::capability_failure)return ERROR_ACCESS_DENIED;
+    auto* capability=static_cast<WLAN_INTERFACE_CAPABILITY*>(calloc(1,sizeof(WLAN_INTERFACE_CAPABILITY)));
+    const ULONG phys[]={5,6,4,7,8,10}; // HR-DSSS, ERP, OFDM, HT, VHT, HE
+    capability->dwNumberOfSupportedPhys=6;memcpy(capability->dot11PhyTypes,phys,sizeof(phys));
+    if(fixture::ihv_phy) {capability->dot11PhyTypes[6]=0x80000001u;capability->dwNumberOfSupportedPhys=7;}
+    *output=capability;return ERROR_SUCCESS;
+}
+namespace fixture {
+std::vector<uint32_t> deliveries;
+int stop_after=3;
+void (*between)(int)=nullptr;
+bool sink(void*,uint32_t bits) {
+    deliveries.push_back(bits);
+    if(between)between(static_cast<int>(deliveries.size()));
+    return static_cast<int>(deliveries.size())<stop_after;
+}
+void watch_events(int delivered) {
+    if(delivered==1) {notify(6,wlan_notification_msm_radio_state_change,WLAN_NOTIFICATION_SOURCE_MSM);
+        notify(6,wlan_notification_acm_scan_complete);}
+    if(delivered==2) notify(6,wlan_notification_msm_signal_quality_change,WLAN_NOTIFICATION_SOURCE_MSM);
+}
+}
 
 int main() {
     using namespace fixture;
@@ -190,5 +222,38 @@ int main() {
     check(events==1,"Late callback after failed close still has a live target");
     callback=nullptr;context=nullptr;delete static_cast<ScanWait*>(last_context);last_context=nullptr;
     check(events==0,"Fixture releases intentionally retained failed-close context after callbacks stopped");
+    // Adapter census: PHY, auth and cipher unions; failures never invent support.
+    reset();
+    output=Hardware(backend);
+    check(output=="hw\t1\ncap\t"+std::to_string((1u<<5)|(1u<<6)|(1u<<4)|(1u<<7)|(1u<<8)|(1u<<10))
+            +"\t"+std::to_string((1u<<7)|(1u<<9)|(1u<<10)|(1u<<1))+"\t"+std::to_string((1u<<4)|(1u<<31))+"\n"
+            && closes==1,"Census reports real PHY types and auth/cipher pairs");
+    reset();capability_failure=true;pairs_overflow=true;ihv_phy=false;
+    output=Hardware(backend);
+    check(output=="hw\t1\ncap\t0\t0\t0\n","Unreadable capability and oversized pair count report no support");
+    reset();ihv_phy=true;
+    output=Hardware(backend);
+    check(output.find("cap\t"+std::to_string((1u<<5)|(1u<<6)|(1u<<4)|(1u<<7)|(1u<<8)|(1u<<10))+"\t")!=std::string::npos,
+            "IHV-defined PHY types are not standards");
+    reset();adapters=0;
+    check(Hardware(backend)=="hw\t0\n","No adapter is a real zero count");
+    reset();open_failure=true;
+    check(Hardware(backend).empty() && closes==0,"Stopped WLAN service is not hardware");
+    check(Hardware(unavailable).empty() && opens==1,"Missing wlanapi is not hardware");
+    // Notification watcher: callback bits are drained by the calling thread only.
+    reset();deliveries.clear();stop_after=3;between=watch_events;
+    check(Watch(backend,sink,nullptr,1000)==0,"Watcher stops cleanly when the sink declines");
+    check(deliveries.size()==3 && deliveries[0]==15,"First delivery after registration requests a full refresh");
+    check(deliveries[1]==(1|2|4),"Radio change and scan completion delivered as state, connection and scan");
+    check(deliveries[2]==0,"Signal-quality noise is not an event");
+    check(callback==nullptr && closes==1 && events==0,"Watcher unregisters, closes and frees its event");
+    reset();deliveries.clear();open_failure=true;
+    check(Watch(backend,sink,nullptr,1000)==-1 && deliveries.empty() && closes==0 && events==0,
+            "Unavailable WLAN service is reported for retry without deliveries");
+    reset();deliveries.clear();stop_after=1;between=nullptr;close_failure=true;
+    check(Watch(backend,sink,nullptr,1000)==-1 && wlan_broken && events==1,
+            "Failed close retains the watcher target and disables WLAN use");
+    callback=nullptr;context=nullptr;delete static_cast<WatchState*>(last_context);last_context=nullptr;
+    check(events==0,"Fixture releases the deliberately retained watcher state");
     std::cout<<"WindowsWifi native boundary all passed: "<<checks<<"\n";
 }

@@ -225,8 +225,65 @@ public final class WindowsWifiFixture {
         publish(WindowsWifi.parse("ok\t1\n",10_000_000));
         check(WindowsWifi.wifiState()==WifiManager.WIFI_STATE_DISABLED && !WindowsWifi.startScan(ok -> {}), "No adapter does not accept scans");
     }
+    private static final class Recorder implements WindowsWifi.Events {
+        final List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        @Override public void onWifiStateChanged(int previous, int current) { events.add("state " + previous + ">" + current); }
+        @Override public void onScanResultsAvailable() { events.add("scan"); }
+        @Override public void onConnectionChanged() { events.add("connection"); }
+    }
+    private static void await(List<String> events, int size) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (events.size() < size && System.nanoTime() < deadline) Thread.sleep(5);
+    }
+    @SuppressWarnings("unchecked")
+    public static void events() throws Exception {
+        WindowsWifi.Hardware hardware = WindowsWifi.parseHardware("hw\t2\ncap\t80\t640\t16\ncap\t1024\t128\t2147483648\n");
+        check(hardware != null && hardware.interfaces == 2 && hardware.phy(4) && hardware.phy(6) && hardware.phy(10)
+                && hardware.auth(7) && hardware.auth(9) && hardware.cipher(4) && hardware.cipher(31) && !hardware.auth(10),
+                "Census unions every adapter's PHY, auth and cipher bits");
+        check(WindowsWifi.parseHardware("hw\t0\n").interfaces == 0 && !WindowsWifi.parseHardware("hw\t0\n").present(),
+                "Zero adapters is real absence");
+        check(WindowsWifi.parseHardware(null) == null && WindowsWifi.parseHardware("hw\t2\ncap\t1\t1\t1\n") == null
+                && WindowsWifi.parseHardware("hw\t1\ncap\t-1\t0\t0\n") == null
+                && WindowsWifi.parseHardware("hw\t65\n") == null, "Malformed census is not hardware");
+        Recorder recorder = new Recorder();
+        ((List<WindowsWifi.Events>) get("EVENTS")).add(recorder);
+        set("sWatching", true);
+        String enabled = "ok\t1\n" + IFACE + "4e6574" + END + BSS;
+        answer = enabled; idle();
+        publish(WindowsWifi.parse(enabled, 10_000_000));
+        set("sPublishedState", WifiManager.WIFI_STATE_DISABLED);
+        set("sOwnScanNanos", 0L);
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_STATE), "Watcher continues after a state event");
+        idle(); await(recorder.events, 2);
+        check(recorder.events.contains("state 1>3") && recorder.events.contains("connection")
+                && !recorder.events.contains("scan"), "Radio event re-reads and reports the observed transition only");
+        recorder.events.clear();
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_STATE), "Repeated state event accepted"); idle(); Thread.sleep(50);
+        check(!recorder.events.toString().contains("state"), "An unchanged state is not a transition");
+        recorder.events.clear();
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_SCAN), "External scan event accepted"); idle(); await(recorder.events, 1);
+        check(recorder.events.equals(List.of("scan")), "Windows-initiated scan completion is published once after a fresh read");
+        recorder.events.clear();
+        set("sOwnScanNanos", System.nanoTime());
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_SCAN), "Own scan echo accepted"); idle(); Thread.sleep(50);
+        check(recorder.events.isEmpty(), "The completion of a requested scan is not published twice");
+        set("sOwnScanNanos", 0L);
+        answer = "error";
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_SCAN | WindowsWifi.EVENT_STATE), "Event before failed read"); idle(); Thread.sleep(50);
+        check(!recorder.events.contains("scan") && !recorder.events.toString().contains("state"),
+                "A failed read reports neither fresh results nor a state change");
+        answer = enabled;
+        publish(WindowsWifi.parse(enabled, 10_000_000));
+        check(WindowsWifi.bandObserved(4900, 5900) && !WindowsWifi.bandObserved(5925, 7125),
+                "Band evidence comes from observed BSS frequencies only");
+        check(WindowsWifi.onEvents(0), "Idle poll keeps watching");
+        WindowsWifi.stopWatching();
+        check(!WindowsWifi.onEvents(WindowsWifi.EVENT_STATE), "Stopped watcher declines further deliveries");
+        ((List<WindowsWifi.Events>) get("EVENTS")).remove(recorder);
+    }
     public static void run(boolean nativeBoundary) throws Exception {
-        parser(); if (nativeBoundary) host();
+        parser(); if (nativeBoundary) { host(); events(); }
         System.out.println("WindowsWifiFixture all passed: " + checks + "; nativeBoundary=" + nativeBoundary);
     }
 }

@@ -1,12 +1,14 @@
 // Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0
 // Locale-independent Native Wi-Fi boundary for com.gesher.net.WindowsWifi.
-// All calls run on its single background worker. No shell subprocess or profile mutation.
+// Queries run on its single background worker; the adapter census is synchronous and the
+// notification watcher owns one dedicated thread. No shell subprocess.
 #include <winsock2.h>
 #include <windows.h>
 #include <netioapi.h>
 #include <wlanapi.h>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -27,6 +29,8 @@ struct Api {
   decltype(&WlanRegisterNotification) notify = nullptr;
   decltype(&WlanScan) scan = nullptr;
   decltype(&WlanFreeMemory) free = nullptr;
+  // Optional: absent capability data means "not reported", never "supported".
+  decltype(&WlanGetInterfaceCapability) capability = nullptr;
   Api() {
     // Optional on Windows Server: never turn missing WLAN support into a loader failure.
     HMODULE module = LoadLibraryExW(L"wlanapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -36,6 +40,7 @@ struct Api {
     LOAD(interfaces, "WlanEnumInterfaces"); LOAD(query, "WlanQueryInterface");
     LOAD(bss, "WlanGetNetworkBssList"); LOAD(notify, "WlanRegisterNotification");
     LOAD(scan, "WlanScan"); LOAD(free, "WlanFreeMemory");
+    LOAD(capability, "WlanGetInterfaceCapability");
 #undef LOAD
     // The system DLL is retained for process lifetime; all function pointers remain valid.
   }
@@ -288,6 +293,132 @@ std::string Snapshot(Api& api, bool request_scan, bool (*eligible)(void*), void*
   return std::string(denied ? "ok\t2\n" : (scans_valid ? "ok\t1\n" : "ok\t0\n")) + interfaces_text + (scans_valid ? scans_text : "");
 }
 
+// Synchronous adapter census for the system feature and capability queries. An
+// unavailable API, a stopped WLAN service or an open failure returns empty, which the
+// Java side treats as "no Wi-Fi hardware"; it is never reported as present.
+bool AuthCipherPairs(Api& api, HANDLE handle, const GUID& guid, uint32_t* auth, uint32_t* cipher) {
+  Memory memory(api);
+  DWORD size = 0;
+  if (api.query(handle, &guid, wlan_intf_opcode_supported_infrastructure_auth_cipher_pairs, nullptr,
+                &size, &memory.value, nullptr) != ERROR_SUCCESS || !memory.value) return false;
+  size_t base = offsetof(WLAN_AUTH_CIPHER_PAIR_LIST, pAuthCipherPairList);
+  if (size < base) return false;
+  const auto* list = static_cast<const WLAN_AUTH_CIPHER_PAIR_LIST*>(memory.value);
+  if (list->dwNumberOfItems > (size - base) / sizeof(DOT11_AUTH_CIPHER_PAIR)) return false;
+  for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
+    uint32_t algorithm = static_cast<uint32_t>(list->pAuthCipherPairList[i].AuthAlgoId);
+    uint32_t suite = static_cast<uint32_t>(list->pAuthCipherPairList[i].CipherAlgoId);
+    if (algorithm >= 1 && algorithm <= 30) *auth |= 1u << algorithm;
+    if (suite <= 30) *cipher |= 1u << suite;
+    else if (suite == 0x101) *cipher |= 1u << 31; // DOT11_CIPHER_ALGO_WEP (either key length)
+  }
+  return true;
+}
+
+uint32_t PhyTypes(Api& api, HANDLE handle, const GUID& guid) {
+  if (!api.capability) return 0;
+  Memory memory(api);
+  if (api.capability(handle, &guid, nullptr, reinterpret_cast<WLAN_INTERFACE_CAPABILITY**>(&memory.value))
+      != ERROR_SUCCESS || !memory.value) return 0;
+  const auto* capability = static_cast<const WLAN_INTERFACE_CAPABILITY*>(memory.value);
+  DWORD count = capability->dwNumberOfSupportedPhys;
+  if (count > WLAN_MAX_PHY_INDEX) return 0;
+  uint32_t mask = 0;
+  for (DWORD i = 0; i < count; i++) {
+    uint32_t type = static_cast<uint32_t>(capability->dot11PhyTypes[i]);
+    if (type >= 1 && type <= 30) mask |= 1u << type; // IHV-defined PHY types are not standards.
+  }
+  return mask;
+}
+
+std::string Hardware(Api& api) {
+  if (!api.ready() || wlan_broken.load()) return {};
+  Client client(api);
+  DWORD version = 0;
+  if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS) return {};
+  Memory interfaces(api);
+  if (api.interfaces(client.handle, nullptr, reinterpret_cast<WLAN_INTERFACE_INFO_LIST**>(&interfaces.value)) != ERROR_SUCCESS || !interfaces.value) return {};
+  const auto* list = static_cast<WLAN_INTERFACE_INFO_LIST*>(interfaces.value);
+  if (list->dwNumberOfItems > 64) return {};
+  std::string text = "hw\t" + std::to_string(list->dwNumberOfItems) + "\n";
+  for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
+    const GUID& guid = list->InterfaceInfo[i].InterfaceGuid;
+    uint32_t auth = 0, cipher = 0;
+    if (!AuthCipherPairs(api, client.handle, guid, &auth, &cipher)) auth = cipher = 0;
+    text += "cap\t" + std::to_string(PhyTypes(api, client.handle, guid)) + "\t" + std::to_string(auth)
+        + "\t" + std::to_string(cipher) + "\n";
+  }
+  return text;
+}
+
+// WLAN notification watcher. Windows callbacks only record event classes and signal;
+// the Java thread that called Watch drains them, so no JNI runs on Windows' threads.
+constexpr uint32_t kWatchState = 1, kWatchScan = 2, kWatchConnection = 4, kWatchInterfaces = 8;
+struct WatchState {
+  std::atomic<uint32_t> pending{0};
+  HANDLE event = nullptr;
+  WatchState() : event(CreateEventW(nullptr, FALSE, FALSE, nullptr)) { }
+  ~WatchState() { if (event) CloseHandle(event); }
+};
+uint32_t WatchBits(DWORD source, DWORD code) {
+  if (source == WLAN_NOTIFICATION_SOURCE_ACM) {
+    switch (code) {
+      case wlan_notification_acm_scan_complete: return kWatchScan;
+      case wlan_notification_acm_interface_arrival:
+      case wlan_notification_acm_interface_removal: return kWatchInterfaces | kWatchState | kWatchConnection;
+      case wlan_notification_acm_connection_complete:
+      case wlan_notification_acm_connection_attempt_fail:
+      case wlan_notification_acm_disconnected: return kWatchConnection;
+      default: return 0;
+    }
+  }
+  if (source == WLAN_NOTIFICATION_SOURCE_MSM) {
+    switch (code) {
+      case wlan_notification_msm_radio_state_change: return kWatchState | kWatchConnection;
+      case wlan_notification_msm_connected:
+      case wlan_notification_msm_disconnected: return kWatchConnection;
+      default: return 0;
+    }
+  }
+  return 0;
+}
+void WINAPI OnWatch(WLAN_NOTIFICATION_DATA* notification, void* context) {
+  if (!notification || !context) return;
+  uint32_t bits = WatchBits(notification->NotificationSource, notification->NotificationCode);
+  if (!bits) return;
+  auto* state = static_cast<WatchState*>(context);
+  state->pending.fetch_or(bits);
+  SetEvent(state->event);
+}
+// Runs until sink returns false (0) or WLAN cannot be watched (-1). The first
+// delivery follows registration, so a change racing the initial read is not lost.
+int Watch(Api& api, bool (*sink)(void*, uint32_t), void* context, DWORD poll_ms) {
+  if (!api.ready() || wlan_broken.load()) return -1;
+  std::unique_ptr<WatchState> state(new (std::nothrow) WatchState());
+  if (!state || !state->event) return -1;
+  HANDLE handle = nullptr;
+  DWORD version = 0;
+  if (api.open(2, nullptr, &version, &handle) != ERROR_SUCCESS) return -1;
+  int result = -1;
+  if (api.notify(handle, WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM, FALSE, OnWatch,
+                 state.get(), nullptr, nullptr) == ERROR_SUCCESS) {
+    result = 0;
+    bool running = sink(context, kWatchState | kWatchScan | kWatchConnection | kWatchInterfaces);
+    while (running) {
+      WaitForSingleObject(state->event, poll_ms);
+      running = sink(context, state->pending.exchange(0));
+    }
+    api.notify(handle, WLAN_NOTIFICATION_SOURCE_NONE, FALSE, nullptr, nullptr, nullptr, nullptr);
+  }
+  // Close drains in-flight callbacks. If it fails, retain the target as Client does.
+  if (api.close(handle, nullptr) != ERROR_SUCCESS) {
+    wlan_broken = true;
+    state.release();
+    return -1;
+  }
+  return result;
+}
+
 struct Eligibility {
   JNIEnv* env;
   jobject supplier;
@@ -311,8 +442,36 @@ jstring WindowsWifi_nativeQuery(JNIEnv* env, jclass, jboolean scan, jobject elig
   if (env->ExceptionCheck()) return nullptr;
   return text.empty() ? nullptr : env->NewStringUTF(text.c_str());
 }
+jstring WindowsWifi_nativeHardware(JNIEnv* env, jclass) {
+  std::string text = Hardware(Wlan());
+  return text.empty() ? nullptr : env->NewStringUTF(text.c_str());
+}
+struct WatchSink {
+  JNIEnv* env;
+  jobject predicate;
+  jmethodID method;
+};
+bool DeliverWatch(void* context, uint32_t bits) {
+  auto* sink = static_cast<WatchSink*>(context);
+  if (sink->env->ExceptionCheck()) return false;
+  jboolean running = sink->env->CallBooleanMethod(sink->predicate, sink->method, static_cast<jint>(bits));
+  return !sink->env->ExceptionCheck() && running == JNI_TRUE;
+}
+jint WindowsWifi_nativeWatch(JNIEnv* env, jclass, jobject predicate, jint poll_ms) {
+  if (!predicate || poll_ms <= 0) return -1;
+  jclass type = env->GetObjectClass(predicate);
+  if (!type) return -1;
+  jmethodID method = env->GetMethodID(type, "test", "(I)Z");
+  env->DeleteLocalRef(type);
+  if (!method) return -1;
+  WatchSink sink{env, predicate, method};
+  int result = Watch(Wlan(), DeliverWatch, &sink, static_cast<DWORD>(poll_ms));
+  return env->ExceptionCheck() ? -1 : result;
+}
 const JNINativeMethod methods[] = {
     {"nativeQuery", "(ZLjava/util/function/BooleanSupplier;)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeQuery)},
+    {"nativeHardware", "()Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeHardware)},
+    {"nativeWatch", "(Ljava/util/function/IntPredicate;I)I", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeWatch)},
 };
 jint OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;
