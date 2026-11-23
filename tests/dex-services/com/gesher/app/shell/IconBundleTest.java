@@ -114,8 +114,13 @@ public final class IconBundleTest {
         check(color(ico(full, new File(output, "ordinary.ico"))) == red, "ordinary APK icon preserved");
         check(color(ico(new File(fixtures, "icon-base.apk"), new File(output, "base-only.ico"))) != red,
                 "causal control: base alone lacks xxxhdpi red asset");
-        for (String name : new String[] {"icon-bundle.apks", "icon-bundle.xapk"}) {
+        for (String extension : new String[] {".apks", ".xapk", ".apkm", ".APK+"}) {
+            String name = "icon-bundle" + extension;
             File bundle = new File(fixtures, name);
+            if (!bundle.isFile() && (extension.equals(".apkm") || extension.equals(".APK+"))) {
+                bundle = new File(output, name);
+                Files.copy(new File(fixtures, "icon-bundle.apks").toPath(), bundle.toPath());
+            }
             check(color(bundleIco(bundle, new File(output, name + ".ico"))) == red,
                     "bundle split pixels match the ordinary APK");
             check(AppShell.apkIcon(bundle) == 0, "real icon command reads bundle");

@@ -299,7 +299,7 @@ public final class ApkPackage {
         return parse(base.getPath(), directory);
     }
 
-    private static ApkLite codeApkLite(File file) throws IOException {
+    static ApkLite codeApkLite(File file) throws IOException {
         if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
         }

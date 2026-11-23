@@ -146,8 +146,8 @@
       "he": "חלקי היישום ⁨{0}⁩ אינם חתומים כולם באותו מפתח."
     },
     "install_missing_split": {
-      "en": "The application ⁨{0}⁩ is a base split APK and requires companion split APKs (such as ABI or density splits) to be installed.\n\nInstall the full bundle (.xapk or .apks), or place its split APKs (split_*.apk / config.*.apk) in the same folder.",
-      "he": "היישום ⁨{0}⁩ הוא קובץ בסיס חלקי (Split APK) שדורש גם את חלקי ההתקנה הנלווים (כגון ספריות מעבד או משאבי מסך).\n\nיש להתקין את החבילה המלאה (.xapk או .apks), או להציב את קובצי החלקים הנלווים (split_*.apk / config.*.apk) באותה תיקייה."
+      "en": "The application ⁨{0}⁩ is a base split APK and requires companion split APKs (such as ABI or density splits) to be installed.\n\nInstall the full bundle (.xapk, .apks, .apkm or .apk+), or place its split APKs (split_*.apk / config.*.apk) in the same folder.",
+      "he": "היישום ⁨{0}⁩ הוא קובץ בסיס חלקי (Split APK) שדורש גם את חלקי ההתקנה הנלווים (כגון ספריות מעבד או משאבי מסך).\n\nיש להתקין את החבילה המלאה (.xapk, .apks, .apkm או .apk+), או להציב את קובצי החלקים הנלווים (split_*.apk / config.*.apk) באותה תיקייה."
     },
     "uninstalled": {
       "en": "uninstalled {0}",

@@ -11,6 +11,7 @@ import android.content.pm.parsing.result.ParseResult;
 import android.content.pm.parsing.result.ParseTypeImpl;
 
 import com.gesher.app.NativeLibs;
+import com.gesher.app.PackageBundles;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -23,6 +24,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -290,16 +292,14 @@ final class Installer {
         return paths;
     }
 
-    /** The split APKs beside {@code apk} (an extracted .xapk's config.*.apk), or null. */
     /**
      * The ABIs {@code apk} and its companion splits ship native code for, if none of
      * them is one Gesher runs ({@link NativeLibs#SUPPORTED}); null if one is, or if
      * there is no native code.
      */
-    private static String[] unsupportedAbis(File apk) throws IOException {
+    private static String[] unsupportedAbis(File apk, File[] splits) throws IOException {
         List<File> files = new ArrayList<>();
         files.add(apk);
-        File[] splits = companionSplits(apk);
         if (splits != null) files.addAll(Arrays.asList(splits));
         java.util.Set<String> abis = new java.util.TreeSet<>();
         for (File f : files) {
@@ -319,6 +319,7 @@ final class Installer {
         return abis.isEmpty() ? null : abis.toArray(new String[0]);
     }
 
+    /** Conventional companion filenames for a loose APK. */
     private static File[] companionSplits(File apk) {
         File dir = apk.getParentFile();
         if (dir == null) return null;
@@ -407,24 +408,14 @@ final class Installer {
         File pendingCode = null;
         String pendingPackage = null;
         try {
-            if (source.getName().toLowerCase().endsWith(".xapk")
-                    || source.getName().toLowerCase().endsWith(".apks")) {
-                tempDir = Files.createTempDirectory("gesher-xapk-").toFile();
-                extractZip(source, tempDir);
-                File[] apks = tempDir.listFiles((dir, name) -> name.endsWith(".apk"));
-                if (apks == null || apks.length == 0) {
-                    throw new IllegalArgumentException("no apk found in " + apk);
-                }
-                File mainApk = null;
-                for (File a : apks) {
-                    if (a.getName().equals("base.apk")
-                            || (!a.getName().startsWith("config.") && !a.getName().startsWith("split_"))) {
-                        mainApk = a;
-                        break;
-                    }
-                }
-                if (mainApk == null) mainApk = apks[0];
-                source = mainApk;
+            File[] incomingSplits;
+            if (PackageBundles.isBundle(source)) {
+                tempDir = Files.createTempDirectory("gesher-bundle-").toFile();
+                List<File> splits = new ArrayList<>();
+                source = extractBundle(source, tempDir, splits);
+                incomingSplits = splits.toArray(new File[0]);
+            } else {
+                incomingSplits = companionSplits(source);
             }
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
             ContactsProviderSupport.checkPackageAdmission(parsed);
@@ -438,7 +429,7 @@ final class Installer {
                             + result.getErrorMessage(), result.getException());
                 }
             }
-            String[] foreign = unsupportedAbis(source);
+            String[] foreign = unsupportedAbis(source, incomingSplits);
             if (foreign != null) {
                 // Native code only for ABIs Gesher cannot run (32-bit armeabi-v7a, x86):
                 // refused, as a device refuses it, instead of an app whose libraries
@@ -469,7 +460,6 @@ final class Installer {
             try (PackageUids.Admission checked = PackageUids.prepare(List.of(parsed), mPm.packages())) {
                 // Preflight only. Parsing/validation never commits shared membership.
             }
-            File[] incomingSplits = companionSplits(source);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
                     android.content.pm.Signature[] splitSigners = ApkPackage.verifySignatures(split.getPath());
@@ -517,12 +507,15 @@ final class Installer {
             boolean syncCode = sessionMetadata != null;
             copy(source, base, syncCode);
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode);
-            File[] companionSplits = companionSplits(source);
-            if (companionSplits != null) {
-                for (File split : companionSplits) {
+            if (incomingSplits != null) {
+                for (File split : incomingSplits) {
                     String targetName = split.getName().startsWith("split_")
                             ? split.getName() : "split_" + split.getName();
-                    copy(split, new File(code, targetName), syncCode);
+                    File target = new File(code, targetName);
+                    if (!target.createNewFile()) {
+                        throw new IOException("Conflicting split filenames: " + targetName);
+                    }
+                    copy(split, target, syncCode);
                     File splitMetadata = dexMetadata(split);
                     if (splitMetadata.isFile()) copy(splitMetadata,
                             new File(code, InstallSessionMetadata.dexName(targetName)), syncCode);
@@ -737,22 +730,39 @@ final class Installer {
         }
     }
 
-    private static void extractZip(File zipFile, File destDir) throws IOException {
-        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(zipFile)) {
+    private static File extractBundle(File archive, File directory, List<File> splits) throws IOException {
+        File base = null;
+        byte[] buffer = new byte[64 * 1024];
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
             java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
                 java.util.zip.ZipEntry entry = entries.nextElement();
                 if (entry.isDirectory()) continue;
                 String name = entry.getName();
-                if (!name.endsWith(".apk") && !name.endsWith(".dm")) continue;
-                File out = new File(destDir, new File(name).getName());
+                boolean apk = name.endsWith(".apk");
+                if (!apk && !name.endsWith(".dm")) continue;
+                // ZIP uses forward slashes. Only the leaf enters the staging directory.
+                String leaf = name.substring(name.lastIndexOf('/') + 1);
+                if (leaf.indexOf('\\') >= 0 || leaf.indexOf(':') >= 0) {
+                    throw new IOException("Invalid APK bundle filename: " + leaf);
+                }
+                File out = new File(directory, leaf);
                 try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = new FileOutputStream(out)) {
-                    byte[] buf = new byte[64 * 1024];
-                    for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+                        OutputStream os = Files.newOutputStream(out.toPath(),
+                                StandardOpenOption.CREATE_NEW)) {
+                    for (int n; (n = in.read(buffer)) > 0; ) os.write(buffer, 0, n);
+                }
+                if (!apk) continue;
+                if (ApkPackage.codeApkLite(out).getSplitName() != null) {
+                    splits.add(out);
+                } else {
+                    if (base != null) throw new IOException("Multiple base APKs in " + archive);
+                    base = out;
                 }
             }
         }
+        if (base == null) throw new IOException("No base APK in " + archive);
+        return base;
     }
 
     synchronized boolean ordinaryInstalled(ApkPackage target) {

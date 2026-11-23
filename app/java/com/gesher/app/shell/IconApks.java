@@ -3,6 +3,7 @@
  */
 package com.gesher.app.shell;
 
+import com.gesher.app.PackageBundles;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -10,7 +11,6 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -27,8 +27,7 @@ final class IconApks implements AutoCloseable {
     }
 
     static IconApks open(File source) throws IOException {
-        String name = source.getName().toLowerCase(Locale.ROOT);
-        if (!name.endsWith(".apks") && !name.endsWith(".xapk")) {
+        if (!PackageBundles.isBundle(source)) {
             return new IconApks(source.getAbsolutePath(),
                     new String[] {source.getAbsolutePath()}, null);
         }
