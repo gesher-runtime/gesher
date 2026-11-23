@@ -104,9 +104,13 @@ constexpr int kTaskMenuMax = 64;
 class Window {
  public:
   // Creates the window (hidden) with a client area of width x height pixels.
-  // Returns null if Windows refuses.
+  // Returns null if Windows refuses; LastCreateFailure then says why.
   static Window* Create(const std::string& title_utf8, int width, int height,
                         InputPaneFactory input_pane_factory = nullptr);
+  // Why this thread's last Create or CreatePopup returned null: the Windows
+  // call that failed ("CreateThread" or "CreateWindowEx") and its
+  // GetLastError. Null and 0 after one that succeeded.
+  static const char* LastCreateFailure(unsigned long* error);
 
   using RetireCallback = void (*)(void* hwnd);
   static void SetRetireCallback(RetireCallback callback);
@@ -276,6 +280,7 @@ class Window {
   std::mutex create_mutex_;
   std::condition_variable create_cv_;
   bool created_ = false;
+  unsigned long create_error_ = 0;  // CreateWindowEx's GetLastError, when it failed
 
   // The back buffer.
   mutable std::mutex buffer_mutex_;

@@ -162,6 +162,74 @@ class ArtifactBatch(unittest.TestCase):
         self.assertFalse(list(self.destination.parent.glob('core-stage-*')))
         self.assertNotIn('CI_ARTIFACT_RECEIPT ', self.logs.getvalue())
 
+    def inconsistent_job_pages(self, *, initial=0, final=0):
+        """Disturb only complete transport payload cardinality, never selectors."""
+        original = self.api_json
+        reads = {False: 0, True: 0}
+        def read(endpoint):
+            value = original(endpoint)
+            if urlsplit(endpoint).path.endswith('/attempts/2/jobs'):
+                after_download = len(self.downloads) == len(self.specs)
+                reads[after_download] += 1
+                if reads[after_download] <= (final if after_download else initial):
+                    value['jobs'] = value['jobs'][:-1]
+            return value
+        return patch.object(self, 'api_json', side_effect=read)
+
+    def test_inconsistent_initial_and_final_job_pages_recover_before_publication(self):
+        with self.inconsistent_job_pages(initial=1, final=1):
+            self.execute()
+        self.assertEqual(len(self.json_reads), 8)
+        jobs = [endpoint for endpoint in self.json_reads if '/jobs?' in endpoint]
+        self.assertEqual(jobs, ['repos/gesher-runtime/gesher/actions/runs/7/attempts/2/jobs?per_page=100&page=1'] * 4)
+        self.assertEqual(len(self.downloads), len(self.specs))
+        self.assertEqual(len(list((self.destination / 'artifacts').iterdir())), len(self.specs))
+        self.assertEqual(self.logs.getvalue().count('CI_ARTIFACT_RECEIPT '), len(self.specs))
+        self.assertEqual(self.logs.getvalue().count('CI_GITHUB_JOBS_INCONSISTENT'), 2)
+
+    def test_persistent_initial_job_inconsistency_never_downloads_or_publishes(self):
+        with self.inconsistent_job_pages(initial=3), self.assertRaisesRegex(RuntimeError, 'Inconsistent job page'):
+            self.execute()
+        self.assertEqual(sum('/jobs?' in path for path in self.json_reads), 3)
+        self.assertFalse(any('/artifacts?' in path for path in self.json_reads))
+        self.assertEqual(self.downloads, [])
+        self.unpublished()
+
+    def test_persistent_final_job_inconsistency_discards_all_verified_staging(self):
+        with self.inconsistent_job_pages(final=3), self.assertRaisesRegex(RuntimeError, 'Inconsistent job page'):
+            self.execute()
+        self.assertEqual(sum('/jobs?' in path for path in self.json_reads), 4)
+        self.assertEqual(len(self.downloads), len(self.specs))
+        self.unpublished()
+
+    def test_recovered_inventory_does_not_relax_any_producer_provenance(self):
+        for key, value in (('run_id', 8), ('run_attempt', 3), ('head_sha', 'c' * 40),
+                           ('status', 'in_progress'), ('conclusion', 'failure')):
+            with self.subTest(key=key):
+                previous = self.jobs[0][key]
+                self.jobs[0][key] = value
+                with self.inconsistent_job_pages(initial=1), self.assertRaisesRegex(
+                        RuntimeError, 'Producer source/attempt/conclusion'):
+                    self.execute()
+                self.jobs[0][key] = previous
+                self.assertEqual(self.downloads, [])
+                self.unpublished()
+
+    def test_recovered_inventory_does_not_relax_artifact_digest(self):
+        self.items[0]['digest'] = 'invalid'
+        with self.inconsistent_job_pages(initial=1), self.assertRaisesRegex(RuntimeError, 'digest, size or expiry'):
+            self.execute()
+        self.assertEqual(self.downloads, [])
+        self.unpublished()
+
+    def test_attempt_change_after_recovered_final_inventory_still_discards_staging(self):
+        self.final_run = dict(self.run, run_attempt=3)
+        with self.inconsistent_job_pages(final=1), self.assertRaisesRegex(
+                RuntimeError, 'Current run/source/attempt/repository'):
+            self.execute()
+        self.assertEqual(len(self.downloads), len(self.specs))
+        self.unpublished()
+
     def test_complete_real_batch_has_20_api_requests_and_only_publishes_verified_members(self):
         self.execute()
         # One run + one 100-row job page + one artifact page, twice.
