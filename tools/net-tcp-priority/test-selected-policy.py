@@ -352,6 +352,38 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
         if (!result) waiting_files = true;
 '''),
 )
+# Reverse the reviewed AppContainer runtime changes into the previous proof.
+# Exact new files are checked before applying the patch; the earlier OFD
+# qualification retains all of its prior source, supplier, and fixture pins.
+APPCONTAINER_IDENTITY_PATCH_SHA256 = 'eee7fab7abeacabac63e47b9f0dc94c73a417f5d3f9ff08d955a7c4f6804ff26'
+APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
+ 'compat/binder/binderd.cc': '3b8953c5d3470d2253ca6d6ffa7c3992caaf80d4b57cd3a75c940b213525b98b',
+ 'compat/elf/exec/exec_spawn.cc': '3f538fbedac362a85f879e057467c60de42e5660294b539c2ecf3d11dff78162',
+ 'compat/posix/src/binder.cc': 'ce3f432e5480a4f88df5c674bb51e89cc01fd71952be3c9eae07b44c70586283',
+ 'compat/posix/src/binder_wire.h': '885ba6612bf9256668cc82b1ae514fddbddfb4ef893de33aeab3d88b42edca91',
+ 'compat/posix/src/fd.cc': '1b2f9017d97c5859e8b8847803dd9e150fa72fd3e19a9bdf8b7d212ba4bd9f5f',
+ 'compat/posix/src/ofd.cc': 'b1d9b541efbd27332d2ea1047f7a98b91101e586b5d04830cf17bfd1ebf4e079',
+ 'compat/posix/src/unistd.cc': '7529dd36a73bfe008fb027541bae21e19dd92ff7d78265aa1dbc45a2008e6e19',
+ 'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
+}
+
+def preceding_appcontainer_identity_sources():
+ patch=(ROOT/'tools/net-tcp-priority/qualified/appcontainer-identity-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==APPCONTAINER_IDENTITY_PATCH_SHA256,'AppContainer identity transition changed'
+ paths=list(APPCONTAINER_IDENTITY_SOURCE_SHA256)
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
+ with tempfile.TemporaryDirectory(prefix='gesher-identity-qualification-') as temporary:
+  work=Path(temporary)
+  for path,digest in APPCONTAINER_IDENTITY_SOURCE_SHA256.items():
+   source=(ROOT/path).read_bytes()
+   assert hashlib.sha256(source).hexdigest()==digest,path
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(source)
+  reverse=['git','-c','core.autocrlf=false','apply','--reverse','--unidiff-zero']
+  subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
+  return {path:(work/path).read_bytes() for path in paths}
+
 def preceding_ofd_sources():
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'ofd-stream-source.json').read_bytes()
@@ -363,8 +395,9 @@ def preceding_ofd_sources():
         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
+ identity=preceding_appcontainer_identity_sources()
  for path,digest in qualification['source_sha256'].items():
-  actual=(ROOT/path).read_bytes()
+  actual=identity.get(path,(ROOT/path).read_bytes())
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
@@ -372,9 +405,10 @@ def preceding_ofd_sources():
   work=Path(temporary)
   for path in paths:
    (work/path).parent.mkdir(parents=True,exist_ok=True)
-   (work/path).write_bytes((ROOT/path).read_bytes())
-  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
-  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+   (work/path).write_bytes(identity.get(path,(ROOT/path).read_bytes()))
+  reverse=['git','-c','core.autocrlf=false','apply','--reverse','--unidiff-zero']
+  subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
   previous={path:(work/path).read_bytes() for path in paths}
  def function(source,marker):
   assert source.count(marker)==1,marker

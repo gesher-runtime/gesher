@@ -37,6 +37,7 @@
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
 #include "startup_null.h"
+#include <gesher/binder_bootstrap.h>
 
 namespace gesher {
 namespace {
@@ -143,6 +144,15 @@ class AppContainerNull {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     GetStartupInfoW(&startup);
+    binder_bootstrap::Startup launch;
+    if (binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kApplication, &launch)) {
+      HANDLE inherited = binder_bootstrap::DecodeHandle(launch.null_device);
+      handle_ = DuplicateVerifiedNull(inherited);
+      if (inherited != startup.hStdInput && inherited != startup.hStdOutput &&
+          inherited != startup.hStdError) CloseHandle(inherited);
+      verified_writable_ = handle_ != nullptr;
+      if (handle_ != nullptr) return;
+    }
     if ((startup.dwFlags & STARTF_USESTDHANDLES) != 0 && startup.hStdInput != nullptr &&
         startup.hStdInput != INVALID_HANDLE_VALUE) {
       handle_ = DuplicateVerifiedNull(startup.hStdInput);
@@ -170,8 +180,16 @@ class AppContainerNull {
     return read_end;
   }
 
+  HANDLE NewNull(DWORD access, bool inheritable) const {
+    HANDLE duplicate = INVALID_HANDLE_VALUE;
+    if (!verified_writable_) return INVALID_HANDLE_VALUE;
+    return DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(), &duplicate,
+                           access, inheritable, 0) ? duplicate : INVALID_HANDLE_VALUE;
+  }
+
  private:
   bool contained_ = false;
+  bool verified_writable_ = false;
   HANDLE handle_ = nullptr;
 };
 
@@ -192,6 +210,16 @@ HANDLE OpenDescriptorPlaceholder(bool inheritable) {
     }
   }
   return h;
+}
+
+HANDLE OpenNullDevice(DWORD access, bool inheritable) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
+  HANDLE handle = CreateFileW(L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              &attributes, OPEN_EXISTING, 0, nullptr);
+  if (handle != INVALID_HANDLE_VALUE || GetLastError() != ERROR_ACCESS_DENIED) return handle;
+  handle = app_container_null.NewNull(access, inheritable);
+  if (handle == INVALID_HANDLE_VALUE) SetLastError(ERROR_ACCESS_DENIED);
+  return handle;
 }
 
 int ReserveFd() {

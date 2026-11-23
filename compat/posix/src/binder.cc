@@ -766,6 +766,30 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 
 }  // namespace
 
+bool binder_endpoint::EnrollChild(HANDLE process) {
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  const std::wstring name = PipeName();
+  if (name.empty()) return false;
+  HANDLE pipe = ConnectPipe(name);
+  if (pipe == INVALID_HANDLE_VALUE) return false;
+  struct OwnedPipe {
+    HANDLE handle;
+    ~OwnedPipe() { CloseHandle(handle); }
+  } close_on_return{pipe};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr)) return false;
+  struct Request {
+    uint32_t length, op, magic, version;
+    uint64_t child;
+  } request{20, wire::kEnrollChild, wire::kMagic, wire::kVersion,
+            binder_bootstrap::EncodeHandle(process)};
+  static_assert(sizeof(Request) == 24);
+  uint32_t reply[2] = {};
+  return binder_bootstrap::Transfer(pipe, &request, sizeof(request), true, deadline) &&
+         binder_bootstrap::Transfer(pipe, reply, sizeof(reply), false, deadline) &&
+         reply[0] == sizeof(reply[1]) && reply[1] == 0;
+}
+
 bool BinderDeviceExists() {
   std::wstring name = PipeName();
   if (name.empty()) return false;

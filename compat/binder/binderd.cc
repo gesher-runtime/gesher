@@ -1671,6 +1671,11 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
           accepted = g_peer_registry->RestoreInstallation(request.installation);
         }
         break;
+      case launch::Action::kAttachJob: {
+        peer::OwnedHandle job(launch::DecodeHandle(request.process));
+        if (system) accepted = g_peer_registry->AttachJob(std::move(job));
+        break;
+      }
     }
     uint32_t status = accepted ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
     if (!launch::Transfer(endpoint, &status, sizeof(status), true)) break;
@@ -1738,6 +1743,22 @@ void ServeProc(HANDLE pipe, In in, bool operator_hello) {
     }
   }
   ProcRelease(proc);
+}
+
+void ServeEnrollChild(HANDLE pipe, In in) {
+  uint32_t version = 0;
+  uint64_t source = 0;
+  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
+      !in.Get(&source) || in.p != in.end) return;
+  const auto parent = g_peer_registry->Authenticate(pipe);
+  HANDLE child = nullptr;
+  const bool duplicated = parent && parent->role == peer::Role::kApplication &&
+      DuplicateHandle(parent->process.get(), launch::DecodeHandle(source), GetCurrentProcess(),
+          &child, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE, FALSE, 0);
+  const bool accepted = duplicated && g_peer_registry->EnrollDescendant(parent, peer::OwnedHandle(child));
+  WireReply reply;
+  reply.Put<int32_t>(accepted ? 0 : -EPERM);
+  if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
 }
 
 // --- the descriptor broker (ADR 0088 section 3) --------------------------------------
@@ -2143,6 +2164,8 @@ void Serve(HANDLE pipe) {
         ServeThread(pipe, in);
       } else if (op == wire::kHelloRights) {
         ServeRights(pipe, in);
+      } else if (op == wire::kEnrollChild) {
+        ServeEnrollChild(pipe, in);
       }
     }
   }

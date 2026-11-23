@@ -4,6 +4,7 @@
 #include "pe_exports.h"
 #include "../../posix/src/startup_null.h"
 
+#include <gesher/binder_endpoint.h>
 #include <gesher/reserved_names.h>
 #include <gesher/environment.h>
 #include <gesher/environment_utf16.h>
@@ -607,7 +608,12 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   const int crt_count = std::min(count, 7000);
   const size_t crt_size = sizeof(int) + static_cast<size_t>(crt_count) * (1 + sizeof(intptr_t));
   constexpr unsigned char kFopen = 0x01, kFpipe = 0x08, kFdev = 0x40;
-  std::vector<unsigned char> block(crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0), 0);
+  auto& binder = binder_endpoint::Current();
+  const bool protected_guest = binder.IsGuest();
+  if (protected_guest && (extra_flags & CREATE_BREAKAWAY_FROM_JOB) != 0) return ERROR_ACCESS_DENIED;
+  const size_t descriptor_bytes = crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0);
+  std::vector<unsigned char> block(descriptor_bytes +
+      (protected_guest ? sizeof(binder_bootstrap::Startup) : 0), 0);
   std::memcpy(block.data(), &crt_count, sizeof(crt_count));
   for (int fd = 0; fd < crt_count; ++fd) {
     HANDLE file = by_fd[static_cast<size_t>(fd)];
@@ -642,6 +648,21 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
         reinterpret_cast<uintptr_t>(manifest), manifest_size};
     std::memcpy(block.data() + crt_size, &extension, sizeof(extension));
   }
+  if (protected_guest) {
+    binder_bootstrap::Startup admission;
+    admission.endpoint = binder_bootstrap::Endpoint::kApplication;
+    admission.uid = binder_bootstrap::GuestUid();
+    if (admission.uid == 0) return ERROR_ACCESS_DENIED;
+    HANDLE broker = nullptr;
+    if (!binder.DuplicateToGuestChild(&broker)) return ERROR_ACCESS_DENIED;
+    owned.values.push_back(broker);
+    HANDLE nul = gesher::OpenNullDevice(GENERIC_READ | GENERIC_WRITE, true);
+    if (nul == INVALID_HANDLE_VALUE) return GetLastError();
+    owned.values.push_back(nul);
+    admission.broker = binder_bootstrap::EncodeHandle(broker);
+    admission.null_device = binder_bootstrap::EncodeHandle(nul);
+    std::memcpy(block.data() + descriptor_bytes, &admission, sizeof(admission));
+  }
 
   SIZE_T bytes = 0;
   if (!owned.values.empty()) {
@@ -673,6 +694,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   startup.lpAttributeList = attributes;
   std::wstring command_line = launch.command_line;
   DWORD flags = CREATE_UNICODE_ENVIRONMENT | extra_flags;
+  if (protected_guest) flags |= CREATE_SUSPENDED;
   // With no inherited handles, CREATE_NO_WINDOW still supplies fresh console
   // standard handles. Default to detaching this native child, while preserving
   // any console mode the caller explicitly requested.
@@ -682,6 +704,23 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   BOOL started = CreateProcessW(launch.application.c_str(), command_line.data(), nullptr, nullptr, attributes ? TRUE : FALSE,
       flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
   DWORD error = started ? ERROR_SUCCESS : GetLastError();
+  if (started && protected_guest) {
+    struct PendingChild {
+      PROCESS_INFORMATION* info;
+      ~PendingChild() {
+        if (info == nullptr) return;
+        TerminateProcess(info->hProcess, ERROR_ACCESS_DENIED);
+        CloseHandle(info->hThread);
+        CloseHandle(info->hProcess);
+        *info = {};
+      }
+    } pending{info};
+    if (!binder_endpoint::EnrollChild(info->hProcess)) return ERROR_ACCESS_DENIED;
+    if ((extra_flags & CREATE_SUSPENDED) == 0 && ResumeThread(info->hThread) != 1) {
+      return ERROR_ACCESS_DENIED;
+    }
+    pending.info = nullptr;
+  }
   if (started) for (auto& reservation : native_exports) reservation->Commit();
   return error;
 } catch (const std::bad_alloc&) {

@@ -204,6 +204,9 @@ public final class SystemServer {
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
 
         Main.bootstrap(TAG, buildProp, frameworkRes);
+        // The Windows runtime does not supply display vsync yet. Publish the
+        // frame scheduling setting before contained apps read system properties.
+        android.os.SystemProperties.set("debug.choreographer.vsync", "false");
 
         if (persistent) {
             // The device goes as a whole: binderd, servicemanager and the app processes

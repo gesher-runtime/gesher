@@ -21,9 +21,10 @@ using binder_bootstrap::EncodeHandle;
 using binder_bootstrap::DecodeHandle;
 using binder_bootstrap::Startup;
 using binder_bootstrap::ReadStartup;
+using binder_bootstrap::Transfer;
 
 enum class Action : uint32_t { kEnroll = 1, kHandoff, kRetire, kRevokeInstallation,
-                               kRestoreInstallation };
+                               kRestoreInstallation, kAttachJob };
 
 struct Request {
   uint32_t magic = 0x474c4152;  // GLAR
@@ -81,27 +82,6 @@ inline bool PrivatePipe(binder_peer::OwnedHandle* server, binder_peer::OwnedHand
   if (!SetNamedPipeHandleState(client.get(), &mode, nullptr, nullptr)) return false;
   *server = std::move(pipe);
   *writer = std::move(client);
-  return true;
-}
-
-// Server endpoint blocks on its own control worker. The launcher endpoint uses
-// PIPE_NOWAIT and a fixed deadline without retrying an ambiguous frame.
-inline bool Transfer(HANDLE pipe, void* data, DWORD size, bool write, ULONGLONG deadline = 0) {
-  auto* cursor = static_cast<BYTE*>(data);
-  while (size != 0) {
-    if (deadline != 0 && GetTickCount64() >= deadline) return false;
-    DWORD moved = 0;
-    const BOOL ok = write ? WriteFile(pipe, cursor, size, &moved, nullptr)
-                          : ReadFile(pipe, cursor, size, &moved, nullptr);
-    if (ok && moved != 0) {
-      cursor += moved;
-      size -= moved;
-    } else if (deadline == 0 || (!ok && GetLastError() != ERROR_NO_DATA)) {
-      return false;
-    } else {
-      Sleep(1);
-    }
-  }
   return true;
 }
 

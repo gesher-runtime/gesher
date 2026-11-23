@@ -106,6 +106,37 @@ class Registry {
     return admitted;
   }
 
+  bool AttachJob(OwnedHandle job) {
+    BOOL member = FALSE;
+    if (!job || !IsProcessInJob(GetCurrentProcess(), job.get(), &member) || !member) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || device_job_) return false;
+    device_job_ = std::move(job);
+    return true;
+  }
+
+  bool EnrollDescendant(const Lease& parent, OwnedHandle child) {
+    process_identity::Process snapshot;
+    if (!parent || parent->role != Role::kApplication ||
+        !process_identity::ReadLiveProcess(child.get(), &snapshot) ||
+        !(snapshot.principal == parent->generation.principal) ||
+        !process_identity::MatchCapabilities(parent->process.get(), child.get())) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto issuer = peers_.find(parent->generation.pid);
+    BOOL member = FALSE;
+    if (!active_ || !device_job_ || issuer == peers_.end() || issuer->second != parent ||
+        WaitForSingleObject(parent->process.get(), 0) != WAIT_TIMEOUT ||
+        !IsProcessInJob(child.get(), device_job_.get(), &member) || !member ||
+        WaitForSingleObject(child.get(), 0) != WAIT_TIMEOUT ||
+        revoked_installations_.count(parent->installation)) return false;
+    PruneExitedLocked();
+    if (peers_.size() >= 4096 || peers_.find(snapshot.pid) != peers_.end()) return false;
+    Lease admitted(new Peer{std::move(child), snapshot, Role::kApplication,
+                            parent->uid, parent->installation});
+    peers_.emplace(snapshot.pid, std::move(admitted));
+    return true;
+  }
+
   bool Live(const Lease& peer) {
     if (!peer) return false;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -158,6 +189,7 @@ class Registry {
     active_ = false;
     peers_.clear();
     revoked_installations_.clear();
+    device_job_.reset();
   }
 
  private:
@@ -199,6 +231,7 @@ class Registry {
   }
 
   const process_identity::Principal authority_;
+  OwnedHandle device_job_;
   std::set<std::array<uint8_t, 16>> revoked_installations_;
   std::mutex mutex_;
   std::map<DWORD, Lease> peers_;

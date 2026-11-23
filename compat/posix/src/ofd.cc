@@ -2,6 +2,7 @@
 // owns one table for all modules; explicitly inherited descriptions share a
 // kernel section rather than copying their status into the child process.
 #include "ofd_internal.h"
+#include <gesher/binder_bootstrap.h>
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_liveness.h"
@@ -216,15 +217,20 @@ int InitializeSnapshotFlags(const DescriptorSnapshotPtr& snapshot) {
 int ImportStartup(Table* state) try {
   STARTUPINFOW startup{};
   GetStartupInfoW(&startup);
-  if (!startup.lpReserved2 || startup.cbReserved2 < sizeof(int) + sizeof(ofd_transfer::Startup)) return 0;
+  size_t descriptor_bytes = startup.cbReserved2;
+  binder_bootstrap::Startup admission;
+  if (binder_bootstrap::ReadStartupRecord(&admission)) {
+    descriptor_bytes -= sizeof(admission);
+  }
+  if (!startup.lpReserved2 || descriptor_bytes < sizeof(int) + sizeof(ofd_transfer::Startup)) return 0;
   ofd_transfer::Startup extension{};
-  std::memcpy(&extension, startup.lpReserved2 + startup.cbReserved2 - sizeof(extension), sizeof(extension));
+  std::memcpy(&extension, startup.lpReserved2 + descriptor_bytes - sizeof(extension), sizeof(extension));
   if (extension.magic != ofd_transfer::kMagic) return 0;
   int descriptor_count = 0;
   std::memcpy(&descriptor_count, startup.lpReserved2, sizeof(descriptor_count));
   if (descriptor_count < 0 || static_cast<unsigned>(descriptor_count) > ofd_transfer::kDescriptorLimit) return EINVAL;
   const size_t crt_size = sizeof(int) + static_cast<size_t>(descriptor_count) * (1 + sizeof(intptr_t));
-  if (crt_size > startup.cbReserved2 || startup.cbReserved2 - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
+  if (crt_size > descriptor_bytes || descriptor_bytes - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
   const size_t maximum = sizeof(ofd_transfer::Header) +
                          ofd_transfer::kDescriptorLimit * sizeof(ofd_transfer::Entry);
   if (extension.manifest_size < sizeof(ofd_transfer::Header) || extension.manifest_size > maximum ||

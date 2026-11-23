@@ -39,7 +39,8 @@ def rejected(label, replacement, repin=False, target=source_path, pin_name='SYST
                 # A mutation inside the pinned transition may be rejected by
                 # reverse application before the baseline hash comparison. This
                 # counts only when that exact check rejects the mutated path.
-                assert error.cmd == ['git', 'apply', '--reverse', '--unidiff-zero', '--check', '-'], error
+                assert error.cmd == ['git', '-c', 'core.autocrlf=false',
+                                     'apply', '--reverse', '--unidiff-zero', '--check', '-'], error
                 assert error.returncode == 1, error
                 assert target.relative_to(ROOT).as_posix().encode() in error.stderr, error.stderr
                 print_result = label

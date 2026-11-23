@@ -11,6 +11,7 @@ namespace gesher {
 
 // An inert CRT reservation, never a real application /dev/null descriptor.
 HANDLE OpenDescriptorPlaceholder(bool inheritable = false);
+HANDLE OpenNullDevice(DWORD access, bool inheritable);
 
 inline HANDLE DuplicateVerifiedNull(HANDLE inherited) {
   HANDLE candidate = nullptr;

@@ -22,11 +22,13 @@ class Binding {
     binder_bootstrap::Startup startup;
     if (!binder_bootstrap::ReadStartupRecord(&startup) ||
         (startup.endpoint != binder_bootstrap::Endpoint::kClient &&
+         startup.endpoint != binder_bootstrap::Endpoint::kApplication &&
          startup.endpoint != binder_bootstrap::Endpoint::kSystemServer)) return;
     required_ = true;
+    guest_ = startup.endpoint == binder_bootstrap::Endpoint::kApplication;
     HANDLE inherited = binder_bootstrap::DecodeHandle(startup.broker);
     if (GetProcessId(inherited) == 0) return;
-    if (startup.endpoint == binder_bootstrap::Endpoint::kClient) {
+    if (guest_ || startup.endpoint == binder_bootstrap::Endpoint::kClient) {
       if (startup.channel != 0 || startup.job_delivery != 0) return;
       broker_ = inherited;
       if (!SetHandleInformation(broker_, HANDLE_FLAG_INHERIT, 0)) {
@@ -88,16 +90,28 @@ class Binding {
     return operator_;
   }
 
+  bool IsGuest() const { return guest_; }
+
+  bool DuplicateToGuestChild(HANDLE* duplicate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return guest_ && broker_ != nullptr && WaitForSingleObject(broker_, 0) == WAIT_TIMEOUT &&
+           DuplicateHandle(GetCurrentProcess(), broker_, GetCurrentProcess(),
+                           duplicate, kPinRights, TRUE, 0);
+  }
+
  private:
   std::mutex mutex_;
   HANDLE broker_ = nullptr;
   bool required_ = false;
   bool operator_ = false;
+  bool guest_ = false;
 };
 
 inline Binding& Current() {
   static Binding binding;
   return binding;
 }
+
+bool EnrollChild(HANDLE process);
 
 }  // namespace gesher::binder_endpoint

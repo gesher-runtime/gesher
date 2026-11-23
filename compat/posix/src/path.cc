@@ -26,6 +26,8 @@
 #include <gesher/reserved_names.h>
 #include <gesher/unc_paths.h>
 
+#include "startup_null.h"
+
 #include <string>
 #include <limits>
 #include <cstdlib>
@@ -247,9 +249,7 @@ int OpenDevice(PathKind kind, int flags) {
   if ((flags & O_PATH) == 0 && (flags & O_NOATIME) != 0) return errno = EOPNOTSUPP, -1;
   if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
   if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return errno = EEXIST, -1;
-  SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};
-  HANDLE h = CreateFileW(L"NUL", Access(flags), FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
-                         OPEN_EXISTING, 0, nullptr);
+  HANDLE h = OpenNullDevice(Access(flags), (flags & O_CLOEXEC) == 0);
   if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
   int fd = FdFromHandle(h, flags);
   if (fd >= 0 && kind == PathKind::kZero) RegisterDevice(fd, Device::kZero);

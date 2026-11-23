@@ -5,7 +5,9 @@
 #include <windows.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace gesher::process_identity {
 
@@ -103,6 +105,37 @@ inline bool ReadLiveProcess(HANDLE process, Process* result) {
   CloseHandle(token);
   if (!captured || snapshot.birth == 0 || WaitForSingleObject(process, 0) != WAIT_TIMEOUT) return false;
   *result = snapshot;
+  return true;
+}
+
+inline bool ReadCapabilities(HANDLE process, std::vector<BYTE>* bytes) {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(process, TOKEN_QUERY, &token)) return false;
+  DWORD size = 0;
+  GetTokenInformation(token, TokenCapabilities, nullptr, 0, &size);
+  bool ok = size >= offsetof(TOKEN_GROUPS, Groups) && size <= 65536;
+  if (ok) {
+    bytes->resize(size);
+    ok = GetTokenInformation(token, TokenCapabilities, bytes->data(), size, &size) != FALSE;
+  }
+  CloseHandle(token);
+  return ok;
+}
+
+inline bool MatchCapabilities(HANDLE first, HANDLE second) {
+  std::vector<BYTE> a, b;
+  if (!ReadCapabilities(first, &a) || !ReadCapabilities(second, &b)) return false;
+  const auto& left = *reinterpret_cast<const TOKEN_GROUPS*>(a.data());
+  const auto& right = *reinterpret_cast<const TOKEN_GROUPS*>(b.data());
+  if (left.GroupCount != right.GroupCount || left.GroupCount > 256) return false;
+  for (DWORD i = 0; i < left.GroupCount; ++i) {
+    bool found = false;
+    for (DWORD j = 0; j < right.GroupCount; ++j) {
+      found |= left.Groups[i].Attributes == right.Groups[j].Attributes &&
+               EqualSid(left.Groups[i].Sid, right.Groups[j].Sid);
+    }
+    if (!found) return false;
+  }
   return true;
 }
 

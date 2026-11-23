@@ -6,6 +6,7 @@ package com.gesher.app.window;
 
 import android.app.Activity;
 import android.app.GesherActivityWindow;
+import android.os.SystemProperties;
 
 import com.gesher.app.DeviceProfile;
 
@@ -72,8 +73,15 @@ public final class WindowMode {
         }
     }
 
-    /** Installs the window session ({@link WindowSession#install}). */
+    /**
+     * Installs the window session ({@link WindowSession#install}). Choreographer schedules
+     * frames on the message queue's clock (there is no display's vsync to receive), unless
+     * {@code debug.choreographer.vsync} was set: before Choreographer is first used.
+     */
     public static WindowSession install(boolean show) {
+        if (SystemProperties.get("debug.choreographer.vsync").isEmpty()) {
+            SystemProperties.set("debug.choreographer.vsync", "false");
+        }
         // ViewRootImpl gets InputMethodManager's instance, which needs input_method: the
         // process's windows get Windows' text input (input track, ADR 0039).
         com.gesher.app.input.WindowsInputMethod.install();

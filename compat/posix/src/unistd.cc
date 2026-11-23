@@ -21,6 +21,8 @@
 #include <mutex>
 #include <string>
 
+#include <gesher/binder_bootstrap.h>
+
 #include "internal.h"
 #include "revocable_internal.h"
 #include "binder_internal.h"
@@ -35,6 +37,8 @@ namespace {
 // process's uid does not change).
 uid_t AppUid() {
   static const uid_t uid = [] {
+    const uint32_t protected_uid = gesher::binder_bootstrap::GuestUid();
+    if (protected_uid != 0) return static_cast<uid_t>(protected_uid);
     const char* env = getenv("GESHER_UID");
     char* end = nullptr;
     unsigned long value = env != nullptr ? strtoul(env, &end, 10) : 0;

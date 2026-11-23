@@ -188,6 +188,11 @@ public final class GesherAppProcess {
         com.gesher.net.WindowsProxy.installInProcess();
 
         withoutSystemFonts();
+        // The system server publishes this setting for read-only AppContainer
+        // clients. Standalone device processes still initialize it locally.
+        if (android.os.SystemProperties.get("debug.choreographer.vsync").isEmpty()) {
+            android.os.SystemProperties.set("debug.choreographer.vsync", "false");
+        }
         if (!com.gesher.app.window.WindowMode.HEADLESS.equals(windowMode)) {
             // The process's windows are Win32 windows it creates and draws itself: the window
             // session is in this process (WindowManagerGlobal's), and its surfaces take the

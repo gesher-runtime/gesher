@@ -238,7 +238,9 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &inherit,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (log == INVALID_HANDLE_VALUE) return -static_cast<int>(GetLastError());
-  HANDLE nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
+  const DWORD null_access = bootstrap != nullptr && bootstrap->endpoint == launch::Endpoint::kApplication
+      ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ;
+  HANDLE nul = CreateFileW(L"NUL", null_access, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
                            OPEN_EXISTING, 0, nullptr);
   if (nul == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
@@ -276,6 +278,10 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
     record.channel = launch::EncodeHandle(inherited_channel.get());
     record.broker = launch::EncodeHandle(inherited_broker.get());
     record.job_delivery = launch::EncodeHandle(inherited_job_delivery.get());
+    if (enrollment != nullptr) record.uid = enrollment->uid;
+    if (bootstrap->endpoint == launch::Endpoint::kApplication) {
+      record.null_device = launch::EncodeHandle(nul);
+    }
   }
   SIZE_T size = 0;
   InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &size);
@@ -524,6 +530,13 @@ Writer ReadWriter() {
       !QueryInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits,
                                  sizeof(limits), nullptr) ||
       (limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) == 0) return {};
+  HANDLE broker_job = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), job.get(), writer.broker.get(), &broker_job,
+                       JOB_OBJECT_QUERY, FALSE, 0)) return {};
+  launch::Request attach;
+  attach.action = launch::Action::kAttachJob;
+  attach.process = launch::EncodeHandle(broker_job);
+  if (!SubmitLaunchRequest(writer.channel.get(), attach)) return {};
   {
     std::lock_guard<std::mutex> lock(g_lock);
     if (g_job != nullptr) return {};
@@ -563,7 +576,7 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
   if (!DuplicateHandle(GetCurrentProcess(), authority.broker.get(), GetCurrentProcess(),
                        &query_broker, kPinRights, FALSE, 0)) return -ERROR_ACCESS_DENIED;
   peer::OwnedHandle app_broker(query_broker);
-  const BootstrapHandles app_handles{launch::Endpoint::kClient, nullptr, app_broker.get()};
+  const BootstrapHandles app_handles{launch::Endpoint::kApplication, nullptr, app_broker.get()};
   bool channel_failed = false;
   const Enrollment enrollment{authority.channel.get(), authority.broker.get(),
                               peer::Role::kApplication, uid, installation, &channel_failed};

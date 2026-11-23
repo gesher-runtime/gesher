@@ -112,6 +112,10 @@ enum Op : uint32_t {
   // Same framing as kHelloProc. The protected broker authenticates the
   // Windows device operator and assigns Android shell; the fields grant no role.
   kHelloOperator = 12,
+  // One protected child admission over an authenticated pipe. Source is
+  // a Windows process handle in the admitted parent's handle table.
+  // -> {magic, version, source (u64)}; <- {status}
+  kEnrollChild = 13,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
