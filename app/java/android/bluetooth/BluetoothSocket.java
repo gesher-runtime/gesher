@@ -16,7 +16,9 @@ import java.util.UUID;
  * BluetoothSocket with the Bluetooth module's public API: RFCOMM over Winsock's AF_BTH
  * sockets ({@link WindowsBluetooth}; docs/bluetooth.md). {@link #connect()} looks the
  * service UUID up in the device's SDP records (Windows does) or uses the channel of
- * createRfcommSocket. As on Android, reading at the end of the stream throws IOException.
+ * createRfcommSocket. Reading after the peer closed the connection returns -1 for apps
+ * targeting Android 17 (API 37) and up, and throws IOException for older targets, as on
+ * Android; a socket closed locally and native errors always throw IOException.
  *
  * <p>Windows applies its own security: a device must be paired with Windows (Settings,
  * Bluetooth &amp; devices) for most RFCOMM services; "insecure" sockets skip the explicit
@@ -32,6 +34,8 @@ public final class BluetoothSocket implements Closeable {
     public static final int TYPE_LE = TYPE_L2CAP_LE;
     /** RFCOMM's default frame size, what Android reports for RFCOMM sockets. */
     private static final int RFCOMM_PACKET = 990;
+    /** First target SDK (Android 17) whose streams report a clean peer EOF as -1. */
+    private static final int PEER_EOF_RETURNS_MINUS_ONE_SDK = 37;
 
     private final BluetoothDevice mDevice;
     private final UUID mUuid;
@@ -43,6 +47,8 @@ public final class BluetoothSocket implements Closeable {
     private boolean mConnecting;
     private boolean mSecureCounted;
     private boolean mClosed;
+    /** The peer closed the connection cleanly (native read returned 0); with mLock held. */
+    private boolean mPeerEof;
     private final InputStream mInput = new Input();
     private final OutputStream mOutput = new Output();
 
@@ -198,6 +204,12 @@ public final class BluetoothSocket implements Closeable {
         }
     }
 
+    /** Whether a clean peer EOF reads as -1 (target Android 17+) instead of an IOException. */
+    private boolean peerEofReturnsMinusOne() {
+        return BluetoothHost.targetSdk(BluetoothHost.context(mDevice.context()))
+                >= PEER_EOF_RETURNS_MINUS_ONE_SDK;
+    }
+
     private final class Input extends InputStream {
         @Override
         public int read() throws IOException {
@@ -210,15 +222,22 @@ public final class BluetoothSocket implements Closeable {
         public int read(byte[] b, int off, int len) throws IOException {
             if (off < 0 || len < 0 || len > b.length - off) throw new IndexOutOfBoundsException();
             if (len == 0) return 0;
-            int n = WindowsBluetooth.nativeRfcommRead(handle(), b, off, len);
-            if (n <= 0) {
-                synchronized (mLock) {
-                    dropLink();
-                }
-                // The module throws at the end of the stream too.
-                throw new IOException("bt socket closed, read return: " + (n == 0 ? -1 : n));
+            synchronized (mLock) {
+                // Reading again after the peer's EOF keeps returning -1 (InputStream contract).
+                if (mPeerEof && !mClosed && peerEofReturnsMinusOne()) return -1;
             }
-            return n;
+            int n = WindowsBluetooth.nativeRfcommRead(handle(), b, off, len);
+            if (n > 0) return n;
+            boolean eof;
+            synchronized (mLock) {
+                // Native 0 is the end of the stream, and also what a read woken by a local
+                // close() reports; only the former is a peer EOF.
+                eof = n == 0 && !mClosed;
+                if (eof) mPeerEof = true;
+                dropLink();
+            }
+            if (eof && peerEofReturnsMinusOne()) return -1;
+            throw new IOException("bt socket closed, read return: " + (n == 0 ? -1 : n));
         }
 
         @Override

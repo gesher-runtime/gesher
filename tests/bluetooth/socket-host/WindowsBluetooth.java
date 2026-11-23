@@ -26,8 +26,12 @@ public final class WindowsBluetooth {
         if(socket==99)acceptedClosed++;
         closed.countDown();
     }
-    public static int nativeRfcommRead(long socket,byte[] b,int off,int len){return -1;}
-    public static int nativeRfcommWrite(long socket,byte[] b,int off,int len){return len;}
+    /** Scripted native read for connected sockets (default: a native error). */
+    public interface Read{int read(long socket,byte[] b,int off,int len);}
+    public static volatile Read readHook;
+    public static final java.io.ByteArrayOutputStream written=new java.io.ByteArrayOutputStream();
+    public static int nativeRfcommRead(long socket,byte[] b,int off,int len){Read hook=readHook;return hook==null?-1:hook.read(socket,b,off,len);}
+    public static int nativeRfcommWrite(long socket,byte[] b,int off,int len){synchronized(written){written.write(b,off,len);}return len;}
     public static int nativeRfcommAvailable(long socket){return 0;}
     public static long nativeRfcommListen(String name,String uuid,boolean secure,int[] out){out[1]=3;return 7;}
     public static long nativeRfcommAccept(long server,int timeout,long[] out){
