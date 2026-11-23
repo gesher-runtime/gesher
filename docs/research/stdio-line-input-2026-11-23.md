@@ -113,12 +113,70 @@ transition corruption and an attempted runtime-approval change. This is source
 qualification only; it does not grant runtime acceptance or replace the
 existing Windows tests.
 
+## Composition with current main and shared stdio ownership
+
+The current branch composes the previously published `4328a34d` with main
+`8f53b6045e26f0bb4a482c69099d084db3e94963`. This includes PR #73's shared
+Bionic conversion-state lifetime and PR #371's canonical diagnostic baseline.
+The production reference is `fdf4861b`; #371 changes only its diagnostic test.
+The measurements and original source receipts above remain historical evidence;
+no new timing or Windows result is inferred from this composition.
+
+The guest `getdelim` keeps its original shared line-reader validation, stream
+error flag and conditional orientation, and additionally stops when the new
+shared `StreamGuard` cannot acquire its owner. Restoring main's older argument
+return would have lost the required stream-error bit; the actual merged
+regression corpus rejected that draft. The new guard-admission control uses a
+one-shot real allocation failure and verifies that the entry does not retry,
+consume input, allocate the caller buffer or retain a CRT lock. Span algorithms,
+native entry points and the separate delimited-owner export remain unchanged. Deleting
+only the guard-failure return from the actual production source makes this
+1,606-check adapter fail exactly the new no-retry/no-consumption assertion;
+the negative exits with one assertion failure and no sanitizer fault.
+
+All incoming owner-lifetime, unlocked-I/O and late-socket-shutdown checks remain.
+The lifetime envelope now verifies both ordinary owner-managed status locking
+and explicitly unlocked status entries. Its supplied owner boundary remains
+separate from the actual shared-owner corpus. The integrated ASan/UBSan replay
+passes 306 core, 1,606 adapter, 122 lifetime and 71 actual Linux reference checks,
+plus the existing exit-order and exact socket-retirement negative controls.
+Full production `stdio_output.cc`, Bionic stdio and the public native fixture
+strictly compile for Windows x64 and ARM64. Actual Windows/ART/ELF execution
+still requires full CI on the new published head.
+
+The original line-input, PR73 and OFD manifests and patches remain byte-for-byte
+unchanged. A separately pinned five-file current-main patch reconstructs the
+complete `fdf4861b` source bytes before the original four-file PR73 transition
+runs. The original line-input receipt is independently replayed against the
+immutable published first-parent files, and its normalized sources must equal
+the current-main/PR73 route. All 71 original OFD digests and explicit false
+runtime approval remain. The integrated policy passes 34 transition controls,
+four repinned-property controls, six repinned-current-stdio controls and all
+25 shared-stdio controls. Supplier metadata retains all 36 semantic mutants
+and its authority-hash negative; these checks grant no runtime approval.
+
+The incoming published `92c87bef` framework reference and exact `6dc4cca5`
+recipe remain intact. No CI limit, test assertion or supplier gate is removed.
+The old full-fork run `45153439733` remains incomplete: its required native
+blocking producer was canceled at the 35-minute prerequisite timeout after a
+verified toolchain download. A fresh full run is required for this merge.
+
 ## Reproduction
+
+For the current integrated correctness gates:
 
 ```sh
 python3 tools/test_stdio_contracts.py --sanitize
 python3 tools/test_stdio_lifetime_contracts.py --sanitize
 python3 tools/net-tcp-priority/test-selected-policy.py --selftest
+```
+
+For the original before/after measurement and baseline defect reproduction,
+use the matching historical helper and fixture before PR73 changed ownership:
+
+```sh
+git worktree add /tmp/stdio-line-measured 4328a34d04e63f6f3881b34c7dca09ef1fa8ec0b
+cd /tmp/stdio-line-measured
 python3 tools/test_stdio_contracts.py --line-benchmark
 python3 tools/test_stdio_contracts.py --line-benchmark --source-ref 6afcb6e6
 # Negative control: the unchanged baseline is expected to exit nonzero.
