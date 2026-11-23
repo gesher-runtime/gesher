@@ -1641,11 +1641,11 @@ function New-PanelActionWorker([string] $operation, $request) {
                     }
                     'Store' {
                         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore.apk'
+                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore-4.8.4.apk'
                         if (-not (Test-Path -LiteralPath $storeApk)) {
                             $temporary = [IO.Path]::GetTempFileName()
                             try {
-                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
+                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
                                 Move-Item -LiteralPath $temporary -Destination $storeApk -Force
                             } finally {
                                 if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }

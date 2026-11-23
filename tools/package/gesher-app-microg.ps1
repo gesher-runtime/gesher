@@ -48,10 +48,16 @@ function Install-AuroraStore {
         $storeTarget = if ($StoreApk -and (Test-Path -LiteralPath $StoreApk)) {
             $StoreApk
         } else {
-            $tmp = Join-Path $env:TEMP "AuroraStore.apk"
+            $tmp = Join-Path $env:TEMP "AuroraStore-4.8.4.apk"
             if (-not (Test-Path $tmp)) {
                 Write-Host "Downloading Aurora Store..."
-                Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk" -OutFile $tmp -UseBasicParsing
+                $partial = "$tmp.partial"
+                try {
+                    Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk" -OutFile $partial -UseBasicParsing
+                    Move-Item -LiteralPath $partial -Destination $tmp -Force
+                } finally {
+                    if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+                }
             }
             $tmp
         }
