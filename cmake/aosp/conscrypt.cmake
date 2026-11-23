@@ -29,6 +29,13 @@ target_link_libraries(conscrypt_jni PUBLIC nativehelper log boringssl_ssl crypt3
 
 target_link_libraries(dalvikvm PRIVATE conscrypt_jni)
 
+# The system CA directory holds only certificates; its manifest is next to it.
+add_executable(trust_store_layout_test ${CMAKE_SOURCE_DIR}/tests/native/trust_store_layout_test.cc
+  ${_net}/trust_store.cc)
+target_include_directories(trust_store_layout_test PRIVATE ${_net}/include ${_net})
+target_compile_options(trust_store_layout_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(trust_store_layout_test PRIVATE boringssl_crypto crypt32)
+
 # com.gesher.net.WindowsNetworks's natives (the built-in library libgesher_net.so):
 # Windows' networks for the connectivity service, and the INTERNET permission's
 # switch (<gesher/inet.h>), plus the libgesher_nsd.so multicast query transport.
