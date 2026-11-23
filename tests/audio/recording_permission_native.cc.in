@@ -1,0 +1,78 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+// Exact production JNI resolver body. JNI lookup/exception outcomes are the fixture boundary.
+#include <jni.h>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include "record_permission.h"
+using namespace gesher::media;
+
+static JNINativeInterface_ functions;
+static JNIEnv environment{&functions};
+static JNIEnv* attached;
+static int outcome, clears, releases, calls, checks;
+static bool exception;
+static void check(bool condition, const char* message) {
+    if (!condition) { std::fprintf(stderr, "recording permission failure: %s\n", message); std::exit(1); }
+    ++checks;
+}
+static JNIEnv* AttachedEnv(const char*) { return attached; }
+static bool CheckException(JNIEnv* env, const char*) {
+    if (!env->ExceptionCheck()) return false;
+    env->ExceptionClear(); return true;
+}
+
+@MAY_RECORD_AUDIO@
+
+static void reset(int value) {
+    outcome = value; clears = releases = calls = 0; exception = false; attached = &environment;
+}
+int main() {
+    functions.FindClass = [](JNIEnv*, const char* name) -> jclass {
+        check(std::strcmp(name, "com/gesher/server/AudioService") == 0, "the real policy class is queried");
+        if (outcome == 1) { exception = true; return nullptr; }
+        return reinterpret_cast<jclass>(1);
+    };
+    functions.GetStaticMethodID = [](JNIEnv*, jclass, const char* name, const char* signature) -> jmethodID {
+        check(std::strcmp(name, "recordAudioAllowed") == 0 && std::strcmp(signature, "()Z") == 0,
+              "the real policy method and signature are queried");
+        if (outcome == 2) { exception = true; return nullptr; }
+        return reinterpret_cast<jmethodID>(1);
+    };
+    functions.CallStaticBooleanMethodV = [](JNIEnv*, jclass, jmethodID, va_list) -> jboolean {
+        ++calls;
+        if (outcome == 3) exception = true;
+        return outcome == 4 ? JNI_FALSE : JNI_TRUE;
+    };
+    functions.ExceptionCheck = [](JNIEnv*) -> jboolean { return exception ? JNI_TRUE : JNI_FALSE; };
+    functions.ExceptionClear = [](JNIEnv*) { ++clears; exception = false; };
+    functions.DeleteLocalRef = [](JNIEnv*, jobject) { ++releases; };
+
+    reset(0); attached = nullptr;
+    check(!MayRecordAudio(nullptr), "no attached Java environment denies");
+    reset(1);
+    check(!MayRecordAudio(&environment), "missing Java policy class denies");
+    check(clears == 1 && releases == 0 && calls == 0 && !exception, "missing class clears lookup failure");
+    reset(2);
+    check(!MayRecordAudio(&environment), "missing Java policy method denies");
+    check(clears == 1 && releases == 1 && calls == 0 && !exception, "missing method releases class and clears failure");
+    reset(3);
+    check(!MayRecordAudio(&environment), "throwing Java policy denies even with a nonzero JNI result");
+    check(clears == 1 && releases == 1 && calls == 1 && !exception, "throwing policy releases class and clears failure");
+    reset(4);
+    check(!MayRecordAudio(&environment), "denied Java policy propagates");
+    check(releases == 1 && calls == 1, "denied policy releases class");
+    reset(0);
+    check(MayRecordAudio(&environment), "granted Java policy propagates");
+    check(releases == 1 && calls == 1, "granted policy releases class");
+    SetRecordingPermissionProvider(nullptr);
+    check(!RecordingAllowed(), "native process without provider denies");
+    SetRecordingPermissionProvider([] { return MayRecordAudio(nullptr); });
+    check(RecordingAllowed(), "native adapters consult the Java provider");
+    outcome = 4;
+    check(!RecordingAllowed(), "native provider does not cache an earlier grant");
+    outcome = 0;
+    check(RecordingAllowed(), "native provider observes a later grant");
+    std::printf("Recording permission native resolver all passed: %d checks\n", checks);
+}

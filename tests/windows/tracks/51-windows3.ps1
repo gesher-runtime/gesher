@@ -26,6 +26,7 @@
 #    windows (ADR 0088), so each task is a window of its own.
 # In a single process (gesher-app --window) and on the Gesher device.
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
+. "$PSScriptRoot/../clipboard/NativeForeground.ps1"
 if (-not ('ImeInput' -as [type])) { Add-Type -Path "$PSScriptRoot/../ime/ImeInput.cs" }
 if (-not ('GesherW3Win32' -as [type])) {
   Add-Type -TypeDefinition @'
@@ -234,13 +235,15 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
   if (-not $visible) { $out += 'the window was hidden (no taskbar button)' }
   if ($RequireClipboardDenial) {
     $foreign = $null
+    $foregroundHelper = $null
     $folder = Join-Path $env:RUNNER_TEMP "clipboard-foreground-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $folder | Out-Null
     $receiptPath = Join-Path $folder 'window.json'; $stopPath = Join-Path $folder 'stop'
     $foreignWindow = [IntPtr]::Zero
     try {
-      $foreign = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-File',
-        "`"$PSScriptRoot/../clipboard/ForeignForeground.ps1`"", '-Receipt', "`"$receiptPath`"", '-Stop', "`"$stopPath`"") -PassThru -WindowStyle Hidden
+      $foregroundHelper = Start-GesherForegroundHelper -Executable "$Dir/clipboard_foreground.exe" `
+        -Receipt $receiptPath -Stop $stopPath -Diagnostics $folder
+      $foreign = $foregroundHelper.Process
       $deadline = (Get-Date).AddSeconds(15)
       while (-not (Test-Path $receiptPath) -and -not $foreign.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
       if (-not (Test-Path $receiptPath)) { throw 'owned foreground window did not start' }
@@ -268,12 +271,7 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
       Write-Host "CLIPBOARD_FOREGROUND hwnd=$foreignWindow pid=$($foreign.Id) created=$($receipt.created) appPid=$([GesherWin32]::ProcessId($app)) probe=$token"
     } catch { $out += "background-denial prerequisite: $_" }
     finally {
-      [IO.File]::WriteAllText($stopPath, 'stop')
-      if ($foreign) {
-        if (-not $foreign.WaitForExit(10000)) { $foreign.Kill(); $out += 'owned foreground helper did not retire'; [void]$foreign.WaitForExit(5000) }
-        elseif ($foreign.ExitCode -ne 0) { $out += "owned foreground helper exited $($foreign.ExitCode)" }
-        $foreign.Dispose()
-      }
+      $out += @(Stop-GesherForegroundHelper $foregroundHelper)
       if ($foreignWindow -ne [IntPtr]::Zero -and [GesherWin32]::IsWindow($foreignWindow)) { $out += 'owned foreground HWND leaked after helper retirement' }
     }
   }
