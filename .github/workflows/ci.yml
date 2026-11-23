@@ -105,7 +105,9 @@ jobs:
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
-        run: python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+        run: |
+          python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+          python tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
       - name: Durable settings journal, replacement and crash recovery contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -404,6 +406,7 @@ jobs:
           python3 tools/test_fnmatch_performance.py --sanitize
           python3 tools/test_virtual_path_classification.py --sanitize
           python3 tools/test_binder_reply_allocations.py --sanitize
+          python3 tools/test_binder_output_ownership.py --sanitize --negative-controls
           python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
@@ -502,7 +505,9 @@ jobs:
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
 
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
-        run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+        run: |
+          python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+          python3 tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
 
       - name: WebStorage origin, owned WebView responses and running-task contracts
         run: |
@@ -696,6 +701,9 @@ jobs:
           python3 tools/test_binder_reply_allocations.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/binder_reply_allocations_test.exe
+          python3 tools/test_binder_output_ownership.py --compile-only --aosp-dir third_party/aosp \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output-dir out/binder-output --output out/binder_output_ownership_test.exe
           python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/binder_lifetime_test.exe
@@ -1988,6 +1996,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/binder_reply_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $binderOutput = & ./dist/binder_output_ownership_test.exe gate 2>&1 | Out-String
+          $binderOutput | Write-Host
+          if ($LASTEXITCODE -ne 0 -or $binderOutput -notmatch '(?m)^BINDER_OUTPUT_PASS checks=[1-9][0-9]*\r?$') {
+            throw 'Binder direct output ownership contracts failed'
+          }
           & ./dist/layered_bitmap_cache_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/structured_logging_test.exe
