@@ -19,7 +19,7 @@ namespace gesher::windows {
 
 // Read an OLE source's exact file list. The data block is source-provided;
 // validate its layout before passing the HDROP handle to Shell32.
-inline std::optional<std::vector<std::wstring>> ReadDropPaths(IDataObject* source) {
+inline std::optional<std::vector<std::wstring>> ReadDropPaths(IDataObject* source, size_t maximum = UINT_MAX) {
   FORMATETC request{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
   STGMEDIUM medium{};
   if (!source || FAILED(source->GetData(&request, &medium))) return std::nullopt;
@@ -51,6 +51,7 @@ inline std::optional<std::vector<std::wstring>> ReadDropPaths(IDataObject* sourc
     if (valid) {
       const HDROP drop = static_cast<HDROP>(medium.hGlobal);
       const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+      if (count > maximum) { ReleaseStgMedium(&medium); return paths; }
       paths.reserve(count);
       for (UINT i = 0; i < count; ++i) {
         const UINT length = DragQueryFileW(drop, i, nullptr, 0);
