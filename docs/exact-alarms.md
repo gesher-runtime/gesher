@@ -41,6 +41,10 @@ backend is available, PackageManager exposes the implemented Android Settings li
 and app-detail components. The real intent filters, priority ordering, selectors,
 direct-boot classification, and activity-options results agree with dispatch.
 An installed Settings package takes precedence over the native components.
+The built-in screen is available in the device's system-server process, where
+the runtime can reserve and restore the originating task and show the native
+window. In standalone mode the native role rejects this operation, so the
+built-in Settings component stays unresolved.
 
 The Windows screen shows the actual selected package's access and applies an
 explicit user decision through the server AppOps service. Dismissal preserves

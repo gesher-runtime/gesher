@@ -112,6 +112,12 @@ Java_com_gesher_server_AccountSecretStore_nativeUnprotect(JNIEnv* env, jclass cl
 #include "permission_dialog.inc"
 #include "exact_alarm_dialog.inc"
 
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_ExactAlarmAccessRequests_nativeAvailable(JNIEnv* env, jclass cls) {
+  (void)env; (void)cls;
+  return server_process ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jint GESHER_NATIVE
 Java_com_gesher_server_ExactAlarmAccessRequests_nativeEdit(JNIEnv* env, jclass cls,
         jobjectArray packages, jbooleanArray allowed) {

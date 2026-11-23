@@ -138,11 +138,12 @@ final class ExactAlarmAccessRequests {
         return result;
     }
 
+    private static native boolean nativeAvailable();
     private static native int nativeEdit(String[] packages, boolean[] allowed);
 
     boolean available() {
         if (!mNativeDialog) return true;
-        try { AccountSecretStore.ensureLoaded(); return true; }
+        try { AccountSecretStore.ensureLoaded(); return nativeAvailable(); }
         catch (LinkageError | SecurityException failure) { return false; }
     }
 
