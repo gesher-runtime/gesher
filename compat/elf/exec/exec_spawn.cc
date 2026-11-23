@@ -5,6 +5,7 @@
 #include "../../posix/src/startup_null.h"
 
 #include <gesher/binder_endpoint.h>
+#include <gesher/cohost_bootstrap.h>
 #include <gesher/reserved_names.h>
 #include <gesher/environment.h>
 #include <gesher/environment_utf16.h>
@@ -662,6 +663,17 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     owned.values.push_back(nul);
     admission.broker = binder_bootstrap::EncodeHandle(broker);
     admission.null_device = binder_bootstrap::EncodeHandle(nul);
+    if (binder.IsStandalone()) {
+      const auto& scope = cohost_bootstrap::Current();
+      if (scope) {
+        HANDLE mapping = nullptr, host = nullptr;
+        if (!scope.DuplicateForChild(&mapping, &host)) return ERROR_ACCESS_DENIED;
+        owned.values.push_back(mapping);
+        owned.values.push_back(host);
+        admission.cohost_section = binder_bootstrap::EncodeHandle(mapping);
+        admission.cohost_host = binder_bootstrap::EncodeHandle(host);
+      }
+    }
     std::memcpy(block.data() + descriptor_bytes, &admission, sizeof(admission));
   }
 

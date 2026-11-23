@@ -507,20 +507,21 @@ index ee26bfc04..74021bb34 100644
 +  g_sandbox = g_peer_registry || gesher::appcontainer::Enabled();
 +  if (g_sandbox && !g_record_only) {
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index d693bd9fe..b72d3ea81 100644
+index d693bd9fe..a8bbb2f96 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
 @@ -4,0 +5 @@
 +#include "../../posix/src/startup_null.h"
-@@ -5,0 +7 @@
+@@ -5,0 +7,2 @@
 +#include <gesher/binder_endpoint.h>
-@@ -599,4 +601 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
++#include <gesher/cohost_bootstrap.h>
+@@ -599,4 +602 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 -    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
 -    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
 -                             FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
 -                             OPEN_EXISTING, 0, nullptr);
 +    HANDLE nul = gesher::OpenDescriptorPlaceholder(true);
-@@ -612 +611,6 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -612 +612,6 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 -  std::vector<unsigned char> block(crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0), 0);
 +  auto& binder = binder_endpoint::Current();
 +  const bool protected_guest = binder.IsGuest();
@@ -528,7 +529,7 @@ index d693bd9fe..b72d3ea81 100644
 +  const size_t descriptor_bytes = crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0);
 +  std::vector<unsigned char> block(descriptor_bytes +
 +      (protected_guest ? sizeof(binder_bootstrap::Startup) : 0), 0);
-@@ -646,0 +651,16 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -646,0 +652,27 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 +  if (protected_guest) {
 +    binder_bootstrap::Startup admission;
 +    admission.endpoint = binder.IsStandalone() ? binder_bootstrap::Endpoint::kStandalone
@@ -543,11 +544,22 @@ index d693bd9fe..b72d3ea81 100644
 +    owned.values.push_back(nul);
 +    admission.broker = binder_bootstrap::EncodeHandle(broker);
 +    admission.null_device = binder_bootstrap::EncodeHandle(nul);
++    if (binder.IsStandalone()) {
++      const auto& scope = cohost_bootstrap::Current();
++      if (scope) {
++        HANDLE mapping = nullptr, host = nullptr;
++        if (!scope.DuplicateForChild(&mapping, &host)) return ERROR_ACCESS_DENIED;
++        owned.values.push_back(mapping);
++        owned.values.push_back(host);
++        admission.cohost_section = binder_bootstrap::EncodeHandle(mapping);
++        admission.cohost_host = binder_bootstrap::EncodeHandle(host);
++      }
++    }
 +    std::memcpy(block.data() + descriptor_bytes, &admission, sizeof(admission));
 +  }
-@@ -677,0 +698 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -677,0 +710 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 +  if (protected_guest) flags |= CREATE_SUSPENDED;
-@@ -686,0 +708,17 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -686,0 +720,17 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 +  if (started && protected_guest) {
 +    struct PendingChild {
 +      PROCESS_INFORMATION* info;

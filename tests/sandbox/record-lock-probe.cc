@@ -363,11 +363,22 @@ int CohostGuest() {
                 {u"android.permission.INTERNET"}, &permissions_result) == ERROR_SUCCESS &&
              permissions_result == std::vector<int32_t>{0},
              "genuine cohost permission check reaches the pinned host")) return 1;
-  return Check(permissions::Exchange(permissions::Operation::kRequest,
+  if (!Check(permissions::Exchange(permissions::Operation::kRequest,
                 {u"android.permission.INTERNET", u"com.gesher.test.UNDECLARED"},
                 &permissions_result) == ERROR_SUCCESS &&
              permissions_result == std::vector<int32_t>{0, -1},
-             "cohost permission reply retains exact request order") ? 0 : 1;
+             "cohost permission reply retains exact request order")) return 1;
+  return Check(StandaloneChild(L" --cohost-descendant", GetStdHandle(STD_INPUT_HANDLE)),
+             "enrolled cohost child inherits the sealed scope") ? 0 : 1;
+}
+
+int CohostDescendant() {
+  namespace permissions = gesher::cohost_permissions;
+  std::vector<int32_t> result;
+  return Check(Lowbox() && gesher::cohost_bootstrap::Current() &&
+      permissions::Exchange(permissions::Operation::kCheck,
+          {u"android.permission.INTERNET"}, &result) != ERROR_SUCCESS,
+      "cohost native descendant carries metadata but no parent permission authority") ? 0 : 1;
 }
 
 bool CheckCohost(const fs::path& dir, const fs::path& exe) {
@@ -499,6 +510,7 @@ int wmain(int argc, wchar_t** argv) {
   if (argc == 3 && std::wstring(argv[1]) == L"--scoped-server") return ScopedServer(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--read-pinned-source") return ReadPinnedSource(argv[2]);
   if (argc == 2 && std::wstring(argv[1]) == L"--cohost-guest") return CohostGuest();
+  if (argc == 2 && std::wstring(argv[1]) == L"--cohost-descendant") return CohostDescendant();
   if (argc == 4 && std::wstring(argv[1]) == L"--scoped-supervisor") return ScopedSupervisor(argv[2], argv[3]);
   if (argc == 2 && std::wstring(argv[1]) == L"--query-inherited-file") return QueryInheritedFile();
   if (argc == 2 && std::wstring(argv[1]) == L"--read-inherited-pipe") return ReadInheritedPipe();

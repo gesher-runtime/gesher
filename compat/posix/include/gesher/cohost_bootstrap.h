@@ -90,6 +90,16 @@ class Binding {
         WaitForSingleObject(storage_host, 0) == WAIT_TIMEOUT;
   }
 
+  bool DuplicateForChild(HANDLE* mapping, HANDLE* host) const {
+    if (!valid_ || !DuplicateHandle(GetCurrentProcess(), section_, GetCurrentProcess(),
+                                    mapping, 0, TRUE, DUPLICATE_SAME_ACCESS)) return false;
+    if (DuplicateHandle(GetCurrentProcess(), storage_host, GetCurrentProcess(),
+                        host, 0, TRUE, DUPLICATE_SAME_ACCESS)) return true;
+    CloseHandle(*mapping);
+    *mapping = nullptr;
+    return false;
+  }
+
   std::wstring credential;
   std::wstring device;
   std::wstring storage_pipe;
