@@ -5,9 +5,11 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -49,7 +51,7 @@ struct Received {
 };
 
 // Receives one datagram on `fd` with a control buffer of `control_size`.
-static Received ReceiveOne(int fd, size_t control_size) {
+static Received ReceiveOne(int fd, size_t control_size, int flags = 0) {
   Received result;
   char data[16] = {};
   iovec io = {data, sizeof(data)};
@@ -63,7 +65,7 @@ static Received ReceiveOne(int fd, size_t control_size) {
   message.msg_iovlen = 1;
   message.msg_control = control;
   message.msg_controllen = control_size;
-  const ssize_t n = recvmsg(fd, &message, 0);
+  const ssize_t n = recvmsg(fd, &message, flags);
   result.ok = n == 4 && memcmp(data, "ping", 4) == 0;
   result.truncated = (message.msg_flags & MSG_CTRUNC) != 0;
   result.controllen = message.msg_controllen;
@@ -76,6 +78,14 @@ static Received ReceiveOne(int fd, size_t control_size) {
     memcpy(&result.info, CMSG_DATA(c), delivered);
   }
   return result;
+}
+
+// Whether a datagram is waiting on `fd` within `ms` milliseconds: receives
+// that may never be answered (a broadcast or multicast datagram the host's
+// firewall drops) wait no longer than that.
+static bool Readable(int fd, int ms) {
+  pollfd p = {fd, POLLIN, 0};
+  return poll(&p, 1, ms) == 1 && (p.revents & POLLIN) != 0;
 }
 
 static bool SendTo(int fd, const sockaddr_in& to) {
@@ -149,6 +159,65 @@ static void TestLoopback() {
     CHECK(r.ok && r.found && r.info.ipi_addr.s_addr == htonl(INADDR_LOOPBACK));
     close(adopted);
   }
+
+  // MSG_PEEK returns the datagram and its in_pktinfo and leaves it queued:
+  // the next recvmsg gets both again.
+  CHECK(SendTo(fd, self));
+  CHECK(Readable(fd, 2000));
+  r = ReceiveOne(fd, 256, MSG_PEEK);
+  CHECK(r.ok && r.found && r.info.ipi_addr.s_addr == htonl(INADDR_LOOPBACK) &&
+        r.info.ipi_spec_dst.s_addr == htonl(INADDR_LOOPBACK));
+  r = ReceiveOne(fd, 256, MSG_PEEK);
+  CHECK(r.ok && r.found);
+  r = ReceiveOne(fd, 256);
+  CHECK(r.ok && r.found && r.info.ipi_addr.s_addr == htonl(INADDR_LOOPBACK));
+
+  // Nothing queued: a non-blocking receive fails with EAGAIN, per call
+  // (MSG_DONTWAIT) and per descriptor (O_NONBLOCK).
+  char data[16];
+  iovec io = {data, sizeof(data)};
+  alignas(cmsghdr) unsigned char control[256];
+  msghdr message = {};
+  message.msg_iov = &io;
+  message.msg_iovlen = 1;
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+  errno = 0;
+  CHECK(recvmsg(fd, &message, MSG_DONTWAIT) == -1 && errno == EAGAIN);
+  const int fl = fcntl(fd, F_GETFL);
+  CHECK(fl >= 0 && fcntl(fd, F_SETFL, fl | O_NONBLOCK) == 0);
+  message.msg_controllen = sizeof(control);
+  errno = 0;
+  CHECK(recvmsg(fd, &message, 0) == -1 && errno == EAGAIN);
+  errno = 0;
+  CHECK(recv(fd, data, sizeof(data), 0) == -1 && errno == EAGAIN);
+  errno = 0;
+  CHECK(read(fd, data, sizeof(data)) == -1 && errno == EAGAIN);
+  CHECK(fcntl(fd, F_SETFL, fl) == 0);
+
+  // Receives with no control buffer to fill still return the datagram.
+  CHECK(SendTo(fd, self));
+  CHECK(Readable(fd, 2000) && recv(fd, data, sizeof(data), 0) == 4 && memcmp(data, "ping", 4) == 0);
+  CHECK(SendTo(fd, self));
+  CHECK(Readable(fd, 2000) && read(fd, data, sizeof(data)) == 4 && memcmp(data, "ping", 4) == 0);
+  sockaddr_in from = {};
+  socklen_t from_len = sizeof(from);
+  CHECK(SendTo(fd, self));
+  CHECK(Readable(fd, 2000) &&
+        recvfrom(fd, data, sizeof(data), 0, reinterpret_cast<sockaddr*>(&from), &from_len) == 4 &&
+        from.sin_port == self.sin_port);
+  CHECK(!Readable(fd, 0));
+
+  // The option's length, as Linux's do_ip_setsockopt: an int, else a byte,
+  // else (optlen 0, the value not read) off.
+  const unsigned char byte_on[3] = {1, 0, 0};
+  CHECK(setsockopt(fd, IPPROTO_IP, IP_PKTINFO, nullptr, 0) == 0 && PacketInfoOption(fd) == 0);
+  CHECK(setsockopt(fd, IPPROTO_IP, IP_PKTINFO, byte_on, 1) == 0 && PacketInfoOption(fd) == 1);
+  CHECK(setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, 0) == 0 && PacketInfoOption(fd) == 0);
+  CHECK(setsockopt(fd, IPPROTO_IP, IP_PKTINFO, byte_on, 3) == 0 && PacketInfoOption(fd) == 1);
+  errno = 0;
+  CHECK(setsockopt(fd, IPPROTO_IP, IP_PKTINFO, nullptr, sizeof(on)) == -1 && errno == EFAULT);
+  CHECK(PacketInfoOption(fd) == 1);
 
   int off = 0;
   CHECK(setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &off, sizeof(off)) == 0);
@@ -247,6 +316,12 @@ static void TestBroadcast() {
   sockaddr_in to = self;
   to.sin_addr = local;
   CHECK(SendTo(fd, to));
+  if (!Readable(fd, 2000)) {
+    // Delivered within the host: no firewall rule applies to it.
+    CHECK(!"unicast datagram to the interface's own address arrived within 2 s");
+    close(fd);
+    return;
+  }
   Received r = ReceiveOne(fd, 256);
   CHECK(r.ok && r.found && r.info.ipi_addr.s_addr == local.s_addr &&
         r.info.ipi_spec_dst.s_addr == local.s_addr);
@@ -261,6 +336,12 @@ static void TestBroadcast() {
       printf("note: broadcast send to %s failed (errno=%d); case skipped\n", inet_ntoa(target), errno);
       continue;
     }
+    if (!Readable(fd, 2000)) {
+      // Windows Firewall may drop a broadcast this host sent to itself.
+      printf("note: broadcast to %s not received within 2 s (dropped by a firewall?); case skipped\n",
+             inet_ntoa(target));
+      continue;
+    }
     r = ReceiveOne(fd, 256);
     char spec[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &r.info.ipi_spec_dst, spec, sizeof(spec));
@@ -273,10 +354,57 @@ static void TestBroadcast() {
   close(fd);
 }
 
+// A multicast datagram's ipi_spec_dst is, as for a broadcast, the local
+// address facing its sender: sent from 127.0.0.1 through the loopback
+// interface, 127.0.0.1 (ipi_addr stays the group).
+static void TestMulticast() {
+  int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  CHECK(fd >= 0);
+  int on = 1;
+  sockaddr_in self = {};
+  self.sin_family = AF_INET;
+  CHECK(bind(fd, reinterpret_cast<sockaddr*>(&self), sizeof(self)) == 0);
+  socklen_t len = sizeof(self);
+  CHECK(getsockname(fd, reinterpret_cast<sockaddr*>(&self), &len) == 0);
+  CHECK(setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) == 0);
+  in_addr loopback = {};
+  loopback.s_addr = htonl(INADDR_LOOPBACK);
+  ip_mreq join = {};
+  join.imr_multiaddr.s_addr = inet_addr("239.255.77.13");
+  join.imr_interface = loopback;
+  if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &join, sizeof(join)) != 0 ||
+      setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &loopback, sizeof(loopback)) != 0 ||
+      setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &on, sizeof(on)) != 0) {
+    printf("note: no multicast on the loopback interface (errno=%d); multicast case skipped\n", errno);
+    close(fd);
+    return;
+  }
+  sockaddr_in to = self;
+  to.sin_addr = join.imr_multiaddr;
+  if (!SendTo(fd, to)) {
+    printf("note: multicast send failed (errno=%d); multicast case skipped\n", errno);
+    close(fd);
+    return;
+  }
+  if (!Readable(fd, 2000)) {
+    printf("note: looped-back multicast not received within 2 s (dropped by a firewall?); case skipped\n");
+    close(fd);
+    return;
+  }
+  Received r = ReceiveOne(fd, 256);
+  CHECK(r.ok && r.found && !r.truncated);
+  CHECK(r.info.ipi_addr.s_addr == join.imr_multiaddr.s_addr);
+  if (r.info.ipi_spec_dst.s_addr != loopback.s_addr) printf("  multicast spec_dst %s\n", inet_ntoa(r.info.ipi_spec_dst));
+  CHECK(r.info.ipi_spec_dst.s_addr == loopback.s_addr);
+  CHECK(r.info.ipi_ifindex > 0);
+  close(fd);
+}
+
 int main() {
   TestLoopback();
   TestDualStack();
   TestBroadcast();
+  TestMulticast();
 
   // A stream socket accepts the option, as on Linux.
   int on = 1;
