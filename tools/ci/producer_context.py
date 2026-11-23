@@ -23,15 +23,52 @@ ROLES = {
     'capture-production': ('media-capture-production-role.json', 'windows-x64', 'build', None),
     'capture-fixture': ('media-capture-fixture-role.json', 'media-capture-test', 'build', None),
     'binder-ordinary-actor': ('binder-host-source.json', 'binder2-sg-host', 'build', None),
+    'binder-ordinary-modes': ('source.json', 'binder2-sg-modes', {
+        'ci': 'binder2-sg-fixtures / modes-build',
+        'binder2-sg-modes-component': 'fixtures / modes-build',
+        'binder2-stable-readonly-component': 'fixtures / modes-build',
+    }, None),
+    'native2-udp': ('net-udp/manifest.json', 'native2', {'ci': 'native2 / native2'}, None),
+    'native2-dns': ('net-dns/manifest.json', 'native2', {'ci': 'native2 / native2'}, 'context'),
+    'tcp-selected-minimum': ('provenance.json', 'tcp-coherent-selected-minimum',
+                             {'ci': 'compile-selected-minimum'}, None),
+    'tsf-format': ('provenance.json', 'tsf-format', {'ci': 'union-tsf / compile'}, None),
+    'native3-blocking': ('provenance.json', 'native3-locks-blocking',
+                         {'ci': 'union-native-blocking / compile'}, None),
     'native3-common-host-fixture': ('provenance.json', 'native3-locks-host', 'build', 'context'),
     'native3-linux-reference': ('provenance.json', 'native3-locks-reference',
                                'native3-locks-reference', 'context'),
 }
+# These consumers always bind the manifest bytes to the exact selected archive,
+# even when the manifest claims the current attempt. Relabelling an old local
+# manifest as current must not turn the historical proof into a fast-path bypass.
+ARCHIVE_REQUIRED = frozenset(('binder-ordinary-modes', 'native2-udp', 'native2-dns',
+                             'tcp-selected-minimum', 'tsf-format', 'native3-blocking'))
 
 
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        require(key not in value, 'Duplicate producer role key')
+        value[key] = item
+    return value
+
+
+def _invalid_constant(_):
+    raise RuntimeError('Invalid producer role JSON constant')
+
+
+def current_context():
+    """Read the complete CI identity, including a PR's distinct checkout/head."""
+    value = receipts.context()
+    return dict(source=value['checkout'], repository=value['repo'], repository_id=value['repo_id'],
+                run=value['run_id'], attempt=value['attempt'], event=os.environ['GITHUB_EVENT_NAME'],
+                supplier_head=value['head'], head_repository_id=value['head_repo'])
 
 
 def receipt_context(info, workflow):
@@ -62,15 +99,22 @@ def snapshot(current, original, artifact_name, producer_name):
     return old, now, item
 
 
-def authenticate(path, consumer, role):
+def authenticate(path, consumer, role, *, expected_supplier=None):
     """Return the proved producer context; leave GITHUB_RUN_ATTEMPT untouched."""
     require(role in ROLES, 'Unknown producer role')
     member, artifact_name, producer_name, nested = ROLES[role]
+    if isinstance(producer_name, dict):
+        producer_name = producer_name.get(os.environ.get('GITHUB_WORKFLOW'))
+        require(producer_name is not None, 'Producer role is not permitted in this workflow')
     path = Path(path)
-    require(path.name == member and path.is_file() and not path.is_symlink(),
+    member_parts = Path(member).parts
+    require(path.parts[-len(member_parts):] == member_parts and path.is_file() and all(
+        not part.is_symlink() and not (hasattr(part, 'is_junction') and part.is_junction())
+        for part in (path, *path.parents)),
             'Missing or linked producer role file')
     raw = path.read_bytes()
-    payload = json.loads(raw)
+    payload = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
+    require(isinstance(payload, dict), 'Producer role is not an object')
     require(payload.get('role') == role, 'Producer role mismatch')
     header = payload if nested is None else payload[nested]
     require(set(consumer) == set(CONTEXT_KEYS), 'Incomplete consumer context')
@@ -81,15 +125,18 @@ def authenticate(path, consumer, role):
             'Producer source/checkout/run/repository/event mismatch')
     require(all(isinstance(value, str) and re.fullmatch(r'[1-9][0-9]*', value)
                 for value in (original['attempt'], consumer['attempt'])), 'Invalid producer attempt')
-    if original['attempt'] == consumer['attempt']:
+    if original['attempt'] == consumer['attempt'] and role not in ARCHIVE_REQUIRED and expected_supplier is None:
         return original
-    require(int(original['attempt']) < int(consumer['attempt']), 'Producer attempt is in the future')
+    require(int(original['attempt']) <= int(consumer['attempt']), 'Producer attempt is in the future')
     require(os.environ.get('GITHUB_ACTIONS') == 'true', 'Reused producer proof executes only in CI')
     current = receipt_context(consumer, os.environ['GITHUB_WORKFLOW'])
     earlier = receipt_context(original, current['workflow'])
     receipts.check_checkout(current)
     receipts.check_run(current)
     before = snapshot(current, earlier, artifact_name, producer_name)
+    if expected_supplier is not None:
+        require(receipts.supplier_identity((before[1], before[2])) ==
+                receipts.supplier_identity(expected_supplier), 'Producer differs from the verified batch supplier')
     # Reuse the unchanged digest-checked downloader/ZIP path and member policy.
     # Comparing the entire archived role binds its attempt, compiler, source and
     # output hashes to the exact API-selected archive, not merely local claims.
@@ -100,6 +147,9 @@ def authenticate(path, consumer, role):
         require(archived.is_file() and not archived.is_symlink() and archived.read_bytes() == raw,
                 'Producer role bytes differ from the verified original archive')
     after = snapshot(current, earlier, artifact_name, producer_name)
+    if expected_supplier is not None:
+        require(receipts.supplier_identity((after[1], after[2])) ==
+                receipts.supplier_identity(expected_supplier), 'Producer differs from the verified batch supplier')
     require(receipts.supplier_identity((before[0], before[2])) ==
             receipts.supplier_identity((after[0], after[2])) and
             receipts.supplier_identity((before[1], before[2])) ==

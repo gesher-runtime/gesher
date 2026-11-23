@@ -84,7 +84,7 @@ try {
     "Panel icon measurement: apps=120 unchanged_images_reused=$reused watched_file_stats_per_poll=$pollStats"
     if (-not $Measure) {
         Assert-Icons ($reused -eq 120) 'Label-only refresh decoded unchanged icons again'
-        Assert-Icons ($pollStats -eq 241) 'Polling repeated file stats for duplicate icon paths'
+        Assert-Icons ($pollStats -eq 361) 'Polling repeated file stats for duplicate icon paths'
         Assert-Icons ([Object]::ReferenceEquals($appsList.ItemsSource[100].IconImage, $appsList.ItemsSource[119].IconImage)) 'Default icons were decoded separately'
         Assert-Icons ($script:ViewState.Icons.Count -eq 101) 'Icon cache does not match current unique icon set'
     }

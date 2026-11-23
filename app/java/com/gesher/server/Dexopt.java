@@ -16,10 +16,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Android's compilation model for installed apps, as ART Service (artd, dex2oat, profman)
@@ -53,7 +53,67 @@ final class Dexopt {
     /** dex2oat's runtime: as tools/boot-image/compile.ps1's (ADR 0031). */
     private static final String[] DEX2OAT_RUNTIME = {"-Xms64m", "-Xmx512m",
             "-XX:LargeObjectSpace=map"};
-    private static final long TOOL_TIMEOUT_MS = 10 * 60_000;
+    private static final int TOOL_TIMEOUT_MS = 10 * 60_000;
+    private static final ReentrantLock sCompiler = new ReentrantLock(true);
+    private static final DexoptWorkQueue sWork = new DexoptWorkQueue();
+    private static final ThreadLocal<Attempt> sAttempt = new ThreadLocal<>();
+    private static volatile Attempt sActive;
+    private static volatile DexoptProfileWatch sProfiles;
+    private static String sCancelName;
+    private static long sCancelEvent;
+    private static Supplier<Long> sIdleSince;
+    private static long sIdleMs;
+    // Preserve the established compiler heap ceiling; constrain the whole child
+    // separately instead of making large applications fail with a smaller heap.
+    private static final int BACKGROUND_HEAP_MIB = 512;
+    private static final int BACKGROUND_MEMORY_MIB = 1536;
+    private static final int BACKGROUND_CPU_RATE = 2000; // 20% of host/parent-job CPU capacity
+
+    private static final class Attempt {
+        final DexoptWorkQueue.Work work;
+        volatile boolean cancelled;
+        boolean completed;
+        Attempt(DexoptWorkQueue.Work work) { this.work = work; }
+    }
+
+    /** Publication/notification locks never span compilation or a process wait. */
+    static void activityChanged() {
+        synchronized (sWork) {
+            Attempt active = sActive;
+            if (active != null) active.cancelled = true;
+            sWork.wake();
+        }
+        String name = sCancelName;
+        if (name != null) Zygote.signalEvent(name);
+    }
+
+    static void packagesChanged() {
+        DexoptProfileWatch profiles = sProfiles;
+        if (profiles != null) profiles.refresh();
+    }
+
+    /** Withdraw a generation before the installer starts replacing/removing its bytes. */
+    static void packageChanging(String name) {
+        synchronized (sWork) {
+            sWork.removed(name);
+            Attempt active = sActive;
+            if (active != null && active.work.packageName.equals(name)) active.cancelled = true;
+            sWork.wake();
+        }
+        if (sCancelName != null) Zygote.signalEvent(sCancelName);
+    }
+
+    static void awaitCompiler() {
+        sCompiler.lock();
+        sCompiler.unlock();
+    }
+
+    private static boolean cancelled(Attempt attempt) {
+        if (attempt == null) return false;
+        if (attempt.cancelled || !sWork.current(attempt.work)) return true;
+        long since = sIdleSince.get();
+        return attempt.cancelled || since == 0 || SystemClock.uptimeMillis() - since < sIdleMs;
+    }
 
     private Dexopt() {
     }
@@ -159,14 +219,22 @@ final class Dexopt {
      * then runs from its APK).
      */
     static String onInstall(String packageName, String codePath, SharedLibraryGraph libraries) {
-        prepareProfiles(packageName);
-        String filter = filterFor("install", "speed-profile");
-        File ref = referenceProfile(packageName);
-        File metadata = new File(codePath, "base.dm");
-        File profile = metadata.isFile() ? importCloudProfile(packageName, codePath, metadata)
-                : hasData(ref) ? ref : null;
-        if (filter.endsWith("-profile") && profile == null) filter = "verify";
-        return compile(packageName, codePath, filter, "install", profile, libraries);
+        packageChanging(packageName);
+        activityChanged(); // foreground install takes precedence over background work
+        sCompiler.lock();
+        try {
+            prepareProfiles(packageName);
+            String filter = filterFor("install", "speed-profile");
+            File ref = referenceProfile(packageName);
+            File metadata = new File(codePath, "base.dm");
+            File profile = metadata.isFile() ? importCloudProfile(packageName, codePath, metadata)
+                    : hasData(ref) ? ref : null;
+            if (filter.endsWith("-profile") && profile == null) filter = "verify";
+            return compile(packageName, codePath, filter, "install", profile, libraries);
+        } finally {
+            sCompiler.unlock();
+            packagesChanged();
+        }
     }
 
     /**
@@ -213,8 +281,9 @@ final class Dexopt {
      * {@code oat.new}, then put in place of the old oat directory, so that a run never sees
      * half of a compile. Returns a description, or null.
      */
-    static synchronized String compile(String packageName, String codePath, String filter,
+    static String compile(String packageName, String codePath, String filter,
             String reason, File profile) {
+        sCompiler.lock();
         try {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(codePath);
             if (!parsed.packageName.equals(packageName)) {
@@ -224,11 +293,15 @@ final class Dexopt {
         } catch (Exception invalidLibrary) {
             SystemServer.log("dexopt: " + packageName + ": library resolution failed: " + invalidLibrary);
             return null;
+        } finally {
+            sCompiler.unlock();
         }
     }
 
-    private static synchronized String compile(String packageName, String codePath, String filter,
+    private static String compile(String packageName, String codePath, String filter,
             String reason, File profile, SharedLibraryGraph libraries) {
+        Attempt attempt = sAttempt.get();
+        if (cancelled(attempt)) return null;
         try {
             if (!libraries.contentsUnchanged()) throw new IOException("shared library changed before dex2oat");
         } catch (IOException changedLibrary) {
@@ -268,7 +341,7 @@ final class Dexopt {
         a.add("-Xbootclasspath:" + vm.bootClassPath);
         for (String r : DEX2OAT_RUNTIME) {
             a.add("--runtime-arg");
-            a.add(r);
+            a.add(attempt != null && r.startsWith("-Xmx") ? "-Xmx" + BACKGROUND_HEAP_MIB + "m" : r);
         }
         if (profile != null) a.add("--profile-file=" + profile.getPath());
         if (appImage) {
@@ -278,7 +351,7 @@ final class Dexopt {
         // dex2oat's watchdog thread needs pthread_condattr_setclock, which gesher-base
         // lacks (tools/boot-image/compile.ps1 turns it off too).
         a.add("--no-watch-dog");
-        a.add("-j4");
+        a.add(attempt == null ? "-j4" : "-j1");
         long start = SystemClock.uptimeMillis();
         int code = run("dex2oat", a);
         long ms = SystemClock.uptimeMillis() - start;
@@ -298,19 +371,48 @@ final class Dexopt {
             deleteTree(newDir.getParentFile());
             return null;
         }
+        if (cancelled(attempt)) {
+            deleteTree(newDir.getParentFile());
+            return null;
+        }
         File oat = new File(codePath, "oat");
         File old = new File(codePath, "oat.old");
         deleteTree(old);
-        if (oat.exists() && !oat.renameTo(old)) {
-            SystemServer.log("dexopt: " + packageName + ": cannot replace " + oat
-                    + " (in use); the new code waits in " + newDir.getParentFile());
-            return null;
-        }
-        if (!newDir.getParentFile().renameTo(oat)) {
-            SystemServer.log("dexopt: " + packageName + ": cannot move " + newDir.getParentFile()
-                    + " to " + oat);
-            if (old.exists()) old.renameTo(oat);
-            return null;
+        synchronized (sWork) {
+            // A generation withdrawal or foreground notification serializes with this
+            // short publication, never with dex2oat, parsing, or an OS process wait.
+            if (attempt != null && (attempt.cancelled || !sWork.current(attempt.work))) {
+                deleteTree(newDir.getParentFile());
+                return null;
+            }
+            if (oat.exists() && !oat.renameTo(old)) {
+                SystemServer.log("dexopt: " + packageName + ": cannot replace " + oat
+                        + " (in use); the new code waits in " + newDir.getParentFile());
+                return null;
+            }
+            if (!newDir.getParentFile().renameTo(oat)) {
+                SystemServer.log("dexopt: " + packageName + ": cannot move " + newDir.getParentFile()
+                        + " to " + oat);
+                if (old.exists()) old.renameTo(oat);
+                return null;
+            }
+            if ("bg-dexopt".equals(reason)) {
+                try {
+                    Files.move(profile.toPath(), referenceProfile(packageName).toPath(),
+                            StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (IOException failedProfileCommit) {
+                    // Keep the previous code/profile pair on a failed publication.
+                    if (oat.renameTo(newDir.getParentFile())) {
+                        if (old.exists() && !old.renameTo(oat))
+                            SystemServer.log("dexopt: previous artifacts remain in " + old);
+                        deleteTree(newDir.getParentFile());
+                    }
+                    SystemServer.log("dexopt: " + packageName + ": reference profile not committed: "
+                            + failedProfileCommit);
+                    return null;
+                }
+                if (attempt != null) attempt.completed = true;
+            }
         }
         deleteTree(old);
         File dir = oatDir(codePath);
@@ -336,82 +438,114 @@ final class Dexopt {
 
     private static Thread sBackground;
 
-    /**
-     * BackgroundDexOptService: every few seconds, once the device has been idle (no app in
-     * use, ActivityTaskManagerService.idleSince) and no app process has been starting for
-     * {@code gesher.dexopt.idle-ms} (default 2000), the packages whose current profile has
-     * new data are compiled with their merged profile (pm.dexopt.bg-dexopt).
-     */
+    /** Profile notifications and real retry/idle deadlines drive one compiler worker. */
     static synchronized void startBackground(Packages packages, Supplier<Long> idleSince) {
         if (sBackground != null) return;
-        long idleMs = SystemProperties.getLong("gesher.dexopt.idle-ms", 2000);
-        Map<String, Long> done = new HashMap<>();  // package -> the profile's time compiled
+        long idleMs = Math.max(0, SystemProperties.getLong("gesher.dexopt.idle-ms", 2000));
+        sIdleSince = idleSince;
+        sIdleMs = idleMs;
+        sCancelName = "Local\\GesherDexopt-" + android.os.Process.myPid();
+        sCancelEvent = Zygote.createEvent(sCancelName);
+        if (sCancelEvent == 0) {
+            SystemServer.log("dexopt: cancellation event unavailable; pending work will retry");
+        }
+        sProfiles = new DexoptProfileWatch(currentProfile("_").getParentFile().getParentFile().toPath(),
+                packages::codePaths, sWork, SystemServer::log);
         sBackground = new Thread(() -> {
             while (true) {
-                SystemClock.sleep(1000);
+                long epoch = sWork.epoch();
                 try {
+                    if (sWork.size() == 0) { sWork.await(epoch, 0); continue; }
                     long since = idleSince.get();
-                    if (since == 0 || SystemClock.uptimeMillis() - since < idleMs) continue;
-                    // The packages used last first.
-                    List<Map.Entry<String, String>> order =
-                            new ArrayList<>(packages.codePaths().entrySet());
-                    order.sort((x, y) -> Long.compare(currentProfile(y.getKey()).lastModified(),
-                            currentProfile(x.getKey()).lastModified()));
-                    for (Map.Entry<String, String> e : order) {
-                        String pkg = e.getKey();
-                        File cur = currentProfile(pkg);
-                        if (!hasData(cur)) continue;
-                        Long t = done.get(pkg);
-                        if (t != null && t == cur.lastModified()) continue;
-                        if (idleSince.get() == 0) break;  // an app starts: later
-                        done.put(pkg, cur.lastModified());
-                        backgroundDexopt(pkg, e.getValue());
+                    if (since == 0) { sWork.await(epoch, 0); continue; }
+                    long now = SystemClock.uptimeMillis();
+                    long idleDelay = idleMs - (now - since);
+                    if (idleDelay > 0) { sWork.await(epoch, idleDelay); continue; }
+                    DexoptWorkQueue.Work work = sWork.poll(now);
+                    if (work == null) { sWork.await(epoch, sWork.delay(now)); continue; }
+                    if (sCancelEvent == 0) sCancelEvent = Zygote.createEvent(sCancelName);
+                    if (sCancelEvent == 0) { sWork.finished(work, false, now); continue; }
+                    Attempt attempt = new Attempt(work);
+                    // Only this worker consumes the auto-reset cancellation event.
+                    Zygote.waitEvent(sCancelEvent, 0);
+                    synchronized (sWork) { sActive = attempt; }
+                    try {
+                        if (!cancelled(attempt)) {
+                            sAttempt.set(attempt);
+                            backgroundDexopt(work.packageName, work.codePath);
+                        }
+                    } finally {
+                        sAttempt.remove();
+                        synchronized (sWork) { sActive = null; }
+                        sWork.finished(work, attempt.completed, SystemClock.uptimeMillis());
                     }
-                } catch (Throwable t) {
-                    SystemServer.log("dexopt: background dexopt failed: " + t);
+                } catch (InterruptedException interrupted) {
+                    // Only an explicit notification interrupts a wait; re-evaluate state.
+                } catch (Throwable failure) {
+                    SystemServer.log("dexopt: background dexopt failed: " + failure);
+                    try { sWork.await(sWork.epoch(), 60_000); }
+                    catch (InterruptedException retryNow) { }
                 }
             }
         }, "bg-dexopt");
         sBackground.setDaemon(true);
+        sProfiles.start();
         sBackground.start();
         SystemServer.log("dexopt: background dexopt runs once the device is idle for " + idleMs
-                + " ms (" + filterFor("bg-dexopt", "speed-profile") + ")");
+                + " ms; profile-driven worker, workers=1, heap=" + BACKGROUND_HEAP_MIB + " MiB, process="
+                + BACKGROUND_MEMORY_MIB + " MiB, cpu=" + BACKGROUND_CPU_RATE / 100 + "%");
     }
 
-    /**
-     * One package: profman merges its current profile into the reference profile (and says
-     * whether that is worth a compile), then dex2oat compiles it with the reference profile.
-     */
+    /** Merge into a private reference, retaining both original profiles until commit. */
     static String backgroundDexopt(String packageName, String codePath) {
-        File cur = currentProfile(packageName);
-        File ref = referenceProfile(packageName);
-        ref.getParentFile().mkdirs();
-        String apk = new File(codePath, "base.apk").getPath();
-        List<String> a = new ArrayList<>();
-        a.add("--profile-file=" + cur.getPath());
-        a.add("--reference-profile-file=" + ref.getPath());
-        a.add("--apk=" + apk);
-        a.add("--dex-location=" + apk);
-        // As artd merges since Android 14: compile unless the merge added nothing.
-        a.add("--force-merge-and-analyze");
-        int code = run("profman", a);
-        // ProfmanResult: 1 compile, 2 small delta, 7 empty profiles.
-        SystemServer.log("dexopt: " + packageName + ": profman merged " + cur.length()
-                + " bytes of profile into " + ref + " (" + ref.length() + " bytes): "
-                + (code == 1 ? "compile" : code == 2 ? "small delta, no compile"
-                        : code == 7 ? "empty profiles" : "exit code " + code));
-        if (code != 1) return null;
-        String filter = filterFor("bg-dexopt", "speed-profile");
-        String what = compile(packageName, codePath, filter, "bg-dexopt", ref);
-        if (what != null) {
-            // Merged: the app's runtime starts its current profile anew.
-            try {
-                new FileOutputStream(cur).close();
-            } catch (IOException e) {
-                // left as it is
+        sCompiler.lock();
+        File staged = null, snapshot = null;
+        try {
+            Attempt attempt = sAttempt.get();
+            if (cancelled(attempt)) return null;
+            File cur = currentProfile(packageName);
+            if (!hasData(cur)) {
+                if (attempt != null) attempt.completed = true;
+                return null;
             }
+            File ref = referenceProfile(packageName);
+            ref.getParentFile().mkdirs();
+            staged = File.createTempFile("primary-", ".prof", ref.getParentFile());
+            snapshot = File.createTempFile("current-", ".prof", ref.getParentFile());
+            Files.copy(cur.toPath(), snapshot.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            if (ref.isFile()) Files.copy(ref.toPath(), staged.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            String apk = new File(codePath, "base.apk").getPath();
+            List<String> args = new ArrayList<>();
+            args.add("--profile-file=" + snapshot.getPath());
+            args.add("--reference-profile-file=" + staged.getPath());
+            args.add("--apk=" + apk);
+            args.add("--dex-location=" + apk);
+            args.add("--force-merge-and-analyze");
+            int code = run("profman", args);
+            SystemServer.log("dexopt: " + packageName + ": profman merged " + cur.length()
+                    + " bytes of profile into staged reference (" + staged.length() + " bytes): "
+                    + (code == 1 ? "compile" : code == 2 ? "small delta, no compile"
+                            : code == 7 ? "empty profiles" : "exit code " + code));
+            if (cancelled(attempt)) return null;
+            if (code == 2 || code == 7) {
+                if (attempt != null) attempt.completed = true;
+                return null;
+            }
+            if (code != 1) return null;
+            String what = compile(packageName, codePath, filterFor("bg-dexopt", "speed-profile"),
+                    "bg-dexopt", staged);
+            if (what == null) return null;
+            // The runtime may have appended after profman's read. Never truncate its
+            // current profile: later notifications merge the retained cumulative data.
+            return what;
+        } catch (IOException failure) {
+            SystemServer.log("dexopt: " + packageName + ": profile not committed: " + failure);
+            return null;
+        } finally {
+            if (staged != null) staged.delete();
+            if (snapshot != null) snapshot.delete();
+            sCompiler.unlock();
         }
-        return what;
     }
 
     // --- tools --------------------------------------------------------------------------
@@ -430,25 +564,28 @@ final class Dexopt {
         } catch (IOException e) {
             // no log line
         }
+        Attempt attempt = sAttempt.get();
+        if (cancelled(attempt)) return -3;
+        if (attempt != null && Zygote.nativeAvailableMemory() < 2L * BACKGROUND_HEAP_MIB * 1024 * 1024)
+            return -3;
         int pid;
         try {
-            pid = Zygote.spawn(cmd.toString(), List.of(), log.getPath(), false);
-        } catch (RuntimeException e) {
-            SystemServer.log("dexopt: " + e.getMessage());
+            pid = attempt == null ? Zygote.spawn(cmd.toString(), List.of(), log.getPath(), false)
+                    : Zygote.nativeSpawnCompiler(cmd.toString(), new String[0],
+                            new String[] {"GESHER_BINDER_UID"}, Zygote.windowsPath(log.getPath()),
+                            BACKGROUND_MEMORY_MIB, BACKGROUND_CPU_RATE);
+            if (pid <= 0) throw new IllegalStateException("compiler process creation failed: " + pid);
+        } catch (RuntimeException failure) {
+            SystemServer.log("dexopt: " + failure.getMessage());
             return -1;
         }
-        long deadline = SystemClock.uptimeMillis() + TOOL_TIMEOUT_MS;
-        while (true) {
-            int code = Zygote.exitCode(pid);
-            if (code != Zygote.STILL_ACTIVE) return code;
-            if (SystemClock.uptimeMillis() > deadline) {
-                Zygote.kill(pid);
-                SystemServer.log("dexopt: " + tool + " took more than " + TOOL_TIMEOUT_MS / 1000
-                        + " s; stopped");
-                return -2;
-            }
-            SystemClock.sleep(50);
-        }
+        long identity = Zygote.childStartTime(pid);
+        if (cancelled(attempt)) Zygote.signalEvent(sCancelName);
+        int code = Zygote.nativeWaitChild(pid, identity, TOOL_TIMEOUT_MS,
+                attempt == null ? 0 : sCancelEvent, attempt != null);
+        if (code < 0) SystemServer.log("dexopt: " + tool + " stopped (" + code
+                + ": -2 deadline, -3 foreground/memory cancellation); input retained for retry");
+        return code;
     }
 
     /** What dex2oat needs of this runtime's options: its boot image and boot class path. */

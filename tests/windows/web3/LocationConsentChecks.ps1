@@ -24,7 +24,7 @@ public class ConsentFixture {
     if (m == 0x110) {
       CreateWindowExW(0, "EDIT", package, 0x50000800, 0,0,80,20,w,(IntPtr)1101,IntPtr.Zero,IntPtr.Zero);
       CreateWindowExW(0, "EDIT", details, 0x50000804, 0,20,80,20,w,(IntPtr)1102,IntPtr.Zero,IntPtr.Zero);
-      CreateWindowExW(0, "BUTTON", "Deny", 0x5001000B, 0,40,40,20,w,(IntPtr)2,IntPtr.Zero,IntPtr.Zero);
+      CreateWindowExW(0, "BUTTON", "Deny", 0x5001000B, 0,40,40,20,w,(IntPtr)7,IntPtr.Zero,IntPtr.Zero);
       CreateWindowExW(0, "BUTTON", "Allow", 0x5001000B, 40,40,40,20,w,(IntPtr)6,IntPtr.Zero,IntPtr.Zero);
       SetTimer(w,(IntPtr)1,30,IntPtr.Zero);
       return (IntPtr)1;
@@ -39,7 +39,7 @@ public class ConsentFixture {
       }
       Console.WriteLine("READY"); Console.Out.Flush(); return (IntPtr)1;
     }
-    if (m == 0x111 && (p.ToInt64() == 2 || p.ToInt64() == 6)) { EndDialog(w, p); return (IntPtr)1; }
+    if (m == 0x111 && (p.ToInt64() == 7 || p.ToInt64() == 6)) { EndDialog(w, p); return (IntPtr)1; }
     return IntPtr.Zero;
   }
   static int Dialog() {
@@ -68,8 +68,8 @@ if($LASTEXITCODE) { throw 'fixture compile failed' }
 $location = 'android.permission.ACCESS_COARSE_LOCATION android.permission.ACCESS_FINE_LOCATION'
 foreach($case in @(
   @{Name='allow';Package='com.gesher.web3app';Details=$location;Allow=$true;Expected=6},
-  @{Name='deny';Package='com.gesher.web3app';Details=$location;Allow=$false;Expected=2},
-  @{Name='inactive-deny';Package='com.gesher.web3app';Details=$location;Allow=$false;Expected=2;Inactive=$true},
+  @{Name='deny';Package='com.gesher.web3app';Details=$location;Allow=$false;Expected=7},
+  @{Name='inactive-deny';Package='com.gesher.web3app';Details=$location;Allow=$false;Expected=7;Inactive=$true},
   @{Name='other-package';Package='com.example.other';Details=$location;Expected=0},
   @{Name='extra-permission';Package='com.gesher.web3app';Details="$location android.permission.CAMERA";Expected=0},
   @{Name='missing-permission';Package='com.gesher.web3app';Details='android.permission.ACCESS_FINE_LOCATION';Expected=0},

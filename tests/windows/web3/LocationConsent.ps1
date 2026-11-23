@@ -59,12 +59,12 @@ public static class Web3LocationConsent {
       foreach (System.Text.RegularExpressions.Match permission in permissions)
         if (!expected.Remove(permission.Value)) return true;
       if (expected.Count == 0 && GetDlgItem(window, 6) != IntPtr.Zero
-          && GetDlgItem(window, 2) != IntPtr.Zero) matches.Add(window);
+          && GetDlgItem(window, 7) != IntPtr.Zero) matches.Add(window);
       return true;
     }, IntPtr.Zero);
     if (matches.Count != 1) return false;
     var dialog = matches[0];
-    int id = allow ? 6 : 2; // IDYES / IDCANCEL
+    int id = allow ? 6 : 7; // IDYES / IDNO (Deny); IDCANCEL is a dismissal
     var button = GetDlgItem(dialog, id);
     uint processId;
     GetWindowThreadProcessId(button, out processId);

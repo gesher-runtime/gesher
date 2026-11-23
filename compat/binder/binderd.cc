@@ -52,6 +52,7 @@
 #include <linux/android/binder.h>
 
 #include "../posix/src/binder_wire.h"
+#include "../framework/app_container.h"
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 
@@ -224,6 +225,8 @@ std::mutex g_lock;
 std::map<uint32_t, std::shared_ptr<Proc>> g_procs;
 Node* g_context_mgr_node = nullptr;
 uint32_t g_next_proc_id = 1;
+// GESHER_SANDBOX=appcontainer (ADR 0090): set once in main, before the first client.
+bool g_sandbox = false;
 uint64_t g_next_buffer_id = 1;
 int g_next_debug_id = 1;
 
@@ -1575,9 +1578,54 @@ uint64_t RandomKey() {
   return x;
 }
 
+// Whether the client of `pipe` is restricted (GESHER_SANDBOX=appcontainer, ADR 0090):
+// in an AppContainer, or below Medium integrity. The pipe's Low label admits both,
+// and neither may speak for the system. Its token, not its hello, says so: the
+// pipe impersonates the sender of the last message read. A token that cannot be
+// read counts as restricted.
+bool ClientIsRestricted(HANDLE pipe) {
+  if (!ImpersonateNamedPipeClient(pipe)) return true;
+  HANDLE token = nullptr;
+  BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
+  RevertToSelf();
+  if (!opened) return true;
+  DWORD contained = 1, size = 0;
+  bool restricted =
+      !GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &size) ||
+      contained != 0;
+  if (!restricted) {
+    alignas(TOKEN_MANDATORY_LABEL) BYTE label[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    if (!GetTokenInformation(token, TokenIntegrityLevel, label, sizeof(label), &size)) {
+      restricted = true;
+    } else {
+      PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(label)->Label.Sid;
+      UCHAR count = *GetSidSubAuthorityCount(sid);
+      restricted = count == 0 || *GetSidSubAuthority(sid, count - 1) < SECURITY_MANDATORY_MEDIUM_RID;
+    }
+  }
+  CloseHandle(token);
+  return restricted;
+}
+
 void ServeProc(HANDLE pipe, In in) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
+  if (g_sandbox && ClientIsRestricted(pipe)) {
+    // A first step of kernel-verified identity (ADR 0090, milestone M2 completes it):
+    // a restricted process is an app, at its own pid. It cannot claim a system UID
+    // (SYSTEM_UID 1000 and every other below FIRST_APPLICATION_UID) or another pid.
+    ULONG actual = 0;
+    bool known = GetNamedPipeClientProcessId(pipe, &actual) != FALSE;
+    if (uid < 10000 || !known || actual != pid) {
+      WireReply reply;
+      reply.Put<int32_t>(-EPERM);
+      // The client reads EPERM before the connection closes, not a broken pipe.
+      if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
+      Log("rejected a restricted client: claimed pid %u uid %u, actual pid %lu", pid, uid,
+          actual);
+      return;
+    }
+  }
   auto proc_owner = std::make_shared<Proc>();
   Proc* proc = proc_owner.get();
   {
@@ -2036,12 +2084,26 @@ int main(int argc, char** argv) {
     Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
   }
 
+  // GESHER_SANDBOX=appcontainer (ADR 0090): an explicit descriptor that admits the
+  // app processes' AppContainers through the binder-client capability and a Low
+  // label, and nothing else beyond this user and SYSTEM. Otherwise the default.
+  SECURITY_ATTRIBUTES pipe_security{sizeof(pipe_security), nullptr, FALSE};
+  g_sandbox = gesher::appcontainer::Enabled();
+  if (g_sandbox) {
+    DWORD error = gesher::appcontainer::BinderPipeSecurity(&pipe_security.lpSecurityDescriptor);
+    if (error != ERROR_SUCCESS) {
+      Log("GESHER_SANDBOX=appcontainer: no pipe security descriptor: %lu", error);
+      return 1;
+    }
+  }
+
   bool first = true;
   for (;;) {
     HANDLE pipe = CreateNamedPipeW(
         name.c_str(), PIPE_ACCESS_DUPLEX | (first ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0, nullptr);
+        PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0,
+        g_sandbox ? &pipe_security : nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
       DWORD error = GetLastError();
       if (first && (error == ERROR_ACCESS_DENIED || error == ERROR_PIPE_BUSY)) {
@@ -2052,6 +2114,9 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (first) {
+      // Logged once the pipe exists: a first write to stderr can be slow, and
+      // clients wait for the pipe, not for the log.
+      if (g_sandbox) Log("GESHER_SANDBOX=appcontainer: app processes run in AppContainers (experimental)");
       Log("serving device %s", device.c_str());
       fflush(stderr);
     }
