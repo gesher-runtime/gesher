@@ -3,10 +3,10 @@
 //
 // Reads Windows' Mobile Broadband API (mbnapi, the WwanSvc COM server) on the
 // caller's thread: interface capabilities, ready state, subscriber information,
-// home provider, registration, signal and packet-connection state. Nothing is
+// home provider, registration, signal, packet-connection and radio state. Nothing is
 // written to the modem: no connect/disconnect, PIN, registration mode, SMS or
-// provider changes. A machine without the WWAN service or without a cellular
-// interface reports "none" rather than failing the runtime.
+// provider changes, and the radio is never switched. A machine without the WWAN
+// service or without a cellular interface reports "none" rather than failing the runtime.
 //
 // The interface declarations below are written from the documented mbnapi.idl
 // (Windows SDK); llvm-mingw does not ship that header. Only the methods up to the
@@ -32,6 +32,10 @@ const IID kManager = {0xDCBBBAB6, 0x201B, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 0x36,
 const IID kRegistration = {0xDCBBBAB6, 0x2009, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 0x36, 0x8A, 0xF6, 0xFA}};
 // {DCBBBAB6-2003-4BBB-AAEE-338E368AF6FA}
 const IID kSignal = {0xDCBBBAB6, 0x2003, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 0x36, 0x8A, 0xF6, 0xFA}};
+// {DCCCCAB6-201F-4BBB-AAEE-338E368AF6FA}
+const IID kRadio = {0xDCCCCAB6, 0x201F, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 0x36, 0x8A, 0xF6, 0xFA}};
+
+enum MBN_RADIO { MBN_RADIO_OFF = 0, MBN_RADIO_ON = MBN_RADIO_OFF + 1 };
 
 struct InterfaceCaps {
   ULONG cellularClass;  // MBN_CELLULAR_CLASS
@@ -96,6 +100,11 @@ struct Registration : IUnknown {
 struct Signal : IUnknown {
   virtual HRESULT STDMETHODCALLTYPE GetSignalStrength(ULONG* strength) = 0;
   virtual HRESULT STDMETHODCALLTYPE GetSignalError(ULONG* error) = 0;
+};
+// SetSoftwareRadioState follows; it is never called and not declared.
+struct Radio : IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE get_SoftwareRadioState(MBN_RADIO* state) = 0;
+  virtual HRESULT STDMETHODCALLTYPE get_HardwareRadioState(MBN_RADIO* state) = 0;
 };
 }  // namespace mbn
 
@@ -283,11 +292,25 @@ void AppendConnection(Api& api, mbn::Interface* modem, std::string& line) {
   line += '\t' + Number(connection.value->GetConnectionState(&state, &profile.value), state);
 }
 
+// IMbnRadio: the software (Windows' cellular switch, airplane mode) and hardware radio
+// states. Read only; SetSoftwareRadioState is never reached.
+void AppendRadio(mbn::Interface* modem, std::string& line) {
+  Ref<mbn::Radio> radio;
+  if (FAILED(modem->QueryInterface(mbn::kRadio, reinterpret_cast<void**>(&radio.value))) || !radio.value) {
+    line += "\t-\t-";
+    return;
+  }
+  mbn::MBN_RADIO software = mbn::MBN_RADIO_OFF, hardware = mbn::MBN_RADIO_OFF;
+  line += '\t' + Number(radio.value->get_SoftwareRadioState(&software), static_cast<ULONG>(software));
+  line += '\t' + Number(radio.value->get_HardwareRadioState(&hardware), static_cast<ULONG>(hardware));
+}
+
 // One line per interface, tab-separated, after a status line:
 //   status <ok|none|error> <hresult>
 //   modem <id> <ready> <cellular> <voice> <data> <sms> <device> <manufacturer> <model>
 //         <firmware> <imsi> <iccid> <numbers> <home-id> <home-name> <register> <reg-id>
 //         <reg-name> <roaming-text> <data-class> <signal> <signal-error> <activation>
+//         <software-radio> <hardware-radio>
 std::string Snapshot(Api& api) {
   HRESULT initialized = api.initialize(nullptr, COINIT_MULTITHREADED);
   // RPC_E_CHANGED_MODE: the thread is already in an apartment; COM is usable.
@@ -337,6 +360,7 @@ std::string Snapshot(Api& api) {
         AppendRegistration(api, modem.value, line);
         AppendSignal(api, modem.value, line);
         AppendConnection(api, modem.value, line);
+        AppendRadio(modem.value, line);
         out += line + '\n';
       }
     }

@@ -41,6 +41,10 @@ machines have a WWAN modem that Windows exposes through the Mobile Broadband API
   answer (no Default answer contradicts the modem or leaves a callback unanswered); the
   data switches, which Windows does not expose, take AOSP's defaults consistent with the
   observed connection (docs/telephony.md).
+- Reading the modem costs an out-of-process WwanSvc session, so it is demand-driven:
+  polled every five seconds only while telephony.registry has listeners or for 30 seconds
+  after a query, with a bounded read before answering from an old reading, and every read
+  bounded by a timeout (docs/telephony.md).
 - framework-res must be rebuilt for the overlay; the framework workflow's cache key
   includes the overlay directory.
 - Validation is host fixtures, a native COM-boundary fixture and an ART no-modem check;

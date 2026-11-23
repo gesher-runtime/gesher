@@ -163,15 +163,55 @@ public final class TelephonyService {
                 ? modem.firmware : ""));
     };
 
-    /** The modem behind Android phone 0, if one was present at boot. */
+    /**
+     * The modem behind Android phone 0, if one was present at boot.
+     *
+     * <p>Readings are demand-driven. Each read of Windows' Mobile Broadband service creates
+     * an out-of-process WwanSvc object and makes about a dozen calls to it, so the modem is
+     * polled every {@link #POLL_MILLIS} only while telephony is in use: while
+     * telephony.registry holds a listener, or for {@link #IDLE_MILLIS} after the last query.
+     * A query finding the reading older than {@link #FRESH_MILLIS} (polling had stopped)
+     * reads the modem before answering, so an answer never presents an old reading as
+     * current. Every read is bounded by {@link #READ_TIMEOUT_MILLIS}; a read that fails or
+     * times out keeps the last good reading only for the next two reads and only while that
+     * reading is under {@link #KEEP_MILLIS} old, after which phone 0 has no reading
+     * (radio-off service state, SIM not ready) until a read succeeds.
+     */
     static final class Cellular {
-        private static final long POLL_MILLIS = 5000;
-        private static final int MAX_FAILED_POLLS = 3;
+        static final long POLL_MILLIS = 5000;
+        static final long IDLE_MILLIS = 30000;
+        static final long READ_TIMEOUT_MILLIS = 2000;
+        static final long FRESH_MILLIS = POLL_MILLIS + READ_TIMEOUT_MILLIS;
+        static final int MAX_FAILED_READS = 3;
+        static final long KEEP_MILLIS = MAX_FAILED_READS * POLL_MILLIS;
+
+        /** A monotonic clock in milliseconds. */
+        interface Clock {
+            long millis();
+        }
+
+        /** Runs the polling loop; production uses a daemon thread. */
+        interface Workers {
+            void start(Runnable loop);
+        }
+
+        static final Clock MONOTONIC = () -> System.nanoTime() / 1_000_000L;
+        static final Workers DAEMON = loop -> {
+            Thread worker = new Thread(loop, "gesher-cellular");
+            worker.setDaemon(true);
+            worker.start();
+        };
+
         private final WindowsCellular.Source mSource;
         private final PropertySink mProperties;
+        private final Clock mClock;
+        private final Workers mWorkers;
+        private final long mReadTimeoutMillis;
         private final boolean mPresent;
         private final String mInterfaceId;
         private final Object mLock = new Object();
+        // Serializes reads, so concurrent queries share one read instead of starting more.
+        private final Object mReadLock = new Object();
         private final List<Runnable> mListeners = new CopyOnWriteArrayList<>();
         // Subscription IDs are assigned per ICCID for this boot, from 1 as Android's
         // subscription database assigns them; they are not persisted across restarts.
@@ -180,33 +220,62 @@ public final class TelephonyService {
         private WindowsCellular.Modem mModem;
         private int mSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         private int mFailures;
-        private Thread mWorker;
+        private long mReadAt, mGoodAt, mDemandAt;
+        private boolean mWatched, mPolling;
+        // A read still blocked in WwanSvc after its timeout (with mReadLock); no second
+        // read is started while it lasts.
+        private Thread mStuckRead;
 
         Cellular(WindowsCellular.Source source, WindowsCellular.Snapshot boot, PropertySink properties) {
+            this(source, boot, properties, MONOTONIC, DAEMON, READ_TIMEOUT_MILLIS);
+        }
+
+        Cellular(WindowsCellular.Source source, WindowsCellular.Snapshot boot, PropertySink properties,
+                Clock clock, Workers workers, long readTimeoutMillis) {
             mSource = Objects.requireNonNull(source);
             mProperties = Objects.requireNonNull(properties);
+            mClock = Objects.requireNonNull(clock);
+            mWorkers = Objects.requireNonNull(workers);
+            mReadTimeoutMillis = readTimeoutMillis;
             WindowsCellular.Modem modem = boot == null ? null : boot.primary();
             mPresent = modem != null;
             mInterfaceId = mPresent ? modem.interfaceId : null;
-            if (mPresent) {
-                synchronized (mLock) {
+            long now = clock.millis();
+            synchronized (mLock) {
+                mReadAt = mGoodAt = now;
+                mDemandAt = now - IDLE_MILLIS;
+                if (mPresent) {
                     mModem = modem;
                     mSubId = subscriptionFor(modem);
                 }
-                publish(modem);
             }
+            if (mPresent) publish(modem);
         }
 
         /** Whether phone 0 exists (fixed at boot). */
         boolean present() { return mPresent; }
 
-        /** The latest reading of the boot modem; null if it has gone or cannot be read. */
+        /**
+         * The current reading of the boot modem, for a query: null if it has gone or cannot
+         * be read. Reads the modem first when the last reading is no longer current.
+         */
         WindowsCellular.Modem modem() {
+            query();
+            return reading();
+        }
+
+        /** The active subscription's ID, for a query; INVALID_SUBSCRIPTION_ID without a ready SIM. */
+        int subId() {
+            query();
+            return readingSubId();
+        }
+
+        /** The last reading, without counting as a query (change listeners use it). */
+        WindowsCellular.Modem reading() {
             synchronized (mLock) { return mModem; }
         }
 
-        /** The active subscription's ID, or INVALID_SUBSCRIPTION_ID without a ready SIM. */
-        int subId() {
+        int readingSubId() {
             synchronized (mLock) { return mSubId; }
         }
 
@@ -218,55 +287,145 @@ public final class TelephonyService {
 
         void addListener(Runnable listener) { mListeners.add(listener); }
 
-        /** Starts the polling worker; nothing runs without a modem. */
-        void start() {
+        /** Whether telephony.registry has listeners; polling continues while it has. */
+        void setWatched(boolean watched) {
             if (!mPresent) return;
             synchronized (mLock) {
-                if (mWorker != null) return;
-                mWorker = new Thread(this::poll, "gesher-cellular");
-                mWorker.setDaemon(true);
-                mWorker.start();
+                if (mWatched == watched) return;
+                mWatched = watched;
+            }
+            if (watched) ensurePolling();
+        }
+
+        /** Whether the polling worker is scheduled (for tests). */
+        boolean polling() {
+            synchronized (mLock) { return mPolling; }
+        }
+
+        /** A query: keeps polling alive and makes sure the reading it answers from is current. */
+        private void query() {
+            if (!mPresent) return;
+            synchronized (mLock) {
+                mDemandAt = mClock.millis();
+            }
+            ensurePolling();
+            if (read(FRESH_MILLIS)) notifyListeners();
+        }
+
+        private void ensurePolling() {
+            synchronized (mLock) {
+                if (mPolling) return;
+                mPolling = true;
+            }
+            try {
+                mWorkers.start(this::pollLoop);
+            } catch (RuntimeException | Error e) {
+                synchronized (mLock) { mPolling = false; }
+                throw e;
             }
         }
 
-        private void poll() {
+        private void pollLoop() {
             while (true) {
                 try {
                     Thread.sleep(POLL_MILLIS);
                 } catch (InterruptedException e) {
+                    synchronized (mLock) { mPolling = false; }
                     return;
                 }
-                refresh();
+                if (!pollOnce()) return;
             }
         }
 
-        /** One read; listeners hear about changes. Returns whether anything changed. */
-        boolean refresh() {
-            if (!mPresent) return false;
-            WindowsCellular.Snapshot snapshot = WindowsCellular.parse(mSource.snapshot());
-            WindowsCellular.Modem next = null;
-            boolean readable = snapshot != null && !"error".equals(snapshot.status);
-            if (readable) {
-                for (WindowsCellular.Modem modem : snapshot.modems) {
-                    if (modem.interfaceId.equals(mInterfaceId)) next = modem;
-                }
-            }
+        /**
+         * One scheduled poll. Returns false, and polling stops, when no listener is
+         * registered and nothing has queried telephony for IDLE_MILLIS.
+         */
+        boolean pollOnce() {
             synchronized (mLock) {
-                if (!readable) {
-                    // A transient read failure keeps the last reading briefly; it is not
-                    // presented as current for longer than a few polls.
-                    if (++mFailures < MAX_FAILED_POLLS) return false;
-                } else {
-                    mFailures = 0;
-                }
-                if (Objects.equals(mModem == null ? null : mModem.source,
-                        next == null ? null : next.source)) {
+                if (!mWatched && mClock.millis() - mDemandAt >= IDLE_MILLIS) {
+                    mPolling = false;
                     return false;
                 }
-                mModem = next;
-                mSubId = subscriptionFor(next);
             }
-            publish(next);
+            refresh();
+            return true;
+        }
+
+        /** One bounded read; listeners hear about changes. Returns whether anything changed. */
+        boolean refresh() {
+            boolean changed = read(-1);
+            if (changed) notifyListeners();
+            return changed;
+        }
+
+        /**
+         * Reads the modem unless (minAge >= 0) the reading is younger than minAge, which
+         * another caller may have just refreshed. Returns whether the model changed.
+         */
+        private boolean read(long minAge) {
+            if (!mPresent) return false;
+            synchronized (mReadLock) {
+                if (minAge >= 0) {
+                    synchronized (mLock) {
+                        if (mClock.millis() - mReadAt < minAge) return false;
+                    }
+                }
+                WindowsCellular.Snapshot snapshot = WindowsCellular.parse(fetch());
+                WindowsCellular.Modem next = null;
+                boolean readable = snapshot != null && !"error".equals(snapshot.status);
+                if (readable) {
+                    for (WindowsCellular.Modem modem : snapshot.modems) {
+                        if (modem.interfaceId.equals(mInterfaceId)) next = modem;
+                    }
+                }
+                synchronized (mLock) {
+                    long now = mClock.millis();
+                    mReadAt = now;
+                    if (!readable) {
+                        // A transient failure keeps a recent reading for two more reads; an
+                        // old one, or a third failure, is not presented as current.
+                        if (++mFailures < MAX_FAILED_READS && now - mGoodAt < KEEP_MILLIS) return false;
+                    } else {
+                        mFailures = 0;
+                        mGoodAt = now;
+                    }
+                    if (Objects.equals(mModem == null ? null : mModem.source,
+                            next == null ? null : next.source)) {
+                        return false;
+                    }
+                    mModem = next;
+                    mSubId = subscriptionFor(next);
+                }
+                publish(next);
+                return true;
+            }
+        }
+
+        /** One snapshot, or null when it fails or exceeds the timeout. Called with mReadLock. */
+        private String fetch() {
+            if (mStuckRead != null) {
+                if (mStuckRead.isAlive()) return null;
+                mStuckRead = null;
+            }
+            AtomicReference<String> raw = new AtomicReference<>();
+            Thread reader = new Thread(() -> raw.set(mSource.snapshot()), "gesher-cellular-read");
+            reader.setDaemon(true);
+            reader.start();
+            try {
+                reader.join(mReadTimeoutMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (reader.isAlive()) {
+                // Its late result is discarded: it would no longer be current.
+                mStuckRead = reader;
+                return null;
+            }
+            return raw.get();
+        }
+
+        private void notifyListeners() {
             for (Runnable listener : mListeners) {
                 try {
                     listener.run();
@@ -274,7 +433,6 @@ public final class TelephonyService {
                     // One observer's failure does not stop others.
                 }
             }
-            return true;
         }
 
         // Called with mLock or from the constructor.
@@ -308,8 +466,24 @@ public final class TelephonyService {
                     ? 0 : SubscriptionManager.INVALID_PHONE_INDEX;
         }
 
+        /**
+         * SubscriptionManagerService.getPhoneId: the default subscription's phone for
+         * DEFAULT_SUBSCRIPTION_ID, INVALID_PHONE_INDEX for an invalid ID, the slot of the
+         * active subscription, and DEFAULT_PHONE_INDEX for a valid ID without a slot.
+         */
+        int phoneId(int subId) {
+            int active = subId();
+            if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) subId = active;
+            if (!SubscriptionManager.isValidSubscriptionId(subId)) return SubscriptionManager.INVALID_PHONE_INDEX;
+            return subId == active ? 0 : SubscriptionManager.DEFAULT_PHONE_INDEX;
+        }
+
+        /**
+         * PhoneFactory.getPhone(index) != null: phone 0 itself or DEFAULT_PHONE_INDEX (the
+         * default phone), while a modem was present at boot.
+         */
         boolean phone(int phoneId) {
-            return mPresent && phoneId == 0;
+            return mPresent && (phoneId == 0 || phoneId == SubscriptionManager.DEFAULT_PHONE_INDEX);
         }
     }
 
@@ -418,7 +592,8 @@ public final class TelephonyService {
         /** Device identifiers (IMEI) and subscriber identifiers (IMSI, ICCID). */
         boolean readIdentifiers(Caller c, String message) {
             int icc = mCallers.noteOp(c, AppOpsManager.OPSTR_USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER);
-            if (icc == AppOpsManager.MODE_ALLOWED
+            // checkCallingOrSelfUseIccAuthWithDeviceIdentifier: MODE_FOREGROUND allows too.
+            if (icc == AppOpsManager.MODE_ALLOWED || icc == AppOpsManager.MODE_FOREGROUND
                     || icc == AppOpsManager.MODE_DEFAULT && granted(c, USE_ICC_AUTH)) {
                 return true;
             }
@@ -477,27 +652,6 @@ public final class TelephonyService {
             }
         }
 
-        /**
-         * LocationAccessPolicy for telephony: the permission, its app op and the location
-         * switch must all allow access. Pre-Q coarse-only apps are not given fine access.
-         */
-        boolean fineLocation(Caller c) {
-            if (c.system()) return true;
-            return granted(c, FINE) && mCallers.noteOp(c, AppOpsManager.OPSTR_FINE_LOCATION)
-                    == AppOpsManager.MODE_ALLOWED && mCallers.locationEnabled();
-        }
-
-        boolean coarseLocation(Caller c) {
-            if (c.system()) return true;
-            if (fineLocation(c)) return true;
-            return granted(c, COARSE) && mCallers.noteOp(c, AppOpsManager.OPSTR_COARSE_LOCATION)
-                    == AppOpsManager.MODE_ALLOWED && mCallers.locationEnabled();
-        }
-
-        boolean anyLocationPermission(Caller c) {
-            return c.system() || granted(c, FINE) || granted(c, COARSE);
-        }
-
         boolean anyGranted(Caller c, String... permissions) {
             for (String permission : permissions) {
                 if (granted(c, permission)) return true;
@@ -543,7 +697,9 @@ public final class TelephonyService {
     /**
      * ServiceState as a caller may see it: the registered operator is location data
      * (AOSP sanitizes it without coarse location). Fine location adds nothing here,
-     * since no cell identity is reported.
+     * since no cell identity is reported. Both answers come from LocationAccessPolicy with
+     * minimum SDK Q (PhoneInterfaceManager.getServiceStateForSlot and TelephonyRegistry
+     * alike), so an app targeting below Q keeps the operator without a location permission.
      */
     static ServiceState forCaller(WindowsCellular.Modem modem, boolean fine, boolean coarse) {
         return WindowsCellular.serviceState(modem, fine || coarse);
@@ -585,8 +741,7 @@ public final class TelephonyService {
          * PhoneFactory.getPhone's DEFAULT_PHONE_INDEX (the default phone).
          */
         private boolean slot(int slotIndex) {
-            return mCellular.present() && (slotIndex == 0
-                    || slotIndex == SubscriptionManager.DEFAULT_SIM_SLOT_INDEX);
+            return mCellular.phone(slotIndex);
         }
 
         /**
@@ -606,7 +761,9 @@ public final class TelephonyService {
         /** The registered network's country; "" without a phone or registration. */
         @Override
         public String getNetworkCountryIsoForPhone(int phoneId) {
-            if (phoneId == SubscriptionManager.INVALID_PHONE_INDEX) phoneId = 0;
+            if (phoneId == SubscriptionManager.INVALID_PHONE_INDEX) {
+                phoneId = SubscriptionManager.DEFAULT_PHONE_INDEX;
+            }
             if (!mCellular.phone(phoneId)) return "";
             WindowsCellular.Modem modem = mCellular.modem();
             if (modem == null || !modem.registered()) return "";
@@ -681,8 +838,10 @@ public final class TelephonyService {
             if (!mCellular.phone(slotIndex)) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readPhoneState(c, "getServiceStateForSubscriber")) return null;
-            boolean fine = !renounceFine && mRules.fineLocation(c);
-            boolean coarse = !renounceCoarse && mRules.coarseLocation(c);
+            boolean fine = !renounceFine && mRules.location(c, Build.VERSION_CODES.Q,
+                    Build.VERSION_CODES.Q) == Location.ALLOWED;
+            boolean coarse = !renounceCoarse && mRules.location(c, Integer.MAX_VALUE,
+                    Build.VERSION_CODES.Q) == Location.ALLOWED;
             return forCaller(mCellular.modem(), fine, coarse);
         }
 
@@ -696,20 +855,29 @@ public final class TelephonyService {
             return isRadioOnForSubscriberWithFeature(subId, callingPackage, null);
         }
 
+        /**
+         * PhoneInterfaceManager.isRadioOnForSubscriberWithFeature: checkCallingOrSelfReadPhoneState
+         * (SecurityException without READ_PHONE_STATE, false with its app op revoked), then
+         * the phone for the subscription (getPhone: none for an invalid ID, the default phone
+         * for a valid ID without a slot) and its service state not POWER_OFF. Windows' radio
+         * switches (airplane mode, the cellular switch, a hardware switch) power the radio
+         * off. Without a phone service: the manager's false.
+         */
         @Override
         public boolean isRadioOnForSubscriberWithFeature(int subId, String callingPackage,
                 String callingFeatureId) {
-            // getPhone(subId) falls back to the default phone, the only one.
-            return isRadioOnWithFeature(callingPackage, callingFeatureId);
+            if (!mCellular.present()) return false;
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (!mRules.readPhoneState(c, "isRadioOnForSubscriber")) return false;
+            if (!mCellular.phone(mCellular.phoneId(subId))) return false;
+            return WindowsCellular.serviceState(mCellular.modem()).getState() != ServiceState.STATE_POWER_OFF;
         }
 
+        /** isRadioOnForSubscriberWithFeature for the default subscription. */
         @Override
         public boolean isRadioOnWithFeature(String callingPackage, String callingFeatureId) {
             if (!mCellular.present()) return false;
-            Caller c = mRules.caller(callingPackage, callingFeatureId);
-            if (!mRules.readPhoneStateNoThrow(c, "isRadioOnWithFeature")) return false;
-            WindowsCellular.Modem modem = mCellular.phone(0) ? mCellular.modem() : null;
-            return modem != null && modem.readyState != WindowsCellular.READY_OFF;
+            return isRadioOnForSubscriberWithFeature(mCellular.subId(), callingPackage, callingFeatureId);
         }
 
         @Override
@@ -1190,17 +1358,22 @@ public final class TelephonyService {
             return mCellular.phoneForSub(subId) == 0 ? mCellular.modem() : null;
         }
 
+        /**
+         * PhoneSubInfoController.callPhoneMethodForPhoneIdWithReadDeviceIdentifiersCheck: a
+         * phone ID that is not valid (anything but 0 with one modem) is phone 0; then device
+         * identifier access.
+         */
         @Override
         public String getDeviceIdForPhone(int phoneId, String callingPackage, String callingFeatureId) {
             if (!mCellular.present()) return null;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             if (!mRules.readIdentifiers(c, "getDeviceId")) return null;
-            return mCellular.phone(phoneId) ? WindowsCellular.imei(mCellular.modem()) : null;
+            return WindowsCellular.imei(mCellular.modem());
         }
 
         @Override
         public String getDeviceIdWithFeature(String callingPackage, String callingFeatureId) {
-            return getDeviceIdForPhone(mCellular.phoneForSub(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID),
+            return getDeviceIdForPhone(mCellular.phoneId(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID),
                     callingPackage, callingFeatureId);
         }
 
@@ -1561,12 +1734,8 @@ public final class TelephonyService {
 
         @Override
         public int getPhoneId(int subId) {
-            if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) subId = getDefaultSubId();
-            if (!SubscriptionManager.isValidSubscriptionId(subId)) {
-                return SubscriptionManager.INVALID_PHONE_INDEX;
-            }
             // AOSP retains the default-phone sentinel for a valid but unmapped ID.
-            return subId == mCellular.subId() ? 0 : SubscriptionManager.DEFAULT_PHONE_INDEX;
+            return mCellular.phoneId(subId);
         }
 
         @Override
@@ -1716,19 +1885,19 @@ public final class TelephonyService {
         Registry(Cellular cellular, Rules rules) {
             mCellular = Objects.requireNonNull(cellular);
             mRules = Objects.requireNonNull(rules);
-            mSubId = cellular.subId();
-            mModem = cellular.modem();
+            mSubId = cellular.readingSubId();
+            mModem = cellular.reading();
             mServiceState = cellular.present() ? WindowsCellular.serviceState(mModem) : null;
             mSignal = cellular.present() ? signal() : null;
-            mDataState = WindowsCellular.dataState(cellular.modem());
-            mDataType = WindowsCellular.dataNetworkType(cellular.modem());
+            mDataState = WindowsCellular.dataState(mModem);
+            mDataType = WindowsCellular.dataNetworkType(mModem);
             mDisplayInfo = WindowsCellular.displayInfo(mModem);
             mDataEnabled = cellular.present() && SubscriptionManager.isValidSubscriptionId(mSubId);
             cellular.addListener(this::onModemChanged);
         }
 
         private SignalStrength signal() {
-            WindowsCellular.Modem modem = mCellular.modem();
+            WindowsCellular.Modem modem = mCellular.reading();
             return modem == null ? new SignalStrength() : WindowsCellular.signalStrength(modem);
         }
 
@@ -1745,6 +1914,7 @@ public final class TelephonyService {
                 // One record per listener binder, as TelephonyRegistry keeps.
                 mSubscriptionListeners.removeIf(l -> l.asBinder() == binder);
                 mSubscriptionListeners.add(callback);
+                watchLocked();
             }
             if (!watchDeath(binder)) {
                 removeSubscriptionListener(callback);
@@ -1768,6 +1938,7 @@ public final class TelephonyService {
             IBinder binder = callback.asBinder();
             synchronized (mLock) {
                 mSubscriptionListeners.removeIf(l -> l.asBinder() == binder);
+                watchLocked();
             }
             unwatchIfUnused(binder);
         }
@@ -1800,6 +1971,7 @@ public final class TelephonyService {
                 mRecords.remove(binder);
                 mSubscriptionListeners.removeIf(l -> l.asBinder() == binder);
                 mDeathRecipients.remove(binder);
+                watchLocked();
             }
         }
 
@@ -1821,6 +1993,11 @@ public final class TelephonyService {
             }
         }
 
+        /** Tells the modem model whether listeners exist (it polls while they do). Called with mLock. */
+        private void watchLocked() {
+            mCellular.setWatched(!mRecords.isEmpty() || !mSubscriptionListeners.isEmpty());
+        }
+
         /** Live listener records (phone-state and subscription), for tests. */
         int listenerCount() {
             synchronized (mLock) {
@@ -1828,14 +2005,23 @@ public final class TelephonyService {
             }
         }
 
-        /** checkListenerPermission: SecurityException, false (app op revoked) or true. */
+        /**
+         * checkListenerPermission: SecurityException, false (not registered: a revoked app
+         * op or a soft location denial) or true. Cell location and cell info use
+         * LocationAccessPolicy with fine location from Q and coarse location at every
+         * target: a hard denial throws, a soft one (location switch off, app op ignored)
+         * registers nothing.
+         */
         private boolean permitted(Set<Integer> events, Caller c) {
             boolean ok = true;
-            if ((events.contains(TelephonyCallback.EVENT_CELL_LOCATION_CHANGED)
-                    || events.contains(TelephonyCallback.EVENT_CELL_INFO_CHANGED))
-                    && !mRules.anyLocationPermission(c)) {
-                throw new SecurityException("Unable to listen for events " + events + " due to "
-                        + "insufficient location permissions.");
+            if (events.contains(TelephonyCallback.EVENT_CELL_LOCATION_CHANGED)
+                    || events.contains(TelephonyCallback.EVENT_CELL_INFO_CHANGED)) {
+                Location location = mRules.location(c, Build.VERSION_CODES.Q, Build.VERSION_CODES.BASE);
+                if (location == Location.DENIED_HARD) {
+                    throw new SecurityException("Unable to listen for events " + events + " due to "
+                            + "insufficient location permissions.");
+                }
+                if (location == Location.DENIED_SOFT) ok = false;
             }
             boolean s = c.targetSdk() >= Build.VERSION_CODES.S;
             boolean phoneState = events.contains(TelephonyCallback.EVENT_CALL_FORWARDING_INDICATOR_CHANGED)
@@ -1881,7 +2067,10 @@ public final class TelephonyService {
             if (events != null) for (int e : events) eventSet.add(e);
             IBinder binder = callback.asBinder();
             if (eventSet.isEmpty()) {
-                synchronized (mLock) { mRecords.remove(binder); }
+                synchronized (mLock) {
+                    mRecords.remove(binder);
+                    watchLocked();
+                }
                 unwatchIfUnused(binder);
                 return;
             }
@@ -1895,11 +2084,14 @@ public final class TelephonyService {
                     : SubscriptionManager.DEFAULT_SUBSCRIPTION_ID;
             r.renounceFine = renounceFine;
             r.renounceCoarse = renounceCoarse;
+            // A query (it may read the modem), made before taking mLock.
+            boolean phone = mCellular.phoneForSub(r.subId) == 0;
             synchronized (mLock) {
                 mRecords.put(binder, r);
-                if (notifyNow && mCellular.phoneForSub(r.subId) == 0) {
+                if (notifyNow && phone) {
                     initial(r);
                 }
+                watchLocked();
             }
         }
 
@@ -1955,6 +2147,7 @@ public final class TelephonyService {
                 }
             } catch (RemoteException | RuntimeException e) {
                 mRecords.remove(r.callback.asBinder());
+                watchLocked();
             }
         }
 
@@ -1969,16 +2162,15 @@ public final class TelephonyService {
                     && mRules.location(r.caller, Integer.MAX_VALUE, minSdk) == Location.ALLOWED;
         }
 
+        /** checkFineLocationAccess(r, Q) and checkCoarseLocationAccess(r, Q). */
         private ServiceState serviceStateFor(Record r) {
-            boolean fine = !r.renounceFine && mRules.fineLocation(r.caller);
-            boolean coarse = !r.renounceCoarse && mRules.coarseLocation(r.caller);
-            return forCaller(mModem, fine, coarse);
+            return forCaller(mModem, fine(r, Build.VERSION_CODES.Q), coarse(r, Build.VERSION_CODES.Q));
         }
 
         private void onModemChanged() {
             List<IOnSubscriptionsChangedListener> subscriptionListeners;
             synchronized (mLock) {
-                WindowsCellular.Modem modem = mCellular.modem();
+                WindowsCellular.Modem modem = mCellular.reading();
                 ServiceState state = WindowsCellular.serviceState(modem);
                 SignalStrength signal = modem == null ? new SignalStrength()
                         : WindowsCellular.signalStrength(modem);
@@ -1987,7 +2179,7 @@ public final class TelephonyService {
                 boolean stateChanged = !state.equals(mServiceState);
                 boolean signalChanged = !signal.equals(mSignal);
                 boolean dataChanged = dataState != mDataState || dataType != mDataType;
-                int subId = mCellular.subId();
+                int subId = mCellular.readingSubId();
                 boolean subscriptionsChanged = subId != mSubId;
                 TelephonyDisplayInfo displayInfo = WindowsCellular.displayInfo(modem);
                 boolean displayChanged = !displayInfo.equals(mDisplayInfo);
@@ -2036,6 +2228,7 @@ public final class TelephonyService {
                         }
                     } catch (RemoteException | RuntimeException e) {
                         mRecords.remove(r.callback.asBinder());
+                        watchLocked();
                     }
                 }
                 subscriptionListeners = subscriptionsChanged
@@ -2077,9 +2270,8 @@ public final class TelephonyService {
     static Endpoints create(PackageManagerService pm, ActivityManagerService am,
             BooleanSupplier locationEnabled) {
         Cellular cellular = new Cellular(WindowsCellular.WINDOWS, bootSnapshot(), SYSTEM_PROPERTIES);
-        Endpoints bundle = new Endpoints(cellular, callers(pm, am, locationEnabled));
-        cellular.start();
-        return bundle;
+        // Polling starts with the first query or listener (Cellular).
+        return new Endpoints(cellular, callers(pm, am, locationEnabled));
     }
 
     /**

@@ -18,6 +18,10 @@ CONTROLS = {
     # A thread already in another COM apartment must not be uninitialized.
     'uninitialize-foreign-apartment': ('bool balance = SUCCEEDED(initialized);', 'bool balance = true;',
                                        'Another apartment is never uninitialized'),
+    # Airplane mode (the software radio) and a hardware switch must not be confused.
+    'swap-radio-states': ('radio.value->get_SoftwareRadioState(&software)',
+                          'radio.value->get_HardwareRadioState(&software)',
+                          'Software radio states are reported in order'),
 }
 
 

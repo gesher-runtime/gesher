@@ -97,13 +97,15 @@ struct Object : Base {
 struct Spec {
   std::u16string id = u"{0D7F7A43-0000-4000-8000-00000000C311}";
   ULONG ready = 1;
-  bool caps = true, subscriber = true, registration = true, signal = true, connection = true;
+  bool caps = true, subscriber = true, registration = true, signal = true, connection = true, radio = true;
+  bool radio_readable = true;
   std::u16string device = u"356938035643809", manufacturer = u"Fixture", model = u"WWAN 1",
                  firmware = u"FW 1.0";
   std::u16string imsi = u"425010123456789", iccid = u"8997201000000000001F";
   std::vector<std::u16string> numbers = {u"+972501234567"};
   std::u16string home_id = u"42501", home_name = u"פלאפון";
   ULONG register_state = 3, data_class = 0x20, signal_value = 20, signal_error = 99, activation = 1;
+  mbn::MBN_RADIO software_radio = mbn::MBN_RADIO_ON, hardware_radio = mbn::MBN_RADIO_ON;
   std::u16string reg_id = u"42501", reg_name = u"Partner \U0001F4F6", roaming = u"";
 };
 
@@ -154,12 +156,27 @@ struct Signal : Object<mbn::Signal> {
   HRESULT STDMETHODCALLTYPE GetSignalStrength(ULONG* out) override { *out = s.signal_value; return S_OK; }
   HRESULT STDMETHODCALLTYPE GetSignalError(ULONG* out) override { *out = s.signal_error; return S_OK; }
 };
+struct Radio : Object<mbn::Radio> {
+  const Spec& s;
+  explicit Radio(const Spec& s) : s(s) { }
+  HRESULT STDMETHODCALLTYPE get_SoftwareRadioState(mbn::MBN_RADIO* out) override {
+    if (!s.radio_readable) return static_cast<HRESULT>(0x80548210);  // E_MBN_FAILURE
+    *out = s.software_radio;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE get_HardwareRadioState(mbn::MBN_RADIO* out) override {
+    if (!s.radio_readable) return static_cast<HRESULT>(0x80548210);
+    *out = s.hardware_radio;
+    return S_OK;
+  }
+};
 struct Interface : Object<mbn::Interface> {
   Spec s;
   explicit Interface(Spec spec) : s(std::move(spec)) { }
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
     if (iid == mbn::kRegistration && s.registration) { *out = static_cast<mbn::Registration*>(new Registration(s)); return S_OK; }
     if (iid == mbn::kSignal && s.signal) { *out = static_cast<mbn::Signal*>(new Signal(s)); return S_OK; }
+    if (iid == mbn::kRadio && s.radio) { *out = static_cast<mbn::Radio*>(new Radio(s)); return S_OK; }
     *out = nullptr;
     return E_NOINTERFACE;
   }
@@ -302,7 +319,7 @@ int main() {
     auto out = lines(Snapshot(api));
     check(out.size() == 2 && out[0] == "status\tok\t00000000", "One modem line");
     auto f = split(out[1]);
-    check(f.size() == 24, "Twenty-four modem fields");
+    check(f.size() == 26, "Twenty-six modem fields");
     check(f[0] == "modem" && f[1] == hex("{0D7F7A43-0000-4000-8000-00000000C311}"), "Interface ID");
     check(f[2] == "1" && f[3] == "1" && f[4] == "1" && f[5] == "63" && f[6] == "3", "Ready state and caps");
     check(f[7] == hex("356938035643809") && f[8] == hex("Fixture") && f[9] == hex("WWAN 1")
@@ -314,6 +331,38 @@ int main() {
     check(f[16] == "3" && f[17] == hex("42501") && f[18] == hex("Partner \xf0\x9f\x93\xb6")
           && f[19] == "", "Registration with a surrogate pair");
     check(f[20] == "32" && f[21] == "20" && f[22] == "99" && f[23] == "1", "Data class, signal, activation");
+    check(f[24] == "1" && f[25] == "1", "Software and hardware radio on");
+  }
+  balanced();
+
+  // Airplane mode or Windows' cellular switch (software) and a hardware switch are reported
+  // separately and in order; an unreadable radio is unreported, not off.
+  reset();
+  {
+    Spec off;
+    off.software_radio = mbn::MBN_RADIO_OFF;
+    modems.push_back(off);
+    Spec hardware;
+    hardware.id = u"{0D7F7A43-0000-4000-8000-00000000C312}";
+    hardware.hardware_radio = mbn::MBN_RADIO_OFF;
+    modems.push_back(hardware);
+    Spec unreadable;
+    unreadable.id = u"{0D7F7A43-0000-4000-8000-00000000C313}";
+    unreadable.radio_readable = false;
+    modems.push_back(unreadable);
+    Spec missing;
+    missing.id = u"{0D7F7A43-0000-4000-8000-00000000C314}";
+    missing.radio = false;
+    modems.push_back(missing);
+  }
+  {
+    auto out = lines(Snapshot(api));
+    check(out.size() == 5, "Four modem lines");
+    auto software = split(out[1]), hardware = split(out[2]), unreadable = split(out[3]), missing = split(out[4]);
+    check(software[24] == "0" && software[25] == "1", "Software radio states are reported in order");
+    check(hardware[24] == "1" && hardware[25] == "0", "Hardware radio states are reported in order");
+    check(unreadable[24] == "-" && unreadable[25] == "-", "A failed radio read is unreported");
+    check(missing[24] == "-" && missing[25] == "-", "No IMbnRadio: radio unreported");
   }
   balanced();
 

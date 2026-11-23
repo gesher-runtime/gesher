@@ -128,6 +128,8 @@ public final class TelephonyHost {
     static final class ModemSpec {
         String id = "{0D7F7A43-0000-4000-8000-00000000C311}";
         int ready = 1, cellular = 1, register = 3, dataClass = 0x20, signal = 20, error = 99, activation = 1;
+        /** IMbnRadio's software and hardware radio states; -1 is unreported. */
+        int softwareRadio = 1, hardwareRadio = 1;
         String imei = "356938035643809", imsi = "425010123456789", iccid = "8997201000000000001F";
         String number = "+972501234567", home = "42501", homeName = "Partner", regId = "42501",
                 regName = "Partner IL";
@@ -137,14 +139,30 @@ public final class TelephonyHost {
                 imsi == null ? "-" : hex(imsi), iccid == null ? "-" : hex(iccid),
                 number == null ? "-" : hex(number), home == null ? "-" : hex(home),
                 homeName == null ? "-" : hex(homeName), "" + register, hex(regId), hex(regName), "",
-                "" + dataClass, "" + signal, "" + error, activation < 0 ? "-" : "" + activation};
+                "" + dataClass, "" + signal, "" + error, activation < 0 ? "-" : "" + activation,
+                softwareRadio < 0 ? "-" : "" + softwareRadio, hardwareRadio < 0 ? "-" : "" + hardwareRadio};
             return String.join("\t", f);
         }
     }
 
     static final class Source implements WindowsCellular.Source {
-        String text;
-        @Override public String snapshot() { return text; }
+        volatile String text;
+        /** Reads started (each is one WwanSvc session in production). */
+        final java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        /** While set, a read blocks until released, as a hung WwanSvc call would. */
+        volatile java.util.concurrent.CountDownLatch hang;
+        @Override public String snapshot() {
+            reads.incrementAndGet();
+            java.util.concurrent.CountDownLatch latch = hang;
+            if (latch != null) {
+                try {
+                    latch.await();
+                } catch (InterruptedException e) {
+                    return null;
+                }
+            }
+            return text;
+        }
         void set(ModemSpec... modems) {
             StringBuilder out = new StringBuilder("status\tok\t00000000\n");
             for (ModemSpec m : modems) out.append(m.line()).append('\n');
@@ -241,6 +259,26 @@ public final class TelephonyHost {
         @Override public void onSubscriptionsChanged() { calls++; }
     }
 
+    /** The modem model's clock and polling worker, under the fixture's control. */
+    static final class Clock implements TelephonyService.Cellular.Clock {
+        long now = 1_000_000;
+        @Override public long millis() { return now; }
+    }
+
+    static final class Workers implements TelephonyService.Cellular.Workers {
+        int started;
+        @Override public void start(Runnable loop) { started++; }
+    }
+
+    /**
+     * A modem model whose clock stands still and whose poller never runs by itself, so
+     * every read is the one a scenario makes. Reads still run on their own bounded thread.
+     */
+    static TelephonyService.Cellular cellular(Source source, WindowsCellular.Snapshot boot,
+            Properties properties) {
+        return new TelephonyService.Cellular(source, boot, properties, new Clock(), new Workers(), 2000);
+    }
+
     static Set<String> features(WindowsCellular.Snapshot boot) {
         ArrayMap<String, FeatureInfo> features = new ArrayMap<>();
         TelephonyService.addTelephonyFeatures(features, boot);
@@ -270,7 +308,7 @@ public final class TelephonyHost {
         check(parsed != null && parsed.modems.isEmpty(), "No-WWAN snapshot parses");
         // The boot probe treats "none" as no modem.
         Properties properties = new Properties();
-        TelephonyService.Cellular cellular = new TelephonyService.Cellular(source, null, properties);
+        TelephonyService.Cellular cellular = cellular(source, null, properties);
         check(!cellular.present(), "No phone without a modem");
         check(features(null).isEmpty(), "No telephony features without a modem");
         check(features(parsed).isEmpty(), "No telephony features for an empty snapshot");
@@ -476,8 +514,8 @@ public final class TelephonyHost {
         Source source = new Source();
         ModemSpec spec = new ModemSpec();
         source.set(spec);
-        TelephonyService.Cellular cellular = new TelephonyService.Cellular(source,
-                WindowsCellular.parse(source.text), new Properties());
+        TelephonyService.Cellular cellular = cellular(source, WindowsCellular.parse(source.text),
+                new Properties());
         Fixture callers = new Fixture();
         TelephonyService.Endpoints t = new TelephonyService.Endpoints(cellular, callers);
 
@@ -497,6 +535,16 @@ public final class TelephonyHost {
         callers.current = STATE;
         check(t.phone.isRadioOn(STATE.name) && t.phone.isRadioOnForSubscriber(1, STATE.name)
                 && t.phone.isRadioOnForSubscriberWithFeature(1, STATE.name, null), "isRadioOn variants agree");
+        check(t.phone.isRadioOnForSubscriberWithFeature(9, STATE.name, null),
+                "A valid subscription without a slot is the default phone's");
+        check(!t.phone.isRadioOnForSubscriberWithFeature(SubscriptionManager.INVALID_SUBSCRIPTION_ID, STATE.name,
+                null), "An invalid subscription has no phone");
+        callers.current = PLAIN;
+        denied(() -> t.phone.isRadioOnWithFeature(PLAIN.name, null) ? 1 : 0,
+                "isRadioOn needs READ_PHONE_STATE (checkCallingOrSelfReadPhoneState)");
+        denied(() -> t.phone.isRadioOnForSubscriber(1, PLAIN.name) ? 1 : 0, "and so does isRadioOnForSubscriber");
+        callers.current = REVOKED;
+        check(!t.phone.isRadioOnWithFeature(REVOKED.name, null), "A revoked app op answers false");
         callers.current = BASIC;
         check(t.phone.isModemEnabledForSlot(0, BASIC.name, null), "Modem enabled");
         check(!t.phone.isModemEnabledForSlot(1, BASIC.name, null), "No modem in slot 1");
@@ -745,7 +793,7 @@ public final class TelephonyHost {
                 PackageManager.FEATURE_TELEPHONY_RADIO_ACCESS, PackageManager.FEATURE_TELEPHONY_DATA,
                 PackageManager.FEATURE_TELEPHONY_GSM), "Data-only GSM modem features");
         Properties properties = new Properties();
-        TelephonyService.Cellular cellular = new TelephonyService.Cellular(source, boot, properties);
+        TelephonyService.Cellular cellular = cellular(source, boot, properties);
         Fixture callers = new Fixture();
         TelephonyService.Endpoints t = new TelephonyService.Endpoints(cellular, callers);
         equal(properties.simStates, List.of(TelephonyManager.SIM_STATE_LOADED), "Properties published at boot");
@@ -760,6 +808,11 @@ public final class TelephonyHost {
                 "Network type follows data for target > Q");
         equal(t.phone.getDataStateForSubId(1), TelephonyManager.DATA_CONNECTED, "Data connected");
         equal(t.phone.getNetworkCountryIsoForPhone(0), "il", "Network country from MCC 425");
+        equal(t.phone.getNetworkCountryIsoForPhone(SubscriptionManager.DEFAULT_PHONE_INDEX), "il",
+                "DEFAULT_PHONE_INDEX is the default phone");
+        equal(t.phone.getNetworkCountryIsoForPhone(SubscriptionManager.INVALID_PHONE_INDEX), "il",
+                "INVALID_PHONE_INDEX asks for the default phone");
+        equal(t.phone.getNetworkCountryIsoForPhone(1), "", "No phone 1");
         check(t.phone.isRadioOnWithFeature(STATE.name, null), "Radio on");
         SignalStrength signal = t.phone.getSignalStrength(1);
         check(signal != null && signal.getCellSignalStrengths().size() == 1, "One measurement");
@@ -803,6 +856,33 @@ public final class TelephonyHost {
         equal(t.phone.getServiceStateForSlot(0, false, false, LOCATED.name, null).getOperatorNumeric(), null,
                 "Location switch off");
         callers.location = true;
+        // LocationAccessPolicy with minimum SDK Q: below Q no location permission is needed.
+        callers.current = LEGACY;
+        equal(t.phone.getServiceStateForSlot(0, false, false, LEGACY.name, null).getOperatorNumeric(), "42501",
+                "Pre-Q app keeps the operator without location");
+        equal(t.phone.getServiceStateForSlot(0, true, true, LEGACY.name, null).getOperatorNumeric(), null,
+                "unless it renounces location access");
+        callers.location = false;
+        equal(t.phone.getServiceStateForSlot(0, false, false, LEGACY.name, null).getOperatorNumeric(), null,
+                "Location switch off is a soft denial at every target");
+        callers.location = true;
+        App coarseState = new App("com.example.coarsestate", 10115, 34, TelephonyService.READ_PHONE_STATE,
+                TelephonyService.COARSE);
+        callers.current = coarseState;
+        equal(t.phone.getServiceStateForSlot(0, false, false, coarseState.name, null).getOperatorNumeric(), "42501",
+                "Coarse location shows the operator");
+        App coarseIgnored = new App("com.example.coarseignored", 10116, 34, TelephonyService.READ_PHONE_STATE,
+                TelephonyService.COARSE).op(AppOpsManager.OPSTR_COARSE_LOCATION, AppOpsManager.MODE_IGNORED);
+        callers.current = coarseIgnored;
+        equal(t.phone.getServiceStateForSlot(0, false, false, coarseIgnored.name, null).getOperatorNumeric(), null,
+                "Coarse location with its app op ignored hides it");
+        callers.current = LEGACY;
+        Listener legacyListener = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, LEGACY.name, null,
+                legacyListener, new int[] {TelephonyCallback.EVENT_SERVICE_STATE_CHANGED}, true);
+        equal(legacyListener.state.getOperatorNumeric(), "42501", "Registry: pre-Q listener keeps the operator");
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, LEGACY.name, null,
+                legacyListener, new int[0], false);
 
         // Device and subscriber identifiers.
         callers.current = STATE;
@@ -818,6 +898,11 @@ public final class TelephonyHost {
         equal(t.phoneSubInfo.getIccSerialNumberForSubscriber(1, PRIVILEGED.name, null), "8997201000000000001",
                 "ICCID without padding");
         equal(t.phone.getTypeAllocationCodeForSlot(0), "35693803", "TAC needs no permission");
+        App iccAuth = new App("com.example.iccauth", 10117, 34)
+                .op(AppOpsManager.OPSTR_USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER, AppOpsManager.MODE_FOREGROUND);
+        callers.current = iccAuth;
+        equal(t.phone.getImeiForSlot(0, iccAuth.name, null), "356938035643809",
+                "USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER in MODE_FOREGROUND grants identifiers");
         App identifiers = new App("com.example.ids", 10110, 34)
                 .op(AppOpsManager.OPSTR_READ_DEVICE_IDENTIFIERS, AppOpsManager.MODE_ALLOWED);
         callers.current = identifiers;
@@ -900,6 +985,7 @@ public final class TelephonyHost {
         denied(() -> { t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
                 modern.name, null, callState, new int[] {TelephonyCallback.EVENT_CELL_INFO_CHANGED}, true);
                 return null; }, "Cell info needs location");
+        registryLocation(t, callers);
         callers.current = STATE;
         Listener listener = new Listener();
         t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name, null,
@@ -963,6 +1049,253 @@ public final class TelephonyHost {
                 ServiceState.STATE_POWER_OFF, "Radio unavailable");
     }
 
+    /**
+     * TelephonyRegistry.checkListenerPermission for cell location and cell info:
+     * LocationAccessPolicy with fine location from Q and coarse at every target.
+     */
+    static void registryLocation(TelephonyService.Endpoints t, Fixture callers) throws Exception {
+        int before = t.registry.listenerCount();
+        App coarse = new App("com.example.coarselisten", 10118, 34, TelephonyService.COARSE);
+        callers.current = coarse;
+        for (int event : new int[] {TelephonyCallback.EVENT_CELL_INFO_CHANGED,
+                TelephonyCallback.EVENT_CELL_LOCATION_CHANGED}) {
+            denied(() -> { t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                    coarse.name, null, new Listener(), new int[] {event}, true); return null; },
+                    "Coarse location only, target >= Q: SecurityException for event " + event);
+        }
+        App legacyCoarse = new App("com.example.legacycoarse", 10119, 28, TelephonyService.COARSE);
+        callers.current = legacyCoarse;
+        Listener legacy = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, legacyCoarse.name,
+                null, legacy, new int[] {TelephonyCallback.EVENT_CELL_INFO_CHANGED}, true);
+        equal(legacy.events, List.of("cellInfo:0"), "Below Q coarse location suffices");
+        equal(t.registry.listenerCount(), before + 1, "and the listener is registered");
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, legacyCoarse.name,
+                null, legacy, new int[0], false);
+        // Soft denials register nothing and throw nothing.
+        callers.current = LOCATED;
+        callers.location = false;
+        Listener off = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, LOCATED.name, null,
+                off, new int[] {TelephonyCallback.EVENT_CELL_INFO_CHANGED}, true);
+        check(off.events.isEmpty() && off.remote.recipients.isEmpty(), "Location switch off: nothing delivered");
+        equal(t.registry.listenerCount(), before, "Location switch off: not registered, no exception");
+        callers.current = PLAIN;
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, PLAIN.name, null,
+                new Listener(), new int[] {TelephonyCallback.EVENT_CELL_LOCATION_CHANGED}, true);
+        equal(t.registry.listenerCount(), before,
+                "The location switch is checked first: off is a soft denial even without permission");
+        callers.location = true;
+        App ignored = new App("com.example.fineignored", 10126, 34, TelephonyService.FINE, TelephonyService.COARSE)
+                .op(AppOpsManager.OPSTR_FINE_LOCATION, AppOpsManager.MODE_IGNORED);
+        callers.current = ignored;
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, ignored.name, null,
+                new Listener(), new int[] {TelephonyCallback.EVENT_CELL_LOCATION_CHANGED}, true);
+        equal(t.registry.listenerCount(), before, "Fine location app op ignored: not registered");
+        App errored = new App("com.example.fineerrored", 10127, 34, TelephonyService.FINE, TelephonyService.COARSE)
+                .op(AppOpsManager.OPSTR_FINE_LOCATION, AppOpsManager.MODE_ERRORED);
+        callers.current = errored;
+        denied(() -> { t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                errored.name, null, new Listener(), new int[] {TelephonyCallback.EVENT_CELL_LOCATION_CHANGED}, true);
+                return null; }, "Fine location app op errored: SecurityException");
+    }
+
+    /**
+     * A modem without a SIM: DEFAULT_SIM_SLOT_INDEX (TelephonyManager's slot without a SIM)
+     * and invalid phone IDs reach phone 0, as PhoneFactory.getPhone and PhoneSubInfoController
+     * map them, with their permission checks.
+     */
+    static void modemWithoutSim() throws Exception {
+        ModemSpec spec = new ModemSpec();
+        spec.ready = WindowsCellular.READY_SIM_NOT_INSERTED;
+        spec.imsi = null; spec.iccid = null; spec.number = null; spec.home = null; spec.homeName = null;
+        spec.register = WindowsCellular.REGISTER_SEARCHING;
+        spec.activation = -1;
+        Source source = new Source();
+        source.set(spec);
+        TelephonyService.Cellular cellular = cellular(source, WindowsCellular.parse(source.text), new Properties());
+        Fixture callers = new Fixture();
+        TelephonyService.Endpoints t = new TelephonyService.Endpoints(cellular, callers);
+        int slot = SubscriptionManager.DEFAULT_SIM_SLOT_INDEX;
+        String imei = "356938035643809";
+        equal(cellular.subId(), SubscriptionManager.INVALID_SUBSCRIPTION_ID, "No subscription without a SIM");
+
+        callers.current = PRIVILEGED;
+        equal(t.phone.getImeiForSlot(slot, PRIVILEGED.name, null), imei, "getImei() without a SIM (default slot)");
+        equal(t.phone.getImeiForSlot(0, PRIVILEGED.name, null), imei, "IMEI for slot 0");
+        equal(t.phone.getImeiForSlot(1, PRIVILEGED.name, null), null, "No phone in slot 1");
+        equal(t.phone.getImeiForSlot(-1, PRIVILEGED.name, null), null, "No phone for slot -1");
+        equal(t.phone.getTypeAllocationCodeForSlot(slot), "35693803", "TAC for the default slot");
+        equal(t.phone.getTypeAllocationCodeForSlot(1), null, "No TAC for slot 1");
+        equal(t.phoneSubInfo.getDeviceIdForPhone(SubscriptionManager.INVALID_PHONE_INDEX, PRIVILEGED.name, null),
+                imei, "An invalid phone ID is phone 0");
+        equal(t.phoneSubInfo.getDeviceIdForPhone(5, PRIVILEGED.name, null), imei, "Phone 5 is not valid: phone 0");
+        equal(t.phoneSubInfo.getDeviceIdWithFeature(PRIVILEGED.name, null), imei,
+                "getDeviceId() without a default subscription");
+        equal(t.phoneSubInfo.getDeviceId(PRIVILEGED.name), imei, "Deprecated overload too");
+        equal(t.phone.getDeviceIdWithFeature(PRIVILEGED.name, null), imei, "ITelephony.getDeviceId: phone 0");
+        equal(t.phone.getNetworkCountryIsoForPhone(SubscriptionManager.INVALID_PHONE_INDEX), "",
+                "Not registered: no network country");
+
+        // The checks still apply, in AOSP's order: the phone is found first.
+        callers.current = STATE;
+        denied(() -> t.phone.getImeiForSlot(slot, STATE.name, null), "IMEI for the default slot needs access");
+        denied(() -> t.phoneSubInfo.getDeviceIdForPhone(SubscriptionManager.INVALID_PHONE_INDEX, STATE.name, null),
+                "Device ID for an invalid phone ID needs access (target >= Q)");
+        denied(() -> t.phoneSubInfo.getDeviceIdWithFeature(STATE.name, null), "Default device ID needs access");
+        equal(t.phone.getDeviceSoftwareVersionForSlot(slot, STATE.name, null), null,
+                "IMEISV is not reported (after the check)");
+        callers.current = LEGACY;
+        equal(t.phone.getImeiForSlot(slot, LEGACY.name, null), null, "Pre-Q placeholder for the default slot");
+        equal(t.phoneSubInfo.getDeviceIdForPhone(SubscriptionManager.INVALID_PHONE_INDEX, LEGACY.name, null), null,
+                "Pre-Q placeholder device ID");
+        callers.current = PLAIN;
+        denied(() -> t.phone.getDeviceSoftwareVersionForSlot(slot, PLAIN.name, null),
+                "IMEISV for the default slot needs READ_PHONE_STATE");
+        equal(t.phone.getDeviceSoftwareVersionForSlot(1, PLAIN.name, null), null, "No phone in slot 1: no check");
+        equal(t.phone.getImeiForSlot(1, PLAIN.name, null), null, "No phone in slot 1: no identifier check");
+
+        callers.current = STATE;
+        check(t.phone.getServiceStateForSlot(slot, false, false, STATE.name, null) != null,
+                "Service state for the default slot");
+        // isRadioOn() asks for the default subscription; without a SIM PhoneInterfaceManager
+        // finds no phone for it (getPhone(INVALID_PHONE_INDEX)) and answers false.
+        check(!t.phone.isRadioOnWithFeature(STATE.name, null), "No default subscription: isRadioOn() is false");
+        check(t.phone.isRadioOnForSubscriberWithFeature(7, STATE.name, null),
+                "A valid subscription without a slot reaches the default phone, whose radio is on");
+        callers.current = PLAIN;
+        denied(() -> t.phone.isRadioOnWithFeature(PLAIN.name, null) ? 1 : 0, "isRadioOn checks READ_PHONE_STATE first");
+    }
+
+    /** Windows' radio switches: airplane mode, the cellular switch and a hardware switch. */
+    static void radioSwitches() throws Exception {
+        ModemSpec spec = new ModemSpec();
+        Source source = new Source();
+        source.set(spec);
+        TelephonyService.Cellular cellular = cellular(source, WindowsCellular.parse(source.text), new Properties());
+        Fixture callers = new Fixture();
+        TelephonyService.Endpoints t = new TelephonyService.Endpoints(cellular, callers);
+        callers.current = STATE;
+        Listener listener = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name, null,
+                listener, new int[] {TelephonyCallback.EVENT_SERVICE_STATE_CHANGED}, true);
+        check(t.phone.isRadioOnWithFeature(STATE.name, null), "Radio on");
+        for (int[] radio : new int[][] {{0, 1}, {1, 0}}) {
+            String what = radio[0] == 0 ? " (software radio off)" : " (hardware radio off)";
+            spec.softwareRadio = radio[0];
+            spec.hardwareRadio = radio[1];
+            source.set(spec);
+            listener.events.clear();
+            check(cellular.refresh(), "Radio change observed" + what);
+            check(!t.phone.isRadioOnWithFeature(STATE.name, null), "isRadioOn false" + what);
+            equal(t.phone.getServiceStateForSlot(0, false, false, STATE.name, null).getState(),
+                    ServiceState.STATE_POWER_OFF, "Service state POWER_OFF" + what);
+            equal(listener.state.getState(), ServiceState.STATE_POWER_OFF, "Listeners hear POWER_OFF" + what);
+            equal(t.phone.getDataNetworkTypeForSubscriber(1, STATE.name, null), TelephonyManager.NETWORK_TYPE_UNKNOWN,
+                    "No data network with the radio off" + what);
+            equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_LOADED, "The SIM stays loaded" + what);
+        }
+        spec.softwareRadio = 1;
+        spec.hardwareRadio = 1;
+        source.set(spec);
+        check(cellular.refresh(), "Radio back on");
+        check(t.phone.isRadioOnWithFeature(STATE.name, null), "isRadioOn true again");
+        equal(listener.state.getState(), ServiceState.STATE_OUT_OF_SERVICE, "Data-only service state again");
+    }
+
+    /**
+     * Demand-driven polling (resource use): no worker until telephony is used, polling
+     * while listeners exist or a query was recent, a bounded read before answering from an
+     * old reading, and bounded reads that never present an old reading as current.
+     */
+    static void polling() throws Exception {
+        ModemSpec spec = new ModemSpec();
+        Source source = new Source();
+        source.set(spec);
+        Clock clock = new Clock();
+        Workers workers = new Workers();
+        TelephonyService.Cellular cellular = new TelephonyService.Cellular(source, WindowsCellular.parse(source.text),
+                new Properties(), clock, workers, 300);
+        Fixture callers = new Fixture();
+        TelephonyService.Endpoints t = new TelephonyService.Endpoints(cellular, callers);
+        check(!cellular.polling() && workers.started == 0, "No polling at boot");
+        equal(source.reads.get(), 0, "The boot reading is not read again");
+
+        callers.current = STATE;
+        equal(t.phone.getDataNetworkTypeForSubscriber(1, STATE.name, null), TelephonyManager.NETWORK_TYPE_LTE,
+                "A query answers from the current reading");
+        check(cellular.polling() && workers.started == 1, "A query starts polling");
+        equal(source.reads.get(), 0, "A current reading is not read again");
+        clock.now += TelephonyService.Cellular.POLL_MILLIS;
+        check(cellular.pollOnce(), "Polling continues after a recent query");
+        equal(source.reads.get(), 1, "One read per poll");
+        clock.now += TelephonyService.Cellular.IDLE_MILLIS;
+        check(!cellular.pollOnce() && !cellular.polling(), "Polling stops after IDLE_MILLIS without queries");
+        equal(source.reads.get(), 1, "Stopping reads nothing");
+
+        // An old reading is never answered as current: the query reads first.
+        spec.signal = 25;
+        spec.register = WindowsCellular.REGISTER_ROAMING;
+        source.set(spec);
+        clock.now += 60_000;
+        SignalStrength signal = t.phone.getSignalStrength(1);
+        equal(((android.telephony.CellSignalStrengthLte) signal.getCellSignalStrengths().get(0)).getRssi(), -63,
+                "A query after polling stopped reads before answering");
+        equal(source.reads.get(), 2, "One bounded read for that query");
+        check(cellular.polling() && workers.started == 2, "and polling resumes");
+        equal(t.phone.getNetworkCountryIsoForPhone(0), "il", "Further queries answer from the same reading");
+        equal(source.reads.get(), 2, "Queries within FRESH_MILLIS share the reading");
+
+        // Listeners keep polling alive without queries; removing the last one lets it stop.
+        Listener listener = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name, null,
+                listener, new int[] {TelephonyCallback.EVENT_SIGNAL_STRENGTHS_CHANGED}, false);
+        clock.now += 10 * TelephonyService.Cellular.IDLE_MILLIS;
+        spec.signal = 10;
+        source.set(spec);
+        check(cellular.pollOnce(), "A registered listener keeps polling");
+        equal(listener.events, List.of("signal"), "and hears the change from the poll");
+        SubscriptionsListener subscriptions = new SubscriptionsListener();
+        t.registry.addOnSubscriptionsChangedListener(STATE.name, null, subscriptions);
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name, null,
+                listener, new int[0], false);
+        clock.now += 10 * TelephonyService.Cellular.IDLE_MILLIS;
+        check(cellular.pollOnce(), "A subscription listener keeps polling too");
+        subscriptions.remote.die();
+        clock.now += TelephonyService.Cellular.IDLE_MILLIS;
+        check(!cellular.pollOnce(), "Without listeners or queries polling stops");
+
+        // Bounded reads. A recent reading survives two failed or hung reads, not three.
+        check(!cellular.refresh(), "A fresh, unchanged reading");
+        int reads = source.reads.get();
+        source.hang = new java.util.concurrent.CountDownLatch(1);
+        long started = System.nanoTime();
+        check(!cellular.refresh(), "A hung read keeps a recent reading");
+        check(System.nanoTime() - started < java.util.concurrent.TimeUnit.SECONDS.toNanos(5), "The read is bounded");
+        check(cellular.reading() != null, "Kept after one hung read");
+        check(!cellular.refresh(), "A second failure keeps it");
+        equal(source.reads.get(), reads + 1, "No second read is started while one hangs in WwanSvc");
+        check(cellular.refresh() && cellular.reading() == null, "The third failure drops it");
+        equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_NOT_READY, "No reading: SIM not ready");
+        source.hang.countDown();
+        source.hang = null;
+        // Let the released read finish so the next read is a fresh one.
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline && !cellular.refresh()) Thread.sleep(20);
+        check(cellular.reading() != null, "A successful read restores the reading");
+
+        // An old reading is not kept on failure: after a long idle period a failed read
+        // means no reading, even on the first failure.
+        clock.now += 60_000;
+        source.text = "status\terror\t80070005\n";
+        equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_NOT_READY,
+                "A failed read after idle does not present the old reading as current");
+        check(cellular.reading() == null, "No reading");
+        source.set(spec);
+        clock.now += TelephonyService.Cellular.FRESH_MILLIS;
+        equal(t.phone.getSimStateForSlotIndex(0), TelephonyManager.SIM_STATE_LOADED, "The next query reads again");
+    }
+
     static void translations() {
         equal(WindowsCellular.networkType(WindowsCellular.DATA_5G_SA | WindowsCellular.DATA_LTE),
                 TelephonyManager.NETWORK_TYPE_NR, "5G SA");
@@ -970,7 +1303,27 @@ public final class TelephonyHost {
         equal(WindowsCellular.networkType(WindowsCellular.DATA_HSDPA | WindowsCellular.DATA_HSUPA),
                 TelephonyManager.NETWORK_TYPE_HSPA, "HSPA");
         equal(WindowsCellular.networkType(WindowsCellular.DATA_EDGE), TelephonyManager.NETWORK_TYPE_EDGE, "EDGE");
-        equal(WindowsCellular.networkType(0x80000000), TelephonyManager.NETWORK_TYPE_UNKNOWN, "Custom class");
+        equal(WindowsCellular.networkType(0x80000000L), TelephonyManager.NETWORK_TYPE_UNKNOWN, "Custom class");
+        // Numeric fields are unsigned 32-bit: 0xFFFFFFFF is a reported value, not "unreported".
+        ModemSpec all = new ModemSpec();
+        all.dataClass = -1;
+        Source allSource = new Source();
+        allSource.set(all);
+        WindowsCellular.Modem allBits = WindowsCellular.parse(allSource.text.replace("\t-1\t20\t", "\t4294967295\t20\t"))
+                .primary();
+        equal(allBits.currentDataClass, 0xFFFFFFFFL, "0xFFFFFFFF is kept as reported");
+        check(allBits.currentDataClass != WindowsCellular.ABSENT, "and differs from an unreported field");
+        equal(WindowsCellular.networkType(allBits.currentDataClass), TelephonyManager.NETWORK_TYPE_NR,
+                "All data class bits include 5G SA");
+        ModemSpec unreported = new ModemSpec();
+        unreported.activation = -1;
+        unreported.softwareRadio = -1;
+        unreported.hardwareRadio = -1;
+        Source unreportedSource = new Source();
+        unreportedSource.set(unreported);
+        WindowsCellular.Modem dashes = WindowsCellular.parse(unreportedSource.text).primary();
+        equal(dashes.activation, WindowsCellular.ABSENT, "\"-\" is unreported");
+        check(!dashes.radioOff(), "An unreported radio state is not taken as off");
         equal(WindowsCellular.rssiDbm(0), -113, "CSQ 0");
         equal(WindowsCellular.rssiDbm(31), -51, "CSQ 31");
         equal(WindowsCellular.rssiDbm(99), android.telephony.CellInfo.UNAVAILABLE, "CSQ unknown");
@@ -1020,6 +1373,9 @@ public final class TelephonyHost {
         noModem();
         modem();
         modemContracts();
+        modemWithoutSim();
+        radioSwitches();
+        polling();
         System.out.println("TelephonyHost passed: " + checks + " checks");
     }
 }

@@ -70,22 +70,29 @@ public final class WindowsCellular {
             DATA_HSUPA = 0x10, DATA_LTE = 0x20, DATA_5G_NSA = 0x40, DATA_5G_SA = 0x80,
             DATA_1XRTT = 0x10000, DATA_1XEVDO = 0x20000, DATA_1XEVDO_REVA = 0x40000,
             DATA_1XEVDO_REVB = 0x200000;
+    // MBN_RADIO.
+    static final int RADIO_OFF = 0, RADIO_ON = 1;
     /** MBN_RSSI_UNKNOWN and MBN_ERROR_RATE_UNKNOWN. */
     static final int UNKNOWN_99 = 99;
-    /** A value the modem did not report. */
-    static final int ABSENT = -1;
+    /**
+     * A value the modem did not report. Numeric fields are unsigned 32-bit (ULONG) values
+     * held in a long, so every reported value, 0xFFFFFFFF included, stays distinct from it.
+     */
+    static final long ABSENT = -1;
 
     /** One WWAN interface as Windows reported it; strings are null when not reported. */
     public static final class Modem {
         public final String interfaceId;
-        public final int readyState, cellularClass, voiceClass, dataClasses, smsCaps;
+        public final long readyState, cellularClass, voiceClass, dataClasses, smsCaps;
         public final String deviceId, manufacturer, model, firmware;
         public final String subscriberId, iccId;
         public final List<String> numbers;
         public final String homeProviderId, homeProviderName;
-        public final int registerState;
+        public final long registerState;
         public final String registeredProviderId, registeredProviderName, roamingText;
-        public final int currentDataClass, signal, signalError, activation;
+        public final long currentDataClass, signal, signalError, activation;
+        /** IMbnRadio's software (Windows' radio switch) and hardware radio states. */
+        public final long softwareRadio, hardwareRadio;
         /** The reading as reported, to detect changes. */
         final String source;
 
@@ -114,12 +121,23 @@ public final class WindowsCellular {
             signal = number(f[21]);
             signalError = number(f[22]);
             activation = number(f[23]);
+            softwareRadio = number(f[24]);
+            hardwareRadio = number(f[25]);
         }
 
         boolean simReady() { return readyState == READY_INITIALIZED; }
 
+        /**
+         * Whether the radio is off: Windows' cellular switch or airplane mode (software) or
+         * a hardware switch (hardware), as IMbnRadio reports them, or the device stack off.
+         * An unreported radio state is not taken as off.
+         */
+        boolean radioOff() {
+            return readyState == READY_OFF || softwareRadio == RADIO_OFF || hardwareRadio == RADIO_OFF;
+        }
+
         boolean registered() {
-            return readyState == READY_INITIALIZED && (registerState == REGISTER_HOME
+            return !radioOff() && readyState == READY_INITIALIZED && (registerState == REGISTER_HOME
                     || registerState == REGISTER_ROAMING || registerState == REGISTER_PARTNER);
         }
 
@@ -144,7 +162,7 @@ public final class WindowsCellular {
         public Modem primary() { return modems.isEmpty() ? null : modems.get(0); }
     }
 
-    private static final int MODEM_FIELDS = 24;
+    private static final int MODEM_FIELDS = 26;
 
     /** Parses native text; null when malformed (never a partial modem). */
     static Snapshot parse(String raw) {
@@ -175,11 +193,17 @@ public final class WindowsCellular {
         return new Snapshot(status[1], modems);
     }
 
-    private static int number(String field) {
+    /** An unsigned 32-bit field, or ABSENT for "-". */
+    private static long number(String field) {
         if (field.equals("-")) return ABSENT;
         long value = Long.parseLong(field);
         if (value < 0 || value > 0xFFFFFFFFL) throw new IllegalArgumentException("range");
-        return (int) value;
+        return value;
+    }
+
+    /** An enumeration value for a switch: ABSENT and out-of-range values match no case. */
+    private static int enumValue(long value) {
+        return value >= 0 && value <= Integer.MAX_VALUE ? (int) value : -1;
     }
 
     private static String text(String field) {
@@ -210,7 +234,7 @@ public final class WindowsCellular {
      */
     static int simState(Modem modem) {
         if (modem == null) return TelephonyManager.SIM_STATE_UNKNOWN;
-        switch (modem.readyState) {
+        switch (enumValue(modem.readyState)) {
             case READY_INITIALIZED: return TelephonyManager.SIM_STATE_LOADED;
             case READY_SIM_NOT_INSERTED:
             case READY_NO_ESIM_PROFILE: return TelephonyManager.SIM_STATE_ABSENT;
@@ -237,7 +261,7 @@ public final class WindowsCellular {
     }
 
     /** The radio access network type for an MBN data class (the highest bit present). */
-    static int networkType(int dataClass) {
+    static int networkType(long dataClass) {
         if (dataClass == ABSENT || dataClass == 0) return TelephonyManager.NETWORK_TYPE_UNKNOWN;
         if ((dataClass & DATA_5G_SA) != 0) return TelephonyManager.NETWORK_TYPE_NR;
         // 5G NSA is an LTE anchor with an NR secondary cell; Android reports LTE and
@@ -267,7 +291,7 @@ public final class WindowsCellular {
     /** TelephonyManager.DATA_* for the packet connection's activation state. */
     static int dataState(Modem modem) {
         if (modem == null) return TelephonyManager.DATA_DISCONNECTED;
-        switch (modem.activation) {
+        switch (enumValue(modem.activation)) {
             case ACTIVATION_ACTIVATED: return TelephonyManager.DATA_CONNECTED;
             case ACTIVATION_ACTIVATING: return TelephonyManager.DATA_CONNECTING;
             case ACTIVATION_DEACTIVATING: return TelephonyManager.DATA_DISCONNECTING;
@@ -276,9 +300,9 @@ public final class WindowsCellular {
     }
 
     /** RSSI in dBm for a 27.007 CSQ value 0..31; UNAVAILABLE otherwise. */
-    static int rssiDbm(int csq) {
+    static int rssiDbm(long csq) {
         if (csq < 0 || csq > 31) return CellInfo.UNAVAILABLE;
-        return -113 + 2 * csq;
+        return -113 + 2 * (int) csq;
     }
 
     /**
@@ -290,7 +314,7 @@ public final class WindowsCellular {
     static SignalStrength signalStrength(Modem modem) {
         if (modem == null) return null;
         int rssi = rssiDbm(modem.signal);
-        int ber = modem.signalError >= 0 && modem.signalError <= 7 ? modem.signalError
+        int ber = modem.signalError >= 0 && modem.signalError <= 7 ? (int) modem.signalError
                 : CellInfo.UNAVAILABLE;
         if (rssi == CellInfo.UNAVAILABLE || !modem.registered()) return new SignalStrength();
         int u = CellInfo.UNAVAILABLE;
@@ -341,7 +365,7 @@ public final class WindowsCellular {
      */
     static ServiceState serviceState(Modem modem, boolean operator) {
         ServiceState state = new ServiceState();
-        if (modem == null || modem.readyState == READY_OFF) {
+        if (modem == null || modem.radioOff()) {
             state.setStateOff();
             return state;
         }
@@ -427,7 +451,7 @@ public final class WindowsCellular {
      */
     static boolean cardPresent(Modem modem) {
         if (modem == null) return false;
-        switch (modem.readyState) {
+        switch (enumValue(modem.readyState)) {
             case READY_INITIALIZED:
             case READY_BAD_SIM:
             case READY_DEVICE_LOCKED:

@@ -36,8 +36,10 @@ Mobile Broadband API (`IMbnInterfaceManager` on the WwanSvc COM server):
 interface capabilities (cellular class, data classes, device ID, model, firmware), ready
 state, subscriber information (IMSI, ICCID, telephone numbers), home provider,
 registration (state, provider ID/name, current data class), signal (RSSI as a 27.007 CSQ
-value, bit error rate) and the packet connection's activation state. It never connects,
-disconnects, scans, unlocks a PIN, changes registration or touches SMS. `REGDB_E_CLASSNOTREG`,
+value, bit error rate), the packet connection's activation state and the radio state
+(`IMbnRadio`: the software radio, which airplane mode and Windows' Cellular switch turn off,
+and the hardware radio). It never connects, disconnects, scans, unlocks a PIN, changes
+registration, switches the radio or touches SMS. `REGDB_E_CLASSNOTREG`,
 `ERROR_NOT_FOUND` and a disabled/missing WWAN service mean "no modem"; any other failure is
 an error, not an absent modem. The interface declarations are written from the documented
 `mbnapi.idl`, which llvm-mingw does not ship; IIDs are looked up through COM, so a mismatch
@@ -53,13 +55,23 @@ fails closed.
 | connection ACTIVATED / ACTIVATING / DEACTIVATING | `DATA_CONNECTED` / `DATA_CONNECTING` / `DATA_DISCONNECTING` |
 | CSQ 0..31 | RSSI −113..−51 dBm in the current RAT's `CellSignalStrength` (LTE, WCDMA or GSM); NR SA and CDMA have no RSSI field and stay empty |
 | provider ID | MCC/MNC; country ISO from AOSP's MCC table |
+| software or hardware radio OFF, ready state OFF | `ServiceState.STATE_POWER_OFF`, `isRadioOn()` false, no data registration (the SIM state is unchanged) |
+| a field Windows did not report | unreported, never a value: numeric fields are unsigned 32-bit, so `0xFFFFFFFF` stays a reported value |
 
 `TelephonyService` keeps one model of the modem (Android phone 0). The modem present at
-boot fixes the phone count and the system features, as on Android; a daemon worker polls
-every five seconds only when a modem exists. A modem that disappears leaves phone 0 with
-radio-off service state and `SIM_STATE_NOT_READY`; a read failure keeps the last reading
-for at most two further polls. Subscription IDs are assigned per ICCID from 1 for the boot
-session (not persisted).
+boot fixes the phone count and the system features, as on Android. Each read creates an
+out-of-process WwanSvc object and makes about a dozen calls to it, so reads are
+demand-driven: without a modem nothing is read after the boot probe; with one, a daemon
+worker reads every five seconds only while `telephony.registry` holds a listener (phone
+state or subscriptions) or for 30 seconds after the last query, then stops. A query that
+finds the reading older than seven seconds (polling had stopped) reads the modem before
+answering, so an answer is never an old reading presented as current. Every read is
+bounded to two seconds (the boot probe to five); a read still blocked in WwanSvc is not
+joined by a second one. A read that fails or times out keeps the last good reading only
+for the next two reads and only while that reading is less than 15 seconds old; otherwise,
+as for a modem that disappears, phone 0 has radio-off service state and
+`SIM_STATE_NOT_READY` until a read succeeds. Subscription IDs are assigned per ICCID from 1
+for the boot session (not persisted).
 
 ## What applications observe
 
@@ -83,8 +95,15 @@ without carrier privileges (there are no carrier apps):
 - phone number: `READ_PHONE_NUMBERS`, `READ_SMS`, the default SMS app's `WRITE_SMS` app op,
   or `READ_PHONE_STATE` for targets ≤ Q.
 - `SubscriptionInfo` hides the ICCID/card string without identifier access and the number
-  without phone-number access. Operator name and numeric in `ServiceState` need coarse
-  location (permission, app op and the location switch).
+  without phone-number access. Operator name and numeric in `ServiceState` (from
+  `getServiceState()` and from listeners) follow `LocationAccessPolicy` with minimum SDK Q,
+  as PhoneInterfaceManager and TelephonyRegistry check them: from target Q coarse location
+  (permission and app op) is needed; below Q no location permission is; the location switch
+  off hides them at every target.
+- Cell location and cell info listeners: `LocationAccessPolicy` with fine location from Q
+  and coarse location at every target. A hard denial (no permission, an errored app op)
+  throws `SecurityException("Unable to listen for events ...")`; a soft denial (location
+  switch off, an ignored app op) registers nothing, without an exception.
 
 These rules apply only when a modem was present at boot. Without one the device has no
 `FEATURE_TELEPHONY`, and AOSP's `PhoneGlobals.onCreate` then returns before publishing
@@ -122,8 +141,15 @@ leaves a callback unanswered. The answers, with AOSP's permission checks:
   also for a CDMA-class modem.
 - SIM card and radio: `hasIccCard()` follows the card (present while ready, locked, blocked,
   failed or not activated; not for an empty slot or a missing eSIM profile);
-  `DEFAULT_SIM_SLOT_INDEX` is phone 0, as `PhoneFactory.getPhone` treats it;
-  `isRadioOn*` variants agree; `isModemEnabledForSlot(0)` is true;
+  `DEFAULT_SIM_SLOT_INDEX` (what `TelephonyManager` asks for without a SIM) is phone 0, as
+  `PhoneFactory.getPhone` treats it, for the SIM state, IMEI, type allocation code, IMEISV,
+  service state and network country (`INVALID_PHONE_INDEX` asks for the default phone
+  there); `iphonesubinfo`'s device ID treats any invalid phone ID as phone 0, as
+  PhoneSubInfoController does; the permission checks are unchanged.
+  `isRadioOn*` need `READ_PHONE_STATE` (`SecurityException` without it, false with its app
+  op revoked) and answer whether the subscription's phone is powered on: false while
+  Windows' radio is off, and, as on AOSP, false from `isRadioOn()` without a SIM (no default
+  subscription, so no phone). `isModemEnabledForSlot(0)` is true;
   `getCardIdForDefaultEuicc()` is `UNSUPPORTED_CARD_ID` (no eUICC);
   `getUiccCardsInfo()` lists the one removable card (sanitized for
   `READ_BASIC_PHONE_STATE`).
@@ -192,17 +218,21 @@ Mobile data is the WWAN IP interface, which `ConnectivityService` already report
 
 - `tools/test_windows_cellular_native.py` compiles the unchanged native adapter against an
   explicit COM boundary under ASan/UBSan: absent service/interface, errors, apartments,
-  exact UTF-8 fields, unreported fields, bounds and that every BSTR, SAFEARRAY and COM
-  reference is released. Two negative controls (leaked capability strings,
-  uninitializing a foreign apartment) must fail.
+  exact UTF-8 fields, unreported fields, software and hardware radio states, bounds and that
+  every BSTR, SAFEARRAY and COM reference is released. Three negative controls (leaked
+  capability strings, uninitializing a foreign apartment, swapped radio states) must fail.
 - `tools/test_telephony.py` runs the production Java services on a host JVM with synthetic
-  modems and callers: features, translations, permission rules, redaction, listeners,
-  SIM removal/insertion, read failures and the no-modem path.
+  modems and callers: features, translations, permission rules (including
+  `LocationAccessPolicy` for listeners and `ServiceState`), redaction, listeners, SIM
+  removal/insertion, a modem without a SIM (default slot and invalid phone IDs), radio
+  switches, read failures, hung reads, demand-driven polling under a controlled clock and
+  the no-modem path.
 - `ManagerConstructionBatchTest` (ART, Windows CI) runs the real Mobile Broadband probe on a
   runner without a modem and checks the absence of telephony features and AOSP's no-phone
   answers through `TelephonyManager`.
 
-No physical modem has been tested: the native adapter's interface declarations were
-checked against the Windows SDK's `mbnapi.h` locally, but real WwanSvc behavior, access
+No physical modem has been tested: the native adapter's interface declarations (including
+`IMbnRadio`, `{DCCCCAB6-201F-4BBB-AAEE-338E368AF6FA}`) were checked against the Windows
+SDK's `mbnapi.h` (10.0.26100.0) locally, but real WwanSvc behavior, access
 rights for subscriber information, modem timing and the Windows cellular UI are
 unverified until someone runs Gesher on a machine with a WWAN modem.
