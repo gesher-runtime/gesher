@@ -87,6 +87,14 @@ final class PermissionCatalog {
             uea.protectionLevel = PermissionInfo.PROTECTION_NORMAL;
             mFramework.put(uea.name, uea);
         }
+        if (!mFramework.containsKey("android.permission.OBSERVE_APP_USAGE")) {
+            PermissionInfo oau = new PermissionInfo();
+            oau.name = "android.permission.OBSERVE_APP_USAGE";
+            oau.packageName = "android";
+            oau.protectionLevel = PermissionInfo.PROTECTION_SIGNATURE
+                    | PermissionInfo.PROTECTION_FLAG_PRIVILEGED;
+            mFramework.put(oau.name, oau);
+        }
         mProtectedBroadcasts.add(android.app.AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED);
         mLoaded = true;
     }

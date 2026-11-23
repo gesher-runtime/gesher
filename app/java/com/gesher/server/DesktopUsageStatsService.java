@@ -16,10 +16,12 @@ import android.app.usage.UsageEvents;
 import android.app.usage.UsageEventsQuery;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.os.IBinder;
 import android.os.PersistableBundle;
+import android.os.Process;
 import android.os.SystemClock;
 import android.os.UserHandle;
 
@@ -37,7 +39,9 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     private final PackageManagerService mPackages;
     private final CallerIdentity mCallers;
     private final ActivityUsageHistory mHistory;
+    private final UsageLimitObservers mObservers;
     private final boolean mManaged;
+    private volatile ActivityManagerService mAm;
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file) {
         this(packages, callers, file, usageClock(), SystemClock::elapsedRealtime);
@@ -50,13 +54,31 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
             java.util.function.LongSupplier wall, java.util.function.LongSupplier elapsed) {
+        this(packages, callers, file, wall, elapsed, null);
+    }
+
+    DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
+            java.util.function.LongSupplier wall, java.util.function.LongSupplier elapsed,
+            UsageLimitObservers.ExpiryScheduler scheduler) {
         mPackages = packages;
         mCallers = callers;
         mManaged = file != null;
         mHistory = new ActivityUsageHistory(file, wall, elapsed,
                 failure -> SystemServer.log("usage history I/O failed: "
                         + failure.getClass().getSimpleName()));
-        if (mManaged) mPackages.onPackageRemoval(this::packageRemoved);
+        mObservers = scheduler == null
+                ? new UsageLimitObservers(elapsed, this::dispatchUsageObserver)
+                : new UsageLimitObservers(elapsed, this::dispatchUsageObserver, scheduler,
+                        UsageLimitObservers.MIN_TIME_LIMIT_MS);
+        if (mPackages != null) mPackages.onPackageRemoval(this::packageRemoved);
+    }
+
+    void setActivityManager(ActivityManagerService am) {
+        mAm = am;
+    }
+
+    UsageLimitObservers observers() {
+        return mObservers;
     }
 
     private static java.util.function.LongSupplier usageClock() {
@@ -66,13 +88,22 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     }
 
     void transition(Object token, String pkg, String cls, ActivityUsageHistory.State state) {
-        if (mManaged && (state == ActivityUsageHistory.State.TERMINATED
-                || !mPackages.isRemovalPending(pkg))) {
+        boolean eligible = state == ActivityUsageHistory.State.TERMINATED
+                || mPackages == null || !mPackages.isRemovalPending(pkg);
+        if (mManaged && eligible) {
             mHistory.transition(token, pkg, cls, state);
+        }
+        if (eligible) {
+            mObservers.transition(token, pkg, state);
         }
     }
 
     private void packageRemoved(String pkg) {
+        mObservers.packageRemoved(pkg, uid -> {
+            String[] remaining = mPackages.getPackagesForUid(uid);
+            return remaining != null && remaining.length > 0;
+        });
+        if (!mManaged) return;
         try { mHistory.forgetPackage(pkg); }
         catch (IOException failure) {
             throw new IllegalStateException("Cannot remove package usage history", failure);
@@ -120,6 +151,45 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         // replaced package generation cannot use the previous owner's decision.
         mCallers.requirePackage(caller);
         return mPackages.get(caller) == owner && !mPackages.isRemovalPending(caller);
+    }
+
+    private int requireObserverUid(String caller) {
+        mCallers.requirePackage(Objects.requireNonNull(caller, "callingPackage"));
+        if (mCallers.isSystem()) return Process.SYSTEM_UID;
+        int uid = mCallers.callerUid(), pid = mCallers.callerPid();
+        ApkPackage owner = mPackages.get(caller);
+        if (owner == null || owner.uid() != uid || mPackages.isRemovalPending(caller)
+                || mPackages.permissions().checkProcessPermission(
+                        Manifest.permission.OBSERVE_APP_USAGE, pid, uid)
+                        != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Caller " + caller + " does not hold "
+                    + Manifest.permission.OBSERVE_APP_USAGE);
+        }
+        mCallers.requirePackage(caller);
+        if (mPackages.get(caller) != owner || mPackages.isRemovalPending(caller)) {
+            throw new SecurityException("Observer caller package identity changed");
+        }
+        return uid;
+    }
+
+    private void dispatchUsageObserver(PendingIntent callback, int observerId, long timeLimitMs,
+            long timeUsedMs) {
+        Intent fillIn = new Intent()
+                .putExtra(UsageStatsManager.EXTRA_OBSERVER_ID, observerId)
+                .putExtra(UsageStatsManager.EXTRA_TIME_LIMIT, timeLimitMs)
+                .putExtra(UsageStatsManager.EXTRA_TIME_USED, timeUsedMs);
+        try {
+            ActivityManagerService am = mAm;
+            if (am != null) {
+                am.sendIntentSender(null, callback.getTarget(), null, 0, fillIn, null, null, null,
+                        null);
+            } else {
+                callback.send(null, 0, fillIn);
+            }
+        } catch (PendingIntent.CanceledException | RuntimeException failure) {
+            SystemServer.log("usage observer callback failed: "
+                    + failure.getClass().getSimpleName());
+        }
     }
 
     private UsageEvents events(long begin, long end, Set<String> packages, int[] types) {
@@ -305,15 +375,20 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     @Override public void setEstimatedLaunchTime(String pkg, long time, int userId) { throw denied(); }
     @Override public void setEstimatedLaunchTimes(ParceledListSlice times, int userId) { throw denied(); }
     @Override public void registerAppUsageObserver(int id, String[] packages, long limit,
-            PendingIntent callback, String caller) { throw denied(); }
+            PendingIntent callback, String caller) {
+        int uid = requireObserverUid(caller);
+        mObservers.register(uid, id, packages, limit, callback);
+    }
     @Override public void registerUsageSessionObserver(int id, String[] packages, long limit,
             long threshold, PendingIntent limitCallback, PendingIntent endCallback, String caller) {
         throw denied();
     }
     @Override public void registerAppUsageLimitObserver(int id, String[] packages, long limit,
             long used, PendingIntent callback, String caller) { throw denied(); }
-    // Nothing can have registered; removal is idempotent and retains no callback/token.
-    @Override public void unregisterAppUsageObserver(int id, String caller) { }
+    @Override public void unregisterAppUsageObserver(int id, String caller) {
+        int uid = requireObserverUid(caller);
+        mObservers.unregister(uid, id);
+    }
     @Override public void unregisterUsageSessionObserver(int id, String caller) { }
     @Override public void unregisterAppUsageLimitObserver(int id, String caller) { }
     @Override public void reportUsageStart(IBinder token, String name, String caller) { }

@@ -45,12 +45,17 @@ def main() -> None:
         sources = []
         for name in ("ActivityCallerState", "ActivityClientController", "ActivityTaskManagerService",
                      "ActivityManagerService", "PendingIntents", "UriGrants", "ActivityUsageHistory",
-                     "DesktopUsageStatsService"):
+                     "UsageLimitObservers", "DesktopUsageStatsService"):
             relative = "app/java/com/gesher/server/" + name + ".java"
             source = ROOT / relative
             source_ref = args.controller_source_ref if name == "ActivityClientController" else (
-                    args.usage_source_ref if name in ("ActivityUsageHistory", "DesktopUsageStatsService") else None)
+                    args.usage_source_ref if name in ("ActivityUsageHistory", "UsageLimitObservers",
+                                                     "DesktopUsageStatsService") else None)
             if source_ref:
+                exists = subprocess.run(["git", "cat-file", "-e", source_ref + ":" + relative],
+                                        cwd=ROOT, capture_output=True)
+                if exists.returncode != 0 and name == "UsageLimitObservers":
+                    continue
                 source = work / (name + ".java")
                 old = subprocess.run(["git", "show", source_ref + ":" + relative],
                                      cwd=ROOT, check=True, capture_output=True)
