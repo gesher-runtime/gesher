@@ -312,7 +312,7 @@ public final class ProviderAuthorityIndexTest {
         PackageImpl syncable = manifest("fixture.authority.syncable");
         provider(syncable, "First", "shared", true, false);
         provider(syncable, "Second", "shared;alias", true, false).setSyncable(true);
-        provider(syncable, "Third", "own;more", true, false).setSyncable(true);
+        provider(syncable, "Third", "own;more;extra", true, false).setSyncable(true);
         provider(syncable, "Fourth", "fourth;more", true, false).setSyncable(true);
         provider(syncable, "Fifth", "shared;own", true, false).setSyncable(true);
         ApkPackage syncablePkg = apk(syncable, 12356);
@@ -328,8 +328,20 @@ public final class ProviderAuthorityIndexTest {
                 "Free authority of a syncable provider with a skipped first authority");
         ProviderInfo own = declared(pm, "own");
         require(own != null && own.name.equals(syncablePkg.packageName + ".Third")
-                        && "own;more".equals(own.authority) && own.isSyncable,
+                        && "own;more;extra".equals(own.authority) && own.isSyncable,
                 "Syncable provider that registered its first authority changed");
+        ProviderInfo firstRecord = pm.resolveContentProvider("own", 0, 0);
+        require(firstRecord != null && "own".equals(firstRecord.authority) && firstRecord.isSyncable,
+                "Authority lookup did not retain the syncable class record");
+        ProviderInfo aliasRecord = pm.resolveContentProvider("more", 0, 0);
+        require(aliasRecord != null && "more;extra".equals(aliasRecord.authority) && !aliasRecord.isSyncable,
+                "Secondary authority lookup exposed the syncable class record");
+        ProviderInfo skippedClass = component(pm, syncablePkg, "Second", 0);
+        require(skippedClass != null && skippedClass.authority == null && skippedClass.isSyncable,
+                "Class lookup exposed the non-syncable copy of a skipped first authority");
+        ProviderInfo freeAlias = pm.resolveContentProvider("alias", 0, 0);
+        require(freeAlias != null && "alias".equals(freeAlias.authority) && !freeAlias.isSyncable,
+                "Authority lookup lost the free alias after skipping the first authority");
         ProviderInfo fourth = declared(pm, "fourth");
         require(fourth != null && "fourth".equals(fourth.authority) && fourth.isSyncable,
                 "Syncable provider keeping its first authority lost its syncable state");

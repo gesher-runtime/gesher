@@ -207,7 +207,7 @@ final class ContentProviders {
                     throw new SecurityException("Conflicting content provider authority");
                 }
                 packageClaimsAuthority = true;
-                for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                for (ProviderInfo info : pkg.providersForBinding(PackageManager.GET_META_DATA
                         | PackageManager.GET_URI_PERMISSION_PATTERNS
                         | PackageManager.GET_SHARED_LIBRARY_FILES)) {
                     if (!hasAuthority(info, authority)) continue;
@@ -273,7 +273,7 @@ final class ContentProviders {
      * declarations differ in process, enabled state, permissions or authorities.
      */
     static List<ProviderInfo> declaredProviders(ApkPackage pkg, long flags) {
-        return pkg.providers(flags);
+        return pkg.providersForBinding(flags);
     }
 
     /** The providers a process of {@code ai}'s package installs at bindApplication. */

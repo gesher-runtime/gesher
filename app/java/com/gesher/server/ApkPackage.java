@@ -726,10 +726,11 @@ public final class ApkPackage {
 
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
-        return packageInfo(flags, false);
+        return packageInfo(flags, false, null, false);
     }
 
-    private PackageInfo packageInfo(long flags, boolean providerQuery) {
+    private PackageInfo packageInfo(long flags, boolean providerQuery, String authority,
+            boolean forBinding) {
         if ((flags & DIRECT_BOOT) == 0) {
             flags |= DIRECT_BOOT;
         }
@@ -749,10 +750,10 @@ public final class ApkPackage {
                     (generated | DIRECT_BOOT) & ~(PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS
                             | PackageManager.GET_SERVICES | PackageManager.GET_PERMISSIONS
                             | PackageManager.GET_CONFIGURATIONS), 0 /* userId */).providers;
-            registerAuthorities(allProviders);
+            registerAuthorities(allProviders, authority, forBinding);
             pi.providers = filterProviderBootState(allProviders, generated);
         } else {
-            registerAuthorities(pi.providers);
+            registerAuthorities(pi.providers, authority, forBinding);
         }
         if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
@@ -983,7 +984,23 @@ public final class ApkPackage {
      * common to bind, publication and PackageManager's authority/component queries.
      */
     public List<ProviderInfo> providers(long flags) {
-        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true);
+        return providerList(flags, null, false);
+    }
+
+    List<ProviderInfo> providersForBinding(long flags) {
+        return providerList(flags, null, true);
+    }
+
+    ProviderInfo providerForAuthority(String authority, long flags) {
+        for (ProviderInfo info : providerList(flags, authority, false)) {
+            if (ContentProviders.hasAuthority(info, authority)) return info;
+        }
+        return null;
+    }
+
+    private List<ProviderInfo> providerList(long flags, String authority, boolean forBinding) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true,
+                authority, forBinding);
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;
@@ -999,35 +1016,44 @@ public final class ApkPackage {
      * rejects that ambiguity instead of picking an owner by install order. Use the
      * same first-declaration-per-class rule as the provider queries and index.
      *
-     * <p>A syncable provider with several authorities: Android registers its first
-     * authority on the class record and its later ones on a copy whose isSyncable is
-     * false, as only the first authority may be syncable. Gesher keeps one record per
-     * class, which owns every authority it registered. When the first authority was
-     * skipped, the free ones are exactly the copy's, so the record takes the copy's
-     * non-syncable state; otherwise it keeps the class record's syncable state.
+     * <p>For a syncable provider Android stores the first authority on the class record
+     * and the remaining authorities on a separate, non-syncable record. Authority
+     * queries select the corresponding view. The process bind and publication path
+     * uses the complete set of authorities owned by the same provider instance.
      */
-    private static void registerAuthorities(ProviderInfo[] providers) {
+    private static void registerAuthorities(ProviderInfo[] providers, String authority,
+            boolean forBinding) {
         if (providers == null) return;
         Set<String> registered = new HashSet<>();
         Set<String> components = new HashSet<>();
         for (ProviderInfo info : providers) {
             if (!components.add(info.name) || info.authority == null) continue;
             String[] authorities = info.authority.split(";");
-            StringBuilder kept = null;
+            String first = null;
+            StringBuilder others = null;
             boolean skipped = false;
-            boolean firstSkipped = false;
             for (int i = 0; i < authorities.length; i++) {
-                if (!registered.add(authorities[i])) {
+                String name = authorities[i];
+                if (!registered.add(name)) {
                     skipped = true;
-                    if (i == 0) firstSkipped = true;
                     continue;
                 }
-                if (kept == null) kept = new StringBuilder(authorities[i]);
-                else kept.append(';').append(authorities[i]);
+                if (i == 0) {
+                    first = name;
+                } else {
+                    if (others == null) others = new StringBuilder(name);
+                    else others.append(';').append(name);
+                }
             }
-            if (!skipped) continue;
-            info.authority = kept == null ? null : kept.toString();
-            if (firstSkipped && kept != null && info.isSyncable) info.isSyncable = false;
+            if (info.isSyncable && !forBinding) {
+                boolean classRecord = authority == null || authority.equals(first);
+                info.authority = classRecord ? first : others == null ? null : others.toString();
+                info.isSyncable = classRecord;
+            } else if (skipped) {
+                info.authority = others == null ? first
+                        : first == null ? others.toString() : first + ";" + others;
+                if (first == null && info.authority != null) info.isSyncable = false;
+            }
         }
     }
 

@@ -674,12 +674,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     synchronized ProviderInfo provider(String authority, long flags) {
         for (ApkPackage p : providerPackages(authority)) {
             if (isRemovalPending(p.packageName)) continue;
-            for (ProviderInfo info : p.providers(flags)) {
-                if (info.authority == null) continue;
-                for (String a : info.authority.split(";")) {
-                    if (a.equals(authority)) return info;
-                }
-            }
+            ProviderInfo info = p.providerForAuthority(authority, flags);
+            if (info != null) return info;
         }
         return null;
     }
