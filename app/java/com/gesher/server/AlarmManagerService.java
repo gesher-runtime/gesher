@@ -6,14 +6,17 @@ package com.gesher.server;
 
 import android.app.ActivityManager;
 import android.app.AlarmManager;
+import android.app.AppOpsManager;
 import android.app.IAlarmCompleteListener;
 import android.app.IAlarmListener;
 import android.app.IAlarmManager;
 import android.app.PendingIntent;
 import android.content.IIntentReceiver;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Process;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.WorkSource;
@@ -43,7 +46,8 @@ import java.util.TimeZone;
  * also notices clock and time zone changes (WM_TIMECHANGE, WM_SETTINGCHANGE, a jump of the wall clock
  * against the monotonic one) and the local date's change, and sends TIME_SET,
  * TIMEZONE_CHANGED and DATE_CHANGED to each package (registered and manifest receivers).
- * There are no idle or doze restrictions, and exact alarms are allowed to every app.
+ * There are no idle or doze restrictions. Exact PendingIntent alarms follow Android
+ * target-SDK, permission and AppOps authority; direct listeners have their own lifetime.
  *
  * <p>Alarms live in the device: they keep it running while one is due within its idle
  * timeout ({@link DeviceWork}) and are lost when it stops, as on a reboot.
@@ -56,6 +60,9 @@ final class AlarmManagerService extends IAlarmManager.Default
     private static final long TIME_SET_SLACK_MS = 2_000;
     /** Maximum delivery hold from reservation, including an acknowledged broadcast chain. */
     private static final long DELIVERY_TIMEOUT_MS = 5 * 60_000;
+    /** Android 16 AlarmManagerService's default repeating-alarm bounds. */
+    private static final long MIN_INTERVAL_MS = 60_000;
+    private static final long MAX_INTERVAL_MS = 365L * AlarmManager.INTERVAL_DAY;
 
     private final ActivityManagerService mAm;
     private final PackageManagerService mPm;
@@ -72,11 +79,14 @@ final class AlarmManagerService extends IAlarmManager.Default
         final IAlarmListener listener;
         final String tag;
         final AlarmManager.AlarmClockInfo alarmClock;
+        final boolean exact;
+        IBinder.DeathRecipient pendingDeath;
+        boolean pendingDeathLinked, pendingDead; // Guarded by AlarmManagerService.this.
         int count;  // periods passed when delivered
 
         Alarm(String packageName, int type, long when, long windowLength, long interval,
                 int flags, PendingIntent operation, IAlarmListener listener, String tag,
-                AlarmManager.AlarmClockInfo alarmClock) {
+                AlarmManager.AlarmClockInfo alarmClock, boolean exact) {
             this.packageName = packageName;
             this.type = type;
             this.when = when;
@@ -87,6 +97,7 @@ final class AlarmManagerService extends IAlarmManager.Default
             this.listener = listener;
             this.tag = tag;
             this.alarmClock = alarmClock;
+            this.exact = exact;
         }
 
         boolean rtc() {
@@ -104,7 +115,7 @@ final class AlarmManagerService extends IAlarmManager.Default
 
         boolean matches(PendingIntent op, IAlarmListener l) {
             if (op != null) return operation != null && operation.equals(op);
-            return l != null && listener != null && listener.asBinder() == l.asBinder();
+            return l != null && listener != null && listener.asBinder().equals(l.asBinder());
         }
 
         @Override
@@ -152,6 +163,12 @@ final class AlarmManagerService extends IAlarmManager.Default
         mAm = am;
         mPm = pm;
         pm.onPackageRemoval(this::removeAll);
+        pm.onPackageChange(this::packageChanged);
+        pm.appOps().addModeChangedListener((pkg, op, oldMode, newMode) -> {
+            if (op == AppOpsManager.OP_SCHEDULE_EXACT_ALARM) {
+                exactAlarmModeChanged(pkg, oldMode, newMode);
+            }
+        });
         DeviceWork.add(this);
         // The clock watch (TIME_SET, TIMEZONE_CHANGED, DATE_CHANGED) from the system server's
         // start; in an app's own process (--single-process) from its first alarm.
@@ -185,22 +202,74 @@ final class AlarmManagerService extends IAlarmManager.Default
                 && !(mAm.callers().isSystem() && "android".equals(callingPackage))) {
             throw new SecurityException("Unknown or retiring alarm owner");
         }
-        if (operation == null && listener == null) {
-            SystemServer.log("alarm: set from " + callingPackage + " with no operation");
+        if (interval != 0 && listener != null) {
+            throw new IllegalArgumentException("Repeating alarms cannot use AlarmReceivers");
+        }
+        if (workSource != null && !mAm.callers().isSystem()
+                && mPm.permissions().checkPermission(callingPackage, "android.permission.UPDATE_DEVICE_STATS")
+                        != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Alarm WorkSource requires UPDATE_DEVICE_STATS");
+        }
+        if ((flags & AlarmManager.FLAG_IDLE_UNTIL) != 0) {
+            if (!mAm.callers().isSystem()) flags &= ~AlarmManager.FLAG_IDLE_UNTIL;
+            else windowLength = AlarmManager.WINDOW_EXACT;
+        }
+        flags &= ~(AlarmManager.FLAG_WAKE_FROM_IDLE | AlarmManager.FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED
+                | AlarmManager.FLAG_ALLOW_WHILE_IDLE_COMPAT);
+        if (alarmClock != null) {
+            windowLength = AlarmManager.WINDOW_EXACT;
+            flags |= AlarmManager.FLAG_WAKE_FROM_IDLE;
+        }
+        boolean prioritized = (flags & AlarmManager.FLAG_PRIORITIZE) != 0;
+        if (prioritized) {
+            if (!mAm.callers().isSystem() && mPm.permissions().checkPermission(callingPackage,
+                    "android.permission.SCHEDULE_PRIORITIZED_ALARM") != PackageManager.PERMISSION_GRANTED) {
+                throw new SecurityException("Prioritized alarms require SCHEDULE_PRIORITIZED_ALARM");
+            }
+            flags &= ~AlarmManager.FLAG_ALLOW_WHILE_IDLE;
+        }
+        boolean isExact = windowLength == AlarmManager.WINDOW_EXACT;
+        // A direct OnAlarmListener is expressly exempt. Its Binder must survive
+        // from registration to delivery; a PendingIntent may outlive its process.
+        if (isExact && !prioritized && listener == null && creator != null
+                && !ExactAlarmAccess.canSchedule(mPm, creator)) {
+            throw new SecurityException("Caller " + callingPackage
+                    + " does not have SCHEDULE_EXACT_ALARM or USE_EXACT_ALARM");
+        }
+
+        // AOSP validates target presence in setImpl, after permission checks.
+        if ((operation == null) == (listener == null)) {
+            SystemServer.log("alarm: set from " + callingPackage + " requires exactly one target");
             return;
         }
         if (type < AlarmManager.RTC_WAKEUP || type > AlarmManager.ELAPSED_REALTIME) {
             throw new IllegalArgumentException("Invalid alarm type " + type);
         }
         start();
+        long repeatInterval = interval <= 0 ? 0
+                : Math.max(MIN_INTERVAL_MS, Math.min(interval, MAX_INTERVAL_MS));
         Alarm a = new Alarm(callingPackage, type, Math.max(0, triggerAtTime), windowLength,
-                Math.max(0, interval), flags, operation, listener, listenerTag, alarmClock);
-        synchronized (this) {
-            if (mPm.isRemovalPending(callingPackage) || mPm.get(callingPackage) != creator) {
-                throw new SecurityException("Alarm owner changed before publication");
+                repeatInterval, flags, operation, listener, listenerTag, alarmClock, isExact);
+        if (!linkPendingListener(a)) return;
+        List<Alarm> replaced = new ArrayList<>();
+        boolean published = false;
+        try {
+            synchronized (this) {
+                if (mPm.isRemovalPending(callingPackage) || mPm.get(callingPackage) != creator) {
+                    throw new SecurityException("Alarm owner changed before publication");
+                }
+                if (isExact && !prioritized && listener == null && creator != null
+                        && !ExactAlarmAccess.canSchedule(mPm, creator)) {
+                    throw new SecurityException("Exact alarm access changed before publication");
+                }
+                if (a.pendingDead) return;
+                removeAlarmsLocked(old -> old.matches(operation, listener), replaced);
+                mAlarms.add(a);
+                published = true;
             }
-            mAlarms.removeIf(old -> old.matches(operation, listener));
-            mAlarms.add(a);
+        } finally {
+            unlinkPendingListeners(replaced);
+            if (!published) unlinkPendingListener(a);
         }
         SystemServer.log("alarm: set " + a + " in " + inMs(a) + " ms");
         // An ordinary alarm may have replaced the current alarm clock.
@@ -212,13 +281,14 @@ final class AlarmManagerService extends IAlarmManager.Default
     public void remove(PendingIntent operation, IAlarmListener listener) {
         boolean clock;
         int removed;
+        List<Alarm> retired = new ArrayList<>();
         synchronized (this) {
-            int before = mAlarms.size();
             clock = mAlarms.stream().anyMatch(a -> a.alarmClock != null
                     && a.matches(operation, listener));
-            mAlarms.removeIf(a -> a.matches(operation, listener));
-            removed = before - mAlarms.size();
+            removeAlarmsLocked(a -> a.matches(operation, listener), retired);
+            removed = retired.size();
         }
+        unlinkPendingListeners(retired);
         if (removed > 0) {
             SystemServer.log("alarm: removed " + removed + " alarm(s) of "
                     + (operation != null ? operation : "a listener"));
@@ -230,9 +300,11 @@ final class AlarmManagerService extends IAlarmManager.Default
     @Override
     public void removeAll(String packageName) {
         mAm.callers().requireSystemOrPackage(packageName);
+        List<Alarm> retired = new ArrayList<>();
         synchronized (this) {
-            mAlarms.removeIf(a -> a.packageName != null && a.packageName.equals(packageName));
+            removeAlarmsLocked(a -> a.packageName != null && a.packageName.equals(packageName), retired);
         }
+        unlinkPendingListeners(retired);
         alarmClocksChanged();
         WindowsHost.alarmKick();
     }
@@ -261,17 +333,136 @@ final class AlarmManagerService extends IAlarmManager.Default
 
     @Override
     public boolean canScheduleExactAlarms(String packageName) {
-        return true;
+        CallerIdentity callers = mAm.callers();
+        callers.requirePackage(packageName);
+        // The public query is for the caller's package. Administrative callers
+        // use hasScheduleExactAlarm to inspect a different installed package.
+        if (callers.isSystem()) {
+            if ("android".equals(packageName)) return true;
+            throw new SecurityException("Cannot query another package's exact alarm capability");
+        }
+        ApkPackage pkg = mPm.get(packageName);
+        if (pkg == null) throw new SecurityException("Unknown alarm package");
+        return ExactAlarmAccess.canSchedule(mPm, pkg);
     }
 
     @Override
     public boolean hasScheduleExactAlarm(String packageName, int userId) {
-        return true;
+        CallerIdentity callers = mAm.callers();
+        if (android.os.UserHandle.getUserId(callers.callerUid()) != userId
+                && !callers.isSystem()
+                && mPm.permissions().checkPermission(callers.callerPackage(),
+                        "android.permission.INTERACT_ACROSS_USERS_FULL")
+                        != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("hasScheduleExactAlarm requires INTERACT_ACROSS_USERS_FULL");
+        }
+        if (!callers.isSystem()) callers.requirePackage(packageName);
+        if (userId != 0) return false;
+        return ExactAlarmAccess.hasSchedule(mPm, mPm.get(packageName));
+    }
+
+    private void exactAlarmModeChanged(ApkPackage pkg, int oldMode, int newMode) {
+        if (mPm.get(pkg.packageName) != pkg || mPm.isRemovalPending(pkg.packageName)
+                || !ExactAlarmAccess.requiresPermission(pkg) || ExactAlarmAccess.hasUse(mPm, pkg)) return;
+        boolean hadPermission = ExactAlarmAccess.hasSchedule(mPm, pkg, oldMode);
+        boolean hasPermission = ExactAlarmAccess.hasSchedule(mPm, pkg, newMode);
+        if (hadPermission && !hasPermission) {
+            revokeExactAlarmAccess(pkg, true);
+        } else if (!hadPermission && hasPermission) {
+            sendExactAlarmPermissionGranted(pkg);
+        }
+    }
+
+    /** Package publication rechecks authority without killing an already replaced process. */
+    void packageChanged(ApkPackage pkg) {
+        if (!ExactAlarmAccess.canSchedule(mPm, pkg)) revokeExactAlarmAccess(pkg, false);
+    }
+
+    private void revokeExactAlarmAccess(ApkPackage pkg, boolean killProcesses) {
+        boolean clock;
+        int removed;
+        List<Alarm> retired = new ArrayList<>();
+        synchronized (this) {
+            if (mPm.get(pkg.packageName) != pkg || mPm.isRemovalPending(pkg.packageName)
+                    || ExactAlarmAccess.canSchedule(mPm, pkg)) return;
+            int before = mAlarms.size();
+            clock = mAlarms.stream().anyMatch(a -> a.alarmClock != null
+                    && pkg.packageName.equals(a.packageName) && a.exact);
+            removeAlarmsLocked(a -> pkg.packageName.equals(a.packageName) && a.exact, retired);
+            removed = before - mAlarms.size();
+        }
+        unlinkPendingListeners(retired);
+        if (clock) alarmClocksChanged();
+        if (removed > 0) WindowsHost.alarmKick();
+        if (killProcesses) mAm.killProcessesForExactAlarmRevocation(pkg,
+                () -> !ExactAlarmAccess.canSchedule(mPm, pkg));
+    }
+
+    private void sendExactAlarmPermissionGranted(ApkPackage pkg) {
+        Intent intent = new Intent(AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED);
+        intent.setPackage(pkg.packageName);
+        intent.addFlags(Intent.FLAG_RECEIVER_REPLACE_PENDING
+                | Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT | Intent.FLAG_RECEIVER_FOREGROUND);
+        // A later revoke/update invalidates a queued grant notification. Only the
+        // grant edge is broadcast; Android kills the affected processes on revoke.
+        mAm.sendBroadcastFor("android", intent, null, null,
+                () -> mPm.get(pkg.packageName) == pkg && !mPm.isRemovalPending(pkg.packageName)
+                        && ExactAlarmAccess.hasSchedule(mPm, pkg));
     }
 
     @Override
     public int getConfigVersion() {
         return 0;
+    }
+
+    private void removeAlarmsLocked(java.util.function.Predicate<Alarm> predicate, List<Alarm> retired) {
+        for (java.util.Iterator<Alarm> it = mAlarms.iterator(); it.hasNext();) {
+            Alarm alarm = it.next();
+            if (predicate.test(alarm)) { it.remove(); retired.add(alarm); }
+        }
+    }
+
+    /** Bind the listener's pending lifetime before publishing it; no Binder call under our lock. */
+    private boolean linkPendingListener(Alarm alarm) {
+        if (alarm.listener == null) return true;
+        alarm.pendingDeath = () -> pendingListenerDied(alarm);
+        try { alarm.listener.asBinder().linkToDeath(alarm.pendingDeath, 0); }
+        catch (RemoteException unreachable) { return false; }
+        synchronized (this) {
+            if (!alarm.pendingDead) { alarm.pendingDeathLinked = true; return true; }
+        }
+        try { alarm.listener.asBinder().unlinkToDeath(alarm.pendingDeath, 0); }
+        catch (NoSuchElementException ignored) { }
+        return false;
+    }
+
+    private void pendingListenerDied(Alarm alarm) {
+        List<Delivery> deliveries = new ArrayList<>();
+        boolean removed;
+        synchronized (this) {
+            alarm.pendingDead = true;
+            removed = mAlarms.remove(alarm);
+            for (Delivery delivery : mDelivering) if (delivery.alarm == alarm) deliveries.add(delivery);
+        }
+        unlinkPendingListener(alarm);
+        for (Delivery delivery : deliveries) finishDelivery(delivery);
+        if (removed) {
+            if (alarm.alarmClock != null) alarmClocksChanged();
+            WindowsHost.alarmKick();
+        }
+    }
+
+    private void unlinkPendingListeners(List<Alarm> alarms) {
+        for (Alarm alarm : alarms) unlinkPendingListener(alarm);
+    }
+
+    private void unlinkPendingListener(Alarm alarm) {
+        synchronized (this) {
+            if (!alarm.pendingDeathLinked) return;
+            alarm.pendingDeathLinked = false;
+        }
+        try { alarm.listener.asBinder().unlinkToDeath(alarm.pendingDeath, 0); }
+        catch (NoSuchElementException ignored) { }
     }
 
     // --- DeviceWork.Source ------------------------------------------------------------------
@@ -319,6 +510,7 @@ final class AlarmManagerService extends IAlarmManager.Default
             delivery.deathLinked = false;
         }
         if (linked) unlinkDelivery(delivery);
+        unlinkPendingListener(delivery.alarm);
     }
 
     private static void unlinkDelivery(Delivery delivery) {
@@ -479,6 +671,7 @@ final class AlarmManagerService extends IAlarmManager.Default
         } else {
             try {
                 if (!linkDelivery(delivery)) return;
+                unlinkPendingListener(a);
                 a.listener.doAlarm(new IAlarmCompleteListener.Stub() {
                     @Override
                     public void alarmComplete(IBinder who) {

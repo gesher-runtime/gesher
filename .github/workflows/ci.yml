@@ -154,6 +154,8 @@ jobs:
           tests/windows/shell/PreferredLanguagesChecks.ps1
           tests/windows/shell/MicrogDefaultsChecks.ps1
           tests/windows/shell/ControlPanelRefreshChecks.ps1
+          tests/windows/shell/ControlPanelRecoveryChecks.ps1
+          tests/windows/shell/ControlPanelIdleChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
@@ -926,7 +928,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@3321867ce53c5ee386242f5b49888fca2ea8c3d9
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@92c87bef013c0f1a5423b49b68d9b78079a8acd9
     with:
       local-runner: false
 
@@ -1081,6 +1083,8 @@ jobs:
           tests/windows/shell/PreferredLanguagesChecks.ps1
           tests/windows/shell/MicrogDefaultsChecks.ps1
           tests/windows/shell/ControlPanelRefreshChecks.ps1
+          tests/windows/shell/ControlPanelRecoveryChecks.ps1
+          tests/windows/shell/ControlPanelIdleChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
