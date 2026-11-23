@@ -423,6 +423,23 @@ int main(int argc, char** argv) {
     Check(("leftover " + std::string(leftover.name) + " is set up").c_str(), !ec, ec.message());
   }
 
+  // This image's own directory, left by an older process a while ago and
+  // reused: loading marks it used, or a newer Gesher would prune it.
+  const std::string image = gesher::bionic::ArtShimImage();
+  uint64_t fnv = 14695981039346656037ull;
+  for (unsigned char c : image) fnv = (fnv ^ c) * 1099511628211ull;
+  char reused_name[32];
+  std::snprintf(reused_name, sizeof(reused_name), "x86_64-%016llx",
+                static_cast<unsigned long long>(fnv));
+  {
+    const fs::path sub = scratch / reused_name;
+    fs::create_directories(sub);
+    std::ofstream(sub / "libart.so", std::ios::binary) << image;
+    std::error_code ec;
+    fs::last_write_time(sub, old_time, ec);
+    Check("an old directory of this image is set up", !ec, ec.message());
+  }
+
   std::string path, error;
   void* entry = gesher::bionic::LoadArtShim(argv[2], &path, &error);
   Check("the stand-in libart.so loads", entry != nullptr, path + error);
@@ -430,6 +447,14 @@ int main(int argc, char** argv) {
   const std::string loaded_dir = fs::path(path).parent_path().filename().string();
   Check("its directory is named x86_64-<64-bit hash>",
         loaded_dir.size() == 23 && loaded_dir.compare(0, 7, "x86_64-") == 0, loaded_dir);
+  {
+    std::error_code ec;
+    const auto written = fs::last_write_time(scratch / reused_name, ec);
+    Check("the reused directory is marked used",
+          loaded_dir == reused_name && !ec &&
+              fs::file_time_type::clock::now() - written < std::chrono::hours(1),
+          loaded_dir);
+  }
   for (const Leftover& leftover : leftovers) {
     Check(("leftover " + std::string(leftover.name) + (leftover.pruned ? " is pruned" : " stays"))
               .c_str(),

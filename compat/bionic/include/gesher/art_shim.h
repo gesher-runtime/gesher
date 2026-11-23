@@ -45,7 +45,8 @@ extern const char kArtShimKindArm64[];
 // `keep`'s kind other than `keep`, and the 8-hex-digit names used before
 // kinds, when untouched for `min_age`. A file a process still has mapped is
 // not deleted (Windows refuses), and that directory stays; failures are
-// ignored. The loaders call it after loading their stand-ins.
+// ignored. The loaders call it after loading their stand-ins, and mark the
+// directory they use as written when they start using it.
 void PruneArtShimDirectories(const std::string& dir, const std::string& keep,
                              std::chrono::seconds min_age);
 

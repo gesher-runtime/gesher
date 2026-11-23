@@ -144,6 +144,16 @@ void MakeDirectories(const std::string& dir) {
   }
 }
 
+// The stand-in directory `dir` is in use: its last-write time becomes now, so
+// that another Gesher's PruneArtShimDirectories, which goes by that time,
+// does not take it for an abandoned one while this process loads from it
+// (reusing a directory writes nothing into it). A failure is ignored.
+void MarkDirectoryUsed(const std::string& dir) {
+  std::error_code ignored;
+  std::filesystem::last_write_time(std::filesystem::path(dir),
+                                   std::filesystem::file_time_type::clock::now(), ignored);
+}
+
 // Makes `path` hold exactly `image`: an existing file with these bytes is used
 // as it is (another process may have it mapped); otherwise the bytes go to a
 // file of this process and are renamed into place.
@@ -386,6 +396,7 @@ void* LoadArtShim(const std::string& dir, std::string* path, std::string* error)
   const std::string name = ImageDirectory(kArtShimKindX86_64, image);
   const std::string sub = dir + "/" + name;
   MakeDirectories(sub);
+  MarkDirectoryUsed(sub);
   *path = sub + "/" + kSoname;
   if (!WriteOnce(*path, image, error)) return nullptr;
   elf::Library* lib = elf::Load(path->c_str(), error);
@@ -808,6 +819,7 @@ void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, v
   const std::string name = ImageDirectory(kArtShimKindArm64, image, dexfile_image);
   const std::string sub = dir + "/" + name;
   MakeDirectories(sub);
+  MarkDirectoryUsed(sub);
   const std::string dexfile_path = sub + "/" + kDexFileSoname;
   *path = sub + "/" + kSoname;
   if (!WriteOnce(dexfile_path, dexfile_image, error) || !WriteOnce(*path, image, error)) {
