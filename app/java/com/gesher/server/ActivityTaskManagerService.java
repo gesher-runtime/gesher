@@ -4489,6 +4489,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     affectedTasks.add(r.taskId);
                     continue;
                 }
+                // A launch that lost its process before reaching idle must report failure
+                // even when there is no saved state and the record is removed below.
+                if (!r.idle && !r.finishing && r.state != State.DESTROYED) r.launchFailed = true;
                 recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
@@ -4502,7 +4505,6 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         mTaskRotation.delete(r.taskId);
                     }
                 } else {
-                    if (!r.idle) r.launchFailed = true;
                     r.app = null;
                     r.launchGeneration = null;
                     r.launchScheduled = false;
