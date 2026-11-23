@@ -154,6 +154,8 @@ jobs:
           tests/windows/shell/PreferredLanguagesChecks.ps1
           tests/windows/shell/MicrogDefaultsChecks.ps1
           tests/windows/shell/ControlPanelRefreshChecks.ps1
+          tests/windows/shell/ControlPanelRecoveryChecks.ps1
+          tests/windows/shell/ControlPanelIdleChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
@@ -309,6 +311,7 @@ jobs:
           python3 tools/test_pthread_attribute_contracts.py --sanitize
           python3 tools/test_bionic_wait_contracts.py --sanitize
           python3 tools/test_libcore_process_logging.py --sanitize
+          python3 tools/test_structured_logging.py --sanitize
           python3 tools/test_debug_memory_contracts.py --sanitize
           python3 tools/test_bionic_dns_contracts.py --sanitize
           python3 tools/test_ordinary_os_contracts.py --sanitize
@@ -663,6 +666,9 @@ jobs:
           python3 tools/test_layered_bitmap_cache.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/layered_bitmap_cache_test.exe
+          python3 tools/test_structured_logging.py --compile-only \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/structured_logging_test.exe
           python3 tools/test_native_poll_allocations.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/native_poll_allocations_test.exe
@@ -922,7 +928,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@c3ebc5b8016487422c4029edb8e7c6877f92a9bf
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@fe42fc3d4854141df94cd1e05cfbd10c4a686315
     with:
       local-runner: false
 
@@ -1077,6 +1083,8 @@ jobs:
           tests/windows/shell/PreferredLanguagesChecks.ps1
           tests/windows/shell/MicrogDefaultsChecks.ps1
           tests/windows/shell/ControlPanelRefreshChecks.ps1
+          tests/windows/shell/ControlPanelRecoveryChecks.ps1
+          tests/windows/shell/ControlPanelIdleChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
@@ -1943,6 +1951,8 @@ jobs:
           & ./dist/binder_reply_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/layered_bitmap_cache_test.exe gate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/structured_logging_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/native_poll_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
