@@ -31,6 +31,7 @@ final class JavaEngineConnection extends HttpURLConnection {
 
     private synchronized void enter() {
         if (!started || finished && !registered && responseCode == -1 && !disconnected) {
+            engine.configureContentEncoding(delegate);
             engine.register(this); // Also rejects a previously opened, unused connection after shutdown.
             started = true;
             registered = true;
@@ -83,6 +84,12 @@ final class JavaEngineConnection extends HttpURLConnection {
         int code = delegate.getResponseCode();
         InputStream body = code >= 400 ? delegate.getErrorStream()
                 : delegate.getDoInput() ? delegate.getInputStream() : null;
+        try { body = engine.decodeBody(body, delegate); }
+        catch (IOException | RuntimeException | Error failure) {
+            if (body != null) try { body.close(); }
+            catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
         TrackedInput tracked = body == null ? null : new TrackedInput(body);
         boolean cancel;
         synchronized (this) {

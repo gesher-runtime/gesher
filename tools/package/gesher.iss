@@ -124,7 +124,7 @@ Source: "{#BuildDir}\tzdata\*"; DestDir: "{app}\tzdata"; Flags: ignoreversion re
 Source: "{#BuildDir}\TZDATA-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 ; Networking (docs/network.md): Android's CA certificates, which dalvikvm joins
 ; with the roots Windows trusts as the system CAs ($ANDROID_ROOT/etc/security/cacerts),
-; and the licenses of BoringSSL, Conscrypt, OkHttp and BouncyCastle.
+; and the licenses of BoringSSL, Conscrypt, OkHttp, Brotli and BouncyCastle.
 Source: "{#BuildDir}\cacerts\*"; DestDir: "{app}\cacerts"; Flags: ignoreversion
 Source: "{#BuildDir}\NET-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 ; Gesher's default ringtone, notification and alarm sounds (docs/media.md):

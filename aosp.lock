@@ -25,6 +25,7 @@ system/unwinding libunwindstack/include/
 libcore libcore.aconfig NativeCode.bp JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
 external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/ android_icu4j/libcore_bridge/src/native/ android_icu4j/resources/ android_icu4c/include/ libicu/ndk_headers/ libicu/src/ libandroidicuinit/ icu4c/source/common/ icu4c/source/i18n/ icu4c/source/stubdata/ icu4c/source/data/misc/windowsZones.txt
 external/okhttp Android.bp repackaged/ /LICENSE
+external/brotli c/common/ c/dec/ c/enc/ c/include/ /LICENSE
 # Networking (docs/network.md): BoringSSL for Windows (cmake/aosp/boringssl.cmake),
 # Conscrypt's natives and Java (cmake/aosp/conscrypt.cmake, tools/net), BouncyCastle
 # (external/bouncycastle, below, widened to its sources).

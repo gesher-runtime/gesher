@@ -18,6 +18,7 @@ final class JavaHttpEngine extends HttpEngine {
     private static final URL HTTPS_BASE = transportBase("https://localhost/");
     final String agent;
     final boolean http2Enabled;
+    final boolean brotliEnabled;
     final Http2SessionPool http2Sessions = new Http2SessionPool();
     private final EngineHttpCache cache;
     final ExecutorService io = Executors.newCachedThreadPool(r -> {
@@ -28,8 +29,12 @@ final class JavaHttpEngine extends HttpEngine {
     private Network network;
 
     JavaHttpEngine(String agent, boolean http2Enabled, EngineHttpCache cache) {
+        this(agent, http2Enabled, false, cache);
+    }
+    JavaHttpEngine(String agent, boolean http2Enabled, boolean brotliEnabled, EngineHttpCache cache) {
         this.agent = agent;
         this.http2Enabled = http2Enabled;
+        this.brotliEnabled = brotliEnabled;
         this.cache = cache;
     }
     synchronized void checkOpen() {
@@ -45,7 +50,8 @@ final class JavaHttpEngine extends HttpEngine {
         connection.setRequestProperty("User-Agent", agent);
         // HttpEngine exposes HTTP request properties, not the provider's private
         // protocol setters. Keep a returned connection from changing engine policy.
-        return androidConnection ? new JavaEngineConnection(this, (HttpURLConnection) connection) : connection;
+        return androidConnection || brotliEnabled
+                ? new JavaEngineConnection(this, (HttpURLConnection) connection) : connection;
     }
     private static URL transportBase(String value) {
         try { return new URL(value); }
@@ -68,6 +74,34 @@ final class JavaHttpEngine extends HttpEngine {
         // pool includes the protocol list in the address key, separating
         // HTTP/2-enabled connections from HTTP/1.1-only connections.
         connection.setRequestProperty("X-Android-Protocols", http2Enabled ? "h2,http/1.1" : "http/1.1");
+    }
+
+    void configureContentEncoding(HttpURLConnection connection) {
+        if (brotliEnabled && connection.getRequestProperty("Accept-Encoding") == null) {
+            connection.setRequestProperty("Accept-Encoding", ContentDecoding.acceptEncoding(
+                    connection.getURL(), connection.getRequestProperty("Range") != null));
+        }
+    }
+    List<Map.Entry<String,String>> contentHeaders(URL url, List<Map.Entry<String,String>> headers) {
+        if (!brotliEnabled || headers.stream().anyMatch(h -> h.getKey().equalsIgnoreCase("Accept-Encoding")))
+            return headers;
+        List<Map.Entry<String,String>> wire = new ArrayList<>(headers);
+        wire.add(new AbstractMap.SimpleImmutableEntry<>("Accept-Encoding", ContentDecoding.acceptEncoding(
+                url, headers.stream().anyMatch(h -> h.getKey().equalsIgnoreCase("Range")))));
+        return wire;
+    }
+    InputStream decodeBody(InputStream stream, HttpURLConnection connection) throws IOException {
+        if (!brotliEnabled || stream == null || connection.getRequestMethod().equals("HEAD")) return stream;
+        int status = connection.getResponseCode();
+        if (status >= 100 && status < 200 || status == 204 || status == 304) return stream;
+        List<Map.Entry<String,String>> encodings = new ArrayList<>();
+        for (int i = 0; ; i++) {
+            String name = connection.getHeaderFieldKey(i), value = connection.getHeaderField(i);
+            if (name == null && value == null) break;
+            if (name != null && value != null && name.equalsIgnoreCase("Content-Encoding"))
+                encodings.add(new AbstractMap.SimpleImmutableEntry<>(name, value));
+        }
+        return ContentDecoding.wrap(stream, ContentDecoding.encoding(encodings), true);
     }
 
     static String transportHeaderName(String name) {
@@ -386,11 +420,14 @@ final class JavaHttpEngine extends HttpEngine {
                         : header.getKey(), header.getValue());
             }
             if (androidConnection) engine.configureProtocols(opened);
+            engine.configureContentEncoding(opened);
             if (sendUpload) upload(opened);
             chain.add(target.toExternalForm());
             Response info=new Response(chain,opened);
             response=info;
             InputStream stream=info.code>=400 ? opened.getErrorStream() : opened.getInputStream();
+            synchronized (this) { transports.put(opened,stream); }
+            stream=engine.decodeBody(stream, opened);
             synchronized (this) { transports.put(opened,stream); }
             String location=opened.getHeaderField("Location");
             if (location!=null && (info.code==301 || info.code==302 || info.code==303 || info.code==307 || info.code==308)) {
@@ -455,12 +492,19 @@ final class JavaHttpEngine extends HttpEngine {
                     int grown=bytes==null ? capacity : Math.max(capacity,Math.min(32768,bytes.length*2));
                     readScratch=bytes=new byte[grown];
                 }
-                int n=input.read(bytes,0,capacity);
+                int n;
+                try { n=input.read(bytes,0,capacity); }
+                finally {
+                    long encoded=ContentDecoding.encodedBytes(input);
+                    if (!response.cached && encoded>=0) response.received=encoded;
+                }
                 if (isDone()) return;
                 if (n<0) { finish(null,false); return; }
                 synchronized (this) {
                     if (isDone()) return;
-                    buffer.put(bytes,0,n); if (!response.cached) response.received+=n; phase=READY;
+                    buffer.put(bytes,0,n);
+                    if (!response.cached && ContentDecoding.encodedBytes(input)<0) response.received+=n;
+                    phase=READY;
                 }
                 dispatch(() -> callback.onReadCompleted(this,response,buffer));
             });

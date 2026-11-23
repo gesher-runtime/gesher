@@ -93,7 +93,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
             // The current duplex transport requires HTTP/2. Fail through the
             // ordinary asynchronous callback path before opening a connection.
             if (!engine.http2Enabled) throw new ProtocolException("HTTP/2 is disabled for this engine");
-            Http2Transport opened=new Http2Transport(engine.http2Sessions);
+            Http2Transport opened=new Http2Transport(engine.http2Sessions, engine.brotliEnabled);
             synchronized (this) { if (done) { opened.close(); return; } transport=opened; }
             opened.connect(url,network);
             synchronized (this) { if (done) return; ready=true; }
@@ -103,7 +103,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     }
     private void sendHeaders() throws Exception {
         if (headersSent) return;
-        transport.start(url,method,headers.getAsList(),engine.agent,!writeEnded); headersSent=true;
+        transport.start(url,method,engine.contentHeaders(url,headers.getAsList()),engine.agent,!writeEnded); headersSent=true;
         io(() -> {
             List<Map.Entry<String,String>> received=transport.headers();
             initialHeaderCount=received.size();
@@ -117,11 +117,8 @@ final class JavaBidirectionalStream extends BidirectionalStream {
             }
             if (code<100) throw new java.io.IOException("HTTP/2 response is missing :status");
             trace("HTTP status "+code);
-            String encoding="";
-            for (Map.Entry<String,String> h:values) {
-                if (h.getKey().equalsIgnoreCase("content-encoding")) encoding=h.getValue();
-            }
-            transport.setResponseEncoding(encoding);
+            transport.setResponseEncoding(method.equals("HEAD") || code == 204 || code == 304
+                    ? "" : ContentDecoding.encoding(values));
             Response response=new Response(url.toExternalForm(),code,new JavaHttpEngine.Headers(values));
             synchronized (this) { if (done) return; info=response; }
             callback(() -> callback.onResponseHeadersReceived(this,response));
@@ -188,7 +185,9 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     private void pump() throws Exception {
         byte[] bytes=new byte[TRANSFER_BYTES];
         for (;;) {
-            int length=transport.read(bytes,0,bytes.length);
+            int length;
+            try { length=transport.read(bytes,0,bytes.length); }
+            finally { info.received=transport.receivedBytes(); }
             if (done) return;
             if (length<0) {
                 List<Map.Entry<String,String>> all=transport.headers();
@@ -223,7 +222,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
                     if (done) return;
                     buffer=pendingRead; pendingRead=null; readPending=false;
                     int count=Math.min(buffer.remaining(),length-offset);
-                    buffer.put(bytes,offset,count); offset+=count; info.received+=count;
+                    buffer.put(bytes,offset,count); offset+=count;
                 }
                 callback(() -> callback.onReadCompleted(this,info,buffer,false));
             }

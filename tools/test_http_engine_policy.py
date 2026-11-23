@@ -18,6 +18,10 @@ parser.add_argument('--cache-only',action='store_true',help='Run private-cache c
 parser.add_argument('--cache-workload',action='store_true',help='Run just the network-work gate')
 parser.add_argument('--read-only',action='store_true',help='Run request read-buffer contracts and work gate only')
 parser.add_argument('--read-baseline',action='store_true',help='Report prior production allocation work without candidate budget')
+parser.add_argument('--brotli-native',type=Path,help='Directory with the production JNI/pinned decoder host library')
+parser.add_argument('--brotli-only',action='store_true',help='Run native Brotli and real-provider HTTP/HTTP2 contracts only')
+parser.add_argument('--brotli-wire-only',action='store_true',help='Run the public API traffic workload only')
+parser.add_argument('--brotli-wire-baseline',action='store_true',help='Require unchanged pre-feature gzip behavior in the wire workload')
 parser.add_argument('--source-ref',help='Compile the unchanged HTTP module at a prior Git revision')
 parser.add_argument('--mode',action='append',choices=['ordinary', 'global-enabled', 'global-disabled'],
                     help='Run selected provider fixture mode(s), instead of all modes')
@@ -101,8 +105,32 @@ else:
 sources+=[root/'tests/net/HttpEngineProtocolPolicyTest.java', root/'tests/net/HttpEngineTlsPolicyHostTest.java']
 sources+=[root/'tests/net/HttpEngineCacheTest.java',root/'tests/net/HttpEngineConnectionLifetimeTest.java']
 sources+=[root/'tests/net/HttpEngineReadBufferTest.java']
+if args.brotli_native or args.brotli_wire_only:
+ sources += [root/'tests/net'/name for name in ['HttpBrotliFixtures.java','HttpEngineBrotliWireTest.java']]
+if args.brotli_native and not args.brotli_wire_only:
+ sources += [root/'tests/net'/name for name in ['HttpEngineBrotliTest.java',
+              'Http2DeviceSmoke.java','Http2SessionContracts.java']]
 command=[str(jdk/'javac'),'--release','17','-encoding','UTF-8','-d',str(classes),*map(str,sources)]
 subprocess.run(command,check=True,timeout=60)
+if args.brotli_native or args.brotli_wire_only:
+ wire_java=[str(jdk/'java'),'-Xcheck:jni',
+             *([f'-Djava.library.path={args.brotli_native.resolve()}'] if args.brotli_native else []),
+             '-cp',str(classes)]
+ subprocess.run([*wire_java,'HttpEngineBrotliWireTest',
+                 *(['--baseline'] if args.brotli_wire_baseline else [])],check=True,timeout=60)
+if args.brotli_wire_only:
+ temporary.cleanup()
+ raise SystemExit(0)
+if args.brotli_native:
+ brotli_java=[str(jdk/'java'),'-Xcheck:jni',f'-Djava.library.path={args.brotli_native.resolve()}',
+              '-cp',str(classes)]
+ subprocess.run([*brotli_java,'android.net.http.HttpEngineBrotliTest','--host'],check=True,timeout=120)
+ for mode in ['brotli','brotli-headers','brotli-cancel']:
+  subprocess.run([*brotli_java,'Http2DeviceSmoke',mode],check=True,timeout=40)
+if args.brotli_only:
+ if not args.brotli_native: raise ValueError('--brotli-only requires --brotli-native')
+ temporary.cleanup()
+ raise SystemExit(0)
 if not args.cache_only and not args.cache_workload:
  subprocess.run([str(jdk/'java'),'-cp',str(classes),'HttpEngineReadBufferTest','--host',
                  *(['--baseline'] if args.read_baseline else [])],check=True,timeout=90)
