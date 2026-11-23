@@ -4,6 +4,8 @@
  */
 package com.gesher.server;
 
+import android.accounts.Account;
+import android.accounts.IAccountManager;
 import android.app.ContentProviderHolder;
 import android.app.GesherSettingsContext;
 import android.content.AttributionSource;
@@ -14,6 +16,7 @@ import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IContentService;
 import android.content.OperationApplicationException;
 import android.content.PermissionChecker;
 import android.content.UriMatcher;
@@ -30,6 +33,8 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
+import android.os.RemoteException;
+import android.os.ServiceManager;
 import android.os.SharedMemory;
 import android.os.UserHandle;
 import android.provider.ContactsContract;
@@ -144,6 +149,15 @@ final class ContactsProvider extends ContentProvider {
     private static final int PHOTO_DIMENSIONS = 98;
     private static final int PROFILE_STATUS = 99;
     private static final int PROFILE_STATUS_ID = 100;
+    private static final int DATA_USAGE_FEEDBACK = 101;
+    private static final int CONTACTS_DELETE_USAGE = 102;
+    private static final int CONTACTS_STREQUENT = 103;
+    private static final int CONTACTS_STREQUENT_FILTER = 104;
+    private static final int CONTACTS_FREQUENT = 105;
+    private static final int CALLABLES = 106;
+    private static final int CALLABLES_ID = 107;
+    private static final int CALLABLES_FILTER = 108;
+    private static final int PROVIDER_STATUS = 109;
     private static final Executor sProfilePhotoWriters = new ThreadPoolExecutor(
             0, 2, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), task -> {
                 Thread worker = new Thread(task, "ContactsProfilePhoto");
@@ -167,6 +181,8 @@ final class ContactsProvider extends ContentProvider {
             ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE;
     private static final String MIME_PHONE =
             ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE;
+    private static final String MIME_SIP =
+            ContactsContract.CommonDataKinds.SipAddress.CONTENT_ITEM_TYPE;
     private static final String MIME_EMAIL =
             ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE;
     private static final String MIME_POSTAL =
@@ -181,6 +197,7 @@ final class ContactsProvider extends ContentProvider {
     private static final Map<String, String> sContactsProjectionMap;
     private static final Map<String, String> sRawContactsProjectionMap;
     private static final Map<String, String> sDataProjectionMap;
+    private static final Map<String, String> sStrequentPhoneProjectionMap;
     private static final Map<String, String> sContactsEntityProjectionMap;
     private static final Map<String, String> sRawEntityProjectionMap;
     private static final Map<String, String> sPhoneLookupProjectionMap;
@@ -206,6 +223,11 @@ final class ContactsProvider extends ContentProvider {
         sUriMatcher.addURI(auth, "contacts/lookup/*/#", CONTACTS_LOOKUP_ID);
         sUriMatcher.addURI(auth, "contacts/#/data", CONTACTS_DATA);
         sUriMatcher.addURI(auth, "contacts/#/entities", CONTACTS_ENTITY);
+        sUriMatcher.addURI(auth, "contacts/delete_usage", CONTACTS_DELETE_USAGE);
+        sUriMatcher.addURI(auth, "contacts/strequent", CONTACTS_STREQUENT);
+        sUriMatcher.addURI(auth, "contacts/strequent/filter", CONTACTS_STREQUENT);
+        sUriMatcher.addURI(auth, "contacts/strequent/filter/*", CONTACTS_STREQUENT_FILTER);
+        sUriMatcher.addURI(auth, "contacts/frequent", CONTACTS_FREQUENT);
 
         sUriMatcher.addURI(auth, "raw_contacts", RAW_CONTACTS);
         sUriMatcher.addURI(auth, "raw_contacts/#", RAW_CONTACTS_ID);
@@ -215,10 +237,15 @@ final class ContactsProvider extends ContentProvider {
 
         sUriMatcher.addURI(auth, "data", DATA);
         sUriMatcher.addURI(auth, "data/#", DATA_ID);
+        sUriMatcher.addURI(auth, "data/usagefeedback/*", DATA_USAGE_FEEDBACK);
         sUriMatcher.addURI(auth, "data/phones", PHONES);
         sUriMatcher.addURI(auth, "data/phones/#", PHONES_ID);
         sUriMatcher.addURI(auth, "data/phones/filter", PHONES_FILTER_EMPTY);
         sUriMatcher.addURI(auth, "data/phones/filter/*", PHONES_FILTER);
+        sUriMatcher.addURI(auth, "data/callables", CALLABLES);
+        sUriMatcher.addURI(auth, "data/callables/#", CALLABLES_ID);
+        sUriMatcher.addURI(auth, "data/callables/filter", CALLABLES);
+        sUriMatcher.addURI(auth, "data/callables/filter/*", CALLABLES_FILTER);
         sUriMatcher.addURI(auth, "data/emails", EMAILS);
         sUriMatcher.addURI(auth, "data/emails/#", EMAILS_ID);
         sUriMatcher.addURI(auth, "data/emails/filter", EMAILS_FILTER_EMPTY);
@@ -235,6 +262,7 @@ final class ContactsProvider extends ContentProvider {
         sUriMatcher.addURI(auth, "directories", DIRECTORIES);
         sUriMatcher.addURI(auth, "directories/#", DIRECTORIES_ID);
         sUriMatcher.addURI(auth, "settings", SETTINGS);
+        sUriMatcher.addURI(auth, "provider_status", PROVIDER_STATUS);
         sUriMatcher.addURI(auth, "profile", PROFILE);
         sUriMatcher.addURI(auth, "profile/entities", CONTACTS_ENTITY);
         sUriMatcher.addURI(auth, "profile/raw_contacts", RAW_CONTACTS);
@@ -314,6 +342,12 @@ final class ContactsProvider extends ContentProvider {
                 "dirty", "deleted", "name_raw_contact_id",
                 "raw_contact_is_user_profile", "is_user_profile");
 
+        Map<String, String> strequentPhone = new HashMap<>(sDataProjectionMap);
+        strequentPhone.put("number", "data1 AS number");
+        strequentPhone.put("type", "data2 AS type");
+        strequentPhone.put("label", "data3 AS label");
+        sStrequentPhoneProjectionMap = Collections.unmodifiableMap(strequentPhone);
+
         sRawEntityProjectionMap = entityProjection(false);
         sContactsEntityProjectionMap = entityProjection(true);
 
@@ -368,6 +402,8 @@ final class ContactsProvider extends ContentProvider {
     private final File mDatabase;
     private final ContentProviders.RegisteredProvider mRegistration;
     private final Object mDbLock = new Object();
+    private boolean mStrictPhoneComparison;
+    private int mPhoneMinMatch;
     private SQLiteDatabase mDb;
     private boolean mInitialized;
     private Throwable mInitializationFailure;
@@ -647,6 +683,10 @@ final class ContactsProvider extends ContentProvider {
                 + "ungrouped_visible INTEGER NOT NULL DEFAULT 0,"
                 + "should_sync INTEGER NOT NULL DEFAULT 1"
                 + ");");
+        db.execSQL("CREATE TABLE IF NOT EXISTS contacts_database_metadata ("
+                + "_id INTEGER PRIMARY KEY CHECK (_id = 1), creation_time INTEGER NOT NULL)");
+        db.execSQL("INSERT OR IGNORE INTO contacts_database_metadata VALUES (1, ?)",
+                new Object[] {System.currentTimeMillis()});
         db.execSQL("CREATE TABLE IF NOT EXISTS profile_display_photos ("
                 + " data_id INTEGER PRIMARY KEY REFERENCES data(_id) ON DELETE CASCADE,"
                 + " contents BLOB NOT NULL)");
@@ -956,6 +996,7 @@ final class ContactsProvider extends ContentProvider {
             case PROFILE_STATUS_ID:
                 return uri.getPathSegments().get(hasProfilePath(uri) ? 2 : 1);
             case PHONES_ID:
+            case CALLABLES_ID:
             case EMAILS_ID:
             case POSTALS_ID:
             case DISPLAY_PHOTO_FILE:
@@ -1011,6 +1052,10 @@ final class ContactsProvider extends ContentProvider {
 
     @Override
     public boolean onCreate() {
+        mStrictPhoneComparison = getContext().getResources().getBoolean(
+                com.android.internal.R.bool.config_use_strict_phone_number_comparation);
+        mPhoneMinMatch = getContext().getResources().getInteger(
+                com.android.internal.R.integer.config_phonenumber_compare_min_match);
         return true;
     }
 
@@ -1020,6 +1065,9 @@ final class ContactsProvider extends ContentProvider {
             case CONTACTS:
             case CONTACTS_FILTER_EMPTY:
             case CONTACTS_FILTER:
+            case CONTACTS_STREQUENT:
+            case CONTACTS_STREQUENT_FILTER:
+            case CONTACTS_FREQUENT:
                 return ContactsContract.Contacts.CONTENT_TYPE;
             case CONTACTS_ID:
             case CONTACTS_LOOKUP:
@@ -1055,6 +1103,11 @@ final class ContactsProvider extends ContentProvider {
                 return ContactsContract.CommonDataKinds.Phone.CONTENT_TYPE;
             case PHONES_ID:
                 return ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE;
+            case CALLABLES:
+            case CALLABLES_FILTER:
+                return "vnd.android.cursor.dir/callable";
+            case CALLABLES_ID:
+                return "vnd.android.cursor.item/callable";
             case EMAILS:
             case EMAILS_FILTER_EMPTY:
             case EMAILS_FILTER:
@@ -1080,6 +1133,8 @@ final class ContactsProvider extends ContentProvider {
                 return ContactsContract.Directory.CONTENT_ITEM_TYPE;
             case SETTINGS:
                 return ContactsContract.Settings.CONTENT_TYPE;
+            case PROVIDER_STATUS:
+                return "vnd.android.cursor.dir/provider_status";
             case PROFILE_SYNC_STATE:
             case PROFILE_SYNC_STATE_ID:
                 return "vnd.android.cursor.item/syncstate";
@@ -1119,6 +1174,7 @@ final class ContactsProvider extends ContentProvider {
         }
         int match = sUriMatcher.match(uri);
         if (match == PHOTO_DIMENSIONS) return profilePhotoDimensions(projection);
+        if (match == PROVIDER_STATUS) return queryProviderStatus(projection);
         boolean profile = isProfileRequest(uri, match);
         String id = itemId(uri, match);
         String limit = ContactsProviderSupport.parseLimit(uri);
@@ -1128,7 +1184,7 @@ final class ContactsProvider extends ContentProvider {
         qb.setStrictGrammar(true);
         String effSelection = selection;
         String[] effArgs = selectionArgs;
-        String phoneLookupQuery = null;
+        String defaultOrder = null;
         boolean syncAdapter = isCallerSyncAdapter(uri);
 
         switch (match) {
@@ -1154,6 +1210,31 @@ final class ContactsProvider extends ContentProvider {
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, pattern);
                 break;
             }
+            case CONTACTS_STREQUENT:
+            case CONTACTS_STREQUENT_FILTER: {
+                boolean phoneOnly = uri.getBooleanQueryParameter(ContactsContract.STREQUENT_PHONE_ONLY, false);
+                qb.setTables(phoneOnly ? "view_data" : "view_contacts");
+                qb.setProjectionMap(phoneOnly ? sStrequentPhoneProjectionMap : sContactsProjectionMap);
+                if (phoneOnly) {
+                    effSelection = scopedSelection(effSelection,
+                            "mimetype IN (?, ?) AND in_default_directory = 1");
+                    effArgs = ContactsProviderSupport.prependArgs(effArgs, MIME_PHONE, MIME_SIP);
+                }
+                qb.appendWhereStandalone("starred = 1");
+                if (match == CONTACTS_STREQUENT_FILTER) {
+                    effSelection = scopedSelection(effSelection, "display_name LIKE ?");
+                    effArgs = ContactsProviderSupport.prependArgs(effArgs, "%" + uri.getLastPathSegment() + "%");
+                }
+                defaultOrder = phoneOnly ? "is_super_primary DESC" : "display_name COLLATE LOCALIZED ASC";
+                break;
+            }
+            case CONTACTS_FREQUENT:
+                qb.setTables("view_contacts");
+                qb.setProjectionMap(sContactsProjectionMap);
+                qb.appendWhereStandalone("0");
+                effSelection = null;
+                effArgs = null;
+                break;
             case CONTACTS_LOOKUP: {
                 List<String> segments = uri.getPathSegments();
                 qb.setTables("view_contacts");
@@ -1291,11 +1372,33 @@ final class ContactsProvider extends ContentProvider {
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, MIME_POSTAL, id);
                 break;
-            case PHONE_LOOKUP:
+            case CALLABLES:
+            case CALLABLES_ID:
+            case CALLABLES_FILTER:
+                qb.setTables("view_data");
+                qb.setProjectionMap(sDataProjectionMap);
+                effSelection = scopedSelection(selection, "mimetype IN (?, ?)");
+                effArgs = ContactsProviderSupport.prependArgs(selectionArgs, MIME_PHONE, MIME_SIP);
+                if (match == CALLABLES_ID) {
+                    effSelection = scopedSelection(effSelection, "_id = ?");
+                    effArgs = ContactsProviderSupport.prependArgs(effArgs, id);
+                } else if (match == CALLABLES_FILTER) {
+                    String pattern = "%" + uri.getLastPathSegment() + "%";
+                    effSelection = scopedSelection(effSelection, "(display_name LIKE ? OR data1 LIKE ?)");
+                    effArgs = ContactsProviderSupport.prependArgs(effArgs, pattern, pattern);
+                }
+                break;
+            case PHONE_LOOKUP: {
                 qb.setTables("view_phone_lookup");
                 qb.setProjectionMap(sPhoneLookupProjectionMap);
-                phoneLookupQuery = uri.getLastPathSegment();
+                int strict = mStrictPhoneComparison ? 1 : 0;
+                String arguments = ", ?, " + strict + ", " + mPhoneMinMatch + ")";
+                qb.appendWhereStandalone("PHONE_NUMBERS_EQUAL(number" + arguments
+                        + " OR PHONE_NUMBERS_EQUAL(normalized_number" + arguments);
+                String number = uri.getLastPathSegment();
+                effArgs = ContactsProviderSupport.prependArgs(selectionArgs, number, number);
                 break;
+            }
             case GROUPS:
             case GROUPS_SUMMARY:
                 qb.setTables(match == GROUPS_SUMMARY ? "view_groups_summary" : "groups");
@@ -1341,7 +1444,6 @@ final class ContactsProvider extends ContentProvider {
                 qb.setProjectionMap(PROFILE_VCARD_COLUMNS);
                 break;
             case CONTACT_THUMBNAIL:
-                if (!profile) throw new IllegalArgumentException("Unknown URL " + uri);
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
                 qb.appendWhereStandalone("_id = photo_id");
@@ -1389,13 +1491,8 @@ final class ContactsProvider extends ContentProvider {
         Cursor cursor;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
-            if (phoneLookupQuery != null) {
-                List<Long> matchedDataIds = findMatchingPhoneDataIds(db, phoneLookupQuery);
-                String idClause = idInClause("data_id", matchedDataIds);
-                effSelection = scopedSelection(effSelection, idClause);
-            }
             cursor = qb.query(db, projection, effSelection, effArgs,
-                    null, null, sortOrder, limit);
+                    null, null, sortOrder == null || sortOrder.isBlank() ? defaultOrder : sortOrder, limit);
         }
         try {
             ContactsProviderSupport.setNotificationUri(cursor, getContext(), uri);
@@ -1404,24 +1501,6 @@ final class ContactsProvider extends ContentProvider {
             cursor.close();
             throw failure;
         }
-    }
-
-    private static List<Long> findMatchingPhoneDataIds(SQLiteDatabase db, String queryNumber) {
-        List<Long> dataIds = new ArrayList<>();
-        if (queryNumber == null || queryNumber.isEmpty()) return dataIds;
-        try (Cursor c = db.rawQuery(
-                "SELECT data_id, number, normalized_number FROM view_phone_lookup", null)) {
-            while (c.moveToNext()) {
-                long dataId = c.getLong(0);
-                String number = c.getString(1);
-                String normalized = c.getString(2);
-                if (PhoneNumberUtils.compareLoosely(number, queryNumber)
-                        || PhoneNumberUtils.compareLoosely(normalized, queryNumber)) {
-                    dataIds.add(dataId);
-                }
-            }
-        }
-        return dataIds;
     }
 
     private static Cursor profilePhotoDimensions(String[] projection) {
@@ -1440,6 +1519,53 @@ final class ContactsProvider extends ContentProvider {
         MatrixCursor cursor = new MatrixCursor(columns, 1);
         cursor.addRow(dimensions);
         return cursor;
+    }
+
+    private Cursor queryProviderStatus(String[] projection) {
+        boolean hasContacts = hasSyncableContactsAccount();
+        long creationTime;
+        synchronized (mDbLock) {
+            SQLiteDatabase db = openDatabase();
+            try (Cursor c = db.rawQuery("SELECT creation_time, EXISTS(SELECT 1 FROM contacts "
+                    + "WHERE is_user_profile = 0) FROM contacts_database_metadata", null)) {
+                if (!c.moveToFirst()) throw new IllegalStateException("Contacts database metadata missing");
+                creationTime = c.getLong(0);
+                hasContacts |= c.getInt(1) != 0;
+            }
+        }
+        String[] columns = projection == null ? new String[] {
+                ContactsContract.ProviderStatus.STATUS,
+                ContactsContract.ProviderStatus.DATABASE_CREATION_TIMESTAMP
+        } : projection;
+        Object[] row = new Object[columns.length];
+        for (int i = 0; i < columns.length; i++) {
+            row[i] = switch (columns[i]) {
+                case ContactsContract.ProviderStatus.STATUS -> hasContacts
+                        ? ContactsContract.ProviderStatus.STATUS_NORMAL : ContactsContract.ProviderStatus.STATUS_EMPTY;
+                case ContactsContract.ProviderStatus.DATABASE_CREATION_TIMESTAMP -> creationTime;
+                default -> throw new IllegalArgumentException("Unknown provider status column " + columns[i]);
+            };
+        }
+        MatrixCursor result = new MatrixCursor(columns, 1);
+        result.addRow(row);
+        return result;
+    }
+
+    private static boolean hasSyncableContactsAccount() {
+        IAccountManager accounts = IAccountManager.Stub.asInterface(ServiceManager.checkService(Context.ACCOUNT_SERVICE));
+        IContentService content = IContentService.Stub.asInterface(ServiceManager.checkService(Context.CONTENT_SERVICE));
+        if (accounts == null || content == null) return false;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            for (Account account : accounts.getAccountsAsUser(null, 0, ContactsProviderSupport.PACKAGE)) {
+                if (content.getIsSyncable(account, ContactsContract.AUTHORITY) > 0) return true;
+            }
+            return false;
+        } catch (RemoteException failure) {
+            throw failure.rethrowFromSystemServer();
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
     }
 
     private static String profileColumn(String table) {
@@ -1871,6 +1997,8 @@ final class ContactsProvider extends ContentProvider {
 
     private int updateLocked(SQLiteDatabase db, int match, Uri uri, ContentValues values,
             String selection, String[] selectionArgs) {
+        // Android 10 and later accept this URI without recording contact affinity.
+        if (match == DATA_USAGE_FEEDBACK) return 0;
         ContentValues copy = values == null ? new ContentValues() : new ContentValues(values);
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
@@ -2193,6 +2321,16 @@ final class ContactsProvider extends ContentProvider {
 
     private int deleteLocked(SQLiteDatabase db, int match, Uri uri, String selection,
             String[] selectionArgs) {
+        if (match == CONTACTS_DELETE_USAGE) {
+            ContentValues reset = new ContentValues();
+            reset.put("times_contacted", 0);
+            reset.put("times_used", 0);
+            reset.putNull("last_time_contacted");
+            reset.putNull("last_time_used");
+            db.update("contacts", reset, "is_user_profile = 0", null);
+            db.update("raw_contacts", reset, "raw_contact_is_user_profile = 0", null);
+            return 1;
+        }
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
         if (match == SETTINGS) return mutateSettings(db, uri, null, selection, selectionArgs);
@@ -2301,7 +2439,8 @@ final class ContactsProvider extends ContentProvider {
     private static boolean shouldSyncToNetwork(Uri uri) {
         int match = sUriMatcher.match(uri);
         return match != PROFILE_SYNC_STATE && match != PROFILE_SYNC_STATE_ID
-                && match != PROFILE_STATUS && match != PROFILE_STATUS_ID && !isCallerSyncAdapter(uri);
+                && match != PROFILE_STATUS && match != PROFILE_STATUS_ID
+                && match != CONTACTS_DELETE_USAGE && !isCallerSyncAdapter(uri);
     }
 
     private void notifyObservers(boolean syncToNetwork, boolean profileChanged) {

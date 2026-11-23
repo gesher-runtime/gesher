@@ -440,6 +440,74 @@ public final class ContactsProviderContractTest {
         }
     }
 
+    private static void testOrdinaryDiscoveryRoutes(File dbDir) throws Exception {
+        List<Boolean> sync = new ArrayList<>();
+        ContentProvider provider = newContactsProvider(null, null, new File(dbDir, "contacts-discovery.db"));
+        Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
+        ProviderInfo info = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
+        provider.attachInfo(observerRecordingContext(provider, new ArrayList<>(), sync), info);
+        try {
+            Uri status = ContactsContract.ProviderStatus.CONTENT_URI;
+            long creationTime;
+            try (Cursor c = provider.query(status, null, null, null, null)) {
+                check(c.moveToFirst() && c.getInt(0) == ContactsContract.ProviderStatus.STATUS_EMPTY,
+                        "fresh database reports empty status");
+                creationTime = c.getLong(1);
+                check(creationTime > 0, "provider reports its creation timestamp");
+            }
+            Uri raw = provider.insert(ContactsContract.RawContacts.CONTENT_URI, new ContentValues());
+            long rawId = ContentUris.parseId(raw);
+            long contactId;
+            try (Cursor c = provider.query(raw, new String[] {"contact_id"}, null, null, null)) {
+                check(c.moveToFirst(), "ordinary raw contact resolves its aggregate");
+                contactId = c.getLong(0);
+            }
+            try (Cursor c = provider.query(status, null, null, null, null)) {
+                check(c.moveToFirst() && c.getInt(0) == ContactsContract.ProviderStatus.STATUS_NORMAL
+                        && c.getLong(1) == creationTime, "provider status follows ordinary contact data");
+            }
+            ContentValues data = new ContentValues();
+            data.put("raw_contact_id", rawId);
+            data.put("mimetype", ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE);
+            data.put("data1", "+16505550100");
+            Uri phone = provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            data.put("mimetype", ContactsContract.CommonDataKinds.SipAddress.CONTENT_ITEM_TYPE);
+            data.put("data1", "fixture@example.invalid");
+            Uri sip = provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            data.put("mimetype", ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE);
+            provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            Uri callables = Uri.withAppendedPath(ContactsContract.Data.CONTENT_URI, "callables");
+            check(count(provider, callables) == 2
+                            && count(provider, ContentUris.withAppendedId(callables, ContentUris.parseId(sip))) == 1,
+                    "callables contain phone and SIP rows without email rows");
+            Uri callableFilter = Uri.withAppendedPath(Uri.withAppendedPath(callables, "filter"), "example.invalid");
+            check(count(provider, callableFilter) == 1, "callable filter matches the SIP address");
+
+            Uri strequent = ContactsContract.Contacts.CONTENT_STREQUENT_URI;
+            Uri feedback = Uri.withAppendedPath(ContactsContract.DataUsageFeedback.FEEDBACK_URI,
+                    Long.toString(ContentUris.parseId(phone)));
+            check(provider.update(feedback, new ContentValues(), null, null) == 0 && count(provider, strequent) == 0,
+                    "obsolete usage feedback ignores updates and does not change affinity");
+            ContentValues stars = new ContentValues();
+            stars.put("starred", 1);
+            check(provider.update(ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, contactId),
+                    stars, null, null) == 1 && count(provider, strequent) == 1,
+                    "strequent reports starred contacts");
+            Uri phones = strequent.buildUpon().appendQueryParameter(ContactsContract.STREQUENT_PHONE_ONLY, "true").build();
+            try (Cursor c = provider.query(phones, new String[] {"number"}, null, null, null)) {
+                check(c.getCount() == 2, "phone-only strequent returns stored callable rows for starred contacts");
+            }
+            check(count(provider, Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_URI, "frequent")) == 0,
+                    "obsolete frequent list stays empty");
+            sync.clear();
+            check(provider.delete(ContactsContract.DataUsageFeedback.DELETE_USAGE_URI, null, null) == 1
+                    && sync.equals(List.of(false)) && count(provider, strequent) == 1,
+                    "usage cleanup preserves stars and avoids scheduling sync");
+        } finally {
+            provider.shutdown();
+        }
+    }
+
     private static void testFreshSchemaAndPersistence(File dbDir) throws Exception {
         File dbFile = new File(dbDir, "contacts-reopen.db");
         Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
@@ -1231,6 +1299,7 @@ public final class ContactsProviderContractTest {
 
         try {
             testContactsSchemaViewsStrictAndFallback(dbDir);
+            testOrdinaryDiscoveryRoutes(dbDir);
             testProfileNamespaceAndLifecycle(dbDir);
             testProfileAssetsAndSyncState(dbDir);
             testProfileStatusUpdates(dbDir);
