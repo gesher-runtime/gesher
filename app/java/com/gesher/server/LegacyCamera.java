@@ -26,7 +26,7 @@ import java.util.WeakHashMap;
  *
  * <p>A device is camera {@code i} in Windows' order (the test camera last); a PC's camera
  * faces the user (CAMERA_FACING_FRONT), the test camera is BACK, orientation 0. Opening needs
- * CAMERA in the app's manifest, else "Fail to connect to camera service". Parameters: the
+ * a current CAMERA permission grant, else "Fail to connect to camera service". Parameters: the
  * device's sizes for preview, picture and video, preview formats NV21 (yuv420sp, the
  * default) and YV12, 30 fps, fixed focus, no flash, no zoom, no face detection, JPEG
  * pictures and thumbnails. Preview frames go to the preview callback (NV21 or YV12; with

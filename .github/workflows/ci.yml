@@ -180,6 +180,7 @@ jobs:
           tests/windows/shell/ControlPanelIdleChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelLaunchChecks.ps1
+          tests/windows/shell/ControlPanelProxyChecks.ps1
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
@@ -543,6 +544,7 @@ jobs:
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
+          python3 tools/test_capture_permission_flow.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
           python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
