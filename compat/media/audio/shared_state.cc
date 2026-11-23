@@ -18,30 +18,9 @@
 
 namespace gesher::media {
 
-struct SharedAudioState {
-  uint32_t magic;
-  uint32_t version;
-  volatile LONG generation;
-  volatile LONG next_session;
-  volatile LONG lock;  // a spin lock for the multi-field updates
-  int32_t index[kNumStreamTypes];
-  int32_t min_index[kNumStreamTypes];
-  int32_t max_index[kNumStreamTypes];
-  int32_t muted[kNumStreamTypes];
-  volatile LONG64 active_until_ms[kNumStreamTypes];
-  float master_volume;
-  int32_t master_mute;
-};
+using SharedAudioState = audio_state::DeviceState;
 
 namespace {
-
-constexpr uint32_t kMagic = 0x47415544;  // 'GAUD'
-constexpr uint32_t kVersion = 1;
-
-// AudioService's default maximum indexes (MAX_STREAM_VOLUME) and minimums
-// (MIN_STREAM_VOLUME), by stream type.
-constexpr int kMaxIndex[kNumStreamTypes] = {5, 7, 7, 15, 7, 7, 15, 7, 15, 15, 15, 15};
-constexpr int kMinIndex[kNumStreamTypes] = {1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0};
 
 // A device's name for its Windows objects: ANDROID_DATA's Java hashCode, as
 // com.gesher.server.Device names its mutex (here over the variable itself).
@@ -58,22 +37,15 @@ std::wstring MappingName() {
   return buf;
 }
 
-void InitDefaults(SharedAudioState* s) {
-  memset(s, 0, sizeof(*s));
-  s->version = kVersion;
-  s->next_session = 1;
-  for (int i = 0; i < kNumStreamTypes; i++) {
-    s->min_index[i] = kMinIndex[i];
-    s->max_index[i] = kMaxIndex[i];
-    // A Windows app's sessions start at full volume; so do Gesher's streams.
-    s->index[i] = kMaxIndex[i];
-  }
-  s->master_volume = 1.0f;
-  MemoryBarrier();
-  s->magic = kMagic;
-}
-
 SharedAudioState* Open() {
+  if (binder_endpoint::Current().UsesProtectedAudio()) {
+    if (auto* controls = binder_endpoint::OpenAudioDeviceControls(
+            binder_endpoint::Current().CanWriteAudioControls())) return controls;
+    MEDIA_LOGW("audio state: the protected device controls are unavailable");
+    auto* state = new SharedAudioState;
+    audio_state::InitDeviceState(state);
+    return state;
+  }
   std::wstring name = MappingName();
   HANDLE h = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
                                 sizeof(SharedAudioState), name.c_str());
@@ -84,18 +56,18 @@ SharedAudioState* Open() {
     MEDIA_LOGW("audio state: no shared mapping (error %lu); volumes are this process's",
                GetLastError());
     auto* s = new SharedAudioState;
-    InitDefaults(s);
+    audio_state::InitDeviceState(s);
     return s;
   }
   // The handle stays open for the process's life: the mapping lives as long
   // as some process of the device has it.
   auto* s = static_cast<SharedAudioState*>(view);
   if (!existed) {
-    InitDefaults(s);
+    audio_state::InitDeviceState(s);
   } else {
     // Another process is initializing it: wait for its magic.
-    for (int i = 0; i < 1000 && s->magic != kMagic; i++) Sleep(1);
-    if (s->magic != kMagic || s->version != kVersion) InitDefaults(s);
+    for (int i = 0; i < 1000 && s->magic != audio_state::kMagic; i++) Sleep(1);
+    if (s->magic != audio_state::kMagic || s->version != audio_state::kVersion) audio_state::InitDeviceState(s);
   }
   return s;
 }
@@ -119,13 +91,13 @@ void Bump(SharedAudioState* s) { InterlockedIncrement(&s->generation); }
 
 }  // namespace
 
-SharedAudioState* State() {
+static SharedAudioState* State() {
   static SharedAudioState* state = Open();
   return state;
 }
 
 void InitStreamVolume(int stream, int min_index, int max_index) {
-  if (!Valid(stream) || max_index <= min_index) return;
+  if (!binder_endpoint::Current().CanWriteAudioControls() || !Valid(stream) || max_index <= min_index) return;
   SharedAudioState* s = State();
   {
     SpinLock lock(s);
@@ -143,7 +115,7 @@ void InitStreamVolume(int stream, int min_index, int max_index) {
 }
 
 void SetStreamVolume(int stream, int index, bool muted) {
-  if (!Valid(stream)) return;
+  if (!binder_endpoint::Current().CanWriteAudioControls() || !Valid(stream)) return;
   SharedAudioState* s = State();
   {
     SpinLock lock(s);
@@ -169,7 +141,7 @@ float StreamGain(int stream) {
 }
 
 void SetStreamGainFromSession(int stream, float level, bool muted) {
-  if (!Valid(stream)) return;
+  if (!binder_endpoint::Current().CanWriteAudioControls() || !Valid(stream)) return;
   SharedAudioState* s = State();
   int a = StreamAlias(stream);
   bool changed = false;
@@ -189,11 +161,13 @@ void SetStreamGainFromSession(int stream, float level, bool muted) {
 }
 
 void SetMasterVolume(float v) {
+  if (!binder_endpoint::Current().CanWriteAudioControls()) return;
   State()->master_volume = std::clamp(v, 0.0f, 1.0f);
   Bump(State());
 }
 float GetMasterVolume() { return State()->master_volume; }
 void SetMasterMute(bool mute) {
+  if (!binder_endpoint::Current().CanWriteAudioControls()) return;
   State()->master_mute = mute ? 1 : 0;
   Bump(State());
 }
@@ -203,7 +177,7 @@ uint32_t Generation() { return static_cast<uint32_t>(State()->generation); }
 
 namespace {
 
-audio_playback::Activity* PlaybackActivity() {
+audio_state::Activity* PlaybackActivity() {
   static auto* activity = binder_endpoint::OpenAudioPlaybackActivity();
   return activity;
 }
@@ -215,7 +189,7 @@ void PreparePlaybackActivity() {
 }
 
 void MarkStreamActive(int stream, uint64_t until_ms) {
-  static_assert(kNumStreamTypes == audio_playback::kStreamCount);
+  static_assert(kNumStreamTypes == audio_state::kStreamCount);
   if (!Valid(stream)) return;
   volatile LONG64* value;
   if (binder_endpoint::Current().UsesProtectedAudio()) {

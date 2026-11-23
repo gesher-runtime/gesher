@@ -1,10 +1,10 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc04..30bf93d5d 100644
+index ee26bfc04..922989fb4 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -54,0 +55,2 @@
 +#include "../posix/include/gesher/windows_process_identity.h"
-+#include "../posix/include/gesher/audio_playback_activity.h"
++#include "../posix/include/gesher/audio_device_state.h"
 @@ -57,0 +60,4 @@
 +#include "launch_channel.h"
 +#ifdef GESHER_RECORD_LOCK_BROKER
@@ -72,7 +72,7 @@ index ee26bfc04..30bf93d5d 100644
 @@ -968 +990 @@ void CloseStagingFds(Buffer* buffer) {
 -    CloseRemoteHandle(buffer->proc->pid, staging);
 +    CloseRemoteHandle(buffer->proc, staging);
-@@ -1587,17 +1609,12 @@ bool ClientIsRestricted(HANDLE pipe) {
+@@ -1587,17 +1609,80 @@ bool ClientIsRestricted(HANDLE pipe) {
 -  if (!ImpersonateNamedPipeClient(pipe)) return true;
 -  HANDLE token = nullptr;
 -  BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
@@ -102,12 +102,11 @@ index ee26bfc04..30bf93d5d 100644
 +    std::lock_guard<std::mutex> lock(g_lock);
 +    for (const auto& entry : g_procs) {
 +      if (!g_peer_registry->Live(entry.second->identity)) revoked.push_back(entry.second);
-@@ -1606,2 +1623 @@ bool ClientIsRestricted(HANDLE pipe) {
--  CloseHandle(token);
--  return restricted;
++    }
++  }
 +  for (const auto& proc : revoked) ProcRelease(proc.get());
-@@ -1610 +1626,73 @@ bool ClientIsRestricted(HANDLE pipe) {
--void ServeProc(HANDLE pipe, In in) {
++}
++
 +void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
 +                          gesher::process_identity::Principal authority) {
 +  peer::OwnedHandle endpoint_owner(endpoint);
@@ -171,15 +170,17 @@ index ee26bfc04..30bf93d5d 100644
 +        if (system || g_record_only) accepted = g_peer_registry->AttachJob(std::move(job));
 +        break;
 +      }
-+    }
+@@ -1604,0 +1690,2 @@ bool ClientIsRestricted(HANDLE pipe) {
 +    uint32_t status = accepted ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
 +    if (!launch::Transfer(endpoint, &status, sizeof(status), true)) break;
-+  }
+@@ -1606,2 +1693,3 @@ bool ClientIsRestricted(HANDLE pipe) {
+-  CloseHandle(token);
+-  return restricted;
 +  g_peer_registry->CloseAuthority();
 +  ReapRevokedPeers();
 +  ExitProcess(ERROR_BROKEN_PIPE);
-+}
-+
+@@ -1610 +1698 @@ bool ClientIsRestricted(HANDLE pipe) {
+-void ServeProc(HANDLE pipe, In in) {
 +void ServeProc(HANDLE pipe, In in, bool operator_hello) {
 @@ -1613 +1701,15 @@ void ServeProc(HANDLE pipe, In in) {
 -  if (g_sandbox && ClientIsRestricted(pipe)) {
@@ -202,7 +203,7 @@ index ee26bfc04..30bf93d5d 100644
 +    if (g_peer_registry && !g_peer_registry->Live(identity)) return;
 @@ -1636,0 +1740 @@ void ServeProc(HANDLE pipe, In in) {
 +    proc->identity = std::move(identity);
-@@ -1653,0 +1758,209 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1653,0 +1758,238 @@ void ServeProc(HANDLE pipe, In in) {
 +#ifdef GESHER_RECORD_LOCK_BROKER
 +bool WaitRecordClient(HANDLE pipe, bool accept_ack);
 +#endif
@@ -288,7 +289,7 @@ index ee26bfc04..30bf93d5d 100644
 +  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
 +}
 +
-+namespace playback = gesher::audio_playback;
++namespace playback = gesher::audio_state;
 +
 +struct AudioRegion {
 +  peer::OwnedHandle section;
@@ -300,6 +301,24 @@ index ee26bfc04..30bf93d5d 100644
 +std::map<WeakPeer, AudioRegion, std::owner_less<WeakPeer>> g_audio_activity;
 +std::mutex g_audio_lock;
 +uint32_t g_next_audio_session = 1;  // guarded by g_audio_lock
++peer::OwnedHandle g_audio_device_controls;
++
++HANDLE DuplicateAudioDeviceControls(const peer::Registry::Lease& process, bool writable) {
++  if (!g_audio_device_controls) {
++    peer::OwnedHandle section(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
++                                                 sizeof(playback::DeviceState), nullptr));
++    if (!section) return nullptr;
++    auto* state = static_cast<playback::DeviceState*>(
++        MapViewOfFile(section.get(), FILE_MAP_WRITE, 0, 0, sizeof(playback::DeviceState)));
++    if (!state) return nullptr;
++    playback::InitDeviceState(state);
++    UnmapViewOfFile(state);
++    g_audio_device_controls = std::move(section);
++  }
++  HANDLE child = nullptr;
++  return DuplicateHandle(GetCurrentProcess(), g_audio_device_controls.get(), process->process.get(),
++                         &child, writable ? FILE_MAP_WRITE : FILE_MAP_READ, FALSE, 0) ? child : nullptr;
++}
 +
 +bool AudioPeer(const peer::Registry::Lease& process) {
 +  return process && (process->role == peer::Role::kApplication ||
@@ -357,6 +376,17 @@ index ee26bfc04..30bf93d5d 100644
 +        }
 +      } else if (op == wire::kAudioPlaybackSession && g_next_audio_session < INT_MAX / 8u) {
 +        result = (g_next_audio_session++ << 3) | 1u;
++      } else if (op == wire::kAudioDeviceControls && stream <= 1) {
++        const bool writable = stream == 1;
++        // A record-only broker belongs to one standalone app's process tree.
++        // Only the real SystemServer sets shared controls for a normal device.
++        if (writable && !g_record_only && process->role != peer::Role::kSystemServer) {
++          status = -EACCES;
++        } else {
++          const HANDLE section = DuplicateAudioDeviceControls(process, writable);
++          if (section) result = launch::EncodeHandle(section);
++          else status = -EIO;
++        }
 +      } else {
 +        status = -EINVAL;
 +      }
@@ -412,10 +442,10 @@ index ee26bfc04..30bf93d5d 100644
 +}
 +#endif
 +
-@@ -1736,0 +2050,2 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1736,0 +2079,2 @@ void ServeRights(HANDLE pipe, In in) {
 +  peer::Registry::Lease identity;
 +  peer::OwnedHandle legacy_client;
-@@ -1738,3 +2053,11 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1738,3 +2082,11 @@ void ServeRights(HANDLE pipe, In in) {
 -  if (in.Get(&version) && version == wire::kRightsVersion &&
 -      GetNamedPipeClientProcessId(pipe, &client_pid)) {
 -    client = OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid);
@@ -430,26 +460,26 @@ index ee26bfc04..30bf93d5d 100644
 +      legacy_client.reset(OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid));
 +      client = legacy_client.get();
 +    }
-@@ -1745 +2067,0 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1745 +2096,0 @@ void ServeRights(HANDLE pipe, In in) {
 -    if (client != nullptr) CloseHandle(client);
-@@ -1749,0 +2072 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1749,0 +2101 @@ void ServeRights(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -1885 +2207,0 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1885 +2236,0 @@ void ServeRights(HANDLE pipe, In in) {
 -  CloseHandle(client);
-@@ -1897,0 +2220,2 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+@@ -1897,0 +2249,2 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
 +      if (g_peer_registry && (!proc->identity ||
 +                              proc->identity->role != peer::Role::kServiceManager)) return -EPERM;
-@@ -1941,0 +2266,2 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1941,0 +2295,2 @@ void ServeThread(HANDLE pipe, In in) {
 +  const auto identity = g_peer_registry ? g_peer_registry->Authenticate(pipe)
 +                                        : peer::Registry::Lease{};
-@@ -1947 +2273,3 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1947 +2302,3 @@ void ServeThread(HANDLE pipe, In in) {
 -    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
 +    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead &&
 +        (!g_peer_registry || (identity && it->second->identity == identity &&
 +                              g_peer_registry->Live(identity)))) {
-@@ -1968,0 +2297 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1968,0 +2326 @@ void ServeThread(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -2028,0 +2358,11 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -2028,0 +2387,11 @@ void ServeThread(HANDLE pipe, In in) {
 +bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
 +  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
@@ -461,10 +491,10 @@ index ee26bfc04..30bf93d5d 100644
 +  return launch::Transfer(pipe, request->data(), length, false, deadline);
 +}
 +
-@@ -2031 +2371 @@ void Serve(HANDLE pipe) {
+@@ -2031 +2400 @@ void Serve(HANDLE pipe) {
 -  if (ReadMessage(pipe, &msg)) {
 +  if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
-@@ -2035,6 +2375,17 @@ void Serve(HANDLE pipe) {
+@@ -2035,6 +2404,17 @@ void Serve(HANDLE pipe) {
 -      if (op == wire::kHelloProc) {
 -        ServeProc(pipe, in);
 -      } else if (op == wire::kHelloThread) {
@@ -477,7 +507,7 @@ index ee26bfc04..30bf93d5d 100644
 +      } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
 +        ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
 +      } else if (op == wire::kAudioPlaybackPublish || op == wire::kAudioPlaybackQuery ||
-+                 op == wire::kAudioPlaybackSession) {
++                 op == wire::kAudioPlaybackSession || op == wire::kAudioDeviceControls) {
 +        ServeAudioPlayback(pipe, in, op);
 +#endif
 +      } else if (!g_record_only) {
@@ -488,7 +518,7 @@ index ee26bfc04..30bf93d5d 100644
 +        } else if (op == wire::kHelloRights) {
 +          ServeRights(pipe, in);
 +        }
-@@ -2052,0 +2404,10 @@ int main(int argc, char** argv) {
+@@ -2052,0 +2433,10 @@ int main(int argc, char** argv) {
 +  launch::Startup bootstrap;
 +  g_record_only = gesher::binder_bootstrap::ReadStartupRecord(&bootstrap) &&
 +      bootstrap.endpoint == launch::Endpoint::kRecordBroker;
@@ -499,12 +529,12 @@ index ee26bfc04..30bf93d5d 100644
 +  if (g_record_only) return EXIT_FAILURE;
 +#endif
 +  const bool protected_launch = g_record_only || launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap);
-@@ -2054 +2415,3 @@ int main(int argc, char** argv) {
+@@ -2054 +2444,3 @@ int main(int argc, char** argv) {
 -  if (argc > 1) {
 +  if (g_record_only) {
 +    device = "standalone record locks";
 +  } else if (argc > 1) {
-@@ -2061,24 +2424,29 @@ int main(int argc, char** argv) {
+@@ -2061,24 +2453,29 @@ int main(int argc, char** argv) {
 -  std::wstring name = wire::kPipePrefix;
 -  for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
 -
@@ -558,7 +588,7 @@ index ee26bfc04..30bf93d5d 100644
 +    if (g_rights_doorbell == nullptr || positions_section == nullptr) {
 +      Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
 +    }
-@@ -2091,2 +2459,28 @@ int main(int argc, char** argv) {
+@@ -2091,2 +2488,28 @@ int main(int argc, char** argv) {
 -  g_sandbox = gesher::appcontainer::Enabled();
 -  if (g_sandbox) {
 +  if (g_record_only) {
@@ -684,7 +714,7 @@ index 3492add71..93f84db15 100644
 +target_link_options(rooted_storage_probe PRIVATE -municode)
 +target_link_libraries(rooted_storage_probe PRIVATE gesher_posix)
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index 2fe5f43ba..a8567e34a 100644
+index 2fe5f43ba..c5bf00173 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -29,0 +30 @@
@@ -710,7 +740,7 @@ index 2fe5f43ba..a8567e34a 100644
 +      SetLastError(ERROR_ACCESS_DENIED);
 +      return INVALID_HANDLE_VALUE;
 +    }
-@@ -762,0 +777,132 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
+@@ -762,0 +777,143 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 +bool binder_endpoint::EnrollChild(HANDLE process) {
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
 +  const std::wstring name = RecordPipeName();
@@ -768,13 +798,13 @@ index 2fe5f43ba..a8567e34a 100644
 +}
 +}  // namespace
 +
-+audio_playback::Activity* binder_endpoint::OpenAudioPlaybackActivity() {
++audio_state::Activity* binder_endpoint::OpenAudioPlaybackActivity() {
 +  uint64_t handle = 0;
 +  if (!AudioPlaybackRequest(wire::kAudioPlaybackPublish, 0, 0, &handle) ||
 +      !handle || handle > UINTPTR_MAX) return nullptr;
 +  auto section = binder_bootstrap::DecodeHandle(handle);
-+  auto* state = static_cast<audio_playback::Activity*>(
-+      MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(audio_playback::Activity)));
++  auto* state = static_cast<audio_state::Activity*>(
++      MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(audio_state::Activity)));
 +  CloseHandle(section);
 +  return state;
 +}
@@ -789,6 +819,17 @@ index 2fe5f43ba..a8567e34a 100644
 +  uint64_t session = 0;
 +  return AudioPlaybackRequest(wire::kAudioPlaybackSession, 0, 0, &session) && session <= INT_MAX
 +      ? static_cast<int>(session) : 0;
++}
++
++audio_state::DeviceState* binder_endpoint::OpenAudioDeviceControls(bool writable) {
++  uint64_t handle = 0;
++  if (!AudioPlaybackRequest(wire::kAudioDeviceControls, writable ? 1 : 0, 0, &handle) ||
++      !handle || handle > UINTPTR_MAX) return nullptr;
++  auto section = binder_bootstrap::DecodeHandle(handle);
++  auto* state = static_cast<audio_state::DeviceState*>(MapViewOfFile(
++      section, writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0, sizeof(audio_state::DeviceState)));
++  CloseHandle(section);
++  return state;
 +}
 +
 +int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
@@ -843,14 +884,14 @@ index 2fe5f43ba..a8567e34a 100644
 +  return !error && reply.size() != sizeof(int32_t) ? EPROTO : error;
 +}
 +
-@@ -782 +928 @@ int OpenBinder(int flags) {
+@@ -782 +939 @@ int OpenBinder(int flags) {
 -  hello.Put<uint32_t>(wire::kHelloProc);
 +  hello.Put<uint32_t>(binder_endpoint::Current().IsOperator() ? wire::kHelloOperator : wire::kHelloProc);
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 50a85fb80..3359c9896 100644
+index 50a85fb80..83edc0ca9 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
-@@ -111,0 +112,20 @@ enum Op : uint32_t {
+@@ -111,0 +112,22 @@ enum Op : uint32_t {
 +  // Same framing as kHelloProc. The protected broker authenticates the
 +  // Windows device operator and assigns Android shell; the fields grant no role.
 +  kHelloOperator = 12,
@@ -871,7 +912,9 @@ index 50a85fb80..3359c9896 100644
 +  kAudioPlaybackPublish = 17,
 +  kAudioPlaybackQuery = 18,
 +  kAudioPlaybackSession = 19,
-@@ -147,0 +168 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
++  // Audio request framing, with the writable flag in the stream field.
++  kAudioDeviceControls = 20,
+@@ -147,0 +170 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
 +constexpr const wchar_t kStandaloneRecordPipe[] = L"\\\\.\\pipe\\gesher-binder-standalone-record-";
 diff --git a/compat/posix/src/dirent.cc b/compat/posix/src/dirent.cc
 index 572f64140..56b19af0f 100644

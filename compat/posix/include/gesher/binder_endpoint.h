@@ -3,7 +3,7 @@
 #pragma once
 
 #include <windows.h>
-#include "audio_playback_activity.h"
+#include "audio_device_state.h"
 
 #include <mutex>
 
@@ -100,6 +100,7 @@ class Binding {
   bool IsGuest() const { return guest_; }
   bool IsStandalone() const { return standalone_; }
   bool UsesProtectedAudio() const { return guest_ || system_; }
+  bool CanWriteAudioControls() const { return !guest_ || standalone_; }
 
   DWORD StandaloneRecordBrokerPid() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -130,9 +131,10 @@ inline Binding& Current() {
 }
 
 bool EnrollChild(HANDLE process);
-audio_playback::Activity* OpenAudioPlaybackActivity();
+audio_state::Activity* OpenAudioPlaybackActivity();
 bool IsAudioPlaybackActive(int stream, int in_past_ms);
 int NewProtectedAudioSession();
+audio_state::DeviceState* OpenAudioDeviceControls(bool writable);
 int FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* input_and_output);
 // Closes the caller-owned pin after the broker has captured file identity.
 // The pointer is cleared only if the pin was closed.

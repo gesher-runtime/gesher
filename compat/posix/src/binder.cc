@@ -831,13 +831,13 @@ int ReceiveRecordStatus(HANDLE pipe, std::vector<uint8_t>* reply) {
 }
 }  // namespace
 
-audio_playback::Activity* binder_endpoint::OpenAudioPlaybackActivity() {
+audio_state::Activity* binder_endpoint::OpenAudioPlaybackActivity() {
   uint64_t handle = 0;
   if (!AudioPlaybackRequest(wire::kAudioPlaybackPublish, 0, 0, &handle) ||
       !handle || handle > UINTPTR_MAX) return nullptr;
   auto section = binder_bootstrap::DecodeHandle(handle);
-  auto* state = static_cast<audio_playback::Activity*>(
-      MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(audio_playback::Activity)));
+  auto* state = static_cast<audio_state::Activity*>(
+      MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(audio_state::Activity)));
   CloseHandle(section);
   return state;
 }
@@ -852,6 +852,17 @@ int binder_endpoint::NewProtectedAudioSession() {
   uint64_t session = 0;
   return AudioPlaybackRequest(wire::kAudioPlaybackSession, 0, 0, &session) && session <= INT_MAX
       ? static_cast<int>(session) : 0;
+}
+
+audio_state::DeviceState* binder_endpoint::OpenAudioDeviceControls(bool writable) {
+  uint64_t handle = 0;
+  if (!AudioPlaybackRequest(wire::kAudioDeviceControls, writable ? 1 : 0, 0, &handle) ||
+      !handle || handle > UINTPTR_MAX) return nullptr;
+  auto section = binder_bootstrap::DecodeHandle(handle);
+  auto* state = static_cast<audio_state::DeviceState*>(MapViewOfFile(
+      section, writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0, sizeof(audio_state::DeviceState)));
+  CloseHandle(section);
+  return state;
 }
 
 int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
