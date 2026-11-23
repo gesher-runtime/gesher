@@ -1082,6 +1082,7 @@ struct In {
   const uint8_t* p;
   const uint8_t* end;
   bool Read(void* out, size_t n) {
+    if (n == 0) return true;
     if (static_cast<size_t>(end - p) < n) return false;
     memcpy(out, p, n);
     p += n;
