@@ -2,6 +2,7 @@
 import ast
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -13,29 +14,25 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PythonEntryTest(unittest.TestCase):
-    def run_gate(self, name, job, reject=False, workflow='ci'):
-        tree = ast.parse((ROOT / name).read_text())
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                        and n.name == ('context' if name.endswith('minimum_receipt.py') else 'main'))
-        body = function.body
-        if name.endswith('prepare-supplier.py'):
-            # Stop before the first actual git/compiler/source workspace access.
-            end = next(i for i, n in enumerate(body) if isinstance(n, ast.Assert)
-                       and 'output(' in ast.unparse(n.test))
-            body = body[:end]
-        elif name.endswith('selected_supplier.py'):
-            begin = next(i for i, n in enumerate(body) if isinstance(n, ast.Assign)
-                         and any(isinstance(t, ast.Name) and t.id == 'context' for t in n.targets))
-            end = next(i for i, n in enumerate(body) if isinstance(n, ast.Assign)
-                       and any(isinstance(t, ast.Name) and t.id == 'manifest' for t in n.targets))
-            body = body[begin:end]
-        else:
-            # Keep the real function (including its return), but stub only git.
-            body = [function]
-        code = compile(ast.Module(body=body, type_ignores=[]), str(ROOT / name), 'exec')
+    def run_gate(self, name, job, reject=False, workflow='ci', actions='true'):
+        selected = name.endswith('selected_supplier.py')
+        if not selected:
+            tree = ast.parse((ROOT / name).read_text())
+            function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                            and n.name == ('context' if name.endswith('minimum_receipt.py') else 'main'))
+            body = function.body
+            if name.endswith('prepare-supplier.py'):
+                # Stop before the first actual git/compiler/source workspace access.
+                end = next(i for i, n in enumerate(body) if isinstance(n, ast.Assert)
+                           and 'output(' in ast.unparse(n.test))
+                body = body[:end]
+            else:
+                # Keep the real function (including its return), but stub only git.
+                body = [function]
+            code = compile(ast.Module(body=body, type_ignores=[]), str(ROOT / name), 'exec')
         keys = ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')
         env = dict(zip(keys, ('1' * 40, '123', '1', 'gesher-runtime/gesher', '1426153186')),
-                   GITHUB_ACTIONS='true', GITHUB_JOB=job, GITHUB_REF='refs/pull/5/merge',
+                   GITHUB_ACTIONS=actions, GITHUB_JOB=job, GITHUB_REF='refs/pull/5/merge',
                    GITHUB_WORKFLOW=workflow, TCP_SUPPLIER_ROLE='selected-minimum')
         calls = []
 
@@ -47,13 +44,34 @@ class PythonEntryTest(unittest.TestCase):
                 raise AssertionError('rejected shared CI authority')
 
         validator = types.ModuleType('coherent_tcp_context'); validator.context = validate
+        class PayloadBoundary(RuntimeError):
+            pass
+
+        manifest = ROOT / 'tcp-fixture/provenance.json'
+        def verified_authority(role, *, path):
+            # Run the real selected-supplier CLI and its delegation. Stop only
+            # after authorization, before archive/network/member work, whose
+            # actual paths are covered by test_component_producer.py.
+            self.assertEqual(calls, [job], 'artifact work preceded caller authorization')
+            self.assertEqual(dict(os.environ), env, 'consumer environment was relabelled')
+            self.assertEqual(role, 'tcp-selected-minimum')
+            self.assertEqual(path, manifest)
+            raise PayloadBoundary('authorized entry reached the payload boundary')
+
+        component = types.ModuleType('component_producer'); component.verify = verified_authority
         namespace = dict(os=os, sys=sys, ROOT=ROOT, CONTEXT=keys,
                          command=lambda *args: env['GITHUB_SHA'] + '\n',
                          subprocess=types.SimpleNamespace(check_call=lambda *args: 0))
-        with patch.dict(os.environ, env, clear=True), patch.dict(sys.modules, coherent_tcp_context=validator):
-            exec(code, namespace)
-            if name.endswith('minimum_receipt.py'):
-                namespace['context']()
+        with patch.dict(os.environ, env, clear=True), \
+                patch.dict(sys.modules, coherent_tcp_context=validator, component_producer=component):
+            if selected:
+                with patch.object(sys, 'argv', [name, '--manifest', str(manifest)]), \
+                        self.assertRaises(PayloadBoundary):
+                    runpy.run_path(str(ROOT / name), run_name='__main__')
+            else:
+                exec(code, namespace)
+                if name.endswith('minimum_receipt.py'):
+                    namespace['context']()
         self.assertEqual(calls, [job], 'shared CI entry did not delegate its authority')
 
     def test_all_shared_python_entries_delegate_and_propagate_denial(self):
@@ -67,6 +85,10 @@ class PythonEntryTest(unittest.TestCase):
                     self.run_gate(path, job, reject=True)
                 with self.assertRaises(AssertionError):
                     self.run_gate(path, job, workflow='net-tcp-selected-component')
+
+    def test_selected_cli_requires_ci_before_reaching_the_artifact_boundary(self):
+        with self.assertRaises(AssertionError):
+            self.run_gate('tools/net-tcp-priority/selected_supplier.py', 'windows', actions='false')
 
 
 @unittest.skipUnless(shutil.which('bash'), 'bash is required')
