@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -50,6 +51,27 @@ struct DeviceLifetime {
   uint64_t job = 0;
   uint64_t supervisor = 0;
 };
+
+struct StandaloneInput {
+  peer::OwnedHandle file;
+  peer::OwnedHandle requests;
+  peer::OwnedHandle child_requests;
+  peer::OwnedHandle name;
+};
+
+DWORD PreparePinnedSource(uint64_t pin, StandaloneInput* source);
+void WaitWithStandaloneInput(HANDLE process, StandaloneInput& code);
+
+struct PinnedChildInput {
+  peer::OwnedHandle process;
+  StandaloneInput source;
+};
+
+DWORD WINAPI ServePinnedChildInput(void* value) {
+  std::unique_ptr<PinnedChildInput> input(static_cast<PinnedChildInput*>(value));
+  WaitWithStandaloneInput(input->process.get(), input->source);
+  return 0;
+}
 
 bool SubmitLaunchRequest(HANDLE channel, launch::Request request, bool* channel_failed = nullptr) {
   uint32_t result = ERROR_ACCESS_DENIED;
@@ -235,7 +257,8 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
               const std::vector<std::u16string>& unset, const std::u16string& log_path,
               bool breakaway, const AppContainerSpec* sandbox,
               const BootstrapHandles* bootstrap = nullptr,
-              const Enrollment* enrollment = nullptr, HANDLE lifetime_job = nullptr) {
+              const Enrollment* enrollment = nullptr, HANDLE lifetime_job = nullptr,
+              std::unique_ptr<PinnedChildInput> pinned_input = nullptr) {
   Container container;
   if (sandbox != nullptr) {
     DWORD error = PrepareContainer(*sandbox, &container);
@@ -295,6 +318,14 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
     if (enrollment != nullptr) record.uid = enrollment->uid;
     if (bootstrap->endpoint == launch::Endpoint::kApplication) {
       record.null_device = launch::EncodeHandle(nul);
+      if (pinned_input) {
+        auto& source = pinned_input->source;
+        handles.insert(handles.end(), {source.file.get(), source.child_requests.get(),
+                                       source.name.get()});
+        record.code_file = launch::EncodeHandle(source.file.get());
+        record.code_channel = launch::EncodeHandle(source.child_requests.get());
+        record.code_name = launch::EncodeHandle(source.name.get());
+      }
     }
   }
   SIZE_T size = 0;
@@ -382,6 +413,19 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
               handoff.pid = child.pid;
               handoff.birth = child.birth;
               retained = SubmitLaunchRequest(enrollment->channel, handoff);
+            }
+          }
+          if (retained && pinned_input) {
+            HANDLE target = nullptr;
+            retained = DuplicateHandle(GetCurrentProcess(), pi.hProcess, GetCurrentProcess(),
+                                       &target, SYNCHRONIZE | PROCESS_DUP_HANDLE, FALSE, 0);
+            if (retained) {
+              pinned_input->process.reset(target);
+              PinnedChildInput* input = pinned_input.release();
+              peer::OwnedHandle worker(CreateThread(nullptr, 0, ServePinnedChildInput,
+                                                     input, 0, nullptr));
+              retained = static_cast<bool>(worker);
+              if (!retained) pinned_input.reset(input);
             }
           }
           if (retained && suspended) retained = ResumeThread(pi.hThread) == 1;
@@ -527,6 +571,7 @@ namespace {
 struct Writer {
   peer::OwnedHandle channel;
   peer::OwnedHandle broker;
+  bool scoped = false;
   std::map<std::array<uint8_t, 16>, peer::OwnedHandle> installations;
   std::map<std::array<uint8_t, 16>, uint64_t> stopped_through;
 };
@@ -554,6 +599,7 @@ Writer ReadWriter() {
   if (!launch::Transfer(job_pipe.get(), &delivered, sizeof(delivered), false)) return {};
   peer::OwnedHandle job(launch::DecodeHandle(delivered.job));
   peer::OwnedHandle supervisor(launch::DecodeHandle(delivered.supervisor));
+  writer.scoped = delivered.supervisor != 0;
   BOOL in_job = FALSE;
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   if (!job || !IsProcessInJob(GetCurrentProcess(), job.get(), &in_job) || !in_job ||
@@ -570,7 +616,7 @@ Writer ReadWriter() {
   {
     std::lock_guard<std::mutex> lock(g_lock);
     if (g_job != nullptr) return {};
-    if (delivered.supervisor != 0) {
+    if (writer.scoped) {
       HANDLE watch;
       if (!supervisor || GetProcessId(supervisor.get()) == 0 ||
           GetProcessId(supervisor.get()) == GetCurrentProcessId() ||
@@ -614,10 +660,10 @@ bool StopInstallation(Writer& authority, const std::array<uint8_t, 16>& installa
 
 }  // namespace
 
-bool HasProtectedLaunchAuthority() {
+bool HasProtectedLaunchAuthority(bool scoped) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& authority = Authority();
-  return authority.channel && authority.broker &&
+  return authority.channel && authority.broker && (!scoped || authority.scoped) &&
          WaitForSingleObject(authority.broker.get(), 0) == WAIT_TIMEOUT;
 }
 
@@ -629,7 +675,7 @@ bool PrepareProtectedOperator(int broker_pid, uint64_t birth) {
 int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std::u16string>& set,
     const std::vector<std::u16string>& unset, const std::u16string& log_path,
     const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation,
-    uint64_t start_sequence) {
+    uint64_t start_sequence, uint64_t code_pin) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& authority = Authority();
   auto stopped = authority.stopped_through.find(installation);
@@ -652,8 +698,14 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
   bool channel_failed = false;
   const Enrollment enrollment{authority.channel.get(), authority.broker.get(),
                               peer::Role::kApplication, uid, installation, &channel_failed};
+  std::unique_ptr<PinnedChildInput> input;
+  if (code_pin != 0) {
+    input = std::make_unique<PinnedChildInput>();
+    const DWORD error = PreparePinnedSource(code_pin, &input->source);
+    if (error != ERROR_SUCCESS) return -static_cast<int>(error);
+  }
   int pid = SpawnImpl(command_line, set, unset, log_path, false, &sandbox, &app_handles,
-                      &enrollment, job->second.get());
+                      &enrollment, job->second.get(), std::move(input));
   if (channel_failed) authority = {};
   return pid;
 }
@@ -717,13 +769,6 @@ uint32_t DeleteAppContainer(const std::u16string& name) {
 
 namespace {
 
-struct StandaloneInput {
-  peer::OwnedHandle file;
-  peer::OwnedHandle requests;
-  peer::OwnedHandle child_requests;
-  peer::OwnedHandle name;
-};
-
 struct PinnedProgram {
   peer::OwnedHandle file;
   std::wstring path;
@@ -749,6 +794,31 @@ DWORD RetainStandaloneSource(uint64_t pin, StandaloneInput* source, std::wstring
                        &inherited, 0, TRUE, DUPLICATE_SAME_ACCESS)) return GetLastError();
   source->file.reset(inherited);
   *path = found->second.path;
+  return ERROR_SUCCESS;
+}
+
+DWORD PreparePinnedSource(uint64_t pin, StandaloneInput* source) {
+  std::wstring path;
+  const DWORD result = RetainStandaloneSource(pin, source, &path);
+  if (result != ERROR_SUCCESS) return result;
+  if (!launch::PrivatePipe(&source->requests, &source->child_requests)) return ERROR_ACCESS_DENIED;
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(source->requests.get(), &mode, nullptr, nullptr) ||
+      !SetHandleInformation(source->child_requests.get(), HANDLE_FLAG_INHERIT,
+                            HANDLE_FLAG_INHERIT)) return GetLastError();
+  using Name = binder_bootstrap::StandaloneName;
+  peer::OwnedHandle name(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                            0, sizeof(Name), nullptr));
+  if (!name) return GetLastError();
+  auto* record = static_cast<Name*>(MapViewOfFile(name.get(), FILE_MAP_WRITE, 0, 0, sizeof(Name)));
+  if (record == nullptr) return GetLastError();
+  record->length = static_cast<uint32_t>(path.size());
+  std::memcpy(record->path, path.c_str(), (path.size() + 1) * sizeof(wchar_t));
+  UnmapViewOfFile(record);
+  HANDLE read_only = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), name.get(), GetCurrentProcess(),
+                       &read_only, FILE_MAP_READ, TRUE, 0)) return GetLastError();
+  source->name.reset(read_only);
   return ERROR_SUCCESS;
 }
 
@@ -1025,27 +1095,8 @@ uint32_t RunPinnedContainedStandalone(const std::u16string& command, const AppCo
   if (failure != ERROR_SUCCESS) return failure;
   StandaloneInput source;
   if (pin != 0) {
-    std::wstring path;
-    failure = RetainStandaloneSource(pin, &source, &path);
+    failure = PreparePinnedSource(pin, &source);
     if (failure != ERROR_SUCCESS) return failure;
-    if (!launch::PrivatePipe(&source.requests, &source.child_requests)) return ERROR_ACCESS_DENIED;
-    DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-    if (!SetNamedPipeHandleState(source.requests.get(), &mode, nullptr, nullptr) ||
-        !SetHandleInformation(source.child_requests.get(), HANDLE_FLAG_INHERIT,
-                              HANDLE_FLAG_INHERIT)) return GetLastError();
-    using Name = binder_bootstrap::StandaloneName;
-    peer::OwnedHandle name(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
-                                              0, sizeof(Name), nullptr));
-    if (!name) return GetLastError();
-    auto* record = static_cast<Name*>(MapViewOfFile(name.get(), FILE_MAP_WRITE, 0, 0, sizeof(Name)));
-    if (record == nullptr) return GetLastError();
-    record->length = static_cast<uint32_t>(path.size());
-    std::memcpy(record->path, path.c_str(), (path.size() + 1) * sizeof(wchar_t));
-    UnmapViewOfFile(record);
-    HANDLE read_only = nullptr;
-    if (!DuplicateHandle(GetCurrentProcess(), name.get(), GetCurrentProcess(),
-                         &read_only, FILE_MAP_READ, TRUE, 0)) return ERROR_ACCESS_DENIED;
-    source.name.reset(read_only);
   }
   auto environment = EnvironmentBlock({u"TEMP=" + sandbox.folder, u"TMP=" + sandbox.folder},
       {u"GESHER_UID", u"GESHER_BINDER_UID", u"GESHER_BINDER", u"TMPDIR"});

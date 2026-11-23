@@ -60,8 +60,10 @@ inline bool ReadStartupRecord(Startup* result) {
 inline bool ReadStartup(Endpoint endpoint, Startup* result) {
   Startup record;
   if (!ReadStartupRecord(&record) || record.endpoint != endpoint) return false;
-  if (endpoint != Endpoint::kStandalone &&
-      (record.code_channel != 0 || record.code_file != 0 || record.code_name != 0)) {
+  if (endpoint == Endpoint::kStandalone || endpoint == Endpoint::kApplication) {
+    if ((record.code_file == 0) != (record.code_channel == 0) ||
+        (record.code_file == 0) != (record.code_name == 0)) return false;
+  } else if (record.code_channel != 0 || record.code_file != 0 || record.code_name != 0) {
     return false;
   }
   switch (endpoint) {
@@ -83,20 +85,11 @@ inline bool ReadStartup(Endpoint endpoint, Startup* result) {
           record.null_device != 0 || record.uid != 1000) return false;
       break;
     case Endpoint::kApplication:
-      if (record.channel != 0 || record.job_delivery != 0 ||
-          GetProcessId(DecodeHandle(record.broker)) == 0 ||
-          GetFileType(DecodeHandle(record.null_device)) != FILE_TYPE_CHAR ||
-          record.uid < 10000 || record.uid > 19999) return false;
-      break;
     case Endpoint::kStandalone:
       if (record.channel != 0 || record.job_delivery != 0 ||
           GetProcessId(DecodeHandle(record.broker)) == 0 ||
           GetFileType(DecodeHandle(record.null_device)) != FILE_TYPE_CHAR ||
-          record.uid < 10000 || record.uid > 19999 ||
-          (record.code_file == 0) != (record.code_channel == 0) ||
-          (record.code_file == 0) != (record.code_name == 0) ||
-          (record.code_file != 0 && (GetFileType(DecodeHandle(record.code_file)) != FILE_TYPE_DISK ||
-           GetFileType(DecodeHandle(record.code_channel)) != FILE_TYPE_PIPE))) return false;
+          record.uid < 10000 || record.uid > 19999) return false;
       break;
   }
   *result = record;

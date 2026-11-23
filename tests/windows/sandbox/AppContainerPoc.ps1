@@ -9,6 +9,8 @@
 # binderd.exe, servicemanager.exe, the boot jars, framework.jar, gesher-app.jar,
 # framework-res.apk, lifecycle.apk). The script reports what it observed; it is a
 # proof of concept, not a gate: docs/sandbox.md records its results.
+# -Scoped starts a device for this invocation and reads the original APK.
+# -AlongsidePersistent verifies an existing device registration remains live.
 param(
   [Parameter(Mandatory)][string] $Dir,
   [string] $Root = (Join-Path ([IO.Path]::GetTempPath()) "gesher-sandbox-$PID"),
@@ -17,15 +19,18 @@ param(
   # The same run without the sandbox: a baseline for the layout under test.
   [switch] $NoSandbox,
   [switch] $Protected,
-  [switch] $NativeChild
+  [switch] $NativeChild,
+  [switch] $Scoped,
+  [switch] $AlongsidePersistent
 )
 $ErrorActionPreference = 'Stop'
 $Dir = (Resolve-Path $Dir).Path
 $defaultApk = !$Apk
 if (-not $Apk) { $Apk = Join-Path $Dir 'lifecycle.apk' }
-if (($Protected -and $NoSandbox) -or ($NativeChild -and !$Protected)) {
-  throw 'Use -NativeChild only with -Protected, without -NoSandbox.'
+if (($Protected -and $NoSandbox) -or (($NativeChild -or $Scoped) -and !$Protected)) {
+  throw 'Use -NativeChild and -Scoped only with -Protected, without -NoSandbox.'
 }
+if ($AlongsidePersistent -and !$Scoped) { throw 'Use -AlongsidePersistent only with -Scoped.' }
 function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata', 'logs') {
@@ -149,21 +154,39 @@ $watcher = [PowerShell]::Create()
 $async = $watcher.BeginInvoke()
 
 try {
-  Write-Host "== install $Apk"
-  Run ($launcher + 'install', (NoDrive $Apk)) | Write-Host
+  $state = "$Root/data/system/gesher-device"
+  if ($AlongsidePersistent) {
+    Run ($launcher + 'start') | Write-Host
+    $persistentState = (Get-FileHash -LiteralPath $state).Hash
+  }
+  if (!$Scoped) {
+    Write-Host "== install $Apk"
+    Run ($launcher + 'install', (NoDrive $Apk)) | Write-Host
+  } else {
+    $originalAcl = (Get-Acl -LiteralPath $Apk).Sddl
+    $originalHash = (Get-FileHash -LiteralPath $Apk).Hash
+  }
   Write-Host "== launch"
-  $launchArguments = $launcher + 'launch'
+  $launchArguments = if ($Scoped) { $launcher + 'launch-scoped', '--headless' } else { $launcher + 'launch' }
   if ($NativeChild) {
     $launchArguments += '--ez', 'com.gesher.lifecycle.RUN_NATIVE_CHILD', 'true'
   }
   $launchOutput = Run ($launchArguments + (NoDrive $Apk))
   $launchOutput | Write-Host
-  if ($Protected -and $defaultApk) {
+  if ($AlongsidePersistent) {
+    if ($persistentState -ne (Get-FileHash -LiteralPath $state).Hash) {
+      throw 'The scoped launch changed the existing persistent device registration.'
+    }
+    Run ($launcher + 'status') | Write-Host
+  }
+  if (!$Scoped -and $Protected -and $defaultApk) {
     Run ($launcher + 'uninstall', 'com.gesher.lifecycle') | Write-Host
   }
 } finally {
-  Write-Host "== shutdown"
-  Run ($launcher + 'shutdown') | Write-Host
+  if (!$Scoped -or $AlongsidePersistent) {
+    Write-Host "== shutdown"
+    Run ($launcher + 'shutdown') | Write-Host
+  }
   $watcher.Stop()
   $watcher.Dispose()
 }
@@ -171,13 +194,13 @@ try {
 Write-Host "== app processes seen"
 foreach ($k in $watch.Keys) { Write-Host "pid $k : $($watch[$k])" }
 Write-Host "== logs ($Root/logs)"
-foreach ($f in Get-ChildItem (Join-Path $Root 'logs') -File -ErrorAction SilentlyContinue) {
+foreach ($f in Get-ChildItem (Join-Path $Root 'logs') -File -Filter '*.log' -Recurse -ErrorAction SilentlyContinue) {
   Write-Host "--- $($f.Name)"
   Get-Content $f.FullName -Tail 80 | Write-Host
 }
 if ($Protected) {
   if ($exitCodes | Where-Object { $_ -ne 0 }) { throw "Protected command failed: $exitCodes" }
-  if ($defaultApk -and ($launchOutput -join "`n") -notmatch 'LifecycleActivity onResume') {
+  if (($defaultApk -or $NativeChild) -and ($launchOutput -join "`n") -notmatch 'LifecycleActivity onResume') {
     throw 'The contained fixture did not reach Activity.onResume.'
   }
   $apps = @($watch.Values | Where-Object { $_ -match '^app: AppContainer (S-[^,]+)' })
@@ -189,6 +212,15 @@ if ($Protected) {
     }
     if ($children | Where-Object { $apps -notcontains ($_ -replace '^child:', 'app:') }) {
       throw 'The native child and its application used different Windows AppContainers.'
+    }
+  }
+  if ($Scoped) {
+    if ($originalAcl -ne (Get-Acl -LiteralPath $Apk).Sddl -or
+        $originalHash -ne (Get-FileHash -LiteralPath $Apk).Hash) {
+      throw 'The scoped launch altered its source APK.'
+    }
+    if (Test-Path "$Root/data/system/gesher-device") {
+      throw 'The scoped launch wrote a persistent device registration.'
     }
   }
 }

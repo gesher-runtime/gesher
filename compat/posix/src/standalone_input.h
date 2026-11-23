@@ -15,8 +15,11 @@ class Binding {
  public:
   Binding() {
     binder_bootstrap::Startup startup;
+    // The input owns only these three handles. Binder may already have consumed
+    // its separate startup handles by the time an app first opens a path.
     if (!binder_bootstrap::ReadStartupRecord(&startup) ||
-        startup.endpoint != binder_bootstrap::Endpoint::kStandalone ||
+        (startup.endpoint != binder_bootstrap::Endpoint::kStandalone &&
+         startup.endpoint != binder_bootstrap::Endpoint::kApplication) ||
         startup.code_file == 0 || startup.code_channel == 0 || startup.code_name == 0) return;
     HANDLE file = binder_bootstrap::DecodeHandle(startup.code_file);
     HANDLE channel = binder_bootstrap::DecodeHandle(startup.code_channel);

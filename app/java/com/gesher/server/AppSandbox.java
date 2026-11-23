@@ -106,7 +106,7 @@ final class AppSandbox {
      * idempotent: an ACE already there is not written (or propagated) again.
      */
     static int spawn(String commandLine, List<String> env, File logFile, ApkPackage pkg,
-            String packageName, boolean internet, long startSeq) {
+            String packageName, boolean internet, long startSeq, Zygote.StandaloneInput input) {
         String container = installationContainer(pkg);
         int error = Zygote.nativeEnsureAppContainer(container, packageName);
         if (error != 0) {
@@ -133,12 +133,14 @@ final class AppSandbox {
         // The APK itself; its directory (and the oat files in it) only when it is the
         // package's own code directory under data/app. An APK run from where the user
         // keeps it (Downloads) must not open that directory to the container.
-        File apk = grantPath(new File(pkg.apkPath));
-        grantContainer(apk.getPath(), container, READ_EXECUTE, false);
-        File apps = grantPath(new File(Device.dataDir(), "app"));
-        File code = apk.getParentFile();
-        if (code != null && apps.getPath().equals(code.getParent())) {
-            grantContainer(code.getPath(), container, READ_EXECUTE, true);
+        if (input == null) {
+            File apk = grantPath(new File(pkg.apkPath));
+            grantContainer(apk.getPath(), container, READ_EXECUTE, false);
+            File apps = grantPath(new File(Device.dataDir(), "app"));
+            File code = apk.getParentFile();
+            if (code != null && apps.getPath().equals(code.getParent())) {
+                grantContainer(code.getPath(), container, READ_EXECUTE, true);
+            }
         }
         grantContainer(pkg.credentialProtectedDataDir(), container, MODIFY, true);
         grantContainer(pkg.deviceProtectedDataDir(), container, MODIFY, true);
@@ -162,7 +164,7 @@ final class AppSandbox {
                 + " with " + caps);
         if (SystemServer.isProtectedDevice()) {
             return Zygote.spawnProtectedApp(commandLine, env, logFile.getPath(), container,
-                    caps, pkg, startSeq);
+                    caps, pkg, startSeq, input);
         }
         return Zygote.spawnInAppContainer(commandLine, env, logFile.getPath(), container,
                 packageName, caps);

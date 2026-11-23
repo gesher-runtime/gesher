@@ -284,8 +284,47 @@ int StandaloneSupervisor(const fs::path& dir) {
                "standalone lock-only broker completes and shuts down") ? 0 : 1;
 }
 
-int ScopedServer() {
+int ReadPinnedSource(const fs::path& dir) {
+  if (!Check(Lowbox(), "enrolled source reader executes in a genuine AppContainer")) return 1;
+  const auto source = dir / L"source.bin";
+  HANDLE ordinary = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                nullptr, OPEN_EXISTING, 0, nullptr);
+  if (ordinary != INVALID_HANDLE_VALUE) CloseHandle(ordinary);
+  if (!Check(ordinary == INVALID_HANDLE_VALUE, "source ACL independently denies lowbox read")) return 1;
+  auto path = source.u8string();
+  const auto* name = reinterpret_cast<const char*>(path.c_str());
+  const int first = open(name, O_RDONLY | O_CLOEXEC);
+  const int second = open(name, O_RDONLY | O_CLOEXEC);
+  const int writable = open(name, O_RDWR | O_CLOEXEC);
+  char found[2]{};
+  const bool okay = first >= 0 && second >= 0 && writable < 0 &&
+      read(first, found, sizeof(found)) == sizeof(found) && found[0] == 'a' && found[1] == 'b' &&
+      read(second, found, 1) == 1 && found[0] == 'a';
+  if (first >= 0) close(first);
+  if (second >= 0) close(second);
+  if (writable >= 0) close(writable);
+  return Check(okay, "enrolled source uses real bytes and independent read-only handles") ? 0 : 1;
+}
+
+int ScopedServer(const fs::path& dir) {
   if (!launch::HasProtectedLaunchAuthority()) return 1;
+  const fs::path exe(launch::ExePath());
+  const auto profile = Profile(dir, L"pinned");
+  const auto source = dir / L"source.bin";
+  std::ofstream(source, std::ios::binary) << "abc";
+  uint64_t pin = 0;
+  if (!Check(launch::EnsureAppContainer(profile, profile) == ERROR_SUCCESS &&
+             launch::GrantToAppContainer(U16(exe.native()), profile,
+                                         FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, false) == 0 &&
+             launch::PinStandaloneInput(U16(source.native()), &pin) == ERROR_SUCCESS,
+             "protected server pins original ungranted source")) return 1;
+  std::array<uint8_t, 16> installation{};
+  installation[0] = 3;
+  const int guest = launch::SpawnProtectedApp(Quote(exe) + u" --read-pinned-source " + Quote(dir), {}, {},
+      U16((dir / L"scoped-guest.log").native()), {profile, profile, {u"gesherBinderClient"}},
+      11004, installation, 1, pin);
+  launch::ReleaseStandaloneInput(pin);
+  if (!Check(guest > 0 && WaitExit(guest), "protected server executes the pinned source admission")) return 1;
   Mark("scoped server ready");
   Sleep(INFINITE);
   return 1;
@@ -295,7 +334,7 @@ int ScopedSupervisor(const fs::path& runtime, const fs::path& dir) {
   const auto device = U16(dir.filename().native()) + u"-scoped";
   const auto children = launch::StartProtectedDevice(device,
       {Quote(runtime / L"binderd.exe"), Quote(runtime / L"servicemanager.exe"),
-       Quote(fs::path(launch::ExePath())) + u" --scoped-server"},
+       Quote(fs::path(launch::ExePath())) + u" --scoped-server " + Quote(dir)},
       {U16((dir / L"scoped-binder.log").native()), U16((dir / L"scoped-manager.log").native()),
        U16((dir / L"scoped-server.log").native())},
       {u"GESHER_BINDER=" + device}, true);
@@ -332,6 +371,7 @@ bool CheckScopedDevice(const fs::path& runtime, const fs::path& dir, const fs::p
       WaitForMultipleObjects(static_cast<DWORD>(processes.size()), processes.data(), TRUE, 5000)
           == WAIT_OBJECT_0;
   for (HANDLE process : processes) if (process != nullptr) CloseHandle(process);
+  launch::DeleteAppContainer(Profile(dir, L"pinned"));
   return Check(stopped, "scoped device job exits after its exact supervisor dies");
 }
 }  // namespace
@@ -341,7 +381,8 @@ int wmain(int argc, wchar_t** argv) {
   if (argc == 3 && std::wstring(argv[1]) == L"--hold") return Hold(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--standalone-guest") return StandaloneGuest(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--standalone-supervisor") return StandaloneSupervisor(argv[2]);
-  if (argc == 2 && std::wstring(argv[1]) == L"--scoped-server") return ScopedServer();
+  if (argc == 3 && std::wstring(argv[1]) == L"--scoped-server") return ScopedServer(argv[2]);
+  if (argc == 3 && std::wstring(argv[1]) == L"--read-pinned-source") return ReadPinnedSource(argv[2]);
   if (argc == 4 && std::wstring(argv[1]) == L"--scoped-supervisor") return ScopedSupervisor(argv[2], argv[3]);
   if (argc == 2 && std::wstring(argv[1]) == L"--query-inherited-file") return QueryInheritedFile();
   if (argc == 4 && std::wstring(argv[1]) == L"--observe") return Observe(argv[3], _wtoi(argv[2]));

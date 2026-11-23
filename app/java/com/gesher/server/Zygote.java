@@ -35,12 +35,13 @@ public final class Zygote {
             String[] unsetEnv, String logPath, String container, String displayName,
             String[] capabilities);
     private static native int[] nativeStartProtectedDevice(String device, String[] commands,
-            String[] logs, String[] environment);
-    static native boolean nativeHasProtectedLaunchAuthority();
+            String[] logs, String[] environment, boolean scoped);
+    static native boolean nativeHasProtectedLaunchAuthority(boolean scoped);
     public static native boolean nativePrepareProtectedOperator(int brokerPid, long birth);
     private static native int nativeSpawnProtectedApp(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,
-            String[] capabilities, int uid, long installHigh, long installLow, long startSeq);
+            String[] capabilities, int uid, long installHigh, long installLow, long startSeq,
+            long codePin);
     private static native boolean nativeChangeProtectedInstallation(long installHigh,
             long installLow, boolean revoke);
     private static native boolean nativeStopProtectedInstallation(long installHigh,
@@ -162,6 +163,11 @@ public final class Zygote {
 
     public static int[] startProtectedDevice(String device, List<String> commands,
             List<File> logs, List<String> environment) {
+        return startProtectedDevice(device, commands, logs, environment, false);
+    }
+
+    public static int[] startProtectedDevice(String device, List<String> commands,
+            List<File> logs, List<String> environment, boolean scoped) {
         String[] paths = new String[logs.size()];
         for (int i = 0; i < paths.length; i++) {
             File log = logs.get(i);
@@ -169,18 +175,23 @@ public final class Zygote {
             paths[i] = windowsPath(log.getPath());
         }
         int[] pids = nativeStartProtectedDevice(device, commands.toArray(new String[0]),
-                paths, environment.toArray(new String[0]));
+                paths, environment.toArray(new String[0]), scoped);
         if (pids.length != 3) throw new IllegalStateException("Protected device startup failed");
         return pids;
     }
 
     static int spawnProtectedApp(String commandLine, List<String> setEnv, String logPath,
-            String container, List<String> capabilities, ApkPackage pkg, long startSeq) {
+            String container, List<String> capabilities, ApkPackage pkg, long startSeq,
+            StandaloneInput code) {
+        if (code != null && code.pin == 0) {
+            throw new IllegalStateException("The protected APK lease is closed");
+        }
         UUID owner = UUID.fromString(pkg.enabledStateOwner());
         int pid = nativeSpawnProtectedApp(commandLine, setEnv.toArray(new String[0]),
                 new String[] {"GESHER_BINDER_UID"}, windowsPath(logPath), container,
                 pkg.packageName, capabilities.toArray(new String[0]), pkg.uid(),
-                owner.getMostSignificantBits(), owner.getLeastSignificantBits(), startSeq);
+                owner.getMostSignificantBits(), owner.getLeastSignificantBits(), startSeq,
+                code != null ? code.pin : 0);
         if (pid <= 0) {
             throw new IllegalStateException("Protected launch failed for "
                     + pkg.packageName + " with Win32 error " + (-pid));

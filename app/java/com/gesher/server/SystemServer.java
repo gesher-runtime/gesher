@@ -189,7 +189,7 @@ public final class SystemServer {
         }
         if (protectedDevice) {
             System.loadLibrary("android_runtime");
-            if (!persistent || adopt != null || !Zygote.nativeHasProtectedLaunchAuthority()) {
+            if (adopt != null || !Zygote.nativeHasProtectedLaunchAuthority(!persistent)) {
                 throw new IllegalStateException("Protected system server requires a live launch authority");
             }
         }
@@ -264,10 +264,8 @@ public final class SystemServer {
                 log("microg addon: " + p.describe());
             }
         }
-        for (String apk : apks) {
-            ApkPackage p = ApkPackage.parse(apk);
-            selectCommandLinePackage(packages, p);
-        }
+        Map<ApkPackage, Zygote.StandaloneInput> pinnedInputs =
+                selectExplicitPackages(packages, apks, protectedDevice);
         try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
             identity.commit();
             preparePackageStorage(committed, packages);
@@ -280,15 +278,14 @@ public final class SystemServer {
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
-        startAppProcessesOnDemand(created.atm, created.pm);
-        PersistentDevice device = null;
-        if (persistent) {
-            device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
-                    idleTimeoutS);
-            services.put(GesherService.NAME, new GesherService(device));
-        } else {
+        startAppProcessesOnDemand(created.atm, created.pm, pinnedInputs);
+        Installer installer = persistent ? Installer.create(created.pm, created.atm) : null;
+        if (!persistent) {
             Installer.attachMetadata(created.pm, created.atm);
         }
+        DeviceControl device = persistent || protectedDevice
+                ? new DeviceControl(created, installer, idleTimeoutS) : null;
+        if (device != null) services.put(GesherService.NAME, new GesherService(device));
         for (Map.Entry<String, IBinder> e : services.entrySet()) {
             ServiceManager.addService(e.getKey(), e.getValue());
         }
@@ -301,7 +298,8 @@ public final class SystemServer {
         // until an activity is idle or a provider is published. system_server runs up to
         // 31 (BinderInternal.setMaxThreads).
         startBinderThreads(TAG, 31);
-        if (device != null) device.start();
+        if (persistent) device.startPersistent();
+        else if (protectedDevice) DeviceControl.writeReady(new File(Device.logsDir(), "ready"));
         if (persistent && GmsSignatureSpoofing.isEnabled()) {
             ApkPackage gms = created.pm.get(GmsPackageSupport.PACKAGE_GMS);
             if (gms != null && gms.hasVerifiedMicrogSigner()) {
@@ -319,13 +317,46 @@ public final class SystemServer {
         Binder.joinThreadPool();
     }
 
+    private static Map<ApkPackage, Zygote.StandaloneInput> selectExplicitPackages(
+            List<ApkPackage> packages, List<String> apks, boolean pinCode) throws Exception {
+        // Keep the actual selected code pinned for this temporary device's lifetime,
+        // including subsequent process starts from the same package publication.
+        Map<ApkPackage, Zygote.StandaloneInput> pinned = new java.util.IdentityHashMap<>();
+        try {
+            for (String apk : apks) {
+                if (!pinCode) {
+                    selectCommandLinePackage(packages, ApkPackage.parse(apk));
+                    continue;
+                }
+                Zygote.StandaloneInput input = new Zygote.StandaloneInput(apk);
+                try {
+                    ApkPackage pkg = ApkPackage.parseStandaloneInput(input);
+                    selectCommandLinePackage(packages, pkg);
+                    pinned.put(pkg, input);
+                } catch (Exception failure) {
+                    input.close();
+                    throw failure;
+                }
+            }
+            pinned.entrySet().removeIf(entry -> {
+                if (packages.contains(entry.getKey())) return false;
+                entry.getValue().close();
+                return true;
+            });
+            return Map.copyOf(pinned);
+        } catch (Exception failure) {
+            pinned.values().forEach(Zygote.StandaloneInput::close);
+            throw failure;
+        }
+    }
+
     /**
      * App processes on demand: a dalvikvm like this one (its runtime options) running
      * android.app.GesherAppProcess for the package, its output appended to the package's
      * log.
      */
     private static void startAppProcessesOnDemand(ActivityTaskManagerService atm,
-            PackageManagerService pm) {
+            PackageManagerService pm, Map<ApkPackage, Zygote.StandaloneInput> pinnedInputs) {
         final String vm;
         try {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
@@ -382,7 +413,8 @@ public final class SystemServer {
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pkg, packageName,
-                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET), startSeq);
+                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET), startSeq,
+                        pinnedInputs.get(pkg));
             }
             return Zygote.spawn(command, env, logFile.getPath(), false);
             }
@@ -401,8 +433,8 @@ public final class SystemServer {
         }
     }
 
-    /** The persistent device's lifetime: ready, idle, shutdown. */
-    private static final class PersistentDevice implements GesherService.Device {
+    /** Host control for a published persistent or launch-scoped device. */
+    private static final class DeviceControl implements GesherService.Device {
         private final Services.Created mServices;
         private final Installer mInstaller;
         private final long mIdleTimeoutMs;
@@ -410,7 +442,7 @@ public final class SystemServer {
         private volatile long mLastCall = SystemClock.uptimeMillis();
         private boolean mShuttingDown;
 
-        PersistentDevice(Services.Created services, Installer installer, long idleTimeoutS) {
+        DeviceControl(Services.Created services, Installer installer, long idleTimeoutS) {
             mServices = services;
             mInstaller = installer;
             mIdleTimeoutMs = idleTimeoutS * 1000;
@@ -450,15 +482,18 @@ public final class SystemServer {
             reaper.start();
         }
 
-        void start() throws Exception {
-            // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
-            CameraApp.sync(mInstaller, mServices.pm);
-            // The launcher waits for this file: the services are registered.
-            File ready = Device.readyFile();
+        static void writeReady(File ready) throws IOException {
             ready.getParentFile().mkdirs();
             try (OutputStream out = new FileOutputStream(ready)) {
                 out.write(String.valueOf(Process.myPid()).getBytes(StandardCharsets.UTF_8));
             }
+        }
+
+        void startPersistent() throws Exception {
+            // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
+            CameraApp.sync(mInstaller, mServices.pm);
+            // The launcher waits for this file: the services are registered.
+            writeReady(Device.readyFile());
             long event = Zygote.createEvent(Device.shutdownEventName());
             Thread events = new Thread(() -> {
                 while (!Zygote.waitEvent(event, 60_000)) {
@@ -509,11 +544,13 @@ public final class SystemServer {
 
         @Override
         public String[] install(String apk) throws Exception {
+            if (mInstaller == null) throw new UnsupportedOperationException("Temporary device");
             return mInstaller.install(apk);
         }
 
         @Override
         public boolean uninstall(String packageName) throws Exception {
+            if (mInstaller == null) throw new UnsupportedOperationException("Temporary device");
             return mInstaller.uninstall(packageName);
         }
 
@@ -556,11 +593,13 @@ public final class SystemServer {
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
                 mServices.atm.flushUsageStats();
-                java.util.Properties state = Device.read(Device.stateFile());
-                if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
-                    Device.stateFile().delete();
+                if (mInstaller != null) {
+                    java.util.Properties state = Device.read(Device.stateFile());
+                    if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
+                        Device.stateFile().delete();
+                    }
+                    Device.readyFile().delete();
                 }
-                Device.readyFile().delete();
                 log("the Gesher device stopped");
                 System.out.flush();
                 // binderd and servicemanager are in this process's job: they end with it.

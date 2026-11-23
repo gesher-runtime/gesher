@@ -216,7 +216,8 @@ public final class Launcher {
         Main.bootstrap(TAG, buildProp, frameworkRes);
 
         switch (command) {
-            case "launch": return launch(rest);
+            case "launch": return launch(rest, false, buildProp, frameworkRes);
+            case "launch-scoped": return launch(rest, true, buildProp, frameworkRes);
             case "install": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
@@ -394,10 +395,13 @@ public final class Launcher {
 
     /** Waits until the system server of {@code state} has registered its services. */
     private static boolean waitReady(Properties state) throws IOException {
+        return waitReady(state, Device.readyFile());
+    }
+
+    private static boolean waitReady(Properties state, File ready) throws IOException {
         String pid = String.valueOf(Device.pid(state, Device.SYSTEM_SERVER));
         long deadline = SystemClock.uptimeMillis() + READY_TIMEOUT_MS;
         while (SystemClock.uptimeMillis() < deadline) {
-            File ready = Device.readyFile();
             if (ready.isFile() && pid.equals(new String(Files.readAllBytes(ready.toPath()),
                     StandardCharsets.UTF_8).trim())) {
                 return true;
@@ -653,14 +657,79 @@ public final class Launcher {
         return 1;
     }
 
-    private static int launch(List<String> args) throws Exception {
+    private record ScopedDevice(Properties state, File logs) implements AutoCloseable {
+        @Override public void close() {
+            try {
+                GesherService.Client client = GesherService.Client.find();
+                if (client != null) {
+                    client.shutdown("temporary launcher completed");
+                    long deadline = SystemClock.uptimeMillis() + 10_000;
+                    while (Device.alive(state, Device.SYSTEM_SERVER)
+                            && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(100);
+                }
+            } catch (Exception ignored) {
+                // The native job also ends with the exact launcher.
+            } finally {
+                Device.killLeftovers(state);
+            }
+        }
+    }
+
+    private static ScopedDevice startScopedDevice(String apk, String buildProp,
+            String frameworkRes, String display, boolean strict) throws Exception {
+        File parent = Device.logsDir();
+        parent.mkdirs();
+        File logs = Files.createTempDirectory(parent.toPath(), "scoped-device-").toFile();
+        String name = logs.getName();
+        String exe = Zygote.exePath();
+        String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
+        List<String> env = new ArrayList<>(List.of("GESHER_BINDER=" + name,
+                "GESHER_LOGS=" + logs.getPath()));
+        if (display != null) env.add("GESHER_DISPLAY=" + display);
+        List<String> args = new ArrayList<>(List.of("--protected-launch", "--build-prop",
+                buildProp, "--framework-res", frameworkRes, apk));
+        if (strict) {
+            args.add("--strict-services");
+            env.add("GESHER_APP_STRICT_SERVICES=1");
+        }
+        String vm = Zygote.vmCommandLine(Launcher.class.getName());
+        int[] children = Zygote.startProtectedDevice(name, List.of(
+                Zygote.quote(dir + "binderd.exe") + " " + name,
+                Zygote.quote(dir + "servicemanager.exe"),
+                Zygote.commandLine(vm, SystemServer.class.getName(), args)),
+                List.of(new File(logs, "binderd.log"), new File(logs, "servicemanager.log"),
+                        new File(logs, "system_server.log")), env, true);
+        Properties state = new Properties();
+        state.setProperty(Device.STATE_DEVICE, name);
+        state.setProperty(Device.STATE_PROTECTED, "true");
+        record(state, Device.BINDERD, children[0]);
+        record(state, Device.SERVICEMANAGER, children[1]);
+        record(state, Device.SYSTEM_SERVER, children[2]);
+        try {
+            if (!waitReady(state, new File(logs, "ready"))) {
+                File serverLog = new File(logs, "system_server.log");
+                printTail(serverLog, 40);
+                throw new IllegalStateException(text("server_not_ready", name, serverLog));
+            }
+            use(state);
+            return new ScopedDevice(state, logs);
+        } catch (Exception failure) {
+            Device.killLeftovers(state);
+            throw failure;
+        }
+    }
+
+    private static int launch(List<String> args, boolean scoped, String buildProp,
+            String frameworkRes) throws Exception {
         String apk = null;
         String activity = null;
         String shortcutId = null;
         boolean keepTask = false;
-        boolean detach = sDetachRequested;
+        boolean detach = !scoped && sDetachRequested;
         String proxy = null;
-        String windowMode = WindowMode.fromEnvironment(WindowMode.WINDOW);
+        String display = null;
+        boolean strict = false;
+        String windowMode = scoped ? WindowMode.HEADLESS : WindowMode.fromEnvironment(WindowMode.WINDOW);
         Map<String, Boolean> extras = new LinkedHashMap<>();
         for (int i = 0; i < args.size(); i++) {
             String a = args.get(i);
@@ -681,6 +750,33 @@ public final class Launcher {
                 case "--window": windowMode = WindowMode.WINDOW; break;
                 case "--hidden-window": windowMode = WindowMode.HIDDEN; break;
                 case "--headless": windowMode = WindowMode.HEADLESS; break;
+                case "--display": {
+                    if (!scoped) return usage();
+                    DeviceProfile.parseAndSet(args.get(++i));
+                    display = DeviceProfile.describe();
+                    break;
+                }
+                case "--strict-services": {
+                    if (!scoped) return usage();
+                    strict = true;
+                    break;
+                }
+                case "--build-prop": {
+                    if (!scoped) return usage();
+                    buildProp = args.get(++i);
+                    break;
+                }
+                case "--framework-res": {
+                    if (!scoped) return usage();
+                    frameworkRes = args.get(++i);
+                    break;
+                }
+                case "--data-dir": {
+                    if (!scoped) return usage();
+                    if (++i >= args.size()) return usage();
+                    log("--data-dir ignored: the system server's package manager sets the data directory");
+                    break;
+                }
                 case "--ez": {
                     String key = args.get(++i);
                     extras.put(key, Boolean.parseBoolean(args.get(++i)));
@@ -693,12 +789,35 @@ public final class Launcher {
         }
         if (apk == null) return usage();
         if (shortcutId != null && (activity != null || !extras.isEmpty())) return usage();
-        Properties state = ensureDevice(true);
+        if (scoped && (detach || shortcutId != null || !new File(apk).isFile())) return usage();
+        if (scoped) apk = new File(apk).getAbsolutePath();
+        try (ScopedDevice temporary = scoped
+                ? startScopedDevice(apk, buildProp, frameworkRes, display, strict) : null) {
+            return launchActivity(temporary, apk, activity, shortcutId, keepTask, detach,
+                    proxy, windowMode, extras);
+        }
+    }
+
+    private static int launchActivity(ScopedDevice temporary, String apk, String activity,
+            String shortcutId, boolean keepTask, boolean detach, String proxy, String windowMode,
+            Map<String, Boolean> extras) throws Exception {
+        Properties state = temporary == null ? ensureDevice(true) : temporary.state();
         GesherService.Client gesher = gesher();
         // An APK is installed or updated first; a package name (a Start menu shortcut's
         // `launch <package>`) must be installed.
         String pkg;
-        if (new File(apk).isFile()) {
+        if (temporary != null) {
+            IPackageManager pm = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
+            pkg = null;
+            for (Object entry : pm.getInstalledPackages(0L, 0).getList()) {
+                PackageInfo info = (PackageInfo) entry;
+                if (info.applicationInfo != null && apk.equals(info.applicationInfo.sourceDir)) {
+                    pkg = info.packageName;
+                    break;
+                }
+            }
+            if (pkg == null) throw new IllegalStateException("Temporary device did not admit " + apk);
+        } else if (new File(apk).isFile()) {
             pkg = install(gesher, apk);
         } else {
             pkg = apk;
@@ -757,7 +876,8 @@ public final class Launcher {
 
         // The app's output: its process appends to the package's log (not copied when
         // nobody reads it: detached).
-        Tail tail = new Tail(Device.packageLog(pkg));
+        Tail tail = new Tail(temporary == null ? Device.packageLog(pkg)
+                : new File(temporary.logs(), pkg + ".log"));
         if (!detach) tail.start();
         try {
             if (shortcutId == null) log(text("start_intent", intent.toShortString(false, true, true, false)));

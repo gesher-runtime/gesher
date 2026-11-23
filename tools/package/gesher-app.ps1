@@ -61,7 +61,8 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
-# AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
+# Keep the scoped launch pilot explicit until every guest entry point is migrated.
+$protectedScopedRun = $env:GESHER_SANDBOX -eq 'appcontainer-trusted'
 Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
@@ -314,6 +315,11 @@ try {
   $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
   if ($DriverArgs -notcontains '--system-server') {
     Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
+    exit $LASTEXITCODE
+  }
+  if ($protectedScopedRun) {
+    $ScopedArgs = @($DriverArgs | Where-Object { $_ -ne '--system-server' })
+    Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-scoped @ScopedArgs (UserPath $apkFull)
     exit $LASTEXITCODE
   }
 
