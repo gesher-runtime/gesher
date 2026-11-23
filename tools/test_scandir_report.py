@@ -52,8 +52,10 @@ def main():
     for path, expected in manifest['members'].items():
         require(digest(members[path]) == expected['sha256'], 'member digest: ' + path)
         require(len(members[path]) == expected['bytes'], 'member size: ' + path)
+    from scandir_ci_integration import historical_sources
+    source_bytes = historical_sources(ROOT, report, members, 'f6bfd6c916300cbf95b31a6de4ad394b3c6da13cdd189339c0fc823a167481cd')
     for path, expected in report['sources'].items():
-        require(digest((ROOT / path).read_bytes()) == expected, 'current source: ' + path)
+        require(digest(source_bytes[path]) == expected, 'current source: ' + path)
         require(digest(members['repo/' + path]) == expected, 'archived source: ' + path)
     current = members['repo/compat/bionic/posix_bionic.cc']
     require(digest(current) == report['candidate_production_sha256'], 'candidate production')

@@ -10848,5 +10848,424 @@
     "Scoped C allocation counters are not whole-process allocations, RSS or measured stack high-water.",
     "No timing rerun or source retuning followed the fixed final campaign. Original O2 pilot and final O3 project-shaped caller are distinct, fully retained campaigns.",
     "Six paired blocks and12 first calls per variant support the reported observations; bootstrap intervals and p95s do not prove platform-wide/no-regression acceptance."
-  ]
+  ],
+  "supplier_bundle_integration": {
+    "source_transition": {
+      "version": 1,
+      "published_feature": "0654cde8fb473b463a0ac5ad29149d6a5b2037c0",
+      "incoming_main": "52513f0fc3f5fc657138cf01429cf969b2f21649",
+      "canonical_merge_tree": "e821b52bbaf8f8582ec96313ad1573a1d08ee755",
+      "normalized_paths": [
+        ".github/workflows/ci.yml",
+        "tools/test_scandir_report.py"
+      ],
+      "workflow_before_sha256": "af2513f090a06862285dc1687395084a7dcd2435410711f920bf9e6e0c1f5f4d",
+      "workflow_after_sha256": "5484d9c10c388bc1be865392d7b585dd660edd118ce3ff1d0c3df5dbd8cbd0f2",
+      "incoming_workflow_sha256": "37c525f6bf01b7a96dcea34f76566c0e1523582441e26d20d342dc2b297b4618",
+      "verifier_before_sha256": "44a9cf647cdf989b2eb6aedb26cb73a8098bc8f754c2393694a507246f9faae2",
+      "adapter_sha256": "f6bfd6c916300cbf95b31a6de4ad394b3c6da13cdd189339c0fc823a167481cd"
+    },
+    "ordered_parents": [
+      "0654cde8fb473b463a0ac5ad29149d6a5b2037c0",
+      "52513f0fc3f5fc657138cf01429cf969b2f21649"
+    ],
+    "reason": "Integrate the published main supplier bundle after actual authenticated quota failures, preserving all measured Scandir inputs and every inherited CI gate.",
+    "historical_evidence": "All earlier JSON fields and the original 728-member archive are unchanged. No benchmark, runtime-source or acceptance result is replaced.",
+    "source_scope": "Only the exact composed workflow and the exactly reconstructed verifier normalize to archived predecessors; every other current source still reaches its original hash assertion.",
+    "limits": [
+      "This is CI/source provenance integration, not a new timing campaign or Windows/runtime acceptance.",
+      "Actual authenticated GitHub bundle transport and complete fork CI remain pending."
+    ],
+    "local_canonical_merge_commit": "1e3241af1ab734c4c08da29c6460dc8a07119a1a",
+    "canonical_proof": {
+      "checks": 4710,
+      "published_feature": "0654cde8fb473b463a0ac5ad29149d6a5b2037c0",
+      "incoming_main": "52513f0fc3f5fc657138cf01429cf969b2f21649",
+      "merge_base": "910bebe1edaf105e289edd60841b8354fd847bea",
+      "canonical_local_commit": "1e3241af1ab734c4c08da29c6460dc8a07119a1a",
+      "canonical_tree": "e821b52bbaf8f8582ec96313ad1573a1d08ee755",
+      "ordered_parents": [
+        "0654cde8fb473b463a0ac5ad29149d6a5b2037c0",
+        "52513f0fc3f5fc657138cf01429cf969b2f21649"
+      ],
+      "feature_only_paths": {
+        "compat/bionic/posix_bionic.cc": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "1f3394e9563f452593a95e5b2b000dd8dc715ba5"
+        },
+        "docs/research/data/scandir-stable-sort-2026-11-23.tar.gz": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "6b14e2da8f6041d9120bae2b6546c84c0b3de806"
+        },
+        "docs/research/memrchr-word-search-2026-11-23.json": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "4143a0dfd52b202c5def519e9f9dbe9fc752ffd8"
+        },
+        "docs/research/memrchr-word-search-2026-11-23.md": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "0d49c6e658ed6f933d3371cbe01f228eaa6154d6"
+        },
+        "docs/research/scandir-stable-sort-2026-11-23.json": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "6b259bf16e16c27e2cc3602f4cb6723c3c257300"
+        },
+        "docs/research/scandir-stable-sort-2026-11-23.md": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "2a6806b173ce4b5864f6c079dcae32726ddb0879"
+        },
+        "tests/native/libc_test.c": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "2eedef0d83cf86f16185f8bd38920e00288cff28"
+        },
+        "tests/native/memrchr_android_reference.json": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "8549cca4ed7d120bbd0f5fd22a9b578f3ac9df03"
+        },
+        "tests/native/memrchr_contract.inc": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "4388ee1b72de46f48f27ed75a2552c6b4a673390"
+        },
+        "tests/native/memrchr_host.cc.in": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "95cf9614623dcd18f014b9bc755d2d7dd2420910"
+        },
+        "tests/native/memrchr_measure.cc.in": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "a7f1d8422c973b942ac69f05b0012949e7a6c4a5"
+        },
+        "tests/native/scandir_sort_bench.cc.in": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "44c78f9867112f4ca4336f6fd970c74ca3bddb2b"
+        },
+        "tests/native/scandir_sort_contract_test.inc": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "ed160c23e6d55b8462fad2ccc9dacc14f3c506ea"
+        },
+        "tests/native/scandir_sort_host.cc.in": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "b69ecba126544f3701c5d1fe7c529bc177f3030c"
+        },
+        "tools/measure_memrchr.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "147c731f68c19fe9b6fc1a6a1e5b28729e2fbb0e"
+        },
+        "tools/net-tcp-priority/qualified/memrchr-source.json": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "c7d6fec05a460c2b942fe06e62bddea30bc302b2"
+        },
+        "tools/net-tcp-priority/qualified/memrchr-source.patch": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "a0c6f9a15676eb939994a7acc9827327615d37e6"
+        },
+        "tools/net-tcp-priority/qualified/scandir-source.json": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "1cd0c7d3ff64b67156f474f96cc5bd19a2ff192e"
+        },
+        "tools/net-tcp-priority/qualified/scandir-source.patch": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "ae64ba4589bbc5f5a6de0958ad07771ccdc0f108"
+        },
+        "tools/net-tcp-priority/test-memrchr-policy.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "ff74e316c8ad681c4f961e688eb653d062443ed1"
+        },
+        "tools/net-tcp-priority/test-scandir-policy.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "fcd68fdfa506f4aaaa42170fc08acf5413e60012"
+        },
+        "tools/net-tcp-priority/test-selected-policy.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "5f0fff857bc0fe38afcadd5ffb953531739718a7"
+        },
+        "tools/test_memrchr_contracts.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "69db72e7b56837867dfad1894ab81b22eaf13c42"
+        },
+        "tools/test_memrchr_report.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "bbbec330d7ff0b02bf8c27970245de2f2e6d2a4a"
+        },
+        "tools/test_scandir_report.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "9952daecaac77688753fe1f0a08f6bb94a9ea51e"
+        },
+        "tools/test_scandir_sort.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "2d6c08809d08239f54df1c1945cea681ac5b56a6"
+        }
+      },
+      "main_only_paths": {
+        ".github/workflows/arm64-windows-self-hosted.yml": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "7cba40bc8add088854eb9371a52599e7cb7331e9"
+        },
+        ".github/workflows/native3-locks-blocking.yml": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "b467951cccf0a471dda59efb20712d6284ce928d"
+        },
+        ".github/workflows/publish-release.yml": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "2f8eae1c56edabf08fddf6c3268613182edddfd1"
+        },
+        ".github/workflows/tsf-format-component.yml": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "55dbe0789818f88952963419f57a10ac153e572b"
+        },
+        "tools/ci/artifact_receipt.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "1cd6c997146cbe48ee59cca679fb493d75f639ed"
+        },
+        "tools/ci/github_read.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "185256b2664ae3e6225f38f6add8d493731d30aa"
+        },
+        "tools/ci/publish_release.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "d40be9d627315245a20fe690770f50701fa3b964"
+        },
+        "tools/ci/test_artifact_batch.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "2c64d9e8102d843b35428e5d2177ec1870c54f09"
+        },
+        "tools/ci/test_github_rate_limits.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "64ea87b371829300e043a5acd1d8fd36977ace3b"
+        },
+        "tools/ci/test_supplier_bundle.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "eca76f5409941bad582d9c9e5d347bb784aa55b7"
+        },
+        "tools/net-tcp-priority/run-component.ps1": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "d802889c40aafbc36cf84af6c3b9169b3364fbe9"
+        },
+        "tools/net-tcp-priority/test-helper-metadata.ps1": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "d9a2355114c32e20e0ee8a13e93353678ae5954e"
+        },
+        "tools/surface/download-verified-artifact.py": {
+          "mode": "100644",
+          "type": "blob",
+          "sha": "3056d730eea1f4caa60dd6149bfb7777d2f5618e"
+        }
+      },
+      "shared_paths": [
+        ".github/workflows/ci.yml"
+      ],
+      "workflow_sha256": "5484d9c10c388bc1be865392d7b585dd660edd118ce3ff1d0c3df5dbd8cbd0f2",
+      "incoming_workflow_sha256": "37c525f6bf01b7a96dcea34f76566c0e1523582441e26d20d342dc2b297b4618",
+      "retained_feature_commands": [
+        "python3 tools/test_memrchr_contracts.py --sanitize --negative-controls",
+        "python3 tools/test_memrchr_report.py",
+        "python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts",
+        "python3 tools/test_scandir_report.py"
+      ],
+      "historical_report_fields": [
+        "schema_version",
+        "date",
+        "scope",
+        "candidate_production_sha256",
+        "baseline_production_sha256",
+        "public_prerequisite",
+        "measured_baseline",
+        "current_main_composition",
+        "archive",
+        "sources",
+        "final",
+        "pilot",
+        "campaigns",
+        "resources",
+        "windows_static_frames_bytes",
+        "qualification",
+        "acceptance",
+        "limits"
+      ],
+      "original_archive": {
+        "path": "docs/research/data/scandir-stable-sort-2026-11-23.tar.gz",
+        "sha256": "cae0558ee56a97d3bee5ff5b2e5a9e816d3fd53707ae30ddab541502c406f770",
+        "bytes": 1342719,
+        "members": 728
+      },
+      "all_measured_and_protected_sources_unchanged": true,
+      "original_artifact_functions_changed": [
+        "batch",
+        "main"
+      ],
+      "adapter_sha256": "f6bfd6c916300cbf95b31a6de4ad394b3c6da13cdd189339c0fc823a167481cd",
+      "verifier_sha256": "4f34024300f80a661d18236632da20091d7277a9bdd7e44e6010812e3a31a3af",
+      "limits": "No new timing or runtime acceptance. Existing authenticated bundle transport is simulated only by its maintained contract suites; actual full CI remains separate."
+    },
+    "compatibility_checks": [
+      {
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/ci",
+          "-p",
+          "test_supplier_bundle.py"
+        ],
+        "returncode": 0,
+        "log": "/workspace/scratch/aa09b1a0dc1f/native-scandir-main525-test_supplier_bundle.log",
+        "sha256": "c271f22986a936eaf1cb12c3c9645b316c03633f174f41311378d40393028d62"
+      },
+      {
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/ci",
+          "-p",
+          "test_artifact_batch.py"
+        ],
+        "returncode": 0,
+        "log": "/workspace/scratch/aa09b1a0dc1f/native-scandir-main525-test_artifact_batch.log",
+        "sha256": "59574d3ce2214b6f4e6937e8d68948e6d7b330d01aad94d24794c94efb091fd7"
+      },
+      {
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/ci",
+          "-p",
+          "test_github_rate_limits.py"
+        ],
+        "returncode": 0,
+        "log": "/workspace/scratch/aa09b1a0dc1f/native-scandir-main525-test_github_rate_limits.log",
+        "sha256": "bed6dbb4d5f1a0ca8fb80c073500318ca5383df870249d6592f052bf2ae072bc"
+      },
+      {
+        "command": [
+          "python3",
+          "tools/test_scandir_report.py"
+        ],
+        "returncode": 1,
+        "expected": "strict original whole-workflow source identity rejection",
+        "log": "/workspace/scratch/aa09b1a0dc1f/native-scandir-main525-report-original-negative.log",
+        "sha256": "f05a6724bab608d53b89e06b88df909c98aa8ee2490cdd66bc75841f7b9f711a"
+      }
+    ],
+    "gate_receipts": [
+      {
+        "name": "report",
+        "command": [
+          "python3",
+          "tools/test_scandir_report.py"
+        ],
+        "returncode": 0,
+        "elapsed_seconds": 12.136404566001147,
+        "log": "native-scandir-main525-report.log",
+        "log_sha256": "4db796f52482135febaab61af2915392d199dabb2ce265a2e3d12002080d25cf"
+      },
+      {
+        "name": "source",
+        "command": [
+          "python3",
+          "tools/net-tcp-priority/test-selected-policy.py",
+          "--selftest"
+        ],
+        "returncode": 0,
+        "elapsed_seconds": 5.324226983000699,
+        "log": "native-scandir-main525-source.log",
+        "log_sha256": "6c2ac75fccfd73a9d64bd342be384319f7f3bc423d6fd02a53b681b18cadf15b"
+      },
+      {
+        "name": "supplier",
+        "command": [
+          "python3",
+          "tools/net-tcp-priority/test-supplier-policy.py",
+          "--selftest"
+        ],
+        "returncode": 2,
+        "elapsed_seconds": 0.02437947800353868,
+        "log": "native-scandir-main525-supplier.log",
+        "log_sha256": "4ba18da0161e3438c3903a9d53870874b3a3a588502097d8f43d7b750af39831"
+      },
+      {
+        "name": "selected-supplier",
+        "command": [
+          "python3",
+          "tools/net-tcp-priority/test-selected-supplier.py"
+        ],
+        "returncode": 0,
+        "elapsed_seconds": 0.1285067170028924,
+        "log": "native-scandir-main525-selected-supplier.log",
+        "log_sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120"
+      },
+      {
+        "name": "vector",
+        "command": [
+          "python3",
+          "tools/net-tcp-priority/test-vector-policy.py"
+        ],
+        "returncode": 0,
+        "elapsed_seconds": 8.470612714001618,
+        "log": "native-scandir-main525-vector.log",
+        "log_sha256": "d24e6cfdbb25d6d19fd035787f9947619fd2dd3ec060da33469cd6d37db3a409"
+      },
+      {
+        "name": "memrchr-report",
+        "command": [
+          "python3",
+          "tools/test_memrchr_report.py"
+        ],
+        "returncode": 0,
+        "elapsed_seconds": 0.20060050299798604,
+        "log": "native-scandir-main525-memrchr-report.log",
+        "log_sha256": "21159a23636678d728a8224b23882dae63617770f3159bfd3df9d0711ce5796a"
+      }
+    ],
+    "invocation_note": "The first supplier command named a nonexistent file; its exit2 is retained. The actual maintained test-selected-supplier.py passed unchanged. This is a command-path error, not a source assertion or a relaxed gate.",
+    "evidence_archive": {
+      "path": "docs/research/data/scandir-supplier-ci-2026-11-23.tar.gz",
+      "sha256": "92de120705eba7bc0e8bad3195f362d7effd818678f3beed7005a5938cb316eb",
+      "bytes": 307024,
+      "members": 53
+    }
+  }
 }
