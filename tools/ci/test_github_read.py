@@ -22,6 +22,7 @@ ENDPOINT = 'repos/gesher-runtime/gesher/actions/runs/42444051868/attempts/1/jobs
 COMMAND = ['gh', 'api', '--method', 'GET', '--include', '--', ENDPOINT]
 DIAL_TIMEOUT = ('Get "https://api.github.com/' + ENDPOINT
                 + '": dial tcp 20.29.134.17:443: i/o timeout')
+GH_JSON_EOF = 'unexpected end of JSON input'
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -96,7 +97,7 @@ class GitHubReadTest(unittest.TestCase):
     def test_four_attempts_exhaust_with_exact_bounded_backoff(self):
         self.run.side_effect = [response(code=1, stderr=error) for error in
                                 ('gh: Server Error (HTTP 502)', DIAL_TIMEOUT,
-                                 'gh: Server Error (HTTP 504)', DIAL_TIMEOUT)]
+                                 'gh: Server Error (HTTP 504)', GH_JSON_EOF)]
         with self.assertRaisesRegex(GitHubReadError, r'after 4 attempt\(s\)'):
             get_json(ENDPOINT)
         self.assertEqual(self.run.call_args_list,
@@ -112,7 +113,8 @@ class GitHubReadTest(unittest.TestCase):
         self.assertEqual(self.sleep.call_args_list, [call(1), call(2), call(4)])
 
     def test_transient_failure_without_retry_raises_at_once_for_a_caller_fallback(self):
-        for stderr in ('gh: Server Error (HTTP 502)', 'gh: Server Error (HTTP 504)', DIAL_TIMEOUT):
+        for stderr in ('gh: Server Error (HTTP 502)', 'gh: Server Error (HTTP 504)',
+                       DIAL_TIMEOUT, GH_JSON_EOF):
             with self.subTest(stderr=stderr):
                 self.run.reset_mock(); self.sleep.reset_mock()
                 self.run.side_effect = [response(code=1, stderr=stderr)]
@@ -142,6 +144,8 @@ class GitHubReadTest(unittest.TestCase):
                    'gh: HTTP 403\r\ngh: Server Error (HTTP 503)',
                    'diagnostic text mentioning gh: HTTP 503',
                    'gh: HTTP 503 in a diagnostic message',
+                   GH_JSON_EOF + '\na different error',
+                   'gh: HTTP 403\r\n' + GH_JSON_EOF,
                    'i/o timeout', 'net/http: TLS handshake timeout',
                    DIAL_TIMEOUT.replace('dial tcp', 'read tcp'),
                    DIAL_TIMEOUT.replace(':443:', ':80:'),
@@ -157,6 +161,26 @@ class GitHubReadTest(unittest.TestCase):
                     get_json(ENDPOINT)
                 self.assertEqual(self.run.call_count, 1)
                 self.sleep.assert_not_called()
+
+    def test_gh_json_eof_discards_partial_output_and_retries_exact_get(self):
+        truncated = response(code=1, stderr=GH_JSON_EOF + '\r\n')
+        truncated.stdout = b'HTTP/2.0 200\r\n\r\n{"jobs":'
+        complete = {'jobs': [], 'total_count': 0}
+        self.run.side_effect = [truncated, response(complete)]
+        self.assertEqual(get_json(ENDPOINT), complete)
+        self.assertEqual(self.run.call_args_list,
+                         [call(COMMAND, capture_output=True, timeout=60)] * 2)
+        self.sleep.assert_called_once_with(1)
+
+    def test_gh_json_eof_never_masks_a_non_success_http_status(self):
+        truncated_forbidden = response(code=1, stderr=GH_JSON_EOF)
+        truncated_forbidden.stdout = b'HTTP/2.0 403\r\n\r\n{"message":'
+        self.run.return_value = truncated_forbidden
+        with self.assertRaises(GitHubReadError) as caught:
+            get_json(ENDPOINT, retry_transient=False)
+        self.assertNotIsInstance(caught.exception, GitHubTransientError)
+        self.run.assert_called_once()
+        self.sleep.assert_not_called()
 
     def test_a_permanent_error_after_one_transient_stops_immediately(self):
         self.run.side_effect = [response(code=1, stderr='gh: Server Error (HTTP 502)'),
@@ -339,6 +363,33 @@ class ReceiptIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Producer source/attempt/conclusion mismatch'):
             self._receipt()
         self.assertEqual(self.downloads, [])
+
+    def test_receipt_recovers_gh_json_eof_and_still_rejects_wrong_identity_or_digest(self):
+        for defect in (None, 'source', 'digest'):
+            with self.subTest(defect=defect):
+                self.commands.clear()
+                self.downloads.clear()
+                jobs = copy.deepcopy(self.jobs)
+                inventory = copy.deepcopy(self.inventory)
+                if defect == 'source':
+                    jobs['jobs'][0]['head_sha'] = 'd' * 40
+                if defect == 'digest':
+                    inventory['artifacts'][0]['digest'] = 'sha256:wrong'
+                self.responses = [response(self.run_value),
+                                  response(code=1, stderr=GH_JSON_EOF + '\r\n'),
+                                  response(jobs), response(inventory)]
+                expected = [self.endpoints[0], self.endpoints[1], self.paged, self.endpoints[2]]
+                if defect:
+                    with self.assertRaisesRegex(RuntimeError, 'Producer source|Artifact digest'):
+                        self._receipt()
+                    self.assertEqual(self.downloads, [])
+                    if defect == 'source':
+                        expected.pop()
+                else:
+                    self._receipt()
+                    self.assertEqual(len(self.downloads), 1)
+                self.assertEqual([command[-1] for command in self.commands], expected)
+                self.sleep.assert_not_called()
 
     def test_real_receipt_selects_one_valid_artifact_from_actual_producer_window(self):
         current = self.inventory['artifacts'][0]
