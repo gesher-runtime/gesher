@@ -20,6 +20,8 @@
 #include <vector>
 
 #include "camera_mf.h"
+#include "brokered_camera.h"
+#include <gesher/binder_endpoint.h>
 #include "core_jni_helpers.h"
 #include "location_win.h"
 
@@ -92,7 +94,8 @@ namespace cam = gesher::devices::camera;
 
 // One string per device: "id\tname\tWxH,WxH,...".
 jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
-  const std::vector<cam::Device>& devices = cam::List(nullptr);
+  const auto& devices = gesher::binder_endpoint::Current().IsGuest()
+      ? cam::ListBrokered(nullptr) : cam::List(nullptr);
   jclass string = env->FindClass("java/lang/String");
   jobjectArray result = env->NewObjectArray(static_cast<jsize>(devices.size()), string, nullptr);
   for (size_t i = 0; i < devices.size(); ++i) {
@@ -110,7 +113,8 @@ jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
 
 jstring WindowsCamera_status(JNIEnv* env, jclass) {
   std::string status;
-  cam::List(&status);
+  if (gesher::binder_endpoint::Current().IsGuest()) cam::ListBrokered(&status);
+  else cam::List(&status);
   return env->NewStringUTF(status.c_str());
 }
 
@@ -120,7 +124,9 @@ jlong WindowsCamera_open(JNIEnv* env, jclass, jstring id, jint width, jint heigh
   ScopedUtfChars chars(env, id);
   if (chars.c_str() == nullptr) return 0;
   HRESULT hr = S_OK;
-  std::unique_ptr<cam::Capture> capture = cam::Open(chars.c_str(), width, height, &hr);
+  std::unique_ptr<cam::Capture> capture = gesher::binder_endpoint::Current().IsGuest()
+      ? cam::OpenBrokered(chars.c_str(), width, height, &hr)
+      : cam::Open(chars.c_str(), width, height, &hr);
   if (capture) {
     ALOGI("camera: opened %s at %dx%d through %s", chars.c_str(), capture->width,
           capture->height, capture->via);

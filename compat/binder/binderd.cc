@@ -58,9 +58,13 @@
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 #include "launch_channel.h"
+#include "../posix/include/gesher/capture_policy.h"
 #ifdef GESHER_AUDIO_RENDER_BROKER
 #include "brokered_audio.h"
 #include "shared_state.h"
+#endif
+#ifdef GESHER_CAMERA_BROKER_HOST
+#include "brokered_camera.h"
 #endif
 #ifdef GESHER_RECORD_LOCK_BROKER
 #include "../posix/src/record_lock_descriptors.h"
@@ -1630,15 +1634,16 @@ void ReapRevokedPeers() {
 std::mutex g_capture_policy_lock;
 peer::OwnedHandle g_capture_policy;
 
-[[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process) {
+[[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process,
+                                        gesher::capture_policy::Kind kind) {
   if (!process || process->role != peer::Role::kApplication ||
       !g_peer_registry->Live(process)) return false;
   std::lock_guard<std::mutex> lock(g_capture_policy_lock);
   if (!g_capture_policy) return false;
-  uint32_t uid = process->uid;
+  gesher::capture_policy::Request request{process->uid, kind};
   uint32_t allowed = 0;
   const ULONGLONG deadline = GetTickCount64() + 500;
-  if (!launch::Transfer(g_capture_policy.get(), &uid, sizeof(uid), true, deadline) ||
+  if (!launch::Transfer(g_capture_policy.get(), &request, sizeof(request), true, deadline) ||
       !launch::Transfer(g_capture_policy.get(), &allowed, sizeof(allowed), false, deadline)) {
     g_capture_policy.reset();
     return false;
@@ -1709,7 +1714,7 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
         if (system || g_record_only) accepted = g_peer_registry->AttachJob(std::move(job));
         break;
       }
-      case launch::Action::kAttachCapturePolicy: {
+      case launch::Action::kAttachTypedCapturePolicy: {
         peer::OwnedHandle pipe(launch::DecodeHandle(request.process));
         if ((system || g_record_only) && pipe && GetFileType(pipe.get()) == FILE_TYPE_PIPE) {
           std::lock_guard<std::mutex> lock(g_capture_policy_lock);
@@ -2012,7 +2017,7 @@ void ServeAudioCapture(HANDLE pipe, In in) {
   }
   gesher::media::ServeBrokeredCapture(pipe, info_only != 0,
       [&] { return g_peer_registry->Live(process); },
-      [&] { return CaptureAuthorized(process); });
+      [&] { return CaptureAuthorized(process, gesher::capture_policy::Kind::kMicrophone); });
   if (!info_only) {
     std::lock_guard<std::mutex> lock(g_audio_lock);
     g_audio_capturers.erase(id);
@@ -2043,6 +2048,34 @@ void ServeAudioRender(HANDLE pipe, In in) {
   {
     std::lock_guard<std::mutex> lock(g_audio_lock);
     g_audio_renderers.erase(id);
+  }
+}
+#endif
+
+#ifdef GESHER_CAMERA_BROKER_HOST
+std::mutex g_camera_lock;
+std::set<std::pair<DWORD, uint64_t>> g_camera_sessions;
+
+void ServeCamera(HANDLE pipe, In in) {
+  uint32_t version = 0, info_only = 0;
+  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
+      !in.Get(&info_only) || info_only > 1 || in.p != in.end) return;
+  const auto process = g_peer_registry->Authenticate(pipe);
+  if (!process || process->role != peer::Role::kApplication) return;
+  const auto identity = std::pair{process->generation.pid, process->generation.birth};
+  bool slot = false;
+  if (!info_only) {
+    std::lock_guard lock(g_camera_lock);
+    // CameraService advertises no concurrent camera sessions. Keep a bounded
+    // number of readers and buffers even if a guest makes raw requests.
+    if (g_camera_sessions.size() < 16) slot = g_camera_sessions.insert(identity).second;
+  }
+  gesher::devices::camera::ServeBrokeredCamera(pipe, info_only != 0,
+      [&] { return g_peer_registry->Live(process); },
+      [&] { return CaptureAuthorized(process, gesher::capture_policy::Kind::kCamera); }, slot);
+  if (slot) {
+    std::lock_guard lock(g_camera_lock);
+    g_camera_sessions.erase(identity);
   }
 }
 #endif
@@ -2512,6 +2545,10 @@ void Serve(HANDLE pipe) {
         ServeAudioRender(pipe, in);
       } else if (op == wire::kAudioCapture) {
         ServeAudioCapture(pipe, in);
+#endif
+#ifdef GESHER_CAMERA_BROKER_HOST
+      } else if (op == wire::kCamera) {
+        ServeCamera(pipe, in);
 #endif
 #endif
       } else if (!g_record_only) {

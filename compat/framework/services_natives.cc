@@ -298,16 +298,17 @@ static jboolean Zygote_attachCapturePermissionPolicy(JNIEnv* env, jclass, jobjec
     if (env->GetJavaVM(&vm) != JNI_OK) return JNI_FALSE;
     jclass type = env->GetObjectClass(predicate);
     if (type == nullptr) return JNI_FALSE;
-    const jmethodID method = env->GetMethodID(type, "test", "(I)Z");
+    const jmethodID method = env->GetMethodID(type, "allowed", "(II)Z");
     env->DeleteLocalRef(type);
     if (method == nullptr) return JNI_FALSE;
     const jobject policy = env->NewGlobalRef(predicate);
     if (policy == nullptr) return JNI_FALSE;
     const bool started = gesher::zygote::RegisterProtectedCapturePolicy(
-        [vm, policy, method](uint32_t uid) {
+        [vm, policy, method](uint32_t uid, gesher::capture_policy::Kind kind) {
             JNIEnv* thread = nullptr;
             if (vm->AttachCurrentThread(&thread, nullptr) != JNI_OK) return false;
-            const bool allowed = thread->CallBooleanMethod(policy, method, static_cast<jint>(uid));
+            const bool allowed = thread->CallBooleanMethod(
+                policy, method, static_cast<jint>(uid), static_cast<jint>(kind));
             const bool failed = thread->ExceptionCheck();
             if (failed) thread->ExceptionClear();
             vm->DetachCurrentThread();
@@ -802,11 +803,13 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
                 return authority.Start(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
             }, std::move(credentialRoot.canonical), std::move(deviceRoot.canonical),
             std::move(credentialRoot.nt), std::move(deviceRoot.nt), streams, buildPath, frameworkPath,
-            [vm, host, dispatch, uid](uint32_t source_uid) {
+            [vm, host, dispatch, uid](uint32_t source_uid, gesher::capture_policy::Kind kind) {
                 if (source_uid != static_cast<uint32_t>(uid)) return false;
                 std::vector<int32_t> values;
                 return DispatchCohostPermission(vm, host, dispatch, cohost::Operation::kCheck,
-                    {u"android.permission.RECORD_AUDIO"}, &values) == ERROR_SUCCESS &&
+                    {kind == gesher::capture_policy::Kind::kCamera
+                        ? u"android.permission.CAMERA" : u"android.permission.RECORD_AUDIO"},
+                    &values) == ERROR_SUCCESS &&
                     values.size() == 1 && values[0] == 0; // PackageManager.PERMISSION_GRANTED
             }};
         gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
@@ -895,7 +898,7 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeHasProtectedLaunchAuthority", "(Z)Z", GESHER_JNI(Zygote_hasProtectedLaunchAuthority)},
     {"nativeOpenProtectedChildFile", "(IJLjava/lang/String;)I",
      GESHER_JNI(Zygote_openProtectedChildFile)},
-    {"nativeAttachCapturePermissionPolicy", "(Ljava/util/function/IntPredicate;)Z",
+    {"nativeAttachCapturePermissionPolicy", "(Lcom/gesher/server/Zygote$CapturePolicy;)Z",
      GESHER_JNI(Zygote_attachCapturePermissionPolicy)},
     {"nativePrepareProtectedOperator", "(IJ)Z", GESHER_JNI(Zygote_prepareProtectedOperator)},
     {"nativeSpawnProtectedApp",

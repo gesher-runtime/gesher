@@ -191,7 +191,8 @@ class CapturePolicyServer {
     if (thread_) WaitForSingleObject(thread_.get(), INFINITE);
   }
 
-  bool Start(HANDLE authority, HANDLE broker, std::function<bool(uint32_t)> allowed) {
+  bool Start(HANDLE authority, HANDLE broker,
+             std::function<bool(uint32_t, capture_policy::Kind)> allowed) {
     peer::OwnedHandle writer;
     if (!launch::PrivatePipe(&pipe_, &writer, true)) return false;
     stop_.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -204,7 +205,7 @@ class CapturePolicyServer {
     if (!DuplicateHandle(GetCurrentProcess(), writer.get(), broker, &remote,
                          0, FALSE, DUPLICATE_SAME_ACCESS)) return false;
     launch::Request attach;
-    attach.action = launch::Action::kAttachCapturePolicy;
+    attach.action = launch::Action::kAttachTypedCapturePolicy;
     attach.process = launch::EncodeHandle(remote);
     return SubmitLaunchRequest(authority, attach);
   }
@@ -230,16 +231,17 @@ class CapturePolicyServer {
 
   static DWORD WINAPI Serve(void* self) {
     auto& server = *static_cast<CapturePolicyServer*>(self);
-    uint32_t uid = 0;
-    while (server.Exchange(&uid, sizeof(uid), false)) {
-      uint32_t allowed = uid >= 10000 && uid <= 19999 && server.allowed_(uid);
+    capture_policy::Request request{};
+    while (server.Exchange(&request, sizeof(request), false)) {
+      uint32_t allowed = request.uid >= 10000 && request.uid <= 19999 &&
+          capture_policy::Valid(request.kind) && server.allowed_(request.uid, request.kind);
       if (!server.Exchange(&allowed, sizeof(allowed), true)) break;
     }
     return 0;
   }
 
   peer::OwnedHandle pipe_, thread_, ready_, stop_;
-  std::function<bool(uint32_t)> allowed_;
+  std::function<bool(uint32_t, capture_policy::Kind)> allowed_;
 };
 
 std::mutex g_lock;
@@ -923,7 +925,8 @@ bool StopInstallation(Writer& authority, const std::array<uint8_t, 16>& installa
 
 }  // namespace
 
-bool RegisterProtectedCapturePolicy(std::function<bool(uint32_t)> allowed) {
+bool RegisterProtectedCapturePolicy(
+    std::function<bool(uint32_t, capture_policy::Kind)> allowed) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& owner = Authority();
   if (!owner.channel || !allowed) return false;

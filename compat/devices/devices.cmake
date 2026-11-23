@@ -10,6 +10,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/bluetooth_test.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/bluetooth_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/camera_frames.cc
+  ${CMAKE_SOURCE_DIR}/compat/devices/brokered_camera.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/camera_metadata_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/camera_mf.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/devices_jni.cc
@@ -19,6 +20,12 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/winrt.cc)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devices)
 target_link_libraries(framework_runtime PUBLIC ole32)
+target_sources(binderd PRIVATE
+  ${CMAKE_SOURCE_DIR}/compat/devices/brokered_camera.cc
+  ${CMAKE_SOURCE_DIR}/compat/devices/camera_mf.cc)
+target_include_directories(binderd PRIVATE ${CMAKE_SOURCE_DIR}/compat/devices)
+target_compile_definitions(binderd PRIVATE GESHER_CAMERA_BROKER_HOST=1)
+target_link_libraries(binderd PRIVATE mfuuid)
 # Bluetooth (docs/bluetooth.md): Winsock's AF_BTH sockets and WSASetService for
 # RFCOMM; IID_IUnknown. BluetoothApis.dll and the WinRT classes are found at run time.
 target_link_libraries(framework_runtime PUBLIC ws2_32 uuid)

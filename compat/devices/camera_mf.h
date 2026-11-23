@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -48,5 +49,11 @@ class Capture {
 
 // Opens `id` at the offered size nearest to width x height.
 std::unique_ptr<Capture> Open(const std::string& id, int width, int height, HRESULT* hr);
+#ifdef GESHER_CAMERA_BROKER_HOST
+std::vector<Device> EnumerateRealDevices(std::string* status);
+// A real device only. Gives the broker a bounded wait while a driver owes a sample.
+std::unique_ptr<Capture> OpenRevocable(const std::string& id, int width, int height,
+                                       HRESULT* hr, std::function<bool()> admitted);
+#endif
 
 }  // namespace gesher::devices::camera

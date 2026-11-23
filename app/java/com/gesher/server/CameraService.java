@@ -7,7 +7,7 @@ package com.gesher.server;
 import android.Manifest;
 import android.app.ActivityThread;
 import android.content.AttributionSourceState;
-import android.content.pm.PackageInfo;
+import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.res.CameraCompatibilityInfo;
 import android.graphics.Rect;
@@ -468,17 +468,16 @@ public final class CameraService extends ICameraService.Default {
         }
     }
 
-    /** What the package's manifest asks for (Gesher grants that; docs/devices.md). */
+    /** Camera1 and Camera2 run locally in the app. Check its live, UID-owned grant. */
     static boolean hasCameraPermission(String packageName) {
         if (packageName == null) return false;
         try {
-            PackageInfo info = ActivityThread.getPackageManager().getPackageInfo(packageName,
-                    PackageManager.GET_PERMISSIONS, 0);
-            if (info == null || info.requestedPermissions == null) return false;
-            for (String p : info.requestedPermissions) {
-                if (Manifest.permission.CAMERA.equals(p)) return true;
-            }
-            return false;
+            IPackageManager pm = ActivityThread.getPackageManager();
+            int uid = android.os.Process.myUid();
+            int userId = android.os.UserHandle.getUserId(uid);
+            return pm != null && pm.getPackageUid(packageName, 0, userId) == uid
+                    && pm.checkUidPermission(Manifest.permission.CAMERA, uid)
+                            == PackageManager.PERMISSION_GRANTED;
         } catch (android.os.RemoteException | RuntimeException e) {
             log("checking " + packageName + "'s permissions: " + e);
             return false;

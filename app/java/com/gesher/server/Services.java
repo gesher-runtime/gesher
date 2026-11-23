@@ -129,10 +129,16 @@ public final class Services {
         Created created = new Created(pm, atm, am, clipboard, services);
         sLast = created;
         if (SystemServer.isProtectedDevice()
-                && !Zygote.nativeAttachCapturePermissionPolicy(uid ->
-                    pm.checkUidPermission(android.Manifest.permission.RECORD_AUDIO, uid)
-                        == android.content.pm.PackageManager.PERMISSION_GRANTED)) {
-            SystemServer.log("The protected microphone permission channel is unavailable");
+                && !Zygote.nativeAttachCapturePermissionPolicy((uid, kind) -> {
+                    String permission = switch (kind) {
+                        case Zygote.CapturePolicy.MICROPHONE -> android.Manifest.permission.RECORD_AUDIO;
+                        case Zygote.CapturePolicy.CAMERA -> android.Manifest.permission.CAMERA;
+                        default -> null;
+                    };
+                    return permission != null && pm.checkUidPermission(permission, uid)
+                            == android.content.pm.PackageManager.PERMISSION_GRANTED;
+                })) {
+            SystemServer.log("The protected capture permission channel is unavailable");
         }
         services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
                 new UriGrantsManagerService(pm, atm, am)).asBinder());

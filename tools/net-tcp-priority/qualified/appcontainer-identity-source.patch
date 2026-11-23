@@ -1,30 +1,34 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc04..2487e68f4 100644
+index ee26bfc..5c54593 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -54,0 +55,2 @@
 +#include "../posix/include/gesher/windows_process_identity.h"
 +#include "../posix/include/gesher/audio_device_state.h"
-@@ -57,0 +60,8 @@
+@@ -57,0 +60,12 @@
 +#include "launch_channel.h"
++#include "../posix/include/gesher/capture_policy.h"
 +#ifdef GESHER_AUDIO_RENDER_BROKER
 +#include "brokered_audio.h"
 +#include "shared_state.h"
 +#endif
++#ifdef GESHER_CAMERA_BROKER_HOST
++#include "brokered_camera.h"
++#endif
 +#ifdef GESHER_RECORD_LOCK_BROKER
 +#include "../posix/src/record_lock_descriptors.h"
 +#endif
-@@ -61,0 +72,2 @@ namespace wire = gesher::binder_wire;
+@@ -61,0 +76,2 @@ namespace wire = gesher::binder_wire;
 +namespace launch = gesher::binder_launch;
 +namespace peer = gesher::binder_peer;
-@@ -63,0 +76,2 @@ bool g_trace = false;
+@@ -63,0 +80,2 @@ bool g_trace = false;
 +bool g_record_only = false;
 +gesher::process_identity::Sid g_record_container;
-@@ -204,0 +219 @@ struct Proc {
+@@ -204,0 +223 @@ struct Proc {
 +  gesher::binder_peer::Registry::Lease identity;
-@@ -229,0 +245 @@ bool g_sandbox = false;
+@@ -229,0 +249 @@ bool g_sandbox = false;
 +std::unique_ptr<gesher::binder_peer::Registry> g_peer_registry;
-@@ -480 +496,8 @@ constexpr size_t kFlatObjectSize = sizeof(flat_binder_object);
+@@ -480 +500,8 @@ constexpr size_t kFlatObjectSize = sizeof(flat_binder_object);
 -uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
 +HANDLE ProcessForTransfer(const Proc* proc, peer::OwnedHandle* legacy_owner) {
 +  if (proc->identity) return proc->identity->process.get();
@@ -34,7 +38,7 @@ index ee26bfc04..2487e68f4 100644
 +}
 +
 +uint64_t DuplicateRemoteHandle(const Proc* from_proc, const Proc* to_proc, uint64_t handle) {
-@@ -482,2 +505,6 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+@@ -482,2 +509,6 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
 -  HANDLE from = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(from_pid));
 -  HANDLE to = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(to_pid));
 +  if (g_peer_registry && (!g_peer_registry->Live(from_proc->identity) ||
@@ -43,40 +47,40 @@ index ee26bfc04..2487e68f4 100644
 +  peer::OwnedHandle legacy_to;
 +  HANDLE from = ProcessForTransfer(from_proc, &legacy_from);
 +  HANDLE to = ProcessForTransfer(to_proc, &legacy_to);
-@@ -488,3 +515,2 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+@@ -488,3 +519,2 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
 -  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu", from_pid, to_pid, GetLastError());
 -  if (from != nullptr) CloseHandle(from);
 -  if (to != nullptr) CloseHandle(to);
 +  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu",
 +               from_proc->pid, to_proc->pid, GetLastError());
-@@ -494 +520 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+@@ -494 +524 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
 -void CloseRemoteHandle(int pid, uint64_t handle) {
 +void CloseRemoteHandle(const Proc* proc, uint64_t handle) {
-@@ -496 +522,2 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
+@@ -496 +526,2 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
 -  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(pid));
 +  peer::OwnedHandle legacy;
 +  HANDLE p = ProcessForTransfer(proc, &legacy);
-@@ -500 +526,0 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
+@@ -500 +530,0 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
 -  CloseHandle(p);
-@@ -512 +538 @@ void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
+@@ -512 +542 @@ void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
 -    CloseRemoteHandle(buffer->proc->pid, description->shared_handle);
 +    CloseRemoteHandle(buffer->proc, description->shared_handle);
-@@ -541 +567 @@ void ReleaseBufferObjects(Buffer* buffer) {
+@@ -541 +571 @@ void ReleaseBufferObjects(Buffer* buffer) {
 -        CloseRemoteHandle(proc->pid, fp.binder);
 +        CloseRemoteHandle(proc, fp.binder);
-@@ -709 +735 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
+@@ -709 +739 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
 -      uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
 +      uint64_t dup = DuplicateRemoteHandle(proc, target_proc, fp.binder);
-@@ -713 +739 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
+@@ -713 +743 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
 -          ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
 +          ? DuplicateRemoteHandle(proc, target_proc, description->shared_handle) : 0;
-@@ -718 +744 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
+@@ -718 +748 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
 -        CloseRemoteHandle(target_proc->pid, dup);
 +        CloseRemoteHandle(target_proc, dup);
-@@ -968 +994 @@ void CloseStagingFds(Buffer* buffer) {
+@@ -968 +998 @@ void CloseStagingFds(Buffer* buffer) {
 -    CloseRemoteHandle(buffer->proc->pid, staging);
 +    CloseRemoteHandle(buffer->proc, staging);
-@@ -1587,17 +1613,12 @@ bool ClientIsRestricted(HANDLE pipe) {
+@@ -1587,17 +1617,111 @@ bool ClientIsRestricted(HANDLE pipe) {
 -  if (!ImpersonateNamedPipeClient(pipe)) return true;
 -  HANDLE token = nullptr;
 -  BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
@@ -106,24 +110,24 @@ index ee26bfc04..2487e68f4 100644
 +    std::lock_guard<std::mutex> lock(g_lock);
 +    for (const auto& entry : g_procs) {
 +      if (!g_peer_registry->Live(entry.second->identity)) revoked.push_back(entry.second);
-@@ -1606,2 +1627 @@ bool ClientIsRestricted(HANDLE pipe) {
--  CloseHandle(token);
--  return restricted;
++    }
++  }
 +  for (const auto& proc : revoked) ProcRelease(proc.get());
-@@ -1610 +1630,103 @@ bool ClientIsRestricted(HANDLE pipe) {
--void ServeProc(HANDLE pipe, In in) {
++}
++
 +std::mutex g_capture_policy_lock;
 +peer::OwnedHandle g_capture_policy;
 +
-+[[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process) {
++[[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process,
++                                        gesher::capture_policy::Kind kind) {
 +  if (!process || process->role != peer::Role::kApplication ||
 +      !g_peer_registry->Live(process)) return false;
 +  std::lock_guard<std::mutex> lock(g_capture_policy_lock);
 +  if (!g_capture_policy) return false;
-+  uint32_t uid = process->uid;
++  gesher::capture_policy::Request request{process->uid, kind};
 +  uint32_t allowed = 0;
 +  const ULONGLONG deadline = GetTickCount64() + 500;
-+  if (!launch::Transfer(g_capture_policy.get(), &uid, sizeof(uid), true, deadline) ||
++  if (!launch::Transfer(g_capture_policy.get(), &request, sizeof(request), true, deadline) ||
 +      !launch::Transfer(g_capture_policy.get(), &allowed, sizeof(allowed), false, deadline)) {
 +    g_capture_policy.reset();
 +    return false;
@@ -194,7 +198,7 @@ index ee26bfc04..2487e68f4 100644
 +        if (system || g_record_only) accepted = g_peer_registry->AttachJob(std::move(job));
 +        break;
 +      }
-+      case launch::Action::kAttachCapturePolicy: {
++      case launch::Action::kAttachTypedCapturePolicy: {
 +        peer::OwnedHandle pipe(launch::DecodeHandle(request.process));
 +        if ((system || g_record_only) && pipe && GetFileType(pipe.get()) == FILE_TYPE_PIPE) {
 +          std::lock_guard<std::mutex> lock(g_capture_policy_lock);
@@ -205,17 +209,19 @@ index ee26bfc04..2487e68f4 100644
 +        }
 +        break;
 +      }
-+    }
+@@ -1604,0 +1729,2 @@ bool ClientIsRestricted(HANDLE pipe) {
 +    uint32_t status = accepted ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
 +    if (!launch::Transfer(endpoint, &status, sizeof(status), true)) break;
-+  }
+@@ -1606,2 +1732,3 @@ bool ClientIsRestricted(HANDLE pipe) {
+-  CloseHandle(token);
+-  return restricted;
 +  g_peer_registry->CloseAuthority();
 +  ReapRevokedPeers();
 +  ExitProcess(ERROR_BROKEN_PIPE);
-+}
-+
+@@ -1610 +1737 @@ bool ClientIsRestricted(HANDLE pipe) {
+-void ServeProc(HANDLE pipe, In in) {
 +void ServeProc(HANDLE pipe, In in, bool operator_hello) {
-@@ -1613 +1735,15 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1613 +1740,15 @@ void ServeProc(HANDLE pipe, In in) {
 -  if (g_sandbox && ClientIsRestricted(pipe)) {
 +  peer::Registry::Lease identity;
 +  if (g_peer_registry) {
@@ -232,11 +238,11 @@ index ee26bfc04..2487e68f4 100644
 +  } else if (operator_hello) {
 +    return;
 +  } else if (g_sandbox && ClientIsRestricted(pipe)) {
-@@ -1632,0 +1769 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1632,0 +1774 @@ void ServeProc(HANDLE pipe, In in) {
 +    if (g_peer_registry && !g_peer_registry->Live(identity)) return;
-@@ -1636,0 +1774 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1636,0 +1779 @@ void ServeProc(HANDLE pipe, In in) {
 +    proc->identity = std::move(identity);
-@@ -1653,0 +1792,302 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1653,0 +1797,330 @@ void ServeProc(HANDLE pipe, In in) {
 +#ifdef GESHER_RECORD_LOCK_BROKER
 +bool WaitRecordClient(HANDLE pipe, bool accept_ack);
 +#endif
@@ -460,7 +466,7 @@ index ee26bfc04..2487e68f4 100644
 +  }
 +  gesher::media::ServeBrokeredCapture(pipe, info_only != 0,
 +      [&] { return g_peer_registry->Live(process); },
-+      [&] { return CaptureAuthorized(process); });
++      [&] { return CaptureAuthorized(process, gesher::capture_policy::Kind::kMicrophone); });
 +  if (!info_only) {
 +    std::lock_guard<std::mutex> lock(g_audio_lock);
 +    g_audio_capturers.erase(id);
@@ -491,6 +497,34 @@ index ee26bfc04..2487e68f4 100644
 +  {
 +    std::lock_guard<std::mutex> lock(g_audio_lock);
 +    g_audio_renderers.erase(id);
++  }
++}
++#endif
++
++#ifdef GESHER_CAMERA_BROKER_HOST
++std::mutex g_camera_lock;
++std::set<std::pair<DWORD, uint64_t>> g_camera_sessions;
++
++void ServeCamera(HANDLE pipe, In in) {
++  uint32_t version = 0, info_only = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
++      !in.Get(&info_only) || info_only > 1 || in.p != in.end) return;
++  const auto process = g_peer_registry->Authenticate(pipe);
++  if (!process || process->role != peer::Role::kApplication) return;
++  const auto identity = std::pair{process->generation.pid, process->generation.birth};
++  bool slot = false;
++  if (!info_only) {
++    std::lock_guard lock(g_camera_lock);
++    // CameraService advertises no concurrent camera sessions. Keep a bounded
++    // number of readers and buffers even if a guest makes raw requests.
++    if (g_camera_sessions.size() < 16) slot = g_camera_sessions.insert(identity).second;
++  }
++  gesher::devices::camera::ServeBrokeredCamera(pipe, info_only != 0,
++      [&] { return g_peer_registry->Live(process); },
++      [&] { return CaptureAuthorized(process, gesher::capture_policy::Kind::kCamera); }, slot);
++  if (slot) {
++    std::lock_guard lock(g_camera_lock);
++    g_camera_sessions.erase(identity);
 +  }
 +}
 +#endif
@@ -539,10 +573,10 @@ index ee26bfc04..2487e68f4 100644
 +}
 +#endif
 +
-@@ -1736,0 +2177,2 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1736,0 +2210,2 @@ void ServeRights(HANDLE pipe, In in) {
 +  peer::Registry::Lease identity;
 +  peer::OwnedHandle legacy_client;
-@@ -1738,3 +2180,11 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1738,3 +2213,11 @@ void ServeRights(HANDLE pipe, In in) {
 -  if (in.Get(&version) && version == wire::kRightsVersion &&
 -      GetNamedPipeClientProcessId(pipe, &client_pid)) {
 -    client = OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid);
@@ -557,26 +591,26 @@ index ee26bfc04..2487e68f4 100644
 +      legacy_client.reset(OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid));
 +      client = legacy_client.get();
 +    }
-@@ -1745 +2194,0 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1745 +2227,0 @@ void ServeRights(HANDLE pipe, In in) {
 -    if (client != nullptr) CloseHandle(client);
-@@ -1749,0 +2199 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1749,0 +2232 @@ void ServeRights(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -1885 +2334,0 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1885 +2367,0 @@ void ServeRights(HANDLE pipe, In in) {
 -  CloseHandle(client);
-@@ -1897,0 +2347,2 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+@@ -1897,0 +2380,2 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
 +      if (g_peer_registry && (!proc->identity ||
 +                              proc->identity->role != peer::Role::kServiceManager)) return -EPERM;
-@@ -1941,0 +2393,2 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1941,0 +2426,2 @@ void ServeThread(HANDLE pipe, In in) {
 +  const auto identity = g_peer_registry ? g_peer_registry->Authenticate(pipe)
 +                                        : peer::Registry::Lease{};
-@@ -1947 +2400,3 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1947 +2433,3 @@ void ServeThread(HANDLE pipe, In in) {
 -    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
 +    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead &&
 +        (!g_peer_registry || (identity && it->second->identity == identity &&
 +                              g_peer_registry->Live(identity)))) {
-@@ -1968,0 +2424 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1968,0 +2457 @@ void ServeThread(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -2028,0 +2485,11 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -2028,0 +2518,11 @@ void ServeThread(HANDLE pipe, In in) {
 +bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
 +  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
@@ -588,10 +622,10 @@ index ee26bfc04..2487e68f4 100644
 +  return launch::Transfer(pipe, request->data(), length, false, deadline);
 +}
 +
-@@ -2031 +2498 @@ void Serve(HANDLE pipe) {
+@@ -2031 +2531 @@ void Serve(HANDLE pipe) {
 -  if (ReadMessage(pipe, &msg)) {
 +  if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
-@@ -2035,6 +2502,23 @@ void Serve(HANDLE pipe) {
+@@ -2035,6 +2535,27 @@ void Serve(HANDLE pipe) {
 -      if (op == wire::kHelloProc) {
 -        ServeProc(pipe, in);
 -      } else if (op == wire::kHelloThread) {
@@ -612,6 +646,10 @@ index ee26bfc04..2487e68f4 100644
 +      } else if (op == wire::kAudioCapture) {
 +        ServeAudioCapture(pipe, in);
 +#endif
++#ifdef GESHER_CAMERA_BROKER_HOST
++      } else if (op == wire::kCamera) {
++        ServeCamera(pipe, in);
++#endif
 +#endif
 +      } else if (!g_record_only) {
 +        if (op == wire::kHelloProc || op == wire::kHelloOperator) {
@@ -621,7 +659,7 @@ index ee26bfc04..2487e68f4 100644
 +        } else if (op == wire::kHelloRights) {
 +          ServeRights(pipe, in);
 +        }
-@@ -2052,0 +2537,10 @@ int main(int argc, char** argv) {
+@@ -2052,0 +2574,10 @@ int main(int argc, char** argv) {
 +  launch::Startup bootstrap;
 +  g_record_only = gesher::binder_bootstrap::ReadStartupRecord(&bootstrap) &&
 +      bootstrap.endpoint == launch::Endpoint::kRecordBroker;
@@ -632,12 +670,12 @@ index ee26bfc04..2487e68f4 100644
 +  if (g_record_only) return EXIT_FAILURE;
 +#endif
 +  const bool protected_launch = g_record_only || launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap);
-@@ -2054 +2548,3 @@ int main(int argc, char** argv) {
+@@ -2054 +2585,3 @@ int main(int argc, char** argv) {
 -  if (argc > 1) {
 +  if (g_record_only) {
 +    device = "standalone record locks";
 +  } else if (argc > 1) {
-@@ -2061,24 +2557,29 @@ int main(int argc, char** argv) {
+@@ -2061,24 +2594,29 @@ int main(int argc, char** argv) {
 -  std::wstring name = wire::kPipePrefix;
 -  for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
 -
@@ -691,7 +729,7 @@ index ee26bfc04..2487e68f4 100644
 +    if (g_rights_doorbell == nullptr || positions_section == nullptr) {
 +      Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
 +    }
-@@ -2091,2 +2592,28 @@ int main(int argc, char** argv) {
+@@ -2091,2 +2629,28 @@ int main(int argc, char** argv) {
 -  g_sandbox = gesher::appcontainer::Enabled();
 -  if (g_sandbox) {
 +  if (g_record_only) {
@@ -817,7 +855,7 @@ index 3492add71..93f84db15 100644
 +target_link_options(rooted_storage_probe PRIVATE -municode)
 +target_link_libraries(rooted_storage_probe PRIVATE gesher_posix)
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index 2fe5f43ba..3255fabcc 100644
+index 2fe5f43..6164b28 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -29,0 +30 @@
@@ -843,7 +881,7 @@ index 2fe5f43ba..3255fabcc 100644
 +      SetLastError(ERROR_ACCESS_DENIED);
 +      return INVALID_HANDLE_VALUE;
 +    }
-@@ -762,0 +777,181 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
+@@ -762,0 +777,189 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 +bool binder_endpoint::EnrollChild(HANDLE process) {
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
 +  const std::wstring name = RecordPipeName();
@@ -956,7 +994,7 @@ index 2fe5f43ba..3255fabcc 100644
 +  return connected;
 +}
 +
-+HANDLE binder_endpoint::OpenAudioCapture(bool info_only) {
++static HANDLE OpenRecordDevice(uint32_t op, bool info_only) {
 +  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
 +  const std::wstring name = RecordPipeName();
 +  if (name.empty()) return INVALID_HANDLE_VALUE;
@@ -964,13 +1002,21 @@ index 2fe5f43ba..3255fabcc 100644
 +  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
 +  if (pipe.handle == INVALID_HANDLE_VALUE ||
 +      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
-+  uint32_t request[] = {4 * sizeof(uint32_t), wire::kAudioCapture, wire::kMagic, wire::kVersion,
++  uint32_t request[] = {4 * sizeof(uint32_t), op, wire::kMagic, wire::kVersion,
 +                        static_cast<uint32_t>(info_only)};
 +  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true,
 +                                  GetTickCount64() + 5000)) return INVALID_HANDLE_VALUE;
 +  const HANDLE connected = pipe.handle;
 +  pipe.handle = INVALID_HANDLE_VALUE;
 +  return connected;
++}
++
++HANDLE binder_endpoint::OpenAudioCapture(bool info_only) {
++  return OpenRecordDevice(wire::kAudioCapture, info_only);
++}
++
++HANDLE binder_endpoint::OpenCamera(bool info_only) {
++  return OpenRecordDevice(wire::kCamera, info_only);
 +}
 +
 +int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
@@ -1025,14 +1071,14 @@ index 2fe5f43ba..3255fabcc 100644
 +  return !error && reply.size() != sizeof(int32_t) ? EPROTO : error;
 +}
 +
-@@ -782 +977 @@ int OpenBinder(int flags) {
+@@ -782 +985 @@ int OpenBinder(int flags) {
 -  hello.Put<uint32_t>(wire::kHelloProc);
 +  hello.Put<uint32_t>(binder_endpoint::Current().IsOperator() ? wire::kHelloOperator : wire::kHelloProc);
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 50a85fb80..e394e62df 100644
+index 50a85fb..2226e69 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
-@@ -111,0 +112,27 @@ enum Op : uint32_t {
+@@ -111,0 +112,29 @@ enum Op : uint32_t {
 +  // Same framing as kHelloProc. The protected broker authenticates the
 +  // Windows device operator and assigns Android shell; the fields grant no role.
 +  kHelloOperator = 12,
@@ -1060,7 +1106,9 @@ index 50a85fb80..e394e62df 100644
 +  kAudioRender = 21,
 +  // Starts a host capture lane or asks for real input endpoint availability.
 +  kAudioCapture = 22,
-@@ -147,0 +175 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
++  // Private metadata or capture connection backed by the Windows camera.
++  kCamera = 23,
+@@ -147,0 +177 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
 +constexpr const wchar_t kStandaloneRecordPipe[] = L"\\\\.\\pipe\\gesher-binder-standalone-record-";
 diff --git a/compat/posix/src/dirent.cc b/compat/posix/src/dirent.cc
 index 572f64140..56b19af0f 100644

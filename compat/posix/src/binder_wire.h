@@ -136,6 +136,8 @@ enum Op : uint32_t {
   kAudioRender = 21,
   // Starts a host capture lane or asks for real input endpoint availability.
   kAudioCapture = 22,
+  // Private metadata or capture connection backed by the Windows camera.
+  kCamera = 23,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
