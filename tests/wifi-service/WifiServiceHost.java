@@ -172,11 +172,29 @@ public final class WifiServiceHost {
         boolean ipv4 = true;
         String current = "Home";
         final List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        // Windows' per-user profiles, per interface index (WLAN profiles belong to an
+        // interface), and their names on any interface.
+        final Map<Integer, Set<String>> on = new java.util.concurrent.ConcurrentHashMap<>();
         final Set<String> stored = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        synchronized void add(int ifIndex, String profile) {
+            on.computeIfAbsent(ifIndex, key -> java.util.concurrent.ConcurrentHashMap.newKeySet()).add(profile);
+            stored.add(profile);
+        }
+        synchronized void remove(int ifIndex, String profile) {
+            Set<String> names = on.get(ifIndex);
+            if (names != null) names.remove(profile);
+            if (on.values().stream().noneMatch(set -> set.contains(profile))) stored.remove(profile);
+        }
+        /** The adapter on {@code from} comes back as {@code to}, with its profiles (Windows keeps them per GUID). */
+        synchronized void renumber(int from, int to) {
+            Set<String> names = on.remove(from);
+            if (names != null) on.put(to, names);
+            present.remove(from); absent.remove(from); present.add(to);
+        }
         String lastXml;
         @Override public int primaryInterface() { return iface; }
         @Override public int connect(int ifIndex, String xml, String profile, byte[] bssid, BooleanSupplier active, int timeoutMs) {
-            calls.add("connect " + ifIndex + " " + (bssid != null)); lastXml = xml; stored.add(profile);
+            calls.add("connect " + ifIndex + " " + (bssid != null)); lastXml = xml; add(ifIndex, profile);
             if (!active.getAsBoolean()) return com.gesher.net.WindowsWifi.CANCELLED;
             if (outcome == com.gesher.net.WindowsWifi.CONNECTED) current = profile;
             return outcome;
@@ -184,17 +202,34 @@ public final class WifiServiceHost {
         @Override public boolean disconnect(int ifIndex, String remove, String restore) {
             calls.add("disconnect " + (remove != null) + " " + restore);
             ifOps.add("disconnect " + ifIndex + " " + remove);
-            if (remove != null) stored.remove(remove);
+            if (remove != null) remove(ifIndex, remove);
             current = restore; return true;
         }
         // Scripted interleaving and failures of profile stores (synthetic WLAN boundary).
         volatile Runnable duringStore;
         final java.util.concurrent.atomic.AtomicInteger failStores = new java.util.concurrent.atomic.AtomicInteger();
-        // Interfaces Windows does not list now (adapter disabled or unplugged, WLAN
-        // service stopped): nothing can be stored, deleted or listed on them.
+        // WLAN interfaces Windows lists (besides the primary one); interfaces it does not
+        // list now (adapter disabled or unplugged): nothing can be stored, deleted or listed
+        // on them; interfaces whose profile list cannot be read; scripted delete failures.
+        final Set<Integer> present = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        { present.add(12); }
         final Set<Integer> absent = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        final Set<Integer> unreadable = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        final java.util.concurrent.atomic.AtomicInteger failDeletes = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger windowsOps = new java.util.concurrent.atomic.AtomicInteger();
+        Set<Integer> listed() {
+            Set<Integer> result = new java.util.TreeSet<>(present);
+            if (iface > 0) result.add(iface);
+            result.removeAll(absent);
+            return result;
+        }
         @Override public boolean storeProfile(int ifIndex, String xml, String profile) {
-            if (absent.contains(ifIndex)) { ifOps.add("unreachable " + ifIndex + " " + profile); return false; }
+            windowsOps.incrementAndGet();
+            if (!listed().contains(ifIndex)) { ifOps.add("unreachable " + ifIndex + " " + profile); return false; }
+            if (xml == null && failDeletes.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+                ifOps.add("refused " + ifIndex + " " + profile);
+                return false;
+            }
             Runnable hook = duringStore;
             if (xml != null && hook != null) { duringStore = null; hook.run(); }
             if (xml != null && failStores.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
@@ -202,7 +237,7 @@ public final class WifiServiceHost {
                 return false;
             }
             calls.add((xml != null ? "store " : "delete ") + profile.substring(0, 9));
-            if (xml != null) { stored.add(profile); lastXml = xml; } else stored.remove(profile);
+            if (xml != null) { add(ifIndex, profile); lastXml = xml; } else remove(ifIndex, profile);
             ifOps.add((xml != null ? "store " : "delete ") + ifIndex + " " + profile);
             return true;
         }
@@ -220,10 +255,18 @@ public final class WifiServiceHost {
             }
             return current;
         }
-        @Override public List<String> profiles(int ifIndex, String prefix) {
-            if (absent.contains(ifIndex)) return null; // the list could not be read
+        // Listing on every listed interface; null for an unreadable list.
+        public Map<Integer, List<String>> interfaceProfiles(String prefix) {
+            windowsOps.incrementAndGet();
+            Map<Integer, List<String>> result = new java.util.TreeMap<>();
+            for (int index : listed()) result.put(index, profiles(index, prefix));
+            return result;
+        }
+        // One interface's list (the per-interface form of the same boundary).
+        public List<String> profiles(int ifIndex, String prefix) {
+            if (!listed().contains(ifIndex) || unreadable.contains(ifIndex)) return null;
             List<String> result = new ArrayList<>();
-            for (String name : stored) if (name.startsWith(prefix)) result.add(name);
+            for (String name : on.getOrDefault(ifIndex, Set.of())) if (name.startsWith(prefix)) result.add(name);
             return result;
         }
         @Override public boolean hasIpv4(int ifIndex) { return ipv4; }
@@ -1260,8 +1303,9 @@ public final class WifiServiceHost {
             h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
                     WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
                     "Remove all while the adapter is absent"));
-            check(h.radio.ifOps.contains("unreachable 12 " + homeProfile) && h.radio.stored.contains(homeProfile),
-                    "The deletion could not reach the absent adapter");
+            check(h.radio.stored.contains(homeProfile)
+                    && h.radio.ifOps.stream().noneMatch(op -> op.startsWith("delete 12 ")),
+                    "Windows cannot reach the absent adapter: its profile is still there");
             // The adapter returns: its arrival event deletes the profile left there.
             h.radio.absent.remove(12); h.radio.iface = 12; h.radio.events.onConnectionChanged();
             await(() -> h.radio.ifOps.contains("delete 12 " + homeProfile) && !h.radio.stored.contains(homeProfile),
@@ -1273,7 +1317,7 @@ public final class WifiServiceHost {
             await(() -> h.radio.stored.contains(homeProfile), "Stored on interface 12 again");
             h.radio.ifOps.clear();
             h.radio.absent.add(12); h.radio.iface = 13; h.radio.events.onConnectionChanged();
-            await(() -> h.radio.ifOps.contains("store 13 " + homeProfile) && h.radio.ifOps.contains("unreachable 12 " + homeProfile),
+            await(() -> h.radio.ifOps.contains("store 13 " + homeProfile),
                     "The suggestion moves to the new adapter; the old one cannot be reached");
             h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
                     WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
@@ -1344,6 +1388,111 @@ public final class WifiServiceHost {
             check(!h.radio.ifOps.contains("store 13 " + thirdProfile), "The disallowed network stays blocked there");
         }
     }
+    /** An adapter that comes back under a new interface index still loses a removed suggestion's profile. */
+    private static void adapterNewIndex() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            android.net.wifi.WifiNetworkSuggestion home = psk("Fixture AP").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 1, "Approved suggestion becomes a Windows profile");
+            String homeProfile = h.radio.stored.iterator().next();
+            // Disabled: Windows no longer lists the adapter; the app removes everything.
+            h.radio.iface = 0; h.radio.absent.add(12);
+            h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
+                    WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                    "Remove all while the adapter is disabled"));
+            // Re-enabled with a new IP interface index; Windows kept its profiles (per GUID).
+            h.radio.renumber(12, 14); h.radio.iface = 14; h.radio.events.onConnectionChanged();
+            await(() -> h.radio.ifOps.contains("delete 14 " + homeProfile) && suggestionProfileCount(h.radio) == 0,
+                    "The removed suggestion's profile is deleted on the adapter's new interface index");
+        }
+    }
+    private static final String LEFTOVER_S1 = "Gesher-s-0123456789abcdef01234567";
+    private static final String LEFTOVER_S2 = "Gesher-s-89abcdef0123456789abcdef";
+    private static final String LEFTOVER_R = "Gesher-r-0123456789abcdef";
+    /** Leftovers of an earlier run go on every interface, and a refused deletion is retried. */
+    private static void leftoverProfiles() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            h.radio.present.add(15);
+            h.radio.add(12, LEFTOVER_S1); h.radio.add(12, LEFTOVER_R); h.radio.add(15, LEFTOVER_S2);
+            h.radio.add(12, "Gesher-s-mine"); h.radio.add(15, "Office");
+            h.radio.failDeletes.set(1);
+            h.radio.events.onConnectionChanged();
+            await(() -> h.radio.ifOps.stream().anyMatch(op -> op.startsWith("refused ")), "Windows refused one deletion");
+            await(() -> !h.radio.stored.contains(LEFTOVER_S1) && !h.radio.stored.contains(LEFTOVER_R)
+                    && !h.radio.stored.contains(LEFTOVER_S2),
+                    "Leftover Gesher profiles are deleted on every interface, the refused one by a retry");
+            check(h.radio.ifOps.contains("delete 15 " + LEFTOVER_S2), "The secondary interface's leftover is deleted there");
+            check(h.radio.stored.contains("Gesher-s-mine") && h.radio.stored.contains("Office"),
+                    "Profiles without exactly Gesher's generated names are never touched");
+        }
+    }
+    /** A pass never deletes the profile of the active specifier request. */
+    private static void activeRequestKept() throws Exception {
+        WifiConnections.ipWaitMs = 300;
+        try (Harness h = new Harness(36, false)) {
+            h.owner.process.inProcessActivityState = ActivityTaskManagerService.State.RESUMED;
+            Req request = new Req();
+            h.owner.call(() -> h.wifi.requestLocalNetwork(h.owner.name(), "wifi", open("Fixture AP"), request));
+            await(() -> request.events.size() == 1, "Approved request completes");
+            check(request.events.get(0) == com.gesher.net.IWindowsWifi.NETWORK_AVAILABLE, "The request is AVAILABLE");
+            String requestProfile = h.radio.stored.stream().filter(name -> name.startsWith("Gesher-r-")).findFirst().orElseThrow();
+            // WLAN events and a suggestion change run passes while the request is active.
+            h.radio.events.onConnectionChanged();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(psk("Other").build()))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 1, "A pass stored the suggestion");
+            h.radio.events.onConnectionChanged();
+            Thread.sleep(300);
+            check(h.radio.stored.contains(requestProfile) && request.events.size() == 1,
+                    "The active request's profile is kept by every pass");
+            h.owner.call(() -> h.wifi.releaseLocalNetwork(h.owner.name(), request));
+            await(() -> !h.radio.stored.contains(requestProfile), "Release deletes it");
+        } finally {
+            WifiConnections.ipWaitMs = 20_000;
+        }
+    }
+    /** An adapter that never comes back does not keep a retry running. */
+    private static void deadInterfaceNoRetry() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            android.net.wifi.WifiNetworkSuggestion home = psk("Fixture AP").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 1, "Approved suggestion becomes a Windows profile");
+            h.radio.iface = 0; h.radio.absent.add(12);
+            h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
+                    WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                    "Remove all after the adapter is gone"));
+            Thread.sleep(200);
+            int ops = h.radio.windowsOps.get();
+            Thread.sleep(6_500); // past the first retry (RETRY_MIN_MS)
+            check(h.radio.windowsOps.get() == ops, "Nothing retries against an adapter that is gone");
+        }
+    }
+    /** A WLAN read that hangs does not hold disallowCurrentSuggestedNetwork's caller. */
+    private static void disallowHungRead() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            android.net.wifi.WifiNetworkSuggestion home = psk("Fixture AP").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 1, "Approved suggestion becomes a Windows profile");
+            String homeProfile = h.radio.stored.iterator().next();
+            h.radio.current = homeProfile;
+            java.util.concurrent.CountDownLatch gate = new java.util.concurrent.CountDownLatch(1);
+            h.radio.readGate = gate;
+            try {
+                long started = System.nanoTime();
+                h.owner.call(() -> h.wifi.disallowCurrentSuggestedNetwork(h.owner.name(),
+                        new android.net.wifi.BlockingOption.Builder(3600).build()));
+                check(System.nanoTime() - started < 1_000_000_000L,
+                        "disallowCurrentSuggestedNetwork does not wait for a hung WLAN read");
+            } finally {
+                h.radio.readGate = null; gate.countDown();
+            }
+            await(() -> h.radio.ifOps.contains("disconnect 12 " + homeProfile) && !h.radio.stored.contains(homeProfile),
+                    "The disallow is applied once Windows answers");
+        }
+    }
     public static void main(String[] args) throws Exception {
         System.load(args[0]); setOwnUid(Process.SYSTEM_UID);
         android.app.PropertyInvalidatedCache.setTestMode(true);
@@ -1353,6 +1502,7 @@ public final class WifiServiceHost {
         capabilitiesAndEvents(); specifierRequests(); suggestions(); suggestionProfiles();
         radioOffProfiles(); interfaceChangeProfiles(); profileThreadStall();
         absentInterfaceProfiles(); disallowThenRemove(); disallowAfterAdapterChange();
+        adapterNewIndex(); leftoverProfiles(); activeRequestKept(); deadInterfaceNoRetry(); disallowHungRead();
         System.out.println("WifiServiceHost passed: " + checks + " checks; real permission/AppOps/broadcast Java, radio=fixture");
     }
 }

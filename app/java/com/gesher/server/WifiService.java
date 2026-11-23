@@ -51,8 +51,8 @@ public final class WifiService extends IWindowsWifi.Stub {
         boolean disconnect(int ifIndex, String removeProfile, String restoreProfile);
         boolean storeProfile(int ifIndex, String xml, String profile);
         String currentProfile(int ifIndex);
-        /** null when the interface's profile list could not be read. */
-        List<String> profiles(int ifIndex, String prefix);
+        /** WindowsWifi.interfaceProfiles: per present interface, null for an unreadable list. */
+        java.util.Map<Integer, List<String>> interfaceProfiles(String prefix);
         boolean hasIpv4(int ifIndex);
     }
 
@@ -80,7 +80,9 @@ public final class WifiService extends IWindowsWifi.Stub {
             return WindowsWifi.storeProfile(ifIndex, xml, profile);
         }
         @Override public String currentProfile(int ifIndex) { return WindowsWifi.currentProfile(ifIndex); }
-        @Override public List<String> profiles(int ifIndex, String prefix) { return WindowsWifi.profiles(ifIndex, prefix); }
+        @Override public java.util.Map<Integer, List<String>> interfaceProfiles(String prefix) {
+            return WindowsWifi.interfaceProfiles(prefix);
+        }
         @Override public boolean hasIpv4(int ifIndex) { return WindowsWifi.hasIpv4(ifIndex); }
     };
 

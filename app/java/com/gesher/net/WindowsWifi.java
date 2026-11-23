@@ -68,7 +68,7 @@ public final class WindowsWifi {
     private static native boolean nativeDisconnect(int ifIndex, String removeProfile, String restoreProfile);
     private static native boolean nativeStoreProfile(int ifIndex, String xml, String profile);
     private static native String nativeCurrentProfile(int ifIndex);
-    private static native String nativeProfiles(int ifIndex, String prefix);
+    private static native String nativeInterfaceProfiles(String prefix);
 
     private static final class Operation {
         final boolean scan;
@@ -409,22 +409,40 @@ public final class WindowsWifi {
     }
 
     /**
-     * This user's per-user profiles on the interface whose names start with prefix, or
-     * null when the interface's profile list could not be read (no WLAN service, an
-     * absent interface, a failed list): that is not evidence that a profile is absent.
+     * This user's per-user profiles whose names start with prefix, on every WLAN interface
+     * Windows lists now (radio on or off), by IP interface index. An interface whose list
+     * could not be read maps to null: that is not evidence that a profile is absent. The
+     * whole result is null when the interfaces could not be enumerated (no WLAN library
+     * or service). An interface that is gone (disabled, unplugged) is simply not listed.
      */
-    public static List<String> profiles(int ifIndex, String prefix) {
+    public static java.util.Map<Integer, List<String>> interfaceProfiles(String prefix) {
         String raw;
         try {
             load();
-            raw = nativeProfiles(ifIndex, prefix);
+            raw = nativeInterfaceProfiles(prefix);
         } catch (RuntimeException | LinkageError unavailable) {
             return null;
         }
+        return parseInterfaceProfiles(raw, prefix);
+    }
+
+    static java.util.Map<Integer, List<String>> parseInterfaceProfiles(String raw, String prefix) {
         if (raw == null) return null;
-        List<String> names = new ArrayList<>();
-        for (String name : raw.split("\n")) if (!name.isEmpty() && name.startsWith(prefix)) names.add(name);
-        return names;
+        java.util.Map<Integer, List<String>> result = new java.util.LinkedHashMap<>();
+        for (String line : raw.split("\n")) {
+            if (line.isEmpty()) continue;
+            String[] fields = line.split("\t", -1);
+            int index;
+            try { index = Integer.parseInt(fields[0]); }
+            catch (NumberFormatException malformed) { return null; }
+            if (fields.length < 2 || !(fields[1].equals("0") || fields[1].equals("1"))) return null;
+            boolean read = fields[1].equals("1") && index > 0;
+            List<String> names = read ? new ArrayList<>() : null;
+            if (read) for (int k = 2; k < fields.length; k++) if (fields[k].startsWith(prefix)) names.add(fields[k]);
+            // An interface Windows could not address (index 0) is unknown, never "empty".
+            result.put(index > 0 ? index : 0, names);
+        }
+        return result;
     }
 
     /** The IP interface index of an adapter with an enabled radio, or 0. */

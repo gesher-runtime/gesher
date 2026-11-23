@@ -32,7 +32,9 @@ Gesher has no Android supplicant; it can only ask Windows to connect.
 - An approved app's suggestions become profiles whose connection mode follows
   `isInitialAutojoinEnabled`; Windows' own selection then plays the part of
   Android's auto-join. They are deleted on removal, on "Don't allow", when the app
-  is uninstalled, and (as leftovers without an Android owner) after a restart.
+  is uninstalled, and (as leftovers without an Android owner) after a restart; each
+  reconciliation reads Windows' own profile lists rather than a record of what was
+  stored.
   All suggestion-profile changes run on one thread that reconciles Windows with the
   suggestion store, so removals and blocks cannot race an in-flight store. Binder
   calls wait for that thread only within Android's own bounds:
@@ -64,8 +66,9 @@ Gesher has no Android supplicant; it can only ask Windows to connect.
 - Only the first adapter with an enabled radio is used for specifier and
   suggestion connections. Suggestion profiles are still deleted on the adapter they
   were stored on when its radio is off or another adapter has become the primary
-  one, since Windows would otherwise auto-join them there later. An adapter Windows
-  cannot reach for now (disabled, unplugged, WLAN service stopped) keeps its records
-  until the deletion succeeds there.
+  one, since Windows would otherwise auto-join them there later. Because interface
+  indices change (an adapter re-enabled can return under another one), deletion is
+  not tracked per index: every pass reads all interfaces Windows lists and deletes the
+  Gesher-named profiles not wanted there, so an adapter's leftovers go when it returns.
 - Real adapter behaviour (profile acceptance by drivers, WPA3-SAE and OWE profile
   support on older Windows builds, notification timing) needs hardware validation.

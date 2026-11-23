@@ -246,6 +246,17 @@ public final class WindowsWifiFixture {
         check(WindowsWifi.parseHardware(null) == null && WindowsWifi.parseHardware("hw\t2\ncap\t1\t1\t1\n") == null
                 && WindowsWifi.parseHardware("hw\t1\ncap\t-1\t0\t0\n") == null
                 && WindowsWifi.parseHardware("hw\t65\n") == null, "Malformed census is not hardware");
+        // Per-interface profile listing: an unreadable interface or list is unknown (null).
+        java.util.Map<Integer, List<String>> listing = WindowsWifi.parseInterfaceProfiles(
+                "12\t1\tGesher-s-a\tOther\n14\t1\n15\t0\n0\t0\n", "Gesher-");
+        check(listing.get(12).equals(List.of("Gesher-s-a")) && listing.get(14).isEmpty()
+                && listing.containsKey(15) && listing.get(15) == null && listing.containsKey(0) && listing.get(0) == null,
+                "Each interface's list is read, empty or unknown");
+        check(WindowsWifi.parseInterfaceProfiles(null, "Gesher-") == null
+                && WindowsWifi.parseInterfaceProfiles("x\t1\n", "Gesher-") == null
+                && WindowsWifi.parseInterfaceProfiles("12\n", "Gesher-") == null
+                && WindowsWifi.parseInterfaceProfiles("", "Gesher-").isEmpty(),
+                "No enumeration or a malformed listing is unknown; no interfaces is empty");
         // A WLAN service that hangs in its census does not hold the caller (boot) past the bound.
         CountDownLatch hung = new CountDownLatch(1);
         AtomicInteger reads = new AtomicInteger();

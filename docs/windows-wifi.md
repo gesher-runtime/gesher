@@ -47,8 +47,11 @@ previous profile (used only while the interface is still on Gesher's profile or 
 none); `nativeStoreProfile` stores or deletes suggestion profiles and moves a stored
 one to the end of the preference list with `WlanSetProfilePosition` (deleting it if
 that fails);
-`nativeProfiles` lists only per-user profiles with Gesher's prefix (all-user
-profiles are never listed or removed); `nativeCurrentProfile` reads the connected
+`nativeInterfaceProfiles` lists, for every WLAN interface `WlanEnumInterfaces`
+returns (radio on or off), only per-user profiles with Gesher's prefix (all-user
+profiles are never listed or removed), marking an interface whose list could not be
+read as unknown and returning null when the interfaces cannot be enumerated;
+deleting a profile Windows reports not found (`ERROR_NOT_FOUND`) counts as deleted; `nativeCurrentProfile` reads the connected
 profile name. Profile XML (`WlanProfiles`) carries the SSID as hex bytes and
 escapes every text value; the native copy of the XML, which may hold a passphrase,
 is zeroed after use.

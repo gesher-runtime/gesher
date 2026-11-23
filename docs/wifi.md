@@ -174,40 +174,45 @@ IPv4 address).
   waits for the Wi-Fi thread. If Windows has not answered by then the call returns
   `ERROR_INTERNAL`, as Android does on that timeout; the suggestions are already
   dropped and the queued pass still deletes their profiles.
-- Windows profiles follow the suggestion store through one profile thread: each pass
-  stores, rewrites or deletes the difference between the profiles the store wants and
-  those on Windows. A removal, uninstall or block made while a pass is talking to
-  Windows is handled by the pass after it, so no profile outlives its suggestion.
-  Deletions do not wait for a radio: a profile is deleted on the interface it was
-  stored on while that adapter's radio is off, and when another adapter becomes the
-  primary one the previous adapter's profiles are deleted there and the suggestions
-  stored on the new one. Stores wait for a radio. A profile counts as deleted only
-  when Windows deleted it, reported it not found, or listed the interface's profiles
-  without it; an adapter that is disabled or unplugged, or a stopped WLAN service,
-  keeps the record. A profile Windows refused to store or delete, or a store waiting
-  for the radio, is retried on the next WLAN event (including the adapter's return)
-  and with backoff (5 s doubling to 5 min, reset by the next complete pass).
+- Windows profiles follow the suggestion store through one profile thread. Each pass
+  converges from Windows' own state: it reads the per-user profile list of every WLAN
+  interface Windows lists at that moment (radio on or off), and deletes each profile
+  with exactly a Gesher-generated name (`Gesher-s-` plus 24 hex digits for suggestions,
+  `Gesher-r-` plus 16 for requests) that is not wanted there. A suggestion profile is
+  wanted only on the primary interface (while no radio is on, the last primary one),
+  only while its suggestion is approved and not blocked, or during its linger period;
+  a request profile only while its request is active. Missing or changed suggestion
+  profiles are then stored on the primary interface; stores wait for a radio. A
+  removal, uninstall or block made while a pass is talking to Windows is handled by
+  the pass after it, so no profile outlives its suggestion.
+- Interface indices are not stable (an adapter disabled and re-enabled can return
+  under another one) and Windows keeps profiles per adapter, so nothing is remembered
+  per index: an adapter that is disabled, unplugged or behind a stopped WLAN service
+  is simply not listed, and every WLAN event (connection, radio, interface arrival or
+  removal) runs a pass, which finds and deletes its leftovers when it is back,
+  whatever its index. Leftovers of an earlier run, including a request profile a
+  crashed system server left connected, go the same way on every interface. A list
+  Windows could not read, or a store or deletion it refused, is retried with backoff
+  (5 s doubling to 5 min) and on the next WLAN event; a pass with nothing unknown or
+  failed ends the retry. A WLAN service that cannot enumerate interfaces at all also
+  counts as unknown.
 - When Windows joins an app-interaction suggestion, the app receives the explicit
   `ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION` broadcast with
   `EXTRA_NETWORK_SUGGESTION`, if location is on, it holds fine location and its
   fine-location app op is allowed (`enforceCanAccessScanResults`).
-- `disallowCurrentSuggestedNetwork` identifies and blocks the app's current suggested
-  network when called, so the app's later adds and removals apply after it, as on
-  Android; it returns without waiting for Windows (Android posts it to the Wi-Fi
-  thread), and the profile thread then disconnects that network and removes its
-  profile for the blocking period; every profile pass honours the
-  block until it expires, then the profile returns. Windows has no BSSID block list,
+- `disallowCurrentSuggestedNetwork` takes the app's suggestions when called and
+  returns at once (Android posts it to the Wi-Fi thread). On the profile thread, in
+  order with the passes of the app's later adds and removals as on Android, the current
+  connection is read; if it is one of those suggestions, Windows leaves it and its
+  profile is removed for the blocking period; every profile pass honours the block
+  until it expires, then the profile returns. Windows has no BSSID block list,
   so the whole network is blocked even when `BlockingOption` asks for the BSSID only.
 - An uninstalled app's suggestions and approvals are dropped as soon as the
   package-removal event arrives, and the next profile pass deletes its profiles,
   without holding the event's sender. WLAN events and profile installations are
   coalesced: at most one pass of each is queued at a time. The store lives for the
-  system server's lifetime (Android persists it).
-  Once the WLAN interface is known after a start (the first WLAN event,
-  request or suggestion), per-user profiles with exactly Gesher's generated names
-  (`Gesher-r-` plus 16 hex digits, `Gesher-s-` plus 24) left by an earlier run are
-  deleted, including one a crashed system server left connected, so no ownerless
-  profile keeps joining. Profiles of the current run and any other profile are kept.
+  system server's lifetime (Android persists it). Profiles without exactly Gesher's
+  generated names, including the user's own, are never deleted.
 - `SuggestionConnectionStatusListener` registrations are accepted but no failures are
   reported: Windows' own auto-connect attempts do not identify their failure to
   Gesher.

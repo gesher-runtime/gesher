@@ -19,11 +19,9 @@ def main():
             source=(ROOT/'compat/net/windows_wifi.cc').read_text()
             if args.negative_control=='listing-failure-as-empty':
                 # A profile list that could not be read reported as a read, empty one.
-                start=source.find('bool Profiles(Api& api')
-                end=source.find('\n}\n',start)
-                if start<0 or end<0 or source.count('bool Profiles(Api& api')!=1:
-                    raise AssertionError('Negative control target changed')
-                source=source[:start]+source[start:end].replace('return false;','return true;')+source[end:]
+                before,after = 'result += read ? L"\\t1" : L"\\t0";', 'result += L"\\t1";'
+                if source.count(before)!=1: raise AssertionError('Negative control target changed')
+                source=source.replace(before,after)
             else:
                 before,after = (('state{-2}', 'state{0}') if args.negative_control=='premature-notification'
                                 else ('if (!eligible(context))', 'if (false)'))
@@ -43,7 +41,7 @@ def main():
         if args.negative_control:
             expected={'premature-notification':'Pre-request notifications',
                       'skip-eligibility':'Permission revoked during native initialization',
-                      'listing-failure-as-empty':'An absent interface has no readable list'}[args.negative_control]
+                      'listing-failure-as-empty':'An unreadable interface list is reported as unknown'}[args.negative_control]
             if result.returncode==0 or expected not in result.stderr:
                 raise AssertionError('Negative control did not fail at the intended production contract: '+result.stderr)
             print('Caught native negative control:',args.negative_control)

@@ -602,36 +602,57 @@ bool StoreProfile(Api& api, ULONG if_index, const WCHAR* xml, const WCHAR* profi
   return false;
 }
 
-// Names of this user's profiles on the interface that start with prefix, '\n'-separated.
-// False when the interface's complete profile list could not be read (no WLAN API or
-// service, an unknown or absent interface, a failed or oversized list): that is not
-// evidence that a profile is absent.
-bool Profiles(Api& api, ULONG if_index, const WCHAR* prefix, std::wstring* out) {
-  out->clear();
-  if (!api.ready() || !api.profiles || wlan_broken.load()) return false;
-  Client client(api);
-  DWORD version = 0;
-  GUID guid{};
-  if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
-      || !InterfaceGuid(api, client.handle, if_index, &guid)) return false;
+// Names of this user's profiles on one interface that start with prefix. False when the
+// interface's complete list could not be read (a failed or oversized list): that is not
+// evidence that a profile is absent. Names a line-based reply cannot carry are skipped.
+bool ProfileNames(Api& api, HANDLE handle, const GUID& guid, const WCHAR* prefix, std::wstring* out) {
   Memory memory(api);
-  if (api.profiles(client.handle, &guid, nullptr, reinterpret_cast<WLAN_PROFILE_INFO_LIST**>(&memory.value)) != ERROR_SUCCESS
+  if (api.profiles(handle, &guid, nullptr, reinterpret_cast<WLAN_PROFILE_INFO_LIST**>(&memory.value)) != ERROR_SUCCESS
       || !memory.value) return false;
   const auto* list = static_cast<const WLAN_PROFILE_INFO_LIST*>(memory.value);
   if (list->dwNumberOfItems > 4096) return false;
-  std::wstring names;
   size_t prefix_length = wcslen(prefix);
   for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
     WCHAR name[WLAN_MAX_NAME_LENGTH];
     memcpy(name, list->ProfileInfo[i].strProfileName, sizeof(name));
     name[WLAN_MAX_NAME_LENGTH - 1] = 0;
     // Only per-user profiles: Gesher never stores all-user ones, and never removes them.
-    if ((list->ProfileInfo[i].dwFlags & WLAN_PROFILE_USER) && wcsncmp(name, prefix, prefix_length) == 0) {
-      names += name;
-      names += L'\n';
-    }
+    if (!(list->ProfileInfo[i].dwFlags & WLAN_PROFILE_USER) || wcsncmp(name, prefix, prefix_length) != 0
+        || wcspbrk(name, L"\t\n")) continue;
+    *out += L'\t';
+    *out += name;
   }
-  *out = names;
+  return true;
+}
+
+// This user's profiles starting with prefix on every WLAN interface Windows lists now,
+// whatever its radio state: one line per interface, "<index>\t1" followed by a tab and
+// each name, or "<index>\t0" when that interface's list could not be read (index 0: the
+// interface has no IP interface index to address it by). False when the interfaces
+// could not be enumerated (no WLAN API or service).
+bool InterfaceProfiles(Api& api, const WCHAR* prefix, std::wstring* out) {
+  out->clear();
+  if (!api.ready() || !api.profiles || wlan_broken.load()) return false;
+  Client client(api);
+  DWORD version = 0;
+  Memory interfaces(api);
+  if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
+      || api.interfaces(client.handle, nullptr, reinterpret_cast<WLAN_INTERFACE_INFO_LIST**>(&interfaces.value)) != ERROR_SUCCESS
+      || !interfaces.value) return false;
+  const auto* list = static_cast<WLAN_INTERFACE_INFO_LIST*>(interfaces.value);
+  if (list->dwNumberOfItems > 64) return false;
+  std::wstring result;
+  for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
+    const GUID& guid = list->InterfaceInfo[i].InterfaceGuid;
+    ULONG index = Index(guid);
+    std::wstring names;
+    bool read = index != 0 && ProfileNames(api, client.handle, guid, prefix, &names);
+    result += std::to_wstring(index);
+    result += read ? L"\t1" : L"\t0";
+    if (read) result += names;
+    result += L'\n';
+  }
+  *out = std::move(result);
   return true;
 }
 
@@ -730,13 +751,12 @@ jstring WindowsWifi_nativeCurrentProfile(JNIEnv* env, jclass, jint if_index) {
   if (name.empty()) return nullptr;
   return env->NewString(reinterpret_cast<const jchar*>(name.c_str()), static_cast<jsize>(name.size()));
 }
-jstring WindowsWifi_nativeProfiles(JNIEnv* env, jclass, jint if_index, jstring prefix) {
-  std::wstring wide_prefix;
-  if (if_index <= 0 || !Wide(env, prefix, &wide_prefix, 64)) return nullptr;
-  std::wstring names;
-  // null: the list could not be read; "" is a read list without matching profiles.
-  if (!Profiles(Wlan(), static_cast<ULONG>(if_index), wide_prefix.c_str(), &names)) return nullptr;
-  return env->NewString(reinterpret_cast<const jchar*>(names.c_str()), static_cast<jsize>(names.size()));
+jstring WindowsWifi_nativeInterfaceProfiles(JNIEnv* env, jclass, jstring prefix) {
+  std::wstring wide_prefix, lines;
+  if (!Wide(env, prefix, &wide_prefix, 64)) return nullptr;
+  // null: the interfaces could not be enumerated.
+  if (!InterfaceProfiles(Wlan(), wide_prefix.c_str(), &lines)) return nullptr;
+  return env->NewString(reinterpret_cast<const jchar*>(lines.c_str()), static_cast<jsize>(lines.size()));
 }
 jstring WindowsWifi_nativeHardware(JNIEnv* env, jclass) {
   std::string text = Hardware(Wlan());
@@ -772,7 +792,7 @@ const JNINativeMethod methods[] = {
     {"nativeDisconnect", "(ILjava/lang/String;Ljava/lang/String;)Z", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeDisconnect)},
     {"nativeStoreProfile", "(ILjava/lang/String;Ljava/lang/String;)Z", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeStoreProfile)},
     {"nativeCurrentProfile", "(I)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeCurrentProfile)},
-    {"nativeProfiles", "(ILjava/lang/String;)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeProfiles)},
+    {"nativeInterfaceProfiles", "(Ljava/lang/String;)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeInterfaceProfiles)},
 };
 jint OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;
