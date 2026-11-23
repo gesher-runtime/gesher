@@ -8,7 +8,6 @@ import argparse
 import copy
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -20,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/net-dns-component'))
 from aosp_reference import run_reference
 from payload_shared import source_inventory
+sys.path.insert(0, str(ROOT / 'tools/ci'))
+import producer_context
 
 ASSETS = {'linux-reference.log': 'executed-linux-libresolv',
           'compilers.json': 'actual-compiler-commands-and-identities'}
@@ -55,13 +56,8 @@ def read(path):
 
 
 def context():
-    require(os.environ.get('GITHUB_ACTIONS') == 'true', 'CI only')
-    result = {key: os.environ[value] for key, value in (
-        ('source', 'GITHUB_SHA'), ('run', 'GITHUB_RUN_ID'), ('attempt', 'GITHUB_RUN_ATTEMPT'),
-        ('repository', 'GITHUB_REPOSITORY'), ('repository_id', 'GITHUB_REPOSITORY_ID'))}
+    result = producer_context.current_context()
     require(result['repository'] == 'gesher-runtime/gesher', 'Wrong repository')
-    require(subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == result['source'],
-            'Checkout source differs')
     return result
 
 
@@ -75,6 +71,7 @@ def execution_context(diagnostic):
 
 def expected(folder, diagnostic=None):
     return {'schema': 1 if diagnostic is None else 'gesher-dns-fork-diagnostic-v1',
+            **({'role': 'native2-dns'} if diagnostic is None else {}),
             'context': execution_context(diagnostic),
             'producer': 'native2 / native2' if diagnostic is None else 'native2 / native2 (fork diagnostic)',
             'sources': source_inventory(),
@@ -149,7 +146,9 @@ def build(folder, diagnostic=None):
         subprocess.run(['unzip', '-q', str(archive), '-d', temporary], check=True, timeout=180)
         build_guests(folder, records, Path(temporary) / 'android-ndk-r27c')
     (out / 'compilers.json').write_text(json.dumps(records, sort_keys=True) + '\n')
-    (out / 'manifest.json').write_text(json.dumps(expected(folder, diagnostic), sort_keys=True) + '\n')
+    manifest = expected(folder, diagnostic)
+    (out / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True) + '\n')
+    return manifest
 
 
 def build_guests(folder, records, ndk):
@@ -176,16 +175,15 @@ def build_guests(folder, records, ndk):
         records['guests'][abi] = record
 
 
-def verify(folder, diagnostic=None):
+def validate_payload(folder, wanted, diagnostic=None):
     out = folder / 'net-dns'
     entries = list(out.iterdir())
     require(all(p.is_file() and not p.is_symlink() for p in entries) and
             {p.name for p in entries} == set(ASSETS) | {'manifest.json'}, 'Unexpected DNS asset members')
-    wanted = expected(folder, diagnostic)
     controls(wanted)
     validate(read(out / 'manifest.json'), wanted)
     records = read(out / 'compilers.json')
-    require(records['context'] == execution_context(diagnostic), 'Compiler context differs')
+    require(records['context'] == wanted['context'], 'Compiler context differs')
     require(records['archive']['publisher_sha1'] == '090e8083a715fdb1a3e402d0763c388abb03fb4e' and
             records['archive']['size'] == 663987688 and len(records['archive']['sha256']) == 64,
             'Compiler publisher archive identity differs')
@@ -208,6 +206,13 @@ def verify(folder, diagnostic=None):
     print(label, json.dumps(wanted, sort_keys=True), flush=True)
 
 
+def verify(folder, diagnostic=None):
+    wanted = expected(folder, diagnostic)
+    if diagnostic is None:
+        wanted['context'] = producer_context.authenticate(folder / 'net-dns/manifest.json', wanted['context'], 'native2-dns')
+    validate_payload(folder, wanted, diagnostic)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=('build', 'verify'))
@@ -221,5 +226,9 @@ if __name__ == '__main__':
         from fork_diagnostic_context import current_context
         diagnostic = current_context(producer=args.mode == 'build')
     if args.mode == 'build':
-        build(args.directory.resolve(), diagnostic)
-    verify(args.directory.resolve(), diagnostic)
+        # The producer verifies the bytes it just compiled before its job can
+        # finish/upload. Consumers always go through the archive proof above.
+        folder = args.directory.resolve()
+        validate_payload(folder, build(folder, diagnostic), diagnostic)
+    else:
+        verify(args.directory.resolve(), diagnostic)
