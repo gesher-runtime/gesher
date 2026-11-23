@@ -112,6 +112,7 @@ add_library(framework_runtime OBJECT
   ${_fwjni}/android_util_jar_StrictJarFile.cpp
   ${_fwjni}/com_android_internal_util_VirtualRefBasePtr.cpp
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/rooted_storage_server.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives_pic.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
@@ -148,3 +149,11 @@ target_compile_options(framework_runtime PRIVATE -Wall -Wextra -Werror
 set_target_properties(framework_runtime PROPERTIES CXX_STANDARD 23)
 
 target_link_libraries(dalvikvm PRIVATE framework_runtime)
+
+add_executable(rooted_storage_host_probe
+  ${CMAKE_SOURCE_DIR}/tests/sandbox/rooted-storage-host-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/rooted_storage_server.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+target_compile_options(rooted_storage_host_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(rooted_storage_host_probe PRIVATE -municode)
+target_link_libraries(rooted_storage_host_probe PRIVATE gesher_posix)
