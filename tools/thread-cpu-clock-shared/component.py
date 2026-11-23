@@ -146,6 +146,12 @@ def build(args):
                         "-o", fixture / "clock-shared.exe"]
         run(peer_command, ROOT, role / "peer-build.log", env)
         run(host_command, ROOT, role / "host-build.log", env)
+        unload_command = [cc, "-std=c11", *common, fixture_sources / "unload.c",
+                          "-Wl,--verbose", "-o", fixture / "clock-unload.exe"]
+        run(unload_command, ROOT, role / "unload-build.log", env)
+        unload_link = (role / "unload-build.log").read_text()
+        require(not re.search(r"(?:^|[/\s])lib(?:win)?pthread(?:\.dll)?\.a(?:[\s(]|$)", unload_link, re.MULTILINE),
+                "unload fixture linked a pthread provider")
         for name in ["peer-build.log", "host-build.log"]:
             linked = (role / name).read_text()
             require("Reading " + str(import_library) in linked and
@@ -153,18 +159,20 @@ def build(args):
                     "a consumer embedded a static pthread provider")
         binary = {}
         readobj = llvm / "bin/llvm-readobj"
-        for image in [fixture / "clock-shared.exe", fixture / "clock-peer.dll", fixture / dll.name]:
+        for name in ["clock-shared.exe", "clock-peer.dll", "clock-unload.exe", dll.name]:
+            image = fixture / name
             names, raw = imports(readobj, image)
             (role / (image.name + ".imports.txt")).write_text(raw)
             header = subprocess.check_output([str(readobj), "--file-headers", str(image)], text=True)
             require(ABI[abi] in header, "wrong output ABI: " + image.name)
-            if image.name != dll.name:
+            if name in {"clock-shared.exe", "clock-peer.dll"}:
                 require(names.count(dll.name) == 1, "consumer must import the one shared supplier")
                 provider_imports = next(block for block in raw.split("Import {") if "Name: " + dll.name in block)
                 for symbol in ["pthread_self", "pthread_getcpuclockid", "clock_gettime64", "clock_getres64"]:
                     require("Symbol: " + symbol + " " in provider_imports, "public clock API does not import from shared supplier")
             else:
-                require(not any("pthread" in name.lower() for name in names), "supplier must not import itself")
+                require(not any("pthread" in imported.lower() for imported in names),
+                        name + " must not import a pthread supplier")
             binary[image.name] = {"sha256": digest(image), "imports": names, "machine": ABI[abi]}
         exports = subprocess.check_output([str(readobj), "--coff-exports", str(fixture / dll.name)], text=True)
         (role / "supplier-exports.txt").write_text(exports)
@@ -179,7 +187,8 @@ def build(args):
                     "source_before": source_before, "source_after": source_after,
                     "compiler_driver": {"c": digest(cc), "cxx": digest(cxx), "clang": digest(llvm / "bin/clang")},
                     "commands": {"configure": [str(x) for x in configure], "peer": [str(x) for x in peer_command],
-                                 "host": [str(x) for x in host_command]},
+                                 "host": [str(x) for x in host_command],
+                                 "unload": [str(x) for x in unload_command]},
                     "import_library_sha256": digest(import_library), "binaries": binary,
                     "members": {p.name: digest(p) for p in fixture.iterdir() if p.is_file()}}
         (fixture / "manifest.json").write_text(json.dumps(metadata, indent=2) + "\n")
@@ -193,7 +202,8 @@ def verify(directory):
     require(data["schema"] == "gesher-thread-cpu-clock-shared-v1" and data["abi"] in ABI, "manifest type/ABI")
     require(data["pin"] == PIN, "manifest supplier identity")
     require(set(p.name for p in directory.iterdir()) == set(data["members"]) | {"manifest.json"}, "fixture member set")
-    require(set(data["members"]) == {"clock-shared.exe", "clock-peer.dll", "libwinpthread-1.dll", "COPYING.winpthreads.txt"},
+    require(set(data["members"]) == {"clock-shared.exe", "clock-peer.dll", "clock-unload.exe",
+                                     "libwinpthread-1.dll", "COPYING.winpthreads.txt"},
             "unexpected component payload")
     for name, expected_hash in data["members"].items():
         require(digest(directory / name) == expected_hash, "fixture hash mismatch: " + name)

@@ -55,7 +55,9 @@ supplier reclaims synchronization handles without repeating completed key cleanu
 
 Public `pthread_getcpuclockid` and time32/time64 readers live in the provider,
 including literal exported symbols. A 256-slot table deduplicates generations
-and reaps signaled objects. Reads use `GetThreadTimes` on owned handles, never
+and reaps signaled objects. Explicit supplier DLL unload releases any remaining
+clock handles after callers have stopped using the library. Reads use
+`GetThreadTimes` on owned handles, never
 reopen a TID. Dead/unknown pthreads return `ESRCH`; capacity/ID exhaustion returns
 `EAGAIN`; retired clock reads return `EINVAL`. The pthread API preserves errno;
 failure outputs stay unchanged. A live null-output read returns `EFAULT`.
@@ -95,6 +97,10 @@ builds are labeled and cannot qualify CI.
 
 ## Runtime acceptance
 
+- Eight real supplier load/unload cycles in an executable without pthread
+  imports. Each cycle acquires a clock on a native thread and unloads after
+  that thread exits, without issuing another clock call to reap the slot.
+  The process handle count must return to its initial value.
 - Busy and idle peers while the caller sleeps, measured against independent
   Win32 handle brackets; 10,000 acquisitions report cost and handle counts.
 - Two-image public calls, function pointers, literal dynamic symbols,

@@ -69,7 +69,7 @@
    pthread_mutex_unlock (&mtx_pthr_locked);
    return r;
  }
-@@ -458,68 +485,46 @@
+@@ -458,68 +485,49 @@
  static void WINAPI
  __dyn_tls_pthread (HANDLE hDllHandle, DWORD dwReason, LPVOID lpreserved)
  {
@@ -78,15 +78,15 @@
    pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
 -
 +  (void) hDllHandle;
-+  (void) lpreserved;
    if (dwReason == DLL_PROCESS_DETACH)
--    {
--      free_pthread_mem ();
--    }
+     {
++      if (!lpreserved)
++        _gesher_cpu_clock_close_on_unload ();
+       free_pthread_mem ();
+     }
 -  else if (dwReason == DLL_PROCESS_ATTACH)
 -    {
 -    }
-+    free_pthread_mem ();
    else if (dwReason == DLL_THREAD_DETACH)
      {
 -      if (_pthread_tls != 0xffffffff)
@@ -174,7 +174,7 @@
      }
  }
  
-@@ -1072,9 +1077,13 @@
+@@ -1072,9 +1080,13 @@
    t->h = NULL; //GetCurrentThread();
    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &t->h, 0, FALSE, DUPLICATE_SAME_ACCESS))
      abort ();
@@ -188,7 +188,7 @@
  
    /* Save for later */
    if (!TlsSetValue(_pthread_tls, t))
-@@ -1100,6 +1109,40 @@
+@@ -1100,6 +1112,40 @@
    return (!t ? NULL : t->evStart);
  }
  
@@ -229,7 +229,7 @@
  /* Internal helper for getting thread handle of thread T.  */
  void *
  pthread_gethandle (pthread_t t)
-@@ -1144,37 +1187,16 @@
+@@ -1144,37 +1190,16 @@
    if (id->thread_noposix == 0)
      longjmp(id->jb, 1);
  
@@ -277,7 +277,7 @@
      }
    /* Time to die */
    _endthreadex(rslt);
-@@ -1562,7 +1584,9 @@
+@@ -1562,7 +1587,9 @@
    pthread_mutex_lock (&mtx_pthr_locked);
    pthread_mutex_lock (&tv->p_clock);
    _pthread_once_raw(&_pthread_tls_once, pthread_tls_init);
@@ -288,7 +288,7 @@
    tv->tid = GetCurrentThreadId();
    pthread_mutex_unlock (&tv->p_clock);
  
-@@ -1584,28 +1608,16 @@
+@@ -1584,28 +1611,16 @@
  
    pthread_mutex_lock (&tv->p_clock);
    rslt = (unsigned) (size_t) tv->ret_arg;
@@ -324,7 +324,7 @@
    while (pthread_mutex_unlock (&mtx_pthr_locked) == 0)
     Sleep (0);
    _endthreadex (rslt);
-@@ -1707,12 +1719,15 @@
+@@ -1707,12 +1722,15 @@
      }
      SetThreadPriority (thrd, pr);
    }
@@ -341,7 +341,7 @@
      }
    else
      {
-@@ -1723,23 +1738,48 @@
+@@ -1723,23 +1741,48 @@
    return 0;
  }
  
@@ -398,7 +398,7 @@
    if (tv->evStart)
      CloseHandle (tv->evStart);
    tv->evStart = NULL;
-@@ -1773,21 +1813,20 @@
+@@ -1773,21 +1816,20 @@
        pthread_mutex_unlock (&mtx_pthr_locked);
        return EINVAL;
      }
@@ -430,7 +430,7 @@
    if (tv->evStart)
      CloseHandle (tv->evStart);
    tv->evStart = NULL;
-@@ -1809,11 +1848,12 @@
+@@ -1809,11 +1851,12 @@
  pthread_detach (pthread_t t)
  {
    int r = 0;
@@ -444,7 +444,7 @@
    if (!tv || !TEST_HANDLE(tv->h))
      {
        pthread_mutex_unlock (&mtx_pthr_locked);
-@@ -1831,8 +1871,11 @@
+@@ -1831,8 +1874,11 @@
    _ReadWriteBarrier();
    if (dw)
      {
@@ -472,6 +472,13 @@
      HANDLE evStart;
      pthread_mutex_t p_clock;
      int cancelled : 2;
+@@ -72,5 +75,6 @@
+ int  __pthread_shallcancel(void);
+ WINPTHREAD_API struct _pthread_v * __pth_gpointer_locked (pthread_t id);
+ int _pthread_delay_np_ms (DWORD to);
++void _gesher_cpu_clock_close_on_unload (void);
+ 
+ #endif
 --- a/mingw-w64-libraries/winpthreads/include/pthread.h
 +++ b/mingw-w64-libraries/winpthreads/include/pthread.h
 @@ -146,7 +146,6 @@
@@ -508,7 +515,7 @@
  /* internal header files */
  #include "misc.h"
  
-@@ -38,6 +40,112 @@
+@@ -38,6 +40,125 @@
          return -1;
      }
      return 0;
@@ -528,6 +535,19 @@
 +   encode a reusable Windows TID. They never overlap fixed clocks or recycle. */
 +#define GESHER_CPU_CLOCK_FIRST (-1073741818)
 +static int64_t gesher_cpu_clock_next = GESHER_CPU_CLOCK_FIRST;
++
++/* Called during explicit unload, once the client has stopped making calls.
++   Do not take the clock lock or wait on threads from the loader callback. */
++void _gesher_cpu_clock_close_on_unload(void)
++{
++    for (unsigned i = 0; i < 256; ++i) {
++        gesher_cpu_clock_slot *slot = &gesher_cpu_clocks[i];
++        if (slot->handle) {
++            CloseHandle(slot->handle);
++            *slot = (gesher_cpu_clock_slot){0};
++        }
++    }
++}
 +
 +static void gesher_cpu_clock_reap(void)
 +{
@@ -621,7 +641,7 @@
  }
  
  /**
-@@ -62,6 +170,7 @@
+@@ -62,6 +183,7 @@
  static int __clock_getres(clockid_t clock_id, struct _timespec64 *res)
  {
      clockid_t id = clock_id;
@@ -629,7 +649,7 @@
  
      if (id == CLOCK_REALTIME && _pthread_get_system_time_best_as_file_time == GetSystemTimeAsFileTime)
          id = CLOCK_REALTIME_COARSE; /* GetSystemTimePreciseAsFileTime() not available */
-@@ -124,6 +233,7 @@
+@@ -124,6 +246,7 @@
  static int __clock_gettime(clockid_t clock_id, struct _timespec64 *tp)
  {
      unsigned __int64 t;
@@ -637,7 +657,7 @@
      LARGE_INTEGER pf, pc;
      union {
          unsigned __int64 u64;
-@@ -297,6 +407,8 @@
+@@ -297,6 +420,8 @@
  {
      struct _timespec64 tp64 = {0};
  
@@ -646,7 +666,7 @@
      if (__clock_getres (clock_id, &tp64) == -1)
          return -1;
  
-@@ -310,6 +422,8 @@
+@@ -310,6 +435,8 @@
  {
      struct _timespec64 tp64 = {0};
  
@@ -655,3 +675,4 @@
      if (__clock_gettime (clock_id, &tp64) == -1)
          return -1;
  
+
