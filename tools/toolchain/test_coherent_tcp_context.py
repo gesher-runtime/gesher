@@ -21,6 +21,17 @@ def main():
       GITHUB_WORKFLOW_REF=c.REPOSITORY+'/'+c.PATH+'@'+ref,
       GITHUB_ACTOR=actor,GITHUB_TRIGGERING_ACTOR=trigger)
      assert c.context(arbitrary,job)['GITHUB_SHA']==source
+  # A pushed canonical release tag runs full ci; other tags and events do not.
+  tag=dict(e,GITHUB_REF='refs/tags/v0.2.0',GITHUB_EVENT_NAME='push',
+   GITHUB_WORKFLOW_REF=c.REPOSITORY+'/'+c.PATH+'@refs/tags/v0.2.0')
+  assert c.context(tag,job)['GITHUB_SHA']==source
+  for ref,event_name in (('refs/tags/v0.2.0','workflow_dispatch'),('refs/tags/v0.2','push'),
+    ('refs/tags/v0.2.0-rc1','push'),('refs/tags/0.2.0','push'),('refs/tags/v01.2.0','push'),
+    ('refs/heads/v0.2.0','push')):
+   b=dict(tag,GITHUB_REF=ref,GITHUB_EVENT_NAME=event_name,GITHUB_WORKFLOW_REF=c.REPOSITORY+'/'+c.PATH+'@'+ref)
+   try:c.context(b,job)
+   except AssertionError:count+=1
+   else:raise AssertionError('non-release tag accepted '+ref+'/'+event_name)
   for k in e:
    b=copy.copy(e);b[k]='' if k in ('GITHUB_ACTOR','GITHUB_TRIGGERING_ACTOR') else 'invalid'
    try:c.context(b,job)

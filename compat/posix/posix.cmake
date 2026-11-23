@@ -23,6 +23,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/mman_alias_prepare.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/memfd_seals.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/native_fence.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/misc.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/netdb.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/network_dns.cc
@@ -104,6 +105,10 @@ target_include_directories(gesher_posix BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR}/
 include_directories(BEFORE ${CMAKE_CURRENT_LIST_DIR}/include)
 link_libraries(gesher_posix)
 target_compile_options(gesher_posix PRIVATE -Wall -Wextra -Werror)
+# Fence factories convert allocation failure to ENOMEM while retaining pending
+# GPU-event lifetime. Descriptor publication itself uses preallocated slots.
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/native_fence.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
 # /dev/binder (src/binder.cc) speaks the kernel driver's ABI, from bionic's
 # uapi header; searched last, so gesher-base's <linux/*.h> come first.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES

@@ -85,6 +85,7 @@ struct MEMORY_BASIC_INFORMATION {
 #include "binder_wire.h"
 #define FIXTURE_SHARED_DESCRIPTIONS @SHARED_DESCRIPTIONS@
 #define FIXTURE_SOCKET_DESCRIPTIONS @SOCKET_DESCRIPTIONS@
+#define FIXTURE_NATIVE_FENCES @NATIVE_FENCES@
 #if FIXTURE_SHARED_DESCRIPTIONS
 #include "binder_file_descriptions.h"
 #endif
@@ -115,6 +116,9 @@ struct Peer {
   unsigned duplicates = 0, opens = 0, closes = 0, closed_fds = 0, fail_duplicate = 0, fail_open = 0;
   std::array<uint32_t, 32> adopted_kinds{};
   void (*on_claim)() = nullptr;
+  // A sender fd that production identifies as a completed native fence.
+  int sending_fence_fd = -1;
+  uintptr_t sending_fence_event = 0;
 };
 thread_local Peer* peer = nullptr;
 struct SelectPeer {
@@ -225,7 +229,9 @@ int FixtureClose(int fd) {
     fixture::Check(a.open, "adopted fd handles closed once"); a.open = false; ++p.closes; ++handles;
   }
   if (!handles) std::abort();
-  fixture::Check(handles == (FIXTURE_SHARED_DESCRIPTIONS && p.adopted_kinds[fd - 101] != 4 ? 2 : 1),
+  // Sockets (4) and completed native fences (5) own one typed handle, no OFD.
+  fixture::Check(handles == (FIXTURE_SHARED_DESCRIPTIONS && p.adopted_kinds[fd - 101] != 4 &&
+                             p.adopted_kinds[fd - 101] != 5 ? 2 : 1),
                  "fd owns all transported handles");
   ++p.closed_fds;
   return 0;
@@ -285,6 +291,27 @@ int AdoptSocket(uintptr_t owned, uint64_t metadata) {
   else fixture::peer->adopted_kinds[fd - 101] = 4;
   return fd;
 }
+#if FIXTURE_NATIVE_FENCES
+// Declared native-fence owner boundary (native_fence.cc). The sender exposes
+// only a completed event handle; the receiver consumes one handle per fd.
+class NativeFence;
+bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
+                         std::shared_ptr<NativeFence>* = nullptr) {
+  auto& p = *fixture::peer;
+  if (fd != p.sending_fence_fd) return false;
+  *handle = p.sending_fence_event;
+  *metadata = binder_wire::kCompletedNativeFenceMetadata;
+  return true;
+}
+int AdoptNativeFence(HANDLE owned, uint64_t metadata) {
+  fixture::Check(metadata == binder_wire::kCompletedNativeFenceMetadata,
+                 "native fence adoption receives its exact completed type");
+  const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+  if (fd < 0) CloseHandle(owned);
+  else fixture::peer->adopted_kinds[fd - 101] = 5;
+  return fd;
+}
+#endif
 int AdoptTransferred(HANDLE owned, uint64_t) {
   const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
   if (fd < 0) CloseHandle(owned);  // as production: a failed adoption closes the handle
@@ -649,6 +676,103 @@ void SocketDescriptionMetadata() {
 #endif
 #endif
 
+#if FIXTURE_NATIVE_FENCES
+// Receive: a completed native fence is one typed handle without a shared OFD,
+// and malformed type/handle combinations never reach adoption.
+void NativeFenceDescriptionMetadata() {
+  Payload valid(64); valid.Fd(0, 0x301); valid.Fd(32, 0x302);
+  auto fence = Load<binder_fd_object>(valid.data.data());
+  fence.pad_flags = gesher::binder_wire::kCompletedNativeFenceMetadata;
+  fence.cookie = 0x55;
+  std::memcpy(valid.data.data(), &fence, sizeof(fence));
+  valid.descriptions[0].kind = gesher::binder_wire::kNativeFenceFileDescription;
+  valid.descriptions[0].shared_handle = 0;
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Mapping mapping; Peer p; BeginReply(p); valid.AppendTo(p, 321); Output output;
+    if (failure == 1) p.fail_duplicate = 1;
+    if (failure == 2) p.fail_open = 2;
+    const int result = output.Run(mapping, p);
+    if (failure == 0) {
+      Check(result == 0 && p.duplicates == 3 && p.opens == 2,
+            "mixed native fence and file adopt their distinct ownership representations");
+      const auto tr = output.Transaction();
+      const auto delivered = Load<binder_fd_object>(reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer));
+      Check(delivered.cookie == 0x55 && delivered.pad_flags == 0,
+            "native fence type is consumed without leaking into Android's FD object");
+      Check(p.adopted_kinds[0] == 5 && p.adopted_kinds[1] == 0,
+            "native fence transport does not turn the following file into a fence");
+      SelectPeer selected(p);
+      gesher::CloseReceivedFds(reinterpret_cast<uint8_t*>(tr.data.ptr.buffer), tr.data_size,
+                              reinterpret_cast<const void*>(tr.data.ptr.offsets), tr.offsets_size);
+      Check(mapping.file->Free(tr.data.ptr.buffer) == 321, "native fence caller frees exact buffer");
+    } else {
+      Check(result == -1, "native fence descriptor failure is never published as success");
+    }
+    Check(EmptyMapping(mapping) && std::none_of(p.adopted.begin(), p.adopted.end(),
+          [](const auto& handle) { return handle.open; }), "native fence failure or close releases every capability");
+  }
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Payload invalid = valid;
+    auto object = fence;
+    if (failure == 0) invalid.descriptions[0].shared_handle = 0x10000;
+    if (failure == 1) object.pad_flags = 1;
+    if (failure == 2) object.pad_flags = 0;
+    std::memcpy(invalid.data.data(), &object, sizeof(object));
+    Peer p; BeginReply(p); invalid.AppendTo(p); Reject(p, EBADF);
+  }
+}
+
+// Send: the fence travels as a pinned duplicate of its completion event with
+// its exact type, while Android's ownership cookie and the caller's object stay.
+void SenderNativeFence() {
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Mapping mapping; Peer p; BeginReply(p, 0, 1); Output output;
+    p.sending_fence_fd = 71;
+    p.sending_fence_event = 0x123400;
+    if (failure == 1) p.fail_duplicate = 1;
+    if (failure == 2) p.fail_write_operation = gesher::binder_wire::kWriteRead;
+    binder_fd_object object{};
+    object.hdr.type = BINDER_TYPE_FD;
+    object.fd = 71;
+    object.cookie = 0xaabbccdd00000001ULL;
+    const std::array<uint64_t, 1> offsets{0};
+    binder_transaction_data transaction{};
+    transaction.data_size = sizeof(object);
+    transaction.offsets_size = sizeof(offsets);
+    transaction.data.ptr.buffer = reinterpret_cast<uintptr_t>(&object);
+    transaction.data.ptr.offsets = reinterpret_cast<uintptr_t>(offsets.data());
+    std::vector<uint8_t> command;
+    Append<uint32_t>(&command, BC_TRANSACTION); Append(&command, transaction);
+    output.request.write_buffer = reinterpret_cast<uintptr_t>(command.data());
+    output.request.write_size = command.size();
+    errno = 0;
+    const int result = output.Run(mapping, p);
+    Check(object.fd == 71 && object.cookie == 0xaabbccdd00000001ULL,
+          "native fence sender object remains unchanged");
+    Check(p.adopted[0].staging == reinterpret_cast<HANDLE>(0x123400) || failure == 1,
+          "native fence pins a duplicate of its actual completion event");
+    if (failure == 2) { Check(result == -1, "native fence transport failure is reported"); continue; }
+    Check(result == 0 && output.request.write_consumed == command.size(),
+          "native fence transaction remains a broker transaction result");
+    constexpr size_t copy_error_at = 4 + 4 + 8 + 4 + 4 + 4 + sizeof(binder_transaction_data);
+    const int32_t copy_error = Load<int32_t>(p.request.data() + copy_error_at);
+    if (failure == 1) { Check(copy_error == EBADF, "failed native fence pin fails only this transaction"); continue; }
+    Check(copy_error == 0, "native fence transaction is serialized");
+    constexpr size_t data_at = copy_error_at + 4 + 4;
+    const auto sent = Load<binder_fd_object>(p.request.data() + data_at);
+    Check(sent.pad_binder == reinterpret_cast<uintptr_t>(p.adopted[0].handle) &&
+          sent.pad_flags == gesher::binder_wire::kCompletedNativeFenceMetadata &&
+          sent.cookie == 0xaabbccdd00000001ULL,
+          "native fence transports its pinned event and exact type, preserving the cookie");
+    const auto table = Load<gesher::binder_wire::FileDescription>(
+        p.request.data() + data_at + sizeof(object) + sizeof(offsets));
+    Check(table.object_offset == 0 && table.shared_handle == 0 &&
+          table.kind == gesher::binder_wire::kNativeFenceFileDescription && table.reserved == 0,
+          "native fence side-table entry carries no shared description");
+  }
+}
+#endif
+
 void FdAndOwnershipFailures() {
   for (unsigned mode = 0; mode != (FIXTURE_SHARED_DESCRIPTIONS ? 13 : 9); ++mode) {
     Mapping mapping; Peer p; BeginReply(p); Payload payload(83);
@@ -819,6 +943,10 @@ int main(int argc, char** argv) {
 #if FIXTURE_SOCKET_DESCRIPTIONS
   fixture::SocketDescriptionMetadata();
 #endif
+#endif
+#if FIXTURE_NATIVE_FENCES
+  fixture::NativeFenceDescriptionMetadata();
+  fixture::SenderNativeFence();
 #endif
   fixture::FdAndOwnershipFailures();
   fixture::MixedCommands();
