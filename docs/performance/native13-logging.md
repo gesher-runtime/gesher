@@ -169,38 +169,3 @@ python3 tools/test_structured_logging.py --source-ref 638e19b4a6c109ec8881ba90a9
 Leak detection was disabled only for the local logging sanitizer invocation;
 the CI command is unchanged. These checks qualify the source composition and
 test build, not a new performance result or a native runtime approval.
-## Integration with the corrected native-fence baseline
-
-The next integration carries main
-`20252fde18db387b4d99d99f7050d6336f58bf6e` and the exact correction published
-separately in [PR #296](https://github.com/gesher-runtime/gesher/pull/296), head
-`f6307ad47ba16d838770f100675e33f2eb84ed7a`. That correction has the same tree as
-independently reviewed commit `53c7373789985c31d6beb8ed64020e6dee65d79d`.
-Its source/qualification review resolves the receiver-selected native-fence
-descriptor flag defect in main972; actual Windows runtime acceptance remains
-pending. Carrying this common dependency in the local integration does not
-merge its pull request or grant runtime approval.
-
-The logging implementation, property revision API, environment-owner staging,
-logging fixtures and historical benchmark samples are unchanged from published
-PR #263 head `f6abd04f4c389a4c8ad3c776af24a8c985287902`. Main's native-fence,
-metadata ownership, pipe/OFD, Binder, graphics, framework and CI changes are
-preserved. The original performance observations above continue to describe
-their identified source and host boundary; they do not qualify this new merge
-or establish a Windows file-I/O or elapsed-time improvement.
-
-Source qualification composes three existing exact restorations: NATIVE-13
-property revisions, main's memmem wrapper, and the reviewed native-fence flag
-transition. The property/header/patch pins are unchanged. Main972's reviewed
-71-entry qualification, original OFD patch, checkpoint/hunk document, supplier
-authority and `native_runtime_approval=false` are unchanged from the corrected
-main baseline. No old source receipt is relabeled as evidence for new bytes.
-All existing property repinning and fence pin/roundtrip negative controls run
-together with the complete original policy.
-
-This integration requires its own independent composition review and fresh
-exact-source CI. The real Windows structured-logging tests and the default/WARP
-native-fence SCM tests remain separate gates. The latter uses a separate broker
-with same-client-process SCM endpoints; generic startup/raw-file fence export
-remains explicitly unsupported as documented by the correction.
-

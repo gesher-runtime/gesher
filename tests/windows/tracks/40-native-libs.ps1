@@ -196,6 +196,7 @@ Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
 } @('JNI_OnLoad ran: ok', 'a native thread that ends attached only warns, as on Android: ok',
+    'GetEnv guest boundary: all passed', 'GetEnv attach/detach: all passed',
     'JniTest all passed')
 
 # Step 5, libc++: a C++ .so against the NDK's libc++_shared.so, which the
@@ -348,34 +349,17 @@ Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP,
 # completed native-fence descriptor transfer. The fixture checks the private
 # ANGLE synchronization ABI so an older cached SDK cannot silently pass.
 Check 'native libs: asynchronous local EGL fences and native descriptor lifetime' {
-  $device = 'egl-fence-' + [guid]::NewGuid().ToString('N')
-  $broker = Start-Process -FilePath "$Dir/binderd.exe" -ArgumentList $device -PassThru -WindowStyle Hidden
-  try {
-    Start-Sleep -Milliseconds 500
-    $env:GESHER_BINDER = $device
-    & "$Dir/egl_fence_test.exe"
-  } finally {
-    Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
-    Stop-Process -Id $broker.Id -Force -ErrorAction SilentlyContinue
-  }
-} @('this package contains the current ANGLE synchronization ABI',
-    'ok: SCM native-fence receiver flags and ownership passed', 'egl_fence_test all passed')
+  & "$Dir/egl_fence_test.exe"
+} @('this package contains the current ANGLE synchronization ABI', 'egl_fence_test all passed')
 
 Check 'native libs: the same pending EGL fence and native descriptor checks on WARP' {
-  $device = 'egl-fence-warp-' + [guid]::NewGuid().ToString('N')
-  $broker = Start-Process -FilePath "$Dir/binderd.exe" -ArgumentList $device -PassThru -WindowStyle Hidden
   $env:GESHER_EGL_DEVICE = 'warp'
   try {
-    Start-Sleep -Milliseconds 500
-    $env:GESHER_BINDER = $device
     & "$Dir/egl_fence_test.exe"
   } finally {
-    Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
-    Stop-Process -Id $broker.Id -Force -ErrorAction SilentlyContinue
     Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
   }
-} @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device',
-    'ok: SCM native-fence receiver flags and ownership passed', 'egl_fence_test all passed')
+} @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'egl_fence_test all passed')
 
 # The GPU kept from sleeping between the frames Gesher reads back (child
 # surfaces, SurfaceControl composition; compat/bionic/gpu_keepalive.h): on a
