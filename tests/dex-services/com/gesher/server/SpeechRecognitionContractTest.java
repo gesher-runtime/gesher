@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.RemoteException;
 import android.speech.IModelDownloadListener;
 import android.speech.IRecognitionListener;
 import android.speech.IRecognitionService;
@@ -19,6 +20,7 @@ import android.speech.RecognitionSupport;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -61,6 +63,22 @@ public final class SpeechRecognitionContractTest {
         }
         synchronized boolean detached() { return recipients.isEmpty(); }
         synchronized int links() { return recipients.size(); }
+    }
+
+    private static IBinder deadBinder(String detail) {
+        return (IBinder) Proxy.newProxyInstance(
+                IBinder.class.getClassLoader(),
+                new Class<?>[]{IBinder.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    case "toString" -> "dead-binder:" + detail;
+                    case "linkToDeath" -> throw new RemoteException(detail);
+                    case "unlinkToDeath" -> false;
+                    case "isBinderAlive", "pingBinder" -> false;
+                    case "queryLocalInterface" -> null;
+                    default -> throw new UnsupportedOperationException("Unexpected Binder call: " + method);
+                });
     }
 
     private static class Backend implements SpeechRecognitionManagerService.Backend {
@@ -339,8 +357,16 @@ public final class SpeechRecognitionContractTest {
         check(take(callback.events).equals(SpeechRecognizer.ERROR_CLIENT), "no selected provider");
         manager.createSession(SERVICE, bindingToken, true, callback);
         check(take(callback.events).equals(SpeechRecognizer.ERROR_CLIENT), "no configured on-device provider");
-        manager.createSession(OTHER, bindingToken, false, callback);
-        check(take(callback.events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS), "reject unrelated component");
+        // provider == null contract: AOSP reports ERROR_CLIENT (never ERROR_TOO_MANY_REQUESTS)
+        // and consumes no session quota across repeated unresolved requests.
+        for (int i = 0; i < 12; i++) {
+            Lifetime unresolvedToken = new Lifetime();
+            manager.createSession(OTHER, unresolvedToken, false, callback);
+            check(take(callback.events).equals(SpeechRecognizer.ERROR_CLIENT)
+                    && unresolvedToken.detached() && backend.process.detached()
+                    && backend.bindings.isEmpty(),
+                    "unresolved provider == null reports ERROR_CLIENT without consuming quota");
+        }
         backend.rejectBinding = true;
         manager.createSession(SERVICE, new Lifetime(), false, callback);
         check(take(callback.events).equals(SpeechRecognizer.ERROR_CLIENT)
@@ -367,24 +393,46 @@ public final class SpeechRecognitionContractTest {
         client.cancel(new Listener(), true);
         check(take(backend.unbindings) == newLink, "terminal cleanup after timeout retry");
 
+        // Same-ComponentName per-UID quota contract: 10 concurrent sessions share one
+        // remote binding, while the 11th session to the SAME ComponentName is rejected
+        // with ERROR_TOO_MANY_REQUESTS until one of the 10 active sessions retires.
         SpeechRecognitionManagerService shared = new SpeechRecognitionManagerService(backend, 2000);
+        List<Lifetime> sharedTokens = new ArrayList<>();
         List<Admission> admissions = new ArrayList<>();
         for (int i = 0; i < 11; i++) {
+            Lifetime nextToken = new Lifetime();
             Admission next = new Admission();
+            sharedTokens.add(nextToken);
             admissions.add(next);
-            shared.createSession(SERVICE, new Lifetime(), false, next);
+            shared.createSession(SERVICE, nextToken, false, next);
         }
         IServiceConnection sharedLink = take(backend.bindings);
-        check(backend.bindings.isEmpty(), "eleven sessions for one UID/provider share one remote connection");
+        check(backend.bindings.isEmpty(), "ten admitted sessions for one UID/provider share one remote connection");
+        check(take(admissions.get(10).events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+                && sharedTokens.get(10).detached() && backend.process.links() == 10,
+                "eleventh session for the same ComponentName is rejected with ERROR_TOO_MANY_REQUESTS");
         Engine sharedEngine = new Engine();
         sharedLink.connected(SERVICE, sharedEngine, null, false);
         List<IRecognitionService> sessions = new ArrayList<>();
-        for (Admission next : admissions) {
-            sessions.add((IRecognitionService) take(next.events));
+        for (int i = 0; i < 10; i++) {
+            sessions.add((IRecognitionService) take(admissions.get(i).events));
         }
-        check(sessions.size() == 11, "all eleven same-provider session tokens are independently admitted");
+        check(sessions.size() == 10, "first ten same-provider session tokens are independently admitted");
+        Admission stillSaturated = new Admission();
+        shared.createSession(SERVICE, sharedTokens.get(10), false, stillSaturated);
+        check(take(stillSaturated.events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+                && sharedTokens.get(10).detached() && backend.bindings.isEmpty(),
+                "connected same-ComponentName provider still rejects an eleventh session");
+        sessions.get(0).cancel(null, true);
+        Admission admittedAfterRelease = new Admission();
+        shared.createSession(SERVICE, sharedTokens.get(10), false, admittedAfterRelease);
+        sessions.set(0, (IRecognitionService) take(admittedAfterRelease.events));
+        check(!sharedTokens.get(10).detached() && backend.unbindings.isEmpty()
+                && backend.bindings.isEmpty() && backend.process.links() == 10,
+                "releasing one same-provider session admits the waiting eleventh session on the shared connection");
         for (IRecognitionService session : sessions) session.cancel(null, true);
-        check(take(backend.unbindings) == sharedLink && backend.unbindings.isEmpty(),
+        check(take(backend.unbindings) == sharedLink && backend.unbindings.isEmpty()
+                && sharedTokens.stream().allMatch(Lifetime::detached) && backend.process.detached(),
                 "shared provider connection is released after the final client session");
 
         SpeechRecognitionManagerService fanout = new SpeechRecognitionManagerService(backend, 2000);
@@ -419,6 +467,79 @@ public final class SpeechRecognitionContractTest {
         check(take(backend.unbindings) == fanoutLink, "request fanout session releases its provider connection");
     }
 
+    private static void deathLinkFailures() throws Exception {
+        SpeechRecognitionManagerService.Owner[] dynamicOwner = new SpeechRecognitionManagerService.Owner[1];
+        Backend backend = new Backend() {
+            @Override public boolean isCurrent(SpeechRecognitionManagerService.Owner owner) {
+                return client.equals(owner) || owner.equals(dynamicOwner[0]);
+            }
+        };
+        SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 2000);
+
+        // 1. token.linkToDeath throws RemoteException -> cleans up session & quota and calls callback.onError(ERROR_CLIENT).
+        Admission deadTokenCallback = new Admission();
+        manager.createSession(SERVICE, deadBinder("client-token-dead"), false, deadTokenCallback);
+        check(take(deadTokenCallback.events).equals(SpeechRecognizer.ERROR_CLIENT)
+                && backend.bindings.isEmpty() && backend.process.detached(),
+                "token.linkToDeath RemoteException reports ERROR_CLIENT and leaves no leaked session or binding");
+
+        // 2. processDeathLink.linkToDeath throws RemoteException after token.linkToDeath succeeded ->
+        //    unlinks token, cleans up session & quota, and calls callback.onError(ERROR_CLIENT).
+        SpeechRecognitionManagerService.Owner deadProcessOwner = new SpeechRecognitionManagerService.Owner(
+                7299, backend.client.uid(), backend.client.packageName(), backend.client.code(),
+                deadBinder("owning-process-dead"));
+        dynamicOwner[0] = deadProcessOwner;
+        backend.caller = deadProcessOwner;
+        Lifetime liveToken = new Lifetime();
+        Admission deadProcessCallback = new Admission();
+        manager.createSession(SERVICE, liveToken, false, deadProcessCallback);
+        check(take(deadProcessCallback.events).equals(SpeechRecognizer.ERROR_CLIENT)
+                && liveToken.detached() && backend.bindings.isEmpty(),
+                "processDeathLink.linkToDeath RemoteException unlinks token, cleans up session and reports ERROR_CLIENT");
+
+        // 3. callback.onError itself throws RemoteException during linkToDeath failure ->
+        //    swallowed cleanly without crashing the worker thread or leaking quota.
+        backend.caller = backend.client;
+        BlockingQueue<Integer> observedError = new LinkedBlockingQueue<>();
+        IRecognitionServiceManagerCallback deadCallback = (IRecognitionServiceManagerCallback) Proxy.newProxyInstance(
+                IRecognitionServiceManagerCallback.class.getClassLoader(),
+                new Class<?>[]{IRecognitionServiceManagerCallback.class},
+                (proxy, method, args) -> {
+                    if ("onError".equals(method.getName())) {
+                        observedError.add((Integer) args[0]);
+                        throw new RemoteException("callback binder dead");
+                    }
+                    if ("asBinder".equals(method.getName())) return deadBinder("callback");
+                    throw new UnsupportedOperationException("Unexpected callback call: " + method);
+                });
+        manager.createSession(SERVICE, deadBinder("both-dead"), false, deadCallback);
+        check(take(observedError).equals(SpeechRecognizer.ERROR_CLIENT),
+                "linkToDeath failure still invokes callback.onError before ignoring callback RemoteException");
+
+        // Verify all 10 per-UID quota slots remain completely available after repeated linkToDeath failures.
+        List<Lifetime> healthyTokens = new ArrayList<>();
+        List<Admission> healthyAdmissions = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            Lifetime token = new Lifetime();
+            Admission admission = new Admission();
+            healthyTokens.add(token);
+            healthyAdmissions.add(admission);
+            manager.createSession(SERVICE, token, false, admission);
+        }
+        IServiceConnection link = take(backend.bindings);
+        link.connected(SERVICE, new Engine(), null, false);
+        List<IRecognitionService> healthySessions = new ArrayList<>();
+        for (Admission admission : healthyAdmissions) {
+            healthySessions.add((IRecognitionService) take(admission.events));
+        }
+        check(healthySessions.size() == 10 && backend.process.links() == 10,
+                "failed linkToDeath attempts leak zero UID quota reservations");
+        for (IRecognitionService session : healthySessions) session.cancel(null, true);
+        check(take(backend.unbindings) == link && backend.process.detached()
+                && healthyTokens.stream().allMatch(Lifetime::detached),
+                "healthy sessions after linkToDeath failures clean up completely");
+    }
+
     private static void manifestEligibility() {
         ServiceInfo service = new ServiceInfo();
         service.applicationInfo = new ApplicationInfo();
@@ -439,45 +560,76 @@ public final class SpeechRecognitionContractTest {
     }
 
     private static void sharedAdmissionWork() throws Exception {
-        Backend backend = new Backend();
+        int uidCount = 128;
+        int perUid = 8;
+        int count = uidCount * perUid;
+        List<Lifetime> processes = new ArrayList<>();
+        List<SpeechRecognitionManagerService.Owner> owners = new ArrayList<>();
+        for (int u = 0; u < uidCount; u++) {
+            Lifetime proc = new Lifetime();
+            processes.add(proc);
+            owners.add(new SpeechRecognitionManagerService.Owner(
+                    8000 + u, 10200 + u, "fixture.client." + u, new Object(), proc));
+        }
+        Backend backend = new Backend() {
+            @Override public boolean isCurrent(SpeechRecognitionManagerService.Owner owner) {
+                return client.equals(owner) || owners.contains(owner);
+            }
+        };
         SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 2000);
         Admission first = new Admission();
         Lifetime firstToken = new Lifetime();
         manager.createSession(SERVICE, firstToken, false, first);
-        IServiceConnection link = take(backend.bindings);
-        link.connected(SERVICE, new Engine(), null, false);
+        IServiceConnection firstLink = take(backend.bindings);
+        firstLink.connected(SERVICE, new Engine(), null, false);
         IRecognitionService firstClient = (IRecognitionService) take(first.events);
         boolean observe = Boolean.getBoolean("gesher.test.speech.quota-budget");
         long before = observe ? manager.getClass().getField("testQuotaAdmissionVisits").getLong(manager) : 0;
-        int count = 1024;
         List<Lifetime> tokens = new ArrayList<>();
         List<Admission> admissions = new ArrayList<>();
+        List<IServiceConnection> uidLinks = new ArrayList<>();
         List<IRecognitionService> clients = new ArrayList<>();
-        for (int i = 0; i < count; i++) {
-            Lifetime token = new Lifetime();
-            Admission admission = new Admission();
-            tokens.add(token);
-            admissions.add(admission);
-            manager.createSession(SERVICE, token, false, admission);
+        for (int u = 0; u < uidCount; u++) {
+            backend.caller = owners.get(u);
+            for (int s = 0; s < perUid; s++) {
+                Lifetime token = new Lifetime();
+                Admission admission = new Admission();
+                tokens.add(token);
+                admissions.add(admission);
+                manager.createSession(SERVICE, token, false, admission);
+            }
+            IServiceConnection uidLink = take(backend.bindings);
+            uidLinks.add(uidLink);
+            uidLink.connected(SERVICE, new Engine(), null, false);
         }
+        backend.caller = backend.client;
         for (Admission admission : admissions) clients.add((IRecognitionService) take(admission.events));
         check(clients.size() == count && backend.bindings.isEmpty(),
-                "many same-provider tokens remain individually admitted through one binding");
+                "1024 sessions across 128 UIDs (8 per UID <= 10 limit) share one binding per UID");
         if (observe) {
             long visits = manager.getClass().getField("testQuotaAdmissionVisits").getLong(manager) - before;
             System.out.println("speech quota admission visits: " + visits + " for " + count + " tokens");
             check(visits <= count, "quota work grows with new tokens, not all previous sessions");
         }
-        // Retiring any subset must retain the reservation and shared binding.
-        for (int i = 0; i < count / 2; i++) clients.get(i).cancel(null, true);
+        // Retiring half of each UID's sessions must retain its reservation and shared binding.
+        for (int u = 0; u < uidCount; u++) {
+            backend.caller = owners.get(u);
+            for (int s = 0; s < perUid / 2; s++) {
+                clients.get(u * perUid + s).cancel(null, true);
+            }
+        }
+        backend.caller = backend.client;
         Admission barrier = new Admission();
         manager.createSession(SERVICE, firstToken, false, barrier);
         check(take(barrier.events) == firstClient && backend.unbindings.isEmpty()
-                && backend.process.links() == count / 2 + 1,
+                && processes.stream().allMatch(p -> p.links() == perUid / 2),
                 "partial shared-session retirement keeps the remaining provider owners");
+        for (Lifetime proc : processes) proc.die();
         backend.process.die();
-        check(take(backend.unbindings) == link && backend.unbindings.isEmpty()
-                && firstToken.detached() && tokens.stream().allMatch(Lifetime::detached),
+        for (int i = 0; i < uidCount + 1; i++) take(backend.unbindings);
+        check(backend.unbindings.isEmpty() && firstToken.detached()
+                && tokens.stream().allMatch(Lifetime::detached)
+                && processes.stream().allMatch(Lifetime::detached),
                 "process death retires every shared token and the final provider reservation");
         // The controlled backend can reuse its caller after death. Re-admission
         // verifies no empty UID reservation remains after final cleanup.
@@ -742,6 +894,7 @@ public final class SpeechRecognitionContractTest {
         lifecycle();
         supportAndDeath();
         unavailableAndShared();
+        deathLinkFailures();
         pendingRequestDispatch();
         sharedAdmissionWork();
         java.lang.System.out.println("SpeechRecognitionContractTest all passed: " + checks + " checks");
