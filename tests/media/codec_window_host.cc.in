@@ -94,9 +94,12 @@ int rendered = 0, delivered = 0;
 bool render_ok = true, delivery_ok = true;
 int render_error = android::NO_INIT, delivery_error = android::NO_INIT;
 int64_t render_timestamp_ns = -1, reader_timestamp_ns = -1;
-int RenderFrame(ANativeWindow* window, const VideoFrame& frame, int64_t timestamp_ns) {
+int render_scaling_mode = 1;
+int RenderFrame(ANativeWindow* window, const VideoFrame& frame, int64_t timestamp_ns,
+                int video_scaling_mode = 1) {
   Check(!window->retired && frame.id == 7, "render receives live window and frame");
   render_timestamp_ns = timestamp_ns;
+  render_scaling_mode = video_scaling_mode;
   ++rendered;
   if (on_render) on_render(window);
   Check(!window->retired, "window remains live until rendering ends");
@@ -142,6 +145,7 @@ class Codec {
   std::shared_ptr<void> persistent_input_;
   std::deque<int> surface_frames_, csd_, work_, ready_, config_, pending_config_;
   ANativeWindow* window_ = nullptr;
+  int video_scaling_mode_ = 1;
   std::shared_ptr<GlobalRef> reader_;
   std::atomic<bool> frame_rendered_{true};
   int events = 0;
@@ -181,6 +185,8 @@ class Codec {
   @DEQUEUE_OUTPUT@
   @POST_FATAL@
   @SET_SURFACE@
+  bool has_surface() const { return window_ != nullptr || reader_ != nullptr; }
+  @SET_VIDEO_SCALING@
   @RELEASE_OUTPUT@
   void Prepare(bool frame = true) {
     outputs_[0].client = true;
@@ -190,7 +196,13 @@ class Codec {
 };
 
 Codec* jni_codec = nullptr;
-Codec* GetCodec(JNIEnv*, jobject) { return jni_codec; }
+Codec* GetCodec(JNIEnv* env, jobject) {
+  if (jni_codec == nullptr || jni_codec->released_) {
+    jniThrow(env, "java/lang/IllegalStateException", "released codec");
+    return nullptr;
+  }
+  return jni_codec;
+}
 @JNI_RELEASE_OUTPUT@
 @JNI_DEQUEUE_INPUT@
 @JNI_DEQUEUE_OUTPUT@
@@ -198,6 +210,56 @@ Codec* GetCodec(JNIEnv*, jobject) { return jni_codec; }
 @JNI_START@
 @JNI_STOP@
 @JNI_FLUSH@
+@JNI_VIDEO_SCALING@
+
+void ScalingContracts() {
+  render_ok = delivery_ok = true;
+  on_render = {};
+  on_deliver = {};
+  Codec codec;
+  jni_codec = &codec;
+  JNIEnv env;
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  Check(env.exception.empty() && codec.video_scaling_mode_ == 1,
+        "valid scaling without an output Surface has no effect");
+  for (int invalid : {-1, 0, 3, INT32_MAX}) {
+    env.exception.clear();
+    MC_setVideoScalingMode(&env, nullptr, invalid);
+    Check(env.exception == "java/lang/IllegalArgumentException" && codec.video_scaling_mode_ == 1,
+          "unknown scaling mode rejected before changing state");
+  }
+  env.exception.clear();
+  ANativeWindow first_window, second_window;
+  JavaSurface first{&first_window}, second{&second_window};
+  codec.SetSurface(&env, &first);
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  Check(env.exception.empty() && codec.video_scaling_mode_ == 2, "crop mode admitted for a Surface");
+  std::string error;
+  codec.Prepare();
+  on_render = [&](ANativeWindow*) {
+    MC_setVideoScalingMode(&env, nullptr, 1);
+    codec.SetSurface(&env, &second);
+    Check(render_scaling_mode == 2, "in-flight frame keeps its admitted scaling during mode and Surface changes");
+  };
+  Check(codec.ReleaseOutput(0, true, true, 123, &error), "cropped frame releases normally");
+  Check(render_scaling_mode == 2 && render_timestamp_ns == 123, "render receives the mode and timestamp together");
+  on_render = {};
+  codec.Prepare();
+  Check(codec.ReleaseOutput(0, true, true, 456, &error) && render_scaling_mode == 1,
+        "next released frame uses the live mode on the replacement Surface");
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  codec.Reset();
+  Check(codec.video_scaling_mode_ == 1, "reset retires session scaling");
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  Check(env.exception.empty(), "scaling call does not require execution state");
+  codec.Release();
+  for (int mode : {1, 2, -1, 3}) {
+    env.exception.clear();
+    MC_setVideoScalingMode(&env, nullptr, mode);
+    Check(env.exception == "java/lang/IllegalStateException", "released-state error takes precedence over mode validation");
+  }
+  jni_codec = nullptr;
+}
 
 void ReleaseErrorContracts() {
   for (bool reader : {false, true}) {
@@ -409,6 +471,7 @@ int main() {
     Check(!codec.ReleaseOutput(0, true, false, 0, &error) && reader_timestamp_ns == -1000 &&
               codec.events == 1, "full-width PTS scales without overflow and failed reader posts no event");
   }
+  ScalingContracts();
   std::printf("codec window ownership contracts: %d checks, %d failures\n", checks, failures);
   return failures != 0;
 }

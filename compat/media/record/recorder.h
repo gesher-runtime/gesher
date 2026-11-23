@@ -73,6 +73,9 @@ class Recorder {
   bool Prepare(std::string* error, bool* invalid_state = nullptr);
   // Store the source before prepare; prepare takes its exclusive consumer lease.
   bool SetInputSurface(std::shared_ptr<PersistentInputSurface> source);
+  // Queue one writable, seekable MP4 output after prepare. Duplicates fd;
+  // the caller retains ownership and may close it as soon as this returns.
+  bool SetNextOutputFile(int fd, std::string* error, bool* invalid_state = nullptr);
   // The input Surface (video source SURFACE), after Prepare.
   InputSurface* input_surface();
   bool Start(std::string* error, bool* invalid_state = nullptr);
@@ -92,6 +95,9 @@ class Recorder {
   void Clear();
   void RequestStop(StopReason reason, std::string error = {});
   void RequestStopLocked(StopReason reason, std::string error);
+  // RequestStop for Write, which already holds mux_mu_.
+  void RequestStopUnderMux(StopReason reason, std::string error = {});
+  void WakeGrace();
   bool ShouldDrain();
   void CompleteWorker();
   void AudioLoop();
@@ -104,9 +110,20 @@ class Recorder {
   Listener listener_;
   RecorderConfig config_;
   std::unique_ptr<Muxer> muxer_;
+  // Serialize size-limited MP4 admission/info callbacks across both workers.
+  // Public setters take only mux_mu_; callbacks run without mux_mu_ or mu_.
+  // This serialization does not introduce a native pending-event queue.
+  std::mutex writer_event_mu_;
   std::mutex mux_mu_;
+  std::condition_variable next_file_cv_;
+  int next_fd_ = -1;  // owned, protected by mux_mu_ during worker activity
   bool size_reached_ = false;  // protected by mux_mu_ while recording
   bool size_approaching_ = false;
+  bool awaiting_video_key_ = false;
+  int64_t segment_first_us_ = 0;  // -1 until the successor's first accepted media sample
+  std::atomic<bool> has_rolled_over_{false};
+  uint64_t segment_audio_samples_ = 0, segment_video_samples_ = 0;
+  std::atomic<bool> force_video_key_{false};
   int audio_track_ = -1, video_track_ = -1;
   std::string audio_mime_, video_mime_;
   std::shared_ptr<CaptureStream> capture_;

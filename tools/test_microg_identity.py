@@ -36,13 +36,21 @@ def main() -> None:
                         str(ROOT / "tests/appops/framework_host.c"), "-o", str(library)], check=True)
         subprocess.run([str(args.java_home / "bin/javac"), "-J-XX:-UsePerfData", "-encoding", "UTF-8",
                         "-cp", classpath, "-d", str(classes), str(ROOT / "tests/package/MicrogIdentityHost.java")], check=True)
+        # A disposable non-microG signer: an installed com.android.vending such as Google's.
+        keystore = work / "other-signer.p12"
+        subprocess.run([str(args.java_home / "bin/keytool"), "-genkeypair", "-keystore", str(keystore),
+                        "-storetype", "PKCS12", "-storepass", "fixture-only", "-alias", "fixture",
+                        "-keyalg", "RSA", "-keysize", "2048", "-validity", "30",
+                        "-dname", "CN=Gesher disposable signing test", "-noprompt"],
+                       check=True, stdout=subprocess.DEVNULL)
         cleaner = work / "cleaner/sun/misc"; cleaner.mkdir(parents=True)
         for source in (args.core_classes / "sun/misc").glob("Cleaner*.class"):
             shutil.copy2(source, cleaner / source.name)
         command = [str(args.java_home / "bin/java"), "-XX:-UsePerfData", "--patch-module",
                    "jdk.unsupported=" + str(work / "cleaner"), "-cp", str(classes) + os.pathsep + classpath,
                    "com.gesher.server.MicrogIdentityHost", str(library), str(args.companion_apk.resolve()),
-                   str(args.gsf_apk.resolve()), str(ROOT / "tests/dex-services/fixtures"), str(work)]
+                   str(args.gsf_apk.resolve()), str(ROOT / "tests/dex-services/fixtures"), str(work),
+                   str(keystore)]
         for mode in ("0", "1"):
             env = os.environ.copy(); env["ANDROID_DATA"] = str(work / ("data-" + mode))
             env["GESHER_MICROG_SPOOF"] = mode; env.pop("GESHER_BINDER_UID", None)

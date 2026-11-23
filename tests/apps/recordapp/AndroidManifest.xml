@@ -17,6 +17,10 @@
         <service android:name=".PersistentInputService" android:exported="false"
             android:process=":persistentinput" />
         <activity
+            android:name=".RecorderRolloverActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity
             android:name=".RecordActivity"
             android:exported="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">

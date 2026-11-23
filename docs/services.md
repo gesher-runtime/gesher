@@ -66,6 +66,28 @@ atomically with Android's unique-name rules, preserving existing contents.
 read/write access; trees also carry a prefix grant. Persisting and releasing each
 mode uses the shared durable URI-grant store.
 
+`MediaStore.ACTION_PICK_IMAGES` uses the same Windows open dialog with the
+[photo picker](https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/tags/android-16.0.0_r4/photopicker/)
+request contract. Its manifest filters accept only `image/*`, `video/*` or no data,
+so an explicit non-media type is not resolved. The wildcard type, alone or in
+`EXTRA_MIME_TYPES`, means `image/*` and `video/*`. Only `EXTRA_PICK_IMAGES_MAX`
+enables multiple selection; `EXTRA_ALLOW_MULTIPLE` does not apply. A limit outside
+`1..getPickImagesMaxLimit()`, or non-media `EXTRA_MIME_TYPES`, starts and then
+returns `RESULT_CANCELED` without UI, as the photo picker does. The dialog title
+states the limit, and a larger selection is cancelled rather than truncated. Results
+carry read and persistable grants. Unlike Android, the returned URIs are
+`content://com.gesher.documents` SAF document URIs, not `content://media/picker`
+URIs; both support streams, `OpenableColumns` queries and persisted grants.
+
+An `ACTION_CHOOSER` around a document request lists the system picker as one of
+its choices, as DocumentsUI appears in Android's chooser; see
+[intent-chooser.md](intent-chooser.md).
+
+Android's MIME map (`DefaultMimeMapFactory`, from the framework jar's
+`mime.types` resources) replaces libcore's minimal default in every Gesher process
+during `Main.bootstrap`, as `RuntimeInit.commonInit` installs it. A failure to load
+it is logged and leaves libcore's map in effect.
+
 Multiple selection and `EXTRA_MIME_TYPES` retain all valid entries; there is no
 256-document or 64-filter policy. Native results are checked against the actual
 JNI array and C++ container representation limits before conversion, following
@@ -137,6 +159,7 @@ built in framework.yml).
 | `jobscheduler` | `JobSchedulerService` | constraints: the net track's ConnectivityManager networks (`WindowsNetworks`; the Network List Manager without them), `GetSystemPowerStatus`, `GetLastInputInfo`; content URI triggers from `content` |
 | `content` | `ContentService`, `SyncManager` | (none: observers and `notifyChange` in the system server, hwsvc2; apps' sync adapters) |
 | `vibrator_manager` | `VibratorManagerService` | (none: a device without a vibrator; hwsvc2) |
+| `usb` | `UsbService` | (none: AOSP's UsbService with no host, device or port manager, as on an emulator; issue #303) |
 | `clipboard` | `ClipboardService` | CF_UNICODETEXT and CF_HTML, `AddClipboardFormatListener` |
 | `notification` | `NotificationManagerService`, `NotificationIcons`, `NotificationStore` | toasts of `Gesher.App.<package>` (WinRT `ToastNotificationManager`), `HKCU\Software\Classes\AppUserModelId\<id>` with `CustomActivator`; Gesher's toast activator (COM, `devsvc_activator.c`; the installer's LocalServer32 runs `gesher-app toast-activated`) |
 | `power` | `PowerManagerService` | `PowerCreateRequest`/`PowerSetRequest` (wake locks), battery saver, PBT_APMSUSPEND/RESUME (screen off/on) |
@@ -188,6 +211,16 @@ Behaviour, in short (details in the classes' comments and ADR 0038):
   full, battery not present.
 - Vibrator: `vibrator_manager` of a device without one: no ids,
   `hasVibrator()` false, the null vibrator, vibrate/cancel accepted.
+- USB: `usb` as AOSP's UsbService runs on an emulator without USB (SystemServer
+  starts it with `android.hardware.usb.host`/`accessory` or `Build.IS_EMULATOR`; a
+  non-emulator without either feature has no service and `getSystemService` answers
+  null). Gesher declares neither feature but registers the service, since phone apps
+  use the manager unchecked: an empty `getDeviceList()`, a null `getAccessoryList()`,
+  `openDevice`/`openAccessory` null, no ports (port operations report an internal
+  error), device-mode calls fail as there, MANAGE_USB/ACCESS_MTP calls are
+  system-only, and only the system has device permission. Where AOSP shows SystemUI's
+  UsbPermissionActivity, an app's `requestPermission` is answered at once with
+  `EXTRA_PERMISSION_GRANTED` false. Windows' USB devices are not exposed to apps.
 - Content observers: register/unregister/`notifyChange` with ContentService's
   URI matching, each observer once per change.
 - Sync: apps' sync adapters (services for `android.content.SyncAdapter` with a

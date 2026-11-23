@@ -489,6 +489,7 @@ class Codec {
     if (mime.empty()) AMediaFormat_setString(format.get(), "mime", entry_.mime.c_str());
     if (entry_.encoder && !ConfigureEncoder(format, error)) return false;
     input_format_ = std::move(format);
+    video_scaling_mode_ = 1;
     if (entry_.encoder) {
       BeginMetricsLocked();
       configured_ = true;
@@ -650,6 +651,15 @@ class Codec {
     return true;
   }
 
+  bool SetVideoScalingMode(int mode) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (released_) return false;
+    // As on Android, a valid call before an output Surface exists has no effect.
+    // Capture the setting with each released frame, not in shared pixel storage.
+    if (has_surface()) video_scaling_mode_ = mode;
+    return true;
+  }
+
   jobject GetMetrics(JNIEnv* env) {
     std::optional<CodecMetrics> metrics;
     bool released;
@@ -727,6 +737,7 @@ class Codec {
     std::lock_guard<std::mutex> lock(mu_);
     retired_input = std::move(input_surface_);
     configured_ = false;
+    video_scaling_mode_ = 1;
     video_enc_.reset();
     audio_enc_.reset();
     surface_frames_.clear();
@@ -892,6 +903,7 @@ class Codec {
     std::unique_ptr<ANativeWindow, decltype(&ANativeWindow_release)> window(
         nullptr, ANativeWindow_release);
     int64_t time_us = 0;
+    int video_scaling_mode = 1;
     uint64_t execution_generation = 0;
     std::shared_ptr<GlobalRef> reader;
     {
@@ -915,6 +927,7 @@ class Codec {
       s.client = false;
       frame = std::move(s.frame);
       time_us = s.time_us;
+      video_scaling_mode = video_scaling_mode_;
       execution_generation = execution_generation_;
       if (render && window_ != nullptr) {
         // SetSurface can release the codec's reference once mu_ is unlocked.
@@ -933,7 +946,7 @@ class Codec {
     static gesher::perf::Site render_site("MediaCodec: render a frame into its Surface");
     const int64_t render_start = gesher::perf::Now();
     const int delivery_status = window != nullptr
-        ? RenderFrame(window.get(), *frame, timestamp_ns)
+        ? RenderFrame(window.get(), *frame, timestamp_ns, video_scaling_mode)
         : DeliverToReader(reader->get(), *frame, timestamp_ns);
     if (window != nullptr) render_site.Add(gesher::perf::Now() - render_start);
     if (delivery_status == android::NO_INIT) {
@@ -1825,6 +1838,7 @@ class Codec {
   std::atomic<bool> frame_rendered_{false};
   Format input_format_;
   ANativeWindow* window_ = nullptr;
+  int video_scaling_mode_ = 1;
   Slot inputs_[kSlots];
   Slot outputs_[kSlots];
   std::deque<int> work_;   // queued inputs, in order
@@ -2132,7 +2146,16 @@ void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobj
     jniThrow(env, "java/lang/IllegalStateException", "setParameters() after release()");
   }
 }
-void JNICALL MC_setVideoScalingMode(JNIEnv*, jobject, jint) {}
+void JNICALL MC_setVideoScalingMode(JNIEnv* env, jobject thiz, jint mode) {
+  auto c = GetCodec(env, thiz);
+  if (c == nullptr) return;
+  if (mode != 1 && mode != 2) {
+    jniThrow(env, "java/lang/IllegalArgumentException", "unrecognized video scaling mode");
+    return;
+  }
+  if (!c->SetVideoScalingMode(mode))
+    jniThrow(env, "java/lang/IllegalStateException", "setVideoScalingMode() after release()");
+}
 
 void JNICALL MC_enableOnFrameRenderedListener(JNIEnv* env, jobject thiz, jboolean enable) {
   if (auto c = GetCodec(env, thiz)) c->EnableFrameRendered(enable);

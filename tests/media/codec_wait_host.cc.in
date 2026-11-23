@@ -183,6 +183,7 @@ class Codec {
   std::shared_ptr<void> persistent_input_;
   std::deque<int> surface_frames_, csd_, work_, ready_, config_, pending_config_;
   ANativeWindow* window_ = nullptr;
+  int video_scaling_mode_ = 1;
   std::shared_ptr<int> reader_;
 };
 

@@ -137,8 +137,13 @@ exit 1
         $n.Left.VariablePath.UserPath -eq 'previousMicrogSpoof'
     }, $true)
     Assert-Install ($null -ne $boundary) 'The production VM invocation boundary exists'
+    # The block runs the VM through the production Invoke-Dalvikvm, defined above it.
+    $invoke = $appAst.Find({ param($n)
+        $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Dalvikvm'
+    }, $true)
+    Assert-Install ($null -ne $invoke) 'gesher-app.ps1 defines Invoke-Dalvikvm'
     $bridge = Join-Path $work 'invoke-vm.ps1'
-    [IO.File]::WriteAllText($bridge, $appText.Substring($boundary.Extent.StartOffset), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($bridge, $invoke.Extent.Text + "`n" + $appText.Substring($boundary.Extent.StartOffset), [Text.UTF8Encoding]::new($false))
     $bridgeReport = Join-Path $work 'vm-arguments.json'
     $dalvikvm = Join-Path $work 'dalvikvm.ps1'
     Set-Content -LiteralPath $dalvikvm -Encoding UTF8 -Value @'

@@ -901,6 +901,7 @@ class Matcher {
         begin_(begin),
         len_(static_cast<size_t>(end - begin)),
         eflags_(eflags),
+        need_match_span_(!prog.nosub && nmatch != 0),
         track_caps_(!prog.nosub && nmatch > 1 && prog.nsub > 0),
         num_slots_(track_caps_ ? 2 * (prog.nsub + 1) : 0) {}
 
@@ -1279,7 +1280,10 @@ class Matcher {
   int ExecuteNfa(std::vector<int32_t>& out_caps, int32_t& out_start, int32_t& out_end) {
     const size_t ninsns = prog_.insns.size();
     const size_t bytes_per_state = 8 * sizeof(Thread) + 16;
-    if (ninsns > kMaxWorkBytes / bytes_per_state) return kRegEspace;
+    // Keep the original capacity headroom and account for the best-start tag
+    // added to each epsilon visit. Capture dissection still uses its own scratch.
+    const size_t nfa_bytes_per_state = bytes_per_state + sizeof(int32_t);
+    if (ninsns > kMaxWorkBytes / nfa_bytes_per_state) return kRegEspace;
     std::vector<int32_t> slot_of(ninsns, -1);
     std::vector<Thread> curr;
     std::vector<Thread> next;
@@ -1297,24 +1301,31 @@ class Matcher {
     };
 
     std::vector<int32_t> stack;
-    std::vector<uint32_t> eps_vis(ninsns, 0);
-    uint32_t eps_epoch = 0;
+    struct Visit {
+      uint32_t position = 0;
+      int32_t start = 0;
+    };
+    std::vector<Visit> eps_vis(ninsns);
 
     auto add_thread_step = [&](std::vector<Thread>& dst, int32_t seed_pc, int32_t seed_start,
                                size_t pos) {
+      const uint32_t position = static_cast<uint32_t>(pos) + 1;
       stack.clear();
       stack.push_back(seed_pc);
-      ++eps_epoch;
-      if (eps_epoch == 0) {
-        std::fill(eps_vis.begin(), eps_vis.end(), 0);
-        ++eps_epoch;
-      }
 
       while (!stack.empty()) {
         int32_t pc = stack.back();
         stack.pop_back();
-        if (pc < 0 || eps_vis[pc] == eps_epoch) continue;
-        eps_vis[pc] = eps_epoch;
+        if (pc < 0) continue;
+        Visit& visit = eps_vis[pc];
+        // At the same input position, this phase has no capture history: only
+        // the earliest start can win. Retain that traversal across all seeds,
+        // including a newly injected start. A better start must propagate even
+        // if a later-starting thread reached this state first. Execute() bounds
+        // positions to INT32_MAX, so position+1 cannot wrap to the unvisited
+        // zero marker. This also lets the scratch start completely zeroed.
+        if (visit.position == position && visit.start <= seed_start) continue;
+        visit = {position, seed_start};
         const Insn& insn = prog_.insns[pc];
         switch (insn.op) {
           case Op::kJump:
@@ -1367,6 +1378,10 @@ class Matcher {
         add_thread_step(curr, prog_.entry, static_cast<int32_t>(pos), pos);
       }
 
+      // REG_NOSUB and nmatch == 0 request existence only. All public argument
+      // and resource checks have already run, and backreferences use the
+      // separate executor. Observable spans still require leftmost-longest.
+      if (has_match && !need_match_span_) break;
       if (curr.empty() && has_match) break;
       if (pos == len_) break;
 
@@ -1390,7 +1405,8 @@ class Matcher {
       // Both NFA phases coexist here. Include vector capacity headroom,
       // capture offsets and iterative dissection tasks before input scratch.
       const size_t cap_bytes = num_slots_ * sizeof(int32_t) +
-          ninsns * (2 * bytes_per_state) + prog_.nodes.size() * sizeof(DissectTask);
+          ninsns * (nfa_bytes_per_state + bytes_per_state) +
+          prog_.nodes.size() * sizeof(DissectTask);
       if (cap_bytes > kMaxWorkBytes) return kRegEspace;
       std::vector<int32_t> caps(num_slots_, -1);
       caps[0] = best_start;
@@ -1712,6 +1728,7 @@ class Matcher {
   const char* begin_;
   size_t len_;
   int eflags_;
+  bool need_match_span_;
   bool track_caps_;
   size_t num_slots_;
 };
