@@ -581,6 +581,12 @@ public final class ContactsProviderContractTest {
                 photo.put("mimetype", ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE);
                 photo.put("data15", photos[i]);
                 provider.insert(ContactsContract.Data.CONTENT_URI, photo);
+                try (Cursor c = provider.query(contact, new String[] {"photo_thumb_uri", "photo_uri"},
+                        null, null, null)) {
+                    String expected = Uri.withAppendedPath(contact, "photo").toString();
+                    check(c.moveToFirst() && expected.equals(c.getString(0)) && expected.equals(c.getString(1)),
+                            "ordinary contact metadata points to its stored thumbnail");
+                }
             }
             Uri key = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, keys[0]);
             Uri exact = Uri.withAppendedPath(key, "photo");

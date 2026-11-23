@@ -2632,8 +2632,8 @@ final class ContactsProvider extends ContentProvider {
             update.put("has_phone_number", hasPhone ? 1 : 0);
             update.put("contact_last_updated_timestamp", now);
             if (bestRawId != 0) update.put("name_raw_contact_id", bestRawId);
+            updatePhotoMetadata(db, contactId, update);
             if (ContactsContract.isProfileId(contactId)) {
-                updateProfilePhotoMetadata(db, contactId, update);
                 ProfileStatusUpdates.applyAggregate(db, contactId, update);
             }
             applyNameDerivedFields(update, best.displayName, best.displayNameAlt, best.source);
@@ -2641,7 +2641,7 @@ final class ContactsProvider extends ContentProvider {
         }
     }
 
-    private static void updateProfilePhotoMetadata(SQLiteDatabase db, long contactId, ContentValues values) {
+    private static void updatePhotoMetadata(SQLiteDatabase db, long contactId, ContentValues values) {
         try (Cursor c = db.rawQuery("SELECT _id FROM view_data WHERE contact_id = ? AND mimetype = ?"
                 + " AND data15 IS NOT NULL AND length(data15) > 0"
                 + " ORDER BY is_super_primary DESC, is_primary DESC, _id LIMIT 1",
@@ -2652,7 +2652,8 @@ final class ContactsProvider extends ContentProvider {
                 String thumbnail = Uri.withAppendedPath(contact, "photo").toString();
                 values.put("photo_thumb_uri", thumbnail);
                 long photoId = c.getLong(0);
-                if (hasRemainingRows(db, "profile_display_photos", "data_id = ?", photoId)) {
+                if (ContactsContract.isProfileId(contactId)
+                        && hasRemainingRows(db, "profile_display_photos", "data_id = ?", photoId)) {
                     values.put("photo_file_id", photoId);
                     values.put("photo_uri",
                             ContentUris.withAppendedId(ContactsContract.DisplayPhoto.CONTENT_URI, photoId).toString());
