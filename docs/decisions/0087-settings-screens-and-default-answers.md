@@ -97,16 +97,23 @@ answered true for every requesting app before); installs still need the per-comm
 consent. An INSTALL_PACKAGES holder is always allowed, so its switch is shown fixed on.
 
 Item 4 changes for these screens: a `startActivityForResult` on an app's details is no longer
-answered at once. The request file carries a token (`SettingsResults`), and the Control
-Center reports it (`gesher-app settings-closed`) when the details close; only then does the
-app get its result, so a store re-checking in `onActivityResult` sees the user's decision.
-The result is RESULT_OK where AOSP's screen gives it, Install unknown apps once installs are
-allowed (ExternalSourcesDetails), and RESULT_CANCELED otherwise, as the other details
-screens set no result (from AOSP Settings as known; packages/apps/Settings is not in the
-local AOSP checkout). A request whose details never report is answered after 15 minutes, at
-most 32 wait, and an activity that finished or died meanwhile gets nothing. A request for
-the app already shown joins the open details instead of reopening them. Windows' pages and
-the Control Center's own views still answer RESULT_CANCELED at once.
+answered at once. Each such request gets a token (`SettingsResults`) in a file of its own,
+`data/system/control-panel-results/<token>` holding the package, and the Control Center
+reports the tokens of the package it showed (`gesher-app settings-closed`) when the details
+close; only then does the app get its result, so a store re-checking in `onActivityResult`
+sees the user's decision. The result follows AOSP Settings (as known: packages/apps/Settings
+is not in the local AOSP checkout): ExternalSourcesDetails sets a result only when the user
+turns the switch during the visit, RESULT_OK if the last turn was on and RESULT_CANCELED if
+off, so an app already allowed that is closed without a turn gets RESULT_CANCELED; the other
+details screens set no result (RESULT_CANCELED). The request file stays one package name,
+so a Control Center of an older Gesher still shows the details (it reports nothing; the result
+then comes at the timeout). A request that one for another app replaces before the Control
+Center showed it is answered at once; one for the same app joins the open details. A request
+whose details never report is answered after 15 minutes, at most 32 wait, and an activity
+that finished or died meanwhile gets nothing. Windows' pages and the Control Center's own
+views still answer RESULT_CANCELED at once. `canRequestPackageInstalls` now refuses a caller
+that does not own the package (SecurityException, as AOSP), since its answer reveals the
+user's decision.
 
 Item 5 changes too: StorageStatsService decides usage access as AOSP's checkStatsPermission
 does, from `OP_GET_USAGE_STATS` (MODE_ALLOWED allows, MODE_DEFAULT falls back to holding

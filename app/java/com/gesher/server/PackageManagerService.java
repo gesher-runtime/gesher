@@ -1385,9 +1385,25 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public boolean canRequestPackageInstalls(String packageName, int userId) {
-        if (userId != 0 || packageName == null || isRemovalPending(packageName)) {
-            return false;
+        if (userId != 0 || packageName == null) return false;
+        // As AOSP: the answer is about the caller's own package (it reveals the user's
+        // Install unknown apps decision), so another app's caller is refused.
+        int callingUid = Binder.getCallingUid();
+        if (Binder.getCallingPid() != android.os.Process.myPid()
+                && callingUid != android.os.Process.SYSTEM_UID
+                && callingUid != android.os.Process.ROOT_UID) {
+            ApkPackage owner = get(packageName);
+            if (owner == null || owner.uid() != callingUid) {
+                throw new SecurityException("Caller uid " + callingUid + " does not own package "
+                        + packageName);
+            }
         }
+        return canRequestPackageInstallsInternal(packageName);
+    }
+
+    /** canRequestPackageInstalls for the server's own use (no caller to check). */
+    boolean canRequestPackageInstallsInternal(String packageName) {
+        if (packageName == null || isRemovalPending(packageName)) return false;
         if ("android".equals(packageName)) {
             return true;
         }

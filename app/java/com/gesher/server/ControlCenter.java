@@ -18,8 +18,9 @@ import java.nio.file.StandardCopyOption;
  * ({@link SettingsIntents}).
  *
  * <p>The app goes in {@code system/control-panel-request} (one package name, validated by
- * the caller, and for a startActivityForResult a tab and the {@link SettingsResults} token
- * the Control Center reports when the app's details close); the Control Center reads and deletes it as it starts and on its live-refresh
+ * the caller; for a startActivityForResult, a {@link #RESULTS} file holds the
+ * {@link SettingsResults} token the Control Center reports when the app's details close);
+ * the Control Center reads and deletes it as it starts and on its live-refresh
  * timer, so a Control Center already open shows the app too. ShellExecute takes no
  * arguments here ({@link WindowsHost#openUrl}), so the Control Center is opened through a
  * shortcut to {@code gesher-launch.exe control-panel} that this class keeps next to the
@@ -31,31 +32,58 @@ final class ControlCenter {
 
     static final String REQUEST = "system/control-panel-request";
     static final String SHORTCUT = "system/gesher-control-panel.lnk";
+    /**
+     * Requests awaiting their result (SettingsResults): one file per token, named by it and
+     * holding the package. The request file itself stays one package name, so a Control
+     * Center of an older Gesher still shows the details (it reports nothing: the result then
+     * comes at the timeout); a current one takes the files of the package it shows.
+     */
+    static final String RESULTS = "system/control-panel-results";
 
+    /** Opens the Control Center for a request awaiting a result. */
+    interface Opener {
+        /**
+         * @param replaced told the tokens of requests for other packages that this one
+         *     replaced before the Control Center showed them: they will not be shown
+         */
+        boolean open(String packageName, String token, java.util.function.Consumer<String> replaced);
+    }
+
+    private static final java.util.function.Predicate<String> HOST_OPEN =
+            pkg -> openOnHost(pkg, null, null);
     /** Replaced by tests: opens the Control Center on a package (null: its main view). */
-    static volatile java.util.function.Predicate<String> sOpen = pkg -> openOnHost(pkg, null);
+    static volatile java.util.function.Predicate<String> sOpen = HOST_OPEN;
     /** Replaced by tests: opens it on a package for a request awaiting its result token. */
-    static volatile java.util.function.BiPredicate<String, String> sOpenForResult =
-            ControlCenter::openOnHost;
+    static volatile Opener sOpenForResult = ControlCenter::openOnHost;
 
     static boolean open(String packageName) {
-        return open(packageName, null);
+        return open(packageName, null, null);
     }
 
     /** With a token (SettingsResults), the Control Center reports when the details close. */
-    static boolean open(String packageName, String token) {
+    static boolean open(String packageName, String token,
+            java.util.function.Consumer<String> replaced) {
         try {
-            if (token == null) return sOpen.test(packageName);
-            // SettingsResults.validToken, kept here: the host request test builds this class alone.
-            if (packageName == null || !token.matches("[0-9a-f]{32}")) return false;
-            return sOpenForResult.test(packageName, token);
+            if (token == null) {
+                java.util.function.Predicate<String> open = sOpen;
+                return open == HOST_OPEN ? openOnHost(packageName, null, replaced)
+                        : open.test(packageName);
+            }
+            if (packageName == null || !validToken(token)) return false;
+            return sOpenForResult.open(packageName, token, replaced);
         } catch (RuntimeException | LinkageError e) {
             SystemServer.log("Control Center: " + e);
             return false;
         }
     }
 
-    private static synchronized boolean openOnHost(String packageName, String token) {
+    /** SettingsResults.validToken, kept here: the host request test builds this class alone. */
+    static boolean validToken(String token) {
+        return token != null && token.matches("[0-9a-f]{32}");
+    }
+
+    private static synchronized boolean openOnHost(String packageName, String token,
+            java.util.function.Consumer<String> replaced) {
         File request = new File(Device.dataDir(), REQUEST);
         String exe = Zygote.exePath();
         if (exe == null || exe.lastIndexOf('\\') < 0) return false;
@@ -74,10 +102,12 @@ final class ControlCenter {
             SystemServer.log("Control Center: no shortcut: 0x" + Integer.toHexString(hr));
             return false;
         }
+        File results = new File(Device.dataDir(), RESULTS);
         try {
-            writeRequest(request, packageName, token);
+            publishRequest(request, results, packageName, token, replaced);
         } catch (IOException e) {
             SystemServer.log("Control Center: no request file: " + e);
+            if (token != null) new File(results, token).delete();
             return false;
         }
         boolean opened = false;
@@ -86,37 +116,70 @@ final class ControlCenter {
             return opened;
         } finally {
             // Serialize publication and failure cleanup: never delete a later request.
-            if (!opened) request.delete();
+            if (!opened) {
+                request.delete();
+                if (token != null) new File(results, token).delete();
+            }
         }
+    }
+
+    /**
+     * Publishes a request: its token file first (the Control Center may take the request at
+     * once), then the request file. The token files of other packages are requests the new
+     * one replaces before they were shown: they are removed and told to {@code replaced}.
+     * A request for the same package keeps them (its details take them all).
+     */
+    static synchronized void publishRequest(File request, File results, String packageName,
+            String token, java.util.function.Consumer<String> replaced) throws IOException {
+        if (token != null) {
+            if (packageName == null || !validToken(token)) throw new IOException("invalid token");
+            writeAtomically(new File(results, token), packageName);
+        }
+        File[] waiting = results.listFiles();
+        if (waiting != null) {
+            for (File file : waiting) {
+                String name = file.getName();
+                if (!validToken(name) || name.equals(token)) continue;
+                String owner;
+                try {
+                    owner = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim();
+                } catch (IOException e) {
+                    continue;  // taken by the Control Center meanwhile
+                }
+                if (owner.equals(packageName)) continue;
+                if (file.delete() && replaced != null) replaced.accept(name);
+            }
+        }
+        writeRequest(request, packageName);
+    }
+
+    /** The request's result was answered (or timed out): its token file goes. */
+    static void forgetResult(String token) {
+        if (validToken(token)) new File(new File(Device.dataDir(), RESULTS), token).delete();
     }
 
     /** The request: one line, the package (empty for the main view); replaced atomically. */
     static synchronized void writeRequest(File request, String packageName) throws IOException {
-        writeRequest(request, packageName, null);
+        writeAtomically(request, packageName);
     }
 
-    /** One line: the package, then a tab and the result token when there is one. */
-    static synchronized void writeRequest(File request, String packageName, String token)
-            throws IOException {
-        File dir = request.getParentFile();
+    /** One line, replaced atomically. */
+    private static void writeAtomically(File target, String line) throws IOException {
+        File dir = target.getParentFile();
         if (dir != null && !dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
             throw new IOException("cannot create " + dir);
         }
-        File temp = File.createTempFile(request.getName() + ".", ".tmp", dir);
+        File temp = File.createTempFile(target.getName() + ".", ".tmp", dir);
         try {
             try (FileOutputStream out = new FileOutputStream(temp)) {
-                out.write((packageName == null ? "" : packageName).getBytes(StandardCharsets.UTF_8));
-                if (token != null && packageName != null) {
-                    out.write('\t');
-                    out.write(token.getBytes(StandardCharsets.UTF_8));
-                }
+                out.write((line == null ? "" : line).getBytes(StandardCharsets.UTF_8));
                 out.write('\n');
             }
             try {
-                Files.move(temp.toPath(), request.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE,
                         StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException e) {
-                Files.move(temp.toPath(), request.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         } finally {
             temp.delete();

@@ -22,7 +22,8 @@ if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 foreach ($name in 'ConvertFrom-SpecialAccessOutput', 'Invoke-PanelSpecialAccess', 'Start-PanelSpecialAccess',
         'Test-PanelSpecialAccessDone', 'Receive-PanelSpecialAccess', 'Clear-PanelSpecialAccessWorkers',
         'Test-PanelPackageName', 'Test-PanelSpecialAccessOp', 'Read-AppSpecialAccessResult',
-        'Read-SetSpecialAccessResult', 'Get-AppSpecialAccess', 'Set-AppSpecialAccess', 'ConvertFrom-PanelRequest') {
+        'Read-SetSpecialAccessResult', 'Get-AppSpecialAccess', 'Set-AppSpecialAccess', 'ConvertFrom-PanelRequest',
+        'Receive-PanelResultTokens', 'Write-PanelLog') {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -126,6 +127,7 @@ Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' 'android:manage
 Set-Item function:Invoke-PanelSpecialAccess $production
 $here = Join-Path ([IO.Path]::GetTempPath()) ('gesher-special-access-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $here | Out-Null
+$script:PanelLogFile = Join-Path $here 'logs/control-panel.log'
 try {
     [IO.File]::WriteAllText((Join-Path $here 'gesher-app.ps1'), @'
 param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @())
@@ -163,6 +165,7 @@ exit 0
     Assert-Access ($answer.ExitCode -eq 0 -and (Read-SetSpecialAccessResult $answer 'android:write_settings') -eq $true) 'The worker brings the launcher''s answer'
     $broken = [PSCustomObject]@{ PowerShell = [PowerShell]::Create(); Handle = $null }
     Assert-Access ((Receive-PanelSpecialAccess $broken).ExitCode -eq -1) 'A broken worker is a failure, not an exception'
+    Assert-Access ((Test-Path -LiteralPath $script:PanelLogFile) -and ([IO.File]::ReadAllText($script:PanelLogFile) -match 'special access: ')) 'A broken worker is logged'
     # Orphans of a closed dialog are disposed once they finish.
     $script:OrphanSpecialAccessWorkers.Add((Start-PanelSpecialAccess @('com.example.app')))
     Clear-PanelSpecialAccessWorkers
@@ -193,13 +196,26 @@ Start-Sleep -Seconds 60
     Remove-Item -LiteralPath $here -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Requests carry a result token for an app that waits (SettingsResults.java).
-$parsedRequest = ConvertFrom-PanelRequest "com.example.app`t0123456789abcdef0123456789abcdef"
-Assert-Access ($parsedRequest.Package -eq 'com.example.app' -and $parsedRequest.Token -eq '0123456789abcdef0123456789abcdef') 'A request with a token is read'
-Assert-Access ((ConvertFrom-PanelRequest 'com.example.app').Token -eq $null) 'A request without a token is read'
-foreach ($bad in "com.example.app`tABCDEF0123456789ABCDEF0123456789", "com.example.app`t../x", "com.example.app`t", '../evil', '') {
+# A request names one package; the results of requests that wait for the details are one
+# file per token holding the package (ControlCenter.java), taken for the package shown.
+Assert-Access ((ConvertFrom-PanelRequest 'com.example.app').Package -eq 'com.example.app') 'A request is read'
+foreach ($bad in "com.example.app`t0123456789abcdef0123456789abcdef", '../evil', 'single', '') {
     Assert-Access ($null -eq (ConvertFrom-PanelRequest $bad)) "A malformed request is refused: $bad"
 }
+$script:PanelResultsDir = Join-Path ([IO.Path]::GetTempPath()) ('gesher-panel-results-' + [guid]::NewGuid().ToString('N'))
+try {
+    Assert-Access (@(Receive-PanelResultTokens 'com.example.app').Count -eq 0) 'No results directory, no tokens'
+    New-Item -ItemType Directory -Path $script:PanelResultsDir | Out-Null
+    $mine = '0123456789abcdef0123456789abcdef', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    foreach ($token in $mine) { [IO.File]::WriteAllText((Join-Path $script:PanelResultsDir $token), "com.example.app`n") }
+    [IO.File]::WriteAllText((Join-Path $script:PanelResultsDir 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'), "com.example.other`n")
+    [IO.File]::WriteAllText((Join-Path $script:PanelResultsDir 'not-a-token'), "com.example.app`n")
+    [IO.File]::WriteAllText((Join-Path $script:PanelResultsDir 'cccccccccccccccccccccccccccccccc.tmp'), "com.example.app`n")
+    $taken = @(Receive-PanelResultTokens 'com.example.app')
+    Assert-Access ((@($taken | Sort-Object) -join ',') -eq (@($mine | Sort-Object) -join ',')) "The package's tokens are taken: $($taken -join ',')"
+    Assert-Access (-not (Test-Path (Join-Path $script:PanelResultsDir $mine[0])) -and (Test-Path (Join-Path $script:PanelResultsDir 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))) 'Taken files go; another app''s stay'
+    Assert-Access (@(Receive-PanelResultTokens 'com.example.app').Count -eq 0) 'A token is taken once'
+} finally { Remove-Item -LiteralPath $script:PanelResultsDir -Recurse -Force -ErrorAction SilentlyContinue }
 
 # The App info dialog's switches in actual WPF, through the production background
 # polling: shown at once while loading, a switch disabled while its change runs, the

@@ -151,10 +151,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (results != null) return results;
         synchronized (mSettingsResultsLock) {
             if (mSettingsResults == null) {
-                mSettingsResults = new SettingsResults((pending, code) -> deliverResult(
-                        (ActivityRecord) pending.source, pending.resultWho, pending.requestCode,
-                        code, null, (ProcessRecord) pending.process),
-                        pkg -> mPm.canRequestPackageInstalls(pkg, 0));
+                mSettingsResults = new SettingsResults((pending, code) -> {
+                    ControlCenter.forgetResult(pending.token);
+                    deliverResult((ActivityRecord) pending.source, pending.resultWho,
+                            pending.requestCode, code, null, (ProcessRecord) pending.process);
+                });
             }
             return mSettingsResults;
         }
@@ -164,6 +165,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     public int settingsScreensClosed(String[] tokens) {
         SettingsResults results = mSettingsResults;
         return results == null ? 0 : results.closed(tokens);
+    }
+
+    /** The user turned a special access switch in the Control Center (SpecialAccess). */
+    public void specialAccessToggled(String packageName, String opName, boolean allowed) {
+        SettingsResults results = mSettingsResults;
+        if (results != null) results.toggled(packageName, opName, allowed);
     }
 
     /** STARTED: made visible again without being resumed (StartActivityItem). */
@@ -2516,8 +2523,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                     source.app, resultWho, requestCode, action,
                                     settings.packageName))
                             : null;
+                    // Waiting requests of other apps this one replaces before they were
+                    // shown are answered now: their details will not open.
+                    java.util.function.Consumer<String> replaced = old -> {
+                        SettingsResults results = mSettingsResults;
+                        if (results != null) results.closed(new String[] {old});
+                    };
                     boolean opened = settings.controlCenter
-                            ? ControlCenter.open(settings.packageName, token)
+                            ? ControlCenter.open(settings.packageName, token, replaced)
                             : sOpenSettingsPage.test(settings.windowsUri);
                     SystemServer.log("startActivity: " + action + ": " + settings
                             + (opened ? " opened" : " unavailable")

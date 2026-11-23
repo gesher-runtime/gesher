@@ -415,7 +415,12 @@ public final class Launcher {
             return 3;
         }
         try {
-            gesher().settingsScreensClosed(tokens.toArray(new String[0]));
+            // The device takes at most 32 tokens a call (SettingsResults.MAX_PENDING).
+            GesherService.Client gesher = gesher();
+            for (int from = 0; from < tokens.size(); from += 32) {
+                gesher.settingsScreensClosed(tokens.subList(from, Math.min(tokens.size(), from + 32))
+                        .toArray(new String[0]));
+            }
         } catch (UnsupportedOperationException e) {
             log(e.getMessage());
             return 4;

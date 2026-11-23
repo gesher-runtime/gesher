@@ -474,6 +474,8 @@ public final class SystemServer {
         @Override
         public String setSpecialAccess(String packageName, String opName, boolean allowed) {
             SpecialAccess.Entry entry = SpecialAccess.set(mServices.pm, packageName, opName, allowed);
+            // A screen waiting for its result answers the user's last turn (SettingsResults).
+            mServices.atm.specialAccessToggled(packageName, opName, allowed);
             log("special access: " + packageName + " " + entry.row().replace('\t', ' ')
                     + " (the user's choice in the Control Center)");
             return entry.row();

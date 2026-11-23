@@ -117,7 +117,7 @@ final class SpecialAccess {
     /** What the app's own check answers (Environment, Settings, PackageManager...). */
     private static boolean allowed(PackageManagerService pm, ApkPackage pkg, Kind kind) {
         if (kind.op == AppOpsManager.OP_REQUEST_INSTALL_PACKAGES) {
-            return pm.canRequestPackageInstalls(pkg.packageName, 0);
+            return pm.canRequestPackageInstallsInternal(pkg.packageName);
         }
         int mode = pm.appOps().checkRawMode(kind.op, pkg.uid(), pkg.packageName);
         if (mode == AppOpsManager.MODE_DEFAULT) {

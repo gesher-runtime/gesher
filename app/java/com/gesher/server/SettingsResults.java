@@ -25,10 +25,12 @@ import java.util.concurrent.TimeUnit;
  * re-checks then (its onActivityResult, and the onResume around it). Here the result waits
  * for the Control Center: each request carries a token in its request file
  * ({@link ControlCenter}), and the Control Center reports the token when the details it
- * showed for it close ({@code gesher-app settings-closed}). The result is computed at that
- * moment ({@link #resultCode}): RESULT_OK only where AOSP's screen answers it, Install
- * unknown apps (ExternalSourcesDetails) once the app may request installs; RESULT_CANCELED
- * otherwise, as the other details screens set no result.
+ * showed for it close ({@code gesher-app settings-closed}). The result is what AOSP's screen
+ * answers ({@link #resultCode}): Install unknown apps (ExternalSourcesDetails) sets a result
+ * only when the user turns its switch during the visit, RESULT_OK if the last turn was on and
+ * RESULT_CANCELED if off ({@link #toggled}); a visit without a turn, and the other details
+ * screens, which set no result, answer RESULT_CANCELED. A request that a later one for
+ * another app replaced before it was shown is answered at once ({@link ControlCenter}).
  *
  * <p>Nothing waits forever: a request whose details never report (a Control Center that
  * crashed, or a request it never read) is answered after {@link #TIMEOUT_MS}, and at most
@@ -48,7 +50,10 @@ final class SettingsResults {
         final int requestCode;
         final String action;
         final String packageName;
+        String token;
         ScheduledFuture<?> timeout;
+        /** The last turn of the screen's switch during the visit (null: none). */
+        Boolean toggle;
 
         Pending(Object source, Object process, String resultWho, int requestCode, String action,
                 String packageName) {
@@ -66,26 +71,18 @@ final class SettingsResults {
         void deliver(Pending pending, int resultCode);
     }
 
-    /** Whether the screen's app may request installs now (canRequestPackageInstalls). */
-    interface InstallAccess {
-        boolean canRequestInstalls(String packageName);
-    }
-
     private final Map<String, Pending> mPending = new LinkedHashMap<>();
     private final Delivery mDelivery;
-    private final InstallAccess mInstalls;
     private final ScheduledExecutorService mTimer;
     private final long mTimeoutMs;
     private final SecureRandom mRandom = new SecureRandom();
 
-    SettingsResults(Delivery delivery, InstallAccess installs) {
-        this(delivery, installs, newTimer(), TIMEOUT_MS);
+    SettingsResults(Delivery delivery) {
+        this(delivery, newTimer(), TIMEOUT_MS);
     }
 
-    SettingsResults(Delivery delivery, InstallAccess installs, ScheduledExecutorService timer,
-            long timeoutMs) {
+    SettingsResults(Delivery delivery, ScheduledExecutorService timer, long timeoutMs) {
         mDelivery = delivery;
-        mInstalls = installs;
         mTimer = timer;
         mTimeoutMs = timeoutMs;
     }
@@ -105,17 +102,31 @@ final class SettingsResults {
         return token != null && token.matches("[0-9a-f]{32}");
     }
 
+    static final String UNKNOWN_SOURCES = "android.settings.MANAGE_UNKNOWN_APP_SOURCES";
+
     /** The result the screen answers now. */
     int resultCode(Pending pending) {
-        if ("android.settings.MANAGE_UNKNOWN_APP_SOURCES".equals(pending.action)
-                && pending.packageName != null) {
-            try {
-                if (mInstalls.canRequestInstalls(pending.packageName)) return Activity.RESULT_OK;
-            } catch (RuntimeException e) {
-                SystemServer.log("settings result: " + e);
+        synchronized (mPending) {
+            return UNKNOWN_SOURCES.equals(pending.action) && Boolean.TRUE.equals(pending.toggle)
+                    ? Activity.RESULT_OK : Activity.RESULT_CANCELED;
+        }
+    }
+
+    /**
+     * The user turned a special access switch (the Control Center's details): the waiting
+     * requests of that app's screen for it remember the last turn (ExternalSourcesDetails'
+     * setResult on a change).
+     */
+    void toggled(String packageName, String opName, boolean allowed) {
+        if (!"android:request_install_packages".equals(opName)) return;
+        synchronized (mPending) {
+            for (Pending pending : mPending.values()) {
+                if (UNKNOWN_SOURCES.equals(pending.action) && pending.packageName != null
+                        && pending.packageName.equals(packageName)) {
+                    pending.toggle = allowed;
+                }
             }
         }
-        return Activity.RESULT_CANCELED;
     }
 
     /** Registers a request before the Control Center can see it; returns its token. */
@@ -132,6 +143,7 @@ final class SettingsResults {
                 evicted.add(oldest.next().getValue());
                 oldest.remove();
             }
+            pending.token = key;
             mPending.put(key, pending);
             pending.timeout = mTimer.schedule(() -> answer(key), mTimeoutMs, TimeUnit.MILLISECONDS);
         }

@@ -30,6 +30,14 @@ public final class PackageServiceQueriesTest {
         checks++;
     }
 
+    /** The install policy without the Binder caller check (SpecialAccessTest covers that). */
+    private static boolean installs(PackageManagerService service, String name) throws Exception {
+        java.lang.reflect.Method method = PackageManagerService.class
+                .getDeclaredMethod("canRequestPackageInstallsInternal", String.class);
+        method.setAccessible(true);
+        return (Boolean) method.invoke(service, name);
+    }
+
     private static void field(Object target, String name, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
@@ -113,19 +121,19 @@ public final class PackageServiceQueriesTest {
         // (OP_REQUEST_INSTALL_PACKAGES): SpecialAccessTest covers it with real AppOps policy.
         PackageImpl installer = (PackageImpl) packages.get("fixture.one").parsed;
         installer.setTargetSdkVersion(android.os.Build.VERSION_CODES.O - 1);
-        require(!service.canRequestPackageInstalls("fixture.one", 0),
+        require(!installs(service, "fixture.one"),
                 "Installer targeting pre-O Android acquired the O-only capability");
         installer.setTargetSdkVersion(android.os.Build.VERSION_CODES.O);
-        require(!service.canRequestPackageInstalls("fixture.two", 0)
-                        && !service.canRequestPackageInstalls("fixture.absent", 0)
+        require(!installs(service, "fixture.two")
+                        && !installs(service, "fixture.absent")
                         && !service.canRequestPackageInstalls(null, 0)
                         && !service.canRequestPackageInstalls("fixture.one", 10),
                 "Package without permission, unknown package, null or secondary user could request installs");
-        require(service.canRequestPackageInstalls("android", 0)
+        require(installs(service, "android")
                         && !service.canRequestPackageInstalls("android", 10),
                 "Platform package install-request status broke");
         removing.put("fixture.one", packages.get("fixture.one"));
-        require(!service.canRequestPackageInstalls("fixture.one", 0),
+        require(!installs(service, "fixture.one"),
                 "Package pending removal could still request installs");
         removing.clear();
 

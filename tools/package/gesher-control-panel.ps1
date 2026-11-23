@@ -25,6 +25,9 @@ $script:UpdateDirectory = Join-Path $root 'updates'
 # new one. "Reopen" after an update starts the new version while the old one is still
 # open: GESHER_PANEL_REOPEN lets that start through.
 $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
+# Requests waiting for their result: one file per token, holding the package (ControlCenter.java).
+$script:PanelResultsDir = Join-Path $root 'data/system/control-panel-results'
+$script:PanelLogFile = Join-Path $root 'logs/control-panel.log'
 $script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
 # Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
@@ -805,12 +808,24 @@ function Test-PanelSpecialAccessDone($worker) {
     return [bool]$worker.Handle.IsCompleted
 }
 
+# A diagnostic line in logs\control-panel.log; never fails the caller.
+function Write-PanelLog([string] $message) {
+    try {
+        $directory = Split-Path -Parent $script:PanelLogFile
+        if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+        [IO.File]::AppendAllText($script:PanelLogFile,
+            "$([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss')) $message`r`n", [Text.UTF8Encoding]::new($false))
+    } catch { }
+}
+
 function Receive-PanelSpecialAccess($worker) {
     try {
         $results = @($worker.PowerShell.EndInvoke($worker.Handle))
+        foreach ($failure in @($worker.PowerShell.Streams.Error)) { Write-PanelLog "special access: $failure" }
         $last = if ($results.Count) { $results[-1] } else { $null }
         if ($last -and $last.PSObject.Properties['ExitCode']) { return $last }
-    } catch { }
+        Write-PanelLog 'special access: the background query returned no result'
+    } catch { Write-PanelLog "special access: $($_.Exception.Message)" }
     finally { try { $worker.PowerShell.Dispose() } catch { } }
     return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
 }
@@ -873,14 +888,28 @@ function Send-PanelSettingsClosed([string[]] $tokens) {
     try { ([System.Diagnostics.Process]::Start($info)).Dispose() } catch { }
 }
 
-# A request from the system server: the package, and the result token of an app waiting
-# for the screen's result. $null for anything else.
+# A request from the system server: one package name. $null for anything else.
 function ConvertFrom-PanelRequest([string] $text) {
     if ($null -eq $text) { return $null }
-    if ($text -cmatch '^([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)(?:\t([0-9a-f]{32}))?$' -and $Matches[1].Length -le 255) {
-        return [PSCustomObject]@{ Package = $Matches[1]; Token = $(if ($Matches[2]) { $Matches[2] } else { $null }) }
+    if ($text -cmatch '^([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)$' -and $Matches[1].Length -le 255) {
+        return [PSCustomObject]@{ Package = $Matches[1] }
     }
     return $null
+}
+
+# Takes the result tokens of the requests waiting for this package's details: each a file
+# named by its token, holding the package. Taken files are removed (reported on close).
+function Receive-PanelResultTokens([string] $pkg) {
+    $tokens = [Collections.Generic.List[string]]::new()
+    if (-not $pkg -or -not (Test-Path -LiteralPath $script:PanelResultsDir)) { return $tokens.ToArray() }
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:PanelResultsDir -File -ErrorAction SilentlyContinue)) {
+        if ($file.Name -cnotmatch '^[0-9a-f]{32}$') { continue }
+        try { $owner = [IO.File]::ReadAllText($file.FullName).Trim() } catch { continue }
+        if ($owner -cne $pkg) { continue }
+        try { [IO.File]::Delete($file.FullName) } catch { continue }
+        $tokens.Add($file.Name)
+    }
+    return $tokens.ToArray()
 }
 
 # FromList: the user opened it from the app list, rather than an app from Settings' screens.
@@ -928,17 +957,15 @@ function Invoke-PanelRequest {
     # in progress keeps the request until it ends.
     $request = $null
     if ($script:ShowingAppInfo -and $script:ShowingPackage -and -not $script:IsBusy) {
-        # Only a request for the app shown is taken now; another one waits for the dialog.
+        # New requests for the app shown join these details; another app's waits for them.
+        foreach ($token in (Receive-PanelResultTokens $script:ShowingPackage)) { $script:ShowingTokens.Add($token) }
         $pending = $null
         try { $pending = ConvertFrom-PanelRequest ([IO.File]::ReadAllText($script:PanelRequestFile).Trim()) } catch { }
         if ($pending -and $pending.Package -ceq $script:ShowingPackage) {
             $taken = ConvertFrom-PanelRequest (Read-PanelRequest)
             if ($taken -and $taken.Package -ceq $script:ShowingPackage) {
-                if ($taken.Token) { $script:ShowingTokens.Add($taken.Token) }
+                foreach ($token in (Receive-PanelResultTokens $script:ShowingPackage)) { $script:ShowingTokens.Add($token) }
                 $raise = $true
-            } elseif ($taken -and $taken.Token) {
-                # Replaced meanwhile by a request for another app: answer it rather than lose it.
-                Send-PanelSettingsClosed @($taken.Token)
             }
         }
     } elseif (-not $script:IsBusy -and -not $script:ShowingAppInfo) { $request = Read-PanelRequest }
@@ -956,7 +983,7 @@ function Invoke-PanelRequest {
         $script:ShowingAppInfo = $true
         $script:ShowingPackage = $parsed.Package
         $script:ShowingTokens.Clear()
-        if ($parsed.Token) { $script:ShowingTokens.Add($parsed.Token) }
+        foreach ($token in (Receive-PanelResultTokens $parsed.Package)) { $script:ShowingTokens.Add($token) }
         try { Show-AppInfoDialog $parsed.Package }
         finally {
             $tokens = $script:ShowingTokens.ToArray()
@@ -1369,16 +1396,11 @@ function Show-ModernConfirmDialog {
         $dialog.FindName('SwitchTitle').Text = Get-GesherText 'cp_access_title'
         $switchStatus.Text = Get-GesherText 'cp_access_loading'
         $switchStatus.Visibility = 'Visible'
-        try { $accessState.Query = Start-PanelSpecialAccess @($SpecialAccessPackage) }
-        catch {
-            $switchStatus.Visibility = 'Collapsed'
-            $switchError.Text = Get-GesherText 'cp_access_unavailable'
-            $switchError.Visibility = 'Visible'
-        }
         $accessTimer = [System.Windows.Threading.DispatcherTimer]::new()
         $accessTimer.Interval = [TimeSpan]::FromMilliseconds(100)
         $accessTimer.Add_Tick({
             if ($accessState.Closed) { return }
+            try {
             if ($accessState.Query -and (Test-PanelSpecialAccessDone $accessState.Query)) {
                 $switches = Read-AppSpecialAccessResult (Receive-PanelSpecialAccess $accessState.Query)
                 $accessState.Query = $null
@@ -1439,6 +1461,13 @@ function Show-ModernConfirmDialog {
                     $change.Box.IsChecked = [bool]$state
                 }
             }
+            } catch {
+                # A failure here must not leave the dialog loading forever or end the panel.
+                Write-PanelLog "special access dialog: $($_.Exception.Message)"
+                $switchStatus.Visibility = 'Collapsed'
+                $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                $switchError.Visibility = 'Visible'
+            }
         })
         $dialog.Add_Closed({
             $accessTimer.Stop()
@@ -1448,7 +1477,20 @@ function Show-ModernConfirmDialog {
             foreach ($change in @($accessState.Pending.Values)) { $script:OrphanSpecialAccessWorkers.Add($change.Worker) }
             $accessState.Pending.Clear()
         })
-        $accessTimer.Start()
+        # Nothing runs before the dialog is shown: an error before ShowDialog leaves no
+        # timer or background query behind.
+        $dialog.Add_Loaded({
+            if ($accessState.Closed) { return }
+            try { $accessState.Query = Start-PanelSpecialAccess @($SpecialAccessPackage) }
+            catch {
+                Write-PanelLog "special access: $($_.Exception.Message)"
+                $switchStatus.Visibility = 'Collapsed'
+                $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                $switchError.Visibility = 'Visible'
+                return
+            }
+            $accessTimer.Start()
+        })
     }
 
     $btnConfirm = $dialog.FindName('BtnConfirm')

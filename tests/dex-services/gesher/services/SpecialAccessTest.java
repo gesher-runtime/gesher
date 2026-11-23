@@ -263,6 +263,10 @@ public final class SpecialAccessTest {
             setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
             check(pm.canRequestPackageInstalls(APP, 0), "canRequestPackageInstalls follows Install unknown apps");
             check(!pm.canRequestPackageInstalls(APP, 10), "Only the one user");
+            // The answer reveals a user decision: only the package's own caller may ask (AOSP).
+            as(APP_UID, APP_PID, () -> check(pm.canRequestPackageInstalls(APP, 0), "An app may ask about itself"));
+            as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> pm.canRequestPackageInstalls(PLAIN, 0)));
+            as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> pm.canRequestPackageInstalls("fixture.absent", 0)));
             setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, false);
             check(!pm.canRequestPackageInstalls(APP, 0), "Turning Install unknown apps off is read back");
 
@@ -476,7 +480,9 @@ public final class SpecialAccessTest {
             List<String> plainOpens = new java.util.ArrayList<>();
             openPlain.set(null, (java.util.function.Predicate<String>)pkg -> plainOpens.add(String.valueOf(pkg)));
             List<String> requests = new java.util.ArrayList<>();
-            forResult.set(null, (java.util.function.BiPredicate<String, String>)(pkg, token) -> requests.add(pkg + "\t" + token));
+            java.util.function.Consumer<String>[] lastReplaced = new java.util.function.Consumer[1];
+            forResult.set(null, opener((pkg, token, told) -> { lastReplaced[0] = told; return requests.add(pkg + "\t" + token); }));
+            Method toggled = atm.getClass().getMethod("specialAccessToggled", String.class, String.class, boolean.class);
             Intent unknownSources = new Intent("android.settings.MANAGE_UNKNOWN_APP_SOURCES", android.net.Uri.parse("package:" + APP));
             Object[] status = new Object[1];
             try {
@@ -487,12 +493,14 @@ public final class SpecialAccessTest {
                         "The Control Center request carries a result token: " + requests);
                 check(results.isEmpty(), "No result before the user decided");
                 String token = requests.get(0).substring(APP.length() + 1);
-                // The user turns Install unknown apps on, then closes the details.
+                // The user turns Install unknown apps on, then closes the details (the device
+                // tells the waiting screens of the turn, as PersistentDevice does).
                 setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
+                toggled.invoke(atm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
                 check(atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{token}).equals(1),
                         "The close report is accepted");
                 check(results.size() == 1 && (Integer)get(results.get(0), "mResultCode") == android.app.Activity.RESULT_OK
-                        && (Integer)get(results.get(0), "mRequestCode") == 7, "Install unknown apps, allowed, answers RESULT_OK");
+                        && (Integer)get(results.get(0), "mRequestCode") == 7, "Install unknown apps turned on answers RESULT_OK");
                 check(atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{token}).equals(0)
                         && results.size() == 1, "A result is delivered once");
                 // Left off, or another screen: RESULT_CANCELED, still after the close.
@@ -510,23 +518,67 @@ public final class SpecialAccessTest {
                 set(caller, "finishing", false);
                 Object pendingResults = get(atm, "mSettingsResults");
                 check((Integer)call(pendingResults, "pendingCount") == 0, "Nothing is left waiting");
+                // Already allowed and closed without a turn: RESULT_CANCELED, as AOSP.
+                setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
+                as(APP_UID, APP_PID, () -> start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 12, null));
+                atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{requests.get(3).substring(APP.length() + 1)});
+                check(results.size() == 3 && (Integer)get(results.get(2), "mResultCode") == android.app.Activity.RESULT_CANCELED
+                        && (Integer)get(results.get(2), "mRequestCode") == 12, "An app already allowed, closed without a turn, gets RESULT_CANCELED");
+                // A waiting request that another app's request replaced before it was shown is
+                // answered at once; the newer one keeps waiting.
+                as(APP_UID, APP_PID, () -> start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 13, null));
+                String replacedToken = requests.get(4).substring(APP.length() + 1);
+                as(APP_UID, APP_PID, () -> start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 14, null));
+                check(results.size() == 3, "Both requests wait");
+                lastReplaced[0].accept(replacedToken);
+                check(results.size() == 4 && (Integer)get(results.get(3), "mRequestCode") == 13
+                        && (Integer)get(results.get(3), "mResultCode") == android.app.Activity.RESULT_CANCELED,
+                        "A replaced request is answered at once, not after the timeout");
+                atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{requests.get(5).substring(APP.length() + 1)});
+                check(results.size() == 5 && (Integer)get(results.get(4), "mRequestCode") == 14, "The newer request is answered on its close");
+                setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, false);
                 // A Control Center that does not open: no token kept, the start fails.
-                forResult.set(null, (java.util.function.BiPredicate<String, String>)(pkg, token2) -> false);
+                forResult.set(null, opener((pkg, token2, told) -> false));
                 as(APP_UID, APP_PID, () -> status[0] = start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 10, null));
                 check(Integer.valueOf(android.app.ActivityManager.START_INTENT_NOT_RESOLVED).equals(status[0])
                         && (Integer)call(pendingResults, "pendingCount") == 0, "A request the Control Center never saw is not kept");
                 // Another process's token gets no result at all (the calling-process guard).
-                forResult.set(null, (java.util.function.BiPredicate<String, String>)(pkg, token3) -> requests.add(pkg + "\t" + token3));
+                forResult.set(null, opener((pkg, token3, told) -> requests.add(pkg + "\t" + token3)));
                 int before = requests.size();
                 as(PLAIN_UID, APP_PID + 50, () -> start.invoke(atm, plainThread, unknownSources, null, PLAIN, callerToken, "who", 11, null));
                 check(requests.size() == before && plainOpens.equals(List.of(APP))
-                        && (Integer)call(pendingResults, "pendingCount") == 0 && results.size() == 2,
+                        && (Integer)call(pendingResults, "pendingCount") == 0 && results.size() == 5,
                         "A foreign result token neither waits nor receives a result");
             } finally {
                 forResult.set(null, previousForResult);
                 openPlain.set(null, previousOpen);
                 ((List<Object>)get(atm, "mActivities")).remove(caller);
             }
+
+            // The request files: one token file per waiting request; a request for another
+            // app replaces the unshown ones (told), one for the same app keeps them.
+            File requestFile = new File(directory, "system/control-panel-request");
+            File resultsDir = new File(directory, "system/control-panel-results");
+            Method publish = type("ControlCenter").getDeclaredMethod("publishRequest", File.class, File.class,
+                    String.class, String.class, java.util.function.Consumer.class);
+            publish.setAccessible(true);
+            List<String> told = new java.util.ArrayList<>();
+            java.util.function.Consumer<String> tell = told::add;
+            String ta = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", tb = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tc = "cccccccccccccccccccccccccccccccc";
+            publish.invoke(null, requestFile, resultsDir, "com.example.first", ta, tell);
+            check(new String(java.nio.file.Files.readAllBytes(requestFile.toPath()), "UTF-8").equals("com.example.first\n")
+                    && new File(resultsDir, ta).isFile() && told.isEmpty(), "The request file names the package; its token has a file");
+            publish.invoke(null, requestFile, resultsDir, "com.example.first", tb, tell);
+            check(new File(resultsDir, ta).isFile() && new File(resultsDir, tb).isFile() && told.isEmpty(),
+                    "A second request for the same app keeps the first token");
+            publish.invoke(null, requestFile, resultsDir, "com.example.second", tc, tell);
+            check(!new File(resultsDir, ta).exists() && !new File(resultsDir, tb).exists() && new File(resultsDir, tc).isFile()
+                    && told.size() == 2 && told.containsAll(List.of(ta, tb)), "Another app's request replaces and tells the unshown ones: " + told);
+            publish.invoke(null, requestFile, resultsDir, "com.example.third", null, tell);
+            check(!new File(resultsDir, tc).exists() && told.size() == 3 && told.get(2).equals(tc)
+                    && new String(java.nio.file.Files.readAllBytes(requestFile.toPath()), "UTF-8").equals("com.example.third\n"),
+                    "A request with no token replaces waiting ones too");
+            rejects(java.io.IOException.class, () -> publish.invoke(null, requestFile, resultsDir, "com.example.x", "../evil", tell));
 
             // Persistence: a restarted ledger over the same file has the user's decisions.
             setAccess(pm, APP, AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, true);
@@ -558,6 +610,14 @@ public final class SpecialAccessTest {
             directory.delete();
         }
         return checks;
+    }
+
+    private interface OpenCall { boolean open(String pkg, String token, java.util.function.Consumer<String> replaced); }
+    @SuppressWarnings("unchecked")
+    private static Object opener(OpenCall call) throws Exception {
+        Class<?> type = type("ControlCenter$Opener");
+        return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type},
+                (proxy, method, args) -> call.open((String)args[0], (String)args[1], (java.util.function.Consumer<String>)args[2]));
     }
 
     private static Object clientCall(Object client, String name, Object... args) throws Exception {
