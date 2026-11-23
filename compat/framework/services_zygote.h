@@ -21,7 +21,13 @@ namespace zygote {
 // console or job the starter belongs to. Returns the pid, or -(Win32 error).
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
-          bool breakaway);
+          bool breakaway, uint32_t compiler_memory_mib = 0, uint32_t compiler_cpu_rate = 0);
+
+// Compiler-only wait. Pins the retained creation identity, waits without g_lock,
+// and reaps before returning. -2 deadline, -3 cancellation/low memory, -1 failure.
+int WaitChild(int pid, int64_t start_time, int timeout_ms, intptr_t cancel_event,
+              bool stop_on_low_memory);
+uint64_t AvailableMemory();
 
 // An app process's AppContainer (app_container.h, GESHER_SANDBOX=appcontainer):
 // the profile name (1..64 of [A-Za-z0-9.-]), its display name and the

@@ -265,7 +265,64 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'd1c7f34eb189879e7e68e104448f93830172af1d132439ba5f797ead0eefb1a2'
+OFD_QUALIFICATION_SHA256 = '9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01'
+# PR73 unifies Bionic conversion metadata with the existing shared stream
+# owner. Keep the original OFD receipt and all of its 71 source digests intact.
+# Only this separately pinned four-file transition may be reversed to main's
+# exact bytes before the unchanged OFD and supplier checks run. It neither
+# qualifies Windows execution nor replaces review of the production delta.
+SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
+SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
+SHARED_STDIO_TRANSITION_SHA256 = '6de1e4d1363de0477e9c89aec4ae4b9b16cd1ee5b2bd1c002d626e5e129dd443'
+SHARED_STDIO_PATHS = (
+ 'compat/bionic/stdio_bionic.cc',
+ 'compat/posix/include/gesher/stdio.h',
+ 'compat/posix/include/stdio.h',
+ 'compat/posix/src/stdio_output.cc',
+)
+
+def preceding_shared_stdio_sources(qualification):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'shared-stdio-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==SHARED_STDIO_TRANSITION_SHA256,'shared-stdio source transition changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'baseline','feature_head','baseline_policy_sha256','paths',
+                         'before_sha256','after_sha256','patch_sha256'},'shared-stdio transition schema changed'
+ assert transition['baseline']==SHARED_STDIO_BASE,'shared-stdio baseline changed'
+ assert transition['feature_head']==SHARED_STDIO_FEATURE_HEAD,'shared-stdio feature checkpoint changed'
+ paths=list(SHARED_STDIO_PATHS)
+ assert transition['paths']==paths,'shared-stdio transition paths changed'
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==paths,'shared-stdio endpoint paths changed'
+ baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
+ assert hashlib.sha256(baseline_policy).hexdigest()==transition['baseline_policy_sha256'],'shared-stdio baseline policy changed'
+ patch=(folder/'shared-stdio-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'shared-stdio transition patch changed'
+ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+     ('diff --git a/'+path+' b/'+path).encode() for path in paths],'shared-stdio patch paths changed'
+ current={};baseline={}
+ for path in paths:
+  current[path]=(ROOT/path).read_bytes()
+  assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
+  baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':'+path])
+  assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
+  assert transition['before_sha256'][path]==qualification['source_sha256'][path],path
+  assert current[path]!=baseline[path],('empty shared-stdio transition',path)
+ with tempfile.TemporaryDirectory(prefix='gesher-shared-stdio-qualification-') as temporary:
+  work=Path(temporary)
+  for path in paths:
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(current[path])
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   assert (work/path).read_bytes()==baseline[path],('shared-stdio reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   assert (work/path).read_bytes()==current[path],('shared-stdio forward endpoint',path)
+ return baseline
+
+
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -274,36 +331,20 @@ OFD_QUALIFICATION_SHA256 = 'd1c7f34eb189879e7e68e104448f93830172af1d132439ba5f79
 PROPERTY_REVISION_SHA256 = 'fc2e4d97ee02d1f32e49aeccd648ee386cd44debf9092b4eef48b0c7e2f1499a'
 PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
 PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
-# Recover the exact earlier property revision before replaying its qualification.
-# Supporting read-only AppContainer readers leaves the earlier receipt pinned.
-APPCONTAINER_PROPERTY_PATCH_SHA256 = '3da6f46e88a0845264a3ae077ec3a3654a24edece8b8880154961c17ddd6b1df'
-APPCONTAINER_PROPERTY_SOURCE_SHA256 = {
- 'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
- 'compat/posix/src/system_properties.cc': '561b60eb0bf874438ba65fa8e3b9d5a8bcf3af67589c5a46105c0375fb1bb42b',
-}
-def preceding_logging_property_source():
+def preceding_logging_property_source(source, header_source):
  path='compat/posix/src/system_properties.cc'
+ assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
  header='compat/posix/include/gesher/system_properties.h'
- latest=(ROOT/'tools/net-tcp-priority/qualified/appcontainer-property-source.patch').read_bytes()
- assert hashlib.sha256(latest).hexdigest()==APPCONTAINER_PROPERTY_PATCH_SHA256,'AppContainer property transition changed'
- assert [line.decode().split(' b/',1)[1] for line in latest.splitlines() if line.startswith(b'diff --git ')]==[header,path]
+ assert hashlib.sha256(header_source).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
  patch=(ROOT/'tools/net-tcp-priority/qualified/native13-property-source.patch').read_bytes()
  assert hashlib.sha256(patch).hexdigest()==PROPERTY_REVISION_PATCH_SHA256,'property revision transition changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
  with tempfile.TemporaryDirectory(prefix='gesher-property-qualification-') as temporary:
   work=Path(temporary)
-  for current,digest in APPCONTAINER_PROPERTY_SOURCE_SHA256.items():
-   source=(ROOT/current).read_bytes()
-   assert hashlib.sha256(source).hexdigest()==digest,current
-   (work/current).parent.mkdir(parents=True,exist_ok=True)
-   (work/current).write_bytes(source)
-  reverse=['git','-c','core.autocrlf=false','apply','--reverse','--unidiff-zero']
-  subprocess.run([*reverse,'--check','-'],input=latest,cwd=work,check=True,capture_output=True)
-  subprocess.run([*reverse,'-'],input=latest,cwd=work,check=True,capture_output=True)
-  assert hashlib.sha256((work/path).read_bytes()).hexdigest()==PROPERTY_REVISION_SHA256,path
-  assert hashlib.sha256((work/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
-  subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
-  subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(source)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
   return (work/path).read_bytes()
 # Bionic's independently reviewed memmem search changes only this include and
 # complete wrapper. Restore those exact bytes before applying the UNCHANGED
@@ -355,20 +396,21 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = 'c761a4c5e3f4994b134eab95a4620f84ebb8d99e107ab87564fbaeea7415d43b'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = 'd395d45797bb5d6290e353616ea6568a9b2e51af55363d666765cdfcb8c35e4f'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/binder/binderd.cc': '3011ce2db55d2e129b7cf693064d1f89fbe8398089b7420a7fa88c47559cf8fb',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
+ 'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
  'compat/posix/posix.cmake': 'aafaa8d7fe47db48a52890f70d05495e88726ead08becc8297a08fba09423083',
  'compat/posix/src/binder.cc': 'c949a02add8fdb4102c0248fc796d6a0b39ac20a9ff2a2070455e1b9cd3845d0',
  'compat/posix/src/binder_wire.h': '72aaf4a8dbb26ab151cde349136b8f0f9976819609a0f101df96a2c4cdfe0d69',
  'compat/posix/src/dirent.cc': 'db31cc15b7cc8d8b2ac881a9e4ceee12ba903a9798ce59eaf150e61cc7dcc921',
  'compat/posix/src/errno.cc': 'f2d2e94807fec9abd2e3785994f388538b1dee9abc49a4b2e574cdd594f89238',
  'compat/posix/src/fd.cc': '4f7ab619d769b885e6f54be626567d4df8ec5a2739901b6beba8a2a5548305dc',
- 'compat/posix/src/fsops.cc': '92ccadfd0f52d00e6805db64998792173a9abb997ee60aa023086a2581f95660',
+ 'compat/posix/src/fsops.cc': '7d62a6eb8078e9054c230c0bd20cf5c5c20b4eddcee6ddfc60501dd89a565b4f',
  'compat/posix/src/internal.h': '63d4a1383062aee4d6b96bbbbc0ec1c8858ae2af49d4ebabcaaee9b53d32033f',
  'compat/posix/src/ofd.cc': 'b1d9b541efbd27332d2ea1047f7a98b91101e586b5d04830cf17bfd1ebf4e079',
- 'compat/posix/src/path.cc': 'a3b3a3715887397a08525712bd2bcbbbe61d8b059b1f7fe4311042bad9b3e620',
+ 'compat/posix/src/path.cc': '2dbecc9c23cc6ac43b73aa72651020459d54a5a8684258cf86c95d3275301d84',
  'compat/posix/src/pipe_io.cc': '6df3e0ab8cae3afc9cf6cebc902c5950a7d612bea2745460cdd1447538e6e23b',
  'compat/posix/src/record_lock_descriptors.cc': '3289895673c4f63c98ae1c7434c89cce5700197c5b1401a4cc7f12cb79dcc819',
  'compat/posix/src/record_lock_descriptors.h': '915a45d8232f44ae07d1cfefe9d0b9c128253e6b16cc6f9fef1e185fd52d6e63',
@@ -376,9 +418,9 @@ APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/posix/src/record_lock_operation.cc': '5a61fd0f2c6dcd3204205cbbc35fb125efea21b155530816d9a0204e974d079f',
  'compat/posix/src/record_lock_operation.h': '90634149c714c0c0f8ac0e7e2af46a91f750981456ff90ac473243e8c661020a',
  'compat/posix/src/sqlite_path.cc': '793968fbd0e9d3002568a6da6f2ae2ec082bdb048d1d32ca3aa3f9496dab87fe',
- 'compat/posix/src/stat.cc': '0e5b94db2096d19d36f334646b62c154d2b403fb4ea7fc2ac7a98a4378855da6',
+ 'compat/posix/src/stat.cc': 'e57711eae13d59d556917c3ea536856587a249e216e653ffb6a44cb5c9d0711c',
  'compat/posix/src/system.cc': 'e9a53915f7b79faecf03eb1d5a90ac93baccd6ae2c7101e64fae4613a09e40c3',
- 'compat/posix/src/system_properties.cc': '561b60eb0bf874438ba65fa8e3b9d5a8bcf3af67589c5a46105c0375fb1bb42b',
+ 'compat/posix/src/system_properties.cc': 'bb8b16bfd421ddef655bec8e933ea0196f18f1b697e59d13c6155c5c487b594a',
  'compat/posix/src/unistd.cc': 'e32b80cc0902e75dd0a9d6ed6b9a90c48b0dd18269697f739b87d0b41c4d6e61',
  'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
 }
@@ -412,9 +454,10 @@ def preceding_ofd_sources():
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  identity=preceding_appcontainer_identity_sources()
+ shared_stdio=preceding_shared_stdio_sources(qualification)
  for path,digest in qualification['source_sha256'].items():
-  actual=identity.get(path,(ROOT/path).read_bytes())
-  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
+  actual=identity.get(path,shared_stdio.get(path,(ROOT/path).read_bytes()))
+  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source(actual, identity['compat/posix/include/gesher/system_properties.h'])
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
@@ -643,4 +686,7 @@ def transition_negative_controls():
 if __name__=='__main__':
  import sys
  check()
- if '--selftest' in sys.argv:transition_negative_controls()
+ if '--selftest' in sys.argv:
+  transition_negative_controls()
+  import runpy
+  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')

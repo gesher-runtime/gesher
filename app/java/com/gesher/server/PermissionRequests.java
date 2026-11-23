@@ -24,14 +24,16 @@ import java.util.function.Consumer;
  * The host's default-No consent dialog runs away from app/Binder/UI threads.
  */
 final class PermissionRequests {
-    public interface Decision { boolean allow(String packageName, String permissionNames); }
+    // Keep these values in sync with compat/credentials/permission_dialog.inc.
+    static final int DISMISSED = 0, DENIED = 1, ALLOWED = 2;
+    public interface Decision { int decide(String packageName, String permissionNames); }
 
     private interface Owner {
         String name();
         boolean isCurrent();
         boolean canRequest(String permission);
         int check(String permission);
-        void grantAfterConsent(String permission);
+        void recordUserDecision(List<String> permissions, boolean allowed);
     }
 
     private final PackageManagerService mPm;
@@ -44,7 +46,7 @@ final class PermissionRequests {
             Thread thread = new Thread(r, "permission-consent");
             thread.setDaemon(true);
             return thread;
-        }), PermissionRequests::confirm);
+        }), PermissionRequests::confirmDecision);
     }
 
     /** Server-local injection for regression tests; never exposed through Binder or env. */
@@ -54,17 +56,22 @@ final class PermissionRequests {
         mDecision = decision;
     }
 
+    /** Other host consent flows need only the explicit-Allow result. */
     static boolean confirm(String packageName, String permissions) {
+        return confirmDecision(packageName, permissions) == ALLOWED;
+    }
+
+    static int confirmDecision(String packageName, String permissions) {
         try {
             AccountSecretStore.ensureLoaded();
             return nativeConfirm(packageName, permissions);
         } catch (LinkageError | SecurityException e) {
             SystemServer.log("permission consent unavailable: " + e.getClass().getSimpleName());
-            return false;
+            return DISMISSED;
         }
     }
 
-    private static native boolean nativeConfirm(String packageLabel, String permissionNames);
+    private static native int nativeConfirm(String packageLabel, String permissionNames);
 
     void request(ApkPackage captured, String[] requested, Consumer<Intent> completion) {
         if (captured == null) throw new IllegalArgumentException("Invalid runtime permission owner");
@@ -80,8 +87,8 @@ final class PermissionRequests {
             @Override public int check(String permission) {
                 return policy.checkPermission(name(), permission);
             }
-            @Override public void grantAfterConsent(String permission) {
-                policy.grantRuntime(name(), permission, 0);
+            @Override public void recordUserDecision(List<String> permissions, boolean allowed) {
+                policy.recordUserDecision(captured, permissions, allowed);
             }
         }, requested, completion);
     }
@@ -94,8 +101,8 @@ final class PermissionRequests {
             @Override public boolean isCurrent() { return captured.isCurrent(); }
             @Override public boolean canRequest(String permission) { return captured.canRequest(permission); }
             @Override public int check(String permission) { return captured.check(permission); }
-            @Override public void grantAfterConsent(String permission) {
-                captured.grantAfterConsent(permission);
+            @Override public void recordUserDecision(List<String> permissions, boolean allowed) {
+                captured.recordUserDecision(permissions, allowed);
             }
         }, requested, completion);
     }
@@ -155,14 +162,14 @@ final class PermissionRequests {
                     && owner.check(name) != PackageManager.PERMISSION_GRANTED
                     && !prompt.contains(name)) prompt.add(name);
         }
-        boolean allow = !prompt.isEmpty() && owner.isCurrent()
-                && mDecision.allow(owner.name(), describe(mPm.permissions(), prompt));
+        int decision = !prompt.isEmpty() && owner.isCurrent()
+                ? mDecision.decide(owner.name(), describe(mPm.permissions(), prompt)) : DISMISSED;
         // PM.add/remove are synchronized on the PM. Keep identity stable
         // across the final recheck and the entire grant operation.
         synchronized (mPm) {
             if (!owner.isCurrent()) return;
-            if (allow) for (String name : prompt) {
-                if (owner.canRequest(name)) owner.grantAfterConsent(name);
+            if (decision == ALLOWED || decision == DENIED) {
+                owner.recordUserDecision(prompt, decision == ALLOWED);
             }
             for (int i = 0; i < names.length; i++) {
                 if (names[i] != null) grants[i] = owner.check(names[i]);

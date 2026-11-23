@@ -54,6 +54,11 @@ public final class Zygote {
             boolean inherit);
     static native int nativeGrantPropertyAreaRead(String container);
     static native int nativeDeleteAppContainer(String container);
+    static native int nativeSpawnCompiler(String commandLine, String[] setEnv, String[] unsetEnv,
+            String logPath, int memoryMiB, int cpuRate);
+    static native int nativeWaitChild(int pid, long identity, int timeoutMs, long cancel,
+            boolean stopOnLowMemory);
+    static native long nativeAvailableMemory();
     private static native int nativeRestartWithUid(int uid);
     private static native long nativePinStandaloneInput(String windowsPath);
     private static native void nativeReleaseStandaloneInput(long pin);

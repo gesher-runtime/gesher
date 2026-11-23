@@ -236,10 +236,15 @@ function Get-InstalledApps {
             if (Test-Path -LiteralPath $candidate) { $iconPath = $candidate }
         }
 
+        # As a launcher's app list, "Launch" only for a package with a MAIN/LAUNCHER activity:
+        # AppShell records one without (com.gesher.camera's capture activity, for example).
+        $launchable = -not (Test-Path -LiteralPath (Join-Path $root "data/data/$pkg/gesher-shell/no-launcher-activity"))
+
         $apps.Add([PSCustomObject]@{
             Package = $pkg
             Label = $label
             IconPath = $iconPath
+            Launchable = $launchable
             IconCandidates = $iconCandidates.ToArray()
         })
     }
@@ -469,7 +474,7 @@ function Get-InstalledApps {
                                         </StackPanel>
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                             <CheckBox Content="$(Get-GesherText 'cp_separate_windows')" ToolTip="$(Get-GesherText 'cp_separate_windows_tip')" IsChecked="{Binding SeparateWindows, Mode=OneWay}" Tag="{Binding Package}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                            <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Margin="0,0,8,0"/>
+                                            <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Visibility="{Binding LaunchVisibility}" Margin="0,0,8,0"/>
                                             <Button Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_uninstall')" Tag="{Binding Package}"/>
                                         </StackPanel>
                                     </Grid>
@@ -669,7 +674,7 @@ function Update-AppsView($installed) {
     [void]$watched.Add($icoFile)
     $signature = @(foreach ($app in $installed) {
         $shell = Join-Path $root "data/data/$($app.Package)/gesher-shell"
-        $paths = @((Join-Path $shell 'shortcut.properties'), (Join-Path $shell 'icon.ico'), $app.IconPath)
+        $paths = @((Join-Path $shell 'shortcut.properties'), (Join-Path $shell 'icon.ico'), (Join-Path $shell 'no-launcher-activity'), $app.IconPath)
         if ($app.PSObject.Properties['IconCandidates']) { $paths += @($app.IconCandidates) }
         foreach ($path in $paths) {
             if ($path -and $watched.Add([string]$path)) { $appFiles.Add([string]$path) }
@@ -677,7 +682,7 @@ function Update-AppsView($installed) {
         if ($app.IconPath -and -not $iconStamps.ContainsKey($app.IconPath)) {
             $iconStamps[$app.IconPath] = Get-FileStamp $app.IconPath
         }
-        "$($app.Package)`t$($app.Label)`t$($app.IconPath)`t$(if ($app.IconPath) { $iconStamps[$app.IconPath] })"
+        "$($app.Package)`t$($app.Label)`t$($app.IconPath)`t$(if ($app.IconPath) { $iconStamps[$app.IconPath] })`t$($app.Launchable)"
     }) -join "`n"
     $signature += "`n$($iconStamps[$icoFile])"
     $separateApps = Get-SeparateWindowApps
@@ -700,6 +705,7 @@ function Update-AppsView($installed) {
             Label = $app.Label
             IconImage = $imgSource
             SeparateWindows = $separateApps.Contains([string]$app.Package)
+            LaunchVisibility = if ($app.Launchable) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
         })
     }
     $appsList.ItemsSource = $items
@@ -1635,11 +1641,11 @@ function New-PanelActionWorker([string] $operation, $request) {
                     }
                     'Store' {
                         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore.apk'
+                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore-4.8.4.apk'
                         if (-not (Test-Path -LiteralPath $storeApk)) {
                             $temporary = [IO.Path]::GetTempFileName()
                             try {
-                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
+                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
                                 Move-Item -LiteralPath $temporary -Destination $storeApk -Force
                             } finally {
                                 if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }

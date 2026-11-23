@@ -577,6 +577,14 @@ index d693bd9fe..a8bbb2f96 100644
 +    }
 +    pending.info = nullptr;
 +  }
+diff --git a/compat/posix/include/gesher/system_properties.h b/compat/posix/include/gesher/system_properties.h
+index 3516cd627..78b746609 100644
+--- a/compat/posix/include/gesher/system_properties.h
++++ b/compat/posix/include/gesher/system_properties.h
+@@ -21,0 +22,3 @@ bool Initialize();
++// Initialize the broker's current area and return the exact file to grant
++// the guest read access to. A contained process cannot prepare a grant.
++std::wstring ReadOnlyAreaPath();
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
 index 3492add71..93f84db15 100644
 --- a/compat/posix/posix.cmake
@@ -941,7 +949,7 @@ index c001fa738..5660333f2 100644
 @@ -223,0 +323 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
 +    if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
-index a0a55f2a4..b2aef8e11 100644
+index a0a55f2a4..a6eb96f75 100644
 --- a/compat/posix/src/fsops.cc
 +++ b/compat/posix/src/fsops.cc
 @@ -27,0 +28 @@
@@ -970,10 +978,18 @@ index a0a55f2a4..b2aef8e11 100644
 +    CloseHandle(h);
 +    return result;
 +  }
-@@ -302 +319,10 @@ int Access(const char* path, int mode, bool follow) {
+@@ -302 +319,18 @@ int Access(const char* path, int mode, bool follow) {
 -  HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
 +  if (gesher::standalone_input::Current().Matches(windows)) {
 +    return (mode & (W_OK | X_OK)) != 0 ? (errno = EACCES, -1) : 0;
++  }
++  if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
++    if ((mode & (W_OK | X_OK)) != 0) return errno = EACCES, -1;
++    HANDLE h;
++    const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
++    if (error != 0) return errno = error, -1;
++    CloseHandle(h);
++    return 0;
 +  }
 +  const auto rooted = gesher::storage_root::Lookup(windows);
 +  HANDLE h;
@@ -982,9 +998,9 @@ index a0a55f2a4..b2aef8e11 100644
 +    if (error != 0) return errno = error, -1;
 +  } else {
 +    h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
-@@ -306,0 +333 @@ int Access(const char* path, int mode, bool follow) {
+@@ -306,0 +341 @@ int Access(const char* path, int mode, bool follow) {
 +  }
-@@ -376,0 +404,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
+@@ -376,0 +412,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
 +      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +        HANDLE h;
 +        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
@@ -992,7 +1008,7 @@ index a0a55f2a4..b2aef8e11 100644
 +        CloseHandle(h);
 +        return errno = EINVAL, -1;  // The rooted view does not traverse reparse points.
 +      }
-@@ -522 +556,13 @@ int remove(const char* path) {
+@@ -522 +564,13 @@ int remove(const char* path) {
 -  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
 +  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;
 +  if (const auto rooted = gesher::storage_root::Lookup(windows)) {
@@ -1007,11 +1023,11 @@ index a0a55f2a4..b2aef8e11 100644
 +    error = gesher::storage_root::Remove(rooted, (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
 +    return error != 0 ? (errno = error, -1) : 0;
 +  }
-@@ -561,0 +608,3 @@ int fchdir(int fd) {
+@@ -561,0 +616,3 @@ int fchdir(int fd) {
 +  if (const auto rooted = gesher::storage_root::Lookup(path)) {
 +    return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, -1;
 +  }
-@@ -748,0 +798,3 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
+@@ -748,0 +806,3 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
 +        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +          return fail_reopen(rooted.error != 0 ? rooted.error : EOPNOTSUPP);
 +        }
@@ -1044,7 +1060,7 @@ index 09fd4596c..382933857 100644
 -  if (crt_size > startup.cbReserved2 || startup.cbReserved2 - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
 +  if (crt_size > descriptor_bytes || descriptor_bytes - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
 diff --git a/compat/posix/src/path.cc b/compat/posix/src/path.cc
-index a4f865cc4..119d0942b 100644
+index a4f865cc4..a97226de6 100644
 --- a/compat/posix/src/path.cc
 +++ b/compat/posix/src/path.cc
 @@ -28,0 +29,4 @@
@@ -1052,7 +1068,7 @@ index a4f865cc4..119d0942b 100644
 +#include "standalone_input.h"
 +#include "rooted_storage_client.h"
 +
-@@ -185,0 +190,40 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
+@@ -185,0 +190,55 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
 +  auto& selected = standalone_input::Current();
 +  if (selected.Matches(path)) {
 +    const bool metadata_only = (flags & O_PATH) != 0;
@@ -1063,6 +1079,21 @@ index a4f865cc4..119d0942b 100644
 +    }
 +    HANDLE owned = selected.Open(metadata_only, (flags & O_CLOEXEC) == 0);
 +    if (owned == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
++    return FdFromHandle(owned, flags);
++  }
++  if (const auto bootstrap = storage_root::LookupBootstrap(path)) {
++    if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
++    if ((flags & (O_CREAT | O_TRUNC)) != 0 || (Access(flags) & GENERIC_WRITE) != 0) {
++      return errno = EACCES, -1;
++    }
++    HANDLE owned;
++    const int error = storage_root::OpenBootstrap(*bootstrap, &owned);
++    if (error != 0) return errno = error, -1;
++    if ((flags & O_CLOEXEC) == 0 && !SetHandleInformation(owned, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
++      const int result = FailWithLastError();
++      CloseHandle(owned);
++      return result;
++    }
 +    return FdFromHandle(owned, flags);
 +  }
 +  if (const auto rooted = storage_root::Lookup(path)) {
@@ -1093,12 +1124,12 @@ index a4f865cc4..119d0942b 100644
 +    }
 +    return FdFromHandle(owned, flags);
 +  }
-@@ -250,3 +294 @@ int OpenDevice(PathKind kind, int flags) {
+@@ -250,3 +309 @@ int OpenDevice(PathKind kind, int flags) {
 -  SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};
 -  HANDLE h = CreateFileW(L"NUL", Access(flags), FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
 -                         OPEN_EXISTING, 0, nullptr);
 +  HANDLE h = OpenNullDevice(Access(flags), (flags & O_CLOEXEC) == 0);
-@@ -294,5 +336,8 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+@@ -294,5 +351,8 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
 -  DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 -  std::wstring dir(n, L'\0');
 -  n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -1112,20 +1143,20 @@ index a4f865cc4..119d0942b 100644
 +    if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
 +    dir.resize(n);
 +  }
-@@ -406 +451 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
+@@ -406 +466 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
 -bool DiskPath(const char* path, std::wstring* windows, int special) {
 +bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker) {
-@@ -410,0 +456,4 @@ bool DiskPath(const char* path, std::wstring* windows, int special) {
+@@ -410,0 +471,4 @@ bool DiskPath(const char* path, std::wstring* windows, int special) {
 +      if (!allow_broker) {
 +        const auto rooted = storage_root::Lookup(*windows);
 +        if (rooted) return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, false;
 +      }
-@@ -474,0 +524,4 @@ int PosixDelete(const std::wstring& windows, bool directory) {
+@@ -474,0 +539,4 @@ int PosixDelete(const std::wstring& windows, bool directory) {
 +  if (const auto rooted = storage_root::Lookup(windows)) {
 +    const int error = storage_root::Remove(rooted, directory);
 +    return error != 0 ? (errno = error, -1) : 0;
 +  }
-@@ -692,0 +746,8 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
+@@ -692,0 +761,8 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
 +      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +        HANDLE h;
 +        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadataWrite, &h);
@@ -1134,16 +1165,16 @@ index a4f865cc4..119d0942b 100644
 +        CloseTimeHandle(h);
 +        return result;
 +      }
-@@ -743 +804,5 @@ int mkdir(const char* path) {
+@@ -743 +819,5 @@ int mkdir(const char* path) {
 -    case PathKind::kFile:
 +    case PathKind::kFile: {
 +      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +        const int error = gesher::storage_root::MakeDirectory(rooted);
 +        return error != 0 ? (errno = error, -1) : 0;
 +      }
-@@ -744,0 +810 @@ int mkdir(const char* path) {
+@@ -744,0 +825 @@ int mkdir(const char* path) {
 +    }
-@@ -754 +820 @@ int unlink(const char* path) {
+@@ -754 +835 @@ int unlink(const char* path) {
 -  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;  // EACCES: /dev and /proc names
 +  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;  // EACCES: /dev and /proc names
 diff --git a/compat/posix/src/pipe_io.cc b/compat/posix/src/pipe_io.cc
@@ -1481,17 +1512,25 @@ index 91e79de60..1694fb6f0 100644
 +  // wrappers. This step only builds SQLite's owned canonical filename.
 +  if (!gesher::DiskPath(path, &windows, EINVAL, true)) return SQLITE_CANTOPEN;
 diff --git a/compat/posix/src/stat.cc b/compat/posix/src/stat.cc
-index 4c0e19022..337cc6bef 100644
+index 4c0e19022..7ef4d9624 100644
 --- a/compat/posix/src/stat.cc
 +++ b/compat/posix/src/stat.cc
 @@ -10,0 +11,2 @@
 +#include "rooted_storage_client.h"
 +#include "standalone_input.h"
-@@ -91 +93,13 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
+@@ -91 +93,21 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
 -      HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
 +      auto& selected = gesher::standalone_input::Current();
 +      const bool inherited = selected.Matches(windows);
 +      if (!inherited) {
++        if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
++          HANDLE h;
++          const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
++          if (error != 0) return errno = error, -1;
++          const int result = FromHandle(h, buf);
++          CloseHandle(h);
++          return result;
++        }
 +        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +          HANDLE h;
 +          const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
@@ -1502,7 +1541,7 @@ index 4c0e19022..337cc6bef 100644
 +        }
 +      }
 +      HANDLE h = inherited ? selected.Open(true) : CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
-@@ -96 +110,3 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
+@@ -96 +118,3 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
 -      if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
 +      if (h == INVALID_HANDLE_VALUE) {
 +        return inherited ? (errno = EACCES, -1) : gesher::FailWithLastError();
@@ -1562,26 +1601,32 @@ index a3bc4dfdd..0a7af110a 100644
 @@ -258,0 +287 @@ int fstatvfs(int fd, struct statvfs* buf) {
 +  if (!gesher::storage_root::DescriptorPath(h).empty()) return RootedStatvfs(h, buf);
 diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
-index 8e960fbb5..a9df01917 100644
+index 8e960fbb5..a15e944d0 100644
 --- a/compat/posix/src/system_properties.cc
 +++ b/compat/posix/src/system_properties.cc
-@@ -28 +28 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
+@@ -7,0 +8 @@
++#include <gesher/cohost_bootstrap.h>
+@@ -22,0 +24,2 @@
++#include "rooted_storage_client.h"
++
+@@ -28 +31 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
 -constexpr uint32_t kVersion = 2;
 +constexpr uint32_t kVersion = 3;
-@@ -41 +41 @@ struct Header {
+@@ -41 +44 @@ struct Header {
 -  uint32_t used;
 +  uint32_t used[2];
-@@ -42,0 +43,5 @@ struct Header {
+@@ -42,0 +46,5 @@ struct Header {
 +constexpr DWORD kMappingSize = sizeof(Header) + 2 * kCapacity;
 +
 +char* Payload(void* view, uint32_t slot) {
 +  return static_cast<char*>(view) + sizeof(Header) + slot * kCapacity;
 +}
-@@ -64 +69,2 @@ struct Area {
+@@ -64 +72,3 @@ struct Area {
 -  std::wstring root, persistent;
++  Snapshot overrides;
 +  std::wstring root, path, persistent;
 +  bool writable = false;
-@@ -68,0 +75,12 @@ bool Valid(const std::string& name, const std::string& value);
+@@ -68,0 +79,12 @@ bool Valid(const std::string& name, const std::string& value);
 +bool WritableProcess() {
 +  // Use the primary Windows token even when a thread is impersonating a client.
 +  static const bool writable = [] {
@@ -1594,12 +1639,34 @@ index 8e960fbb5..a9df01917 100644
 +  return writable;
 +}
 +
-@@ -240 +258,3 @@ Snapshot Initial() {
+@@ -182,5 +204 @@ bool Decode(const std::string& data, Snapshot* values) {
+-bool Read(const std::wstring& path, std::string* data, bool optional) {
+-  Handle file;
+-  file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+-                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+-  if (file.value == INVALID_HANDLE_VALUE) return optional && GetLastError() == ERROR_FILE_NOT_FOUND;
++bool ReadContents(HANDLE file, std::string* data) {
+@@ -188 +206 @@ bool Read(const std::wstring& path, std::string* data, bool optional) {
+-  if (!GetFileSizeEx(file.value, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
++  if (!GetFileSizeEx(file, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
+@@ -191 +209 @@ bool Read(const std::wstring& path, std::string* data, bool optional) {
+-  return ReadFile(file.value, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
++  return ReadFile(file, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
+@@ -193,0 +212,7 @@ bool Read(const std::wstring& path, std::string* data, bool optional) {
++bool Read(const std::wstring& path, std::string* data, bool optional) {
++  Handle file;
++  file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
++  if (file.value == INVALID_HANDLE_VALUE) return optional && GetLastError() == ERROR_FILE_NOT_FOUND;
++  return ReadContents(file.value, data);
++}
+@@ -240 +265,3 @@ Snapshot Initial() {
 -         {"ro.product.brand", "gesher"}, {"ro.hardware", "gesher"}, {"ro.debuggable", "0"}}) {
 +         {"ro.product.brand", "gesher"}, {"ro.hardware", "gesher"}, {"ro.debuggable", "0"},
 +         // The DisplayEventReceiver stand-in has no vsync source.
 +         {"debug.choreographer.vsync", "false"}}) {
-@@ -264,8 +284,20 @@ bool Refresh(Area* area) {
+@@ -263,8 +290,29 @@ Snapshot Initial() {
+-bool Refresh(Area* area) {
 -  const auto* header = static_cast<Header*>(area->view);
 -  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
@@ -1607,7 +1674,38 @@ index 8e960fbb5..a9df01917 100644
 -  std::string data(static_cast<const char*>(area->view) + sizeof(Header), header->used);
 -  if (!Decode(data, &area->values)) return false;
 -  area->cached_generation = generation;
--  return true;
++
++bool LoadBootstrapOverrides(Area* area) {
++  if (area->writable) return true;
++  const auto& scope = cohost_bootstrap::Current();
++  if (!scope || scope.build_prop.empty()) return true;
++  Handle file;
++  if (storage_root::OpenBootstrap(rooted_storage_wire::Op::kOpenBuildProp, &file.value) != 0) return false;
++  std::string data;
++  if (!ReadContents(file.value, &data)) return false;
++  for (size_t start = 0; start < data.size();) {
++    const size_t end = data.find('\n', start);
++    const std::string line = Trim(data.substr(start, end == std::string::npos ? end : end - start));
++    start = end == std::string::npos ? data.size() : end + 1;
++    if (line.empty() || line.front() == '#') continue;
++    const size_t equal = line.find('=');
++    if (equal == 0 || equal == std::string::npos) continue;
++    std::string name = Trim(line.substr(0, equal));
++    if (!name.empty() && name.back() == '?') name = Trim(name.substr(0, name.size() - 1));
++    std::string text = Trim(line.substr(equal + 1));
++    if (!Valid(name, text)) continue;
++    const auto existing = area->values.find(name);
++    const bool present = existing != area->values.end();
++    // Match the standalone Java loader. Existing ro.* properties stay
++    // immutable, and an assignment of the existing value changes no serial.
++    if (present && (name.starts_with("ro.") || existing->second.text == text)) continue;
++    Value update{text, Serial(name, text, present ? existing->second.serial : 0, present)};
++    area->values[name] = update;
++    area->overrides[name] = std::move(update);
++  }
+@@ -272,0 +321,24 @@ bool Refresh(Area* area) {
++
++bool Refresh(Area* area) {
 +  const auto* header = static_cast<const Header*>(area->view);
 +  for (int attempt = 0; attempt < 8; ++attempt) {
 +    uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
@@ -1622,22 +1720,24 @@ index 8e960fbb5..a9df01917 100644
 +    __atomic_thread_fence(__ATOMIC_SEQ_CST);
 +    if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
 +    if (used > kCapacity || !Decode(data, &area->values)) return false;
++    for (const auto& [name, value] : area->overrides) area->values[name] = value;
 +    area->cached_generation = generation;
 +    return true;
 +  }
 +  // During sustained writes, keep the last coherent snapshot. Wait callers
 +  // will poll again until the property changes or their timeout expires.
 +  return area->cached_generation != 0;
-@@ -273,0 +306 @@ bool Publish(Area* area, Snapshot values) {
++}
+@@ -273,0 +346 @@ bool Publish(Area* area, Snapshot values) {
 +  if (!area->writable) return false;
-@@ -275 +308 @@ bool Publish(Area* area, Snapshot values) {
+@@ -275 +348 @@ bool Publish(Area* area, Snapshot values) {
 -  if (data.size() > kCapacity - sizeof(Header)) return false;
 +  if (data.size() > kCapacity) return false;
-@@ -277 +310,2 @@ bool Publish(Area* area, Snapshot values) {
+@@ -277 +350,2 @@ bool Publish(Area* area, Snapshot values) {
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
 +  uint32_t previous = __atomic_load_n(&header->generation, __ATOMIC_RELAXED);
 +  uint32_t generation = previous + 1;
-@@ -279,4 +313,6 @@ bool Publish(Area* area, Snapshot values) {
+@@ -279,4 +353,6 @@ bool Publish(Area* area, Snapshot values) {
 -  std::memcpy(static_cast<char*>(area->view) + sizeof(Header), data.data(), data.size());
 -  header->magic = kMagic;
 -  header->version = kVersion;
@@ -1648,11 +1748,11 @@ index 8e960fbb5..a9df01917 100644
 +  uint32_t slot = generation & 1;
 +  std::memcpy(Payload(area->view, slot), data.data(), data.size());
 +  __atomic_store_n(&header->used[slot], static_cast<uint32_t>(data.size()), __ATOMIC_RELAXED);
-@@ -353,2 +389 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -353,2 +429 @@ Area* Current() { // LocalMutex is held by every caller.
 -  std::wstring path = dir + L"\\" + Key(session) + L".area";
 -  if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
 +  std::wstring path = dir + L"\\" + Key(L"property-v3-" + session) + L".area";
-@@ -357,2 +392,8 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -357,2 +432,8 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->persistent = data + L"\\property\\persistent_properties";
 -  area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +  area->path = path;
@@ -1663,7 +1763,7 @@ index 8e960fbb5..a9df01917 100644
 +    area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +    if (!area->mutex.value) return nullptr;
 +  }
-@@ -360,3 +401,4 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -360,3 +441,4 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!lock.held) return nullptr;
 -  area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
 -                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
@@ -1671,23 +1771,26 @@ index 8e960fbb5..a9df01917 100644
 +  area->file.value = CreateFileW(path.c_str(), area->writable ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ,
 +                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
 +                                 area->writable ? OPEN_ALWAYS : OPEN_EXISTING,
-@@ -365 +407,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -365 +447,2 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
 +  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, area->writable ? PAGE_READWRITE : PAGE_READONLY,
 +                                           0, area->writable ? kMappingSize : 0, nullptr);
-@@ -367 +410 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -367 +450 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
 +  area->view = MapViewOfFile(area->mapping.value, area->writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0, kMappingSize);
-@@ -370 +413 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -370 +453 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!header->magic) {
 +  if (area->writable && !__atomic_load_n(&header->generation, __ATOMIC_RELAXED)) {
-@@ -373,0 +417,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -373,0 +457,2 @@ Area* Current() { // LocalMutex is held by every caller.
 +    header->magic = kMagic;
 +    header->version = kVersion;
-@@ -381 +426 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -376 +461 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!Refresh(area.get()) || !InheritRoot(session, data)) return nullptr;
++  if (!Refresh(area.get()) || !LoadBootstrapOverrides(area.get()) || !InheritRoot(session, data)) return nullptr;
+@@ -381 +466 @@ Area* Current() { // LocalMutex is held by every caller.
 -  RemoveOldAreas(dir, path);
 +  if (result->writable) RemoveOldAreas(dir, path);
-@@ -419,0 +465,8 @@ bool Initialize() {
+@@ -419,0 +505,8 @@ bool Initialize() {
 +
 +std::wstring ReadOnlyAreaPath() {
 +  if (!WritableProcess()) return {};
@@ -1696,7 +1799,7 @@ index 8e960fbb5..a9df01917 100644
 +  return area ? area->path : std::wstring{};
 +}
 +
-@@ -422,6 +475,2 @@ namespace {
+@@ -422,6 +515,2 @@ namespace {
 -// few properties (log.tag.*). Without the cross-process mutex, this reads only
 -// the header's 32-bit generation (one aligned load) and never the shared
 -// values: when it equals the generation this process last decoded under the
@@ -1705,7 +1808,7 @@ index 8e960fbb5..a9df01917 100644
 -// different generation takes the mutex and decodes again.
 +// few properties (log.tag.*). Refresh returns the process's decoded copy
 +// when the published generation has not changed.
-@@ -430,7 +479 @@ Area* Refreshed() {
+@@ -430,7 +519 @@ Area* Refreshed() {
 -  if (!area) return nullptr;
 -  const auto* header = static_cast<const Header*>(area->view);
 -  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
@@ -1714,27 +1817,27 @@ index 8e960fbb5..a9df01917 100644
 -  }
 -  return area;
 +  return area && Refresh(area) ? area : nullptr;
-@@ -467 +510 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -467 +550 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (!Valid(name, value)) return false;
 +  if (!WritableProcess() || !Valid(name, value)) return false;
-@@ -479 +522 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -479 +562 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
 +  if (Encode(values).size() > kCapacity) return false;
-@@ -485,4 +528,2 @@ Snapshot List() {
+@@ -485,4 +568,2 @@ Snapshot List() {
 -  Area* area = Current();
 -  if (!area) return {};
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->values : Snapshot{};
 +  Area* area = Refreshed();
 +  return area ? area->values : Snapshot{};
-@@ -492,4 +533,2 @@ uint32_t AreaSerial() {
+@@ -492,4 +573,2 @@ uint32_t AreaSerial() {
 -  Area* area = Current();
 -  if (!area) return 0;
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->cached_generation : 0;
 +  Area* area = Refreshed();
 +  return area ? area->cached_generation : 0;
-@@ -522,2 +561 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+@@ -522,2 +601 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
 -      MutexLock lock(area->mutex.value);
 -      if (!lock.held || !Refresh(area)) return false;
 +      if (!Refresh(area)) return false;

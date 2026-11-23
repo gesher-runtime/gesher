@@ -71,6 +71,24 @@ public final class PackageManagerService extends IPackageManager.Default {
         mEnabledStateListener = listener;
         mEnabledStateRestarter = restarter;
     }
+    private volatile Consumer<ApkPackage> mDesktopEnabledStateListener;
+
+    /**
+     * Updates the desktop shell's launcher's view after a package install or enabled-state
+     * change, outside the package manager monitor.
+     */
+    void setDesktopEnabledStateListener(Consumer<ApkPackage> listener) {
+        mDesktopEnabledStateListener = listener;
+    }
+    private void notifyDesktopLauncher(ApkPackage pkg) {
+        Consumer<ApkPackage> desktop = mDesktopEnabledStateListener;
+        if (desktop == null) return;
+        try { desktop.accept(pkg); }
+        catch (RuntimeException failure) {
+            SystemServer.log("desktop launcher update failed: " + failure);
+        }
+    }
+
     private final List<Consumer<String>> mPackageRemoval = new ArrayList<>();
     private final List<Consumer<String>> mPackageRemovalChecks = new ArrayList<>();
     private volatile Consumer<Set<String>> mAccountRemovalReconciler = installed -> { };
@@ -213,6 +231,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         mPermissions = new PermissionPolicy(this, cohost);
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
+            if (ContactsProviderSupport.hasBuiltInConflict(p)) {
+                SystemServer.log("package " + p.packageName
+                        + " skipped: claims a built-in contacts authority");
+                continue;
+            }
             if (map.put(p.packageName, p) != null) throw new IllegalArgumentException("Duplicate installed package");
         }
         if (cohost) {
@@ -243,8 +266,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mEnabledStore;
     }
 
+    private static void checkBuiltInProviderOwner(ApkPackage pkg) {
+        try {
+            ContactsProviderSupport.checkPackageAdmission(pkg);
+        } catch (android.content.pm.PackageParser.PackageParserException conflict) {
+            throw new IllegalArgumentException(conflict.getMessage(), conflict);
+        }
+    }
+
     /** Finish owner I/O before an installer commits its durable package registry. */
     synchronized PackageUids.Admission prepareAdd(ApkPackage p) {
+        checkBuiltInProviderOwner(p);
         PackageUids.Admission identity = PackageUids.prepare(List.of(p), mPackages.values());
         try {
             PackageEnabledStore store = enabledStore();
@@ -318,6 +350,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             // checks. Do not call application Binders until that outer lock is released.
             synchronized (publicationLock) { }
             if (get(name) != pkg || isRemovalPending(name)) return;
+            notifyDesktopLauncher(pkg);
             for (Consumer<ApkPackage> listener : mPackageChanges) {
                 if (get(name) != pkg || isRemovalPending(name)) return;
                 listener.accept(pkg);
@@ -524,6 +557,10 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.packageName = "android";
             info.applicationInfo = platformApplication();
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
+            if ((flags & PackageManager.GET_PROVIDERS) != 0
+                    && ContactsProviderSupport.matchesProviderFlags(flags)) {
+                info.providers = new ProviderInfo[] { ContactsProviderSupport.callLogProviderInfo() };
+            }
             return info;
         }
         ApkPackage p = get(packageName);
@@ -580,7 +617,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         return null;
     }
 
-    private ApplicationInfo platformApplication() {
+    static ApplicationInfo platformApplication() {
         ApplicationInfo info = new ApplicationInfo();
         String root = System.getenv("ANDROID_ROOT");
         info.packageName = "android";
@@ -792,7 +829,18 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
         if (userId != 0) return null;
         ProviderInfo hosted = hostedProvider(name);
-        if (hosted != null) return hosted;
+        if (hosted != null) {
+            if (ContactsProviderSupport.isSystemAuthority(name)
+                    && !ContactsProviderSupport.matchesProviderFlags(flags)) {
+                return null;
+            }
+            return hosted;
+        }
+        if (mHostedProviders == null && ContactsProviderSupport.isSystemAuthority(name)
+                && ContentProviders.declaredProvider(this, name) == null) {
+            ProviderInfo builtIn = ContactsProviderSupport.providerForAuthority(name, flags);
+            if (builtIn != null) return builtIn;
+        }
         return provider(name, flags);
     }
 
@@ -813,6 +861,10 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        if (userId != 0 || className == null) return null;
+        if (ContactsProviderSupport.PACKAGE.equals(className.getPackageName())) {
+            return ContactsProviderSupport.providerForComponent(className.getClassName(), flags);
+        }
         if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         if (p == null) return null;
@@ -982,6 +1034,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             for (EnabledChange event : events.values()) {
                 Consumer<EnabledChange> listener = mEnabledStateListener;
                 if (listener != null && event.current(this)) listener.accept(event);
+                if (event.current(this)) notifyDesktopLauncher(event.pkg);
                 if (!event.dontKill && event.restartCurrent(this)) {
                     try {
                         Consumer<EnabledChange> restarter = mEnabledStateRestarter;
