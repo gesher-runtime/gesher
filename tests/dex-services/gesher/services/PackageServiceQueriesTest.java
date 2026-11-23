@@ -109,6 +109,61 @@ public final class PackageServiceQueriesTest {
         PackageManagerService.addMicrophoneFeature(mic, true);
         require(mic.containsKey(PackageManager.FEATURE_MICROPHONE),
                 "Microphone omitted with an input device");
+        // FEATURE_SENSOR_* follow the sensors SensorManager lists in this process.
+        java.util.Set<Integer> sensorTypes = new java.util.HashSet<>();
+        for (int type : com.gesher.server.WindowsSensors.types()) sensorTypes.add(type);
+        System.out.println("PackageServiceQueriesTest: sensor types " + sensorTypes);
+        require(service.hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER, 0)
+                        == sensorTypes.contains(android.hardware.Sensor.TYPE_ACCELEROMETER)
+                        && service.hasSystemFeature(PackageManager.FEATURE_SENSOR_GYROSCOPE, 0)
+                        == sensorTypes.contains(android.hardware.Sensor.TYPE_GYROSCOPE)
+                        && service.hasSystemFeature(PackageManager.FEATURE_SENSOR_COMPASS, 0)
+                        == sensorTypes.contains(android.hardware.Sensor.TYPE_MAGNETIC_FIELD)
+                        && service.hasSystemFeature(PackageManager.FEATURE_SENSOR_LIGHT, 0)
+                        == sensorTypes.contains(android.hardware.Sensor.TYPE_LIGHT),
+                "Sensor features disagree with the listed sensors");
+        // Without sensors (the CI runners), or without the runtime natives (this class run
+        // as a main class), the comparison above holds even if nothing were wired.
+        // "sensor-test" (run through ServiceFixtureRunner, so the natives are registered,
+        // with GESHER_SENSOR_TEST set) requires the test accelerometer and light sensor to
+        // reach FEATURES through the production path: natives, WindowsSensors, clinit.
+        if (Arrays.asList(args).contains("sensor-test")) {
+            require(sensorTypes.contains(android.hardware.Sensor.TYPE_ACCELEROMETER)
+                            && sensorTypes.contains(android.hardware.Sensor.TYPE_LIGHT),
+                    "GESHER_SENSOR_TEST's sensors are not listed: " + sensorTypes);
+            require(service.hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER, 0)
+                            && service.hasSystemFeature(PackageManager.FEATURE_SENSOR_LIGHT, 0),
+                    "GESHER_SENSOR_TEST's sensors are not system features");
+            boolean accelerometer = false;
+            boolean light = false;
+            for (FeatureInfo f : service.getSystemAvailableFeatures().getList()) {
+                accelerometer |= PackageManager.FEATURE_SENSOR_ACCELEROMETER.equals(f.name);
+                light |= PackageManager.FEATURE_SENSOR_LIGHT.equals(f.name);
+            }
+            require(accelerometer && light,
+                    "getSystemAvailableFeatures omits GESHER_SENSOR_TEST's sensors");
+            System.out.println("PackageServiceQueriesTest: GESHER_SENSOR_TEST's accelerometer"
+                    + " and light sensor are system features");
+        }
+        android.util.ArrayMap<String, FeatureInfo> sensors = new android.util.ArrayMap<>();
+        PackageManagerService.addSensorFeatures(sensors, new int[0]);
+        PackageManagerService.addSensorFeatures(sensors, null);
+        require(sensors.isEmpty(), "Sensor feature claimed without a sensor");
+        PackageManagerService.addSensorFeatures(sensors, new int[] {
+                android.hardware.Sensor.TYPE_ROTATION_VECTOR});
+        require(sensors.isEmpty(), "A rotation vector alone claimed a sensor feature");
+        PackageManagerService.addSensorFeatures(sensors, new int[] {
+                android.hardware.Sensor.TYPE_ACCELEROMETER, android.hardware.Sensor.TYPE_LIGHT});
+        require(sensors.size() == 2
+                        && sensors.containsKey(PackageManager.FEATURE_SENSOR_ACCELEROMETER)
+                        && sensors.containsKey(PackageManager.FEATURE_SENSOR_LIGHT),
+                "Sensor features do not match an accelerometer and a light sensor");
+        PackageManagerService.addSensorFeatures(sensors, new int[] {
+                android.hardware.Sensor.TYPE_GYROSCOPE, android.hardware.Sensor.TYPE_MAGNETIC_FIELD});
+        require(sensors.size() == 4
+                        && sensors.containsKey(PackageManager.FEATURE_SENSOR_GYROSCOPE)
+                        && sensors.containsKey(PackageManager.FEATURE_SENSOR_COMPASS),
+                "Sensor features do not match a gyroscope and a magnetometer");
         require(service.canRequestPackageInstalls("fixture.one", 0),
                 "Package declaring REQUEST_INSTALL_PACKAGES could not request installs");
         PackageImpl installer = (PackageImpl) packages.get("fixture.one").parsed;
