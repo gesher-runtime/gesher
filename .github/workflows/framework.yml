@@ -852,6 +852,7 @@ jobs:
           python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME"
           python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control leak-capability-strings
           python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control uninitialize-foreign-apartment
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control swap-radio-states
 
       - name: SDK36 WifiInfo Builder, copy and redaction contracts
         run: |
