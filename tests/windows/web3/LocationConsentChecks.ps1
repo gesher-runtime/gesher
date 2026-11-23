@@ -16,18 +16,28 @@ public class ConsentFixture {
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr w);
   [DllImport("user32.dll")] static extern IntPtr SetTimer(IntPtr w, IntPtr id, uint ms, IntPtr callback);
   [DllImport("user32.dll")] static extern bool KillTimer(IntPtr w, IntPtr id);
+  [DllImport("user32.dll")] static extern IntPtr SetActiveWindow(IntPtr w);
+  [DllImport("user32.dll")] static extern IntPtr GetActiveWindow();
   static string package, details;
+  static bool inactive;
   static IntPtr Proc(IntPtr w, uint m, IntPtr p, IntPtr l) {
     if (m == 0x110) {
       CreateWindowExW(0, "EDIT", package, 0x50000800, 0,0,80,20,w,(IntPtr)1101,IntPtr.Zero,IntPtr.Zero);
       CreateWindowExW(0, "EDIT", details, 0x50000804, 0,20,80,20,w,(IntPtr)1102,IntPtr.Zero,IntPtr.Zero);
-      CreateWindowExW(0, "BUTTON", "Deny", 0x50000001, 0,40,40,20,w,(IntPtr)2,IntPtr.Zero,IntPtr.Zero);
-      CreateWindowExW(0, "BUTTON", "Allow", 0x50000000, 40,40,40,20,w,(IntPtr)6,IntPtr.Zero,IntPtr.Zero);
+      CreateWindowExW(0, "BUTTON", "Deny", 0x5001000B, 0,40,40,20,w,(IntPtr)2,IntPtr.Zero,IntPtr.Zero);
+      CreateWindowExW(0, "BUTTON", "Allow", 0x5001000B, 40,40,40,20,w,(IntPtr)6,IntPtr.Zero,IntPtr.Zero);
       SetTimer(w,(IntPtr)1,30,IntPtr.Zero);
       return (IntPtr)1;
     }
     if (m == 0x113 && IsWindowVisible(w)) {
-      KillTimer(w,(IntPtr)1); Console.WriteLine("READY"); Console.Out.Flush(); return (IntPtr)1;
+      KillTimer(w,(IntPtr)1);
+      if (inactive) {
+        var other = CreateWindowExW(0, "STATIC", "", 0x10CF0000, -10000,-10000,80,30,
+            IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
+        SetActiveWindow(other);
+        if (other == IntPtr.Zero || GetActiveWindow() != other) Environment.Exit(91);
+      }
+      Console.WriteLine("READY"); Console.Out.Flush(); return (IntPtr)1;
     }
     if (m == 0x111 && (p.ToInt64() == 2 || p.ToInt64() == 6)) { EndDialog(w, p); return (IntPtr)1; }
     return IntPtr.Zero;
@@ -44,7 +54,8 @@ public class ConsentFixture {
   }
   public static int Main(string[] args) {
     package=args[0]; details=args[1];
-    if(args.Length>2) { new Thread(()=>Dialog()).Start(); }
+    inactive = args.Length > 2 && args[2] == "inactive";
+    if(args.Length > 2 && args[2] == "ambiguous") { new Thread(()=>Dialog()).Start(); }
     return Dialog();
   }
 }
@@ -58,6 +69,7 @@ $location = 'android.permission.ACCESS_COARSE_LOCATION android.permission.ACCESS
 foreach($case in @(
   @{Name='allow';Package='com.gesher.web3app';Details=$location;Allow=$true;Expected=6},
   @{Name='deny';Package='com.gesher.web3app';Details=$location;Allow=$false;Expected=2},
+  @{Name='inactive-deny';Package='com.gesher.web3app';Details=$location;Allow=$false;Expected=2;Inactive=$true},
   @{Name='other-package';Package='com.example.other';Details=$location;Expected=0},
   @{Name='extra-permission';Package='com.gesher.web3app';Details="$location android.permission.CAMERA";Expected=0},
   @{Name='missing-permission';Package='com.gesher.web3app';Details='android.permission.ACCESS_FINE_LOCATION';Expected=0},
@@ -65,7 +77,7 @@ foreach($case in @(
   @{Name='ambiguous';Package='com.gesher.web3app';Details=$location;Expected=0;Ambiguous=$true}
 )) {
   $psi = New-Object Diagnostics.ProcessStartInfo
-  $psi.FileName=$exe; $psi.Arguments='"'+$case.Package+'" "'+$case.Details+'"'+$(if($case.Ambiguous){' ambiguous'}else{''})
+  $psi.FileName=$exe; $psi.Arguments='"'+$case.Package+'" "'+$case.Details+'"'+$(if($case.Ambiguous){' ambiguous'}elseif($case.Inactive){' inactive'}else{''})
   $psi.UseShellExecute=$false; $psi.RedirectStandardOutput=$true; $psi.CreateNoWindow=$true
   $process=[Diagnostics.Process]::Start($psi)
   try {

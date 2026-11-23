@@ -20,7 +20,7 @@ public static class Web3LocationConsent {
   static extern IntPtr ReadText(IntPtr window, uint message, IntPtr size, StringBuilder text,
       uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW")]
-  static extern IntPtr Click(IntPtr window, uint message, IntPtr w, IntPtr l,
+  static extern IntPtr SendCommand(IntPtr window, uint message, IntPtr w, IntPtr l,
       uint flags, uint timeout, out IntPtr result);
   static string Text(IntPtr window) {
     if (window == IntPtr.Zero) return "";
@@ -63,12 +63,21 @@ public static class Web3LocationConsent {
       return true;
     }, IntPtr.Zero);
     if (matches.Count != 1) return false;
-    var button = GetDlgItem(matches[0], allow ? 6 : 2); // IDYES / IDCANCEL
+    var dialog = matches[0];
+    int id = allow ? 6 : 2; // IDYES / IDCANCEL
+    var button = GetDlgItem(dialog, id);
     uint processId;
     GetWindowThreadProcessId(button, out processId);
     if (processId != (uint)owner.Id || owner.HasExited || !IsWindowEnabled(button)) return false;
     IntPtr ignored;
-    return Click(button, 0x00F5, IntPtr.Zero, IntPtr.Zero, 2, 500, out ignored) != IntPtr.Zero; // BM_CLICK
+    // BM_CLICK needs an active dialog. Dispatch the equivalent BN_CLICKED
+    // to this exact test dialog without moving desktop focus.
+    if (SendCommand(dialog, 0x0111, (IntPtr)id, button, 2, 500, out ignored) == IntPtr.Zero) return false; // WM_COMMAND / BN_CLICKED
+    // A modal dialog can finish unwinding after the notification returns.
+    var dismissal = Stopwatch.StartNew();
+    while (IsWindowVisible(dialog) && dismissal.ElapsedMilliseconds < 500)
+      System.Threading.Thread.Sleep(10);
+    return !IsWindowVisible(dialog);
   }
 }
 '@
