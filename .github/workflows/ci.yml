@@ -504,6 +504,9 @@ jobs:
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
         run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
 
+      - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
+        run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
+
       - name: WebStorage origin, owned WebView responses and running-task contracts
         run: |
           python3 tools/test_webstorage_origin_contracts.py --java-home "$JAVA_HOME"
