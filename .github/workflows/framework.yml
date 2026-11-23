@@ -835,7 +835,8 @@ jobs:
       - name: Windows cellular telephony services and native Mobile Broadband contracts
         run: |
           set -euo pipefail
-          python3 tools/test_telephony.py --java-home "$JAVA_HOME" --framework-classes out/framework/classes             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_telephony.py --java-home "$JAVA_HOME" --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME"
           python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control leak-capability-strings
           python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control uninitialize-foreign-apartment
