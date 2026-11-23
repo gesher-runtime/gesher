@@ -41,7 +41,7 @@
 #   gesher-app status                  the device's processes
 #   gesher-app cameras                 list Windows cameras and their frame sizes
 #   gesher-app cameras rear CAMERA_ID  record a physically rear-mounted Windows camera
-#   gesher-app cameras reset           clear the mounting choice (external cameras)
+#   gesher-app cameras reset           clear the mounting choice (front cameras)
 #   gesher-app shutdown                stop the device
 #   gesher-app toast-activated         (COM runs it: Gesher's toast activator) a click
 #                                      on an app's toast, given to the device (ADR 0051)

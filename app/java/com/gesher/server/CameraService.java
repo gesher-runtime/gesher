@@ -6,6 +6,8 @@ package com.gesher.server;
 
 import android.Manifest;
 import android.app.ActivityThread;
+import android.app.GesherActivityWindow;
+import android.app.WindowConfiguration;
 import android.content.AttributionSourceState;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
@@ -25,6 +27,7 @@ import android.hardware.camera2.params.StreamConfiguration;
 import android.hardware.camera2.params.StreamConfigurationDuration;
 import android.hardware.camera2.utils.CameraIdAndSessionConfiguration;
 import android.hardware.camera2.utils.ConcurrentCameraIdCombination;
+import android.hardware.display.DisplayManagerGlobal;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Process;
@@ -35,6 +38,9 @@ import android.util.Range;
 import android.util.Rational;
 import android.util.Size;
 import android.util.SizeF;
+import android.view.Display;
+import android.view.DisplayInfo;
+import android.view.Surface;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -259,12 +265,14 @@ public final class CameraService extends ICameraService.Default {
                 durations.toArray(new StreamConfigurationDuration[0]));
         m.set(CameraCharacteristics.SCALER_AVAILABLE_STALL_DURATIONS,
                 stalls.toArray(new StreamConfigurationDuration[0]));
+        // A PC's camera faces the user unless configured as rear (maintainer decision,
+        // CONTRIBUTING.md), as the legacy API reports it.
         m.set(CameraCharacteristics.LENS_FACING, d.isRearFacing() ? CameraMetadata.LENS_FACING_BACK
-                : CameraMetadata.LENS_FACING_EXTERNAL);
+                : CameraMetadata.LENS_FACING_FRONT);
         m.set(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL,
                 CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL);
         m.set(CameraCharacteristics.SENSOR_ORIENTATION,
-                sensorOrientation());
+                sensorOrientation(d.isRearFacing()));
         m.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES,
                 new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
         m.set(CameraCharacteristics.REQUEST_PARTIAL_RESULT_COUNT, 1);
@@ -335,12 +343,52 @@ public final class CameraService extends ICameraService.Default {
     static final int CameraDevice_TEMPLATE_PREVIEW = ICameraDeviceUser.TEMPLATE_PREVIEW;
 
     /**
-     * Media Foundation supplies frames in the backend's native coordinates. Keep this
-     * mounting angle independent of an activity's display rotation; clients combine the
-     * sensor angle with that rotation themselves. A rear-role choice does not rotate pixels.
+     * Sensor orientation in degrees (0, 90, 180, 270), relative to the display rotation of
+     * the Activity using the camera (maintainer-approved desktop adaptation, CONTRIBUTING.md).
+     * Media Foundation supplies frames upright for the desktop monitor and Gesher does not
+     * rotate preview buffers for {@code setDisplayOrientation}, while an Android task may be
+     * portrait or landscape. Matching the Activity's own rotation makes Android's standard
+     * formulas give 0 (rear: {@code (o - d + 360) % 360}; front, mirrored:
+     * {@code (360 - (o + d) % 360) % 360}), so apps keep upright, unswapped preview sizes.
+     * Camera2 and the legacy API both pass the camera's own facing (a PC's camera is FRONT
+     * unless configured as rear), so the two APIs and CameraX agree.
+     * Apps that cache the value (CameraX caches CameraCharacteristics per process) keep the
+     * rotation of their first read (docs/devices.md).
      */
-    static int sensorOrientation() {
-        return 0;
+    static int sensorOrientation(boolean rearFacing) {
+        int degrees = displayDegrees();
+        return rearFacing ? degrees : (360 - degrees) % 360;
+    }
+
+    /**
+     * The calling process's own Activity rotation, which its {@code Display.getRotation()}
+     * reports; the system display's (the focused task's) only when the process has no
+     * Activity, as in a service.
+     */
+    private static int displayDegrees() {
+        int rotation = WindowConfiguration.ROTATION_UNDEFINED;
+        try {
+            rotation = GesherActivityWindow.activeDisplayRotation();
+        } catch (Throwable ignored) {
+        }
+        if (rotation == WindowConfiguration.ROTATION_UNDEFINED) {
+            try {
+                DisplayManagerGlobal dm = DisplayManagerGlobal.getInstance();
+                DisplayInfo info = dm != null ? dm.getDisplayInfo(Display.DEFAULT_DISPLAY) : null;
+                if (info != null) rotation = info.rotation;
+            } catch (Throwable ignored) {
+            }
+        }
+        switch (rotation) {
+            case Surface.ROTATION_90:
+                return 90;
+            case Surface.ROTATION_180:
+                return 180;
+            case Surface.ROTATION_270:
+                return 270;
+            default:
+                return 0;
+        }
     }
 
     /** The tags of what {@code m} holds, for the available-keys lists. */
