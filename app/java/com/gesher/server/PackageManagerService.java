@@ -1169,6 +1169,14 @@ public final class PackageManagerService extends IPackageManager.Default {
      * FEATURE_LOCATION_GPS is not claimed, as no GNSS receiver is known. Google Play filters
      * on these (a RECORD_AUDIO or location permission implies the feature unless the app
      * marks it not required), so an absent one hides an app the device can run.
+     * The rest (docs/system-features.md lists every SDK feature and why it is or is not
+     * here) follow what Windows has when the system server starts: FEATURE_WEBVIEW with a
+     * WebView2 Runtime behind android.webkit.WebView ({@link #addWebViewFeature}),
+     * FEATURE_AUDIO_OUTPUT with an active audio render endpoint, FEATURE_ETHERNET with a
+     * wired Ethernet interface, the touchscreen's multitouch features with a touch
+     * digitizer's contacts ({@link #addHostHardwareFeatures}), and FEATURE_RAM_NORMAL as
+     * AOSP's SystemConfig adds it for a device that is not low-RAM. The OpenGL ES version
+     * is not a named feature ({@link #getSystemAvailableFeatures}).
      */
     static final android.util.ArrayMap<String, android.content.pm.FeatureInfo> FEATURES =
             new android.util.ArrayMap<>();
@@ -1198,6 +1206,92 @@ public final class PackageManagerService extends IPackageManager.Default {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
         addLocationFeatures(FEATURES);
+        try {
+            // Probe the properties' natives first: ActivityManager's static initializer
+            // reads them, and failing there would break the class for the whole process.
+            android.os.SystemProperties.getBoolean("ro.config.low_ram", false);
+            addMemoryFeature(FEATURES, android.app.ActivityManager.isLowRamDeviceStatic());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM or a bare test process): memory class unknown.
+        }
+        try {
+            addWebViewFeature(FEATURES, com.gesher.app.webview.WebView2Host.runtimeVersion());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no WebView2 to report.
+        }
+        try {
+            addHostHardwareFeatures(FEATURES, WindowsHost.hardwareSummary());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no hardware to report.
+        }
+    }
+
+    /**
+     * FEATURE_RAM_LOW or FEATURE_RAM_NORMAL, the one that matches
+     * ActivityManager.isLowRamDevice(), as AOSP's SystemConfig adds them.
+     */
+    public static void addMemoryFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            boolean lowRam) {
+        addFeature(features, lowRam ? PackageManager.FEATURE_RAM_LOW
+                : PackageManager.FEATURE_RAM_NORMAL);
+    }
+
+    /**
+     * FEATURE_WEBVIEW when the WebView2 Runtime that backs android.webkit.WebView
+     * (com.gesher.app.webview, docs/webview.md) is installed: {@code runtimeVersion} is
+     * its version, null without one (WebViews would stay empty, so none is claimed).
+     */
+    public static void addWebViewFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            String runtimeVersion) {
+        if (runtimeVersion != null && !runtimeVersion.isEmpty()) {
+            addFeature(features, PackageManager.FEATURE_WEBVIEW);
+        }
+    }
+
+    /**
+     * The features of the Windows hardware in {@code summary} (WindowsHost.hardwareSummary:
+     * touch contacts, audio render endpoints, wired Ethernet interfaces; null or -1 when
+     * unknown, which claims nothing):
+     * <ul>
+     * <li>FEATURE_TOUCHSCREEN_MULTITOUCH and _DISTINCT with a touch digitizer of two or more
+     * contacts, _JAZZHAND with five or more: WM_POINTER touch reaches apps with each contact
+     * tracked as its own pointer id (compat/input/translate.cc, up to MAX_POINTERS).
+     * <li>FEATURE_AUDIO_OUTPUT with an active render endpoint, which the audio engine's
+     * WASAPI sink plays to (without one it plays to nothing).
+     * <li>FEATURE_ETHERNET with a wired Ethernet interface; ConnectivityManager reports its
+     * networks as TRANSPORT_ETHERNET.
+     * </ul>
+     */
+    public static void addHostHardwareFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            int[] summary) {
+        if (summary == null || summary.length < 3) return;
+        int contacts = summary[0];
+        if (contacts >= 2) {
+            addFeature(features, PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH);
+            addFeature(features, PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_DISTINCT);
+        }
+        if (contacts >= 5) {
+            addFeature(features, PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_JAZZHAND);
+        }
+        if (summary[1] > 0) addFeature(features, PackageManager.FEATURE_AUDIO_OUTPUT);
+        if (summary[2] > 0) addFeature(features, PackageManager.FEATURE_ETHERNET);
+    }
+
+    /**
+     * The OpenGL ES version the device supports, as AOSP reads it: ro.opengles.version
+     * (app/build.prop), else FeatureInfo.GL_ES_VERSION_UNDEFINED.
+     */
+    public static int glEsVersion() {
+        try {
+            return android.os.SystemProperties.getInt("ro.opengles.version",
+                    android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED);
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM or a bare test process): no properties.
+            return android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED;
+        }
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */
@@ -1221,13 +1315,22 @@ public final class PackageManagerService extends IPackageManager.Default {
         addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
     }
 
-    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
+    /**
+     * Report real cameras and an explicitly configured rear role, without inferred
+     * capabilities. A camera without a configured mounting is LENS_FACING_EXTERNAL at the
+     * EXTERNAL hardware level in CameraService's characteristics, so it is
+     * FEATURE_CAMERA_EXTERNAL, as Android declares for its external (USB) cameras.
+     */
     static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
-            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
+            if (camera.isRearFacing()) {
+                addFeature(features, PackageManager.FEATURE_CAMERA);
+            } else {
+                addFeature(features, PackageManager.FEATURE_CAMERA_EXTERNAL);
+            }
         }
     }
 
@@ -1260,7 +1363,13 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ParceledListSlice<android.content.pm.FeatureInfo> getSystemAvailableFeatures() {
-        return new ParceledListSlice<>(new ArrayList<>(FEATURES.values()));
+        // As AOSP: the named features, then one unnamed entry with the OpenGL ES version.
+        ArrayList<android.content.pm.FeatureInfo> list = new ArrayList<>(FEATURES.size() + 1);
+        list.addAll(FEATURES.values());
+        android.content.pm.FeatureInfo gles = new android.content.pm.FeatureInfo();
+        gles.reqGlEsVersion = glEsVersion();
+        list.add(gles);
+        return new ParceledListSlice<>(list);
     }
 
     @Override

@@ -57,6 +57,7 @@ public final class CameraSelectionOrientationHost {
         static final String FEATURE_CAMERA = "android.hardware.camera";
         static final String FEATURE_CAMERA_FRONT = "android.hardware.camera.front";
         static final String FEATURE_CAMERA_AUTOFOCUS = "android.hardware.camera.autofocus";
+        static final String FEATURE_CAMERA_EXTERNAL = "android.hardware.camera.external";
     }
 
     static final class android {
@@ -150,7 +151,8 @@ public final class CameraSelectionOrientationHost {
         check(rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA)
                 && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
-                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS)
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
                 "rear-only feature map mismatch");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> dualFeat =
@@ -159,7 +161,8 @@ public final class CameraSelectionOrientationHost {
         check(dualFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA)
                 && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
-                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS)
+                && dualFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
                 "uncalibrated cameras invented directional or autofocus capabilities");
 
         System.out.println("Camera selection & orientation PASS: " + checks + " checks");

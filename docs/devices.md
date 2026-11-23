@@ -101,7 +101,10 @@ Windows without them (no location service, no Media Foundation) gets clean
 - Characteristics: an EXTERNAL-level camera (as Android's USB cameras): fixed
   focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
   device's sizes, LENS_FACING_EXTERNAL (the test camera: BACK), one partial
-  result, the available request/result/characteristics keys.
+  result, the available request/result/characteristics keys. System features
+  follow: `camera.any` for any camera, `camera` for one configured as rear,
+  `camera.external` for one left external; never `camera.front`, `autofocus`
+  or `flash` (docs/system-features.md).
 - `CameraDeviceUser` (CameraDeviceClient): streams from OutputConfigurations,
   `submitRequestList` (bursts get their frame numbers at submission; the
   repeating request one per frame), `cancelRequest`, `flush`, `waitUntilIdle`,
