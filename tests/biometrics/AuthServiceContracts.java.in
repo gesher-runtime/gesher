@@ -1,0 +1,548 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host contracts for com.gesher.server.AuthService (ADR 0091). The production
+// AuthService and WindowsHelloBackend are inserted unchanged apart from their
+// package, imports and public class visibility; everything else here is a
+// boundary stand-in with android-16.0.0_r4's constant values. FakeBackend is an
+// isolated test double: production registers no backend.
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public final class AuthServiceContracts {
+    private static int failures, checks;
+
+    static void check(boolean condition, String description) {
+        checks++;
+        System.out.println((condition ? "PASS " : "FAIL ") + description);
+        if (!condition) failures++;
+    }
+
+    static boolean throwsSecurity(Runnable call, String fragment) {
+        try {
+            call.run();
+            return false;
+        } catch (SecurityException expected) {
+            return fragment == null || String.valueOf(expected.getMessage()).contains(fragment);
+        }
+    }
+
+    // --- the system server boundary -----------------------------------------------------
+
+    static final class TestHost implements AuthService.Host {
+        final Set<String> granted = new HashSet<>(Set.of(Manifest.permission.USE_BIOMETRIC));
+        boolean appOpAllowed = true, foreground = true, deviceSecure;
+        final ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        public boolean hasPermission(String permission, int pid, int uid) {
+            return pid == Binder.callingPid && uid == Binder.callingUid && granted.contains(permission);
+        }
+        public boolean noteUseBiometric(int uid, String packageName) { return packageName != null && appOpAllowed; }
+        public boolean isForeground(int uid, int pid) { return foreground; }
+        public boolean isDeviceSecure(int userId) { return deviceSecure; }
+        public CharSequence string(String name) { return "res:" + name; }
+        public synchronized void post(Runnable work) { queue.add(work); }
+        void drain() {
+            for (Runnable r; (r = poll()) != null; ) r.run();
+        }
+        synchronized Runnable poll() { return queue.poll(); }
+        synchronized int pending() { return queue.size(); }
+    }
+
+    static final class FakeBackend implements WindowsHelloBackend {
+        int availability = AVAILABLE;
+        RuntimeException verifyThrows;
+        final List<Request> requests = new ArrayList<>();
+        final List<WindowsHelloBackend.Completion> completions = new ArrayList<>();
+        final AtomicInteger cancels = new AtomicInteger();
+        public int availability() { return availability; }
+        public Verification verify(Request request, Completion completion) {
+            if (verifyThrows != null) throw verifyThrows;
+            requests.add(request);
+            completions.add(completion);
+            return cancels::incrementAndGet;
+        }
+        void complete(int index, int result) { completions.get(index).onResult(result); }
+    }
+
+    static final List<String> events = new ArrayList<>();
+
+    static final class Receiver implements IBiometricServiceReceiver, IBinder {
+        final String name;
+        final List<String> calls = new ArrayList<>();
+        IBinder.DeathRecipient recipient;
+        boolean dead;
+        int unlinks;
+        Receiver(String name) { this.name = name; }
+        private void record(String call) { calls.add(call); events.add(name + ":" + call); }
+        public void onAuthenticationSucceeded(int type) { record("succeeded(" + type + ")"); }
+        public void onAuthenticationFailed() { record("failed"); }
+        public void onError(int modality, int error, int vendorCode) {
+            record("error(" + modality + "," + error + "," + vendorCode + ")");
+        }
+        public void onAcquired(int info, String message) { record("acquired"); }
+        public void onDialogDismissed(int reason) { record("dismissed(" + reason + ")"); }
+        public void onSystemEvent(int event) { record("event"); }
+        public IBinder asBinder() { return this; }
+        public void linkToDeath(IBinder.DeathRecipient r, int flags) throws RemoteException {
+            if (dead) throw new RemoteException();
+            recipient = r;
+        }
+        public boolean unlinkToDeath(IBinder.DeathRecipient r, int flags) {
+            unlinks++;
+            boolean was = recipient == r;
+            recipient = null;
+            return was;
+        }
+        void die() { dead = true; if (recipient != null) recipient.binderDied(); }
+    }
+
+    static final class Token implements IBinder {
+        public void linkToDeath(IBinder.DeathRecipient r, int flags) {}
+        public boolean unlinkToDeath(IBinder.DeathRecipient r, int flags) { return true; }
+    }
+
+    static PromptInfo prompt(int authenticators) {
+        PromptInfo info = new PromptInfo();
+        info.authenticators = authenticators;
+        info.title = "Sign in";
+        info.subtitle = "Bank";
+        info.description = "Confirm it's you";
+        return info;
+    }
+
+    static final int WEAK = Authenticators.BIOMETRIC_WEAK, STRONG = Authenticators.BIOMETRIC_STRONG,
+            CRED = Authenticators.DEVICE_CREDENTIAL, ID = Authenticators.IDENTITY_CHECK;
+
+    static TestHost host;
+    static FakeBackend backend;
+    static AuthService service;
+
+    static void fresh(boolean secure, boolean withBackend) {
+        host = new TestHost();
+        host.deviceSecure = secure;
+        backend = withBackend ? new FakeBackend() : null;
+        service = new AuthService(host, backend);
+        Binder.callingUid = 10123;
+        Binder.callingPid = 4321;
+        events.clear();
+    }
+
+    static long start(Receiver receiver, IBinder token, PromptInfo info) {
+        return service.authenticate(token, 0L, 0, receiver, "com.example.bank", info);
+    }
+
+    // --- unavailable backend: AOSP's sensor-less, unsecured device ------------------------
+
+    static void unavailable() {
+        fresh(false, false);
+        check(service.canAuthenticate("p", 0, WEAK) == 12, "no sensors: BIOMETRIC_WEAK is NO_HARDWARE (12)");
+        check(service.canAuthenticate("p", 0, STRONG) == 12, "no sensors: BIOMETRIC_STRONG is NO_HARDWARE (12)");
+        check(service.canAuthenticate("p", 0, CRED) == 11, "unsecured: DEVICE_CREDENTIAL is NONE_ENROLLED (11)");
+        check(service.canAuthenticate("p", 0, STRONG | CRED) == 11, "unsecured: STRONG|CREDENTIAL is NONE_ENROLLED (11)");
+        check(service.canAuthenticate("p", 0, WEAK | CRED) == 11, "unsecured: WEAK|CREDENTIAL is NONE_ENROLLED (11)");
+        check(service.canAuthenticate("p", 0, 0) == 12, "no authenticators: NO_HARDWARE, as PreAuthInfo");
+        check(throwsSecurity(() -> service.canAuthenticate("p", 0, Authenticators.BIOMETRIC_CONVENIENCE),
+                "Invalid authenticator configuration"), "BIOMETRIC_CONVENIENCE is an invalid configuration");
+        check(throwsSecurity(() -> service.canAuthenticate("p", 0, 1 << 20), "Invalid authenticator"),
+                "unknown authenticator bits are invalid");
+        check(throwsSecurity(() -> service.canAuthenticate("p", 0, ID), "SET_BIOMETRIC_DIALOG_ADVANCED"),
+                "IDENTITY_CHECK needs SET_BIOMETRIC_DIALOG_ADVANCED (androidx's probe)");
+        host.granted.add(AuthService.SET_BIOMETRIC_DIALOG_ADVANCED);
+        check(service.canAuthenticate("p", 0, ID) == 20, "IDENTITY_CHECK is never active (20)");
+        host.granted.remove(AuthService.SET_BIOMETRIC_DIALOG_ADVANCED);
+
+        host.granted.clear();
+        check(throwsSecurity(() -> service.canAuthenticate("p", 0, WEAK), "USE_BIOMETRIC"),
+                "canAuthenticate needs USE_BIOMETRIC or USE_FINGERPRINT");
+        host.granted.add(Manifest.permission.USE_FINGERPRINT);
+        check(service.canAuthenticate("p", 0, WEAK) == 12, "USE_FINGERPRINT is accepted for USE_BIOMETRIC");
+        check(throwsSecurity(() -> service.canAuthenticate("p", 10, WEAK), "USE_BIOMETRIC_INTERNAL"),
+                "another user needs USE_BIOMETRIC_INTERNAL");
+        check(service.getAuthenticatorIds(0).length == 0,
+                "getAuthenticatorIds for the caller's user: unchecked and empty");
+        check(throwsSecurity(() -> service.hasEnrolledBiometrics(0, "p"), "USE_BIOMETRIC_INTERNAL"),
+                "hasEnrolledBiometrics is internal");
+        check(throwsSecurity(() -> service.getEnrollmentStatusList(0, "p"), "SET_BIOMETRIC_DIALOG_ADVANCED"),
+                "getEnrollmentStatusList needs SET_BIOMETRIC_DIALOG_ADVANCED");
+        host.granted.add(AuthService.SET_BIOMETRIC_DIALOG_ADVANCED);
+        check(service.getEnrollmentStatusList(0, "p").isEmpty(), "no enrollments without sensors");
+        host.granted.add(Manifest.permission.USE_BIOMETRIC);
+
+        check(service.getLastAuthenticationTime(0, CRED) == -1L,
+                "getLastAuthenticationTime: BIOMETRIC_NO_AUTHENTICATION");
+        check("res:screen_lock_app_setting_name".equals(String.valueOf(service.getButtonLabel(0, "p", WEAK | CRED))),
+                "Strings: credential button label is screen_lock_app_setting_name");
+        check(service.getButtonLabel(0, "p", STRONG) == null, "Strings: biometric-only label is null");
+        check("res:screen_lock_dialog_default_subtitle".equals(String.valueOf(service.getPromptMessage(0, "p", CRED))),
+                "Strings: credential prompt message");
+        check("res:screen_lock_app_setting_name".equals(String.valueOf(service.getSettingName(0, "p", CRED))),
+                "Strings: credential setting name");
+        check(throwsSecurity(() -> service.getSettingName(0, "p", 0x3), "Invalid"),
+                "Strings validate the configuration");
+
+        Receiver r = new Receiver("a");
+        long id = start(r, new Token(), prompt(WEAK));
+        check(id > 0 && r.calls.isEmpty(), "authenticate returns a request id; the outcome is posted");
+        host.drain();
+        check(r.calls.equals(List.of("error(0,12,0)")), "biometric prompt: onError(TYPE_NONE, HW_NOT_PRESENT)");
+
+        r = new Receiver("b");
+        start(r, new Token(), prompt(STRONG | CRED));
+        host.drain();
+        check(r.calls.equals(List.of("error(1,14,0)")), "credential, unsecured: onError(TYPE_CREDENTIAL, NO_DEVICE_CREDENTIAL)");
+
+        r = new Receiver("c");
+        PromptInfo legacy = prompt(0);
+        legacy.deviceCredentialAllowed = true;
+        start(r, new Token(), legacy);
+        host.drain();
+        check(r.calls.equals(List.of("error(1,14,0)")) && legacy.authenticators == 0,
+                "setDeviceCredentialAllowed: CREDENTIAL|WEAK, without changing the app's PromptInfo");
+        r = new Receiver("d");
+        start(r, new Token(), prompt(0));
+        host.drain();
+        check(r.calls.equals(List.of("error(0,12,0)")), "no authenticators set: BIOMETRIC_WEAK");
+
+        check(throwsSecurity(() -> start(new Receiver("e"), new Token(), prompt(0x3)), "Invalid"),
+                "authenticate rejects an invalid configuration");
+        PromptInfo internal = prompt(CRED);
+        internal.internal = true;
+        check(throwsSecurity(() -> start(new Receiver("f"), new Token(), internal), "USE_BIOMETRIC_INTERNAL"),
+                "internal prompt options need USE_BIOMETRIC_INTERNAL");
+
+        host.foreground = false;
+        r = new Receiver("g");
+        check(start(r, new Token(), prompt(CRED)) == -1 && r.calls.equals(List.of("error(0,5,0)")),
+                "not foreground: synchronous onError(TYPE_NONE, CANCELED), -1");
+        host.foreground = true;
+        host.appOpAllowed = false;
+        r = new Receiver("h");
+        check(start(r, new Token(), prompt(CRED)) == -1 && r.calls.equals(List.of("error(0,5,0)")),
+                "OP_USE_BIOMETRIC denied: onError(TYPE_NONE, CANCELED), -1");
+        host.appOpAllowed = true;
+        r = new Receiver("i");
+        check(start(r, new Token(), null) == -1 && r.calls.equals(List.of("error(0,5,0)")),
+                "null PromptInfo: onError(TYPE_NONE, CANCELED), -1");
+        host.drain();
+        check(host.pending() == 0, "fast failures post no work");
+
+        // trust secure, but no natives: nothing may succeed.
+        fresh(true, false);
+        check(service.canAuthenticate("p", 0, CRED) == 0, "secured: DEVICE_CREDENTIAL is SUCCESS (trust decides)");
+        check(service.canAuthenticate("p", 0, STRONG) == 12, "secured: biometrics stay NO_HARDWARE");
+        r = new Receiver("j");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        check(r.calls.equals(List.of("error(1,1,0)")), "no backend: onError(TYPE_CREDENTIAL, HW_UNAVAILABLE), never success");
+    }
+
+    // --- an available backend (test double) ----------------------------------------------
+
+    static void available() throws Exception {
+        fresh(true, true);
+        Receiver r = new Receiver("a");
+        start(r, new Token(), prompt(STRONG | CRED));
+        host.drain();
+        check(backend.requests.size() == 1, "STRONG|CREDENTIAL on a secured device: one Windows Hello verification");
+        WindowsHelloBackend.Request q = backend.requests.get(0);
+        check(q.uid == 10123 && q.pid == 4321 && "com.example.bank".equals(q.packageName)
+                && "Sign in\nBank\nConfirm it's you".equals(q.message),
+                "the request names the caller and carries title, subtitle and description");
+        check(r.recipient != null, "the session links to the client's death");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        check(r.calls.isEmpty(), "a backend result is posted, not delivered on Windows' thread");
+        host.drain();
+        check(r.calls.equals(List.of("succeeded(1)")), "Verified: onAuthenticationSucceeded(DEVICE_CREDENTIAL)");
+        check(r.unlinks == 1, "the finished session unlinks from the client");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(r.calls.size() == 1, "a second result for a finished request is dropped");
+
+        int[][] outcomes = {
+                {WindowsHelloBackend.CANCELED, 10}, {WindowsHelloBackend.RETRIES_EXHAUSTED, 7},
+                {WindowsHelloBackend.NOT_CONFIGURED_FOR_USER, 14}, {WindowsHelloBackend.DEVICE_BUSY, 1},
+                {WindowsHelloBackend.DEVICE_NOT_PRESENT, 1}, {WindowsHelloBackend.DISABLED_BY_POLICY, 1},
+                {WindowsHelloBackend.FAILED, 1}};
+        String[] names = {"user Canceled → USER_CANCELED", "RetriesExhausted → LOCKOUT",
+                "NotConfiguredForUser → NO_DEVICE_CREDENTIAL", "DeviceBusy → HW_UNAVAILABLE",
+                "DeviceNotPresent → HW_UNAVAILABLE", "DisabledByPolicy → HW_UNAVAILABLE",
+                "failure → HW_UNAVAILABLE"};
+        for (int i = 0; i < outcomes.length; i++) {
+            fresh(true, true);
+            r = new Receiver("o");
+            start(r, new Token(), prompt(CRED));
+            host.drain();
+            backend.complete(0, outcomes[i][0]);
+            host.drain();
+            check(r.calls.equals(List.of("error(1," + outcomes[i][1] + ",0)")), names[i]);
+        }
+
+        // The app cancels: CANCELED now, Windows' later Canceled is dropped.
+        fresh(true, true);
+        r = new Receiver("a");
+        Token token = new Token();
+        long id = start(r, token, prompt(CRED));
+        host.drain();
+        service.cancelAuthentication(new Token(), "com.example.bank", id);
+        service.cancelAuthentication(token, "com.example.bank", id + 1);
+        host.drain();
+        check(r.calls.isEmpty() && backend.cancels.get() == 0, "cancel for another token or request id is ignored");
+        service.cancelAuthentication(token, "com.example.bank", id);
+        host.drain();
+        check(backend.cancels.get() == 1 && r.calls.equals(List.of("error(1,5,0)")),
+                "cancelAuthentication: Windows' prompt closed, onError(TYPE_CREDENTIAL, CANCELED)");
+        backend.complete(0, WindowsHelloBackend.CANCELED);
+        host.drain();
+        check(r.calls.size() == 1, "Windows' Canceled after the app's cancel is not a USER_CANCELED");
+        host.granted.clear();
+        check(throwsSecurity(() -> service.cancelAuthentication(token, "p", id), "USE_BIOMETRIC"),
+                "cancelAuthentication needs USE_BIOMETRIC");
+
+        // Cancel issued before the posted start ran still ends that request.
+        fresh(true, true);
+        r = new Receiver("a");
+        Token early = new Token();
+        long earlyId = start(r, early, prompt(CRED));
+        service.cancelAuthentication(early, "com.example.bank", earlyId);
+        host.drain();
+        check(r.calls.equals(List.of("error(1,5,0)")) && backend.cancels.get() == 1,
+                "cancel right after authenticate: the request still ends with CANCELED");
+
+        // A new prompt replaces the current one.
+        fresh(true, true);
+        Receiver first = new Receiver("first"), second = new Receiver("second");
+        start(first, new Token(), prompt(CRED));
+        host.drain();
+        start(second, new Token(), prompt(CRED));
+        host.drain();
+        check(first.calls.equals(List.of("error(1,5,0)")) && backend.cancels.get() == 1
+                && backend.requests.size() == 2, "a new prompt cancels the current one (CANCELED) and starts");
+        check(events.indexOf("first:error(1,5,0)") == 0, "the replaced client hears CANCELED before anything else");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        backend.complete(1, WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(first.calls.size() == 1 && second.calls.equals(List.of("succeeded(1)")),
+                "the replaced request's late Verified is dropped; the new one succeeds");
+
+        // A prompt that cannot start leaves the current one running (getPreAuthenticateStatus).
+        fresh(true, true);
+        first = new Receiver("first");
+        second = new Receiver("second");
+        start(first, new Token(), prompt(CRED));
+        host.drain();
+        start(second, new Token(), prompt(WEAK));
+        host.drain();
+        check(first.calls.isEmpty() && second.calls.equals(List.of("error(0,12,0)")),
+                "a biometric-only prompt fails with NO_HARDWARE and does not cancel the current one");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(first.calls.equals(List.of("succeeded(1)")), "the current prompt still completes");
+
+        // The client dies.
+        fresh(true, true);
+        r = new Receiver("a");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        r.die();
+        host.drain();
+        check(backend.cancels.get() == 1 && r.calls.isEmpty(), "client death: Windows' prompt closed, no callback");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(r.calls.isEmpty(), "a result after the client died is dropped");
+        Receiver next = new Receiver("next");
+        start(next, new Token(), prompt(CRED));
+        host.drain();
+        check(backend.requests.size() == 2 && next.calls.isEmpty() && backend.cancels.get() == 1,
+                "after a death the next prompt starts without cancelling anything");
+
+        fresh(true, true);
+        r = new Receiver("a");
+        r.dead = true;
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        check(backend.requests.isEmpty(), "a client already dead gets no Windows prompt");
+
+        // Requests the backend cannot honour.
+        fresh(true, true);
+        backend.availability = WindowsHelloBackend.NOT_CONFIGURED_FOR_USER;
+        r = new Receiver("a");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        check(backend.requests.isEmpty() && r.calls.equals(List.of("error(1,14,0)")),
+                "Hello not configured: NO_DEVICE_CREDENTIAL without a prompt");
+        backend.availability = WindowsHelloBackend.DEVICE_BUSY;
+        r = new Receiver("b");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        check(backend.requests.isEmpty() && r.calls.equals(List.of("error(1,1,0)")),
+                "Hello busy: HW_UNAVAILABLE without a prompt");
+        backend.availability = WindowsHelloBackend.AVAILABLE;
+        r = new Receiver("c");
+        service.authenticate(new Token(), 0x1234L, 0, r, "com.example.bank", prompt(CRED));
+        host.drain();
+        check(backend.requests.isEmpty() && r.calls.equals(List.of("error(1,1,0)")),
+                "a keystore-bound request (operationId) is never confirmed: HW_UNAVAILABLE");
+        backend.verifyThrows = new IllegalStateException("no window");
+        r = new Receiver("d");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        check(r.calls.equals(List.of("error(1,1,0)")), "a verification that cannot start: HW_UNAVAILABLE");
+        backend.verifyThrows = null;
+        Receiver after = new Receiver("e");
+        start(after, new Token(), prompt(CRED));
+        host.drain();
+        check(backend.requests.size() == 1 && after.calls.isEmpty(), "the service recovers after a failed start");
+
+        // A result from Windows' own thread.
+        fresh(true, true);
+        r = new Receiver("a");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        Thread windows = new Thread(() -> backend.complete(0, WindowsHelloBackend.VERIFIED));
+        windows.start();
+        windows.join();
+        check(r.calls.isEmpty() && host.pending() == 1, "a completion on another thread is queued");
+        host.drain();
+        check(r.calls.equals(List.of("succeeded(1)")), "and delivered once on the service's thread");
+
+        // Biometric results never appear.
+        check(!events.toString().contains("succeeded(2)"), "AUTHENTICATION_RESULT_TYPE_BIOMETRIC is never reported");
+    }
+
+    public static void main(String[] args) throws Exception {
+        unavailable();
+        available();
+        System.out.println(checks + " checks, " + failures + " failures");
+        if (failures != 0) System.exit(1);
+    }
+}
+
+// --- android stand-ins (android-16.0.0_r4 values) -------------------------------------
+
+final class Manifest {
+    static final class permission {
+        static final String USE_BIOMETRIC = "android.permission.USE_BIOMETRIC";
+        static final String USE_FINGERPRINT = "android.permission.USE_FINGERPRINT";
+    }
+}
+
+interface BiometricAuthenticator {
+    int TYPE_NONE = 0;
+    int TYPE_CREDENTIAL = 1;
+}
+
+interface BiometricConstants {
+    int BIOMETRIC_SUCCESS = 0;
+    int BIOMETRIC_ERROR_HW_UNAVAILABLE = 1;
+    int BIOMETRIC_ERROR_CANCELED = 5;
+    int BIOMETRIC_ERROR_LOCKOUT = 7;
+    int BIOMETRIC_ERROR_USER_CANCELED = 10;
+    int BIOMETRIC_ERROR_NO_BIOMETRICS = 11;
+    int BIOMETRIC_ERROR_HW_NOT_PRESENT = 12;
+    int BIOMETRIC_ERROR_NO_DEVICE_CREDENTIAL = 14;
+    int BIOMETRIC_ERROR_IDENTITY_CHECK_NOT_ACTIVE = 20;
+}
+
+final class BiometricManager {
+    static final int BIOMETRIC_SUCCESS = 0;
+    static final int BIOMETRIC_ERROR_HW_UNAVAILABLE = 1;
+    static final int BIOMETRIC_ERROR_NONE_ENROLLED = 11;
+    static final int BIOMETRIC_ERROR_NO_HARDWARE = 12;
+    static final int BIOMETRIC_ERROR_IDENTITY_CHECK_NOT_ACTIVE = 20;
+    static final long BIOMETRIC_NO_AUTHENTICATION = -1;
+}
+
+interface Authenticators {
+    int EMPTY_SET = 0;
+    int BIOMETRIC_STRONG = 0x000F;
+    int BIOMETRIC_WEAK = 0x00FF;
+    int BIOMETRIC_CONVENIENCE = 0x0FFF;
+    int BIOMETRIC_MIN_STRENGTH = 0x7FFF;
+    int DEVICE_CREDENTIAL = 1 << 15;
+    int IDENTITY_CHECK = 1 << 16;
+}
+
+final class BiometricPrompt {
+    static final int AUTHENTICATION_RESULT_TYPE_DEVICE_CREDENTIAL = 1;
+}
+
+final class BiometricEnrollmentStatusInternal {
+}
+
+final class PromptInfo {
+    int authenticators;
+    boolean deviceCredentialAllowed, internal;
+    CharSequence title, subtitle, description;
+    int getAuthenticators() { return authenticators; }
+    boolean isDeviceCredentialAllowed() { return deviceCredentialAllowed; }
+    boolean requiresTestOrInternalPermission() { return false; }
+    boolean requiresInternalPermission() { return internal; }
+    boolean requiresAdvancedPermission() { return false; }
+    CharSequence getTitle() { return title; }
+    CharSequence getSubtitle() { return subtitle; }
+    CharSequence getDescription() { return description; }
+}
+
+class RemoteException extends Exception {
+    private static final long serialVersionUID = 1L;
+}
+
+interface IBinder {
+    interface DeathRecipient { void binderDied(); }
+    void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException;
+    boolean unlinkToDeath(DeathRecipient recipient, int flags);
+}
+
+final class Binder {
+    static int callingUid, callingPid;
+    static int getCallingUid() { return callingUid; }
+    static int getCallingPid() { return callingPid; }
+}
+
+final class UserHandle {
+    static int getCallingUserId() { return 0; }
+}
+
+final class SystemServer {
+    static void log(String message) { System.out.println("log: " + message); }
+}
+
+interface IBiometricServiceReceiver {
+    void onAuthenticationSucceeded(int authenticationType) throws RemoteException;
+    void onAuthenticationFailed() throws RemoteException;
+    void onError(int modality, int error, int vendorCode) throws RemoteException;
+    void onAcquired(int acquiredInfo, String message) throws RemoteException;
+    void onDialogDismissed(int reason) throws RemoteException;
+    void onSystemEvent(int event) throws RemoteException;
+    IBinder asBinder();
+}
+
+interface IAuthService {
+    long authenticate(IBinder token, long sessionId, int userId, IBiometricServiceReceiver receiver,
+            String opPackageName, PromptInfo promptInfo) throws RemoteException;
+    void cancelAuthentication(IBinder token, String opPackageName, long requestId) throws RemoteException;
+    int canAuthenticate(String opPackageName, int userId, int authenticators) throws RemoteException;
+    long getLastAuthenticationTime(int userId, int authenticators) throws RemoteException;
+    boolean hasEnrolledBiometrics(int userId, String opPackageName) throws RemoteException;
+    List<BiometricEnrollmentStatusInternal> getEnrollmentStatusList(int userId, String opPackageName)
+            throws RemoteException;
+    long[] getAuthenticatorIds(int userId) throws RemoteException;
+    CharSequence getButtonLabel(int userId, String opPackageName, int authenticators) throws RemoteException;
+    CharSequence getPromptMessage(int userId, String opPackageName, int authenticators) throws RemoteException;
+    CharSequence getSettingName(int userId, String opPackageName, int authenticators) throws RemoteException;
+
+    class Default implements IAuthService {
+        public long authenticate(IBinder t, long s, int u, IBiometricServiceReceiver r, String p, PromptInfo i) { return 0; }
+        public void cancelAuthentication(IBinder t, String p, long id) {}
+        public int canAuthenticate(String p, int u, int a) { return 0; }
+        public long getLastAuthenticationTime(int u, int a) { return 0; }
+        public boolean hasEnrolledBiometrics(int u, String p) { return false; }
+        public List<BiometricEnrollmentStatusInternal> getEnrollmentStatusList(int u, String p) { return null; }
+        public long[] getAuthenticatorIds(int u) { return null; }
+        public CharSequence getButtonLabel(int u, String p, int a) { return null; }
+        public CharSequence getPromptMessage(int u, String p, int a) { return null; }
+        public CharSequence getSettingName(int u, String p, int a) { return null; }
+    }
+}
+
+// PRODUCTION_BACKEND
+
+// PRODUCTION_SERVICE

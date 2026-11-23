@@ -467,6 +467,9 @@ jobs:
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
 
+      - name: Biometric and device-credential auth service contracts (ADR 0091)
+        run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
+
       - name: MediaDataSource adapter contracts with checked JNI and UBSan
         run: python3 tools/test_media_callback_adapter.py
 
