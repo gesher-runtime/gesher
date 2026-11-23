@@ -74,6 +74,13 @@ class Engine {
   void Remove(Track*) {}
   void Wake() {}
   OutputTiming output_timing() const { return {48000, 0}; }
+  OutputInfo Info() const {
+    const auto timing = output_timing();
+    OutputInfo info{};
+    info.sample_rate = timing.sample_rate;
+    info.latency_frames = timing.latency_frames;
+    return info;
+  }
 };
 void PostEvent(std::function<void()> event) { event(); }
 @TRACK@
