@@ -1,0 +1,112 @@
+// Exact production event startup/wait/post. Only Linux substitutes Win32 waits.
+#include <jni.h>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <string>
+#include "devsvc_win32.h"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+using DWORD = unsigned long;
+using ULONGLONG = unsigned long long;
+using SRWLOCK = std::mutex;
+// Win32 condition variables are process-lifetime trivial state. Do not run a
+// C++ destructor against the intentionally live daemon waiter at JVM exit.
+using CONDITION_VARIABLE = std::condition_variable*;
+#define SRWLOCK_INIT {}
+#define CONDITION_VARIABLE_INIT new std::condition_variable
+constexpr DWORD INFINITE = 0xffffffff;
+constexpr DWORD ERROR_TIMEOUT = 1460;
+static thread_local DWORD last_error;
+static void AcquireSRWLockExclusive(SRWLOCK* lock) { lock->lock(); }
+static void ReleaseSRWLockExclusive(SRWLOCK* lock) { lock->unlock(); }
+static void WakeAllConditionVariable(CONDITION_VARIABLE* condition) { (*condition)->notify_all(); }
+static ULONGLONG GetTickCount64() {
+  return static_cast<ULONGLONG>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+static DWORD GetLastError() { return last_error; }
+static bool SleepConditionVariableSRW(CONDITION_VARIABLE* condition, SRWLOCK* lock, DWORD timeout, int) {
+  std::unique_lock<std::mutex> held(*lock, std::adopt_lock);
+  bool success = true;
+  if (timeout == INFINITE) (*condition)->wait(held);
+  else if ((*condition)->wait_for(held, std::chrono::milliseconds(timeout)) == std::cv_status::timeout) {
+    last_error = ERROR_TIMEOUT; success = false;
+  }
+  held.release(); return success;
+}
+#endif
+
+namespace gesher::devsvc {
+namespace {
+#ifdef _WIN32
+@WINDOW@
+#else
+SRWLOCK g_lock = SRWLOCK_INIT;
+CONDITION_VARIABLE g_cond = CONDITION_VARIABLE_INIT;
+unsigned g_pending = 0;
+@POST@
+#endif
+}  // namespace
+#ifdef _WIN32
+@START@
+// Keep the production consumers of the event window's display-clock state.
+@IDLE@
+#else
+unsigned long long StartEvents() { return 1; } // explicit Linux window boundary
+#endif
+@WAIT@
+}  // namespace gesher::devsvc
+
+namespace {
+std::atomic<int> starts{0}, waits{0}, empty{0}, events{0}, finite{0};
+jint JNICALL Sequence(JNIEnv*, jclass) { return 1; } // native availability boundary only
+jlong JNICALL Start(JNIEnv*, jclass) { ++starts; return static_cast<jlong>(gesher::devsvc::StartEvents()); }
+jint JNICALL Wait(JNIEnv*, jclass, jint timeout) {
+  ++waits; if (timeout >= 0) ++finite;
+  unsigned value = gesher::devsvc::WaitEvents(timeout);
+  if (value == 0) ++empty; else ++events;
+  return static_cast<jint>(value);
+}
+jobjectArray JNICALL Activation(JNIEnv*, jclass) { return nullptr; }
+void JNICALL Emit(JNIEnv*, jclass, jint value) {
+#ifdef _WIN32
+  // A real owned hidden window and its actual EventProc deliver WM_TIMECHANGE.
+  if (value == gesher::devsvc::kTimeChanged && gesher::devsvc::g_window != nullptr) {
+    SendMessageW(gesher::devsvc::g_window, WM_TIMECHANGE, 0, 0); return;
+  }
+#endif
+  gesher::devsvc::Post(static_cast<unsigned>(value));
+}
+jintArray JNICALL Stats(JNIEnv* env, jclass) {
+  jint values[] = {starts.load(), waits.load(), empty.load(), events.load(), finite.load()};
+  jintArray result = env->NewIntArray(5);
+  if (result) env->SetIntArrayRegion(result, 0, 5, values);
+  return result;
+}
+JNINativeMethod Method(const char* name, const char* signature, void* function) {
+  return {const_cast<char*>(name), const_cast<char*>(signature), function};
+}
+}  // namespace
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+  JNIEnv* env = nullptr;
+  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+  jclass host = env->FindClass("com/gesher/server/WindowsHost");
+  JNINativeMethod host_methods[] = {
+      Method("nativeClipboardSequence", "()I", reinterpret_cast<void*>(Sequence)),
+      Method("nativeStartEvents", "()J", reinterpret_cast<void*>(Start)),
+      Method("nativeWaitEvents", "(I)I", reinterpret_cast<void*>(Wait)),
+      Method("nativeNextActivation", "()[Ljava/lang/String;", reinterpret_cast<void*>(Activation))};
+  if (!host || env->RegisterNatives(host, host_methods, 4) != 0) return JNI_ERR;
+  jclass test = env->FindClass("com/gesher/server/WindowsHostEventsHost");
+  JNINativeMethod test_methods[] = {
+      Method("emit", "(I)V", reinterpret_cast<void*>(Emit)),
+      Method("stats", "()[I", reinterpret_cast<void*>(Stats))};
+  if (!test || env->RegisterNatives(test, test_methods, 2) != 0) return JNI_ERR;
+  return JNI_VERSION_1_6;
+}
