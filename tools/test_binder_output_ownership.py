@@ -5,6 +5,8 @@
 Linux uses real local byte-stream sockets and self-process descriptor duplication
 at an explicit Windows I/O boundary. Windows uses actual byte-mode named pipes
 and handle duplication. Neither path replaces Binder parsing/ownership/results.
+The AppContainer hello/admission path is outside this component; its one global
+flag is annotated unused in the extracted core, never activated or simulated.
 """
 from __future__ import annotations
 
@@ -28,6 +30,12 @@ def section(source: str, begin: str, end: str) -> str:
 
 def generated(source: str) -> str:
     core = section(source, 'namespace {\n\nnamespace wire =', '// --- connections ')
+    # Only ServeProc's excluded AppContainer handshake uses this new main flag.
+    # Keep its actual declaration/value while retaining -Werror for this fixture.
+    sandbox_flag = 'bool g_sandbox = false;'
+    if core.count(sandbox_flag) > 1:
+        raise RuntimeError('AppContainer admission flag boundary is not unique')
+    core = core.replace(sandbox_flag, '[[maybe_unused]] ' + sandbox_flag)
     io = section(source, 'bool ReadExact(HANDLE pipe,', 'uint64_t RandomKey() {')
     dispatch = section(source, 'int DoIoctl(Proc* proc,', 'void Serve(HANDLE pipe) {')
     start = dispatch.index('if (op == wire::kWriteRead) {') + len('if (op == wire::kWriteRead) {')

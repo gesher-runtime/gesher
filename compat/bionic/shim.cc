@@ -832,6 +832,9 @@ int64_t BIONIC_SYSV Clock() { return ProcessCpuNanos() / 1000; }  // CLOCKS_PER_
 // caller passed it, and open ignores it without O_CREAT. Linux flag values,
 // like gesher-base's open.
 int BIONIC_SYSV Open(const char* path, int flags, int mode) { return open(path, flags, mode); }
+int BIONIC_SYSV Creat(const char* path, int mode) {
+  return Open(path, O_CREAT | O_TRUNC | O_WRONLY, mode);
+}
 int BIONIC_SYSV Close(int fd) { return close(fd); }
 int64_t BIONIC_SYSV Read(int fd, void* buf, size_t n) {
   return read(fd, buf, static_cast<unsigned>(n > 0x7fffffff ? 0x7fffffff : n));
@@ -1365,6 +1368,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("open", Open);
   ENTRY("open64", Open);
   ENTRY("__open_2", Open);
+  ENTRY("creat", Creat);
+  ENTRY("creat64", Creat);
   ENTRY("close", Close);
   ENTRY("read", Read);
   ENTRY("write", Write);

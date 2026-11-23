@@ -11716,5 +11716,337 @@
     }
   },
   "measurement_coordination": "All four agent lanes confirmed no concurrent heavy local work; all raw ABBA samples retained.",
-  "raw_encoding": "Every numeric/raw JSON sample record is retained verbatim as parsed values; duplicate stdout serialization is omitted after equality verification, with its SHA-256 retained per process."
+  "raw_encoding": "Every numeric/raw JSON sample record is retained verbatim as parsed values; duplicate stdout serialization is omitted after equality verification, with its SHA-256 retained per process.",
+  "main982_composition": {
+    "main": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+    "prior_published_head": "c61fa022341e38ca2c7e88ce229b0e08ac2170d6",
+    "production_sha256": "1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c",
+    "production_is_canonical_automatic_merge": true,
+    "qualification": {
+      "original_manifest_sha256": "c221504d110bf48da4dab9577a0fc50f9bd0867a553e3bb9042a2eda82cafe64",
+      "original_patch_sha256": "1864085a254a4aaee67b3c6fa3fe4f8c3a8012596b5c1fac7fb3d953bcce6d36",
+      "incoming_main_ofd_receipt_sha256": "9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01",
+      "same_original_patch_reverses_to_exact_main_and_forwards_to_current": true,
+      "historical_source_receipt_still_checked": true,
+      "runtime_approval": false,
+      "negative_controls": {
+        "ordinary": 33,
+        "repinned_property": 4,
+        "historical_repinned_binder": 6,
+        "current_repinned_binder_and_main_admission": 7,
+        "shared_stdio": 23
+      }
+    },
+    "fixture_boundary": {
+      "path": "tools/test_binder_output_ownership.py",
+      "sha256": "81fe99c94e537bef6c40f9fc7a307efea040be71acaa3317c1764819c607644b",
+      "change": "Only annotate the one extracted g_sandbox global [[maybe_unused]] because ServeProc admission is outside the component. All strict warning flags, production assertions and six mutants remain.",
+      "actual_AppContainer_runtime_coverage": false
+    },
+    "source_receipt": {
+      "source_ref": null,
+      "source_sha256": "1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c",
+      "command": [
+        "c++",
+        "-std=c++20",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fno-exceptions",
+        "-pthread",
+        "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+        "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+        "-fsanitize=address,undefined",
+        "-fno-sanitize-recover=all",
+        "-fno-omit-frame-pointer",
+        "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/broker-output.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/broker-output"
+      ],
+      "generated_sha256": "ec5522d81f2683f652ba6d86ca63a72b72d31c1211a16a7f766c8b6a0978b33d"
+    },
+    "negative_controls": [
+      {
+        "name": "spawn-header",
+        "source_sha256": "a95479084a42a54f0fa74c9a25fe40796b0f8400fd634c15b0a4c8e9378ca4bc",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-pthread",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/spawn-header/broker-output.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/spawn-header/broker-output"
+        ],
+        "returncode": 1,
+        "assertion": "FAIL broker output: spawn replaces the first command without overwriting status or consumed"
+      },
+      {
+        "name": "read-error-status",
+        "source_sha256": "70311443868f76712f591db09273177a78cdf359fff03b4d52868040101f8f17",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-pthread",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/read-error-status/broker-output.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/read-error-status/broker-output"
+        ],
+        "returncode": 1,
+        "assertion": "FAIL broker output: actual read failure updates status after the header was reserved"
+      },
+      {
+        "name": "consumed-header",
+        "source_sha256": "b77d4a81358c326e371b3125d1ee6f89f834f995af968075619e030f419c9264",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-pthread",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/consumed-header/broker-output.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/consumed-header/broker-output"
+        ],
+        "returncode": 1,
+        "assertion": "FAIL broker output: one actual command is consumed exactly once"
+      },
+      {
+        "name": "read-budget",
+        "source_sha256": "0b0d7bf4d776f7fa2024065d045d4db8f9b884d588144ce3f1e707d4002d6612",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-pthread",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/read-budget/broker-output.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/read-budget/broker-output"
+        ],
+        "returncode": 1,
+        "assertion": "FAIL broker output: wire status header consumes no Android read-buffer budget"
+      },
+      {
+        "name": "zero-input",
+        "source_sha256": "04a191c10228930b060f1aa6604de327ba81ccd3c25dcf844d000fe42df82267",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-pthread",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/zero-input/broker-output.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/zero-input/broker-output"
+        ],
+        "returncode": 1,
+        "assertion": "FAIL broker output: zero-byte empty view neither dereferences nor advances null"
+      },
+      {
+        "name": "extra-output-copy",
+        "source_sha256": "ad6d0f5f2a00cdacf1c5124a3daf6c5462d38606753625b14dd1bb387496d49b",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-pthread",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+          "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/extra-output-copy/broker-output.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder-fixed/negative/extra-output-copy/broker-output"
+        ],
+        "returncode": 1,
+        "assertion": "FAIL broker output: one serialized body pass; no complete nested-output recopy"
+      }
+    ],
+    "logs": {
+      "native-main982-361-binder.log": "binderd_sha256=1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c\n/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder/broker-output.cc:273:6: error: \u2018{anonymous}::g_sandbox\u2019 defined but not used [-Werror=unused-variable]\n  273 | bool g_sandbox = false;\n      |      ^~~~~~~~~\ncc1plus: all warnings being treated as errors\nTraceback (most recent call last):\n  File \"/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tools/test_binder_output_ownership.py\", line 163, in <module>\n    main()\n  File \"/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tools/test_binder_output_ownership.py\", line 112, in main\n    subprocess.run(command, check=True, timeout=120)\n  File \"/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py\", line 571, in run\n    raise CalledProcessError(retcode, process.args,\nsubprocess.CalledProcessError: Command '['c++', '-std=c++20', '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-fno-exceptions', '-pthread', '-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native', '-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder/broker-output.cc', '-o', '/workspace/scratch/aa09b1a0dc1f/native-main982-361-binder/broker-output']' returned non-zero exit status 1.\n",
+      "native-main982-361-binder-fixed.log": "binderd_sha256=1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c\nbinderd: proc 24: invalid transaction user copy or scatter-gather layout\nbinderd: proc 26: invalid transaction user copy or scatter-gather layout\nBINDER_OUTPUT_PASS checks=1613\nBINDER_OUTPUT_NEGATIVE_PASS spawn-header\nBINDER_OUTPUT_NEGATIVE_PASS read-error-status\nBINDER_OUTPUT_NEGATIVE_PASS consumed-header\nBINDER_OUTPUT_NEGATIVE_PASS read-budget\nBINDER_OUTPUT_NEGATIVE_PASS zero-input\nBINDER_OUTPUT_NEGATIVE_PASS extra-output-copy\n",
+      "native-main982-361-policy-composed.log": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\nTCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases=33 repinned_property_controls=4 repinned_binder_output_controls=6 repinned_composed_binder_controls=7\nPASS shared-stdio source policy rejects unqualified bytes in compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/src/stdio_output.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects an undeclared transition file\nPASS shared-stdio source policy rejects an undeclared endpoint\nPASS shared-stdio source policy rejects an invented approval field\nPASS shared-stdio source policy rejects an undeclared patch path even with repinned patch and manifest\nPASS shared-stdio source policy rejects a modified before-hunk even with repinned patch and manifest\nPASS shared-stdio source policy rejects a repinned baseline identity\nPASS shared-stdio source policy rejects a repinned feature identity\nPASS shared-stdio source policy rejects a repinned baseline source digest\nPASS shared-stdio source policy rejects a repinned baseline policy\nPASS shared-stdio source policy rejects changed transition metadata without its independent pin\nPASS shared-stdio source policy rejects changed transition patch without its independent pin\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/ofd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/fd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/bionic/stdio_windows_lock.h\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/stdio_stream_buffer.h\nPASS shared-stdio source policy rejects a modified original OFD receipt\nPASS shared-stdio source policy rejects a modified original OFD patch\nSHARED_STDIO_SOURCE_POLICY_PASS exact_main_round_trip=4 original_protected_digests=71 negative_controls=23\n",
+      "native-main982-361-supplier.log": "TCP_SELECTED_SUPPLIER_METADATA_PASS projection=SYNTHETIC_LOG_METADATA_ONLY semantic_mutants=36 authority_hash_negative=1 actual_selected_runtime_claim=false native_processes_started=0\n"
+    },
+    "windows_links": {
+      "x86_64": {
+        "production": {
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+            "-std=c++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fno-exceptions",
+            "-static",
+            "-pthread",
+            "-Icompat/posix/include",
+            "-idirafter",
+            "../binder-output-aosp/bionic/libc/kernel/uapi",
+            "compat/binder/binderd.cc",
+            "compat/framework/app_container.cc",
+            "-lbcrypt",
+            "-ladvapi32",
+            "-lole32",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/native-main982-361-windows/binderd-x86_64.exe"
+          ],
+          "returncode": 0,
+          "sources": {
+            "compat/binder/binderd.cc": "1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c",
+            "compat/framework/app_container.cc": "9eee534fe210de73c18cb41c0b0978dd9bb45b458f03103b43c547b0a2d37240",
+            "compat/framework/app_container.h": "fad48a3543c9368de39736ffba13e37b744ca0b1a1069dc2ecd3f4142b053100"
+          }
+        },
+        "fixture": {
+          "source_ref": null,
+          "source_sha256": "1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+            "-std=c++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fno-exceptions",
+            "-pthread",
+            "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+            "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+            "-static",
+            "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/include",
+            "-idirafter",
+            "../binder-output-aosp/bionic/libc/kernel/uapi",
+            "/workspace/scratch/aa09b1a0dc1f/native-main982-361-windows/x86_64/broker-output.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/native-main982-361-windows/x86_64/broker-output.exe"
+          ],
+          "generated_sha256": "ec5522d81f2683f652ba6d86ca63a72b72d31c1211a16a7f766c8b6a0978b33d"
+        },
+        "production_binary_sha256": "4a751373bfd190b89d63734732ffdffb5eca518c8f691c2655d3d02e304fe9d9",
+        "fixture_binary_sha256": "39d6692de09fab3b1fbb39967e185c3fedac696527b8b773dabee367a4c8a97e",
+        "status": "Complete real binderd+app_container and component fixture linked; actual Windows execution remains pending full CI."
+      },
+      "aarch64": {
+        "production": {
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+            "-std=c++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fno-exceptions",
+            "-static",
+            "-pthread",
+            "-Icompat/posix/include",
+            "-idirafter",
+            "../binder-output-aosp/bionic/libc/kernel/uapi",
+            "compat/binder/binderd.cc",
+            "compat/framework/app_container.cc",
+            "-lbcrypt",
+            "-ladvapi32",
+            "-lole32",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/native-main982-361-windows/binderd-aarch64.exe"
+          ],
+          "returncode": 0,
+          "sources": {
+            "compat/binder/binderd.cc": "1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c",
+            "compat/framework/app_container.cc": "9eee534fe210de73c18cb41c0b0978dd9bb45b458f03103b43c547b0a2d37240",
+            "compat/framework/app_container.h": "fad48a3543c9368de39736ffba13e37b744ca0b1a1069dc2ecd3f4142b053100"
+          }
+        },
+        "fixture": {
+          "source_ref": null,
+          "source_sha256": "1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+            "-std=c++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fno-exceptions",
+            "-pthread",
+            "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/tests/native",
+            "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/src",
+            "-static",
+            "-I/workspace/scratch/aa09b1a0dc1f/gesher-native-main982-361/compat/posix/include",
+            "-idirafter",
+            "../binder-output-aosp/bionic/libc/kernel/uapi",
+            "/workspace/scratch/aa09b1a0dc1f/native-main982-361-windows/aarch64/broker-output.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/native-main982-361-windows/aarch64/broker-output.exe"
+          ],
+          "generated_sha256": "ec5522d81f2683f652ba6d86ca63a72b72d31c1211a16a7f766c8b6a0978b33d"
+        },
+        "production_binary_sha256": "13d4acac51f002838ea97be959586eeb2394678bbdd7b6cd286355681e157d03",
+        "fixture_binary_sha256": "6707bc9a9653419e24558d8cf5c0735cd11890c4e69e5f827eb8d7f09fef5cec",
+        "status": "Complete real binderd+app_container and component fixture linked; actual Windows execution remains pending full CI."
+      }
+    },
+    "timing": "No current-main timing rerun or Windows/application performance claim; every historical measurement key/value is retained unchanged."
+  }
 }
