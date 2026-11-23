@@ -361,7 +361,9 @@ int pipe(int fds[2]) { return pipe2(fds, 0); }
 //  2. through another descriptor of this process open for writing on the same
 //     file, when Windows refuses that handle: a read-only file
 //     (FILE_ATTRIBUTE_READONLY, Gesher's mode 0444), an ACL that denies
-//     writing, or another open that does not share writing.
+//     writing, another open that does not share writing, or a read-only
+//     volume (ERROR_WRITE_PROTECT; Linux's ext4 and f2fs fsync succeed on a
+//     file of a read-only mount).
 //  3. otherwise by writing the file's cached data back through a read-only
 //     mapping of it (FlushViewOfFile), the one flush Windows offers without
 //     write access. It waits for the cached data to reach the device, but
@@ -456,7 +458,8 @@ int fsync(int fd) {
       return 0;
     }
     const DWORD error = GetLastError();
-    if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION)
+    if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION &&
+        error != ERROR_WRITE_PROTECT)
       return errno = gesher::ErrnoFromWin32(error), -1;
     if (int failed = gesher::record_locks::FileIdentity(h, &identity)) return errno = failed, -1;
   }
