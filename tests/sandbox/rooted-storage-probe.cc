@@ -116,6 +116,9 @@ void WinVfsHandles(const storage::Roots& roots, const fs::path& dir) {
   const bool queued = WriteFile(file, "safe", 4, nullptr, &io) || GetLastError() == ERROR_IO_PENDING;
   Check(queued && GetOverlappedResult(file, &io, &transferred, TRUE) && transferred == 4,
         "overlapped file preserves real I/O");
+  FILE_DISPOSITION_INFO cancel{FALSE};
+  Check(!SetFileInformationByHandle(file, FileDispositionInfo, &cancel, sizeof(cancel)) &&
+        GetLastError() == ERROR_ACCESS_DENIED, "transferred temp handle has no delete authority");
   CloseHandle(file);
   Check(!fs::exists(dir / L"CE/sqlite-temp"), "last close retires the real temp file");
 }

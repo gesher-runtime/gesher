@@ -208,13 +208,23 @@ int Open(const Roots& roots, Area area, std::wstring_view path, OpenRequest requ
   if (request.truncate && !SetFileInformationByHandle(opened, FileEndOfFileInfo, &end, sizeof(end))) {
     return ErrnoFromWin32(GetLastError());
   }
-  FILE_DISPOSITION_INFO deletion{TRUE};
-  if (request.delete_on_close &&
-      !SetFileInformationByHandle(opened, FileDispositionInfo, &deletion, sizeof(deletion))) {
-    return ErrnoFromWin32(GetLastError());
+  if (request.delete_on_close) {
+    HANDLE narrowed = INVALID_HANDLE_VALUE;
+    const HANDLE process = GetCurrentProcess();
+    if (!DuplicateHandle(process, opened, process, &narrowed, (rights & ~DELETE) | SYNCHRONIZE,
+                         FALSE, 0)) return ErrnoFromWin32(GetLastError());
+    File guest(narrowed);
+    FILE_DISPOSITION_INFO deletion{TRUE};
+    if (!SetFileInformationByHandle(opened, FileDispositionInfo, &deletion, sizeof(deletion))) {
+      return ErrnoFromWin32(GetLastError());
+    }
+    // The duplicate keeps this exact file object and its pending deletion,
+    // without receiving the right to change its disposition or name.
+    *result = guest.release();
+  } else {
+    *result = owned.release();
   }
   if (created != nullptr) *created = fresh;
-  *result = owned.release();
   return 0;
 }
 

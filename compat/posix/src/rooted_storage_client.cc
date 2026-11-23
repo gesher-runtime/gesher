@@ -102,13 +102,18 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
 Selection Lookup(const std::wstring& mapped) {
   const auto& state = cohost_bootstrap::Current();
   if (!state || state.storage_pipe.empty()) return {};
+  struct Roots {
+    std::wstring credential, device;
+  };
+  static const Roots roots{AbsoluteDosPath(state.credential), AbsoluteDosPath(state.device)};
+  if (roots.credential.empty() || roots.device.empty()) return {false, EACCES, wire::kCredential, {}};
   const std::wstring absolute = AbsoluteDosPath(mapped);
   if (absolute.empty()) return {false, ENAMETOOLONG, wire::kCredential, {}};
-  const bool ce = Within(absolute, state.credential);
-  const bool de = Within(absolute, state.device);
+  const bool ce = Within(absolute, roots.credential);
+  const bool de = Within(absolute, roots.device);
   if (!ce && !de) return {};
-  const bool choose_device = de && (!ce || state.device.size() > state.credential.size());
-  const auto& root = choose_device ? state.device : state.credential;
+  const bool choose_device = de && (!ce || roots.device.size() > roots.credential.size());
+  const auto& root = choose_device ? roots.device : roots.credential;
   size_t start = root.size();
   if (start < absolute.size() && absolute[start] == L'\\') ++start;
   auto relative = absolute.substr(start);
