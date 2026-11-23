@@ -156,7 +156,10 @@ public final class CameraAdmissionHost {
         flushing.submitRequestList(new CaptureRequest[]{request(128),request(128),request(128)},false);
         check(WindowsCamera.readEntered.await(5,TimeUnit.SECONDS),"actual capture producer is held in native read seam");
         flushing.flush();until(()->ordered.terminals.get()==3,"flush delivers every active/queued terminal");
-        for(int i=0;i<3;i++)check(ordered.events.get(i).startsWith("error:"+i+":"),"active flush error precedes later queued frames");
+        for (int i = 0; i < 3; i++) {
+            check(ordered.events.get(i).equals("error:" + i + ":" + ICameraDeviceCallbacks.ERROR_CAMERA_REQUEST),
+                    "active flush before capture and queued frames report no image in order");
+        }
         check(frames(flushing)==1,"flushed active native read remains charged until producer finishes");
         WindowsCamera.readRelease.countDown();WindowsCamera.readRelease=null;flushing.disconnect();clean();
 
@@ -168,7 +171,43 @@ public final class CameraAdmissionHost {
         until(()->afterError.get()==1,"application Error does not strand subsequent callbacks");clean();
     }
 
+    static void flushDuringImageDelivery() throws Exception {
+        Target target = new Target();
+        CameraDeviceUser camera = camera(target, true);
+        CaptureRequest active = request(128);
+        active.streams = new int[] {
+                camera.createStream(new android.hardware.camera2.params.OutputConfiguration()) };
+        CountDownLatch delivered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CameraFrames.afterDelivery = () -> {
+            delivered.countDown();
+            try {
+                check(release.await(5, TimeUnit.SECONDS), "finish output delivery after flush");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        };
+        try {
+            camera.submitRequestList(new CaptureRequest[] {active, request(128)}, false);
+            check(delivered.await(5, TimeUnit.SECONDS), "frame is publishing buffer with metadata still pending");
+            camera.flush();
+            until(() -> target.terminals.get() == 2, "active and queued frames have terminal callbacks");
+            check(target.events.contains("error:0:" + ICameraDeviceCallbacks.ERROR_CAMERA_RESULT),
+                    "active frame with an image must report a result error");
+            check(target.events.contains("error:1:" + ICameraDeviceCallbacks.ERROR_CAMERA_REQUEST),
+                    "queued frame without an image must report a request error");
+        } finally {
+            release.countDown();
+            CameraFrames.afterDelivery = null;
+            camera.disconnect();
+        }
+        clean();
+        check(target.terminals.get() == 2, "flush publishes no duplicate terminal result");
+    }
+
     public static void main(String[] args)throws Exception{
+        flushDuringImageDelivery();
         admissionAndFlush();bytesAndAtomicBurst();repeatingBackpressure();controlsAndFailure();reentrantAndReopen();progressAndFailureRegressions();
         System.out.println("Camera admission production checks passed: "+checks);
     }

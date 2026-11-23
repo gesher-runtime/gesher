@@ -53,6 +53,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         final Request request;
         final int subsequenceId;
         long frameNumber;
+        boolean imageCaptured; // Updated under mLock before publishing any output buffer.
         final CameraCallbacks.FrameCallbacks callbacks;
 
         Frame(Request request, int subsequenceId, long frameNumber,
@@ -438,7 +439,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             // Post while holding the selection lock (enqueue only, never app code)
             // so a competing producer cannot start a frame after its flush error.
             if (mActive != null) {
-                mActive.callbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_REQUEST,
+                mActive.callbacks.onDeviceError(captureFailure(mActive),
                         extras(mActive.request.requestId, mActive.subsequenceId, mActive.frameNumber));
                 // A native read may still own this frame. Only its producer seals it.
             }
@@ -629,7 +630,10 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     if (timing != null) { ++timing.readErrors; timing.end(); }
                     continue;
                 }
-                if (f.callbacks.terminal()) continue;
+                synchronized (mLock) {
+                    if (f.callbacks.terminal()) continue;
+                    f.imageCaptured = true;
+                }
                 CaptureResultExtras extras = extras(f.request.requestId, f.subsequenceId,
                         f.frameNumber);
                 try {
@@ -686,7 +690,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             } finally {
                 // A delivery/metadata exception still completes the admitted frame.
                 if (!f.callbacks.terminal()) {
-                    f.callbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_REQUEST,
+                    f.callbacks.onDeviceError(captureFailure(f),
                             extras(f.request.requestId, f.subsequenceId, f.frameNumber));
                 }
                 f.callbacks.close();
@@ -752,6 +756,13 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         CameraService.log("camera " + mCameraId + " (" + mDevice.name + ") capturing at "
                 + capture.width + "x" + capture.height + " (opened in "
                 + (SystemClock.elapsedRealtime() - start) + " ms)");
+    }
+
+    private static int captureFailure(Frame frame) {
+        // CameraDeviceImpl uses only RESULT errors to allow buffers on a
+        // failed capture. A REQUEST error promises that none are available.
+        return frame.imageCaptured ? ICameraDeviceCallbacks.ERROR_CAMERA_RESULT
+                : ICameraDeviceCallbacks.ERROR_CAMERA_REQUEST;
     }
 
     private void fail(Frame f, int error) {

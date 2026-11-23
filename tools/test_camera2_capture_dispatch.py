@@ -40,9 +40,14 @@ def main() -> None:
         'private void open(Size size)',
         'private static final class CaptureTiming',
     ))
+    capture_failure = 'private static int captureFailure(Frame frame)'
+    has_capture_failure = capture_failure in source
+    if has_capture_failure:
+        exact += '\n' + method(source, capture_failure)
     print('Camera2 capture dispatch production SHA256', hashlib.sha256(exact.encode()).hexdigest(), flush=True)
     fixture = (ROOT / 'tests/java-performance/Camera2CaptureDispatchHost.java.in').read_text(encoding='utf-8')
     fixture = fixture.replace('@PRODUCTION@', exact).replace('@SCAN_GATE@', str(not args.measure).lower())
+    fixture = fixture.replace('@POST_CAPTURE_ERROR@', '4' if has_capture_failure else '3')
     with tempfile.TemporaryDirectory(prefix='gesher-camera2-dispatch-') as temporary:
         work = Path(temporary)
         target = work / 'Camera2CaptureDispatchHost.java'

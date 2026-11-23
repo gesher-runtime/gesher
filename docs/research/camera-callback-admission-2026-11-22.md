@@ -30,8 +30,10 @@ strand the queue's credits or following callbacks.
 Required per-frame terminal callbacks are not dropped at saturation.
 
 Flush first marks an active lower-numbered frame terminal, then cancels queued
-requests with ordered `ERROR_CAMERA_REQUEST` callbacks. A result already published remains its terminal
-result; cancellation cannot publish a second terminal result. A canceled native
+requests with ordered `ERROR_CAMERA_REQUEST` callbacks. If the active camera
+already captured an image, its abort uses `ERROR_CAMERA_RESULT` so Android can
+report that buffers may be available. A result already published remains its
+terminal result; cancellation cannot publish a second terminal result. A canceled native
 read retains its credits until it actually returns. Disconnect wakes a parked
 producer and closes admission without joining its callback worker. Native capture
 retains the existing bounded join and read-lease ownership, so a blocked native
