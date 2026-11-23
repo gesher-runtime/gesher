@@ -282,6 +282,14 @@ void RetirementAndReuse() {
   WaitEntered(scenario, 4);
   for (size_t index = 4; index < callers.size(); ++index) callers[index].Launch(scenario.pool.get(), Request(old));
   Require(Until([&] { return scenario.pool->QueuedCount() == 2; }), "retirement queued barrier");
+  // RetireWindow publishes this before it acquires the pool mutex. Another
+  // window's retirement can prune this queue before the matching Retire call.
+  old->alive.store(false, std::memory_order_release);
+  scenario.pool->Retire(std::make_shared<WindowEpoch>(400));
+  Check(scenario.pool->QueuedCount() == 0 && Until([&] {
+          return callers[4].finished.load(std::memory_order_acquire) &&
+                 callers[5].finished.load(std::memory_order_acquire);
+        }, 500), "unrelated pruning wakes callers of an already dead queued epoch");
   scenario.pool->Retire(old);
   Check(!old->alive && scenario.pool->QueuedCount() == 0 && scenario.pool->Remaining(callers[0].request->token) == 0,
         "retirement cancels active tokens and removes only stale queued generation");
@@ -289,6 +297,13 @@ void RetirementAndReuse() {
   Caller next;
   next.Launch(scenario.pool.get(), replacement);
   Require(Until([&] { return scenario.pool->QueuedCount() == 1; }), "new HWND generation admission");
+  Check(Until([&] {
+          for (auto& caller : callers) if (!caller.finished.load(std::memory_order_acquire)) return false;
+          return true;
+        }, 500), "retired active and queued Run callers wake before the blocked callbacks return");
+  Check(scenario.pool->ActiveCount() == 4 && scenario.harness.completed == 0 &&
+        scenario.pool->QueuedCount() == 1,
+        "prompt retirement retains all executing callbacks and the fresh queued generation");
   SetEvent(scenario.harness.release);
   next.Join();
   for (auto& caller : callers) { caller.Join(); Check(!caller.result, "retired generation returns unavailable"); }
@@ -315,6 +330,9 @@ void ConcurrentStopAndWaitingCaller() {
   SetEvent(gate);
   Require(Until([&] { return active[0].request->canceled.load() && scenario.pool->QueuedCount() == 0; }),
           "actual Stop cancellation publication");
+  Check(Until([&] { return queued.finished.load(std::memory_order_acquire); }, 500) &&
+        scenario.pool->ActiveCount() == 4 && !stops[0].finished.load() && !stops[1].finished.load(),
+        "Stop wakes a removed caller while both Stop owners still wait for actual callbacks");
   SetEvent(scenario.harness.release);
   for (auto& caller : stops) {
     caller.Join();
@@ -323,8 +341,8 @@ void ConcurrentStopAndWaitingCaller() {
   CloseHandle(gate);
   bool queued_done = false;
   { std::lock_guard<std::mutex> lock(queued.request->result_mutex); queued_done = queued.request->done; }
-  Check(scenario.pool->ActiveCount() == 0 && !queued.finished.load() && !queued_done,
-        "successful callback drain does not falsely imply a removed native Run waiter returned");
+  Check(scenario.pool->ActiveCount() == 0 && !queued_done,
+        "cancellation wakes a removed caller without falsely declaring that its callback executed");
   for (auto& caller : active) { caller.Join(); Check(!caller.result, "Stop cancels active caller result"); }
   queued.Join();
   Check(!queued.result && queued.milliseconds < 4000, "removed native waiter returns by its original deadline");
