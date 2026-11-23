@@ -18,7 +18,11 @@ The whole production implementation and actual successful-write entry point
 pass the host contracts; the shared public corpus passes against real Linux.
 For 4,096 publications with 1,024 file watches, unmatched publications allocate
 **12,288 → 0** objects and matched publications allocate **16,384 → 4,096**.
-Both avoid all 4,096 pathname resolutions and 4,194,304 pathname comparisons.
+Unmatched publications avoid all 4,096 pathname resolutions and 4,194,304
+pathname comparisons. Matched file publications resolve one name per write,
+of the watch's pinned inode rather than the writer, into a stack buffer; that
+query detects a rename whose native record is still in flight (see
+[Rename-record ordering](#rename-record-ordering)).
 These are component resource measurements, not Windows or whole-application
 write-throughput measurements. The setup and memory costs are reported below.
 
@@ -101,12 +105,20 @@ are **not Windows byte counts or RSS**.
 | Unmatched allocated bytes on this host | 537,755,648 | 0 |
 | 1,024 file watches, matched allocations | 16,384 | 4,096 |
 | Matched allocated bytes on this host | 537,825,280 | 69,632 |
-| File workload pathname resolutions | 4,096 | 0 |
-| File workload pathname comparisons | 4,194,304 | 0 |
+| File workload pathname resolutions, unmatched | 4,096 | 0 |
+| File workload pathname resolutions, matched | 4,096 | 4,096 ¹ |
+| File workload pathname comparisons, unmatched | 4,194,304 | 0 |
+| File workload pathname comparisons, matched | 4,194,304 | 8,192 ¹ |
 | File workload identity queries | 4,096 | 4,096 |
 | Matched wake publications | 4,096 | 4,096 |
 | 64 directory watches, unmatched comparisons | 262,144 | 40,960 |
 | 64 directory watches, matched comparisons | 262,144 | 45,056 |
+
+¹ Revised for the rename-record ordering fix: one pinned-inode name query and
+two ordinal comparisons (parent, leaf) per matched write. These counts are
+enforced by host assertions; the allocation counts are unchanged by
+construction (stack buffer for names under 1,024 characters). The ABBA timing
+and allocation runs below were not repeated for the revision.
 
 The retained matched-path allocation constructs the ordinary 17-byte event
 string before duplicate coalescing. It is not eliminated. Directory workloads
@@ -187,6 +199,36 @@ it does not run the production Windows completion worker. UTF-16/native record
 ABI, real Windows filesystem behavior, Windows/ART runtime and full CI were
 not executed locally. Cross compilation and target-gate wiring do not claim
 those results.
+
+## Rename-record ordering
+
+Windows completes a watched file's rename record asynchronously. The baseline
+resolved the writer's pathname on every write, which delayed publication enough
+to mask this; without that delay a write right after `rename` could publish its
+IN_MODIFY before IN_MOVE_SELF and merge it with an earlier unread IN_MODIFY. In
+`posix_probe`'s three-rename burst this gave MS,M,MS,M,MS instead of
+MS,M,MS,M,MS,M.
+
+After the existing drain, a matched known-ID file watch now compares the
+current normalized name of its pinned identity handle with the watched name.
+Only when they differ (and no rename is already being followed) does the write
+wait, at most 50 ms, for the read's own completion event, draining as records
+arrive. If the record does not come, the write reports IN_Q_OVERFLOW before its
+IN_MODIFY and marks the name stale so later writes do not wait again. A watched
+name unlinked while another link keeps the inode is marked stale too, and its
+IN_CLOSE_WRITE probe reopens the pinned inode with `ReOpenFile` instead of
+polling a vanished or reused name. Unmatched writes still resolve no pathname;
+the writing handle's identity or pathname is queried before any lock is taken.
+
+Windows `posix_probe` evidence (x86_64, LLVM-MinGW 20261006, local build):
+an isolated driver repeating the three-rename burst, four concurrent processes
+of 2,000 iterations each, failed **122/8,000** with the baseline, **106/8,000**
+with the original candidate and **0/8,000** with this revision. Complete
+`posix_probe` runs of this revision passed **250/250** sequentially; the original
+candidate failed the burst check in 1 of 250 runs alongside a concurrent loop
+(an earlier independent QA measured 16/224 for it and 1/230 for the baseline). The
+Linux host gate was not re-run for this revision (no Linux executor was
+available); its assertion counts above refer to the original candidate.
 
 ## Reproduction
 
