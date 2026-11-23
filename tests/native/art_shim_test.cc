@@ -28,6 +28,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -264,7 +266,7 @@ void CheckArm64StandIns() {
         IsArtHookingPacker("/data/app/x/lib/arm64/libnesec.so") &&
             !IsArtHookingPacker("/data/app/x/lib/arm64/libnesec2.so"));
   // Each shell's stand-in is for one machine: an x86-64 libnesec.so gets
-  // neither (ADR 0086), an arm64 libexec*.so no x86-64 one.
+  // none (ADR 0086), nor does an arm64 libexec*.so.
   Check("libnesec.so's stand-in is arm64 only, Ijiami's x86-64 only",
         ArtHookingPackerMachine("/data/app/x/lib/x86_64/libnesec.so") == EM_AARCH64 &&
             ArtHookingPackerMachine("C:\\a\\libexec_x86.so") == EM_X86_64 &&
@@ -399,10 +401,40 @@ int main(int argc, char** argv) {
             gesher::bionic::IsArtHookingPacker("C:\\a\\libexecmain.so") &&
             !gesher::bionic::IsArtHookingPacker("/data/app/x/lib/x86_64/libexecutor.so"));
 
+  // Stand-in directories an earlier Gesher left: loading prunes this kind's
+  // other images and the old 8-hex-digit names once they are a day old.
+  namespace fs = std::filesystem;
+  const fs::path scratch(argv[2]);
+  const auto old_time = fs::file_time_type::clock::now() - std::chrono::hours(48);
+  struct Leftover { const char* name; bool old; bool pruned; };
+  const Leftover leftovers[] = {
+      {"0123abcd", true, true},                  // a 32-bit name from before kinds
+      {"x86_64-0000000000000000", true, true},   // another x86-64 image
+      {"x86_64-1111111111111111", false, false}, // recent: may be starting up
+      {"arm64-0000000000000000", true, false},   // the other kind's
+      {"notes", true, false},                    // not a stand-in directory
+  };
+  for (const Leftover& leftover : leftovers) {
+    const fs::path sub = scratch / leftover.name;
+    fs::create_directories(sub);
+    std::ofstream(sub / "libart.so") << "stale";
+    std::error_code ec;
+    if (leftover.old) fs::last_write_time(sub, old_time, ec);
+    Check(("leftover " + std::string(leftover.name) + " is set up").c_str(), !ec, ec.message());
+  }
+
   std::string path, error;
   void* entry = gesher::bionic::LoadArtShim(argv[2], &path, &error);
   Check("the stand-in libart.so loads", entry != nullptr, path + error);
   if (entry == nullptr) return 1;
+  const std::string loaded_dir = fs::path(path).parent_path().filename().string();
+  Check("its directory is named x86_64-<64-bit hash>",
+        loaded_dir.size() == 23 && loaded_dir.compare(0, 7, "x86_64-") == 0, loaded_dir);
+  for (const Leftover& leftover : leftovers) {
+    Check(("leftover " + std::string(leftover.name) + (leftover.pruned ? " is pruned" : " stays"))
+              .c_str(),
+          fs::exists(scratch / leftover.name) != leftover.pruned);
+  }
   const size_t slash = path.find_last_of('/');
   Check("its file is named libart.so",
         slash != std::string::npos && path.substr(slash) == "/libart.so", path);

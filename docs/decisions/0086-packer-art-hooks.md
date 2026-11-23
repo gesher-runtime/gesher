@@ -61,9 +61,12 @@ no symbol.
 **A stand-in `libart.so` for such an app, and ART calling it.**
 
 - `compat/bionic/art_shim.cc` writes a small ELF64 x86-64 object to
-  `$ANDROID_DATA/system/gesher-art/<hash of its bytes>/libart.so` (once; a
-  process that has an older one mapped keeps it) and loads it with the ELF
-  loader. It exports only the `LoadClass` symbol, a System V function that
+  `$ANDROID_DATA/system/gesher-art/x86_64-<64-bit hash of its bytes>/libart.so`
+  (once; a process that has an older one mapped keeps it) and loads it with
+  the ELF loader. After loading, it removes the directories of other images
+  of its kind (and the 32-bit names used before) that have been untouched
+  for a day; a file another process still has mapped is not deleted, and its
+  directory stays. It exports only the `LoadClass` symbol, a System V function that
   does nothing: a normal prologue, two 8-byte NOPs and the epilogue. An inline
   hook can displace the first 14 bytes (or 5) on whole, position-independent
   instructions.
@@ -223,7 +226,8 @@ library that defines it on a device:
   was not looked at.
 
 **Decision.** For an arm64 ELF shell named `libnesec.so`, the bridge writes
-and loads two arm64 stand-ins in one directory named after their contents,
+and loads two arm64 stand-ins in one directory named after their contents
+(`arm64-<64-bit hash>`, pruned as the x86-64 one's are),
 `libart.so` and `libdexfile.so`, as a device's ART module has them in its
 `lib64` (`compat/bionic/art_shim.cc`, `LoadArtShimArm64`;
 `compat/bionic/jni_bridge.cc`, `LoadArtShimArm64For`). The x86-64 stand-in is
@@ -282,6 +286,7 @@ package that declares it (AOSP's `ComponentResolver`); and bionic's
   exports the other's), the `R_AARCH64_GLOB_DAT` GOT relocations and the code
   that reads those slots, and the entry's call. The translated execution of
   the stand-ins and the ART patches are exercised only by an app with this
-  shell; no such app is in the repository.
+  shell; no such app is in the repository. It also checks which machine each
+  shell's stand-in is for, and the pruning of stale stand-in directories.
 - **Not covered:** an x86-64 or 32-bit NetEase shell, and any ART symbol the
   shell looks up on a path Dreame's startup did not take.

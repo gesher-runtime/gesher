@@ -16,6 +16,7 @@
 // when the packer has hooked it, the packer's code runs there, as on a device.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -34,6 +35,19 @@ bool IsArtHookingPacker(const char* path);
 // covers, or 0 when none: EM_X86_64 for Ijiami's names, EM_AARCH64 for NetEase
 // Yidun's libnesec.so (ADR 0086). A shell of another machine gets no stand-in.
 uint16_t ArtHookingPackerMachine(const char* path);
+
+// The stand-ins' directories under `dir` are named "<kind>-<16 hex digits>"
+// (a 64-bit hash of their contents), kind being one of these.
+extern const char kArtShimKindX86_64[];
+extern const char kArtShimKindArm64[];
+
+// Removes stand-in directories under `dir` an earlier Gesher left: those of
+// `keep`'s kind other than `keep`, and the 8-hex-digit names used before
+// kinds, when untouched for `min_age`. A file a process still has mapped is
+// not deleted (Windows refuses), and that directory stays; failures are
+// ignored. The loaders call it after loading their stand-ins.
+void PruneArtShimDirectories(const std::string& dir, const std::string& keep,
+                             std::chrono::seconds min_age);
 
 // The stand-in libart.so's bytes (an ELF64 x86-64 ET_DYN object: one
 // read-execute PT_LOAD from offset 0, .dynsym with DT_HASH and DT_GNU_HASH,

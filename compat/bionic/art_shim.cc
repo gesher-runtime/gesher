@@ -11,9 +11,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <mutex>
 #include <string>
@@ -62,6 +64,9 @@ constexpr uint8_t kLoadClassCode[] = {
 constexpr char kSoname[] = "libart.so";
 constexpr char kDexFileSoname[] = "libdexfile.so";
 constexpr size_t kPage = 4096;
+// A stand-in directory untouched this long is no longer being written or
+// loaded by a process starting up; a longer-running one keeps its files mapped.
+constexpr std::chrono::seconds kArtShimPruneAge{24 * 60 * 60};
 
 uint32_t GnuHash(const char* name) {
   uint32_t h = 5381;
@@ -106,6 +111,28 @@ bool ReadFile(const std::string& path, std::string* data) {
   close(fd);
   return true;
 }
+
+// A directory per image set, under the stand-ins' directory: its machine and a
+// 64-bit FNV-1a of its contents, so a process that has an older stand-in
+// mapped keeps it and a file is never rewritten while mapped.
+std::string ImageDirectory(const char* kind, const std::string& image,
+                           const std::string& more = std::string()) {
+  uint64_t fnv = 14695981039346656037ull;
+  for (unsigned char c : image) fnv = (fnv ^ c) * 1099511628211ull;
+  for (unsigned char c : more) fnv = (fnv ^ c) * 1099511628211ull;
+  char hash[17];
+  std::snprintf(hash, sizeof(hash), "%016llx", static_cast<unsigned long long>(fnv));
+  return std::string(kind) + "-" + hash;
+}
+
+bool IsHexName(const std::string& name, size_t from, size_t digits) {
+  if (name.size() != from + digits) return false;
+  for (size_t i = from; i < name.size(); ++i) {
+    if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) return false;
+  }
+  return true;
+}
+
 
 // mkdir -p.
 void MakeDirectories(const std::string& dir) {
@@ -164,6 +191,45 @@ uint16_t ArtHookingPackerMachine(const char* path) {
 }
 
 bool IsArtHookingPacker(const char* path) { return ArtHookingPackerMachine(path) != 0; }
+
+const char kArtShimKindX86_64[] = "x86_64";
+const char kArtShimKindArm64[] = "arm64";
+
+void PruneArtShimDirectories(const std::string& dir, const std::string& keep,
+                             std::chrono::seconds min_age) {
+  namespace fs = std::filesystem;
+  const size_t dash = keep.find('-');
+  if (dash == std::string::npos) return;
+  const std::string kind = keep.substr(0, dash + 1);
+  std::error_code ec;
+  const auto now = fs::file_time_type::clock::now();
+  std::vector<fs::path> stale;
+  for (fs::directory_iterator it(fs::path(dir), ec), end; !ec && it != end; it.increment(ec)) {
+    const std::string name = it->path().filename().string();
+    // This kind's other images, and the 32-bit names every kind used before.
+    if (name == keep || !(IsHexName(name, 0, 8) ||
+                          (name.compare(0, kind.size(), kind) == 0 &&
+                           IsHexName(name, kind.size(), 16)))) {
+      continue;
+    }
+    std::error_code type_error;
+    if (!it->is_directory(type_error) || type_error) continue;
+    std::error_code time_error;
+    const auto written = fs::last_write_time(it->path(), time_error);
+    if (time_error || now - written < min_age) continue;
+    stale.push_back(it->path());
+  }
+  for (const fs::path& sub : stale) {
+    // A file another process has mapped cannot be deleted (Windows): it and
+    // its directory stay, to be pruned by a later process.
+    std::error_code ignored;
+    for (fs::directory_iterator it(sub, ignored), end; !ignored && it != end; it.increment(ignored)) {
+      std::error_code each;
+      fs::remove(it->path(), each);
+    }
+    fs::remove(sub, ignored);
+  }
+}
 
 std::string ArtShimImage() {
   // Layout, in one read-execute PT_LOAD from file offset 0 at address 0, so
@@ -317,12 +383,7 @@ void* LoadArtShim(const std::string& dir, std::string* path, std::string* error)
     return entry;
   }
   const std::string image = ArtShimImage();
-  // A directory per image: a process that has an older stand-in mapped keeps
-  // it, and the file is never rewritten while mapped.
-  uint32_t fnv = 2166136261u;
-  for (unsigned char c : image) fnv = (fnv ^ c) * 16777619u;
-  char name[16];
-  std::snprintf(name, sizeof(name), "%08x", fnv);
+  const std::string name = ImageDirectory(kArtShimKindX86_64, image);
   const std::string sub = dir + "/" + name;
   MakeDirectories(sub);
   *path = sub + "/" + kSoname;
@@ -336,6 +397,7 @@ void* LoadArtShim(const std::string& dir, std::string* path, std::string* error)
   }
   entry = fn;
   loaded_path = *path;
+  PruneArtShimDirectories(dir, name, kArtShimPruneAge);
   return entry;
 }
 
@@ -743,11 +805,7 @@ void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, v
   // are in its ART module's lib64.
   const std::string image = ArtShimImageArm64(oat_version);
   const std::string dexfile_image = DexFileShimImageArm64();
-  uint32_t fnv = 2166136261u;
-  for (unsigned char c : image) fnv = (fnv ^ c) * 16777619u;
-  for (unsigned char c : dexfile_image) fnv = (fnv ^ c) * 16777619u;
-  char name[16];
-  std::snprintf(name, sizeof(name), "%08x", fnv);
+  const std::string name = ImageDirectory(kArtShimKindArm64, image, dexfile_image);
   const std::string sub = dir + "/" + name;
   MakeDirectories(sub);
   const std::string dexfile_path = sub + "/" + kDexFileSoname;
@@ -777,6 +835,7 @@ void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, v
   open_common = open_common_fn;
   *open_common_entry = open_common;
   loaded_path = *path;
+  PruneArtShimDirectories(dir, name, kArtShimPruneAge);
   return entry;
 }
 
