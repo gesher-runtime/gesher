@@ -159,6 +159,31 @@ public final class ActivityWindowActivationHost {
             require(events.isEmpty(), "Stale/ineligible resume activated a window: " + events);
         }
 
+        void current(Activity a) throws Exception {
+            field(android.app.GesherAppDriver.class, "sActivity").set(null, a);
+        }
+
+        /** Requests the Activity's finish; returns the windows the close handler closes. */
+        List<IBinder> finishing() throws Exception {
+            List<IBinder> closed = new ArrayList<>();
+            session.setCloseHandler((s, window, closing) -> {
+                require(s == session && closing == attrs, "Close handler got another window");
+                closed.add(window);
+            });
+            current(activity);
+            require(session.finishLocalActivity(activityToken),
+                    "The single process's finish request was not taken");
+            require(closed.isEmpty(), "Finish closed the window before finish() returned");
+            return closed;
+        }
+
+        void expectFinish() throws Exception {
+            List<IBinder> closed = finishing();
+            handler.drain();
+            require(closed.equals(List.of(windowToken)), "Finish did not close the window: " + closed);
+            require(events.isEmpty(), "Finish touched the native window: " + events);
+        }
+
         void expect(String operation) {
             handler.drain();
             require(events.equals(List.of(operation + ":" + pointer)),
@@ -293,6 +318,38 @@ public final class ActivityWindowActivationHost {
             require(f.registered() == 1, "Early missing Application permanently disabled activation");
             f.postResume();
             f.expect("activate");
+        }, failures);
+        // Activity.finish in the single process (ActivityClientController ->
+        // finishLocalActivity): the window closes through the close handler, posted so that
+        // finish() returns first, whether or not the Win32 window exists yet.
+        scenario(selected, "finish-before-native-window", f -> {
+            set(f.window, "nativeWindow", null);
+            set(f.window, "handler", null);
+            set(f.session, "mFinishHandler", f.handler);
+            f.expectFinish();
+        }, failures);
+        scenario(selected, "finish-with-native-window", Fixture::expectFinish, failures);
+        scenario(selected, "finish-native-window-gone", f -> {
+            List<IBinder> closed = f.finishing();
+            set(f.window, "nativeWindow", null);
+            f.handler.drain();
+            require(closed.equals(List.of(f.windowToken)),
+                    "Finish dropped once the Win32 window went: " + closed);
+        }, failures);
+        scenario(selected, "finish-window-removed", f -> {
+            List<IBinder> closed = f.finishing();
+            f.windows.remove(f.windowToken);
+            f.handler.drain();
+            require(closed.isEmpty(), "Removed window closed again: " + closed);
+        }, failures);
+        scenario(selected, "finish-other-activity", f -> {
+            List<IBinder> closed = new ArrayList<>();
+            f.session.setCloseHandler((s, window, attrs) -> closed.add(window));
+            f.current(f.activity);
+            require(!f.session.finishLocalActivity(new Binder()),
+                    "Another token's finish was taken by this window");
+            f.handler.drain();
+            require(closed.isEmpty(), "Unrelated finish closed a window: " + closed);
         }, failures);
         require(cases > 0, "Unknown fixture case: " + selected);
         if (!failures.isEmpty()) throw new AssertionError(String.join("\n", failures));
