@@ -33,16 +33,20 @@ import java.util.zip.ZipFile;
  * broadcast's EXTRA_DEVICE. Where gesher-app.jar supplies such a class itself, a member it
  * lacks is a NoSuchMethodError or NoSuchFieldError only when the framework path runs
  * (issue #303). This reads the constant pools of framework.jar's classes, keeps the
- * method and field references whose owner is a class gesher-app.jar defines and
- * framework.jar does not, and resolves each one against gesher-app.jar's class
- * hierarchy, falling back to framework.jar and libcore for supertypes.
+ * method and field references that framework classes gesher-app.jar does not replace
+ * make to classes gesher-app.jar defines, and resolves each one against gesher-app.jar's
+ * class hierarchy, falling back to framework.jar and libcore for supertypes.
+ * FRAMEWORK is the compile classes (tools/framework/build.py), which include the module
+ * API classes framework.jar compiles against but does not ship; gesher-app.jar's copies of
+ * those are the ones that run.
  *
  * <pre>java BootLinkCheck.java FRAMEWORK GESHER_APP_CLASSES [CORE] [--allow FILE]</pre>
  *
  * FRAMEWORK and GESHER_APP_CLASSES are jars or class directories; CORE is libcore's
  * java.base (an exploded module). Unresolved references not listed in the allow file
  * (lines {@code owner.name:descriptor}, '#' comments) are printed with the framework
- * classes that use them, and the exit status is 1.
+ * classes that use them, and the exit status is 1. An allow-file entry that is no longer
+ * unresolved is reported as stale (a warning: remove it).
  */
 public final class BootLinkCheck {
     /** A class file's declared members and supertypes. */
@@ -63,18 +67,15 @@ public final class BootLinkCheck {
     public static void main(String[] args) throws IOException {
         List<String> positional = new ArrayList<>();
         Path allowFile = null;
-        Path runtimeJar = null;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--allow")) {
                 allowFile = Path.of(args[++i]);
-            } else if (args[i].equals("--runtime")) {
-                runtimeJar = Path.of(args[++i]);
             } else {
                 positional.add(args[i]);
             }
         }
         if (positional.size() < 2) {
-            System.err.println("usage: BootLinkCheck FRAMEWORK GESHER_APP_CLASSES [CORE] [--runtime FRAMEWORK_DEX_JAR] [--allow FILE]");
+            System.err.println("usage: BootLinkCheck FRAMEWORK GESHER_APP_CLASSES [CORE] [--allow FILE]");
             System.exit(2);
         }
         Set<String> allowed = new HashSet<>();
@@ -96,10 +97,6 @@ public final class BootLinkCheck {
                 check.mOther.put(c.name, c);
             }
         }
-        // The classes the runtime framework.jar defines (dex), which win over gesher-app.jar's
-        // on the boot class path. Without it: framework.jar's classes gesher-app.jar does not
-        // also define (a compile-only module class gesher-app.jar replaces runs as Gesher's).
-        Set<String> runtime = runtimeJar == null ? null : dexClasses(runtimeJar);
         // Framework references, by owner, for owners only gesher-app.jar supplies at run time.
         Map<String, Set<String>> users = new TreeMap<>();
         Map<String, Ref> refs = new HashMap<>();
@@ -107,24 +104,32 @@ public final class BootLinkCheck {
             List<Ref> found = new ArrayList<>();
             ClassInfo c = parse(b, found);
             check.mOther.put(c.name, c);
-            boolean runs = runtime != null ? runtime.contains(c.name) : !check.mGesher.containsKey(c.name);
-            if (!runs) continue;
+            // A framework class gesher-app.jar also defines runs as Gesher's copy.
+            if (check.mGesher.containsKey(c.name)) continue;
             for (Ref r : found) {
                 refs.putIfAbsent(r.key(), r);
                 users.computeIfAbsent(r.key(), k -> new TreeSet<>()).add(c.name.replace('/', '.'));
             }
         }
         int missing = 0, checked = 0;
+        Set<String> used = new HashSet<>();
         for (Map.Entry<String, Set<String>> e : users.entrySet()) {
             Ref r = refs.get(e.getKey());
             if (!check.mGesher.containsKey(r.owner)) continue;
-            if (runtime != null && runtime.contains(r.owner)) continue;
             checked++;
             if (check.resolves(r, r.owner, new HashSet<>())) continue;
-            if (allowed.contains(r.key())) continue;
+            if (allowed.contains(r.key())) {
+                used.add(r.key());
+                continue;
+            }
             missing++;
             System.out.println("missing " + (r.kind == 'M' ? "method " : "field ") + r.key()
                     + "  (used by " + String.join(", ", e.getValue()) + ")");
+        }
+        for (String stale : new TreeSet<>(allowed)) {
+            if (!used.contains(stale)) {
+                System.out.println("warning: stale allow entry (resolves or is unused now): " + stale);
+            }
         }
         System.out.println("boot link check: " + checked + " framework references to gesher-app classes, "
                 + missing + " unresolved");
@@ -149,35 +154,6 @@ public final class BootLinkCheck {
             if (resolves(r, i, seen)) return true;
         }
         return false;
-    }
-
-    /** The internal names of the classes a jar's classes*.dex define. */
-    private static Set<String> dexClasses(Path jar) throws IOException {
-        Set<String> out = new HashSet<>();
-        try (ZipFile z = new ZipFile(jar.toFile())) {
-            for (ZipEntry e : java.util.Collections.list(z.entries())) {
-                if (!e.getName().matches("classes\\d*\\.dex")) continue;
-                byte[] d;
-                try (InputStream in = z.getInputStream(e)) {
-                    d = in.readAllBytes();
-                }
-                java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(d).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-                int stringIds = buf.getInt(0x3C), typeIds = buf.getInt(0x44);
-                int classDefs = buf.getInt(0x60), classDefsOff = buf.getInt(0x64);
-                for (int i = 0; i < classDefs; i++) {
-                    int type = buf.getInt(classDefsOff + i * 32);
-                    int string = buf.getInt(typeIds + type * 4);
-                    int at = buf.getInt(stringIds + string * 4);
-                    while ((d[at++] & 0x80) != 0) { }  // uleb128 UTF-16 length
-                    int end = at;
-                    while (d[end] != 0) end++;
-                    String desc = new String(d, at, end - at, java.nio.charset.StandardCharsets.UTF_8);
-                    out.add(desc.substring(1, desc.length() - 1));
-                }
-            }
-        }
-        if (out.isEmpty()) throw new IOException("no dex classes in " + jar);
-        return out;
     }
 
     /** The classes of a jar or directory, by internal name. */

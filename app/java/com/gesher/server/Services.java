@@ -210,8 +210,8 @@ public final class Services {
         // classes framework.jar does not have (as IAudioService above).
         services.put(android.os.BatteryStats.SERVICE_NAME,
                 new com.gesher.server.stub.IBatteryStatsStub(new BatteryService.Stats()));
-        // No USB host stack or accessory function (UsbService): an empty device list, as
-        // a phone with nothing plugged in reports. Without it getSystemService answered null.
+        // usb: AOSP's UsbService without managers, as on an emulator (UsbService). Phone
+        // apps use UsbManager unchecked; without it getSystemService answered null.
         services.put(Context.USB_SERVICE, StandIn.of(android.hardware.usb.IUsbManager.class,
                 new UsbService(am.callers())).asBinder());
         // A device without a vibrator (hwsvc2, ADR 0051).
