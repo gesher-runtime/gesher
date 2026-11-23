@@ -114,7 +114,10 @@ final class ContentProviders {
         final ApkPackage owner;
         final ProviderInfo info;
         volatile boolean retired;
-        ProviderInstall(ApkPackage owner, ProviderInfo info) { this.owner = owner; this.info = info; }
+        ProviderInstall(ApkPackage owner, ProviderInfo info) {
+            this.owner = owner;
+            this.info = new ProviderInfo(info);
+        }
     }
 
     private static final class ProviderRequest {
@@ -216,25 +219,24 @@ final class ContentProviders {
 
     /**
      * Ambiguous declarations never select an attacker simply because it installed first.
-     * Within one package there is no ambiguity: ApkPackage.providers gives an authority
-     * only to the package's first provider declaring it, as ComponentResolver does, and
-     * a provider left with none has a null authority, which matches no lookup.
+     * ApkPackage handles ordinary collisions within the same manifest: an authority
+     * belongs to the package's first provider declaring it, and one left with none has
+     * a null authority, which matches no lookup. Reject any remaining ambiguity here,
+     * including names declared by multiple packages.
      */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         synchronized (pm) {
             ProviderInfo found = null;
             for (ApkPackage pkg : pm.providerPackages(authority)) {
                 if (pm.isRemovalPending(pkg.packageName)) continue;
-                for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                ProviderInfo info = pkg.providerForAuthority(authority, PackageManager.GET_META_DATA
                         | PackageManager.GET_URI_PERMISSION_PATTERNS
-                        | PackageManager.GET_SHARED_LIBRARY_FILES)) {
-                    if (!hasAuthority(info, authority)) continue;
-                    if (found != null && (!found.packageName.equals(info.packageName)
-                            || !found.name.equals(info.name))) {
-                        throw new SecurityException("Conflicting content provider authority");
-                    }
-                    found = info;
+                        | PackageManager.GET_SHARED_LIBRARY_FILES);
+                if (info == null) continue;
+                if (found != null) {
+                    throw new SecurityException("Conflicting content provider authority");
                 }
+                found = info;
             }
             return found;
         }
@@ -307,9 +309,9 @@ final class ContentProviders {
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
         for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
                 | PackageManager.GET_SHARED_LIBRARY_FILES)) {
-            // A provider whose authorities all went to an earlier one of its package
-            // is a registered component but is not installed (ComponentResolverBase
-            // queryProviders skips a null authority).
+            // ComponentResolver.queryProviders (generateApplicationProvidersLocked's
+            // source) skips a provider whose every authority an earlier declaration
+            // of the package registered: it is neither instantiated nor published.
             if (info.authority == null) continue;
             if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
                 result.add(info);
@@ -408,32 +410,42 @@ final class ContentProviders {
                 if (caller != null && (caller.exiting || caller.dead)) {
                     throw new SecurityException("Content provider caller retired before acquisition");
                 }
+                String publishedAuthority = name;
                 ContentProviderHolder published = mPublished.get(name);
+                int separator = declared.authority.indexOf(';');
+                if (published == null && separator >= 0) {
+                    // A syncable alias can refer to an already published class record.
+                    publishedAuthority = declared.authority.substring(0, separator);
+                    published = mPublished.get(publishedAuthority);
+                }
                 if (published != null) {
-                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(name);
-                    if (owner == null || owner.exiting || owner.dead || mPublishedCode.get(name) != declaredCode
+                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(publishedAuthority);
+                    if (owner == null || owner.exiting || owner.dead || mPublishedCode.get(publishedAuthority) != declaredCode
                             || !declared.packageName.equals(owner.packageName)
                             || !declared.name.equals(published.info.name)
                             || !mAtm.componentProcess(declared.packageName, declared.processName)
                                     .equals(mAtm.componentProcess(owner.packageName, owner.processName))
                             || !live.contains(owner)) {
-                        mPublished.remove(name); mPublishedBy.remove(name); mPublishedCode.remove(name);
-                        mClients.remove(name);
+                        mPublished.remove(publishedAuthority);
+                        mPublishedBy.remove(publishedAuthority);
+                        mPublishedCode.remove(publishedAuthority);
+                        mClients.remove(publishedAuthority);
                         continue;
                     }
                     if (caller != null && owner != null && caller != owner) {
-                        if (mClients.computeIfAbsent(name, k -> new HashSet<>()).add(caller)) {
+                        if (mClients.computeIfAbsent(publishedAuthority, k -> new HashSet<>()).add(caller)) {
                             SystemServer.log("getContentProvider " + name + " from "
                                     + callingPackage + ": " + owner + " has a client, "
                                     + caller);
                         }
                     }
-                    ContentProviderHolder h = new ContentProviderHolder(new ProviderInfo(declared));
+                    ContentProviderHolder h = new ContentProviderHolder(new ProviderInfo(
+                            name.equals(publishedAuthority) ? declared : published.info));
                     h.provider = published.provider;
                     h.noReleaseNeeded = true;
                     if (counted && caller != null && owner != null && caller != owner) {
                         Connection c = connectionLocked(owner, caller,
-                                published.provider.asBinder(), name, declaredCode, declared.name);
+                                published.provider.asBinder(), publishedAuthority, declaredCode, declared.name);
                         boolean held = c.stable != 0 || c.unstable != 0;
                         if (stable) c.stable++; else c.unstable++;
                         if (!held) {
@@ -482,9 +494,10 @@ final class ContentProviders {
                     if (request.canceled || caller.exiting || caller.dead
                             || mPm.get(declared.packageName) != declaredCode
                             || !declaredCode.componentEnabled(declared.name, ApkPackage.ComponentKind.PROVIDER)) return null;
-                    mInstalling.computeIfAbsent(caller, ignored -> new HashMap<>())
-                            .computeIfAbsent(declared.name, ignored -> new ProviderInstall(declaredCode, declared));
-                    ContentProviderHolder local = new ContentProviderHolder(declared);
+                    ProviderInstall pending = mInstalling.getOrDefault(caller, Map.of()).get(declared.name);
+                    ProviderInfo localInfo = current(pending) && pending.owner == declaredCode
+                            ? pending.info : declared;
+                    ContentProviderHolder local = new ContentProviderHolder(new ProviderInfo(localInfo));
                     local.mLocal = true;
                     local.noReleaseNeeded = true;
                     return local;
@@ -568,12 +581,8 @@ final class ContentProviders {
             // The process no longer owns a pending provider record after cleanup.
             // A late publish cannot recreate it or turn an ordinary race into a crash.
             if (!current(admission) || admission.owner != pkg) continue;
-            ProviderInfo declared = null;
-            for (ProviderInfo candidate : declaredProviders(pkg, PackageManager.GET_META_DATA
-                    | PackageManager.GET_SHARED_LIBRARY_FILES | PackageManager.MATCH_DISABLED_COMPONENTS)) {
-                if (candidate.name.equals(info.name)) { declared = candidate; break; }
-            }
-            if (declared == null || !pkg.packageName.equals(info.packageName)
+            ProviderInfo declared = admission.info;
+            if (!pkg.packageName.equals(info.packageName)
                     || info.applicationInfo == null || info.applicationInfo.uid != pkg.uid()
                     || !pkg.packageName.equals(info.applicationInfo.packageName)
                     || !java.util.Objects.equals(declared.authority, info.authority)

@@ -814,9 +814,9 @@ bool InitGuestLibc() {
   AddPointerVariadicFunction(Host("scanf"), Host("vscanf"), 1);
   // execl/execlp/execle: argv as variadic pointers (and execle's envp after
   // the null), read by the shim's va_list forms.
-  AddPointerVariadicFunction(Host("execl"), Host("__gesher_arm64_vexecl"), 2);
-  AddPointerVariadicFunction(Host("execlp"), Host("__gesher_arm64_vexeclp"), 2);
-  AddPointerVariadicFunction(Host("execle"), Host("__gesher_arm64_vexecle"), 2);
+  AddPointerVariadicFunction(Host("execl"), Host("__gesher_vexecl"), 2);
+  AddPointerVariadicFunction(Host("execlp"), Host("__gesher_vexeclp"), 2);
+  AddPointerVariadicFunction(Host("execle"), Host("__gesher_vexecle"), 2);
 
   for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
     std::string entry = std::string("__gesher_arm64_") + name;

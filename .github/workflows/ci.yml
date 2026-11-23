@@ -102,6 +102,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Build actual UIA query cancellation and lifecycle controls
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\accessibility\query_pool.cc tests\windows\web3\query_pool_test.cc /Fe:query-pool-test.exe
+      - name: Run actual Windows UIA retirement, saturation and worker ownership controls
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\query-pool-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
@@ -367,8 +377,12 @@ jobs:
           python3 tools/test_boottime_resume.py --sanitize
           python3 tools/test_timerfd_contracts.py --sanitize
           python3 tools/test_input_surface_callbacks.py --sanitize
+          python3 tools/test_codec_input_surfaces.py --sanitize
+          python3 tools/test_persistent_input_jni.py
+          python3 tools/test_recorder_persistent_input.py --sanitize
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
+          python3 tools/test_uia_query_retirement.py --sanitize
           python3 tools/test_dns_admission.py --sanitize
 
       - name: Stream device identity across close and reopen

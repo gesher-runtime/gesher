@@ -251,16 +251,14 @@ int main(int argc, char** argv) {
   if (saved_path) { setenv("PATH", saved_path, 1); free(saved_path); } else unsetenv("PATH");
 
   // execl, execlp and execle: a child replaces itself with this program through
-  // the list form, and the program it becomes checks what the list carried.
+  // the list form, and the program it becomes checks what the list carried. Run
+  // for both ABIs; exec2 covers execl's lookup, ENOENT and stack arguments on x86-64.
   char* via_execl[] = {(char*)child_name, "--execl", argv[1], NULL};
   run_child(argv[1], via_execl, environ, NULL, 0, 42, "execl passes its variadic argv to the program");
   char* via_execlp[] = {(char*)child_name, "--execlp", base, self_dir, NULL};
   run_child(argv[1], via_execlp, environ, NULL, 0, 42, "execlp searches PATH and passes its variadic argv");
   char* via_execle[] = {(char*)child_name, "--execle", argv[1], NULL};
   run_child(argv[1], via_execle, environ, NULL, 0, 42, "execle passes the envp after the argv null, not environ");
-  errno = 0;
-  int missing = execl("/missing-execl-program", "missing", "--plain", (char*)NULL);
-  check(missing == -1 && errno == ENOENT, "execl of a missing program returns -1 with ENOENT");
   check(getcwd(after, sizeof(after)) && strcmp(before, after) == 0 &&
             fcntl(parent_fd, F_GETFD) == parent_flags,
         "every child preserves the parent directory and descriptor flags");
