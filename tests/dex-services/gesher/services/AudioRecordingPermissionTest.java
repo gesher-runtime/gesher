@@ -24,6 +24,7 @@ import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.AudioService;
 import com.gesher.server.PackageManagerService;
+import com.gesher.server.PackageUids;
 import com.gesher.server.StandIn;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -163,6 +164,12 @@ public final class AudioRecordingPermissionTest {
         nativeBridge = withNativeBridge; binder = withBinder; checks = 0;
         int uid = Process.myUid();
         check(uid >= Process.FIRST_APPLICATION_UID, "Fixture must run as an ordinary application UID");
+        if (!binder) {
+            // The host adapter fixes Process.myUid() at the first app UID.
+            // Reserve both fixture principals before registering hosted packages.
+            check(PackageUids.uidFor(OWNER) == uid && PackageUids.uidFor(PEER) == uid + 1,
+                    "Host fixture package identities match the supplied process UIDs");
+        }
         Field pmField = field(ActivityThread.class, "sPackageManager"); Object oldPm = pmField.get(null);
         Field threadField = field(ActivityThread.class, "sCurrentActivityThread"); Object oldThread = threadField.get(null);
         Field servicesField = field(Class.forName("com.gesher.server.Services"), "sLast");
