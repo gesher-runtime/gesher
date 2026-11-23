@@ -16,10 +16,13 @@ import android.app.usage.UsageEvents;
 import android.app.usage.UsageEventsQuery;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.os.IBinder;
+import android.os.Binder;
 import android.os.PersistableBundle;
+import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.UserHandle;
 
@@ -37,6 +40,7 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     private final PackageManagerService mPackages;
     private final CallerIdentity mCallers;
     private final ActivityUsageHistory mHistory;
+    private final UsageLimitObservers mObservers;
     private final boolean mManaged;
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file) {
@@ -50,11 +54,20 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
             java.util.function.LongSupplier wall, java.util.function.LongSupplier elapsed) {
+        this(packages, callers, file, wall, elapsed, UsageLimitObservers.scheduler());
+    }
+
+    DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
+            java.util.function.LongSupplier wall, java.util.function.LongSupplier elapsed,
+            UsageLimitObservers.Scheduler scheduler) {
         mPackages = packages;
         mCallers = callers;
         mManaged = file != null;
         mHistory = new ActivityUsageHistory(file, wall, elapsed,
                 failure -> SystemServer.log("usage history I/O failed: "
+                        + failure.getClass().getSimpleName()));
+        mObservers = new UsageLimitObservers(elapsed, scheduler,
+                failure -> SystemServer.log("usage observer callback failed: "
                         + failure.getClass().getSimpleName()));
         if (mManaged) mPackages.onPackageRemoval(this::packageRemoved);
     }
@@ -66,13 +79,28 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     }
 
     void transition(Object token, String pkg, String cls, ActivityUsageHistory.State state) {
-        if (mManaged && (state == ActivityUsageHistory.State.TERMINATED
-                || !mPackages.isRemovalPending(pkg))) {
-            mHistory.transition(token, pkg, cls, state);
+        transition(token, pkg, cls, pkg, state);
+    }
+
+    void transition(Object token, String pkg, String cls, String usageSource,
+            ActivityUsageHistory.State state) {
+        // Serialize admission against beginPackageRemoval: a late lifecycle event
+        // must not recreate active usage after the removal listener has retired it.
+        synchronized (mPackages) {
+            if (mManaged && (state == ActivityUsageHistory.State.TERMINATED
+                    || !mPackages.isRemovalPending(pkg))) {
+                mHistory.transition(token, pkg, cls, state);
+                if (state != ActivityUsageHistory.State.CHECKPOINT_END) {
+                    mObservers.transition(token, pkg, usageSource,
+                            state == ActivityUsageHistory.State.RESUMED
+                                    || state == ActivityUsageHistory.State.PAUSED);
+                }
+            }
         }
     }
 
     private void packageRemoved(String pkg) {
+        mObservers.forgetPackage(pkg);
         try { mHistory.forgetPackage(pkg); }
         catch (IOException failure) {
             throw new IllegalStateException("Cannot remove package usage history", failure);
@@ -305,20 +333,82 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     @Override public void setEstimatedLaunchTime(String pkg, long time, int userId) { throw denied(); }
     @Override public void setEstimatedLaunchTimes(ParceledListSlice times, int userId) { throw denied(); }
     @Override public void registerAppUsageObserver(int id, String[] packages, long limit,
-            PendingIntent callback, String caller) { throw denied(); }
+            PendingIntent callback, String caller) {
+        synchronized (mPackages) {
+            ApkPackage owner = observerAccess(caller);
+            requireManagedObservation();
+            if (packages == null || packages.length == 0) {
+                throw new IllegalArgumentException("Must specify at least one package or token");
+            }
+            Objects.requireNonNull(callback, "callbackIntent");
+            mObservers.register(mCallers.callerUid(), id, caller, packages, limit,
+                    (observerId, timeLimit, timeUsed) -> {
+                        // Do not deliver an old installation's authority to its replacement.
+                        if (mPackages.isRemovalPending(caller)
+                                || (owner != null && mPackages.get(caller) != owner)) return;
+                        Intent intent = new Intent()
+                                .putExtra(UsageStatsManager.EXTRA_OBSERVER_ID, observerId)
+                                .putExtra(UsageStatsManager.EXTRA_TIME_LIMIT, timeLimit)
+                                .putExtra(UsageStatsManager.EXTRA_TIME_USED, timeUsed);
+                        long identity = Binder.clearCallingIdentity();
+                        // Server services have no application Context/ActivityThread.
+                        // Use the same real IIntentSender path as LocationManagerService;
+                        // PendingIntents retains cancellation/immutable/creator semantics.
+                        try { callback.getTarget().send(0, intent, null, null, null, null, null); }
+                        catch (RemoteException failure) {
+                            SystemServer.log("usage observer callback could not be delivered");
+                        } finally { Binder.restoreCallingIdentity(identity); }
+                    });
+        }
+    }
+
+    private ApkPackage observerAccess(String caller) {
+        mCallers.requirePackage(Objects.requireNonNull(caller, "callingPackage"));
+        if (!mCallers.isSystem() && mPackages.permissions().checkProcessPermission(
+                Manifest.permission.OBSERVE_APP_USAGE, mCallers.callerPid(), mCallers.callerUid())
+                != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Caller doesn't have OBSERVE_APP_USAGE permission");
+        }
+        return mCallers.requireCurrentPackage(caller);
+    }
+
+    private void requireManagedObservation() {
+        if (!mManaged) {
+            throw new UnsupportedOperationException("Usage observation requires managed activity lifecycle");
+        }
+    }
     @Override public void registerUsageSessionObserver(int id, String[] packages, long limit,
             long threshold, PendingIntent limitCallback, PendingIntent endCallback, String caller) {
         throw denied();
     }
     @Override public void registerAppUsageLimitObserver(int id, String[] packages, long limit,
             long used, PendingIntent callback, String caller) { throw denied(); }
-    // Nothing can have registered; removal is idempotent and retains no callback/token.
-    @Override public void unregisterAppUsageObserver(int id, String caller) { }
+    @Override public void unregisterAppUsageObserver(int id, String caller) {
+        synchronized (mPackages) {
+            observerAccess(caller);
+            mObservers.unregister(mCallers.callerUid(), id);
+        }
+    }
+    // Session and persistent-limit observers cannot have registered.
     @Override public void unregisterUsageSessionObserver(int id, String caller) { }
     @Override public void unregisterAppUsageLimitObserver(int id, String caller) { }
-    @Override public void reportUsageStart(IBinder token, String name, String caller) { }
-    @Override public void reportPastUsageStart(IBinder token, String name, long ago, String caller) { }
-    @Override public void reportUsageStop(IBinder token, String name, String caller) { }
+    @Override public void reportUsageStart(IBinder token, String name, String caller) {
+        reportPastUsageStart(token, name, 0, caller);
+    }
+    @Override public void reportPastUsageStart(IBinder token, String name, long ago, String caller) {
+        synchronized (mPackages) {
+            mCallers.requireCurrentPackage(Objects.requireNonNull(caller, "callingPackage"));
+            requireManagedObservation();
+            mObservers.reportStart(mCallers.callerUid(), caller, token, name, ago);
+        }
+    }
+    @Override public void reportUsageStop(IBinder token, String name, String caller) {
+        synchronized (mPackages) {
+            mCallers.requireCurrentPackage(Objects.requireNonNull(caller, "callingPackage"));
+            requireManagedObservation();
+            mObservers.reportStop(mCallers.callerUid(), caller, token, name);
+        }
+    }
     @Override public void reportChooserSelection(String pkg, int userId, String type,
             String[] annotations, String action) { }
     @Override public void reportUserInteraction(String pkg, int userId) { }

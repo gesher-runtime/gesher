@@ -1,0 +1,44 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package com.gesher.server;
+
+/** Exact production task-manager call site with recording lifecycle value boundaries. */
+public final class TaskRootUsageHookHost {
+    private record Info(String packageName, String name) { }
+    private record ActivityRecord(Object token, Info info, int taskId) { }
+    private static final class Sink {
+        Object token;
+        String pkg, cls, source;
+        ActivityUsageHistory.State state;
+        void transition(Object token, String pkg, String cls, String source, ActivityUsageHistory.State state) {
+            this.token=token;this.pkg=pkg;this.cls=cls;this.source=source;this.state=state;
+        }
+    }
+    private Sink mUsageStats;
+    private ActivityRecord root;
+    private ActivityRecord rootOf(int taskId) { return root != null && root.taskId == taskId ? root : null; }
+
+    @PRODUCTION_RECORD_USAGE@
+
+    public static void main(String[] args) {
+        TaskRootUsageHookHost host = new TaskRootUsageHookHost();
+        ActivityRecord child = new ActivityRecord(new Object(), new Info("child", "ChildActivity"), 12);
+        host.recordUsage(child, ActivityUsageHistory.State.RESUMED); // no service is harmless
+        host.mUsageStats = new Sink();
+        host.root = new ActivityRecord(new Object(), new Info("root", "RootActivity"), 12);
+        host.recordUsage(child, ActivityUsageHistory.State.PAUSED);
+        Sink sink = host.mUsageStats;
+        if (sink.token != child.token || !sink.pkg.equals("child") || !sink.cls.equals("ChildActivity")
+                || !sink.source.equals("root") || sink.state != ActivityUsageHistory.State.PAUSED) {
+            throw new AssertionError("Task-root hook substituted activity history or failed attribution");
+        }
+        host.root = null;
+        host.recordUsage(child, ActivityUsageHistory.State.TERMINATED);
+        if (!sink.source.equals("child") || sink.state != ActivityUsageHistory.State.TERMINATED) {
+            throw new AssertionError("Missing root lost the terminal lifecycle event");
+        }
+        System.out.println("TaskRootUsageHookHost passed: exact production lifecycle call site");
+    }
+}

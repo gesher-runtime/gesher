@@ -659,7 +659,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     private void recordUsage(ActivityRecord record, ActivityUsageHistory.State state) {
         if (mUsageStats != null) {
-            mUsageStats.transition(record.token, record.info.packageName, record.info.name, state);
+            ActivityRecord root = rootOf(record.taskId);
+            mUsageStats.transition(record.token, record.info.packageName, record.info.name,
+                    root == null ? record.info.packageName : root.info.packageName, state);
         }
     }
 
