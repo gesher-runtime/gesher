@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <limits>
 #include <string>
+#include <gesher/revocable_file.h>
 #include <cstdio>
 
 #include "core_jni_helpers.h"
@@ -45,6 +46,34 @@ void ThrowIoException(JNIEnv* env, const char* msg) {
     env->ThrowNew(ioe, msg);
     env->DeleteLocalRef(ioe);
   }
+}
+
+void ThrowRevocationError(JNIEnv* env, const char* operation) {
+  const int error = errno;
+  const std::string message = std::string(operation) + " failed (errno " + std::to_string(error) + ")";
+  ThrowIoException(env, message.c_str());
+}
+
+jlong RevocableFileDescriptors_create(JNIEnv* env, jclass) {
+  const uint64_t controller = gesher::CreateRevocableFileGroup();
+  if (!controller) ThrowRevocationError(env, "Create descriptor group");
+  return static_cast<jlong>(controller);
+}
+
+void RevocableFileDescriptors_attach(JNIEnv* env, jclass, jlong controller, jobject descriptor) {
+  const int fd = GetFd(env, descriptor);
+  if (fd < 0) { ThrowIoException(env, "Bad file descriptor"); return; }
+  if (gesher::AttachRevocableFileGroup(static_cast<uint64_t>(controller), fd) < 0)
+    ThrowRevocationError(env, "Attach descriptor group");
+}
+
+void RevocableFileDescriptors_revoke(JNIEnv* env, jclass, jlong controller) {
+  if (gesher::RevokeFileGroup(static_cast<uint64_t>(controller)) < 0)
+    ThrowRevocationError(env, "Revoke descriptor group");
+}
+
+void RevocableFileDescriptors_release(JNIEnv*, jclass, jlong controller) {
+  gesher::ReleaseRevocableFileGroup(static_cast<uint64_t>(controller));
 }
 
 void ThrowNullPointerException(JNIEnv* env, const char* msg) {
@@ -483,9 +512,18 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeRevokeActivator", "()V", GESHER_JNI(WindowsHost_revokeActivator)},
 };
 
+const JNINativeMethod gRevocableFileDescriptorMethods[] = {
+    {"nativeCreate", "()J", GESHER_JNI(RevocableFileDescriptors_create)},
+    {"nativeAttach", "(JLjava/io/FileDescriptor;)V", GESHER_JNI(RevocableFileDescriptors_attach)},
+    {"nativeRevoke", "(J)V", GESHER_JNI(RevocableFileDescriptors_revoke)},
+    {"nativeRelease", "(J)V", GESHER_JNI(RevocableFileDescriptors_release)},
+};
+
 }  // namespace
 
 int register_gesher_WindowsHost(JNIEnv* env) {
+  if (RegisterGesherNatives(env, "com/gesher/server/RevocableFileDescriptors", gRevocableFileDescriptorMethods,
+                            NELEM(gRevocableFileDescriptorMethods)) < 0) return -1;
   RegisterGesherNatives(env, "sun/nio/ch/FileDispatcherImpl", gFileDispatcherMethods,
                         NELEM(gFileDispatcherMethods));
   return RegisterGesherNatives(env, "com/gesher/server/WindowsHost", gWindowsHostMethods,

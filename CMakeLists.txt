@@ -161,6 +161,21 @@ add_executable(clipboard_foreground tests/windows/clipboard/foreground_helper.cc
 target_compile_options(clipboard_foreground PRIVATE -Wall -Wextra -Werror)
 target_link_options(clipboard_foreground PRIVATE -municode)
 target_link_libraries(clipboard_foreground PRIVATE user32)
+add_executable(file_flags_ofd_test tests/native/file_flags_ofd_test.cc)
+target_compile_options(file_flags_ofd_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(file_flags_ofd_test PRIVATE gesher_posix)
+
+add_executable(stdio_ofd_test tests/native/stdio_ofd_test.cc)
+target_compile_options(stdio_ofd_test PRIVATE -Wall -Wextra -Werror -fno-builtin)
+target_link_libraries(stdio_ofd_test PRIVATE gesher_posix)
+
+add_executable(pipe_kernel_test tests/native/pipe_kernel_test.cc)
+target_compile_options(pipe_kernel_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(pipe_kernel_test PRIVATE gesher_posix)
+
+add_executable(revocable_file_test tests/native/revocable_file_test.cc)
+target_compile_options(revocable_file_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(revocable_file_test PRIVATE gesher_posix)
 
 add_executable(boottime_resume_windows_test tests/native/boottime_resume_windows_test.cc)
 target_compile_options(boottime_resume_windows_test PRIVATE -Wall -Wextra -Werror)

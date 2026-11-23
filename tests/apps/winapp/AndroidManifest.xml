@@ -43,6 +43,14 @@
             android:launchMode="singleTask" android:taskAffinity="com.gesher.winapp.resume"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:exported="true" />
+        <activity android:name=".FloatingSplashActivity" android:label="Gesher windows3 floating splash"
+            android:theme="@style/FloatingRootTheme"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:exported="true" />
+        <activity android:name=".FloatingRootActivity" android:label="Gesher windows3 floating root"
+            android:theme="@style/FloatingRootTheme" android:taskAffinity="com.gesher.winapp.floating"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:exported="false" />
         <activity android:name=".DisplayActivity" android:label="Gesher windows4 display"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:exported="true" />

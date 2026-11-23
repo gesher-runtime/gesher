@@ -37,7 +37,8 @@ bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result);
 // path. Zero for writable eventfd/non-event descriptors, EBADF for inotify,
 // EINVAL for epoll and read-only timer readiness.
 int EventObjectWriteError(int fd);
-// Drops fd's reference to its object; the caller closes the CRT fd.
+// Drops fd's reference to its object (including a native fence, which does not
+// change the result); the caller closes the CRT fd.
 bool ForgetEventObject(int fd);
 // After `fd2` was made a CRT duplicate of `fd`: fd2 shares fd's object.
 void DupEventObject(int fd, int fd2);
@@ -46,6 +47,9 @@ void DupEventObject(int fd, int fd2);
 // (counter 1 while events are queued), so poll and epoll take it as one.
 struct Inotify;
 std::shared_ptr<EventFd> NewReadiness(bool nonblocking);
+// True publishes a producer notification, even if already readable. Inotify
+// calls this for each newly queued record; timerfd for an armed expiration,
+// not for accounting additional unread periodic ticks. False clears the level.
 void SetReadable(EventFd& readiness, bool readable);
 int RegisterInotify(std::shared_ptr<Inotify> inotify, std::shared_ptr<EventFd> readiness);
 int ReadInotify(Inotify& inotify, void* buf, unsigned int count);

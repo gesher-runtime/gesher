@@ -84,7 +84,10 @@ public final class AccountClientRemovalProbe {
             System.out.println("AccountClientRemovalProbe READY_GRANTED uid=" + uid);
         } else {
             require(args.length == 2 && uid == Integer.parseInt(args[1]), "Reinstall or restart changed the retained package UID");
-            require(accounts.getAccountVisibility(VISIBLE, CLIENT) == AccountManager.VISIBILITY_NOT_VISIBLE,
+            // Removal discards the stored grant; Android then resolves the unset
+            // client to the legacy default, USER_MANAGED_NOT_VISIBLE (not visible).
+            require(accounts.getAccountVisibility(VISIBLE, CLIENT)
+                            == AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE,
                     "Same-identity reinstall or restart revived removed client visibility");
             require(accounts.getAccountsByTypeForPackage(TYPE, CLIENT, "android").length == 0,
                     "Same-identity reinstall or restart revived client account enumeration");

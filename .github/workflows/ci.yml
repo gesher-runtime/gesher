@@ -79,6 +79,7 @@ jobs:
           python3 .github/scripts/test_automerge_workflows.py
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
+          python3 -m unittest discover -s tools/ci -p test_prune_caches.py
   # Short Windows host contracts share one runner per OS: separate jobs each
   # paid for a runner, checkout and queue slot to run a minute of checks.
   # Every check step runs even after an earlier one fails, so one failure
@@ -101,6 +102,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Durable settings journal, replacement and crash recovery contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
@@ -137,6 +142,10 @@ jobs:
           name: clipboard-foreground-${{ matrix.os }}
           path: ${{ runner.temp }}/clipboard-foreground-contract-*/**
           if-no-files-found: warn
+      - name: Storage scan coalescing, bounded admission and real filesystem contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -154,6 +163,7 @@ jobs:
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2
@@ -217,9 +227,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install media contract encoder and decoder tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Windows test shard coverage, dependencies and failure controls
         shell: pwsh
-        run: tests/windows/test-test-shards.ps1
+        run: |
+          tests/windows/test-test-shards.ps1
+          tests/windows/test-bitmap-shared-gate.ps1
 
       - name: Wi-Fi specifier native evidence checker contracts
         shell: pwsh
@@ -239,6 +256,7 @@ jobs:
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
+          python3 tools/net-tcp-priority/test_fork_diagnostic.py
           python3 tools/surface/test-verified-artifact.py
 
       - name: Compatibility inventory parser tests
@@ -259,7 +277,10 @@ jobs:
           python3 tools/test_hwui_renderer_policy.py --sanitize
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
+          python3 tools/test_memmem_performance.py --sanitize
           python3 tools/test_bionic_system_contracts.py --sanitize
+          python3 tools/test_environment_contracts.py --sanitize
+          python3 tools/test_environment_lookup_contracts.py
           python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
@@ -267,6 +288,10 @@ jobs:
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
+          python3 tools/test_ofd_transfer_contracts.py --sanitize
+          python3 tools/test_file_io_contracts.py --sanitize
+          python3 tools/test_pipe_io_contracts.py --sanitize
+          python3 tools/test_revocable_file_contracts.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
@@ -317,8 +342,21 @@ jobs:
       - name: Bionic stream state across close and reopen failures
         run: python3 tools/test_stdio_lifetime_contracts.py --sanitize
 
+      - name: Native metadata reader contention and retirement contracts
+        run: |
+          python3 tools/test_native_metadata_hot_paths.py --sanitize
+          python3 tools/test_native_metadata_hot_paths.py --thread-sanitize
+
+      - name: EGL fence asynchronous creation and ownership contracts
+        run: python3 tools/test_egl_fence_contracts.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
+
+      - name: Descriptor-backed stdio and stream lifetime contracts
+        run: |
+          python3 tools/test_stdio_contracts.py --sanitize
+          python3 tools/test_socket_registry_lifetime.py --sanitize
 
       - name: MediaPlayer PCM priming and playback lifecycle contracts
         run: python3 tools/test_media_player_priming.py --sanitize
@@ -332,6 +370,7 @@ jobs:
           python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
+          python3 tools/test_bitmap_shared.py --sanitize
           python3 tools/test_camera_conversion_allocations.py --sanitize
           python3 tools/test_surface_present_allocations.py --sanitize
           python3 tools/test_d3d11_readback.py --sanitize
@@ -356,6 +395,7 @@ jobs:
           "$RUNNER_TEMP/event-loop-reference"
           python3 tools/test_audio_state_contracts.py --sanitize
           python3 tools/test_surface_geometry_contracts.py --sanitize
+          python3 tools/test_video_scaling_contracts.py --sanitize
           python3 tools/test_native_window_dispatch.py --sanitize
 
       - name: Physical keys, sensor flushes, directory walks and futex contracts
@@ -397,6 +437,8 @@ jobs:
           python3 tools/test_media_http_contracts.py --sanitize
           python3 tools/test_mf_encoder_input.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
+          python3 tools/test_codec_output_storage.py --sanitize
+          python3 tools/test_codec_reader_delivery.py --sanitize
           cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
             tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
           "$RUNNER_TEMP/filesystem-metadata-reference"
@@ -454,6 +496,7 @@ jobs:
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
           python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
@@ -502,6 +545,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
           python3 tools/test_media_recorder_lifecycle.py
+          python3 tools/test_media_recorder_rollover.py --sanitize
+          python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
       - name: libcore System.nanoTime shares Android awake-time domain
@@ -546,7 +591,7 @@ jobs:
     needs: [source-identity]
     runs-on: ubuntu-24.04
     env:
-      GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
+      GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
       GESHER_HOST_PTHREAD_CALLER: ${{ github.ref == 'refs/heads/wip/coherent-selected-tcp' && 'coherent-selected-full/build' || 'ci/build' }}
       GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
       GESHER_COHERENT_FULL_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
@@ -558,7 +603,8 @@ jobs:
         with:
           # The former runtime-port job's cache already holds the runtime.
           ccache-key: runtime
-          # Source-only proposal: no main/default change and no dispatch approval.
+          # Production repair is a separate original-publisher overlay. The
+          # selected-minimum reference remains on its explicit experimental refs.
           pthread-supplier: ${{ env.GESHER_HOST_PTHREAD_SELECTION }}
           pthread-caller: ${{ env.GESHER_HOST_PTHREAD_CALLER }}
 
@@ -567,6 +613,9 @@ jobs:
           SELECTED_LLVM: ${{ steps.host_toolchain.outputs.selected_compiler_root }}
           SELECTED_RECEIPT: ${{ steps.host_toolchain.outputs.selected_receipt }}
           SELECTED_RECEIPT_SHA256: ${{ steps.host_toolchain.outputs.selected_receipt_sha256 }}
+          PRODUCTION_LLVM: ${{ steps.host_toolchain.outputs.production_compiler_root }}
+          PRODUCTION_RECEIPT: ${{ steps.host_toolchain.outputs.production_receipt }}
+          PRODUCTION_RECEIPT_SHA256: ${{ steps.host_toolchain.outputs.production_receipt_sha256 }}
         run: |
           set -euo pipefail
           case "$GESHER_HOST_PTHREAD_SELECTION" in
@@ -574,6 +623,13 @@ jobs:
               test -n "$SELECTED_LLVM" && test -n "$SELECTED_RECEIPT" && test -n "$SELECTED_RECEIPT_SHA256"
               llvm="$SELECTED_LLVM"
               printf 'GESHER_SELECTED_PTHREAD_RECEIPT=%s\nGESHER_SELECTED_PTHREAD_RECEIPT_SHA256=%s\n' "$SELECTED_RECEIPT" "$SELECTED_RECEIPT_SHA256" >> "$GITHUB_ENV"
+              ;;
+            publisher-cancel)
+              test -n "$PRODUCTION_LLVM" && test -n "$PRODUCTION_RECEIPT" && test -n "$PRODUCTION_RECEIPT_SHA256"
+              printf '%s  %s\n' "$PRODUCTION_RECEIPT_SHA256" "$PRODUCTION_RECEIPT" | sha256sum --check --strict
+              python3 tools/toolchain/prepare_pthread_cancel.py verify "$PRODUCTION_RECEIPT"
+              llvm="$PRODUCTION_LLVM"
+              printf 'GESHER_PTHREAD_CANCEL_RECEIPT=%s\nGESHER_PTHREAD_CANCEL_RECEIPT_SHA256=%s\n' "$PRODUCTION_RECEIPT" "$PRODUCTION_RECEIPT_SHA256" >> "$GITHUB_ENV"
               ;;
             publisher) llvm="$HOME/toolchain/$LLVM_MINGW_NAME" ;;
             *) exit 1 ;;
@@ -614,7 +670,7 @@ jobs:
       - name: Build
         run: |
           # Canonical suite/package/e2e always receive the production role.
-          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
@@ -642,6 +698,18 @@ jobs:
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
+          ninja -C out font_environment_test
+
+      - name: Verify cancellation repair in actual production links
+        if: env.GESHER_HOST_PTHREAD_SELECTION == 'publisher-cancel'
+        run: python3 tools/toolchain/prepare_pthread_cancel.py links --receipt "$GESHER_PTHREAD_CANCEL_RECEIPT"
+
+      - uses: actions/upload-artifact@v4
+        if: env.GESHER_HOST_PTHREAD_SELECTION == 'publisher-cancel'
+        with:
+          name: pthread-cancel-runtime
+          path: dist-pthread-cancel/
+          if-no-files-found: error
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -768,7 +836,7 @@ jobs:
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
         run: |
-          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
@@ -851,7 +919,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@2c096437d9474a59e4fd6f78d1670c9c7afc573f
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@972c2b42b40c4ac799e147f5e352d07ba615d0fb
     with:
       local-runner: false
 
@@ -1012,6 +1080,7 @@ jobs:
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
 
       - name: Production modal dialogs on Windows PowerShell 5.1
         timeout-minutes: 2
@@ -1998,6 +2067,7 @@ jobs:
       - name: Run tests
         env:
           GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
+          GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
         shell: pwsh
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Shard ${{ matrix.shard }} -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
@@ -2212,6 +2282,8 @@ jobs:
       matrix:
         supplier: [selected-minimum]
     env:
+      GH_TOKEN: ${{ github.token }}
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
       GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
@@ -2227,12 +2299,18 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify coherent selected TCP producer role
-        run: python3 tools/toolchain/coherent_tcp_context.py
+        run: |
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then
+            python3 tools/toolchain/fork_tcp_context.py --job compile
+          else
+            python3 tools/toolchain/coherent_tcp_context.py
+          fi
       - name: Verify exact source and two-supplier preservation before native compilation
         run: |
           python3 tools/net-tcp-priority/test-selected-policy.py
           python3 tools/net-tcp-priority/test-selected-supplier.py
           python3 tools/host-pthread-authority/minimum_receipt.py selftest
+          python3 tools/net-tcp-priority/test_fork_diagnostic.py
       - uses: ./.github/actions/setup-build
         with:
           ccache-key: selected-minimum
@@ -2288,16 +2366,20 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: tcp-ndk-archive
-          key: tcp-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
+          path: dns-ndk.zip
+          key: combined-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
       - name: Authenticate publisher NDK archive and freshly extract on every use
         run: python3 tools/net-tcp-priority/prepare-ndk.py
       - name: Prepare exact unmodified canonical or intentionally selected two-patch original-profile candidate
-        run: python3 tools/net-tcp-priority/prepare-supplier.py
+        run: |
+          args=()
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+          python3 tools/net-tcp-priority/prepare-supplier.py "${args[@]}"
       - name: Build one fresh coherent host, translator, and both bionic ABI fixtures
         run: |
           set -euo pipefail
-          if [[ "$TCP_SUPPLIER_ROLE" == canonical ]]; then prefix=tcp-canonical-supplier; else prefix=tcp-selected-supplier; fi
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then prefix=tcp-fork-diagnostic-supplier;
+          elif [[ "$TCP_SUPPLIER_ROLE" == canonical ]]; then prefix=tcp-canonical-supplier; else prefix=tcp-selected-supplier; fi
           llvm="$PWD/$prefix/$LLVM_MINGW_NAME"
           cmake --fresh -S . -B out -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" \
@@ -2327,16 +2409,21 @@ jobs:
           test "$negative_rc" = 1
           grep -F 'FAIL UDP: negative missing MSG_TRUNC rejected' /tmp/udp-guarded-negative.txt
       - name: Bind executed compiler and exact Windows-system-only output roles
-        run: python3 tools/net-tcp-priority/manifest.py
+        run: |
+          args=()
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+          python3 tools/net-tcp-priority/manifest.py "${args[@]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: tcp-coherent-${{ matrix.supplier }}-${{ github.sha }}-a${{ github.run_attempt }}
+          name: ${{ github.repository == 'gesher-runtime/gesher' && 'tcp-coherent' || 'tcp-fork-diagnostic' }}-${{ matrix.supplier }}-${{ github.sha }}-a${{ github.run_attempt }}
           path: tcp-fixture/
           if-no-files-found: error
           retention-days: 14
   linux-reference:
     needs: [source-identity]
     env:
+      GH_TOKEN: ${{ github.token }}
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
       GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
     runs-on: ubuntu-24.04
@@ -2346,7 +2433,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify coherent TCP reference role
-        run: python3 tools/toolchain/coherent_tcp_context.py
+        run: |
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then
+            python3 tools/toolchain/fork_tcp_context.py --job linux-reference
+          else
+            python3 tools/toolchain/coherent_tcp_context.py
+          fi
       - name: Retain full independent Linux contract including inline mode
         run: |
           set -euo pipefail
@@ -2358,6 +2450,7 @@ jobs:
     # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
     timeout-minutes: 25
     env:
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: selected-minimum
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
@@ -2367,14 +2460,24 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify coherent selected TCP correlation role
-        run: python3 tools/toolchain/coherent_tcp_context.py
+        run: |
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then
+            python3 tools/toolchain/fork_tcp_context.py --job supplier-correlation
+          else
+            python3 tools/toolchain/coherent_tcp_context.py
+          fi
       - name: Strict current Native host and TCP selected supplier artifacts
         run: |
           set -euo pipefail
           python3 tools/ci/artifact_receipt.py --name native3-locks-host --producer build --destination ci-suppliers/native3_host
-          python3 tools/ci/artifact_receipt.py --name "tcp-coherent-selected-minimum-${{ github.sha }}-a${{ github.run_attempt }}" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
+          prefix=tcp-coherent
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then prefix=tcp-fork-diagnostic; fi
+          python3 tools/ci/artifact_receipt.py --name "$prefix-selected-minimum-${{ github.sha }}-a${{ github.run_attempt }}" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
       - name: Correlate selected host supplier between full build and TCP component
-        run: python3 tools/toolchain/coherent_supplier_correlation.py
+        run: |
+          args=()
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+          python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
   windows:
     needs: [source-identity, compile, linux-reference, supplier-correlation]
     strategy:
@@ -2385,6 +2488,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
@@ -2396,7 +2500,11 @@ jobs:
       - name: Verify coherent selected TCP receiver role
         shell: pwsh
         run: |
-          python tools/toolchain/coherent_tcp_context.py
+          if ($env:TCP_EVIDENCE_SCOPE -ceq 'fork-diagnostic') {
+            python tools/toolchain/fork_tcp_context.py --job windows
+          } else {
+            python tools/toolchain/coherent_tcp_context.py
+          }
           if ($LASTEXITCODE -ne 0) { throw 'Coherent TCP receiver role rejected' }
       - name: Check exact qualified controller helper hashes and source-only pin negatives
         shell: pwsh
@@ -2409,7 +2517,7 @@ jobs:
         run: tools/net-tcp-priority/test-receipt-metadata.ps1
       - name: Verify raw archive and exact producer, then run actual host and both ABI paths
         shell: pwsh
-        run: tools/net-tcp-priority/run-component.ps1
+        run: tools/net-tcp-priority/run-component.ps1 -ForkDiagnostic:($env:TCP_EVIDENCE_SCOPE -ceq 'fork-diagnostic')
 
   ci-required:
     name: ci-required

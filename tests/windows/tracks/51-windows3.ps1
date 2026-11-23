@@ -40,6 +40,8 @@ public static class GesherW3Win32 {
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hwnd, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] struct FILETIME { public uint Low, High; }
   [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr process, out FILETIME created, out FILETIME exited, out FILETIME kernel, out FILETIME user);
@@ -524,6 +526,95 @@ function W3Run([string] $Mode, [string] $Title, [string[]] $Arguments, [scriptbl
   }
 }
 
+# PR #270: full ART lifecycle and real HWND evidence. A floating theme cannot make an
+# activity a popup of a finishing splash or an activity in a different Android task.
+function W3FloatingRootChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
+                              [bool] $SameTask, [bool] $Shared) {
+  $out = @()
+  $mark = W3Mark $ReadLog
+  [GesherWin32]::SetClientSize($app, 420, 620)
+  if (-not (W3WaitSize $app '420x620')) { $out += 'could not resize the floating splash' }
+  if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity onConfigurationChanged: portrait, 420x620 dp' 30).Success) {
+    $out += 'the splash did not observe its real resize'
+  }
+  [void][GesherWin32]::SetWindowPos($app, [IntPtr]::Zero, 137, 113, 0, 0, 0x0015)  # NOSIZE, NOZORDER, NOACTIVATE
+  $place = [GesherW3Win32]::ClientOnScreen($app)
+  $ready = [regex]::Matches("$(& $ReadLog)", 'FloatingSplashActivity ready task (\d+), same at (\d+),(\d+), other at (\d+),(\d+)') | Select-Object -Last 1
+  if ($null -eq $ready) { W3Check $Mode 'floating root fixture is ready' @('no splash layout'); return }
+  $sourceTask = [int]$ready.Groups[1].Value
+  $button = if ($SameTask) { 2 } else { 4 }
+  $mark = W3Mark $ReadLog
+  [GesherWin32]::Click($app, [int]$ready.Groups[$button].Value, [int]$ready.Groups[$button + 1].Value)
+  # Accept a popup log as evidence too, so a bad implementation fails its ownership
+  # assertions instead of waiting for a top-level-only first-frame message.
+  $window = W3Wait $ReadLog $mark 'window "Gesher windows3 floating root" [^\r\n]*hwnd 0x([0-9a-f]+)' 60
+  if (-not $window.Success) { W3Check $Mode 'floating activity obtains a real window' @('no root HWND'); return }
+  $hwnd = [IntPtr][Convert]::ToInt64($window.Groups[1].Value, 16)
+  try {
+    $rootReady = W3Wait $ReadLog $mark 'FloatingRootActivity ready task (\d+), click at (\d+),(\d+)' 30
+    if (-not $rootReady.Success) { $out += 'no successor layout/task report' }
+    elseif ($SameTask -ne ([int]$rootReady.Groups[1].Value -eq $sourceTask)) {
+      $out += "wrong task identity: splash $sourceTask, successor $($rootReady.Groups[1].Value), same-task $SameTask"
+    }
+    if ($SameTask) {
+      if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity replacement requested, finishing true' 30).Success) { $out += 'splash did not request finish in its launch callback' }
+      if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity onDestroy \(finishing\)' 30).Success) { $out += 'finishing splash was not destroyed' }
+      $deadline = (Get-Date).AddSeconds(15)
+      while ([GesherWin32]::IsWindow($app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+      if ([GesherWin32]::IsWindow($app)) { $out += 'finished splash retained its native window' }
+    } else {
+      if (-not [GesherWin32]::IsWindowVisible($app)) { $out += 'floating task hid the source task' }
+      if ((W3After $ReadLog $mark).Contains('FloatingSplashActivity onDestroy')) { $out += 'floating task destroyed the source activity' }
+    }
+    if (-not [GesherWin32]::IsWindow($hwnd) -or -not [GesherWin32]::IsWindowVisible($hwnd)) { $out += 'floating root HWND did not remain alive and visible' }
+    if ($hwnd -eq $app) { $out += 'successor reused the source HWND' }
+    $owner = [GesherW3Win32]::GetWindow($hwnd, 4)  # GW_OWNER
+    $style = [GesherW3Win32]::GetWindowLongPtr($hwnd, -16).ToInt64() -band 0xffffffffL
+    if ($owner -ne [IntPtr]::Zero) { $out += "root acquired an owner HWND: $owner" }
+    if (($style -band 0x80000000L) -ne 0 -or ($style -band 0x00c00000L) -ne 0x00c00000L) { $out += "root is not a decorated top-level window (style $style)" }
+    if ($SameTask -or $Shared) {
+      $deadline = (Get-Date).AddSeconds(15)
+      do {
+        $there = [GesherW3Win32]::ClientOnScreen($hwnd)
+        if (($there -join ',') -eq ($place -join ',')) { break }
+        Start-Sleep -Milliseconds 100
+      } while ((Get-Date) -lt $deadline)
+      if (($there -join ',') -ne ($place -join ',')) { $out += "root bounds $($there -join ',') differ from source $($place -join ',')" }
+    }
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+      $green = W3Share $hwnd 0x00ff00
+      if ($green -ge 0.9) { break }
+      Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    if ($green -lt 0.9) { $out += 'floating root content did not render after the transition' }
+    if ($rootReady.Success) {
+      $clickMark = W3Mark $ReadLog
+      $rootReady = [regex]::Matches("$(& $ReadLog)", 'FloatingRootActivity ready task (\d+), click at (\d+),(\d+)') | Select-Object -Last 1
+      [GesherWin32]::Click($hwnd, [int]$rootReady.Groups[2].Value, [int]$rootReady.Groups[3].Value)
+      if (-not (W3Wait $ReadLog $clickMark 'FloatingRootActivity content clicked' 15).Success) { $out += 'floating root stopped accepting input' }
+    }
+  } finally {
+    [void][GesherWin32]::PostMessageW($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+  }
+  if (-not (W3Wait $ReadLog $mark 'FloatingRootActivity onDestroy \(finishing\)' 30).Success) { $out += 'closing the floating root did not finish it' }
+  if (-not $SameTask -and -not [GesherWin32]::IsWindowVisible($app)) { $out += 'closing the floating task removed the source window' }
+  W3Check $Mode 'floating root keeps task identity, top-level ownership, native placement, pixels and input' $out "same-task $SameTask, shared $Shared"
+}
+
+function W3FloatingRootRuns([string] $Mode, [bool] $Shared) {
+  foreach ($sameTask in @($true, $false)) {
+    $scenario = {
+      param($app, $readLog)
+      W3FloatingRootChecks $Mode $app $readLog $sameTask $Shared
+    }.GetNewClosure()
+    W3Run "$Mode, floating root, same-task $sameTask" 'Gesher windows3 floating splash' @(
+      'com.gesher.app.Launcher', 'launch', $apkW3, '--window', '--activity', '.FloatingSplashActivity'
+    ) $scenario @('FloatingRootActivity onDestroy (finishing)', 'FloatingSplashActivity onDestroy (finishing)',
+                 'gesher-app: the process of com.gesher.winapp ended (exit code 0)', 'gesher-app: done')
+  }
+}
+
 $apkW3 = NoDrive "$Dir/winapp.apk"
 $single = 'single process'
 
@@ -651,6 +742,7 @@ try {
     param($app, $readLog)
     W3ResumeTaskChecks $device $app $readLog
   } @('ResumeTaskActivity onDestroy (finishing)', 'gesher-app: the process of com.gesher.winapp ended (exit code 0)', 'gesher-app: done')
+  W3FloatingRootRuns "$device, separate windows" $false
 } finally {
   $shutdownLog = Join-Path $env:RUNNER_TEMP 'windows3-device-shutdown.log'
   $sd = Start-Process "$Dir/dalvikvm.exe" -ArgumentList (@($dvmW3) + 'com.gesher.app.Launcher', 'shutdown') `
@@ -747,6 +839,7 @@ try {
     Start-Sleep 2
     W3OneWindowChecks $shared $app $readLog
   } @('OtherTaskActivity onDestroy', 'gesher-app: the process of com.gesher.winapp ended (exit code 0)', 'gesher-app: done')
+  W3FloatingRootRuns $shared $true
 } finally {
   $shutdownLog = Join-Path $env:RUNNER_TEMP 'windows3-shared-shutdown.log'
   $sd = Start-Process "$Dir/dalvikvm.exe" -ArgumentList (@($dvmW3) + 'com.gesher.app.Launcher', 'shutdown') `
