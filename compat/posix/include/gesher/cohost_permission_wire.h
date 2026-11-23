@@ -23,7 +23,8 @@ constexpr uint32_t kMaxClipboardPayload = 72 * 1024 * 1024 + kClipboardHeaderByt
 constexpr DWORD kClipboardTransferTimeout = 30000;
 enum class Operation : uint32_t {
   kCheck = 1, kRequest = 2, kFlags = 3, kCanRequest = 4, kAppOpMode = 5,
-  kClipboardState = 6, kClipboardRead = 7, kClipboardWrite = 8, kClipboardClear = 9
+  kClipboardState = 6, kClipboardRead = 7, kClipboardWrite = 8, kClipboardClear = 9,
+  kClipboardMetadata = 10, kClipboardCallback = 11
 };
 
 struct Header {
@@ -64,6 +65,8 @@ inline bool IsClipboard(Operation operation) {
     case Operation::kClipboardRead:
     case Operation::kClipboardWrite:
     case Operation::kClipboardClear:
+    case Operation::kClipboardMetadata:
+    case Operation::kClipboardCallback:
       return true;
     default:
       return false;
@@ -81,9 +84,12 @@ inline bool Valid(const Header& head) {
     case Operation::kRequest:
       return head.count <= kMaxNames;
     case Operation::kClipboardState:
-    case Operation::kClipboardRead:
     case Operation::kClipboardClear:
+    case Operation::kClipboardCallback:
       return head.count == 0;
+    case Operation::kClipboardRead:
+    case Operation::kClipboardMetadata:
+      return head.count == sizeof(uint32_t);
     case Operation::kClipboardWrite:
       return head.count >= kClipboardHeaderBytes && head.count <= kMaxClipboardPayload;
   }
@@ -93,10 +99,12 @@ inline bool Valid(const Header& head) {
 inline bool ValidClipboardReply(Operation operation, uint32_t bytes) {
   switch (operation) {
     case Operation::kClipboardState: return bytes == 3 * sizeof(uint32_t);
-    case Operation::kClipboardRead: return bytes >= kClipboardHeaderBytes
-        && bytes <= kMaxClipboardPayload;
+    case Operation::kClipboardRead: return bytes == sizeof(uint32_t)
+        || (bytes >= kClipboardHeaderBytes && bytes <= kMaxClipboardPayload);
+    case Operation::kClipboardMetadata: return bytes == 4 * sizeof(uint32_t);
     case Operation::kClipboardWrite:
-    case Operation::kClipboardClear: return bytes == sizeof(uint32_t);
+    case Operation::kClipboardClear:
+    case Operation::kClipboardCallback: return bytes == sizeof(uint32_t);
     default: return false;
   }
 }

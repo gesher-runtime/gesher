@@ -371,20 +371,28 @@ int CohostGuest() {
                 &permissions_result) == ERROR_SUCCESS &&
              permissions_result == std::vector<int32_t>{0, -1},
              "cohost permission reply retains exact request order")) return 1;
-  permissions::ClipboardFrame input, empty, output;
-  if (!input.Allocate(kCohostClipboardProbeBytes)) return 1;
+  permissions::ClipboardFrame input, query, output;
+  if (!input.Allocate(kCohostClipboardProbeBytes) || !query.Allocate(sizeof(uint32_t))) return 1;
+  std::fill_n(query.data(), query.size(), 0);
   for (uint32_t i = 0; i < input.size(); i++) input.data()[i] = static_cast<uint8_t>(i);
   for (int pass = 0; pass < 12; ++pass) {
     if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardWrite, input,
                 &output) == ERROR_SUCCESS && output.size() == sizeof(uint32_t) &&
                 output.data()[0] == 0x5a,
                "contained clipboard request preserves exact bytes across pipe buffers")) return 1;
-    if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardRead, empty,
+    if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardRead, query,
                 &output) == ERROR_SUCCESS && output.size() == kCohostClipboardProbeBytes,
                "trusted clipboard response spans multiple pipe buffers")) return 1;
     if (!Check(std::equal(input.data(), input.data() + input.size(), output.data()),
                "cohost clipboard response bytes match")) return 1;
   }
+  if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardMetadata, query,
+              &output) == ERROR_SUCCESS && output.size() == 4 * sizeof(uint32_t),
+             "contained metadata carries only a fixed-size descriptor")) return 1;
+  query.data()[0] = 1;
+  if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardRead, query,
+              &output) == ERROR_SUCCESS && output.size() == sizeof(uint32_t),
+             "cached clipboard content still requires an authenticated read receipt")) return 1;
   return Check(StandaloneChild(L" --cohost-descendant", GetStdHandle(STD_INPUT_HANDLE)),
              "enrolled cohost child inherits the sealed scope") ? 0 : 1;
 }
@@ -393,6 +401,8 @@ int CohostDescendant() {
   namespace permissions = gesher::cohost_permissions;
   std::vector<int32_t> result;
   permissions::ClipboardFrame input, output;
+  if (!input.Allocate(sizeof(uint32_t))) return 1;
+  std::fill_n(input.data(), input.size(), 0);
   return Check(Lowbox() && gesher::cohost_bootstrap::Current() &&
       permissions::Exchange(permissions::Operation::kCheck,
           {u"android.permission.INTERNET"}, &result) != ERROR_SUCCESS &&
@@ -423,8 +433,12 @@ bool CheckCohost(const fs::path& dir, const fs::path& exe) {
       if (!output->Allocate(sizeof(uint32_t))) return ERROR_NOT_ENOUGH_MEMORY;
       std::fill_n(output->data(), output->size(), 0x5a);
     } else if (operation == permissions::Operation::kClipboardRead) {
-      if (!output->Allocate(kCohostClipboardProbeBytes)) return ERROR_NOT_ENOUGH_MEMORY;
+      const uint32_t bytes = input.data()[0] == 1 ? sizeof(uint32_t) : kCohostClipboardProbeBytes;
+      if (!output->Allocate(bytes)) return ERROR_NOT_ENOUGH_MEMORY;
       for (uint32_t i = 0; i < output->size(); i++) output->data()[i] = static_cast<uint8_t>(i);
+    } else if (operation == permissions::Operation::kClipboardMetadata) {
+      if (!output->Allocate(4 * sizeof(uint32_t))) return ERROR_NOT_ENOUGH_MEMORY;
+      std::fill_n(output->data(), output->size(), 0);
     } else {
       return ERROR_ACCESS_DENIED;
     }

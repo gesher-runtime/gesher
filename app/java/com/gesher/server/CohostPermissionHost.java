@@ -30,6 +30,8 @@ final class CohostPermissionHost implements AutoCloseable {
     private boolean mCancelled;
     // Clipboard transport serializes its requests and joins before close().
     private boolean mClipboardPublisher;
+    private int mClipboardMetadataSequence;
+    private CohostClipboard.Metadata mClipboardMetadata;
 
     CohostPermissionHost(PackageManagerService pm, PermissionRequests requests, String apk)
             throws Exception {
@@ -161,7 +163,17 @@ final class CohostPermissionHost implements AutoCloseable {
         return WindowsHost.sessionLockState() == 0 && clipboardReadAllowed(isForeground());
     }
 
-    private byte[] readClipboard() {
+    private ClipboardService.Snapshot readNativeClipboard(int sequence) {
+        byte[] image = WindowsHost.clipboardImage();
+        if (image != null && (image.length == 0 || image.length > ClipboardService.MAX_IMAGE_BYTES)) {
+            image = null;
+        }
+        ClipboardService.Snapshot data = new ClipboardService.Snapshot(sequence,
+                WindowsHost.clipboardText(), WindowsHost.clipboardHtml(), image);
+        return WindowsHost.clipboardSequence() == sequence ? data : null;
+    }
+
+    private byte[] readClipboard(int cachedSequence) {
         boolean foreground = isForeground();
         if (WindowsHost.sessionLockState() != 0 || !clipboardReadAllowed(foreground)
                 || !mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground)) {
@@ -169,13 +181,38 @@ final class CohostPermissionHost implements AutoCloseable {
         }
         int sequence = WindowsHost.clipboardSequence();
         if (sequence == 0) return null;
-        byte[] image = WindowsHost.clipboardImage();
-        if (image != null && image.length > ClipboardService.MAX_IMAGE_BYTES) image = null;
-        ClipboardService.Snapshot data = new ClipboardService.Snapshot(sequence,
-                WindowsHost.clipboardText(), WindowsHost.clipboardHtml(), image);
-        if (WindowsHost.clipboardSequence() != sequence) return null;
+        if (sequence == cachedSequence) {
+            return canReadClipboard() ? CohostClipboard.receipt(sequence) : null;
+        }
+        ClipboardService.Snapshot data = readNativeClipboard(sequence);
+        if (data == null) return null;
         byte[] encoded = CohostClipboard.encode(data);
         return canReadClipboard() ? encoded : null;
+    }
+
+    private byte[] clipboardMetadata(int cachedSequence) {
+        if (!canReadClipboard()) return null;
+        int sequence = WindowsHost.clipboardSequence();
+        if (sequence == 0) return null;
+        if (sequence == cachedSequence) {
+            return canReadClipboard() ? new CohostClipboard.Metadata(sequence, 0, 0).encode() : null;
+        }
+        if (sequence != mClipboardMetadataSequence) {
+            ClipboardService.Snapshot clip = readNativeClipboard(sequence);
+            if (clip == null) return null;
+            String text = clip.text(), html = clip.html();
+            int formats = 0;
+            if (text != null) formats |= CohostClipboard.PLAIN_PRESENT;
+            if (html != null) formats |= CohostClipboard.HTML_PRESENT;
+            if (clip.image() != null) formats |= CohostClipboard.IMAGE_PRESENT;
+            if (text == null && html != null && clip.image() == null) {
+                text = android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString();
+            }
+            if (text != null && !text.isEmpty()) formats |= CohostClipboard.NONEMPTY_TEXT;
+            mClipboardMetadata = new CohostClipboard.Metadata(sequence, formats, System.currentTimeMillis());
+            mClipboardMetadataSequence = sequence;
+        }
+        return canReadClipboard() ? mClipboardMetadata.encode() : null;
     }
 
     /** The endpoint is tied to the exact APK and process. No caller identity comes over the wire. */
@@ -190,7 +227,16 @@ final class CohostPermissionHost implements AutoCloseable {
                 int sequence = (policy & CohostClipboard.CAN_READ) != 0 ? WindowsHost.clipboardSequence() : 0;
                 return new CohostClipboard.State(sequence, WindowsHost.sessionLockState(), policy).encode();
             }
-            case CohostClipboard.READ: return readClipboard();
+            case CohostClipboard.METADATA:
+                return clipboardMetadata(java.nio.ByteBuffer.wrap(input).getInt());
+            case CohostClipboard.READ:
+                return readClipboard(java.nio.ByteBuffer.wrap(input).getInt());
+            case CohostClipboard.CALLBACK: {
+                boolean foreground = isForeground();
+                return clipboardReadAllowed(foreground)
+                        && mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground)
+                        ? CohostClipboard.receipt(1) : null;
+            }
             case CohostClipboard.WRITE:
             case CohostClipboard.CLEAR: {
                 if (!mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,

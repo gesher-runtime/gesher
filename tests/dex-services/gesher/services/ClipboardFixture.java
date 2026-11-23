@@ -122,7 +122,6 @@ public final class ClipboardFixture implements AutoCloseable {
             return Proxy.newProxyInstance(host.getClassLoader(), new Class<?>[]{host}, (proxy, method, args) -> {
                 switch (method.getName()) {
                     case "available": return true;
-                    case "authorized": return true;
                     case "foregroundProcess": return foreground == null ? null : foreground.clone();
                     case "sessionLockState": return lockState;
                     case "sample":
