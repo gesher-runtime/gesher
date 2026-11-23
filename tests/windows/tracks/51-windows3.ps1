@@ -45,6 +45,22 @@ public static class GesherW3Win32 {
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] struct FILETIME { public uint Low, High; }
   [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr process, out FILETIME created, out FILETIME exited, out FILETIME kernel, out FILETIME user);
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("advapi32.dll")] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+  [DllImport("advapi32.dll")] static extern bool GetTokenInformation(IntPtr token, int cls, out uint value, int size, out int written);
+  public static bool IsAppContainer(uint pid) {
+    var process = OpenProcess(0x1000, false, pid);
+    if (process == IntPtr.Zero) return false;
+    try {
+      IntPtr token;
+      if (!OpenProcessToken(process, 8, out token)) return false;
+      try {
+        uint value; int written;
+        return GetTokenInformation(token, 29, out value, 4, out written) && written == 4 && value != 0;
+      } finally { CloseHandle(token); }
+    } finally { CloseHandle(process); }
+  }
   public static ulong Generation(System.Diagnostics.Process process) {
     FILETIME c, e, k, u;
     if (!GetProcessTimes(process.Handle, out c, out e, out k, out u)) throw new InvalidOperationException("GetProcessTimes failed");
@@ -672,6 +688,42 @@ try {
   }
 } finally {
   foreach ($entry in $standaloneSavedEnvironment.GetEnumerator()) {
+    [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value)
+  }
+}
+
+# Exercise the same Android APIs against the live Windows clipboard from the
+# actual signed, host-admitted single-process AppContainer.
+$protectedClipboardEnvironment = @{}
+foreach ($name in @('ANDROID_DATA', 'GESHER_LOGS', 'GESHER_SANDBOX',
+                    'GESHER_IDLE_TIMEOUT', 'GESHER_WINAPP_CLIPBOARD_PROBE')) {
+  $protectedClipboardEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+}
+try {
+  $profile = Join-Path $env:RUNNER_TEMP "cohost-clipboard-$([Guid]::NewGuid().ToString('N'))"
+  $callerData = Join-Path $profile 'caller data'
+  New-Item -ItemType Directory -Path $callerData -Force | Out-Null
+  $env:ANDROID_DATA = NoDrive $profile
+  $env:GESHER_LOGS = NoDrive (Join-Path $profile 'logs')
+  $env:GESHER_SANDBOX = 'appcontainer-trusted'
+  $env:GESHER_IDLE_TIMEOUT = '4'
+  $env:GESHER_WINAPP_CLIPBOARD_PROBE = NoDrive (Join-Path $callerData 'background.request')
+  $protectedCohost = 'protected single process'
+  W3Run $protectedCohost 'Gesher windows3 main' @('com.gesher.app.Launcher', 'launch-cohost', $apkW3,
+      '--window', '--display', '400x800@160', '--data-dir', (NoDrive $callerData)) {
+    param($app, $readLog)
+    $isContained = [GesherW3Win32]::IsAppContainer([GesherWin32]::ProcessId($app))
+    $errors = @()
+    if (-not $isContained) { $errors += 'actual Activity window must be owned by an AppContainer' }
+    W3Check $protectedCohost 'authenticates the actual window owner' $errors
+    if ($isContained) {
+      [void](WaitForLog $readLog 'MainActivity laid out' 60)
+      W3ClipChecks $protectedCohost $app $readLog
+      W3BackChecks $protectedCohost $app $readLog $true
+    }
+  } @('winapp identity foreign clipboard package rejected', 'MainActivity onDestroy (finishing)', 'gesher-app: done')
+} finally {
+  foreach ($entry in $protectedClipboardEnvironment.GetEnumerator()) {
     [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value)
   }
 }

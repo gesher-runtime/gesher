@@ -4,6 +4,8 @@
  */
 package com.gesher.server;
 
+import android.Manifest;
+import android.app.AppOpsManager;
 import android.content.pm.PackageManager;
 
 import java.util.ArrayList;
@@ -23,12 +25,16 @@ final class CohostPermissionHost implements AutoCloseable {
 
     private final PermissionPolicy.ScopedOwner mOwner;
     private final PermissionRequests mRequests;
+    private final AppOpsService mAppOps;
     private volatile long mLease;
     private boolean mCancelled;
+    // Clipboard transport serializes its requests and joins before close().
+    private boolean mClipboardPublisher;
 
     CohostPermissionHost(PackageManagerService pm, PermissionRequests requests, String apk)
             throws Exception {
         mRequests = requests;
+        mAppOps = pm.appOps();
         mOwner = pm.permissions().openScopedOwner(apk, this::isLive);
     }
 
@@ -137,7 +143,78 @@ final class CohostPermissionHost implements AutoCloseable {
         }
     }
 
+    private boolean isForeground() {
+        long[] foreground = WindowsHost.foregroundProcess();
+        return foreground != null && foreground.length == 2
+                && Zygote.nativeCohostMatchesProcess(mLease, foreground[0], foreground[1]);
+    }
+
+    private boolean clipboardReadAllowed(boolean foreground) {
+        return mOwner.isCurrent() && (foreground
+                || mOwner.check(Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND)
+                    == PackageManager.PERMISSION_GRANTED
+                || ClipboardService.defaultIme(mOwner.packageName()))
+                && mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground);
+    }
+
+    private boolean canReadClipboard() {
+        return WindowsHost.sessionLockState() == 0 && clipboardReadAllowed(isForeground());
+    }
+
+    private byte[] readClipboard() {
+        if (!canReadClipboard()) return null;
+        int sequence = WindowsHost.clipboardSequence();
+        if (sequence == 0) return null;
+        byte[] image = WindowsHost.clipboardImage();
+        if (image != null && image.length > ClipboardService.MAX_IMAGE_BYTES) image = null;
+        ClipboardService.Snapshot data = new ClipboardService.Snapshot(sequence,
+                WindowsHost.clipboardText(), WindowsHost.clipboardHtml(), image);
+        if (WindowsHost.clipboardSequence() != sequence) return null;
+        byte[] encoded = CohostClipboard.encode(data);
+        return canReadClipboard() ? encoded : null;
+    }
+
+    /** The endpoint is tied to the exact APK and process. No caller identity comes over the wire. */
+    private byte[] dispatchClipboard(int operation, byte[] input) {
+        if (!mOwner.isCurrent() || !WindowsHost.available()) return null;
+        switch (operation) {
+            case CohostClipboard.STATE: {
+                boolean foreground = isForeground();
+                int policy = clipboardReadAllowed(foreground) ? CohostClipboard.CAN_READ : 0;
+                if (mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
+                        foreground)) policy |= CohostClipboard.CAN_WRITE;
+                int sequence = (policy & CohostClipboard.CAN_READ) != 0 ? WindowsHost.clipboardSequence() : 0;
+                return new CohostClipboard.State(sequence, WindowsHost.sessionLockState(), policy).encode();
+            }
+            case CohostClipboard.READ: return readClipboard();
+            case CohostClipboard.WRITE:
+            case CohostClipboard.CLEAR: {
+                if (!mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
+                        isForeground())) return null;
+                ClipboardService.Snapshot contents = operation == CohostClipboard.WRITE
+                        ? CohostClipboard.decode(input) : null;
+                if (operation == CohostClipboard.WRITE && (contents == null || contents.sequence() != 0)) {
+                    return null;
+                }
+                if (!mClipboardPublisher) {
+                    if (!WindowsHost.retainClipboardPublisher()) return null;
+                    mClipboardPublisher = true;
+                }
+                if (!mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
+                        isForeground())) return null;
+                int sequence = contents == null ? WindowsHost.clearClipboardSequence()
+                        : WindowsHost.setClipboardSequence(contents.text(), contents.html(), contents.image());
+                return CohostClipboard.receipt(sequence);
+            }
+            default: return null;
+        }
+    }
+
     @Override public void close() {
+        if (mClipboardPublisher) {
+            mClipboardPublisher = false;
+            WindowsHost.releaseClipboardPublisher();
+        }
         mOwner.close();
     }
 

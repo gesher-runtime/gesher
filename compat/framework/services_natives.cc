@@ -423,7 +423,8 @@ public:
     jlong attach(HANDLE process, HANDLE job) {
         HANDLE retained = nullptr;
         if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &retained,
-                             SYNCHRONIZE, FALSE, 0)) return 0;
+                             SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                             FALSE, 0)) return 0;
         OwnedHandle owner(retained);
         HANDLE retainedJob = nullptr;
         if (!DuplicateHandle(GetCurrentProcess(), job, GetCurrentProcess(), &retainedJob,
@@ -478,6 +479,44 @@ DWORD DispatchCohostPermission(JavaVM* vm, jobject host, jmethodID dispatch,
     vm->DetachCurrentThread();
     return error;
 }
+
+jbyteArray ByteArray(JNIEnv* env, const cohost::ClipboardFrame& bytes) {
+    const jsize size = static_cast<jsize>(bytes.size());
+    jbyteArray array = env->NewByteArray(size);
+    if (array != nullptr && size != 0) {
+        env->SetByteArrayRegion(array, 0, size, reinterpret_cast<const jbyte*>(bytes.data()));
+    }
+    return array;
+}
+
+DWORD DispatchCohostClipboard(JavaVM* vm, jobject host, jmethodID dispatch,
+        cohost::Operation operation, const cohost::ClipboardFrame& input,
+        cohost::ClipboardFrame* output) {
+    JNIEnv* env = nullptr;
+    if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return ERROR_GEN_FAILURE;
+    DWORD error = ERROR_NO_SYSTEM_RESOURCES;
+    jbyteArray args = ByteArray(env, input);
+    if (args != nullptr && !env->ExceptionCheck()) {
+        auto result = static_cast<jbyteArray>(
+            env->CallObjectMethod(host, dispatch, static_cast<jint>(operation), args));
+        if (!env->ExceptionCheck() && result != nullptr) {
+            const jsize size = env->GetArrayLength(result);
+            if (output->Allocate(static_cast<uint32_t>(size))) {
+                if (size != 0) env->GetByteArrayRegion(result, 0, size,
+                    reinterpret_cast<jbyte*>(output->data()));
+                error = ERROR_SUCCESS;
+            } else {
+                error = ERROR_INVALID_DATA;
+            }
+        }
+    }
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        error = ERROR_ACCESS_DENIED;
+    }
+    vm->DetachCurrentThread();
+    return error;
+}
 }  // namespace
 
 static jboolean Zygote_cohostPermissionLive(JNIEnv*, jclass, jlong lease) {
@@ -492,6 +531,33 @@ static void Zygote_cancelCohost(JNIEnv*, jclass, jlong lease) {
     std::lock_guard<std::mutex> lock(gCohostLeasesLock);
     const auto entry = gCohostLeases.find(lease);
     if (entry != gCohostLeases.end()) TerminateJobObject(entry->second.job.get(), ERROR_CANCELLED);
+}
+
+static jboolean Zygote_cohostMatchesProcess(JNIEnv*, jclass, jlong lease, jlong pid, jlong birth) {
+    if (lease <= 0 || pid <= 0 || birth <= 0) return JNI_FALSE;
+    std::lock_guard<std::mutex> lock(gCohostLeasesLock);
+    auto entry = gCohostLeases.find(lease);
+    if (entry == gCohostLeases.end()) return JNI_FALSE;
+    HANDLE process = entry->second.process.get();
+    FILETIME created{}, exited{}, kernel{}, user{};
+    return GetProcessId(process) == static_cast<uint64_t>(pid) &&
+        WaitForSingleObject(process, 0) == WAIT_TIMEOUT &&
+        GetProcessTimes(process, &created, &exited, &kernel, &user) &&
+        static_cast<uint64_t>(birth) == ((static_cast<uint64_t>(created.dwHighDateTime) << 32) |
+            created.dwLowDateTime) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jbyteArray Zygote_cohostClipboardExchange(JNIEnv* env, jclass, jint operation,
+                                                jbyteArray contents) {
+    const jsize size = contents == nullptr ? 0 : env->GetArrayLength(contents);
+    cohost::ClipboardFrame input, output;
+    if (!input.Allocate(static_cast<uint32_t>(size))) return nullptr;
+    if (size != 0) env->GetByteArrayRegion(contents, 0, size,
+        reinterpret_cast<jbyte*>(input.data()));
+    if (env->ExceptionCheck() ||
+        cohost::ClipboardExchange(static_cast<cohost::Operation>(operation), input,
+            &output) != ERROR_SUCCESS) return nullptr;
+    return ByteArray(env, output);
 }
 
 static jintArray Zygote_captureCohostStreams(JNIEnv* env, jclass) {
@@ -636,6 +702,8 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
     if (bind == nullptr) return 0;
     jmethodID dispatch = env->GetMethodID(type, "dispatch", "(I[Ljava/lang/String;)[I");
     if (dispatch == nullptr) return 0;
+    jmethodID clipboard = env->GetMethodID(type, "dispatchClipboard", "(I[B)[B");
+    if (clipboard == nullptr) return 0;
     JavaVM* vm = nullptr;
     if (env->GetJavaVM(&vm) != JNI_OK) {
         jniThrowException(env, "java/lang/IllegalStateException", "Cannot attach host consent");
@@ -714,6 +782,9 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
         cohost::Server authority([&](cohost::Operation operation,
                 const std::vector<std::u16string>& names, std::vector<int32_t>* values) {
             return DispatchCohostPermission(vm, host, dispatch, operation, names, values);
+        }, [&](cohost::Operation operation, const cohost::ClipboardFrame& input,
+                cohost::ClipboardFrame* output) {
+            return DispatchCohostClipboard(vm, host, clipboard, operation, input, output);
         });
         const std::wstring storageName = storage ? storage->name() : std::wstring{};
         gesher::zygote::CohostSpec services{credentialPath, devicePath,
@@ -858,6 +929,8 @@ static const JNINativeMethod gZygoteMethods[] = {
      "Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_runPinnedCohost)},
     {"nativeCohostPermissionLive", "(J)Z", GESHER_JNI(Zygote_cohostPermissionLive)},
+    {"nativeCohostMatchesProcess", "(JJJ)Z", GESHER_JNI(Zygote_cohostMatchesProcess)},
+    {"nativeCohostClipboardExchange", "(I[B)[B", GESHER_JNI(Zygote_cohostClipboardExchange)},
     {"nativeCancelCohost", "(J)V", GESHER_JNI(Zygote_cancelCohost)},
     {"captureCohostStreams", "()[I", GESHER_JNI(Zygote_captureCohostStreams)},
     {"nativeHasCohostPermissionScope", "()Z", GESHER_JNI(Zygote_hasCohostPermissionScope)},

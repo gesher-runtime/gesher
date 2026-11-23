@@ -314,6 +314,9 @@ public final class SystemServer {
         PermissionRequests ownerPermissions = cohostOwner ? new PermissionRequests(ownerPm) : null;
         CohostOwnerService cohostControl = null;
         if (cohostOwner) {
+            // The hidden policy owner can authorize clipboard for the actually
+            // configured IME before the rest of the device services are published.
+            new SettingsProvider();
             cohostControl = new CohostOwnerService(ownerPm, ownerPermissions,
                     Zygote.vmCommandLine(SystemServer.class.getName()));
             cohostControl.publish();

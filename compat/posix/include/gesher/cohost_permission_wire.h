@@ -5,6 +5,8 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <memory>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -16,8 +18,12 @@ constexpr uint32_t kMagic = 0x47504353;  // GPCS
 constexpr uint32_t kVersion = 1;
 constexpr uint32_t kMaxNames = 128;
 constexpr uint32_t kMaxName = 300;
+constexpr uint32_t kClipboardHeaderBytes = 4 * sizeof(uint32_t);
+constexpr uint32_t kMaxClipboardPayload = 72 * 1024 * 1024 + kClipboardHeaderBytes;
+constexpr DWORD kClipboardTransferTimeout = 30000;
 enum class Operation : uint32_t {
-  kCheck = 1, kRequest = 2, kFlags = 3, kCanRequest = 4, kAppOpMode = 5
+  kCheck = 1, kRequest = 2, kFlags = 3, kCanRequest = 4, kAppOpMode = 5,
+  kClipboardState = 6, kClipboardRead = 7, kClipboardWrite = 8, kClipboardClear = 9
 };
 
 struct Header {
@@ -36,8 +42,36 @@ struct Reply {
 };
 static_assert(sizeof(Reply) == 16);
 
+class ClipboardFrame {
+ public:
+  bool Allocate(uint32_t size) {
+    if (size > kMaxClipboardPayload) return false;
+    data_.reset(size == 0 ? nullptr : new (std::nothrow) uint8_t[size]);
+    size_ = data_ ? size : 0;
+    return size_ == size;
+  }
+  uint32_t size() const { return size_; }
+  uint8_t* data() const { return data_.get(); }
+
+ private:
+  std::unique_ptr<uint8_t[]> data_;
+  uint32_t size_ = 0;
+};
+
+inline bool IsClipboard(Operation operation) {
+  switch (operation) {
+    case Operation::kClipboardState:
+    case Operation::kClipboardRead:
+    case Operation::kClipboardWrite:
+    case Operation::kClipboardClear:
+      return true;
+    default:
+      return false;
+  }
+}
+
 inline bool Valid(const Header& head) {
-  if (head.magic != kMagic || head.version != kVersion || head.count > kMaxNames) return false;
+  if (head.magic != kMagic || head.version != kVersion) return false;
   switch (head.operation) {
     case Operation::kCheck:
     case Operation::kFlags:
@@ -45,9 +79,28 @@ inline bool Valid(const Header& head) {
     case Operation::kAppOpMode:
       return head.count == 1;
     case Operation::kRequest:
-      return true;
+      return head.count <= kMaxNames;
+    case Operation::kClipboardState:
+    case Operation::kClipboardRead:
+    case Operation::kClipboardClear:
+      return head.count == 0;
+    case Operation::kClipboardWrite:
+      return head.count >= kClipboardHeaderBytes && head.count <= kMaxClipboardPayload;
   }
   return false;
+}
+
+// Bound each write to the named pipe's buffer capacity.
+inline bool TransferClipboard(HANDLE pipe, void* data, uint32_t size, bool write,
+                              ULONGLONG deadline) {
+  auto* cursor = static_cast<uint8_t*>(data);
+  while (size != 0) {
+    const DWORD chunk = std::min<uint32_t>(size, 65536);
+    if (!binder_bootstrap::Transfer(pipe, cursor, chunk, write, deadline)) return false;
+    cursor += chunk;
+    size -= chunk;
+  }
+  return true;
 }
 
 inline bool ReadNames(HANDLE pipe, uint32_t count, std::vector<std::u16string>* names,
@@ -87,12 +140,12 @@ inline bool SendRequest(HANDLE pipe, Operation operation, const std::vector<std:
   return true;
 }
 
-// Each call opens its own endpoint. Permission queries need not wait for a
-// human to answer a different request's real host consent dialog.
-inline DWORD Exchange(Operation operation, const std::vector<std::u16string>& names,
-                      std::vector<int32_t>* values) {
+inline HANDLE Connect() {
   const auto& bootstrap = cohost_bootstrap::Current();
-  if (!bootstrap || bootstrap.permission_pipe.empty()) return ERROR_ACCESS_DENIED;
+  if (!bootstrap || bootstrap.permission_pipe.empty()) {
+    SetLastError(ERROR_ACCESS_DENIED);
+    return INVALID_HANDLE_VALUE;
+  }
   const auto connect = [&] {
     return CreateFileW(bootstrap.permission_pipe.c_str(),
         FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES, 0, nullptr, OPEN_EXISTING,
@@ -101,11 +154,26 @@ inline DWORD Exchange(Operation operation, const std::vector<std::u16string>& na
   HANDLE pipe = connect();
   if (pipe == INVALID_HANDLE_VALUE && GetLastError() == ERROR_PIPE_BUSY &&
       WaitNamedPipeW(bootstrap.permission_pipe.c_str(), 5000)) pipe = connect();
-  if (pipe == INVALID_HANDLE_VALUE) return GetLastError();
-  const auto close = [&pipe](DWORD error) { CloseHandle(pipe); return error; };
+  if (pipe == INVALID_HANDLE_VALUE) return pipe;
   DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-  if (!bootstrap.VerifyPeer(pipe) || !SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) ||
-      !SendRequest(pipe, operation, names, GetTickCount64() + 5000)) return close(ERROR_ACCESS_DENIED);
+  if (bootstrap.VerifyPeer(pipe) && SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr)) {
+    return pipe;
+  }
+  CloseHandle(pipe);
+  SetLastError(ERROR_ACCESS_DENIED);
+  return INVALID_HANDLE_VALUE;
+}
+
+// Each call opens its own endpoint. Permission queries need not wait for a
+// human to answer a different request's real host consent dialog.
+inline DWORD Exchange(Operation operation, const std::vector<std::u16string>& names,
+                      std::vector<int32_t>* values) {
+  if (IsClipboard(operation)) return ERROR_INVALID_PARAMETER;
+  HANDLE pipe = Connect();
+  if (pipe == INVALID_HANDLE_VALUE) return GetLastError();
+  const auto& bootstrap = cohost_bootstrap::Current();
+  const auto close = [&pipe](DWORD error) { CloseHandle(pipe); return error; };
+  if (!SendRequest(pipe, operation, names, GetTickCount64() + 5000)) return close(ERROR_ACCESS_DENIED);
   Reply reply;
   const ULONGLONG query_timeout = GetTickCount64() + 5000;
   // Only the dedicated user-consent operation may wait for human input. Its
@@ -121,6 +189,33 @@ inline DWORD Exchange(Operation operation, const std::vector<std::u16string>& na
   if (reply.count != 0 && !binder_bootstrap::Transfer(pipe, values->data(),
       reply.count * sizeof(int32_t), false, GetTickCount64() + 5000)) return close(ERROR_INVALID_DATA);
   return close(bootstrap.VerifyPeer(pipe) ? ERROR_SUCCESS : ERROR_ACCESS_DENIED);
+}
+
+inline DWORD ClipboardExchange(Operation operation, const ClipboardFrame& input,
+                               ClipboardFrame* output) {
+  if (!IsClipboard(operation)) return ERROR_INVALID_PARAMETER;
+  Header request;
+  request.operation = operation;
+  request.count = input.size();
+  if (!Valid(request)) return ERROR_INVALID_PARAMETER;
+  HANDLE pipe = Connect();
+  if (pipe == INVALID_HANDLE_VALUE) return GetLastError();
+  const auto close = [&pipe](DWORD error) { CloseHandle(pipe); return error; };
+  const ULONGLONG deadline = GetTickCount64() + kClipboardTransferTimeout;
+  if (!binder_bootstrap::Transfer(pipe, &request, sizeof(request), true, deadline) ||
+      !TransferClipboard(pipe, input.data(), request.count, true, deadline)) {
+    return close(ERROR_WRITE_FAULT);
+  }
+  Reply reply;
+  if (!binder_bootstrap::Transfer(pipe, &reply, sizeof(reply), false, deadline) ||
+      reply.magic != kMagic || reply.version != kVersion || reply.count > kMaxClipboardPayload ||
+      !cohost_bootstrap::Current().VerifyPeer(pipe)) return close(ERROR_INVALID_DATA);
+  if (reply.error != 0) return close(static_cast<DWORD>(reply.error));
+  if (!output->Allocate(reply.count)) return close(ERROR_NOT_ENOUGH_MEMORY);
+  if (!TransferClipboard(pipe, output->data(), reply.count, false, deadline)) {
+    return close(ERROR_READ_FAULT);
+  }
+  return close(cohost_bootstrap::Current().VerifyPeer(pipe) ? ERROR_SUCCESS : ERROR_ACCESS_DENIED);
 }
 
 }  // namespace gesher::cohost_permissions

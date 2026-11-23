@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -25,8 +26,10 @@ class Server {
  public:
   using Decisions = std::function<DWORD(Operation, const std::vector<std::u16string>&,
                                         std::vector<int32_t>*)>;
+  using Clipboard = std::function<DWORD(Operation, const ClipboardFrame&, ClipboardFrame*)>;
 
-  explicit Server(Decisions decide) : decide_(std::move(decide)) {
+  explicit Server(Decisions decide, Clipboard clipboard = {})
+      : decide_(std::move(decide)), clipboard_(std::move(clipboard)) {
     GUID id;
     wchar_t suffix[40];
     if (SUCCEEDED(CoCreateGuid(&id)) && StringFromGUID2(id, suffix, 40) != 0) {
@@ -69,7 +72,7 @@ class Server {
       const DWORD unique = i == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0;
       instance.pipe.reset(CreateNamedPipeW(name_.c_str(), PIPE_ACCESS_DUPLEX | unique,
           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
-          static_cast<DWORD>(instances_.size()), 4096, 4096, 0, &attributes));
+          static_cast<DWORD>(instances_.size()), 65536, 65536, 0, &attributes));
       if (!instance.pipe) {
         error = GetLastError();
         break;
@@ -115,11 +118,16 @@ class Server {
     ULONG pid = 0;
     if (!IsLive() || !GetNamedPipeClientProcessId(pipe, &pid) || pid != generation_.pid) return;
     Header request;
-    std::vector<std::u16string> names;
     const ULONGLONG deadline = GetTickCount64() + 5000;
     if (!binder_bootstrap::Transfer(pipe, &request, sizeof(request), false, deadline) ||
-        !Valid(request) || !ReadNames(pipe, request.count, &names, deadline) ||
+        !Valid(request) ||
         !process_identity::MatchPipeSender(pipe, child_.get(), generation_)) return;
+    if (IsClipboard(request.operation)) {
+      if (clipboard_) ServeClipboard(pipe, request);
+      return;
+    }
+    std::vector<std::u16string> names;
+    if (!ReadNames(pipe, request.count, &names, deadline)) return;
     std::vector<int32_t> result;
     DWORD error = decide_(request.operation, names, &result);
     if (!IsLive()) return;
@@ -131,6 +139,36 @@ class Server {
     if (!binder_bootstrap::Transfer(pipe, &reply, sizeof(reply), true, send_deadline)) return;
     if (reply.count && !binder_bootstrap::Transfer(pipe, result.data(),
         reply.count * sizeof(int32_t), true, send_deadline)) return;
+    AwaitClose(pipe, send_deadline);
+  }
+
+  void ServeClipboard(HANDLE pipe, const Header& request) {
+    ClipboardFrame input, result;
+    // At most one clipboard frame per lease can be buffered at a time. A
+    // malformed or stalled writer holds only this scope and has a deadline.
+    std::unique_lock lock(clipboard_transfer_, std::try_to_lock);
+    DWORD error = ERROR_BUSY;
+    const ULONGLONG deadline = GetTickCount64() + kClipboardTransferTimeout;
+    if (lock.owns_lock()) {
+      if (input.Allocate(request.count)) {
+        if (!TransferClipboard(pipe, input.data(), request.count, false, deadline) ||
+            !IsLive()) return;
+        error = clipboard_(request.operation, input, &result);
+      } else {
+        error = ERROR_NOT_ENOUGH_MEMORY;
+      }
+    }
+    if (!IsLive()) return;
+    if (result.size() > kMaxClipboardPayload) error = ERROR_INVALID_DATA;
+    Reply reply;
+    reply.error = static_cast<int32_t>(error);
+    if (error == ERROR_SUCCESS) reply.count = static_cast<uint32_t>(result.size());
+    if (!binder_bootstrap::Transfer(pipe, &reply, sizeof(reply), true, deadline) ||
+        !TransferClipboard(pipe, result.data(), reply.count, true, deadline)) return;
+    AwaitClose(pipe, deadline);
+  }
+
+  void AwaitClose(HANDLE pipe, ULONGLONG send_deadline) {
     // DisconnectNamedPipe discards bytes the client has not read. An authorized
     // caller closes normally, and never holds the worker beyond this deadline.
     while (IsLive() && GetTickCount64() < send_deadline &&
@@ -151,6 +189,8 @@ class Server {
 
   std::wstring name_;
   Decisions decide_;
+  Clipboard clipboard_;
+  std::mutex clipboard_transfer_;
   std::atomic<bool> stopped_{false};
   binder_peer::OwnedHandle child_;
   process_identity::Process generation_;

@@ -165,6 +165,26 @@ public final class AppOpsService extends IAppOpsService.Default {
         if (packageFor(uid, name) == null) return MODE_ERRORED;
         return raw(mStore.state(), op, uid, name);
     }
+
+    /** Clipboard policy for a host-admitted signed APK, including transient APKs. */
+    boolean scopedClipboardAllowed(PermissionPolicy.ScopedOwner owner, int op,
+            boolean foreground) {
+        if (!owner.isCurrent() || (op != OP_READ_CLIPBOARD && op != OP_WRITE_CLIPBOARD)) {
+            return false;
+        }
+        ApkPackage code = owner.code();
+        if (restricted(op, code.uid(), code.packageName, null, false)) return false;
+        int switchOp = switchOp(op);
+        int mode = raw(mStore.state(), switchOp, code.uid(), code.packageName);
+        if (mode != MODE_FOREGROUND) return mode == MODE_ALLOWED;
+        if (foreground) {
+            return evaluateForeground(switchOp, new UidState(UID_STATE_TOP, 0)) == MODE_ALLOWED;
+        }
+        refreshUidStates();
+        synchronized (mLock) {
+            return evaluate(op, code.uid(), mode) == MODE_ALLOWED;
+        }
+    }
     @Override public int checkOperationRaw(int code, int uid, String name, String tag) {
         return checkOperationRawForDevice(code, uid, name, tag, 0);
     }

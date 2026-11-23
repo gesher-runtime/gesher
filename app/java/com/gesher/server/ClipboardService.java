@@ -33,21 +33,23 @@ import java.util.Objects;
 public final class ClipboardService extends IClipboard.Default
         implements WindowsHost.Listener, AutoCloseable {
     private static final String WINDOWS_LABEL = "Windows";
-    private static final int MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+    static final int MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+
+    record Snapshot(int sequence, String text, String html, byte[] image) { }
+    record Sample(int sequence, Snapshot contents) { }
 
     /** Instance-owned native boundary. Only isolated fixtures inject an implementation. */
     interface Host {
         boolean available();
-        long[] foregroundProcess();
+        default boolean authorized(int op) { return true; }
+        default long[] foregroundProcess() { return null; }
         int sessionLockState();
-        int sequence();
-        String text();
-        String html();
-        byte[] image();
+        Sample sample(int previousSequence);
         int write(String text, String html, byte[] image);
         int clear();
         void addListener(WindowsHost.Listener listener);
         void removeListener(WindowsHost.Listener listener);
+
     }
 
     private static final class WindowsClipboard implements Host {
@@ -55,10 +57,16 @@ public final class ClipboardService extends IClipboard.Default
         public boolean available() { return WindowsHost.available(); }
         public long[] foregroundProcess() { return WindowsHost.foregroundProcess(); }
         public int sessionLockState() { return WindowsHost.sessionLockState(); }
-        public int sequence() { return WindowsHost.clipboardSequence(); }
-        public String text() { return WindowsHost.clipboardText(); }
-        public String html() { return WindowsHost.clipboardHtml(); }
-        public byte[] image() { return WindowsHost.clipboardImage(); }
+        public Sample sample(int previousSequence) {
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                int sequence = WindowsHost.clipboardSequence();
+                if (sequence == 0 || sequence == previousSequence) return null;
+                Snapshot clip = new Snapshot(sequence, WindowsHost.clipboardText(),
+                        WindowsHost.clipboardHtml(), WindowsHost.clipboardImage());
+                if (WindowsHost.clipboardSequence() == sequence) return new Sample(sequence, clip);
+            }
+            return null;
+        }
         public int write(String text, String html, byte[] image) {
             return WindowsHost.setClipboardSequence(text, html, image);
         }
@@ -105,9 +113,10 @@ public final class ClipboardService extends IClipboard.Default
     private File mOwnedImage;
     private int mSequence;
     private boolean mHaveSequence;
+    private int mDeferredNotificationSequence;
 
     public ClipboardService(ActivityTaskManagerService atm, PackageManagerService pm) {
-        this(atm, pm, new WindowsClipboard());
+        this(atm, pm, null);
     }
 
     ClipboardService(ActivityTaskManagerService atm, PackageManagerService pm, Host host) {
@@ -115,7 +124,9 @@ public final class ClipboardService extends IClipboard.Default
         mPm = Objects.requireNonNull(pm);
         mCallers = new CallerIdentity(pm, atm);
         mAppOps = pm.appOps();
-        mHost = Objects.requireNonNull(host);
+        mHost = host != null ? host : pm.isCohost()
+                ? new CohostClipboard(() -> mListeners.getRegisteredCallbackCount() != 0)
+                : new WindowsClipboard();
         mPackageChanges = pm.onPackageChange(ignored -> pruneListeners());
         mPackageRemovals = pm.onPackageRemoval(ignored -> pruneListeners());
     }
@@ -158,7 +169,7 @@ public final class ClipboardService extends IClipboard.Default
                 Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND) == PackageManager.PERMISSION_GRANTED;
     }
 
-    private boolean defaultIme(String packageName) {
+    static boolean defaultIme(String packageName) {
         String configured = SettingsProvider.secureString(Settings.Secure.DEFAULT_INPUT_METHOD);
         ComponentName ime = configured == null ? null : ComponentName.unflattenFromString(configured);
         return ime != null && packageName.equals(ime.getPackageName());
@@ -167,7 +178,9 @@ public final class ClipboardService extends IClipboard.Default
     private boolean access(ListenerInfo identity, int op, boolean note) {
         checkPackage(identity.uid, identity.packageName);  // AOSP ownership check precedes privileges.
         if (!current(identity)) return false;
-        if (op == AppOpsManager.OP_READ_CLIPBOARD && !backgroundPermission(identity)
+        if (mPm.isCohost()) {
+            if (!mHost.authorized(op)) return false;
+        } else if (op == AppOpsManager.OP_READ_CLIPBOARD && !backgroundPermission(identity)
                 && !defaultIme(identity.packageName)
                 && !mAtm.ownsForegroundProcess(identity.uid, mHost.foregroundProcess())) return false;
         // This is an internal system-server AppOps call for an already authenticated subject.
@@ -207,12 +220,12 @@ public final class ClipboardService extends IClipboard.Default
         boolean changed = false;
         synchronized (mClipboardLock) {
             if (mClosed || !mHost.available()) return;
-            for (int attempt = 0; attempt < 2; attempt++) {
-                int sequence = mHost.sequence();
-                if (sequence == 0 || (mHaveSequence && sequence == mSequence)) return;
-                String text = mHost.text(), html = mHost.html();
-                byte[] image = mHost.image();
-                if (mHost.sequence() != sequence) continue;
+            Sample nativeSample = mHost.sample(mHaveSequence ? mSequence : 0);
+            if (nativeSample == null) return;
+            Snapshot nativeClip = nativeSample.contents();
+            if (nativeClip != null) {
+                String text = nativeClip.text(), html = nativeClip.html();
+                byte[] image = nativeClip.image();
                 ClipData clip = null;
                 File imageFile = null;
                 if (image != null && image.length > 0 && image.length <= MAX_IMAGE_BYTES) {
@@ -235,9 +248,15 @@ public final class ClipboardService extends IClipboard.Default
                     else if (html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL,
                             android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString(), html);
                 }
-                mSequence = sequence; mHaveSequence = true;
-                changed = replaceLocked(clip, null, imageFile);
-                break;
+                mSequence = nativeClip.sequence(); mHaveSequence = true;
+                changed = replaceLocked(clip, null, imageFile)
+                        && nativeSample.sequence() != mDeferredNotificationSequence;
+                mDeferredNotificationSequence = 0;
+            } else if (notify && nativeSample.sequence() != mDeferredNotificationSequence) {
+                // A privileged reader can still observe change notifications on
+                // the lock screen, where Android disallows returning the clip.
+                changed = true;
+                mDeferredNotificationSequence = nativeSample.sequence();
             }
         }
         if (changed && notify) notifyListeners();
@@ -403,7 +422,9 @@ public final class ClipboardService extends IClipboard.Default
             if (mClosed) return;
             int writtenSequence = mHost.available() ? mHost.write(windows[0], windows[1], image) : 0;
             replaceLocked(saved, source, null);
-            if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }
+            if (writtenSequence != 0) {
+                mSequence = writtenSequence; mHaveSequence = true; mDeferredNotificationSequence = 0;
+            }
             else if (mHost.available()) {
                 // No receipt can bind the saved typed clip to native data. The next
                 // read/event must import the actual native generation, even if an
@@ -428,7 +449,9 @@ public final class ClipboardService extends IClipboard.Default
             if (mClosed) return;
             int writtenSequence = mHost.available() ? mHost.clear() : 0;
             changed = replaceLocked(null, null, null);
-            if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }
+            if (writtenSequence != 0) {
+                mSequence = writtenSequence; mHaveSequence = true; mDeferredNotificationSequence = 0;
+            }
             else if (mHost.available()) {
                 // No receipt can bind the saved typed clip to native data. The next
                 // read/event must import the actual native generation, even if an

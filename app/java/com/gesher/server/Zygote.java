@@ -73,6 +73,8 @@ public final class Zygote {
             CohostPermissionHost permissions, String credential, String device, int[] streams,
             String buildProp, String frameworkRes);
     static native boolean nativeCohostPermissionLive(long lease);
+    static native boolean nativeCohostMatchesProcess(long lease, long pid, long birth);
+    static native byte[] nativeCohostClipboardExchange(int operation, byte[] data);
     static native void nativeCancelCohost(long lease);
     public static native int[] captureCohostStreams() throws IOException;
     static native boolean nativeHasCohostPermissionScope();
