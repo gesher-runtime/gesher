@@ -967,7 +967,11 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     // a stream socket accepts the option as on Linux, which has nothing to
     // deliver there. An AF_UNIX pair is not an IP socket (EOPNOTSUPP).
     if (IsUnixPair(*state.description)) return errno = EOPNOTSUPP, -1;
-    if (!ReadInt(value, len, &v)) return -1;
+    // As Linux's do_ip_setsockopt: an int, else a byte, else (optlen 0) off.
+    v = 0;
+    if (len >= 1) {
+      if (!ReadInt(value, len >= sizeof(int) ? sizeof(int) : 1, &v)) return -1;
+    }
     if (ws::SetPacketInfo(state.socket, v != 0) < 0 && errno != ENOPROTOOPT && errno != EINVAL) return -1;
     state.description->recv_pktinfo.store(v != 0);
     return 0;
