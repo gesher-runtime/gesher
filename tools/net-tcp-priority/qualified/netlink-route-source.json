@@ -26,7 +26,7 @@
     "compat/posix/src/binder_wire.h": "173957cbac1911a6ae3d1d7f4d28f54bd0b54a64a649b651fe0c6b26a9d7ea33",
     "compat/posix/src/fd.cc": "cf174d47b1bfe26287966ec46bfa21341544cca351ec0396ad7288d9361b448f",
     "compat/posix/src/linux_socket.h": "dcc0b50c073961b369148896b05121439407084a343c8e281ea22e47d40efc66",
-    "compat/posix/src/netdb.cc": "ffa52076d4d62f5e9a30617a0c36ca01c5a82972b663f1005f202917567aa78a",
+    "compat/posix/src/netdb.cc": "906e35140cf2143132b35d7bdcedbe7d5e6968dc4d43f8da8e89ce42f3c48988",
     "compat/posix/src/netlink.cc": "ccd8491af50a5ddd6b67ae8c8e4bba8b4399d53c586fb6b9018a95cfe8fbce56",
     "compat/posix/src/netlink_internal.h": "a0b46503725a3e3aaecc2e0ea106f12adb007d541b34d117e6031693de421680",
     "compat/posix/src/socket.cc": "4bbefe18a47b36ed84b8eeaff5b078e79bd238e47aefc6b0b262663aa3bb07f6",
@@ -35,7 +35,7 @@
     "compat/posix/src/winsock.cc": "71822702d6b5f2e811bc262226ae82f306333843f4701fb27142316edd23169e",
     "tests/native/native_poll_allocations_windows.cc.in": "18c7df91e370f74eb592e7fe599339f69a98f606874da7882e110c95c15aeb98",
     "tests/native/netlink_route_test.cc": "9e3c5082e0c7c8263a0116c3a8ec40415d8da75e2e9fd4a8cfd7a549f3ccb1ce",
-    "tests/sandbox/netlink-authority-probe.cc": "5052a3339c9a55c03bdb8f459ac599e0aa92302a0e40c36452b9185647794159",
+    "tests/sandbox/netlink-authority-probe.cc": "ec84a5b51fcb9dcd62dfcaa9dfd4544d50fad5b77839da7f04b0baf54bbab16a",
     "tests/windows/tracks/56-net.ps1": "8c516ff425c0d88977fba27f9a53d6993149fd9ff942c4d6593bba3a1da88c5e"
   }
 }

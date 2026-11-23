@@ -17,6 +17,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 
+#include <gesher/binder_endpoint.h>
 #include <gesher/inet.h>
 
 #include <string>
@@ -528,33 +529,36 @@ void if_freenameindex(struct if_nameindex* ptr) {
   free(ptr);
 }
 
-// As on Linux: an AF_PACKET entry per interface, holding its hardware
-// address (which libcore's NetworkInterface reads), then one per IP address.
+// Android exposes IP addresses to ordinary apps. Link-layer entries come from
+// the same authenticated system-only inspection as RTM_GETLINK.
 int getifaddrs(struct ifaddrs** ifap) {
   if (ifap == nullptr) return errno = EFAULT, -1;
   *ifap = nullptr;
   std::vector<ws::Interface> interfaces;
   if (!ListNamedInterfaces(&interfaces)) return -1;
+  const bool include_link_layer = gesher::binder_endpoint::MayInspectNetlink();
   ifaddrs** tail = ifap;
   auto append = [&tail](IfAddrsBlock* block) {
     *tail = &block->ifa;
     tail = &block->ifa.ifa_next;
   };
   for (const ws::Interface& iface : interfaces) {
-    IfAddrsBlock* packet = NewEntry(iface);
-    if (packet == nullptr) {
-      freeifaddrs(*ifap);
-      *ifap = nullptr;
-      return errno = ENOMEM, -1;
+    if (include_link_layer) {
+      IfAddrsBlock* packet = NewEntry(iface);
+      if (packet == nullptr) {
+        freeifaddrs(*ifap);
+        *ifap = nullptr;
+        return errno = ENOMEM, -1;
+      }
+      auto* sll = reinterpret_cast<sockaddr_ll*>(&packet->address);
+      sll->sll_family = AF_PACKET;
+      sll->sll_ifindex = static_cast<int>(iface.index);
+      sll->sll_hatype = (iface.flags & ws::kIfLoopback) != 0 ? ARPHRD_LOOPBACK : ARPHRD_ETHER;
+      sll->sll_halen = static_cast<unsigned char>(iface.hardware_len);
+      memcpy(sll->sll_addr, iface.hardware, iface.hardware_len);
+      packet->ifa.ifa_addr = reinterpret_cast<sockaddr*>(&packet->address);
+      append(packet);
     }
-    auto* sll = reinterpret_cast<sockaddr_ll*>(&packet->address);
-    sll->sll_family = AF_PACKET;
-    sll->sll_ifindex = static_cast<int>(iface.index);
-    sll->sll_hatype = (iface.flags & ws::kIfLoopback) != 0 ? ARPHRD_LOOPBACK : ARPHRD_ETHER;
-    sll->sll_halen = static_cast<unsigned char>(iface.hardware_len);
-    memcpy(sll->sll_addr, iface.hardware, iface.hardware_len);
-    packet->ifa.ifa_addr = reinterpret_cast<sockaddr*>(&packet->address);
-    append(packet);
 
     for (const ws::InterfaceAddress& a : iface.addresses) {
       IfAddrsBlock* block = NewEntry(iface);

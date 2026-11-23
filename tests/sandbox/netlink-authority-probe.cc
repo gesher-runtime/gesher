@@ -1,6 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <errno.h>
+#include <ifaddrs.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
@@ -104,6 +105,21 @@ bool ReadLink(int fd, uint32_t port, int index) {
          (header->nlmsg_flags & NLM_F_MULTI) == 0 && link->ifi_index == index;
 }
 
+bool CheckInterfaceAddresses(bool expect_link_layer) {
+  ifaddrs* addresses = nullptr;
+  if (getifaddrs(&addresses) != 0) return false;
+  bool saw_ip = false;
+  bool saw_link_layer = false;
+  for (const auto* address = addresses; address; address = address->ifa_next) {
+    if (address->ifa_addr == nullptr) continue;
+    const auto family = address->ifa_addr->sa_family;
+    saw_ip |= (family == AF_INET || family == AF_INET6) && address->ifa_name != nullptr;
+    saw_link_layer |= family == AF_PACKET;
+  }
+  freeifaddrs(addresses);
+  return saw_ip && saw_link_layer == expect_link_layer;
+}
+
 bool ActivateInspection(HANDLE pipe) {
   gesher::process_identity::Process self;
   if (!gesher::process_identity::ReadLiveProcess(GetCurrentProcess(), &self)) return false;
@@ -122,7 +138,8 @@ int NoAuthority(bool contained) {
   if (!gesher::process_identity::ReadLiveProcess(GetCurrentProcess(), &self) ||
       (self.principal.container.size != 0) != contained) return 1;
   int fd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_ROUTE);
-  const bool okay = fd >= 0 && !gesher::binder_endpoint::MayInspectNetlink() && Denied(fd);
+  const bool okay = fd >= 0 && !gesher::binder_endpoint::MayInspectNetlink() && Denied(fd) &&
+      Check(CheckInterfaceAddresses(false), "ordinary getifaddrs retains IP rows only");
   if (fd >= 0) close(fd);
   return Check(okay, contained ? "contained app denied" : "unregistered host denied") ? 0 : 1;
 }
@@ -132,7 +149,8 @@ int SystemServer(const fs::path& directory, const std::u16string& profile) {
   if (!Check(channel::ReadStartup(channel::Endpoint::kSystemServer, &startup) &&
              zygote::HasProtectedLaunchAuthority(), "protected process admitted")) return 1;
   int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-  if (!Check(fd >= 0 && Denied(fd), "admitted system_server has no grant by default")) return 1;
+  if (!Check(fd >= 0 && Denied(fd) && CheckInterfaceAddresses(false),
+             "admitted system_server has no grant by default")) return 1;
   if (!Check(ActivateInspection(channel::DecodeHandle(startup.channel)), "explicit private grant") ||
       !Check(gesher::binder_endpoint::MayInspectNetlink(), "authenticated grant received")) return 1;
 
@@ -149,6 +167,7 @@ int SystemServer(const fs::path& directory, const std::u16string& profile) {
              local.nl_pid == port && local.nl_groups == RTMGRP_IPV4_IFADDR && ReadLinks(fd, port, &first_index),
              "authentic Windows link dump")) return 1;
   if (!Check(ReadLink(fd, port, first_index), "single interface read matches the dumped generation")) return 1;
+  if (!Check(CheckInterfaceAddresses(true), "authorized getifaddrs exposes IP and link-layer rows")) return 1;
   int other = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
   const bool duplicate_port = other >= 0 &&
       bind(other, reinterpret_cast<const sockaddr*>(&local), sizeof(local)) < 0 && errno == EADDRINUSE;
