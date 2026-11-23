@@ -197,6 +197,17 @@ public final class UsageObserverServiceTest {
                     1, new String[]{"child"}, 60000, 1, callback, "owner"));
             DesktopUsageStatsService unmanaged = new DesktopUsageStatsService(packages, callers,
                     null, clock::get, clock::get, timer);
+            // Authentication/permission rejection precedes the availability gate,
+            // even when this service has no managed activity lifecycle.
+            packages.permissions.granted = false;
+            try {
+                throwsType(SecurityException.class, () -> unmanaged.registerAppUsageObserver(
+                        1, new String[]{"app"}, 60000, callback, "owner"));
+                throwsType(SecurityException.class, () -> unmanaged.unregisterAppUsageObserver(1, "owner"));
+            } finally { packages.permissions.granted = true; }
+            throwsType(SecurityException.class, () -> unmanaged.registerAppUsageObserver(
+                    1, new String[]{"app"}, 60000, callback, "foreign"));
+            throwsType(SecurityException.class, () -> unmanaged.reportUsageStart(activity, "feature", "foreign"));
             throwsType(UnsupportedOperationException.class, () -> unmanaged.registerAppUsageObserver(
                     1, new String[]{"app"}, 60000, callback, "owner"));
             unmanaged.unregisterAppUsageObserver(1, "owner");
