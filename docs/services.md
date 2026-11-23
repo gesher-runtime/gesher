@@ -159,6 +159,7 @@ built in framework.yml).
 | `jobscheduler` | `JobSchedulerService` | constraints: the net track's ConnectivityManager networks (`WindowsNetworks`; the Network List Manager without them), `GetSystemPowerStatus`, `GetLastInputInfo`; content URI triggers from `content` |
 | `content` | `ContentService`, `SyncManager` | (none: observers and `notifyChange` in the system server, hwsvc2; apps' sync adapters) |
 | `vibrator_manager` | `VibratorManagerService` | (none: a device without a vibrator; hwsvc2) |
+| `usb` | `UsbService` | (none: no USB host stack or accessory function; issue #303) |
 | `clipboard` | `ClipboardService` | CF_UNICODETEXT and CF_HTML, `AddClipboardFormatListener` |
 | `notification` | `NotificationManagerService`, `NotificationIcons`, `NotificationStore` | toasts of `Gesher.App.<package>` (WinRT `ToastNotificationManager`), `HKCU\Software\Classes\AppUserModelId\<id>` with `CustomActivator`; Gesher's toast activator (COM, `devsvc_activator.c`; the installer's LocalServer32 runs `gesher-app toast-activated`) |
 | `power` | `PowerManagerService` | `PowerCreateRequest`/`PowerSetRequest` (wake locks), battery saver, PBT_APMSUSPEND/RESUME (screen off/on) |
@@ -210,6 +211,12 @@ Behaviour, in short (details in the classes' comments and ADR 0038):
   full, battery not present.
 - Vibrator: `vibrator_manager` of a device without one: no ids,
   `hasVibrator()` false, the null vibrator, vibrate/cancel accepted.
+- USB: `usb` of a device without `android.hardware.usb.host` or
+  `android.hardware.usb.accessory` (neither feature is declared): an empty
+  `getDeviceList()`, a null `getAccessoryList()`, `openDevice`/`openAccessory`
+  null, no permission, and `requestPermission` answered at once with
+  `EXTRA_PERMISSION_GRANTED` false; MANAGE_USB calls are system-only. Windows'
+  USB devices are not exposed to apps.
 - Content observers: register/unregister/`notifyChange` with ContentService's
   URI matching, each observer once per change.
 - Sync: apps' sync adapters (services for `android.content.SyncAdapter` with a

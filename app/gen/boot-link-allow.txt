@@ -1,0 +1,25 @@
+# Framework references to gesher-app.jar classes that app/gen/BootLinkCheck.java may
+# leave unresolved, as owner.name:descriptor. Each is on a path Gesher does not run;
+# anything else unresolved fails app/build.sh (a NoSuchMethodError or NoSuchFieldError
+# waiting for the framework path that uses it, as issue #303's
+# BluetoothDevice.prepareToEnterProcess was).
+
+# ActivityThread.initializeMainlineModules, which only ActivityThread.main and
+# ActivityThread.systemMain call. Gesher's processes start in GesherAppProcess and
+# GesherAppDriver instead; the initializers' registerServiceWrappers still run from
+# SystemServiceRegistry's static initializer.
+android.bluetooth.BluetoothFrameworkInitializer.setBinderCallsStatsInitializer:(Ljava/util/function/Consumer;)V
+android.bluetooth.BluetoothFrameworkInitializer.setBluetoothServiceManager:(Landroid/os/BluetoothServiceManager;)V
+android.media.MediaFrameworkInitializer.setMediaServiceManager:(Landroid/media/MediaServiceManager;)V
+android.nfc.NfcFrameworkInitializer.setNfcServiceManager:(Landroid/nfc/NfcServiceManager;)V
+android.os.ProfilingFrameworkInitializer.setProfilingServiceManager:(Landroid/os/ProfilingServiceManager;)V
+android.os.StatsFrameworkInitializer.setStatsServiceManager:(Landroid/os/StatsServiceManager;)V
+
+# ZygoteInit.preload: Gesher has no zygote.
+android.net.http.HttpEngine.preload:()V
+
+# SystemServiceRegistry's TETHERING_SERVICE fetcher. app/compat-java's TetheringManager is
+# a placeholder that only lets SystemServiceRegistry's static initializer name the class;
+# getSystemService(TETHERING_SERVICE) is documented as unsupported there. Known gap: the
+# fetcher fails with NoSuchMethodError instead of answering null.
+android.net.TetheringManager.<init>:(Landroid/content/Context;Ljava/util/function/Supplier;)V
