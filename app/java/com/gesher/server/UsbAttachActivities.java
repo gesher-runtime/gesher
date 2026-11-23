@@ -17,6 +17,8 @@ import android.content.res.XmlResourceParser;
 import android.hardware.usb.DeviceFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
+import android.os.Binder;
+import android.os.Process;
 import android.util.DisplayMetrics;
 
 import com.android.internal.util.XmlUtils;
@@ -32,6 +34,7 @@ import java.util.function.BooleanSupplier;
 final class UsbAttachActivities {
     private final PackageManagerService packages;
     private final IntentChooser.Dialog dialog;
+    private final ThreadLocal<String> matchingDevice = new ThreadLocal<>();
 
     UsbAttachActivities(PackageManagerService packages, IntentChooser.Dialog dialog) {
         this.packages = packages;
@@ -43,7 +46,13 @@ final class UsbAttachActivities {
         Intent intent = new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .putExtra(UsbManager.EXTRA_DEVICE, device);
-        List<IntentChooser.Option> options = resolve(device, intent);
+        List<IntentChooser.Option> options;
+        matchingDevice.set(device.getDeviceName());
+        try {
+            options = resolve(device, intent);
+        } finally {
+            matchingDevice.remove();
+        }
         if (options.isEmpty() || !attached.getAsBoolean()) return null;
         String[] labels = new String[options.size()];
         boolean[] enabled = new boolean[options.size()];
@@ -59,6 +68,12 @@ final class UsbAttachActivities {
         if (index < 0 || index >= options.size() || !attached.getAsBoolean()) return null;
         IntentChooser.Option chosen = options.get(index);
         return chosen.current(packages, null) ? chosen : null;
+    }
+
+    /** DeviceFilter calls the serial reader locally while matching manifest metadata. */
+    boolean readingSerialForMatch(String deviceName) {
+        return deviceName.equals(matchingDevice.get()) && Binder.getCallingPid() == Process.myPid()
+                && !Binder.isDirectlyHandlingTransaction();
     }
 
     private record Candidate(ResolveInfo resolved, ApkPackage installation) {}

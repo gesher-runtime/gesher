@@ -55,10 +55,15 @@ final class UsbHost {
     private int nextAddress;
 
     UsbHost(CallerIdentity callers, PackageManagerService packages, ActivityManagerService activityManager) {
+        this(callers, packages, activityManager, IntentChooser.HOST);
+    }
+
+    UsbHost(CallerIdentity callers, PackageManagerService packages, ActivityManagerService activityManager,
+            IntentChooser.Dialog dialog) {
         this.callers = callers;
         this.packages = packages;
         this.activityManager = activityManager;
-        attachActivities = new UsbAttachActivities(packages, IntentChooser.HOST);
+        attachActivities = new UsbAttachActivities(packages, dialog);
     }
 
     synchronized void start() {
@@ -312,7 +317,9 @@ final class UsbHost {
     private IUsbSerialReader serialReader(String name, String serial) {
         return new IUsbSerialReader.Stub() {
             @Override public String getSerial(String packageName) {
-                if (!has(name, packageName)) throw new SecurityException("No USB permission");
+                if (!attachActivities.readingSerialForMatch(name) && !has(name, packageName)) {
+                    throw new SecurityException("No USB permission");
+                }
                 return serial;
             }
         };
