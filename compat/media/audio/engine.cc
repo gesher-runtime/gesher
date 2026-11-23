@@ -177,6 +177,8 @@ struct Track::Resampler {
 
 // --- Engine ------------------------------------------------------------------------------
 
+void Sink::WaitForRefill(void* timer) { WaitForSingleObject(timer, 100); }
+
 class Engine : public Mixer {
  public:
   static Engine* Get() {
@@ -323,7 +325,7 @@ class Engine : public Mixer {
     uint64_t last_retry = GetTickCount64();
     bool null_sink = sink->Describe().rfind("none", 0) == 0;
     for (;;) {
-      WaitForSingleObject(timer, 100);
+      sink->WaitForRefill(timer);
       uint32_t g = Generation();
       if (g != generation) {
         generation = g;
@@ -539,6 +541,57 @@ bool Track::stopped() const {
   return state_ == State::kStopped || (state_ == State::kStopping && drained_);
 }
 
+// A blocking caller retains its input until Write returns. Register only the
+// remainder waiting for ring space, so a large mix can refill without waiting
+// for that caller to reacquire the mutex the mixer itself holds. All links and
+// progress are protected by mu_; the wait reacquires it before scope cleanup.
+struct Track::PendingWrite {
+  PendingWrite(Track& track, const uint8_t* data, size_t frames, uint64_t interrupt)
+      : owner(&track), previous(track.pending_write_tail_), data(data), frames(frames),
+        interrupt(interrupt) {
+    if (previous != nullptr) previous->next = this;
+    else track.pending_write_head_ = this;
+    track.pending_write_tail_ = this;
+  }
+  ~PendingWrite() { Unlink(); }
+  PendingWrite(const PendingWrite&) = delete;
+  PendingWrite& operator=(const PendingWrite&) = delete;
+
+  void Unlink() {
+    if (owner == nullptr) return;
+    if (previous != nullptr) previous->next = next;
+    else owner->pending_write_head_ = next;
+    if (next != nullptr) next->previous = previous;
+    else owner->pending_write_tail_ = previous;
+    owner = nullptr;
+  }
+
+  Track* owner;
+  PendingWrite* previous;
+  PendingWrite* next = nullptr;
+  const uint8_t* data;
+  size_t frames;
+  size_t committed = 0;
+  uint64_t interrupt;
+};
+
+size_t Track::CopyToRing(const uint8_t* source, size_t frames) {
+  size_t limit = std::min(buffer_frames_, params_.capacity_frames);
+  size_t queued = static_cast<size_t>(written_ - read_);
+  size_t room = queued < limit ? limit - queued : 0;
+  size_t n = std::min(room, frames);
+  if (n == 0) return 0;
+  size_t cap = params_.capacity_frames;
+  size_t pos = static_cast<size_t>(written_ % cap);
+  size_t first = std::min(n, cap - pos);
+  memcpy(data_.data() + pos * frame_size_, source, first * frame_size_);
+  if (n > first) {
+    memcpy(data_.data(), source + first * frame_size_, (n - first) * frame_size_);
+  }
+  written_ += n;
+  return n;
+}
+
 ssize_t Track::Write(const void* data, size_t bytes, bool blocking) {
   const uint8_t* src = static_cast<const uint8_t*>(data);
   size_t frames = bytes / frame_size_;
@@ -555,26 +608,16 @@ ssize_t Track::Write(const void* data, size_t bytes, bool blocking) {
   const uint64_t interrupt = write_interrupt_;
   while (done < frames) {
     if (released_ || write_interrupt_ != interrupt) break;
-    size_t limit = std::min(buffer_frames_, params_.capacity_frames);
-    size_t queued = static_cast<size_t>(written_ - read_);
-    size_t room = queued < limit ? limit - queued : 0;
-    if (room == 0) {
+    size_t n = CopyToRing(src + done * frame_size_, frames - done);
+    if (n == 0) {
       // Android makes writes nonblocking while stopped/paused. Priming before
       // play() may fill the buffer, but must not wait for a mixer that is idle.
       if (!blocking || state_ != State::kPlaying) break;
+      PendingWrite pending(*this, src + done * frame_size_, frames - done, interrupt);
       room_.wait(lock);
+      done += pending.committed;
       continue;
     }
-    size_t n = std::min(room, frames - done);
-    // Copy into the ring, in up to two pieces.
-    size_t cap = params_.capacity_frames;
-    size_t pos = static_cast<size_t>(written_ % cap);
-    size_t first = std::min(n, cap - pos);
-    memcpy(data_.data() + pos * frame_size_, src + done * frame_size_, first * frame_size_);
-    if (n > first) {
-      memcpy(data_.data(), src + (done + first) * frame_size_, (n - first) * frame_size_);
-    }
-    written_ += n;
     done += n;
   }
   return static_cast<ssize_t>(done * frame_size_);
@@ -757,6 +800,17 @@ size_t Track::ReadSource(float* dst, size_t frames, bool* ended) {
   size_t bps = BytesPerSample(params_.format);
   size_t done = 0;
   if (!params_.is_static) {
+    if (read_ == written_ && state_ == State::kPlaying && !released_) {
+      while (pending_write_head_ != nullptr &&
+             pending_write_head_->interrupt != write_interrupt_) {
+        pending_write_head_->Unlink();
+      }
+      if (PendingWrite* pending = pending_write_head_) {
+        pending->committed += CopyToRing(pending->data + pending->committed * frame_size_,
+                                        pending->frames - pending->committed);
+        if (pending->committed == pending->frames) pending->Unlink();
+      }
+    }
     const uint64_t end = state_ == State::kStopping ? stop_end_ : written_;
     size_t avail = static_cast<size_t>(end - read_);
     size_t n = std::min(avail, frames);
@@ -954,14 +1008,17 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
   // would wait for data that may never come (AAudio's getFramesRead, a
   // position that must reach what was written).
   if (starved && out_done == 0 && rs.primed) {
-    if (++starved_ticks_ >= 2) {
+    if (starved_since_ns_ < 0) starved_since_ns_ = played_time_ns_;
+    // Preserve the 10 ms grace between empty mixes when the device asks
+    // for frames more often than the engine's periodic timer.
+    if (played_time_ns_ - starved_since_ns_ >= 10'000'000) {
       int64_t end = rs.start_index + static_cast<int64_t>(rs.frames());
       if (end > rs.played_index) played_ += static_cast<uint64_t>(end - rs.played_index);
       rs.Reset();
-      starved_ticks_ = 0;
+      starved_since_ns_ = -1;
     }
   } else if (!starved) {
-    starved_ticks_ = 0;
+    starved_since_ns_ = -1;
   }
 
   // Drop history the filter no longer needs.

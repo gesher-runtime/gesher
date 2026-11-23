@@ -430,6 +430,7 @@ jobs:
             tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
           "$RUNNER_TEMP/event-loop-reference"
           python3 tools/test_audio_state_contracts.py --sanitize
+          python3 tools/test_audio_blocked_write.py --sanitize --negative-controls
           python3 tools/test_surface_geometry_contracts.py --sanitize
           python3 tools/test_video_scaling_contracts.py --sanitize
           python3 tools/test_native_window_dispatch.py --sanitize
@@ -962,8 +963,10 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     needs: [source-identity]
-    # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@a31f1cdcc0c515905a4faa9bd3bf51e906e1c80b
+    # A local call runs the framework.yml of the commit under test, so a
+    # framework.yml change takes effect in the same PR. Hosted build runners;
+    # see docs/self-hosted-ci.md before routing it to the restricted group.
+    uses: ./.github/workflows/framework.yml
     with:
       local-runner: false
 
