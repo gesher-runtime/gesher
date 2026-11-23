@@ -6,6 +6,7 @@
 #include <gesher/drop_mount.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <map>
 #include <mutex>
@@ -46,8 +47,9 @@ struct Projection {
 struct Aliases {
   std::mutex lock;
   std::map<uint64_t, Alias> items;
-  std::map<DiskId, Projection> directories;
+  std::map<DiskId, Projection> descriptors;
   uint64_t next = 1;
+  std::atomic<bool> enabled{false};
 };
 
 Aliases& Global() {
@@ -99,6 +101,7 @@ std::shared_ptr<Channel> Channel::Attach(HWND window) {
       !Transfer(pipe, &reply, sizeof(reply), false, deadline) ||
       reply.magic != wire::kMagic || reply.status != 0 || reply.handle) return {};
   channel->state_->self = channel;
+  Global().enabled.store(true, std::memory_order_release);
   return channel;
 }
 
@@ -115,8 +118,8 @@ void Channel::Close() {
   for (auto item = global.items.begin(); item != global.items.end();) {
     item = item->second.owner == this ? global.items.erase(item) : std::next(item);
   }
-  for (auto entry = global.directories.begin(); entry != global.directories.end();) {
-    entry = global.items.contains(entry->second.alias) ? std::next(entry) : global.directories.erase(entry);
+  for (auto entry = global.descriptors.begin(); entry != global.descriptors.end();) {
+    entry = global.items.contains(entry->second.alias) ? std::next(entry) : global.descriptors.erase(entry);
   }
 }
 
@@ -202,8 +205,10 @@ int Channel::Open(uint64_t lease, uint32_t item, std::wstring_view relative, boo
   return 0;
 }
 
+bool Enabled() { return Global().enabled.load(std::memory_order_acquire); }
+
 Selection Lookup(std::wstring_view mapped) {
-  if (!mapped.starts_with(kPathPrefix)) return {};
+  if (!mapped.starts_with(kPathPrefix) || !Enabled()) return {};
   mapped.remove_prefix(std::size(kPathPrefix) - 1);
   const size_t separator = mapped.find(L'\\');
   if (separator == std::wstring_view::npos || separator == 0 || separator > 20) {
@@ -255,7 +260,7 @@ int Open(const Selection& selection, uint32_t flags, HANDLE* file) {
   if (error) return error;
 
   BY_HANDLE_FILE_INFORMATION info{};
-  if (GetFileInformationByHandle(*file, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+  if (GetFileInformationByHandle(*file, &info)) {
     const DiskId id{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
     auto path = AliasPath(selection.alias, item.name);
     if (!selection.relative.empty()) {
@@ -263,21 +268,66 @@ int Open(const Selection& selection, uint32_t flags, HANDLE* file) {
       std::replace(path.begin(), path.end(), L'/', L'\\');
     }
     std::lock_guard<std::mutex> guard(global.lock);
-    if (global.items.contains(selection.alias) && global.directories.size() < 4096) {
-      global.directories.insert_or_assign(id, Projection{selection.alias, std::move(path)});
+    if (global.items.contains(selection.alias) && global.descriptors.size() < 4096) {
+      global.descriptors.insert_or_assign(id, Projection{selection.alias, std::move(path)});
     }
   }
   return 0;
 }
 
 std::wstring DescriptorPath(HANDLE file) {
+  if (!Enabled()) return {};
   BY_HANDLE_FILE_INFORMATION info{};
-  if (!GetFileInformationByHandle(file, &info) || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return {};
+  if (!GetFileInformationByHandle(file, &info)) return {};
   const DiskId id{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
   auto& global = Global();
   std::lock_guard<std::mutex> guard(global.lock);
-  const auto found = global.directories.find(id);
-  return found == global.directories.end() ? std::wstring{} : found->second.path;
+  const auto found = global.descriptors.find(id);
+  return found == global.descriptors.end() ? std::wstring{} : found->second.path;
+}
+
+
+void Channel::Release(uint64_t lease) {
+  bool failed = false;
+  {
+    std::lock_guard<std::mutex> guard(state_->lock);
+    const HANDLE pipe = state_->pipe;
+    if (pipe == INVALID_HANDLE_VALUE) return;
+    wire::Request request;
+    request.op = wire::Op::kRelease;
+    request.identity = lease;
+    wire::Reply reply;
+    const auto deadline = Deadline();
+    failed = !Transfer(pipe, &request, sizeof(request), true, deadline) ||
+        !Transfer(pipe, &reply, sizeof(reply), false, deadline) ||
+        reply.magic != wire::kMagic || reply.status != 0 || reply.handle != 0;
+  }
+  if (failed) Close();
+}
+
+void Release(std::wstring_view path) {
+  std::wstring mapped(path);
+  std::replace(mapped.begin(), mapped.end(), L'/', L'\\');
+  const auto selection = Lookup(mapped);
+  if (!selection.alias) return;
+  std::shared_ptr<Channel> channel;
+  uint64_t lease = 0;
+  auto& global = Global();
+  {
+    std::lock_guard<std::mutex> guard(global.lock);
+    const auto found = global.items.find(selection.alias);
+    if (found == global.items.end()) return;
+    channel = found->second.channel.lock();
+    lease = found->second.lease;
+    for (auto item = global.items.begin(); item != global.items.end();) {
+      item = item->second.owner == channel.get() && item->second.lease == lease
+          ? global.items.erase(item) : std::next(item);
+    }
+    for (auto entry = global.descriptors.begin(); entry != global.descriptors.end();) {
+      entry = global.items.contains(entry->second.alias) ? std::next(entry) : global.descriptors.erase(entry);
+    }
+  }
+  if (channel) channel->Release(lease);
 }
 
 }  // namespace gesher::drop_mount

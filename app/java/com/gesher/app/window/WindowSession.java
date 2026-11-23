@@ -52,6 +52,7 @@ import com.gesher.server.WindowManagerService;
 import java.io.FileDescriptor;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -250,6 +251,7 @@ public final class WindowSession extends IWindowSession.Stub {
         /** The last size WM_SIZE reported, not yet applied (guarded by this). */
         int pendingWidth;
         int pendingHeight;
+        final ArrayDeque<String> pendingHostedDrops = new ArrayDeque<>();
         boolean resizePending;
         boolean focused;
         /** A WM_CHAR high surrogate waiting for its low half. */
@@ -2799,7 +2801,11 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             if (target == null && !hosted) target = activeRoot();
         }
-        if (target == null) return;
+        String offeredPath = hosted && files != null && files.length > 0 ? files[0] : null;
+        if (target == null) {
+            NativeWindow.releaseHostedDrop(offeredPath);
+            return;
+        }
 
         ClipData data = null;
         ClipDescription desc = null;
@@ -2825,11 +2831,17 @@ public final class WindowSession extends IWindowSession.Stub {
         }
 
         android.view.DragEvent event = createDragEvent(action, x, y, data, desc);
-        if (event == null) return;
+        if (event == null) {
+            NativeWindow.releaseHostedDrop(offeredPath);
+            return;
+        }
 
         final AppWindow w = target;
         final android.view.DragEvent dragEvent = event;
         Runnable dispatch = () -> {
+            if (offeredPath != null) {
+                synchronized (w) { w.pendingHostedDrops.addLast(offeredPath); }
+            }
             ViewRootImpl root = viewRoot(w);
             if (root != null) {
                 try {
@@ -2847,7 +2859,7 @@ public final class WindowSession extends IWindowSession.Stub {
         };
 
         if (w.handler != null) {
-            w.handler.post(dispatch);
+            if (!w.handler.post(dispatch)) NativeWindow.releaseHostedDrop(offeredPath);
         } else {
             dispatch.run();
         }
@@ -2924,6 +2936,13 @@ public final class WindowSession extends IWindowSession.Stub {
 
     @Override
     public void reportDropResult(IWindow window, boolean consumed) {
+        if (window == null) return;
+        AppWindow target;
+        synchronized (mWindows) { target = mWindows.get(window.asBinder()); }
+        if (target == null) return;
+        String offer;
+        synchronized (target) { offer = target.pendingHostedDrops.pollFirst(); }
+        if (!consumed) NativeWindow.releaseHostedDrop(offer);
     }
 
     @Override

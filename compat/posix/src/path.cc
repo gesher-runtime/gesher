@@ -430,7 +430,7 @@ static int SystemFontPath(const char* path, std::wstring* windows) {
 
 PathKind MapPath(const char* path, std::wstring* windows) {
 
-  if (std::string_view(path).starts_with(drop_mount::kAndroidPrefix)) {
+  if (std::string_view(path).starts_with(drop_mount::kAndroidPrefix) && drop_mount::Enabled()) {
     *windows = Widen(path);
     std::replace(windows->begin(), windows->end(), L'/', L'\\');
     return PathKind::kFile;

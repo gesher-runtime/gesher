@@ -154,7 +154,9 @@ class DropTarget final : public IDropTarget {
 
   void Push(wire::Action action, POINTL at, DropLeases::Offer offer = {}, std::wstring text = {}) {
     POINT client{at.x, at.y};
+    const auto previous = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd_));
     ScreenToClient(hwnd_, &client);
+    if (previous) SetThreadDpiAwarenessContext(previous);
     wire::Event event{action, static_cast<float>(client.x), static_cast<float>(client.y),
                       static_cast<uint32_t>(offer.items.size()), offer.lease,
                       static_cast<uint32_t>(text.size()), file_drag_ ? wire::kFileDrag : 0};

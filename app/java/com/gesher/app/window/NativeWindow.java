@@ -278,6 +278,11 @@ public final class NativeWindow implements AutoCloseable {
     return mPtr;
   }
 
+  static void releaseHostedDrop(String path) {
+    if (path != null) nReleaseHostedDrop(path);
+  }
+
+  private static native void nReleaseHostedDrop(String path);
   private static native long nCreate(String title, int width, int height);
   private static native void nDestroy(long ptr);
   private static native void nShow(long ptr);

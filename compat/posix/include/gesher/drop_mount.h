@@ -34,6 +34,7 @@ class Channel {
   Channel& operator=(const Channel&) = delete;
   bool Poll(Event* event);
   void Close();
+  void Release(uint64_t lease);
 
   // Open one item known to the guest channel; relative is scoped to that
   // item's retained Windows object on the host.
@@ -53,8 +54,10 @@ struct Selection {
   std::wstring relative;
 };
 
+bool Enabled();
 Selection Lookup(std::wstring_view mapped);
 int Open(const Selection& selection, uint32_t flags, HANDLE* file);
 std::wstring DescriptorPath(HANDLE file);
+void Release(std::wstring_view path);
 
 }  // namespace gesher::drop_mount
