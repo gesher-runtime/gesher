@@ -154,10 +154,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (mSettingsResultsLock) {
             if (mSettingsResults == null) {
                 mSettingsResults = new SettingsResults((pending, code) -> {
-                    ControlCenter.forgetResult(pending.token);
-                    if (pending.requestCode >= 0) {
-                        deliverResult((ActivityRecord) pending.source, pending.resultWho,
-                                pending.requestCode, code, null, (ProcessRecord) pending.process);
+                    // A fast host close must wait for launch admission to finish
+                    // and the covered Activity's pause transaction to be scheduled.
+                    synchronized (mLaunchLock) {
+                        ControlCenter.forgetResult(pending.token);
+                        if (pending.requestCode >= 0) {
+                            deliverResult((ActivityRecord) pending.source, pending.resultWho,
+                                    pending.requestCode, code, null, (ProcessRecord) pending.process);
+                        }
                     }
                 });
             }
@@ -2935,15 +2939,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     // Wait for the details to close, even when the app only requested a
                     // lifecycle transition. Windows' external Settings pages and the
                     // Control Center's main view do not report completion.
-                    String token = null;
-                    if (ownActivity && settings.controlCenter && settings.packageName != null) {
-                        SettingsResults.Pending pending = new SettingsResults.Pending(source,
-                                sourceProcess, resultWho, requestCode, action, settings.packageName);
-                        pending.releaseCover = coverWithSettings(source, sourceProcess, intent);
-                        if (wantsResult || pending.releaseCover != null) {
-                            token = settingsResults().register(pending);
-                        }
-                    }
+                    SettingsResults.Pending pending = ownActivity && settings.controlCenter
+                            && settings.packageName != null
+                            ? new SettingsResults.Pending(source, sourceProcess, resultWho,
+                                    requestCode, action, settings.packageName)
+                            : null;
+                    String token = pending == null ? null : settingsResults().register(pending);
                     // Waiting requests of other apps this one replaces before they were
                     // shown are answered now: their details will not open.
                     java.util.function.Consumer<String> replaced = old -> {
@@ -2960,7 +2961,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         if (token != null) settingsResults().discard(token);
                         return ActivityManager.START_INTENT_NOT_RESOLVED;
                     }
-                    if (wantsResult && token == null) {
+                    if (pending != null) {
+                        pending.releaseCover = coverWithSettings(source, sourceProcess, intent);
+                    } else if (wantsResult) {
                         deliverResult(source, resultWho, requestCode,
                                 android.app.Activity.RESULT_CANCELED, null);
                     }
