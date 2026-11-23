@@ -18,7 +18,7 @@ constexpr uint32_t kOpenDirectory = 1;
 constexpr uint32_t kOpenMetadata = 2;
 constexpr uint32_t kFileDrag = 1;
 
-enum class Op : uint32_t { kAttach = 1, kPoll, kOpen, kRelease, kDetach };
+enum class Op : uint32_t { kAttach = 1, kPoll, kOpen, kRelease, kDetach, kTake };
 enum class Action : uint32_t { kStart = 1, kLocation, kDrop, kEnd, kEnter, kExit };
 
 struct Request {

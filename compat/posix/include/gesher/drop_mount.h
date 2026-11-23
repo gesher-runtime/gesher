@@ -36,6 +36,7 @@ class Channel {
   void Close();
   void Detach();
   bool Detached() const;
+  bool Take(uint64_t lease);
   void Release(uint64_t lease);
 
   // Open one item known to the guest channel; relative is scoped to that

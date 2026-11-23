@@ -36,6 +36,7 @@ class DropLeases {
   // Retains files and directories obtained from the authenticated OLE payload.
   // An incomplete offer closes every handle and publishes no lease.
   int Retain(OleDropSource source, const std::vector<std::wstring>& paths, Offer* offer);
+  bool Take(uint64_t lease);
   void Release(uint64_t lease);
 
   // Only relative components beneath an offered directory are accepted. The

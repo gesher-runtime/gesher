@@ -52,6 +52,7 @@ class DropLeases::State {
   struct Lease {
     OleDropSource owner;
     std::vector<Root> roots;
+    bool taken = false;
   };
   std::map<uint64_t, Lease> leases;
   uint64_t next = 1;
@@ -91,6 +92,13 @@ int DropLeases::Retain(OleDropSource source, const std::vector<std::wstring>& pa
   return 0;
 }
 
+bool DropLeases::Take(uint64_t lease) {
+  const auto found = state_->leases.find(lease);
+  if (found == state_->leases.end()) return false;
+  found->second.taken = true;
+  return true;
+}
+
 void DropLeases::Release(uint64_t lease) {
   state_->leases.erase(lease);
 }
@@ -102,6 +110,7 @@ int DropLeases::Open(uint64_t lease, uint32_t item, std::wstring_view relative,
   if (relative.size() > kMaxRelativeUnits) return ENAMETOOLONG;
   const auto found = state_->leases.find(lease);
   if (found == state_->leases.end() || item >= found->second.roots.size()) return ENOENT;
+  if (!found->second.taken) return EACCES;
   const auto authorization = found->second.owner.AuthorizeIo();
   if (!authorization) return EACCES;
   const auto& root = found->second.roots[item];

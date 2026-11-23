@@ -143,6 +143,8 @@ class DropTarget final : public IDropTarget {
                         (request.flags & wire::kOpenMetadata) != 0, result);
   }
 
+  bool TakeLease(uint64_t identity) { return leases_.Take(identity); }
+
   void ReleaseLease(uint64_t identity) { leases_.Release(identity); }
 
   void RetireWindow() {
@@ -188,6 +190,7 @@ bool Valid(const wire::Request& request) {
   if (request.flags || request.units || request.item) return false;
   switch (request.op) {
     case wire::Op::kAttach: return request.identity != 0 && request.identity <= UINTPTR_MAX;
+    case wire::Op::kTake:
     case wire::Op::kRelease: return request.identity != 0;
     case wire::Op::kDetach:
     case wire::Op::kPoll: return request.identity == 0;
@@ -275,6 +278,12 @@ int Serve(HANDLE pipe, HANDLE child) {
         target->RetireWindow();
         if (!Send(pipe, &reply, sizeof(reply), deadline)) return ERROR_BROKEN_PIPE;
         break;
+      case wire::Op::kTake: {
+        wire::Reply result;
+        result.status = window->Live() && target->TakeLease(request.identity) ? 0 : EACCES;
+        if (!Send(pipe, &result, sizeof(result), deadline)) return ERROR_BROKEN_PIPE;
+        break;
+      }
       case wire::Op::kRelease:
         target->ReleaseLease(request.identity);
         if (!Send(pipe, &reply, sizeof(reply), deadline)) return ERROR_BROKEN_PIPE;

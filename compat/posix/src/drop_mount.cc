@@ -56,6 +56,18 @@ std::wstring AliasPath(uint64_t identity, const std::wstring& name) {
   return std::wstring(kPathPrefix) + std::to_wstring(identity) + L"\\" + name;
 }
 
+bool RequestOK(HANDLE pipe, wire::Op operation, uint64_t identity = 0) {
+  if (pipe == INVALID_HANDLE_VALUE) return false;
+  wire::Request request;
+  request.op = operation;
+  request.identity = identity;
+  wire::Reply reply;
+  const auto deadline = Deadline();
+  return Transfer(pipe, &request, sizeof(request), true, deadline) &&
+      Transfer(pipe, &reply, sizeof(reply), false, deadline) &&
+      reply.magic == wire::kMagic && reply.status == 0 && reply.handle == 0;
+}
+
 bool PathPart(std::wstring_view name) {
   return !name.empty() && name != L"." && name != L".." &&
       name.find_first_of(L"\\/:") == std::wstring_view::npos &&
@@ -238,6 +250,7 @@ int Open(const Selection& selection, uint32_t flags, HANDLE* file) {
     std::lock_guard<std::mutex> guard(global.lock);
     const auto found = global.items.find(selection.alias);
     if (found == global.items.end()) return ENOENT;
+    if (!found->second.activity) return EACCES;
     item = found->second;
   }
   const auto channel = item.channel.lock();
@@ -282,13 +295,7 @@ void Channel::Detach() {
     std::lock_guard<std::mutex> guard(state_->lock);
     HANDLE pipe = state_->pipe;
     if (pipe == INVALID_HANDLE_VALUE) return;
-    wire::Request request;
-    request.op = wire::Op::kDetach;
-    wire::Reply reply;
-    const auto deadline = Deadline();
-    failed = !Transfer(pipe, &request, sizeof(request), true, deadline) ||
-        !Transfer(pipe, &reply, sizeof(reply), false, deadline) ||
-        reply.magic != wire::kMagic || reply.status != 0 || reply.handle != 0;
+    failed = !RequestOK(pipe, wire::Op::kDetach);
   }
   if (failed) {
     Close();
@@ -297,20 +304,17 @@ void Channel::Detach() {
   for (const auto lease : discarded) Release(lease);
 }
 
+bool Channel::Take(uint64_t lease) {
+  std::lock_guard<std::mutex> guard(state_->lock);
+  return !Detached() && RequestOK(state_->pipe, wire::Op::kTake, lease);
+}
+
 void Channel::Release(uint64_t lease) {
   bool failed = false;
   {
     std::lock_guard<std::mutex> guard(state_->lock);
-    const HANDLE pipe = state_->pipe;
-    if (pipe == INVALID_HANDLE_VALUE) return;
-    wire::Request request;
-    request.op = wire::Op::kRelease;
-    request.identity = lease;
-    wire::Reply reply;
-    const auto deadline = Deadline();
-    failed = !Transfer(pipe, &request, sizeof(request), true, deadline) ||
-        !Transfer(pipe, &reply, sizeof(reply), false, deadline) ||
-        reply.magic != wire::kMagic || reply.status != 0 || reply.handle != 0;
+    if (state_->pipe == INVALID_HANDLE_VALUE) return;
+    failed = !RequestOK(state_->pipe, wire::Op::kRelease, lease);
   }
   if (failed) Close();
 }
@@ -321,12 +325,19 @@ bool Keep(std::wstring_view path) {
   const auto selection = Lookup(mapped);
   if (!selection.alias) return false;
   auto& global = Global();
+  std::shared_ptr<Channel> channel;
+  uint64_t lease = 0;
+  {
+    std::lock_guard<std::mutex> guard(global.lock);
+    const auto found = global.items.find(selection.alias);
+    if (found == global.items.end()) return false;
+    if (found->second.activity) return true;
+    channel = found->second.channel.lock();
+    lease = found->second.lease;
+  }
+  if (!channel || !channel->Take(lease)) return false;
   std::lock_guard<std::mutex> guard(global.lock);
-  const auto found = global.items.find(selection.alias);
-  if (found == global.items.end()) return false;
-  const auto channel = found->second.channel.lock();
-  if (!channel || channel->Detached()) return false;
-  const uint64_t lease = found->second.lease;
+  if (!global.items.contains(selection.alias) || channel->Detached()) return false;
   for (auto& entry : global.items) {
     auto& item = entry.second;
     if (item.owner == channel.get() && item.lease == lease) item.activity = channel;
