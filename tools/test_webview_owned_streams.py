@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,7 +93,13 @@ def main() -> int:
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)
-        return subprocess.run([str(executable)] + (["measure"] if args.measure else []), check=False, timeout=60).returncode
+        result = subprocess.run([str(executable)] + (["measure"] if args.measure else []), check=False, timeout=60).returncode
+        if result == 0 and not args.source_ref and not args.measure:
+            command = [sys.executable, str(ROOT / "tools/test_service_worker_native_contracts.py"),
+                       "--cxx", args.cxx] + (["--sanitize"] if args.sanitize else [])
+            subprocess.run(command, check=True, timeout=120)
+            subprocess.run(command + ["--negative-control"], check=True, timeout=120)
+        return result
 
 
 if __name__ == "__main__":

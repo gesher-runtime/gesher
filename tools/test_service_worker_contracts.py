@@ -6,6 +6,7 @@ No browser or network is used; Windows WebView2 execution is a separate gate.
 """
 from pathlib import Path
 import argparse
+import os
 import subprocess
 import tempfile
 from test_install_metadata_comparison import method
@@ -176,7 +177,7 @@ public final class SupportLib { private static final String BOUNDARY="org.chromi
         work=Path(tmp)
         for name, text in files.items():
             path=work/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)
-        classpath = str(work) + (':' + str(args.core_classes.resolve()) if args.core_classes else '')
+        classpath = str(work) + (os.pathsep + str(args.core_classes.resolve()) if args.core_classes else '')
         subprocess.run([str(args.java_home/'bin/javac'), '-encoding', 'UTF-8', '-cp', classpath, '-d', str(work),
                         *(str(work/name) for name in files)], check=True,timeout=60)
         subprocess.run([str(args.java_home/'bin/java'),'-XX:-UsePerfData','-Xmx128m','-cp',classpath,

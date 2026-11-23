@@ -7,6 +7,7 @@ separately verify real storage effects through JNI and WebView2 at two origins.
 import argparse
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +74,9 @@ def main():
     parser.add_argument("--java-home", required=True, type=Path)
     parser.add_argument("--source-ref", help="Run an old source revision as a negative control")
     args = parser.parse_args()
+    if not args.source_ref:
+        subprocess.run([sys.executable, str(ROOT / "tools/test_service_worker_contracts.py"),
+                        "--java-home", str(args.java_home)], check=True, timeout=90)
     relative = "app/java/com/gesher/app/webview/GesherWebStorage.java"
     source = (ROOT / relative).read_text()
     if args.source_ref:

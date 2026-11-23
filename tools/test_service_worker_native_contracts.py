@@ -13,6 +13,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--sanitize',action='store_true')
     p.add_argument('--negative-control',action='store_true')
+    p.add_argument('--cxx',default=os.environ.get('CXX','c++'))
     a=p.parse_args()
     source=(ROOT/'compat/webview/webview_host.cc').read_text()
     com=(ROOT/'compat/webview/com_util.h').read_text()
@@ -30,7 +31,7 @@ def main():
                 '@RESPOND@':function(source,'bool Host::RespondToServiceWorker(')}.items():fixture=fixture.replace(k,v)
     with tempfile.TemporaryDirectory(prefix='gesher-worker-native-') as tmp:
         cpp=Path(tmp)/'contracts.cc';exe=Path(tmp)/'contracts';cpp.write_text(fixture)
-        cmd=shlex.split(os.environ.get('CXX','c++'))+['-std=c++20','-Wall','-Wextra','-Werror','-fno-exceptions','-g','-O1',str(cpp),'-o',str(exe)]
+        cmd=shlex.split(a.cxx)+['-std=c++20','-Wall','-Wextra','-Werror','-fno-exceptions','-g','-O1',str(cpp),'-o',str(exe)]
         if a.sanitize:cmd+=['-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer']
         subprocess.run(cmd,check=True,timeout=90)
         result=subprocess.run([str(exe)],capture_output=True,text=True,timeout=15)

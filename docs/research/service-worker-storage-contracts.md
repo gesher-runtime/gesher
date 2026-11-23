@@ -47,6 +47,46 @@ File/content feature flags remain withheld. The bounded synthetic-response
 bridge rejects bodies larger than 64 MiB instead of truncating them; unrestricted
 streaming needs a separate design and runtime validation.
 
+#### Independent check of a CDP alternative
+
+An independent review inspected both the pinned SDK 1.0.4258.31 and stable
+1.0.4370.26. Neither request-event interface has cancellation or a CDP request ID.
+The newer service-worker management interface adds lifecycle/messaging, not a
+before-start request interception guarantee. Changing an HRESULT, inventing a
+status code, failing a response stream or rewriting the request URL is not an
+established equivalent of an initial network failure.
+
+CDP `Fetch.failRequest` is a real network-failure primitive, including
+`AccessDenied`, on a request owned by `Fetch.requestPaused`. WebView2's
+`ICoreWebView2_11::CallDevToolsProtocolMethodForSession` can address an attached
+worker session. It cannot safely retrofit cancellation onto an unrelated
+`WebResourceRequested` deferral: URL/method/order matching is ambiguous for
+concurrent identical requests and redirects.
+
+The Chromium 146.0.7647.2 source reveals the remaining attachment problem:
+
+- [FrameAutoAttacher](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/frame_auto_attacher.cc)
+  matches workers to the page's frame origins. The hidden blank controller does
+  not auto-attach every worker in the profile.
+- [TargetHandler](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/protocol/target_handler.cc)
+  restricts `autoAttachRelated` and `attachToBrowserTarget` to browser targets.
+  The documented WebView2 default session is a top-page session; a broader
+  WebView2-specific capability would need actual runtime proof.
+- [ServiceWorkerVersion](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/service_worker/service_worker_version.cc)
+  changes normal worker request timeouts while a debugger is attached.
+- [DevToolsURLLoaderInterceptor](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/content/browser/devtools/devtools_url_loader_interceptor.cc)
+  resumes an outstanding intercepted request on detachment. Detach is not
+  denial; pending failures must be acknowledged before removing interception.
+
+Discovery followed by attachment leaves first-request races. A faithful CDP
+replacement therefore needs independent profile-scoped ownership before worker
+execution, a table keyed by session and Fetch request ID, and terminal
+continue/fulfill/fail operations. Its Windows acceptance probe must cover cold
+and persisted workers, background restarts, identical concurrent URLs, redirects,
+callback/stream failures, INTERNET denial, closure of the last public WebView,
+teardown acknowledgements and unchanged page requests. That architecture and
+runtime evidence are not provided by the current COM request-filter design.
+
 ### WebStorage scope
 
 Current Chromium Android WebStorage uses the quota manager's complete storage-key
@@ -90,6 +130,20 @@ browser integration evidence.
 - Full `webview_host.cc` and `webview_jni.cc` compile checks use the repository's
   pinned WebView2 SDK 1.0.4258.31 and AOSP JNI header for Windows x64 and ARM64.
 - Existing SupportLib boundary and owned-stream contract suites remain applicable.
+
+The existing CI entry points also run the new suites: WebStorage Java forwarding
+invokes the worker/AndroidX/query contracts; owned-stream testing invokes native
+worker admission/completion checks with the same compiler/sanitizer settings and
+the missing-denial negative control. Historical-source and measurement-only runs
+remain isolated. No workflow changes are required.
+
+The complete unchanged `app/build.sh` recipe compiled the integrated app against
+actual framework/core classes, generated AIDL delegates, passed BootLinkCheck
+(292 references, zero unresolved) and completed D8. This is stronger compile
+evidence than the earlier selected-WebView compilation with unrelated seams.
+The locally available class artifacts are not a fresh framework build. The AOSP
+Java sources needed to regenerate the full SOURCE-retention compatibility table
+are absent; the generated local app package is for validation, not distribution.
 
 No performance improvement is claimed: the old no-op and constant-zero paths did
 not perform equivalent work, so an ABBA timing comparison would be misleading.

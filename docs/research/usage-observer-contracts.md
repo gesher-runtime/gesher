@@ -94,3 +94,20 @@ The existing `test_activity_finish.py` entry point invokes this contract suite,
 so the existing framework workflow runs it without workflow edits. Real Android
 framework/AIDL compilation, Binder transport, PendingIntent flag handling and
 Windows lifecycle integration remain separate framework/Windows validation.
+
+## Integrated framework validation
+
+On the combined round-2 source, the unchanged `app/build.sh` compiled the complete
+app with actual downloaded framework classes and the Android core module,
+generated all AIDL delegates, passed BootLinkCheck (292 references, zero
+unresolved) and completed D8. With its generated `gesher-app-classes.jar`, the
+unchanged actual-framework `test_activity_finish.py --group usage` passed 41
+checks and `--group usage-query` passed 901,153 checks; the query model passed
+12,655 checks. Both entry points also reran the 1,117-check observer suite.
+
+These runs execute real framework/service Java with controlled native identity
+and app acknowledgements. They do not establish ART/Parcel transport, native
+resource loading or Windows window rendering. The local framework class inputs
+are prebuilt; AOSP source inputs for the complete SOURCE-retention compatibility
+change table are unavailable, so the locally generated app package is a
+validation artifact rather than a distributable runtime build.
