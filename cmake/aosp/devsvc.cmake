@@ -19,5 +19,8 @@ target_sources(framework_runtime PRIVATE
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devsvc)
+# gesher/egl_angle.h: the OpenGL ES version of the default EGL display (egl_gles.cc).
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
+  APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/compat/bionic/include)
 target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 wtsapi32
   iphlpapi)

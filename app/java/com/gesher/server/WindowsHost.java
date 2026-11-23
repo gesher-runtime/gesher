@@ -292,6 +292,18 @@ public final class WindowsHost {
         catch (UnsatisfiedLinkError unavailable) { return null; }
     }
 
+    /**
+     * The OpenGL ES version the default EGL display gives (compat/bionic/egl_gles.cc,
+     * docs/system-features.md): 0x30000 on a hardware Direct3D 11 device with ES 3.0,
+     * 0x20000 on WARP or a GPU without ES 3.0, 0 without ANGLE or a Direct3D device;
+     * -1 without the natives.
+     */
+    public static int glEsVersion() {
+        if (!available()) return -1;
+        try { return nativeGlEsVersion(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
+
     /** Bits: 1 connected, 2 internet, 4 metered; -1 if unknown. */
     public static int networkState() {
         return available() ? nativeNetworkState() : -1;
@@ -491,6 +503,7 @@ public final class WindowsHost {
     private static native int nativeSessionDisplayState();
     private static native int nativeNetworkState();
     private static native int[] nativeHardwareSummary();
+    private static native int nativeGlEsVersion();
     private static native String nativeTimeZoneKeyName();
     private static native int nativeShowToast(String appId, String tag, String group,
             String xml, boolean suppressPopup, boolean high);

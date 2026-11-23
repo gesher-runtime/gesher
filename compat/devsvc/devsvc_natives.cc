@@ -11,6 +11,7 @@
 #include <limits>
 #include <string>
 #include <gesher/revocable_file.h>
+#include <gesher/egl_angle.h>
 #include <cstdio>
 
 #include "core_jni_helpers.h"
@@ -302,6 +303,9 @@ jintArray WindowsHost_hardwareSummary(JNIEnv* env, jclass) {
   return out;
 }
 
+// The OpenGL ES version the default EGL display gives (compat/bionic/egl_gles.cc).
+jint WindowsHost_glEsVersion(JNIEnv*, jclass) { return gesher_egl_gles_version(); }
+
 jstring WindowsHost_timeZoneKeyName(JNIEnv* env, jclass) {
   std::u16string name = dev::TimeZoneKeyName();
   return name.empty() ? nullptr : JStr(env, name);
@@ -494,6 +498,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeSessionDisplayState", "()I", GESHER_JNI(WindowsHost_sessionDisplayState)},
     {"nativeNetworkState", "()I", GESHER_JNI(WindowsHost_networkState)},
     {"nativeHardwareSummary", "()[I", GESHER_JNI(WindowsHost_hardwareSummary)},
+    {"nativeGlEsVersion", "()I", GESHER_JNI(WindowsHost_glEsVersion)},
     {"nativeTimeZoneKeyName", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_timeZoneKeyName)},
     {"nativeShowToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "ZZ)I",
      GESHER_JNI(WindowsHost_showToast)},

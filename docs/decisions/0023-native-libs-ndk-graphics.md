@@ -79,7 +79,9 @@ symbol ([0020](0020-native-libs-libandroid.md)).
 ## Consequences
 - Every EGL/GLES entry point an NDK library can import or look up exists;
   what ANGLE implements works (ES 3.0 on the CI runners' WARP; 3.1 on capable
-  hardware is untested), the rest fails visibly when called.
+  hardware is untested), the rest fails visibly when called. The device
+  declares ES 3.0 only for a hardware Direct3D 11 device that gives it, ES 2.0
+  on WARP (docs/system-features.md, "OpenGL ES version").
 - dalvikvm starts without ANGLE; `eglGetDisplay` gives `EGL_NO_DISPLAY` with
   a message when the DLLs are missing.
 - Window surfaces need a Gesher window (a `Win32Surface`); other

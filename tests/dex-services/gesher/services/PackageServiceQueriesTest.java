@@ -62,6 +62,23 @@ public final class PackageServiceQueriesTest {
                     "OpenGL ES entry does not carry ro.opengles.version");
         }
         require(unnamed == 1, "Available features need exactly one OpenGL ES entry, got " + unnamed);
+        // The version is the default EGL display's (compat/bionic/egl_gles_version.h): ES 3.0
+        // only on a hardware Direct3D 11 device, never on WARP. -1 without the natives.
+        int probed;
+        try {
+            probed = com.gesher.server.WindowsHost.glEsVersion();
+        } catch (LinkageError e) {
+            probed = -1;
+        }
+        if (probed >= 0) {
+            require(PackageManagerService.glEsVersion() == probed,
+                    "OpenGL ES entry 0x" + Integer.toHexString(PackageManagerService.glEsVersion())
+                            + " is not the default display's 0x" + Integer.toHexString(probed));
+            if (probed > 0 && "warp".equals(System.getenv("GESHER_EGL_DEVICE"))) {
+                require(probed == 0x20000, "WARP declared OpenGL ES 0x" + Integer.toHexString(probed)
+                        + ", not 2.0");
+            }
+        }
         // ApplicationSharedMemory's cache takes the same list, the unnamed entry included.
         new android.content.pm.SystemFeaturesCache(list);
 

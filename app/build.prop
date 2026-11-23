@@ -42,10 +42,9 @@ ro.bootloader=shiba-1.0
 ro.debuggable=0
 ro.secure=1
 ro.sf.lcd_density=420
-# OpenGL ES 3.0 (0x30000): ANGLE on Direct3D 11, the default EGL display only on a
-# device that gives ES 3.0, else WARP (compat/bionic/egl_gles.cc). Not 3.1: ANGLE's
-# Direct3D 11 backend marks 3.1 unfinished. docs/system-features.md.
-ro.opengles.version=196608
+# ro.opengles.version is not set here: the system server sets it at boot from the
+# device the default EGL display runs on (ES 3.0 only on a hardware Direct3D 11
+# device, ES 2.0 on WARP; PackageManagerService.glEsVersion, docs/system-features.md).
 ro.dalvik.vm.native.bridge=0
 persist.sys.locale=en-US
 persist.sys.timezone=UTC

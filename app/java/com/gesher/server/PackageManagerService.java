@@ -1241,6 +1241,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         // WLAN census bounded to 5 s: a timeout, no wlanapi, a stopped WLAN service or no adapter
         // leaves FEATURE_WIFI out (docs/wifi.md).
         addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
+        // ro.opengles.version, set before app processes start (they may read it).
+        glEsVersion();
     }
 
     /**
@@ -1299,18 +1301,43 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (summary[2] > 0) addFeature(features, PackageManager.FEATURE_ETHERNET);
     }
 
+    // Guarded by PackageManagerService.class. No initializers: FEATURES' static block,
+    // above, calls glEsVersion before this point of the class's initialization.
+    private static boolean sGlEsVersionKnown;
+    private static int sGlEsVersion;
+
     /**
-     * The OpenGL ES version the device supports, as AOSP reads it: ro.opengles.version
-     * (app/build.prop), else FeatureInfo.GL_ES_VERSION_UNDEFINED.
+     * The OpenGL ES version the device supports, as AOSP reads it: ro.opengles.version,
+     * else FeatureInfo.GL_ES_VERSION_UNDEFINED. On a device the vendor build sets the
+     * property; here the first call sets it (for every process of this boot) from what
+     * Android's default EGL display runs on (WindowsHost.glEsVersion,
+     * docs/system-features.md): ES 3.0 only on a hardware Direct3D 11 device that gives it,
+     * ES 2.0 on WARP or a GPU without ES 3.0, nothing without ANGLE or a Direct3D device.
      */
-    public static int glEsVersion() {
+    public static synchronized int glEsVersion() {
+        if (sGlEsVersionKnown) return sGlEsVersion;
+        int version = android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED;
         try {
-            return android.os.SystemProperties.getInt("ro.opengles.version",
-                    android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED);
+            version = android.os.SystemProperties.getInt("ro.opengles.version", version);
+            if (version == android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED) {
+                int probed = WindowsHost.glEsVersion();
+                if (probed > 0) {
+                    version = probed;
+                    try {
+                        android.os.SystemProperties.set("ro.opengles.version",
+                                Integer.toString(probed));
+                    } catch (RuntimeException e) {
+                        SystemServer.log("ro.opengles.version not set: " + e);
+                    }
+                }
+            }
         } catch (LinkageError e) {
-            // No runtime natives (a host JVM or a bare test process): no properties.
-            return android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED;
+            // No runtime natives (a host JVM or a bare test process): no properties, no GL.
+            version = android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED;
         }
+        sGlEsVersion = version;
+        sGlEsVersionKnown = true;
+        return version;
     }
 
     /**

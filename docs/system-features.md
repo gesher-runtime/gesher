@@ -25,7 +25,9 @@ unavailable result.
   boot-time feature list.
 - `getSystemAvailableFeatures` ends with an unnamed `FeatureInfo` carrying
   `reqGlEsVersion`, as AOSP's does. `ActivityTaskManagerService.getDeviceConfigurationInfo`
-  gives the same value. Both read `ro.opengles.version` (`app/build.prop`).
+  gives the same value. Both read `ro.opengles.version`, which the system server
+  sets at boot from the device Android's default EGL display runs on ("OpenGL ES
+  version" below).
 - The Windows probes are `WindowsHost.hardwareSummary()`
   (`compat/devsvc/devsvc_hardware.cc`), `WebView2Host.runtimeVersion()`,
   `WindowsCamera.devices()`, `WindowsBluetooth.adapter()`, the audio engine's
@@ -37,28 +39,47 @@ unavailable result.
 
 ## OpenGL ES version
 
-`ro.opengles.version=196608` (0x30000, OpenGL ES 3.0). Before this change the
-property was unset, and `getDeviceConfigurationInfo` reported 0x20000. All of
-Android's EGL paths (an app's `.so`, `android.opengl.EGL14`/`GLSurfaceView`,
+The declared version (`ro.opengles.version`, `reqGlEsVersion`) follows the
+device Android's default EGL display runs on, by speed: **OpenGL ES 3.0
+(0x30000) only when ANGLE runs on a hardware Direct3D 11 device that gives
+ES 3.0**. On WARP, Direct3D's software rasterizer, the device declares ES 2.0
+(0x20000), as an Android device whose GPU does not support ES 3.0 does.
+
+All of Android's EGL paths (an app's `.so`, `android.opengl.EGL14`/`GLSurfaceView`,
 hwui) use one default display, `gesher_egl_default_display()`
-(`compat/bionic/egl_gles.cc`). That display is ANGLE on Direct3D 11. ANGLE at
-the pinned commit (ab6a82e0, `renderer11_utils.cpp` `GetMaximumClientVersion`)
-gives ES 3.0 from feature level 10_1, ES 3.1 from 11_0, and ES 2.0 below 10_1.
-The default display now uses the hardware adapter only when it has an
-`EGL_OPENGL_ES3_BIT_KHR` config. Otherwise it uses WARP, which gives ES 3.0.
-So wherever ANGLE runs, ES 3.0 contexts can be created. The cost is on a GPU below
-feature level 10_1 (Direct3D 10.0 hardware, about 2006-2009, such as GeForce 8/9
-and GMA X4500): apps' GL, which ran there as ES 2.0 on the GPU, now runs on WARP,
-the CPU rasterizer, as ES 3.0. hwui is not affected by default (SkiaCpu, and
-`auto` turns WARP down). The alternative, a per-machine `reqGlEsVersion` of 2.0
-there, would keep those GPUs but needs the system server to open a Direct3D
-device at boot to learn the version; reporting ES 3.0 everywhere and serving it
-everywhere keeps one truthful value. CI's ANGLE probes
-create them on hardware and WARP (docs/angle.md). If such a GPU's machine also
-cannot open WARP, the default display is `EGL_NO_DISPLAY` and apps get no GL,
-where they used to get ES 2.0 on the GPU; WARP ships with every supported
-Windows version, so this needs a damaged system. Without the ANGLE DLLs there
-is no GLES at all, as before, while `ro.opengles.version` still says 3.0.
+(`compat/bionic/egl_gles.cc`): ANGLE on Direct3D 11. ANGLE at the pinned
+commit (ab6a82e0, `renderer11_utils.cpp` `GetMaximumClientVersion`) gives
+ES 3.0 from feature level 10_1, ES 3.1 from 11_0, and ES 2.0 below 10_1. The
+display and the version are chosen together (`compat/bionic/egl_gles_version.h`):
+
+| ANGLE's device | Default display | Declared |
+| --- | --- | --- |
+| hardware device on a GPU with ES 3.0 configs (feature level 10_1+) | that device | 0x30000 |
+| hardware device on a GPU without them (Direct3D 10.0 hardware, such as GeForce 8/9, GMA X4500) | that device, ES 2.0 on the GPU | 0x20000 |
+| hardware device on the Microsoft Basic Render Driver (no display driver; the CI runners) | that device, which is WARP | 0x20000 |
+| WARP (the hardware device failed or had no ES configs, or `GESHER_EGL_DEVICE=warp`) | WARP | 0x20000 |
+| none (no ANGLE DLLs, or no Direct3D 11 device at all) | `EGL_NO_DISPLAY` | none (`GL_ES_VERSION_UNDEFINED`) |
+
+"Hardware" is decided from the display's own Direct3D 11 device
+(`EGL_EXT_device_query`, `EGL_D3D11_DEVICE_ANGLE`, then the DXGI adapter's
+`GetDesc1`): an adapter flagged `DXGI_ADAPTER_FLAG_SOFTWARE`, the Basic Render
+Driver (vendor 0x1414, device 0x8c), a device opened as WARP, or an adapter the
+query cannot identify is not hardware. ANGLE's "hardware" device type alone is
+not evidence: without a display driver it runs on the Basic Render Driver.
+
+The system server asks once at boot (`PackageManagerService.glEsVersion`,
+`WindowsHost.glEsVersion`, `gesher_egl_gles_version`): it makes the same choice
+an app process makes, sets `ro.opengles.version` for every process of that
+boot, and terminates the display again, so it keeps no Direct3D device. That
+costs one ANGLE initialization (one or two Direct3D 11 devices) at boot. A
+value already in the property (an explicit `build.prop` line) is kept, as on
+a device.
+
+WARP itself still creates ES 3.0 contexts for an app that asks: the declared
+version is what hardware acceleration gives, not everything the software
+rasterizer can do. A GPU below feature level 10_1 now runs apps' GL as ES 2.0
+on the GPU, where before it ran on WARP as ES 3.0. Without the ANGLE DLLs, or
+without any Direct3D 11 device, there is no GLES and no version is declared.
 
 Not reported:
 
@@ -143,17 +164,27 @@ promises. Absent (c): nothing implements it.
 - `tests/dex-services/gesher/services/PackageServiceQueriesTest.java`: the
   production list matches this process's probes (WebView2 Runtime, hardware
   summary, low-RAM), has exactly one OpenGL ES entry carrying
-  `ro.opengles.version`, and builds a `SystemFeaturesCache`. The helpers claim
+  `ro.opengles.version`, which is the default display's version
+  (`WindowsHost.glEsVersion`; 2.0 under `GESHER_EGL_DEVICE=warp`), and builds a
+  `SystemFeaturesCache`. The helpers claim
   nothing for unknown or absent hardware, and the unimplemented features above
   are absent.
+- `tests/native/egl_gles_version_test.cc` (in `tools/test_hwui_renderer_policy.py`):
+  the version policy, hardware ES 3.0 → 0x30000, WARP, the Basic Render Driver,
+  software-flagged or unidentified adapters → 0x20000, `EGL_NO_DISPLAY` → none,
+  and which device the default display keeps; a negative-control build (ES 3.0
+  whenever ES 3.0 configs exist) must fail. `tests/native/gpu_keepalive_test.cc`
+  checks the real ANGLE answer against the display's adapter (CI: Basic Render
+  Driver, 0x20000).
 - `tools/test_camera_selection_and_orientation.py`: `camera.external` for an
   unconfigured camera, not for a configured rear one.
 - CI runs `PackageServiceQueriesTest` without `libandroid_runtime`. Without
   the property natives, the RAM features and `ro.opengles.version` are absent
   (`GL_ES_VERSION_UNDEFINED`), and the test expects exactly that. Through
   `ServiceFixtureRunner`, which has the natives, it expects the real values.
-  Locally (ART, installed boot jars, this branch's gesher-app.jar), it ran
-  with GLES 0x30000, RAM normal, and webview 158.0.4370.33 when the WebView2
+  Locally (ART, installed boot jars, this branch's gesher-app.jar and
+  dalvikvm), it ran with GLES 0x30000 on an Intel UHD Graphics 770 (8086:4680)
+  and 0x20000 with `GESHER_EGL_DEVICE=warp`, RAM normal, and webview 158.0.4370.33 when the WebView2
   bridge sat next to gesher-app.jar. `devsvc_hardware.cc`'s probes on the
   development machine report no touch digitizer, no audio render endpoint and
   one wired Ethernet interface (the physical I219-LM). Hyper-V virtual, WAN
@@ -161,4 +192,4 @@ promises. Absent (c): nothing implements it.
 - Limits: the development machine has no touch digitizer, camera, audio
   endpoint, Wi-Fi adapter, cellular modem or sensors. Multitouch on a real touchscreen, a real webcam's
   `camera.external`, an unplugged audio jack counting as an output, and a
-  hardware GPU below feature level 10_1 falling back to WARP were not observed.
+  hardware GPU below feature level 10_1 declaring ES 2.0 on the GPU were not observed.

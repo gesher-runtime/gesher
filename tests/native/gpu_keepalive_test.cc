@@ -4,6 +4,10 @@
 // while frames come faster than its 10 ms, and stops a second after the last
 // frame until the next one. On a software adapter (WARP, the CI runners' Basic
 // Render Driver) and with GESHER_GPU_KEEPALIVE=0 it stays off.
+// It also checks the OpenGL ES version declared for that display
+// (gesher_egl_gles_version, compat/bionic/egl_gles_version.h): 3.0 on a
+// hardware adapter with ES 3.0 configs, 2.0 on a software one, the same before
+// and after the default display is opened.
 // Prints "gpu_keepalive_test all passed".
 #include "gpu_keepalive.h"
 
@@ -79,14 +83,34 @@ uint64_t Frames(void* display, std::chrono::microseconds period, std::chrono::mi
   return GpuKeepAliveSubmissions() - before;
 }
 
+// Whether `display` has an OpenGL ES 3 config (EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR).
+bool HasEs3Config(void* display) {
+  const int32_t attribs[] = {0x3040, 0x40, 0x3038};
+  int32_t count = 0;
+  return gesher_egl_choose_config(display, attribs, nullptr, 0, &count) != 0 && count > 0;
+}
+
 }  // namespace
 
 int main() {
   timeBeginPeriod(1);
+  // Asked first, as the system server does at boot: the display is chosen and
+  // terminated again.
+  const int probed = gesher_egl_gles_version();
   void* display = gesher_egl_default_display();
   if (display == nullptr) {
     std::printf("gpu_keepalive_test: no EGL display\n");
     return 1;
+  }
+  {
+    const bool software_display = SoftwareAdapter(display);
+    const bool es3 = HasEs3Config(display);
+    const int expected = !software_display && es3 ? 0x30000 : 0x20000;
+    std::printf("declared OpenGL ES 0x%x (%s adapter, ES 3 configs %s)\n", probed,
+                software_display ? "software" : "hardware", es3 ? "yes" : "no");
+    Expect(probed == expected, software_display ? "a software adapter declares OpenGL ES 2.0, not 3.0"
+                                                : "a hardware adapter declares its own OpenGL ES version");
+    Expect(gesher_egl_gles_version() == probed, "the declared version is the default display's");
   }
   const char* env = std::getenv("GESHER_GPU_KEEPALIVE");
   const bool turned_off = env != nullptr && std::strcmp(env, "0") == 0;
