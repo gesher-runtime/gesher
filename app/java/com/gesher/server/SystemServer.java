@@ -161,6 +161,7 @@ public final class SystemServer {
         String buildProp = null;
         String frameworkRes = null;
         boolean persistent = false;
+        boolean cohostOwner = false;
         String adopt = null;
         long idleTimeoutS = 600;
         List<String> apks = new ArrayList<>();
@@ -172,6 +173,7 @@ public final class SystemServer {
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--persistent": persistent = true; break;
                 case "--protected-launch": protectedDevice = true; break;
+                case "--cohost-owner": cohostOwner = true; break;
                 case "--adopt": adopt = args[++i]; break;
                 case "--idle-timeout": idleTimeoutS = Long.parseLong(args[++i]); break;
                 default:
@@ -186,6 +188,9 @@ public final class SystemServer {
         if (System.getenv("GESHER_BINDER") == null) {
             throw new IllegalStateException("$GESHER_BINDER is not set: the system server"
                     + " registers its services with servicemanager over binderd");
+        }
+        if (cohostOwner && (!persistent || !protectedDevice || !apks.isEmpty())) {
+            throw new IllegalArgumentException("A cohost policy owner must be an empty protected host launch");
         }
         if (protectedDevice) {
             System.loadLibrary("android_runtime");
@@ -268,12 +273,30 @@ public final class SystemServer {
                 selectExplicitPackages(packages, apks, protectedDevice);
         try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
             identity.commit();
-            preparePackageStorage(committed, packages);
+            if (!cohostOwner) preparePackageStorage(committed, packages);
             identity.accept();
         }
 
+        // Keep one PackageManager and policy writer for this root. An owner-only
+        // process starts without publishing an Android device. On request it
+        // publishes the usual services on these same live objects.
+        PackageManagerService ownerPm = cohostOwner ? new PackageManagerService(packages) : null;
+        if (cohostOwner) {
+            CohostOwnerService control = new CohostOwnerService();
+            control.publish();
+            startBinderThreads(TAG, 31);
+            DeviceControl.writeReady(Device.cohostOwnerReadyFile());
+            long end = idleTimeoutS <= 0 ? Long.MAX_VALUE
+                    : SystemClock.uptimeMillis() + idleTimeoutS * 1000;
+            while (!control.awaitPromotion()) {
+                if (SystemClock.uptimeMillis() >= end) return;
+            }
+            preparePackageStorage(committed, packages);
+        }
+
         // The services, published with servicemanager.
-        Map<String, IBinder> services = Services.create(packages);
+        Map<String, IBinder> services = cohostOwner ? Services.create(ownerPm, true).services
+                : Services.create(packages);
         Services.Created created = Services.sLast;
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
@@ -297,7 +320,7 @@ public final class SystemServer {
         // activityPaused), and startActivityAndWait and getContentProvider hold a thread
         // until an activity is idle or a provider is published. system_server runs up to
         // 31 (BinderInternal.setMaxThreads).
-        startBinderThreads(TAG, 31);
+        if (!cohostOwner) startBinderThreads(TAG, 31);
         if (persistent) device.startPersistent();
         else if (protectedDevice) DeviceControl.writeReady(new File(Device.logsDir(), "ready"));
         if (persistent && GmsSignatureSpoofing.isEnabled()) {

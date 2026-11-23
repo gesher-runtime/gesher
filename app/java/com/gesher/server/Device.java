@@ -60,6 +60,14 @@ public final class Device {
         return new File(dataDir(), "system/gesher-device.ready");
     }
 
+    public static File cohostOwnerFile() {
+        return new File(dataDir(), "system/gesher-cohost-owner");
+    }
+
+    public static File cohostOwnerReadyFile() {
+        return new File(dataDir(), "system/gesher-cohost-owner.ready");
+    }
+
     public static File logsDir() {
         String d = System.getenv("GESHER_LOGS");
         if (d != null && !d.isEmpty()) return new File(d);

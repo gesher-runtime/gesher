@@ -218,6 +218,11 @@ public final class Launcher {
         switch (command) {
             case "launch": return launch(rest, false, buildProp, frameworkRes);
             case "launch-scoped": return launch(rest, true, buildProp, frameworkRes);
+            case "cohost-owner": {
+                if (!protectedRequested() || !rest.isEmpty()) return usage();
+                ensureCohostOwner();
+                return 0;
+            }
             case "install": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
@@ -385,7 +390,55 @@ public final class Launcher {
                 Device.readyFile().delete();
             }
             if (!start) return null;
-            state = startDevice();
+            state = readyCohostOwner();
+            if (state != null) {
+                use(state);
+                com.gesher.server.CohostOwnerService.promote();
+                if (!waitReady(state)) {
+                    throw new IllegalStateException("The protected policy owner could not publish the device");
+                }
+                Device.write(Device.stateFile(), state);
+                Device.cohostOwnerFile().delete();
+                Device.cohostOwnerReadyFile().delete();
+                return state;
+            }
+            state = startDevice(false);
+            use(state);
+            return state;
+        } finally {
+            Zygote.unlock(lock);
+        }
+    }
+
+    private static Properties readyCohostOwner() throws IOException {
+        Properties state = Device.read(Device.cohostOwnerFile());
+        if (state == null) return null;
+        if (protectedDevice(state) && Device.alive(state, Device.SYSTEM_SERVER)
+                && waitReady(state, Device.cohostOwnerReadyFile())) return state;
+        Device.killLeftovers(state);
+        Device.cohostOwnerFile().delete();
+        Device.cohostOwnerReadyFile().delete();
+        return null;
+    }
+
+    private static Properties ensureCohostOwner() throws Exception {
+        long lock = Zygote.lock(Device.lockName(), (int) (2 * READY_TIMEOUT_MS));
+        if (lock == 0) throw new IllegalStateException(text("cannot_lock", Device.lockName()));
+        try {
+            Properties state = Device.read(Device.stateFile());
+            if (state != null && Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
+                if (!protectedDevice(state)) {
+                    throw new IllegalStateException("The running device has no protected policy owner");
+                }
+            } else {
+                if (state != null) {
+                    Device.killLeftovers(state);
+                    Device.stateFile().delete();
+                    Device.readyFile().delete();
+                }
+                state = readyCohostOwner();
+                if (state == null) state = startDevice(true);
+            }
             use(state);
             return state;
         } finally {
@@ -429,9 +482,13 @@ public final class Launcher {
         return "true".equals(state.getProperty(Device.STATE_PROTECTED));
     }
 
-    private static Properties startDevice() throws Exception {
-        String name = "gesher-" + Long.toString(System.currentTimeMillis(), 36);
+    private static Properties startDevice(boolean cohostOwner) throws Exception {
+        String name = cohostOwner ? "gesher-cohost-" + java.util.UUID.randomUUID()
+                : "gesher-" + Long.toString(System.currentTimeMillis(), 36);
         File logs = Device.logsDir();
+        if (cohostOwner) logs = new File(logs, "cohost-owner");
+        File stateFile = cohostOwner ? Device.cohostOwnerFile() : Device.stateFile();
+        File readyFile = cohostOwner ? Device.cohostOwnerReadyFile() : Device.readyFile();
         logs.mkdirs();
         String exe = Zygote.exePath();
         String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
@@ -460,8 +517,9 @@ public final class Launcher {
         int binderd;
         int servicemanager;
         int server;
-        if (protectedRequested()) {
+        if (cohostOwner || protectedRequested()) {
             args.add("--protected-launch");
+            if (cohostOwner) args.add("--cohost-owner");
             int[] children = Zygote.startProtectedDevice(name, List.of(binderCommand,
                     managerCommand, Zygote.commandLine(vm, SystemServer.class.getName(), args)),
                     List.of(binderLog, managerLog, serverLog), env);
@@ -483,17 +541,17 @@ public final class Launcher {
             log(text("binder_ready", name, binderd));
             servicemanager = Zygote.spawn(managerCommand, env, managerLog.getPath(), true);
             record(state, Device.SERVICEMANAGER, servicemanager);
-            Device.write(Device.stateFile(), state);
+            Device.write(stateFile, state);
             args.add("--adopt");
             args.add(binderd + "," + servicemanager);
             server = Zygote.spawn(Zygote.commandLine(vm, SystemServer.class.getName(), args),
                     env, serverLog.getPath(), true);
         }
         record(state, Device.SYSTEM_SERVER, server);
-        Device.write(Device.stateFile(), state);
-        if (!waitReady(state)) {
+        Device.write(stateFile, state);
+        if (!waitReady(state, readyFile)) {
             Device.killLeftovers(state);
-            Device.stateFile().delete();
+            stateFile.delete();
             printTail(new File(logs, "system_server.log"), 40);
             throw new IllegalStateException(text("server_not_ready", name, new File(logs, "system_server.log")));
         }
