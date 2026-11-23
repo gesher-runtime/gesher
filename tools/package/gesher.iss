@@ -444,7 +444,7 @@ begin
     if WizardIsTaskSelected('aurora') then
     begin
       Failed := False;
-      DownloadOptional('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
+      DownloadOptional('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk',
         'AuroraStore.apk', Cancelled, Failed, Error);
       if Failed then
       begin

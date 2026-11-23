@@ -7,7 +7,7 @@ package com.gesher.server;
 import android.Manifest;
 import android.app.ActivityThread;
 import android.content.AttributionSourceState;
-import android.content.pm.PackageInfo;
+import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.res.CameraCompatibilityInfo;
 import android.graphics.Rect;
@@ -25,9 +25,12 @@ import android.hardware.camera2.params.StreamConfiguration;
 import android.hardware.camera2.params.StreamConfigurationDuration;
 import android.hardware.camera2.utils.CameraIdAndSessionConfiguration;
 import android.hardware.camera2.utils.ConcurrentCameraIdCombination;
+import android.os.Binder;
 import android.os.IBinder;
+import android.os.Process;
 import android.os.ServiceManager;
 import android.os.ServiceSpecificException;
+import android.os.UserHandle;
 import android.util.Range;
 import android.util.Rational;
 import android.util.Size;
@@ -48,8 +51,8 @@ import java.util.Map;
  *
  * <p>Characteristics describe an EXTERNAL-level camera (as Android's USB cameras): fixed
  * focus, auto exposure and white balance only, outputs YUV_420_888, JPEG and PRIVATE at the
- * device's sizes (frames are scaled for other sizes). Opening needs the CAMERA permission in
- * the app's manifest. No torch, no reprocessing, no offline sessions, no extensions.
+ * device's sizes (frames are scaled for other sizes). Opening needs a current CAMERA grant
+ * for the actual application UID. No torch, no reprocessing, no offline sessions, no extensions.
  */
 public final class CameraService extends ICameraService.Default {
     static final String TAG = "camera";
@@ -445,7 +448,7 @@ public final class CameraService extends ICameraService.Default {
             AttributionSourceState clientAttribution, int devicePolicy, boolean sharedMode) {
         WindowsCamera.Device d = device(cameraId);
         String packageName = clientAttribution != null ? clientAttribution.packageName : null;
-        if (!hasCameraPermission(packageName)) {
+        if (!ownsAttribution(clientAttribution) || !hasCameraPermission(packageName)) {
             throw new ServiceSpecificException(ERROR_PERMISSION_DENIED, "package " + packageName
                     + " does not have " + Manifest.permission.CAMERA);
         }
@@ -468,20 +471,34 @@ public final class CameraService extends ICameraService.Default {
         }
     }
 
-    /** What the package's manifest asks for (Gesher grants that; docs/devices.md). */
+    /** This camera service is local to the application process, not a remote cameraserver. */
+    private static boolean ownsAttribution(AttributionSourceState source) {
+        return source != null
+                && (source.uid == USE_CALLING_UID || source.uid == Process.myUid())
+                && (source.pid == USE_CALLING_PID || source.pid == Process.myPid());
+    }
+
+    /**
+     * Query live runtime permission state on every open. Package names are attribution,
+     * not authority: another installed package may be used only when it shares this UID.
+     * Clear an incoming Binder identity because this local call opens the current app's
+     * camera, just as an outgoing call to Android's cameraserver carries the app's UID.
+     */
     static boolean hasCameraPermission(String packageName) {
-        if (packageName == null) return false;
+        if (packageName == null || packageName.isEmpty()) return false;
+        int uid = Process.myUid();
+        int userId = UserHandle.getUserId(uid);
+        long identity = Binder.clearCallingIdentity();
         try {
-            PackageInfo info = ActivityThread.getPackageManager().getPackageInfo(packageName,
-                    PackageManager.GET_PERMISSIONS, 0);
-            if (info == null || info.requestedPermissions == null) return false;
-            for (String p : info.requestedPermissions) {
-                if (Manifest.permission.CAMERA.equals(p)) return true;
-            }
-            return false;
+            IPackageManager packages = ActivityThread.getPackageManager();
+            return packages != null && packages.getPackageUid(packageName, 0, userId) == uid
+                    && packages.checkUidPermission(Manifest.permission.CAMERA, uid)
+                            == PackageManager.PERMISSION_GRANTED;
         } catch (android.os.RemoteException | RuntimeException e) {
             log("checking " + packageName + "'s permissions: " + e);
             return false;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
     }
 }

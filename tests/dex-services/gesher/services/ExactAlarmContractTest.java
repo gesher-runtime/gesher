@@ -300,6 +300,9 @@ public final class ExactAlarmContractTest {
             set(am, "mPm", pm);
             set(am, "mAtm", atm);
             set(am, "mCallers", callers);
+            // Unsafe skips the ordinary defaults used during real process retirement.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
 
             // Result/task retirement uses the actual URI ownership service too.
             Object providers = make(type("ContentProviders"), new Class<?>[]{pmType, atmType}, pm, atm);
