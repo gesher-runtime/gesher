@@ -11,6 +11,14 @@ change, exposing missing process/activity state in the usage-hook fixture.
 Validation of the correction uses the actual combined source, not a shortened
 copy of the production hook.
 
+The continuation is now cumulative: reviewed R1 head `b7b128d2` is a genuine
+merge parent, and every R1 change is retained. The integration tree is
+`2cc49d5d5f922e10e0d9f7a826ab37f879a0211d` (reviewed local merge `9ff31dfb`,
+published merge object `388b6c43`). PR #388 remains unchanged and independently
+reviewable; PR #391 carries the combined source and the R2 follow-ups. Preserving
+R1's ancestry when it lands retains this relationship. A squash/rewrite would
+instead require an explicit branch reconciliation.
+
 ## Scope status
 
 | Handoff item | Status |
@@ -168,6 +176,32 @@ The result is unavailable through these tested routes on these runtimes; no
 Fetch coverage or worker capability was established. This is not a claim that
 every possible browser-session route is impossible.
 
+### Trusted-local unmanaged usage fixture
+
+Both services jobs on `e909052a` reached the same outdated fixture assertion.
+`SoftwareServiceContractTest` calls the service directly in its own process,
+which real `CallerIdentity` treats as trusted local control-plane authority.
+With no managed activity lifecycle, that authorized call correctly reports
+`UnsupportedOperationException`; it is not an unprivileged caller's permission
+denial. Production already authenticates before checking this capability.
+
+The fixture now verifies the actual local Binder PID and `isSystem()` result,
+uses a valid 60-second limit and non-null `PendingIntent`, and requires prompt
+unavailability. Its original `SecurityException`-only denial helper and
+session/limit checks remain. The exact-source host suite separately verifies
+that missing-permission and foreign-package calls are denied before the
+unmanaged gate. A control reversing that order fails the new assertion.
+The focused service suite and the updated runtime fixture's compilation/D8
+against real Android framework/core classes pass. No production permission
+check was changed.
+
+After the cumulative merge, the complete unchanged `app/build.sh` also passes
+against the established actual framework/core inputs: generated AIDL delegates,
+all Java sources, BootLinkCheck's 292 references with zero unresolved members,
+and D8. Source hashes were checked before and after the build. This is combined
+compile/link/DEX evidence; the current Windows/ART result belongs to the PR's
+exact-commit CI checks.
+
 ### Cumulative media feeder causal regression
 
 The Windows 2022 media job `137899912583` in run `45230894563` captured a real
@@ -178,7 +212,8 @@ because its interval includes the gap. The exact CI merge `35b06261` has the
 same media sources as that R2 head. This is not a reason to relax the detector
 or its tolerances.
 
-The cumulative merge `9ff31dfb` carries reviewed R1 `b7b128d2`, including its
+The cumulative merge `388b6c43` (reviewed locally as `9ff31dfb`) carries R1
+`b7b128d2`, including its
 room-notified `WritePcm`, seek flush and pre-join Track release. This follow-up
 adds only a causal regression and its documentation: the complete production
 `player.cc` remains byte-for-byte R1. The full R1 tests, clock/wait observations,
@@ -201,9 +236,10 @@ acceptance threshold is changed by this regression addition.
 
 This demonstrates the missed-room-notification defect addressed by R1. The
 uninstrumented Windows recording cannot distinguish that mechanism from a
-decoder stall, which the correction does not eliminate. **Windows acceptance
-of the cumulative source remains pending**; the host result does not establish
-that the observed Windows dropout is fully resolved. LeakSanitizer is disabled
+decoder stall, which the correction does not eliminate. The pre-publication
+host result does not establish that the observed Windows dropout is fully
+resolved; cumulative Windows acceptance is recorded in the PR's exact-commit
+CI checks. LeakSanitizer is disabled
 locally for the tracing limitation described below; ASan/UBSan stay enabled.
 
 ## Limits
