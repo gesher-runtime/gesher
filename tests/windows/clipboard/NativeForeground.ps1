@@ -60,3 +60,22 @@ function Stop-GesherForegroundHelper($Helper) {
   finally { $process.Dispose() }
   $problems
 }
+
+# PowerShell's Windows clipboard commands can exhaust their immediate native
+# retries without throwing: Set-Clipboard then returns and Get-Clipboard can
+# return empty. Establish the real text before signalling the application;
+# never retry the application's access-control assertion. The absolute setup
+# deadline also applies to a matching readback that arrives too late.
+function Set-GesherClipboardText([ValidateNotNullOrEmpty()][string] $Text,
+    [ValidateRange(1, 1000)][int] $TimeoutMilliseconds = 1000) {
+  $elapsed = [Diagnostics.Stopwatch]::StartNew()
+  do {
+    Set-Clipboard -Value $Text -ErrorAction Stop
+    $actual = Get-Clipboard -Raw -ErrorAction Stop
+    $remaining = $TimeoutMilliseconds - $elapsed.ElapsedMilliseconds
+    if ($remaining -gt 0 -and $actual -ceq $Text) { return }
+    if ($remaining -le 0) { break }
+    Start-Sleep -Milliseconds ([Math]::Min(20, $remaining))
+  } while ($elapsed.ElapsedMilliseconds -lt $TimeoutMilliseconds)
+  throw "denial probe needs a real nonempty Windows clipboard: exact readback was not established within $TimeoutMilliseconds ms"
+}

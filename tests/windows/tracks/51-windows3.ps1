@@ -255,8 +255,7 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
       [void][GesherW3Win32]::ShowWindowAsync($foreignWindow, 5)
       if (-not [ImeInput]::Foreground($foreignWindow)) { throw 'owned foreign window did not become the actual foreground window' }
       $token = [Guid]::NewGuid().ToString('N')
-      Set-Clipboard -Value "background-denial-$token"
-      if ((Get-Clipboard -Raw) -cne "background-denial-$token") { throw 'denial probe needs a real nonempty Windows clipboard' }
+      Set-GesherClipboardText -Text "background-denial-$token"
       if ([ImeInput]::GetForegroundWindow() -ne $foreignWindow) { throw 'foreground changed before the application probe' }
       $request = $env:GESHER_WINAPP_CLIPBOARD_PROBE
       if (-not $request -or (Test-Path $request)) { throw 'background request path is absent or reused' }

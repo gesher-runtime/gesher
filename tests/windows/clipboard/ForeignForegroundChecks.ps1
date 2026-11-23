@@ -54,6 +54,9 @@ public static class NativeForegroundChecks {
 }
 '@
 Add-Type -Path "$PSScriptRoot/../ime/ImeInput.cs"
+# Real clipboard contention and the exact setup helper used by windows3.
+# This remains a required part of the existing short Windows host gate.
+& "$PSScriptRoot/ClipboardSetupChecks.ps1" -Windows
 
 $checks = 0
 function Assert-Foreground([bool] $Okay, [string] $Reason) {
