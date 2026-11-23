@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.24)
+project(gesher_usb_storage LANGUAGES CXX)
+
+add_executable(usb_storage_probe usb_storage_probe.cc)
+target_compile_features(usb_storage_probe PRIVATE cxx_std_20)
+target_compile_definitions(usb_storage_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(usb_storage_probe PRIVATE cfgmgr32)
+if(MINGW)
+  target_link_options(usb_storage_probe PRIVATE -municode -static)
+endif()
