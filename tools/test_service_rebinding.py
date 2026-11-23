@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +52,11 @@ def main() -> None:
                         "--patch-module", "jdk.unsupported=" + str(work / "cleaner"),
                         "-cp", str(classes) + os.pathsep + classpath,
                         "ServiceRebindHost", str(library), args.scenario], env=env, check=True, timeout=90)
+    if args.scenario == "all" and not args.source_ref:
+        subprocess.run([sys.executable, str(ROOT / "tools/test_spell_checker_bindings.py"),
+                        "--java-home", str(args.java_home), "--framework-classes", str(args.framework_classes),
+                        "--core-classes", str(args.core_classes), "--app-classes", str(args.app_classes),
+                        "--apksig", str(args.apksig)], check=True)
 
 
 if __name__ == "__main__":

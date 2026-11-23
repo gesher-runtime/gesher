@@ -1,0 +1,97 @@
+name: N28 shared pthread CPU clock component
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/56-n28-thread-cpu-clock]
+    paths:
+      - 'tools/thread-cpu-clock-shared/**'
+      - 'tests/thread-cpu-clock-shared/**'
+      - '.github/workflows/thread-cpu-clock-shared.yml'
+  pull_request:
+    paths:
+      - 'tools/thread-cpu-clock-shared/**'
+      - 'tests/thread-cpu-clock-shared/**'
+      - '.github/workflows/thread-cpu-clock-shared.yml'
+permissions:
+  contents: read
+concurrency:
+  group: thread-cpu-clock-shared-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  SOURCE_COMMIT: a3d93999ef0521681d45e445c39964a7af0f593f
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux busy-peer and final-task-release reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pthread tests/thread-cpu-clock-shared/linux_reference.c -ldl -o "$RUNNER_TEMP/n28-linux-reference"
+          "$RUNNER_TEMP/n28-linux-reference" | tee "$RUNNER_TEMP/n28-linux-reference.log"
+      - name: Fetch exact publisher inputs without replacing shared compiler caches
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/n28-inputs"
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 240 "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_NAME.tar.xz" -o "$RUNNER_TEMP/n28-inputs/compiler.tar.xz"
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 240 "https://codeload.github.com/mingw-w64/mingw-w64/tar.gz/$SOURCE_COMMIT" -o "$RUNNER_TEMP/n28-inputs/source.tar.gz"
+          python - "$RUNNER_TEMP/n28-inputs" <<'PY'
+          import hashlib,json,sys,tarfile
+          from pathlib import Path
+          root=Path(sys.argv[1]); pin=json.loads(Path('tools/thread-cpu-clock-shared/inputs.json').read_text())
+          for name,prefix in [('compiler.tar.xz','compiler'),('source.tar.gz','source')]:
+              archive=root/name
+              if archive.stat().st_size!=pin[prefix+'_archive_bytes'] or hashlib.sha256(archive.read_bytes()).hexdigest()!=pin[prefix+'_archive_sha256']:
+                  raise SystemExit('Pinned input mismatch: '+name)
+          with tarfile.open(root/'compiler.tar.xz','r:xz') as archive: archive.extractall(root,filter='data')
+          PY
+      - name: Build both Windows ABIs and verify single-provider imports
+        run: |
+          python3 tools/thread-cpu-clock-shared/component.py build --llvm "$RUNNER_TEMP/n28-inputs/$LLVM_NAME" --compiler-archive "$RUNNER_TEMP/n28-inputs/compiler.tar.xz" --source-archive "$RUNNER_TEMP/n28-inputs/source.tar.gz" --output "$RUNNER_TEMP/n28-output"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: n28-shared-x86_64
+          path: ${{ runner.temp }}/n28-output/x86_64/fixture
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: n28-shared-aarch64-cross-build
+          path: ${{ runner.temp }}/n28-output/aarch64/fixture
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: n28-shared-build-evidence
+          path: |
+            ${{ runner.temp }}/n28-output/*/*.log
+            ${{ runner.temp }}/n28-output/*/*.txt
+            ${{ runner.temp }}/n28-output/*/*.map
+            ${{ runner.temp }}/n28-linux-reference.log
+          if-no-files-found: warn
+  windows:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: n28-shared-x86_64
+          path: n28-fixture
+      - name: Verify source and run actual shared-supplier component
+        shell: pwsh
+        run: tools/thread-cpu-clock-shared/run.ps1 -Fixture n28-fixture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: n28-shared-windows-evidence-${{ matrix.os }}
+          path: ${{ runner.temp }}/thread-cpu-clock-shared.*.log
+          if-no-files-found: warn
