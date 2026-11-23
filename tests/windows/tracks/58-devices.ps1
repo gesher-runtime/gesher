@@ -77,6 +77,10 @@ Check 'devices: camera admission checks live grants and process attribution' {
   DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
     'gesher.services.CameraPermissionContractTest') 90
 } @('CameraPermissionContractTest: both admission paths, live grants and UID attribution passed')
+Check 'devices: camera callback/request admission bounds real native metadata and blocked consumers' {
+  DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+    'gesher.services.CameraCallbackAdmissionTest') 90
+} @('CameraCallbackAdmissionTest: real native metadata, bounded requests/callbacks, ordered flush and nonjoining close passed')
 $d = 'devices: location: '
 
 # The location checks of devices.apk's LocationSteps (both modes).

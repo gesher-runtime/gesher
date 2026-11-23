@@ -38,9 +38,9 @@ jobs:
             'tests/windows/helpers/geocoder-compile.ps1' = '90fceedc449a2ec11dfa80809e05163c89bcf2fa'
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
             # The reviewed shared track includes sensor flush, current camera grant
-            # admission and explicit fixture permissions. Its geocoder implementation
-            # and the other nine source pins are unchanged.
-            'tests/windows/tracks/58-devices.ps1' = '1060ef95189434f10f57b9d10abf61274b9e19f3'
+            # admission, explicit fixture permissions and the camera callback-admission
+            # gate. Its geocoder implementation and the other nine source pins are unchanged.
+            'tests/windows/tracks/58-devices.ps1' = '0cddb9e852a5c96291a86255738727a27a3996cd'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

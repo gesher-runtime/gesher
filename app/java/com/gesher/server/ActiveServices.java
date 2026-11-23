@@ -590,6 +590,7 @@ final class ActiveServices {
         mNotifications.withChannelLifecycle(() -> setServiceForegroundLocked(className, token,
                 id, notification, flags, foregroundServiceType, visible));
         mPm.appOps().requestUidStateRefresh();
+        Dexopt.activityChanged();
     }
 
     private void setServiceForegroundLocked(ComponentName className, IBinder token, int id,
@@ -948,6 +949,7 @@ final class ActiveServices {
         // Removing the service also removes its foreground capabilities even if
         // another service or an activity keeps the process alive.
         mPm.appOps().requestUidStateRefresh();
+        Dexopt.activityChanged();
         synchronized (this) { clearStartGrants(r, Integer.MAX_VALUE); }
         if (r.foregroundId != 0) mNotifications.cancel(r.info.packageName, null, r.foregroundId);
         if (r.app == null || !r.created) return;
@@ -1113,6 +1115,7 @@ final class ActiveServices {
                     r.foregroundId = 0;
                     r.foregroundType = 0;
                     mPm.appOps().requestUidStateRefresh();
+                    Dexopt.activityChanged();
                     r.foregroundChannelId = null;
                 }
                 r.app = null;
