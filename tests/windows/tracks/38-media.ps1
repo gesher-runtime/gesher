@@ -12,6 +12,10 @@
 $mediaTmp = Join-Path $env:RUNNER_TEMP 'gesher-media'
 New-Item -ItemType Directory -Force $mediaTmp | Out-Null
 
+Check 'media: real MP3, Vorbis and Opus reuse scratch while retaining independent PCM, seek, trim and errors' {
+  & "$Dir/media_audio_decoder_scratch_test.exe" gate "$Dir/media-audio-scratch-fixtures"
+} @('Real audio decoder scratch, retained PCM, seek, trim and error contracts passed:')
+
 # The sounds of a capture, as media_probe analyze measures them.
 function MediaSounds([string] $wav) {
   $out = & "$Dir/media_probe.exe" analyze $wav 2>&1 | Out-String

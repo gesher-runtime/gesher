@@ -285,3 +285,19 @@ target_compile_options(media_retriever_pixels_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_retriever_pixels_test PRIVATE skia)
 gesher_graphics_cxx(media_retriever_pixels_test)
+
+# Real pinned MP3/Vorbis/Opus providers with the complete product decoder.
+# Metadata/log transport is explicit fixture code; no codec is simulated.
+add_executable(media_audio_decoder_scratch_test
+  "${CMAKE_SOURCE_DIR}/tests/media/audio_decoder_scratch_test.cc"
+  ${_fnd}/OpusHeader.cpp)
+target_include_directories(media_audio_decoder_scratch_test PRIVATE
+  "${CMAKE_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}/tests/media/audio-host/include"
+  ${_fnd}/include ${_fnd}/include/media/stagefright/foundation)
+target_compile_definitions(media_audio_decoder_scratch_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_audio_decoder_scratch_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -fno-exceptions)
+target_link_options(media_audio_decoder_scratch_test PRIVATE -Wl,--gc-sections)
+target_link_libraries(media_audio_decoder_scratch_test PRIVATE stagefright_mp3dec vorbisidec opus)
+set_target_properties(media_audio_decoder_scratch_test PROPERTIES CXX_STANDARD 20)
