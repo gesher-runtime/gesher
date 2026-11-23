@@ -33,11 +33,22 @@ inline DWORD WINAPI TryBoth(void* raw) {
   return 0;
 }
 
+[[noreturn]] inline void PublicProbeTimedOut() {
+  static const char note[] = "STDIO_DIAGNOSTIC phase=fatal94-public-probe-wait\n";
+  DWORD written = 0;
+  WriteFile(GetStdHandle(STD_ERROR_HANDLE), note, sizeof(note) - 1, &written, nullptr);
+  TerminateProcess(GetCurrentProcess(), 94);
+  std::_Exit(94);
+}
+
 // The real probe thread must exit before its stack-owned arguments are retired.
 // A failed/expired wait terminates this owned test process, never abandons a
 // callback or extends the command's original absolute five-second deadline.
 inline bool Observe(FILE* file, FILE* sibling, ULONGLONG deadline, Sample* output) {
-  if (!file || !sibling || file == sibling || GetTickCount64() >= deadline) return false;
+  if (!file || !sibling || file == sibling) return false;
+  // A stalled stderr observer can use up the deadline before the probe starts.
+  // Classify that as the same timeout as an in-flight probe exceeding it.
+  if (GetTickCount64() >= deadline) PublicProbeTimedOut();
   Sample value{file, sibling};
   DWORD tid = 0;
   HANDLE thread = CreateThread(nullptr, 0, TryBoth, &value, 0, &tid);
@@ -45,21 +56,16 @@ inline bool Observe(FILE* file, FILE* sibling, ULONGLONG deadline, Sample* outpu
   ULONGLONG now = GetTickCount64();
   DWORD wait = now < deadline && deadline - now <= MAXDWORD
       ? WaitForSingleObject(thread, static_cast<DWORD>(deadline - now)) : WAIT_TIMEOUT;
-  if (wait != WAIT_OBJECT_0) {
-    static const char note[] = "STDIO_DIAGNOSTIC phase=fatal94-public-probe-wait\n";
-    DWORD written = 0;
-    WriteFile(GetStdHandle(STD_ERROR_HANDLE), note, sizeof(note) - 1, &written, nullptr);
-    TerminateProcess(GetCurrentProcess(), 94);
-    std::_Exit(94);
-  }
+  if (wait != WAIT_OBJECT_0) PublicProbeTimedOut();
   FILETIME created{}, exited{}, kernel{}, user{};
   DWORD code = 1;
   bool valid = GetProcessIdOfThread(thread) == GetCurrentProcessId() &&
       GetThreadTimes(thread, &created, &exited, &kernel, &user) &&
       GetExitCodeThread(thread, &code) && code == 0 && value.thread == tid &&
       value.thread != GetCurrentThreadId() && value.birth != 0 &&
-      value.birth == Birth(created) && GetTickCount64() < deadline;
+      value.birth == Birth(created);
   bool closed = CloseHandle(thread);
+  if (GetTickCount64() >= deadline) PublicProbeTimedOut();
   if (!valid || !closed) return false;
   *output = value;
   return true;
