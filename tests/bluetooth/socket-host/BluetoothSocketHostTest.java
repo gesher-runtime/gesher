@@ -61,7 +61,8 @@ public final class BluetoothSocketHostTest {
             check(socket.getInputStream().read()==-1&&socket.getInputStream().read(buffer,0,4)==-1,"EOF is sticky, target "+target);
             check(!socket.isConnected(),"EOF drops the link, target "+target);
             socket.close();
-            check(throwsIo(socket.getInputStream()),"read after local close throws, target "+target);
+            check(socket.getInputStream().read()==-1,"read after local close is EOF, target "+target);
+            check(socket.getInputStream().read(buffer,0,4)==-1,"array read after local close is EOF, target "+target);
             socket=connected();script(0);
             check(socket.getInputStream().read()==-1,"single-byte read EOF is -1, target "+target);
             socket.close();
@@ -78,15 +79,38 @@ public final class BluetoothSocketHostTest {
             check(throwsIo(socket.getInputStream()),"read after EOF still throws, target "+target);
             socket.close();
         }
-        // Native errors always throw, whatever the target.
+        // Dropped established connections follow the same target gate as clean EOF.
+        for(int target:new int[]{36,37,10000})for(int error:new int[]{-10052,-10053,-10054,-10057,-10058,-10060}){
+            BluetoothHost.target=target;
+            BluetoothSocket socket=connected();script(error);
+            if(target>=37){
+                check(socket.getInputStream().read(new byte[4],0,4)==-1,"drop returns EOF, target "+target+" error "+error);
+                check(socket.getInputStream().read()==-1,"drop EOF is sticky, target "+target);
+            }else check(throwsIo(socket.getInputStream()),"legacy drop throws, error "+error);
+            check(!socket.isConnected(),"drop retires connected state");socket.close();
+        }
+        // Native argument/resource failures always throw, whatever the target.
         for(int target:new int[]{36,37,10000}){
             BluetoothHost.target=target;
-            BluetoothSocket socket=connected();script(-10054);
+            BluetoothSocket socket=connected();script(-10022);
             check(throwsIo(socket.getInputStream()),"native error throws, target "+target);
             check(!socket.isConnected(),"native error drops the link, target "+target);
             socket.close();
         }
-        // A read woken by a local close() (native 0) is not a peer EOF, at any target.
+        // A write can be the first operation to discover a disconnected link.
+        for(int target:new int[]{36,37,10000})for(int error:new int[]{-10054,-10022}){
+            BluetoothHost.target=target;
+            BluetoothSocket socket=connected();
+            WindowsBluetooth.writeHook=(handle,b,off,len)->error;
+            boolean threw=false;
+            try{socket.getOutputStream().write(1);}catch(IOException expected){threw=true;}
+            check(threw,"write still throws for disconnect or other error");
+            if(target>=37&&error==-10054)check(socket.getInputStream().read()==-1,"write-detected drop makes read EOF");
+            else check(throwsIo(socket.getInputStream()),"legacy drop or generic write failure remains IOException");
+            socket.close();
+        }
+        WindowsBluetooth.writeHook=null;
+        // Local close interrupts a pending read and follows the target-SDK EOF gate.
         for(int target:new int[]{36,37,10000}){
             BluetoothHost.target=target;
             BluetoothSocket socket=connected();
@@ -94,8 +118,13 @@ public final class BluetoothSocketHostTest {
                 try{socket.close();}catch(IOException e){throw new AssertionError(e);}
                 return 0;
             };
-            check(throwsIo(socket.getInputStream()),"read ended by local close throws, target "+target);
-            check(throwsIo(socket.getInputStream()),"later read on closed socket throws, target "+target);
+            if(target>=37){
+                check(socket.getInputStream().read()==-1,"local close wakes read as EOF, target "+target);
+                check(socket.getInputStream().read()==-1,"later read on closed socket is EOF, target "+target);
+            }else{
+                check(throwsIo(socket.getInputStream()),"legacy local close throws");
+                check(throwsIo(socket.getInputStream()),"later legacy closed read throws");
+            }
         }
         WindowsBluetooth.readHook=null;BluetoothHost.target=10000;
     }
@@ -141,6 +170,7 @@ public final class BluetoothSocketHostTest {
         WindowsBluetooth.readHook=null;socket.close();
     }
     private static void blockedSingleByteClose()throws Exception{
+        BluetoothHost.target=37;
         BluetoothSocket socket=connected();
         java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch released=new java.util.concurrent.CountDownLatch(1);
@@ -153,8 +183,8 @@ public final class BluetoothSocketHostTest {
             return 0;
         };
         Thread reader=new Thread(()->{
-            try{socket.getInputStream().read();failure.set(new AssertionError("locally closed read succeeded"));}
-            catch(IOException expected){}catch(Throwable e){failure.set(e);}
+            try{check(socket.getInputStream().read()==-1,"locally closed modern read returns EOF");}
+            catch(Throwable e){failure.set(e);}
         });
         reader.start();
         try{
@@ -164,7 +194,7 @@ public final class BluetoothSocketHostTest {
             check(!reader.isAlive()&&failure.get()==null,"close interrupts buffered single-byte read: "+failure.get());
         }finally{
             released.countDown();reader.join(5000);
-            WindowsBluetooth.readHook=null;WindowsBluetooth.closeHook=null;socket.close();
+            WindowsBluetooth.readHook=null;WindowsBluetooth.closeHook=null;socket.close();BluetoothHost.target=10000;
         }
     }
     private static void reconnectAfterEof()throws Exception{
@@ -172,9 +202,18 @@ public final class BluetoothSocketHostTest {
         WindowsBluetooth.opened.set(10); // the fixture's handle 1 is the blocked-connect case
         BluetoothSocket socket=connected();
         java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch writeEntered=new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch released=new java.util.concurrent.CountDownLatch(1);
         AtomicReference<Throwable> failure=new AtomicReference<>();
         java.util.concurrent.atomic.AtomicInteger oldReads=new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger retired=new java.util.concurrent.atomic.AtomicInteger();
+        WindowsBluetooth.closeHook=retired::incrementAndGet;
+        WindowsBluetooth.writeHook=(handle,b,off,len)->{
+            writeEntered.countDown();
+            try{check(released.await(5,TimeUnit.SECONDS),"old write completes after reconnect");}
+            catch(InterruptedException e){throw new AssertionError(e);}
+            return -10054;
+        };
         WindowsBluetooth.readHook=(handle,b,off,len)->{
             if(handle!=5){b[off]=0x55;return 1;}
             if(oldReads.getAndIncrement()==0){
@@ -188,18 +227,24 @@ public final class BluetoothSocketHostTest {
             try{check(socket.getInputStream().read(new byte[1],0,1)==-1,"old connection reports its EOF");}
             catch(Throwable e){failure.set(e);}
         });
-        oldReader.start();
+        Thread oldWriter=new Thread(()->{
+            try{socket.getOutputStream().write(new byte[1]);failure.set(new AssertionError("old write should fail"));}
+            catch(IOException expected){}catch(Throwable e){failure.set(e);}
+        });
+        oldReader.start();oldWriter.start();
         try{
             check(entered.await(5,TimeUnit.SECONDS),"old connection has an outstanding read");
+            check(writeEntered.await(5,TimeUnit.SECONDS),"old connection has an outstanding write");
             check(socket.getInputStream().read()==-1,"second old read observes EOF");
             socket.connect();
+            check(retired.get()==1,"reconnect retires exactly the old native registry entry");
             check(socket.isConnected()&&socket.getInputStream().read()==0x55,"fresh connection clears sticky EOF");
-            released.countDown();oldReader.join(5000);
-            check(!oldReader.isAlive()&&failure.get()==null,"late old read completes: "+failure.get());
+            released.countDown();oldReader.join(5000);oldWriter.join(5000);
+            check(!oldReader.isAlive()&&!oldWriter.isAlive()&&failure.get()==null,"late old operations complete: "+failure.get());
             check(socket.isConnected()&&socket.getInputStream().read()==0x55,"late old EOF preserves fresh connection");
         }finally{
-            released.countDown();oldReader.join(5000);socket.close();
-            WindowsBluetooth.readHook=null;BluetoothHost.target=10000;
+            released.countDown();oldReader.join(5000);oldWriter.join(5000);socket.close();
+            WindowsBluetooth.readHook=null;WindowsBluetooth.writeHook=null;WindowsBluetooth.closeHook=null;BluetoothHost.target=10000;
         }
     }
     public static void main(String[] args)throws Exception{

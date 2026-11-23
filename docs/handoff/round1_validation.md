@@ -19,12 +19,27 @@ its existing independent lock and interrupts blocked native reads. Array reads
 and writes retain their existing path. Tests observe buffers at the native
 boundary, distinct concurrent byte values, peer EOF, local close and native errors.
 
-Independent review found and repaired two additional regressions: peer EOF is
+Independent review found and repaired additional regressions: peer EOF is
 cleared on successful reconnection, and a late read completion from the old
-connection cannot disconnect the new link; WASAPI shared event mode now passes
+connection cannot disconnect the new link. Reconnection closes the old native
+registry entry, and late failed writes also cannot disconnect the new link.
+WASAPI shared event mode now passes
 zero for both buffer duration and periodicity, as required by `IAudioClient`.
 Only the polled fallback requests a 200 ms buffer. The WASAPI boundary rejects
 nonzero event-mode durations so this error cannot silently hide behind fallback.
+
+The Android 17 behavior page, updated 2026-11-11, explicitly includes local socket
+close and dropped connections in the target-37 EOF change. This supersedes the
+older handoff's narrower clean-peer-only claim. Target 37+ now receives sticky
+`-1` after local close, orderly peer EOF and the documented terminating Winsock
+results (`WSAENETRESET`, `WSAECONNABORTED`, `WSAECONNRESET`, `WSAENOTCONN`,
+`WSAESHUTDOWN`, `WSAETIMEDOUT`). Older targets retain `IOException`; native
+argument/resource failures still throw for every target. Windows' native read
+boundary is unchanged. Tests cover initial and repeated EOF, array/single-byte
+reads, a concurrent local close, each disconnect result, a disconnect first
+detected by a write and non-disconnect native errors. Writes still throw on
+failure; the subsequent read observes EOF only for a known disconnect and target
+37+. The preceding source fails the new local-close assertion.
 
 The shared native memfd guest assertions now verify seal success after the last
 unmap, including an original descriptor closed after `mmap`, a duplicated seal
@@ -52,6 +67,7 @@ replace ordinary application behavior.
 | `tools/test_bluetooth_watch_contracts.py` | nonblocking startup, state fallback and single watch pass |
 | `tools/test_handwriting_callbacks_host.py` | null callbacks and remote callback failures pass |
 | Same buffer-reuse assertions against `source-pr381` | Expected failure: per-call input buffer allocation detected |
+| Updated target-37 closure assertions against `cbf84bd8` | Expected failure: local close throws instead of returning EOF |
 
 Java checks use Temurin JDK 21.0.13.1+2. Linux native checks use GCC 14 with ASan
 and UBSan. This container's tracing prevents LeakSanitizer from starting; local
@@ -93,7 +109,8 @@ Windows CPU measurements or end-to-end application benchmarks.
 
 - [memfd sealing](https://man7.org/linux/man-pages/man2/memfd_create.2.html)
 - [Win32 LockFileEx lifetime and shared/exclusive locking](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex)
-- [Android 17 RFCOMM stream EOF change](https://developer.android.com/about/versions/17/behavior-changes-17#bluetoothsocket)
+- [Android 17 RFCOMM stream EOF change](https://developer.android.com/about/versions/17/behavior-changes-17#connectivity)
+- [Win32 recv results and disconnect error meanings](https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recv)
 - [WASAPI event handle contract](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-seteventhandle)
 - [WASAPI shared event-mode initialization](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize)
 
