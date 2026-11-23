@@ -29,6 +29,7 @@ import android.content.pm.PackageManager;
 import android.os.ParcelUuid;
 import android.os.Parcelable;
 import android.os.ServiceManager;
+import android.os.SystemClock;
 import com.gesher.server.BluetoothManagerService;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.WindowsBluetooth;
@@ -372,23 +373,34 @@ public final class BluetoothHostTest {
         checks += 2;
 
         // An active scan whose permission was revoked: the stop reaches the service and fails;
-        // the callback is already forgotten, so stopping again is silent and it can start again.
+        // its framework wrapper is gone, so stopping again is silent and it can start again.
         App revoked = new App(34, "android.permission.BLUETOOTH_SCAN", "android.permission.ACCESS_FINE_LOCATION");
         BluetoothLeScanner active = new BluetoothManager(revoked).getAdapter().getBluetoothLeScanner();
         LinkedBlockingQueue<Integer> failures = new LinkedBlockingQueue<>();
+        LinkedBlockingQueue<ScanResult> reports = new LinkedBlockingQueue<>();
         ScanCallback running = new ScanCallback() {
             @Override public void onScanFailed(int error) { failures.add(error); }
+            @Override public void onScanResult(int type, ScanResult result) { reports.add(result); }
         };
         active.startScan(running);
         revoked.revoke("android.permission.BLUETOOTH_SCAN");
         denied(() -> active.flushPendingScanResults(running), "flushing an active scan");
         denied(() -> active.stopScan(running), "stopping an active scan");
+        long deniedAt = SystemClock.elapsedRealtimeNanos();
+        long deadline = deniedAt + TimeUnit.SECONDS.toNanos(5);
+        ScanResult report = null;
+        while (SystemClock.elapsedRealtimeNanos() < deadline) {
+            report = reports.poll(100, TimeUnit.MILLISECONDS);
+            if (report != null && report.getTimestampNanos() >= deniedAt) break;
+        }
+        check(report != null && report.getTimestampNanos() >= deniedAt,
+                "the native watcher still delivers new scan reports after the stop is denied");
         active.stopScan(running);
         checks++;
         revoked.grant("android.permission.BLUETOOTH_SCAN");
         active.startScan(running);
         check(failures.poll(300, TimeUnit.MILLISECONDS) == null,
-                "the failed stop forgot the scan: the callback starts again (no ALREADY_STARTED)");
+                "the failed stop forgot the wrapper: the callback starts again (no ALREADY_STARTED)");
         active.stopScan(running);
         // The legacy LE scan stops through the same scanner path.
         BluetoothAdapter revokedAdapter = new BluetoothManager(revoked).getAdapter();
@@ -399,8 +411,9 @@ public final class BluetoothHostTest {
         revokedAdapter.stopLeScan(legacyScan);
         checks++;
         revoked.grant("android.permission.BLUETOOTH_SCAN");
-        check(revokedAdapter.startLeScan(legacyScan), "the failed stopLeScan forgot the legacy scan");
+        check(revokedAdapter.startLeScan(legacyScan), "the failed stopLeScan forgot the legacy wrapper");
         revokedAdapter.stopLeScan(legacyScan);
+        active.cleanup(); // Retire the test's detached service registrations.
         step("stop without scan permission: a scan never started stops silently; an active one, PendingIntent stops and discovery need BLUETOOTH_SCAN");
     }
 
