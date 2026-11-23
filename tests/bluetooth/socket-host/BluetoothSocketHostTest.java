@@ -102,9 +102,12 @@ public final class BluetoothSocketHostTest {
     private static void singleByte()throws Exception{
         BluetoothSocket socket=connected();
         int[] next={0};
-        WindowsBluetooth.readHook=(handle,b,off,len)->{if(len!=1||off!=0)throw new AssertionError("single-byte read len "+len+" off "+off);b[off]=(byte)next[0]++;return 1;};
+        java.util.Set<byte[]> readBuffers=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        WindowsBluetooth.readHook=(handle,b,off,len)->{if(len!=1||off!=0)throw new AssertionError("single-byte read len "+len+" off "+off);readBuffers.add(b);b[off]=(byte)next[0]++;return 1;};
         for(int i=0;i<512;i++)check(socket.getInputStream().read()==(i&0xff),"read() returns unsigned byte "+i);
+        check(readBuffers.size()==1,"single-byte reads reuse native-boundary storage");
         for(int i=0;i<256;i++)socket.getOutputStream().write(i+(i%2==0?0:0x100*3));
+        check(WindowsBluetooth.writeBuffers.size()==1,"single-byte writes reuse native-boundary storage");
         byte[] out;synchronized(WindowsBluetooth.written){out=WindowsBluetooth.written.toByteArray();}
         check(out.length==256,"one native byte per write(int)");
         for(int i=0;i<256;i++)check((out[i]&0xff)==i,"write(int) sends the low 8 bits of "+i);
@@ -112,15 +115,16 @@ public final class BluetoothSocketHostTest {
         int threads=4,per=2000;
         java.util.concurrent.atomic.AtomicInteger bad=new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.CountDownLatch go=new java.util.concurrent.CountDownLatch(1);
-        WindowsBluetooth.readHook=(handle,b,off,len)->{b[off]=(byte)0xA5;return 1;};
+        ThreadLocal<Integer> readValue=new ThreadLocal<>();
+        WindowsBluetooth.readHook=(handle,b,off,len)->{b[off]=(byte)(int)readValue.get();Thread.yield();return 1;};
         synchronized(WindowsBluetooth.written){WindowsBluetooth.written.reset();}
         Thread[] all=new Thread[threads];
         for(int t=0;t<threads;t++){
             final int value=0x11*(t+1);
             all[t]=new Thread(()->{
-                try{go.await();
+                try{readValue.set(value);go.await();
                     for(int i=0;i<per;i++){
-                        if(socket.getInputStream().read()!=0xA5)bad.incrementAndGet();
+                        if(socket.getInputStream().read()!=value)bad.incrementAndGet();
                         socket.getOutputStream().write(value);
                     }
                 }catch(Exception e){bad.incrementAndGet();}
@@ -136,12 +140,40 @@ public final class BluetoothSocketHostTest {
         }
         WindowsBluetooth.readHook=null;socket.close();
     }
+    private static void blockedSingleByteClose()throws Exception{
+        BluetoothSocket socket=connected();
+        java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch released=new java.util.concurrent.CountDownLatch(1);
+        AtomicReference<Throwable> failure=new AtomicReference<>();
+        WindowsBluetooth.closeHook=released::countDown;
+        WindowsBluetooth.readHook=(handle,b,off,len)->{
+            entered.countDown();
+            try{check(released.await(5,TimeUnit.SECONDS),"close reaches the blocked native read");}
+            catch(InterruptedException e){throw new AssertionError(e);}
+            return 0;
+        };
+        Thread reader=new Thread(()->{
+            try{socket.getInputStream().read();failure.set(new AssertionError("locally closed read succeeded"));}
+            catch(IOException expected){}catch(Throwable e){failure.set(e);}
+        });
+        reader.start();
+        try{
+            check(entered.await(5,TimeUnit.SECONDS),"single-byte native read entered");
+            socket.close();
+            reader.join(5000);
+            check(!reader.isAlive()&&failure.get()==null,"close interrupts buffered single-byte read: "+failure.get());
+        }finally{
+            released.countDown();reader.join(5000);
+            WindowsBluetooth.readHook=null;WindowsBluetooth.closeHook=null;socket.close();
+        }
+    }
     public static void main(String[] args)throws Exception{
         switch(args[0]){
             case "parallel-connect":parallelConnect();break;
             case "closed-accept":closedAccept();break;
             case "peer-eof":peerEof();break;
             case "single-byte":singleByte();break;
+            case "blocked-single-byte-close":blockedSingleByteClose();break;
             default:throw new AssertionError("unknown case "+args[0]);
         }
         System.out.println("BluetoothSocketHostTest passed: "+args[0]);

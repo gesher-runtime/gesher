@@ -211,11 +211,14 @@ public final class BluetoothSocket implements Closeable {
     }
 
     private final class Input extends InputStream {
+        private final byte[] mSingleByte = new byte[1];
+
         @Override
-        public int read() throws IOException {
-            byte[] one = new byte[1];
-            int n = read(one, 0, 1);
-            return n < 0 ? -1 : one[0] & 0xff;
+        public synchronized int read() throws IOException {
+            // Serialize only users of this buffer. Socket.close() does not take
+            // this monitor and can still interrupt a blocked native read.
+            int n = read(mSingleByte, 0, 1);
+            return n < 0 ? -1 : mSingleByte[0] & 0xff;
         }
 
         @Override
@@ -252,9 +255,12 @@ public final class BluetoothSocket implements Closeable {
     }
 
     private final class Output extends OutputStream {
+        private final byte[] mSingleByte = new byte[1];
+
         @Override
-        public void write(int b) throws IOException {
-            write(new byte[] {(byte) b}, 0, 1);
+        public synchronized void write(int b) throws IOException {
+            mSingleByte[0] = (byte) b;
+            write(mSingleByte, 0, 1);
         }
 
         @Override

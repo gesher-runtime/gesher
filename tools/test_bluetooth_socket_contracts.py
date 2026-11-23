@@ -29,7 +29,7 @@ def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--java-home',type=Path,required=True)
     parser.add_argument('--source-ref')
-    parser.add_argument('--case',choices=('all','parallel-connect','closed-accept','peer-eof','single-byte'),default='all')
+    parser.add_argument('--case',choices=('all','parallel-connect','closed-accept','peer-eof','single-byte','blocked-single-byte-close'),default='all')
     args=parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='gesher-rfcomm-') as tmp:
         work=Path(tmp);sources=[]
@@ -43,7 +43,7 @@ def main() -> None:
         sources += [str(p) for p in sorted((ROOT/'tests/bluetooth/socket-host').glob('*.java'))]
         classes=work/'classes';classes.mkdir()
         subprocess.run([str(args.java_home/'bin/javac'),'-encoding','UTF-8','-d',str(classes),*sources],check=True,timeout=60)
-        cases=('parallel-connect','closed-accept','peer-eof','single-byte') if args.case=='all' else (args.case,)
+        cases=('parallel-connect','closed-accept','peer-eof','single-byte','blocked-single-byte-close') if args.case=='all' else (args.case,)
         for case in cases:
             subprocess.run([str(args.java_home/'bin/java'),'-cp',str(classes),
                             'android.bluetooth.BluetoothSocketHostTest',case],check=True,timeout=30)
