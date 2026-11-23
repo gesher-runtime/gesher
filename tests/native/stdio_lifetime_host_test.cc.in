@@ -68,6 +68,12 @@ void Forget(FILE* stream) {
 }
 int PrepareReopenedStream(FILE* stream, int) { Forget(stream); return 0; }
 int Get(FILE* stream, bool) { ++io_calls; return getc_unlocked(stream); }
+int64_t ReadDelimited(char** bytes, size_t* size, int delimiter, FILE* stream, bool) {
+  ++io_calls; return ::getdelim(bytes, size, delimiter, stream);
+}
+char* ReadLine(char* bytes, int count, FILE* stream, bool) {
+  ++io_calls; return ::fgets_unlocked(bytes, count, stream);
+}
 int Put(int value, FILE* stream, bool) { ++io_calls; return putc_unlocked(value, stream); }
 int Error(FILE* stream, bool unlocked) {
   check("guest status uses the unlocked shared boundary", unlocked);

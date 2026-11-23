@@ -266,6 +266,44 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
 OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
+# Shared line input changes only these five complete sources. Reverse their
+# exact pinned transition before the original OFD preservation checks below;
+# retain that earlier manifest, all its digests and its runtime approval state.
+# This source admission does not stand in for the Windows/native CI gates.
+STDIO_LINE_QUALIFICATION_SHA256='83c559c6a16a1088013af39dc8938b61d2fb8a66ba9a5cc946956b7622735b31'
+STDIO_LINE_PATHS=['compat/bionic/stdio_bionic.cc','compat/posix/include/gesher/stdio.h',
+                  'compat/posix/src/misc.cc','compat/posix/src/stdio_output.cc',
+                  'compat/posix/src/stdio_stream_buffer.h']
+def preceding_stdio_line_sources():
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'stdio-line-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==STDIO_LINE_QUALIFICATION_SHA256,'stdio line source qualification changed'
+ qualification=json.loads(raw)
+ assert qualification['baseline']=='6afcb6e671fc4f2d08a4a98220f9d9a906a327bf'
+ assert qualification['native_runtime_approval'] is False
+ assert qualification['paths']==STDIO_LINE_PATHS
+ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==STDIO_LINE_PATHS
+ patch=(folder/'stdio-line-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'stdio line transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STDIO_LINE_PATHS
+ current={path:(ROOT/path).read_bytes() for path in STDIO_LINE_PATHS}
+ for path,actual in current.items():
+  assert hashlib.sha256(actual).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-stdio-line-qualification-') as temporary:
+  work=Path(temporary)
+  for path,actual in current.items():
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(actual)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous={path:(work/path).read_bytes() for path in STDIO_LINE_PATHS}
+  for path,actual in previous.items():
+   expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
+   assert actual==expected and hashlib.sha256(actual).hexdigest()==qualification['previous_sha256'][path],path
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'stdio line forward reconstruction changed'
+ return previous
 # Bionic's independently reviewed memmem search changes only this include and
 # complete wrapper. Restore those exact bytes before applying the UNCHANGED
 # OFD qualification digest. Pin the new pure-search helper separately: no other
@@ -314,6 +352,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 '''),
 )
 def preceding_ofd_sources():
+ stdio_previous=preceding_stdio_line_sources()
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'ofd-stream-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
@@ -325,7 +364,7 @@ def preceding_ofd_sources():
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  for path,digest in qualification['source_sha256'].items():
-  actual=(ROOT/path).read_bytes()
+  actual=stdio_previous[path] if path in stdio_previous else (ROOT/path).read_bytes()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
@@ -526,6 +565,15 @@ def transition_negative_controls():
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
   (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
+  # Reject changes inside each admitted line-input source, including the new
+  # helper and ABI entry, and reject qualification/transition drift itself.
+  ('compat/bionic/stdio_bionic.cc',b'line != nullptr && n != nullptr && Orient(fp, -1)',b'Orient(fp, -1)'),
+  ('compat/posix/include/gesher/stdio.h',b'bool unlocked = false);',b'bool unlocked = true);'),
+  ('compat/posix/src/misc.cc',b'gesher::stdio::ReadDelimited(lineptr, n, delim, stream)',b'gesher::stdio::ReadDelimited(lineptr, n, 0, stream)'),
+  ('compat/posix/src/stdio_output.cc',b'"gesher_stdio_delimited_v1"',b'"gesher_stdio_delimited_v2"'),
+  ('compat/posix/src/stdio_stream_buffer.h',b'static_cast<unsigned char>(delimiter), span.size)',b'0, span.size)'),
+  ('tools/net-tcp-priority/qualified/stdio-line-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
+  ('tools/net-tcp-priority/qualified/stdio-line-source.patch',b'@@',b'@x'),
  ]
  for name,before,after in cases:
   target=ROOT/name

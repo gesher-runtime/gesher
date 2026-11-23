@@ -713,26 +713,10 @@ int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return SeekDiscardingPush
 // getline/getdelim: *line grows with the CRT's realloc, which the .so's
 // free (the shim's) accepts.
 int64_t BIONIC_SYSV Getdelim(char** line, size_t* n, int delim, void* f) {
-  if (line == nullptr || n == nullptr) return errno = kEINVAL, -1;
   FILE* fp = F(f);
   StreamLock lock(fp);
-  if (Orient(fp, -1) == 0) return -1;
-  size_t len = 0;
-  int c;
-  while ((c = gesher::stdio::Get(fp, true)) != EOF) {
-    if (*line == nullptr || len + 2 > *n) {
-      size_t cap = *n < 120 ? 120 : *n * 2;
-      char* grown = static_cast<char*>(std::realloc(*line, cap));
-      if (grown == nullptr) return errno = kENOMEM, -1;
-      *line = grown;
-      *n = cap;
-    }
-    (*line)[len++] = static_cast<char>(c);
-    if (c == delim) break;
-  }
-  if (len == 0) return -1;
-  (*line)[len] = 0;
-  return static_cast<int64_t>(len);
+  if (line != nullptr && n != nullptr && Orient(fp, -1) == 0) return -1;
+  return gesher::stdio::ReadDelimited(line, n, delim, fp, true);
 }
 int64_t BIONIC_SYSV Getline(char** line, size_t* n, void* f) { return Getdelim(line, n, '\n', f); }
 
@@ -892,18 +876,7 @@ char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) {
   if (n <= 0) return errno = kEINVAL, nullptr;
   FILE* stream = F(f);
   if (Orient(stream, -1) == 0) return nullptr;
-  int count = 0;
-  while (count < n - 1) {
-    int c = gesher::stdio::Get(stream, true);
-    if (c == EOF) {
-      if (count == 0) return nullptr;
-      break;
-    }
-    s[count++] = static_cast<char>(c);
-    if (c == '\n') break;
-  }
-  s[count] = 0;
-  return s;
+  return gesher::stdio::ReadLine(s, n, stream, true);
 }
 
 size_t BIONIC_SYSV Fread(void* buf, size_t size, size_t n, void* f) {

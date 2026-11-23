@@ -35,6 +35,14 @@ static void check(const char* name, int ok) {
 }
 static bool fail_fdopen;
 static std::atomic<int> allocation_failure{-1};
+static thread_local size_t line_reallocations;
+static thread_local bool line_fail_realloc;
+extern "C" void* __real_realloc(void*, size_t);
+extern "C" void* __wrap_realloc(void* bytes, size_t size) {
+  ++line_reallocations;
+  if (line_fail_realloc) return errno = ENOMEM, nullptr;
+  return __real_realloc(bytes, size);
+}
 void* operator new(size_t count) {
   int remaining = allocation_failure.load();
   if (remaining >= 0 && allocation_failure.fetch_sub(1) == 0) throw std::bad_alloc();
@@ -105,8 +113,10 @@ static constexpr unsigned HANDLE_FLAG_INHERIT = 1;
 static constexpr int _O_BINARY = 0;
 static constexpr int _O_NOINHERIT = 0;
 static thread_local int last_error;
+static thread_local uint64_t registry_visits;
 static void SetLastError(int value) { last_error = value; }
 static int InitOnceExecuteOnce(PINIT_ONCE once, int (*callback)(PINIT_ONCE, void*, void**), void*, void**) {
+  ++registry_visits;
   std::lock_guard<std::mutex> lock(once->mutex);
   if (once->ready) return TRUE;
   once->ready = callback(once, nullptr, nullptr) != FALSE;
@@ -196,12 +206,30 @@ FILE* adapter_fdopen(int, const char*);
 @STDIO_ADAPTER@
 
 static void* GetProcAddress(HANDLE, const char* name) {
+#if @HAS_DELIMITED_OWNER@
+  if (strcmp(name, "gesher_stdio_delimited_v1") == 0)
+    return reinterpret_cast<void*>(&gesher::stdio::gesher_stdio_delimited_v1);
+#endif
   if (strcmp(name, "gesher_stdio_output_owner_v1") != 0) std::abort();
   return reinterpret_cast<void*>(&gesher::stdio::gesher_stdio_output_owner_v1);
 }
 using StreamLock = gesher::stdio::StreamGuard;
 @PARSE_MODE@
 @OPEN_CLOSE@
+
+@NATIVE_DELIMITED@
+namespace guest_line {
+#define BIONIC_SYSV
+static constexpr int kEINVAL = EINVAL, kENOMEM = ENOMEM;
+static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
+@GUEST_STREAM_LOCK@
+// Bionic metadata/orientation allocation is independently exercised by
+// test_stdio_lifetime_contracts.py. Keep this envelope on shared stream I/O.
+static int Orient(FILE* stream, int mode) { return gesher::stdio::Orient(stream, mode, true); }
+@GUEST_DELIMITED@
+@GUEST_LINE@
+#undef BIONIC_SYSV
+}
 
 // The envelope's formatting backend uses the host formatter, then the exact
 // fputc/fputwc callbacks used by MinGW's formatter in production.
@@ -257,6 +285,7 @@ extern "C" int __real___mingw_vfwscanf(FILE*, const wchar_t*, va_list) { return 
 #define GESHER_STDIO_HOST_ENVELOPE 1
 #include "stdio_ofd_contract.inc"
 #include "stdio_cancel_contract.inc"
+#include "stdio_line_input_host.inc"
 
 static void TestAllocationOwnership() {
   char path[] = "stdio-allocation-XXXXXX";
@@ -348,10 +377,19 @@ int main(int argc, char** argv) {
     if (!exit_stream || adapter_fputs("early", exit_stream) < 0) return 2;
     return 0;
   }
+  if (argc == 2 && std::strcmp(argv[1], "--line-benchmark") == 0) return BenchmarkLines();
+  if (argc == 2 && std::strcmp(argv[1], "--line-only") == 0) {
+    TestLines();
+    char summary[128];
+    int count = snprintf(summary, sizeof(summary), "stdio line input: %d checks, %d failures\n", checks, failures);
+    write(STDOUT_FILENO, summary, static_cast<size_t>(count));
+    return failures ? 1 : 0;
+  }
   test_stdio_ofd_contracts();
   TestAllocationOwnership();
   test_stdio_cancel_contracts();
   TestCrtLockComposition();
+  TestLines();
   char summary[128];
   int count = snprintf(summary, sizeof(summary), "stdio production adapter: %d checks, %d failures\n", checks, failures);
   if (count < 0 || static_cast<size_t>(count) >= sizeof(summary) ||

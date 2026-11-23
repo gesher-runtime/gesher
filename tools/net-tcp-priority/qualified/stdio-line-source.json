@@ -1,0 +1,29 @@
+{
+  "baseline": "6afcb6e671fc4f2d08a4a98220f9d9a906a327bf",
+  "paths": [
+    "compat/bionic/stdio_bionic.cc",
+    "compat/posix/include/gesher/stdio.h",
+    "compat/posix/src/misc.cc",
+    "compat/posix/src/stdio_output.cc",
+    "compat/posix/src/stdio_stream_buffer.h"
+  ],
+  "patch_sha256": "83a6115770bb011905f849e29e95852c6e2ad85fdfb806b96e92fd3ab6cb5c0d",
+  "previous_sha256": {
+    "compat/bionic/stdio_bionic.cc": "bb8aba18f5794919f0338eb42df7807b89203ffd3371f9e3a53aad40982ecfa1",
+    "compat/posix/include/gesher/stdio.h": "981f2e735df34e3ab4ef1086f040cee6fb51a3a80c1f85edccb46865ecea3051",
+    "compat/posix/src/misc.cc": "a3fd033158c7c9b58ea1332d44dbbac4b89e3917067d58b46bf7b1987a1da521",
+    "compat/posix/src/stdio_output.cc": "7ed987581cbb4b8449293235d0b0fafa8fd6725b06820a97c23924bff949ba97",
+    "compat/posix/src/stdio_stream_buffer.h": "f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d"
+  },
+  "source_sha256": {
+    "compat/bionic/stdio_bionic.cc": "9feb427b80d8b4334c546be8f6e2064bcf5e8b78a6e8e50cb15f3f72dbf64047",
+    "compat/posix/include/gesher/stdio.h": "746e9b6891cb5415ac75e9343256233bda2c5b91ef6ae058c7e728bfd6094744",
+    "compat/posix/src/misc.cc": "c2d92bf468ba6bb52087c7d436a84a8acfe5d039c3f3c4d26925a921a38c8146",
+    "compat/posix/src/stdio_output.cc": "03774dc129b051e0b0abe2e1e94b76472e6f6cfce7af8600a7e6af4229a2acde",
+    "compat/posix/src/stdio_stream_buffer.h": "8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d"
+  },
+  "contract_evidence": [
+    "docs/research/stdio-line-input-2026-11-23.md"
+  ],
+  "native_runtime_approval": false
+}

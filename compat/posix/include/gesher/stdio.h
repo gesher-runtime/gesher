@@ -23,6 +23,8 @@ int TryLock(FILE* stream);
 size_t Read(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked = false);
 size_t Write(const void* bytes, size_t size, size_t count, FILE* stream, bool unlocked = false);
 char* ReadLine(char* bytes, int count, FILE* stream, bool unlocked = false);
+int64_t ReadDelimited(char** bytes, size_t* capacity, int delimiter, FILE* stream,
+                      bool unlocked = false);
 int Get(FILE* stream, bool unlocked = false);
 int Put(int value, FILE* stream, bool unlocked = false);
 int Flush(FILE* stream, bool unlocked = false);

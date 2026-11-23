@@ -1,0 +1,782 @@
+{
+  "baseline_commit": "6afcb6e671fc4f2d08a4a98220f9d9a906a327bf",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "g++ (Debian 14.2.0-19) 14.2.0",
+  "boundary": "Linux real descriptors and production shared stdio adapter; Windows owner/FILE allocation and Bionic metadata orientation are declared host boundaries; no Windows or product timing claim.",
+  "operations": [
+    "native getdelim",
+    "Bionic getdelim",
+    "native fgets",
+    "Bionic fgets_unlocked"
+  ],
+  "runs": [
+    {
+      "label": "baseline",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark",
+        "--source-ref",
+        "6afcb6e6"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 76ad9b250d1ecf9615501a3f0d08121e318e0432e61448faa87c33d9ee4b2e94\nNATIVE_DELIMITED SHA256 1c6d07fe9a4052b9324a4066174225efed4aaed69bd44960ef87f4ccf131a7ad\nGUEST_DELIMITED SHA256 44534bb6ceaac10acfadab03ed844e9a65a35f2bf77885ef3b2b47e8f6822e99\nGUEST_LINE SHA256 6e0f069869f9f134e738c47290d7918c533274e80b63bd371f8cb169d681e7d2\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=132831 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=180998 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=150367 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=131518 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=128244 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=136297 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=131573 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=133588 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=136172 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=137534 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25205 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=26435 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25247 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25618 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25449 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=129916 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=132765 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=130984 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=141415 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=129765 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 132831,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 180998,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 150367,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 131518,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 128244,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 136297,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 131573,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 133588,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 136172,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 137534,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25205,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 26435,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25247,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25618,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25449,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 129916,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 132765,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 130984,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 141415,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 129765,
+          "checksum": 7232
+        }
+      ]
+    },
+    {
+      "label": "candidate",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 caae12393427650d4d42c635f5cc2daa94a05d33e0c095beaf4a566b6998d67d\nNATIVE_DELIMITED SHA256 4acf63dba8206413b3fb7660bc196f74487711bb3ca5bd28785cdf0848130453\nGUEST_DELIMITED SHA256 88d421038161a43b2fc6b5e415fa2cf757f23652496dab5f68d84f9af27bd7bf\nGUEST_LINE SHA256 43d02d59aa48950ff9ba149d36fde289a688672a1adc15d177ef2a47ed2a6ed5\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=64 reallocations=5 microseconds=1005 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=825 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=634 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=648 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=631 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=128 reallocations=5 microseconds=797 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=722 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=879 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=585 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=618 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=912 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=603 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=615 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=651 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=618 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=128 reallocations=0 microseconds=753 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=657 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=583 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=606 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=681 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 5,
+          "microseconds": 1005,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 825,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 634,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 648,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 631,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 5,
+          "microseconds": 797,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 722,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 879,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 585,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 618,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 912,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 603,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 615,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 651,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 618,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 753,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 657,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 583,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 606,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 681,
+          "checksum": 7232
+        }
+      ]
+    },
+    {
+      "label": "candidate",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 caae12393427650d4d42c635f5cc2daa94a05d33e0c095beaf4a566b6998d67d\nNATIVE_DELIMITED SHA256 4acf63dba8206413b3fb7660bc196f74487711bb3ca5bd28785cdf0848130453\nGUEST_DELIMITED SHA256 88d421038161a43b2fc6b5e415fa2cf757f23652496dab5f68d84f9af27bd7bf\nGUEST_LINE SHA256 43d02d59aa48950ff9ba149d36fde289a688672a1adc15d177ef2a47ed2a6ed5\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=64 reallocations=5 microseconds=1249 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=802 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=678 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=762 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=709 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=128 reallocations=5 microseconds=826 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=652 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=603 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=626 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=672 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=763 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=674 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=604 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=642 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=674 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=128 reallocations=0 microseconds=808 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=645 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=680 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=610 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=742 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 5,
+          "microseconds": 1249,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 802,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 678,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 762,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 709,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 5,
+          "microseconds": 826,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 652,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 603,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 626,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 672,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 763,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 674,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 604,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 642,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 674,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 808,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 645,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 680,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 610,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 742,
+          "checksum": 7232
+        }
+      ]
+    },
+    {
+      "label": "baseline",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark",
+        "--source-ref",
+        "6afcb6e6"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 76ad9b250d1ecf9615501a3f0d08121e318e0432e61448faa87c33d9ee4b2e94\nNATIVE_DELIMITED SHA256 1c6d07fe9a4052b9324a4066174225efed4aaed69bd44960ef87f4ccf131a7ad\nGUEST_DELIMITED SHA256 44534bb6ceaac10acfadab03ed844e9a65a35f2bf77885ef3b2b47e8f6822e99\nGUEST_LINE SHA256 6e0f069869f9f134e738c47290d7918c533274e80b63bd371f8cb169d681e7d2\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=134199 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=132979 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=130341 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=127930 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=130988 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=133842 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=166792 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=136324 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=135212 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=134201 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24963 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24351 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24252 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24975 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24843 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=139223 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=133424 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=135973 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=131392 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=134793 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 134199,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 132979,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 130341,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 127930,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 130988,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 133842,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 166792,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 136324,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 135212,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 134201,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24963,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24351,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24252,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24975,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24843,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 139223,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 133424,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 135973,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 131392,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 134793,
+          "checksum": 7232
+        }
+      ]
+    }
+  ]
+}

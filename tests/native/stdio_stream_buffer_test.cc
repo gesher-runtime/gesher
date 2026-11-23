@@ -217,6 +217,82 @@ static void NonblockingPipes() {
   close(pipes[0]);
 }
 
+static void DelimitedGrowthAndErrors() {
+  auto writer = [](const char*, unsigned) { return errno = EBADF, -1; };
+  auto reallocate = [](void* bytes, size_t size) { return std::realloc(bytes, size); };
+  // The allocator is the production callback boundary, not a replacement of
+  // the buffer algorithm. Exercise overflow before any allocation is allowed.
+  int attempts = 0;
+  auto fail = [&](void*, size_t) -> void* { ++attempts; return errno = ENOMEM, nullptr; };
+  char* bytes = nullptr;
+  size_t capacity = 0;
+  constexpr size_t limit = static_cast<size_t>(PTRDIFF_MAX);
+  CHECK(gesher::stdio::detail::GrowLine(&bytes, &capacity, limit, 1, fail) == -1 && errno == EOVERFLOW);
+  CHECK(gesher::stdio::detail::GrowLine(&bytes, &capacity, limit - 1, 1, fail) == -1 && errno == EOVERFLOW);
+  CHECK(gesher::stdio::detail::GrowLine(&bytes, &capacity, 0, SIZE_MAX, fail) == -1 && errno == EOVERFLOW);
+  CHECK(attempts == 0 && bytes == nullptr && capacity == 0);
+  CHECK(gesher::stdio::detail::GrowLine(&bytes, &capacity, limit - 2, 1, fail) == -1 && errno == ENOMEM);
+  CHECK(attempts == 1 && bytes == nullptr && capacity == 0);
+
+  for (size_t chunk : {size_t{1}, size_t{3}, size_t{128}, size_t{4096}}) {
+    StreamBuffer stream(Access::kRead);
+    std::vector<char> storage(chunk);
+    CHECK(stream.Configure(Mode::kFull, storage.data(), storage.size(), writer) == 0);
+    const std::string data = std::string(8192, 'x') + '\n' + "suffix";
+    size_t cursor = 0, calls = 0;
+    auto reader = [&](char* out, unsigned bound) {
+      ++calls;
+      if (calls == 1) return errno = EINTR, -1;
+      size_t size = std::min(static_cast<size_t>(bound), data.size() - cursor);
+      std::memcpy(out, data.data() + cursor, size);
+      cursor += size;
+      return static_cast<int>(size);
+    };
+    bytes = nullptr; capacity = 0;
+    CHECK(stream.ReadDelimited(&bytes, &capacity, '\n', reader, writer, reallocate) == 8193);
+    CHECK(capacity == 16384 && std::memcmp(bytes, data.data(), 8193) == 0 && bytes[8193] == 0);
+    CHECK(std::all_of(bytes + 8194, bytes + capacity, [](char c) { return c == 0; }));
+    CHECK(cursor - stream.Unread() == 8193 && !stream.Error() && !stream.Eof());
+    CHECK(stream.ReadDelimited(&bytes, &capacity, '\n', reader, writer, reallocate) == 6 &&
+          std::memcmp(bytes, "suffix", 7) == 0 && stream.Eof());
+    std::free(bytes);
+  }
+
+  StreamBuffer pushed(Access::kRead);
+  CHECK(pushed.Unget('\n', writer) == '\n' && pushed.Unget('!', writer) == '!');
+  int reads = 0;
+  auto no_input = [&](char*, unsigned) { ++reads; return 0; };
+  bytes = nullptr; capacity = 0;
+  CHECK(pushed.ReadDelimited(&bytes, &capacity, '\n', no_input, writer, fail) == -1 &&
+        pushed.Unread() == 2 && reads == 0 && pushed.Error());
+  pushed.Clear();
+  CHECK(pushed.ReadDelimited(&bytes, &capacity, '\n', no_input, writer, reallocate) == 2 &&
+        std::memcmp(bytes, "!\n", 3) == 0 && pushed.Unread() == 0 && reads == 0);
+  std::free(bytes);
+
+  // A failing growth after a completed span retains that prefix, but the
+  // next span remains unread for retry. Input isn't lost to a failed realloc.
+  StreamBuffer partial(Access::kRead);
+  char storage[128];
+  CHECK(partial.Configure(Mode::kFull, storage, sizeof(storage), writer) == 0);
+  const std::string record(300, 'p');
+  size_t position = 0;
+  auto reader = [&](char* out, unsigned bound) {
+    size_t size = std::min(static_cast<size_t>(bound), record.size() - position);
+    std::memcpy(out, record.data() + position, size); position += size; return static_cast<int>(size);
+  };
+  bytes = static_cast<char*>(std::malloc(129)); capacity = 129;
+  std::memset(bytes, 0x55, capacity);
+  char* original = bytes;
+  CHECK(partial.ReadDelimited(&bytes, &capacity, '\n', reader, writer, fail) == -1 &&
+        bytes == original && capacity == 129 && position - partial.Unread() == 128);
+  CHECK(std::memcmp(bytes, record.data(), 128) == 0 && bytes[128] == 0x55);
+  partial.Clear();
+  CHECK(partial.ReadDelimited(&bytes, &capacity, '\n', reader, writer, reallocate) == 172 &&
+        std::memcmp(bytes, record.data() + 128, 172) == 0 && bytes[172] == 0);
+  std::free(bytes);
+}
+
 int main() {
   AppendAndPosition();
   PermissionsFlagsAndPushback();
@@ -224,6 +300,7 @@ int main() {
   ShortWritesAndFailures();
   AndroidEofRetry();
   NonblockingPipes();
+  DelimitedGrowthAndErrors();
   std::printf("stdio production core: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

@@ -292,17 +292,16 @@ char* LineLocal(char* bytes, int count, FILE* stream, bool unlocked) {
   if (count <= 0) std::abort();  // Bionic fgets rejects a nonpositive bound fatally.
   AccessStream state(stream, unlocked);
   if (!state) return nullptr;
-  state->buffer.Orient(-1);
   state->line_output.store(false, std::memory_order_release);
-  int used = 0;
-  while (used < count - 1) {
-    int value = state->buffer.Get(Reader(state.Get()), Writer(state->fd));
-    if (value == EOF) { if (!used) return nullptr; break; }
-    bytes[used++] = static_cast<char>(value);
-    if (value == '\n') break;
-  }
-  bytes[used] = '\0';
-  return bytes;
+  return state->buffer.ReadLine(bytes, count, Reader(state.Get()), Writer(state->fd));
+}
+int64_t DelimitedLocal(char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
+  AccessStream state(stream, unlocked);
+  if (!state) return -1;
+  state->line_output.store(false, std::memory_order_release);
+  auto reallocate = [](void* prior, size_t size) { return std::realloc(prior, size); };
+  return state->buffer.ReadDelimited(bytes, capacity, delimiter, Reader(state.Get()),
+                                     Writer(state->fd), reallocate);
 }
 int UngetLocal(int character, FILE* stream) {
   AccessStream state(stream, false);
@@ -522,6 +521,12 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
       PrintLocal, PrintWideLocal, ScanLocal, ScanWideLocal};
   return &api;
 }
+// A separate versioned entry avoids extending the existing v1 owner table.
+// All modules still use the same registry and descriptor-backed input state.
+extern "C" __declspec(dllexport) int64_t gesher_stdio_delimited_v1(
+    char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
+  return DelimitedLocal(bytes, capacity, delimiter, stream, unlocked);
+}
 namespace {
 // Register before ordinary application constructors register their destructors
 // or atexit callbacks. A lazy registration during the first fopen would flush
@@ -556,6 +561,13 @@ size_t Write(const void* bytes, size_t size, size_t count, FILE* stream, bool un
   return Owner()->write(bytes, size, count, stream, unlocked);
 }
 char* ReadLine(char* bytes, int count, FILE* stream, bool unlocked) { return Owner()->line(bytes, count, stream, unlocked); }
+int64_t ReadDelimited(char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
+  using Read = int64_t (*)(char**, size_t*, int, FILE*, bool);
+  static auto read = reinterpret_cast<Read>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(nullptr), "gesher_stdio_delimited_v1")));
+  if (!read) std::abort();
+  return read(bytes, capacity, delimiter, stream, unlocked);
+}
 int Get(FILE* stream, bool unlocked) {
   unsigned char value;
   return Read(&value, 1, 1, stream, unlocked) == 1 ? value : EOF;
