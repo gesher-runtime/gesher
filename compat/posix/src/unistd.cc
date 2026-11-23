@@ -781,7 +781,13 @@ char* realpath(const char* path, char* resolved_path) {
       gesher::FailWithLastError();
       return nullptr;
     }
-    bool ok = FinalPath(h, &out);
+    bool ok;
+    if (rooted.drop_alias) {
+      out = gesher::LinuxPath(wpath.c_str());
+      ok = true;
+    } else {
+      ok = FinalPath(h, &out);
+    }
     CloseHandle(h);
     if (!ok) return nullptr;
   } else if (kind != gesher::PathKind::kVirtual) {

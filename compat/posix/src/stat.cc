@@ -106,6 +106,7 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
           const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
           if (error != 0) return errno = error, -1;
           const int result = FromHandle(h, buf);
+          if (result == 0 && rooted.drop_alias) buf->st_mode &= ~0222;
           CloseHandle(h);
           return result;
         }
@@ -184,8 +185,11 @@ int fstat(int fd, struct stat* buf) {
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE h = snapshot->handle;
   switch (GetFileType(h)) {
-    case FILE_TYPE_DISK:
-      return FromHandle(h, buf);
+    case FILE_TYPE_DISK: {
+      const int result = FromHandle(h, buf);
+      if (result == 0 && !gesher::DropDescriptorPath(snapshot).empty()) buf->st_mode &= ~0222;
+      return result;
+    }
     case FILE_TYPE_PIPE:
       Clear(buf);
       buf->st_mode = S_IFIFO | 0600;

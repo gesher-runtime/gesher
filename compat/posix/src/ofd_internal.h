@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <windows.h>
 
 namespace gesher {
@@ -40,6 +41,8 @@ struct OpenFileDescription {
   HANDLE pipe_mutex = nullptr;
   std::mutex mutex;
   std::shared_ptr<RevocableFileGroup> revocation;
+  // Immutable once the new descriptor is published. Aliases share it via this OFD.
+  std::wstring drop_path;
   ~OpenFileDescription();
   int Flags() const;
   void SetFlags(int flags);

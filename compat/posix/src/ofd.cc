@@ -605,6 +605,11 @@ DescriptorSnapshotPtr CaptureFileHandle(HANDLE file) {
   const auto* owner = Owner();
   return owner ? owner->capture_handle(file) : DescriptorSnapshotPtr{};
 }
+std::wstring DropDescriptorPath(const DescriptorSnapshotPtr& descriptor) {
+  if (!descriptor || !descriptor->description) return {};
+  std::lock_guard<std::mutex> guard(descriptor->description->mutex);
+  return descriptor->description->drop_path;
+}
 int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_exec) {
   const auto* owner = Owner();
   return owner ? owner->attach(snapshot, close_on_exec) : -1;

@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index 4a2bde46d..dd824c771 100644
+index 3995dbb31..1927591b5 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -80,0 +81 @@ bool g_record_only = false;
@@ -72,17 +72,17 @@ index 4a2bde46d..dd824c771 100644
 @@ -2131 +2146 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
 -  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
 +  if (!ReplyRecordLock(pipe, 0) || !WaitForClient(pipe, true)) return;
-@@ -2571,0 +2587,2 @@ void Serve(HANDLE pipe) {
+@@ -2653,0 +2669,2 @@ void Serve(HANDLE pipe) {
 +        } else if (op == wire::kNetlinkInspection) {
 +          ServeNetlinkInspection(pipe, in);
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 93f84db15..be60c941b 100644
+index c0871558c..c95aacdc7 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -29,0 +30 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/netlink.cc
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index 6164b28ac..92d12bc4a 100644
+index aa76d46fd..e8325cdd6 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -776,0 +777,19 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
@@ -106,7 +106,7 @@ index 6164b28ac..92d12bc4a 100644
 +}
 +
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 2226e6903..494b383d6 100644
+index 2fbd2c7ee..7beaea004 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
 @@ -125,0 +126,2 @@ enum Op : uint32_t {

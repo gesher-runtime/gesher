@@ -328,6 +328,7 @@ int Access(const char* path, int mode, bool follow) {
     return 0;
   }
   const auto rooted = gesher::storage_root::Lookup(windows);
+  if (rooted.drop_alias && (mode & W_OK)) return errno = EACCES, -1;
   HANDLE h;
   if (rooted) {
     const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);

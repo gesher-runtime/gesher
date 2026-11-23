@@ -63,7 +63,7 @@ class GesherDropTarget : public IDropTarget {
 // Dispatches a drag event to the Android WindowSession for the given window handle.
 void DispatchDragToSession(HWND hwnd, int action, float x, float y,
                            const std::vector<std::wstring>* files,
-                           const std::wstring& text);
+                           const std::wstring& text, bool file_drag = false, bool hosted = false);
 
 }  // namespace windows
 }  // namespace gesher

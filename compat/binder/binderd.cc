@@ -2552,6 +2552,86 @@ bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
   return launch::Transfer(pipe, request->data(), length, false, deadline);
 }
 
+
+void ServeDropWorker(HANDLE pipe, In in) {
+  uint32_t version = 0;
+  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
+  const char* enabled = getenv("GESHER_SANDBOX_DROP_HOST");
+  if (enabled == nullptr || strcmp(enabled, "1") != 0) return;
+  const auto guest = g_peer_registry->Authenticate(pipe);
+  if (!guest || guest->role != peer::Role::kApplication ||
+      guest->generation.principal.container.size == 0) return;
+
+  // A native window needs one disposable STA worker. Bound both the per-guest
+  // and total process count even when an application never closes its pipes.
+  static std::mutex lock;
+  static std::map<std::pair<DWORD, uint64_t>, size_t> workers;
+  static size_t total = 0;
+  const auto id = std::pair{guest->generation.pid, guest->generation.birth};
+  {
+    std::lock_guard<std::mutex> guard(lock);
+    const auto found = workers.find(id);
+    if (total >= 64 || (found != workers.end() && found->second >= 16)) return;
+    ++workers[id];
+    ++total;
+  }
+  const auto settle = [&] {
+    std::lock_guard<std::mutex> guard(lock);
+    if (--workers[id] == 0) workers.erase(id);
+    --total;
+  };
+
+  wchar_t self[32768];
+  const DWORD length = GetModuleFileNameW(nullptr, self, std::size(self));
+  if (length == 0 || length >= std::size(self)) { settle(); return; }
+  std::wstring executable(self, length);
+  const auto separator = executable.find_last_of(L"\\/");
+  if (separator == std::wstring::npos) { settle(); return; }
+  executable.resize(separator + 1);
+  executable += L"gesher-drop-worker.exe";
+
+  const HANDLE current = GetCurrentProcess();
+  HANDLE worker_pipe = nullptr, worker_guest = nullptr;
+  const bool duplicated = DuplicateHandle(current, pipe, current, &worker_pipe, 0,
+      TRUE, DUPLICATE_SAME_ACCESS) && DuplicateHandle(current, guest->process.get(), current,
+      &worker_guest, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE | SYNCHRONIZE, TRUE, 0);
+  const peer::OwnedHandle pipe_copy(worker_pipe), guest_copy(worker_guest);
+  if (!duplicated) { settle(); return; }
+
+  HANDLE inherited[] = {worker_pipe, worker_guest};
+  SIZE_T attributes_size = 0;
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &attributes_size);
+  std::vector<BYTE> storage(attributes_size);
+  auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+  if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributes_size)) { settle(); return; }
+  const bool configured = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+      inherited, sizeof(inherited), nullptr, nullptr);
+  STARTUPINFOEXW startup{};
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.lpAttributeList = attributes;
+  PROCESS_INFORMATION child{};
+  wchar_t encoded[48];
+  swprintf(encoded, std::size(encoded), L" %llx %llx",
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(worker_pipe)),
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(worker_guest)));
+  std::wstring command = L"\"" + executable + L"\"" + encoded;
+  const bool started = configured && CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
+      CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &child);
+  DeleteProcThreadAttributeList(attributes);
+  if (started) {
+    CloseHandle(child.hThread);
+    const peer::OwnedHandle process(child.hProcess);
+    while (WaitForSingleObject(process.get(), 100) == WAIT_TIMEOUT) {
+      if (!g_peer_registry->Live(guest)) {
+        TerminateProcess(process.get(), ERROR_CANCELLED);
+        WaitForSingleObject(process.get(), INFINITE);
+        break;
+      }
+    }
+  }
+  settle();
+}
+
 void Serve(HANDLE pipe) {
   std::vector<uint8_t> msg;
   if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
@@ -2560,6 +2640,8 @@ void Serve(HANDLE pipe) {
     if (in.Get(&op) && in.Get(&magic) && magic == wire::kMagic) {
       if (op == wire::kEnrollChild) {
         ServeEnrollChild(pipe, in);
+      } else if (op == wire::kDropWorker) {
+        ServeDropWorker(pipe, in);
 #ifdef GESHER_RECORD_LOCK_BROKER
       } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
         ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);

@@ -930,6 +930,23 @@ HANDLE binder_endpoint::OpenCamera(bool info_only) {
   return OpenRecordDevice(wire::kCamera, info_only);
 }
 
+HANDLE binder_endpoint::OpenDropWorker() {
+  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return INVALID_HANDLE_VALUE;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
+  uint32_t request[] = {3 * sizeof(uint32_t), wire::kDropWorker, wire::kMagic, wire::kVersion};
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, GetTickCount64() + 2500)) {
+    return INVALID_HANDLE_VALUE;
+  }
+  const HANDLE connected = pipe.handle;
+  pipe.handle = INVALID_HANDLE_VALUE;
+  return connected;
+}
+
 int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
   if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
   const std::wstring name = RecordPipeName();

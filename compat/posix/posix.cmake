@@ -44,6 +44,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage_client.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/drop_mount.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/pthread.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/select.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/signal.cc

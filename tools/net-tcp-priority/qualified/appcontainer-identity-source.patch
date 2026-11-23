@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc..4a2bde4 100644
+index ee26bfc..3995dbb 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -54,0 +55,2 @@
@@ -621,7 +621,7 @@ index ee26bfc..4a2bde4 100644
 +                              g_peer_registry->Live(identity)))) {
 @@ -1968,0 +2468 @@ void ServeThread(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -2028,0 +2529,11 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -2028,0 +2529,91 @@ void ServeThread(HANDLE pipe, In in) {
 +bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
 +  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
@@ -633,10 +633,90 @@ index ee26bfc..4a2bde4 100644
 +  return launch::Transfer(pipe, request->data(), length, false, deadline);
 +}
 +
-@@ -2031 +2542 @@ void Serve(HANDLE pipe) {
++
++void ServeDropWorker(HANDLE pipe, In in) {
++  uint32_t version = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
++  const char* enabled = getenv("GESHER_SANDBOX_DROP_HOST");
++  if (enabled == nullptr || strcmp(enabled, "1") != 0) return;
++  const auto guest = g_peer_registry->Authenticate(pipe);
++  if (!guest || guest->role != peer::Role::kApplication ||
++      guest->generation.principal.container.size == 0) return;
++
++  // A native window needs one disposable STA worker. Bound both the per-guest
++  // and total process count even when an application never closes its pipes.
++  static std::mutex lock;
++  static std::map<std::pair<DWORD, uint64_t>, size_t> workers;
++  static size_t total = 0;
++  const auto id = std::pair{guest->generation.pid, guest->generation.birth};
++  {
++    std::lock_guard<std::mutex> guard(lock);
++    const auto found = workers.find(id);
++    if (total >= 64 || (found != workers.end() && found->second >= 16)) return;
++    ++workers[id];
++    ++total;
++  }
++  const auto settle = [&] {
++    std::lock_guard<std::mutex> guard(lock);
++    if (--workers[id] == 0) workers.erase(id);
++    --total;
++  };
++
++  wchar_t self[32768];
++  const DWORD length = GetModuleFileNameW(nullptr, self, std::size(self));
++  if (length == 0 || length >= std::size(self)) { settle(); return; }
++  std::wstring executable(self, length);
++  const auto separator = executable.find_last_of(L"\\/");
++  if (separator == std::wstring::npos) { settle(); return; }
++  executable.resize(separator + 1);
++  executable += L"gesher-drop-worker.exe";
++
++  const HANDLE current = GetCurrentProcess();
++  HANDLE worker_pipe = nullptr, worker_guest = nullptr;
++  const bool duplicated = DuplicateHandle(current, pipe, current, &worker_pipe, 0,
++      TRUE, DUPLICATE_SAME_ACCESS) && DuplicateHandle(current, guest->process.get(), current,
++      &worker_guest, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE | SYNCHRONIZE, TRUE, 0);
++  const peer::OwnedHandle pipe_copy(worker_pipe), guest_copy(worker_guest);
++  if (!duplicated) { settle(); return; }
++
++  HANDLE inherited[] = {worker_pipe, worker_guest};
++  SIZE_T attributes_size = 0;
++  InitializeProcThreadAttributeList(nullptr, 1, 0, &attributes_size);
++  std::vector<BYTE> storage(attributes_size);
++  auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
++  if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributes_size)) { settle(); return; }
++  const bool configured = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
++      inherited, sizeof(inherited), nullptr, nullptr);
++  STARTUPINFOEXW startup{};
++  startup.StartupInfo.cb = sizeof(startup);
++  startup.lpAttributeList = attributes;
++  PROCESS_INFORMATION child{};
++  wchar_t encoded[48];
++  swprintf(encoded, std::size(encoded), L" %llx %llx",
++      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(worker_pipe)),
++      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(worker_guest)));
++  std::wstring command = L"\"" + executable + L"\"" + encoded;
++  const bool started = configured && CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
++      CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &child);
++  DeleteProcThreadAttributeList(attributes);
++  if (started) {
++    CloseHandle(child.hThread);
++    const peer::OwnedHandle process(child.hProcess);
++    while (WaitForSingleObject(process.get(), 100) == WAIT_TIMEOUT) {
++      if (!g_peer_registry->Live(guest)) {
++        TerminateProcess(process.get(), ERROR_CANCELLED);
++        WaitForSingleObject(process.get(), INFINITE);
++        break;
++      }
++    }
++  }
++  settle();
++}
++
+@@ -2031 +2622 @@ void Serve(HANDLE pipe) {
 -  if (ReadMessage(pipe, &msg)) {
 +  if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
-@@ -2035,6 +2546,27 @@ void Serve(HANDLE pipe) {
+@@ -2035,6 +2626,29 @@ void Serve(HANDLE pipe) {
 -      if (op == wire::kHelloProc) {
 -        ServeProc(pipe, in);
 -      } else if (op == wire::kHelloThread) {
@@ -645,6 +725,8 @@ index ee26bfc..4a2bde4 100644
 -        ServeRights(pipe, in);
 +      if (op == wire::kEnrollChild) {
 +        ServeEnrollChild(pipe, in);
++      } else if (op == wire::kDropWorker) {
++        ServeDropWorker(pipe, in);
 +#ifdef GESHER_RECORD_LOCK_BROKER
 +      } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
 +        ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
@@ -670,7 +752,7 @@ index ee26bfc..4a2bde4 100644
 +        } else if (op == wire::kHelloRights) {
 +          ServeRights(pipe, in);
 +        }
-@@ -2052,0 +2585,10 @@ int main(int argc, char** argv) {
+@@ -2052,0 +2667,10 @@ int main(int argc, char** argv) {
 +  launch::Startup bootstrap;
 +  g_record_only = gesher::binder_bootstrap::ReadStartupRecord(&bootstrap) &&
 +      bootstrap.endpoint == launch::Endpoint::kRecordBroker;
@@ -681,12 +763,12 @@ index ee26bfc..4a2bde4 100644
 +  if (g_record_only) return EXIT_FAILURE;
 +#endif
 +  const bool protected_launch = g_record_only || launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap);
-@@ -2054 +2596,3 @@ int main(int argc, char** argv) {
+@@ -2054 +2678,3 @@ int main(int argc, char** argv) {
 -  if (argc > 1) {
 +  if (g_record_only) {
 +    device = "standalone record locks";
 +  } else if (argc > 1) {
-@@ -2061,24 +2605,29 @@ int main(int argc, char** argv) {
+@@ -2061,24 +2687,29 @@ int main(int argc, char** argv) {
 -  std::wstring name = wire::kPipePrefix;
 -  for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
 -
@@ -740,7 +822,7 @@ index ee26bfc..4a2bde4 100644
 +    if (g_rights_doorbell == nullptr || positions_section == nullptr) {
 +      Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
 +    }
-@@ -2091,2 +2640,28 @@ int main(int argc, char** argv) {
+@@ -2091,2 +2722,28 @@ int main(int argc, char** argv) {
 -  g_sandbox = gesher::appcontainer::Enabled();
 -  if (g_sandbox) {
 +  if (g_record_only) {
@@ -772,7 +854,7 @@ index ee26bfc..4a2bde4 100644
 +  g_sandbox = g_peer_registry || gesher::appcontainer::Enabled();
 +  if (g_sandbox && !g_record_only) {
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index d693bd9fe..a8bbb2f96 100644
+index d693bd9..a8bbb2f 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
 @@ -4,0 +5 @@
@@ -842,8 +924,16 @@ index d693bd9fe..a8bbb2f96 100644
 +    }
 +    pending.info = nullptr;
 +  }
+diff --git a/compat/posix/include/gesher/file_description.h b/compat/posix/include/gesher/file_description.h
+index a2c6ad6..e82420c 100644
+--- a/compat/posix/include/gesher/file_description.h
++++ b/compat/posix/include/gesher/file_description.h
+@@ -6,0 +7 @@
++#include <string>
+@@ -30,0 +32 @@ DescriptorSnapshotPtr CaptureFileHandle(HANDLE file);
++std::wstring DropDescriptorPath(const DescriptorSnapshotPtr& descriptor);
 diff --git a/compat/posix/include/gesher/system_properties.h b/compat/posix/include/gesher/system_properties.h
-index 3516cd627..78b746609 100644
+index 3516cd6..78b7466 100644
 --- a/compat/posix/include/gesher/system_properties.h
 +++ b/compat/posix/include/gesher/system_properties.h
 @@ -21,0 +22,3 @@ bool Initialize();
@@ -851,22 +941,23 @@ index 3516cd627..78b746609 100644
 +// the guest read access to. A contained process cannot prepare a grant.
 +std::wstring ReadOnlyAreaPath();
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 3492add71..93f84db15 100644
+index 3492add..c087155 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -12,0 +13 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/filesystem_capacity.cc
-@@ -42,0 +44,2 @@ add_library(gesher_posix STATIC
+@@ -42,0 +44,3 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage.cc
 +  ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage_client.cc
-@@ -133,0 +137,5 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc PROP
++  ${CMAKE_CURRENT_LIST_DIR}/src/drop_mount.cc
+@@ -133,0 +138,5 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc PROP
 +
 +add_executable(rooted_storage_probe ${CMAKE_SOURCE_DIR}/tests/sandbox/rooted-storage-probe.cc)
 +target_compile_options(rooted_storage_probe PRIVATE -Wall -Wextra -Werror)
 +target_link_options(rooted_storage_probe PRIVATE -municode)
 +target_link_libraries(rooted_storage_probe PRIVATE gesher_posix)
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index 2fe5f43..6164b28 100644
+index 2fe5f43..aa76d46 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -29,0 +30 @@
@@ -892,7 +983,7 @@ index 2fe5f43..6164b28 100644
 +      SetLastError(ERROR_ACCESS_DENIED);
 +      return INVALID_HANDLE_VALUE;
 +    }
-@@ -762,0 +777,189 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
+@@ -762,0 +777,206 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 +bool binder_endpoint::EnrollChild(HANDLE process) {
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
 +  const std::wstring name = RecordPipeName();
@@ -1030,6 +1121,23 @@ index 2fe5f43..6164b28 100644
 +  return OpenRecordDevice(wire::kCamera, info_only);
 +}
 +
++HANDLE binder_endpoint::OpenDropWorker() {
++  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return INVALID_HANDLE_VALUE;
++  RecordPipe pipe{ConnectPipe(name)};
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (pipe.handle == INVALID_HANDLE_VALUE ||
++      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
++  uint32_t request[] = {3 * sizeof(uint32_t), wire::kDropWorker, wire::kMagic, wire::kVersion};
++  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, GetTickCount64() + 2500)) {
++    return INVALID_HANDLE_VALUE;
++  }
++  const HANDLE connected = pipe.handle;
++  pipe.handle = INVALID_HANDLE_VALUE;
++  return connected;
++}
++
 +int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
 +  if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
 +  const std::wstring name = RecordPipeName();
@@ -1082,14 +1190,14 @@ index 2fe5f43..6164b28 100644
 +  return !error && reply.size() != sizeof(int32_t) ? EPROTO : error;
 +}
 +
-@@ -782 +985 @@ int OpenBinder(int flags) {
+@@ -782 +1002 @@ int OpenBinder(int flags) {
 -  hello.Put<uint32_t>(wire::kHelloProc);
 +  hello.Put<uint32_t>(binder_endpoint::Current().IsOperator() ? wire::kHelloOperator : wire::kHelloProc);
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 50a85fb..2226e69 100644
+index 50a85fb..2fbd2c7 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
-@@ -111,0 +112,29 @@ enum Op : uint32_t {
+@@ -111,0 +112,31 @@ enum Op : uint32_t {
 +  // Same framing as kHelloProc. The protected broker authenticates the
 +  // Windows device operator and assigns Android shell; the fields grant no role.
 +  kHelloOperator = 12,
@@ -1119,35 +1227,38 @@ index 50a85fb..2226e69 100644
 +  kAudioCapture = 22,
 +  // Private metadata or capture connection backed by the Windows camera.
 +  kCamera = 23,
-@@ -147,0 +177 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
++  // Authenticated worker for Windows file drops.
++  kDropWorker = 24,
+@@ -147,0 +179 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
 +constexpr const wchar_t kStandaloneRecordPipe[] = L"\\\\.\\pipe\\gesher-binder-standalone-record-";
 diff --git a/compat/posix/src/dirent.cc b/compat/posix/src/dirent.cc
-index 572f64140..56b19af0f 100644
+index 572f641..dfd3a4d 100644
 --- a/compat/posix/src/dirent.cc
 +++ b/compat/posix/src/dirent.cc
 @@ -11,0 +12,3 @@
 +#include <cstddef>
 +#include <cstdint>
 +#include <memory>
-@@ -15,0 +19 @@
+@@ -15,0 +19,2 @@
 +#include "rooted_storage_client.h"
-@@ -18,0 +23,6 @@ struct gesher_DIR {
++#include <gesher/file_description.h>
+@@ -18,0 +24,6 @@ struct gesher_DIR {
 +  struct RootedScan {
 +    alignas(FILE_ID_BOTH_DIR_INFO) unsigned char bytes[16384]{};
 +    size_t offset = sizeof(bytes);
 +    bool restart = true;
 +    bool finished = false;
 +  };
-@@ -25,0 +36 @@ struct gesher_DIR {
+@@ -25,0 +37 @@ struct gesher_DIR {
 +  std::unique_ptr<RootedScan> rooted;
-@@ -35,0 +47,6 @@ bool Start(DIR* dir) {
+@@ -35,0 +48,6 @@ bool Start(DIR* dir) {
 +  if (dir->rooted) {
 +    dir->rooted->offset = sizeof(dir->rooted->bytes);
 +    dir->rooted->restart = true;
 +    dir->rooted->finished = false;
 +    return true;
 +  }
-@@ -56,0 +74,33 @@ void Fill(struct dirent* e, const std::string& name, unsigned char type, long lo
+@@ -56,0 +75,33 @@ void Fill(struct dirent* e, const std::string& name, unsigned char type, long lo
 +struct dirent* ReadRooted(DIR* dir) {
 +  auto& scan = *dir->rooted;
 +  if (scan.finished) return nullptr;
@@ -1181,7 +1292,7 @@ index 572f64140..56b19af0f 100644
 +  return &dir->entry;
 +}
 +
-@@ -70,0 +121,15 @@ DIR* Open(const char* name, int fd) {
+@@ -70,0 +122,15 @@ DIR* Open(const char* name, int fd) {
 +    const auto rooted = gesher::storage_root::Lookup(dir->path);
 +    if (rooted) {
 +      if (rooted.error != 0) {
@@ -1197,21 +1308,28 @@ index 572f64140..56b19af0f 100644
 +      dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
 +      return dir;
 +    }
-@@ -113,0 +179,3 @@ DIR* fdopendir(int fd) {
-+  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
-+    return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
-+  }
-@@ -123,0 +192 @@ struct dirent* readdir(DIR* dir) {
+@@ -104,2 +170,2 @@ DIR* fdopendir(int fd) {
+-  HANDLE h = gesher::HandleFromFd(fd);
+-  if (h == INVALID_HANDLE_VALUE) {
++  const auto descriptor = gesher::CaptureDescriptor(fd);
++  if (!descriptor) {
+@@ -108,0 +175 @@ DIR* fdopendir(int fd) {
++  const HANDLE h = descriptor->handle;
+@@ -113,0 +181,3 @@ DIR* fdopendir(int fd) {
++  auto scoped = gesher::DropDescriptorPath(descriptor);
++  if (scoped.empty()) scoped = gesher::storage_root::DescriptorPath(h);
++  if (!scoped.empty()) return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
+@@ -123,0 +194 @@ struct dirent* readdir(DIR* dir) {
 +  if (dir->rooted) return ReadRooted(dir);
 diff --git a/compat/posix/src/errno.cc b/compat/posix/src/errno.cc
-index 8b90d580b..c2d782802 100644
+index 8b90d58..c2d7828 100644
 --- a/compat/posix/src/errno.cc
 +++ b/compat/posix/src/errno.cc
 @@ -72 +72 @@ extern "C" int gesher_rmdir(const char* path) {
 -  if (!gesher::DiskPath(path, &windows, ENOTDIR)) return -1;  // ENOTDIR: a device or /proc file
 +  if (!gesher::DiskPath(path, &windows, ENOTDIR, true)) return -1;  // ENOTDIR: a device or /proc file
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index c001fa738..5660333f2 100644
+index c001fa7..5660333 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
 @@ -38,0 +39,2 @@
@@ -1327,7 +1445,7 @@ index c001fa738..5660333f2 100644
 @@ -223,0 +323 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
 +    if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
-index a0a55f2a4..a6eb96f75 100644
+index a0a55f2..e02f17e 100644
 --- a/compat/posix/src/fsops.cc
 +++ b/compat/posix/src/fsops.cc
 @@ -27,0 +28 @@
@@ -1356,7 +1474,7 @@ index a0a55f2a4..a6eb96f75 100644
 +    CloseHandle(h);
 +    return result;
 +  }
-@@ -302 +319,18 @@ int Access(const char* path, int mode, bool follow) {
+@@ -302 +319,19 @@ int Access(const char* path, int mode, bool follow) {
 -  HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
 +  if (gesher::standalone_input::Current().Matches(windows)) {
 +    return (mode & (W_OK | X_OK)) != 0 ? (errno = EACCES, -1) : 0;
@@ -1370,15 +1488,16 @@ index a0a55f2a4..a6eb96f75 100644
 +    return 0;
 +  }
 +  const auto rooted = gesher::storage_root::Lookup(windows);
++  if (rooted.drop_alias && (mode & W_OK)) return errno = EACCES, -1;
 +  HANDLE h;
 +  if (rooted) {
 +    const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
 +    if (error != 0) return errno = error, -1;
 +  } else {
 +    h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
-@@ -306,0 +341 @@ int Access(const char* path, int mode, bool follow) {
+@@ -306,0 +342 @@ int Access(const char* path, int mode, bool follow) {
 +  }
-@@ -376,0 +412,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
+@@ -376,0 +413,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
 +      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +        HANDLE h;
 +        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
@@ -1386,7 +1505,7 @@ index a0a55f2a4..a6eb96f75 100644
 +        CloseHandle(h);
 +        return errno = EINVAL, -1;  // The rooted view does not traverse reparse points.
 +      }
-@@ -522 +564,13 @@ int remove(const char* path) {
+@@ -522 +565,13 @@ int remove(const char* path) {
 -  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
 +  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;
 +  if (const auto rooted = gesher::storage_root::Lookup(windows)) {
@@ -1401,16 +1520,16 @@ index a0a55f2a4..a6eb96f75 100644
 +    error = gesher::storage_root::Remove(rooted, (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
 +    return error != 0 ? (errno = error, -1) : 0;
 +  }
-@@ -561,0 +616,3 @@ int fchdir(int fd) {
+@@ -561,0 +617,3 @@ int fchdir(int fd) {
 +  if (const auto rooted = gesher::storage_root::Lookup(path)) {
 +    return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, -1;
 +  }
-@@ -748,0 +806,3 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
+@@ -748,0 +807,3 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
 +        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +          return fail_reopen(rooted.error != 0 ? rooted.error : EOPNOTSUPP);
 +        }
 diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
-index 8ce837212..05a037f32 100644
+index 8ce8372..05a037f 100644
 --- a/compat/posix/src/internal.h
 +++ b/compat/posix/src/internal.h
 @@ -97 +97,2 @@ std::string LinuxPath(const wchar_t* windows);
@@ -1418,7 +1537,7 @@ index 8ce837212..05a037f32 100644
 +// Only operations with a broker implementation may use allow_broker.
 +bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker = false);
 diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
-index 09fd4596c..382933857 100644
+index 09fd459..bfbe116 100644
 --- a/compat/posix/src/ofd.cc
 +++ b/compat/posix/src/ofd.cc
 @@ -4,0 +5 @@
@@ -1437,16 +1556,47 @@ index 09fd4596c..382933857 100644
 @@ -227 +233 @@ int ImportStartup(Table* state) try {
 -  if (crt_size > startup.cbReserved2 || startup.cbReserved2 - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
 +  if (crt_size > descriptor_bytes || descriptor_bytes - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
+@@ -601,0 +608,5 @@ DescriptorSnapshotPtr CaptureFileHandle(HANDLE file) {
++std::wstring DropDescriptorPath(const DescriptorSnapshotPtr& descriptor) {
++  if (!descriptor || !descriptor->description) return {};
++  std::lock_guard<std::mutex> guard(descriptor->description->mutex);
++  return descriptor->description->drop_path;
++}
+diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
+index 60751ad..037230a 100644
+--- a/compat/posix/src/ofd_internal.h
++++ b/compat/posix/src/ofd_internal.h
+@@ -9,0 +10 @@
++#include <string>
+@@ -42,0 +44,2 @@ struct OpenFileDescription {
++  // Immutable once the new descriptor is published. Aliases share it via this OFD.
++  std::wstring drop_path;
 diff --git a/compat/posix/src/path.cc b/compat/posix/src/path.cc
-index a4f865cc4..a97226de6 100644
+index a4f865c..ca6f564 100644
 --- a/compat/posix/src/path.cc
 +++ b/compat/posix/src/path.cc
-@@ -28,0 +29,4 @@
+@@ -28,0 +29,5 @@
 +#include "startup_null.h"
 +#include "standalone_input.h"
 +#include "rooted_storage_client.h"
++#include <gesher/drop_mount.h>
 +
-@@ -185,0 +190,55 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
+@@ -35,0 +41 @@
++#include "ofd_internal.h"
+@@ -160 +166 @@ DWORD Access(int flags) {
+-int FdFromHandle(HANDLE h, int flags) {
++int FdFromHandle(HANDLE h, int flags, const std::wstring* drop_path = nullptr) {
+@@ -174,0 +181,9 @@ int FdFromHandle(HANDLE h, int flags) {
++  if (drop_path != nullptr) {
++    std::shared_ptr<OpenFileDescription> ofd;
++    if (!LookupOfd(fd, &ofd)) {
++      close(fd);
++      return errno = EIO, -1;
++    }
++    std::lock_guard<std::mutex> guard(ofd->mutex);
++    ofd->drop_path = *drop_path;
++  }
+@@ -185,0 +201,55 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
 +  auto& selected = standalone_input::Current();
 +  if (selected.Matches(path)) {
 +    const bool metadata_only = (flags & O_PATH) != 0;
@@ -1500,20 +1650,27 @@ index a4f865cc4..a97226de6 100644
 +      CloseHandle(owned);
 +      return result;
 +    }
-+    return FdFromHandle(owned, flags);
++    return FdFromHandle(owned, flags, rooted.drop_alias ? &path : nullptr);
 +  }
-@@ -250,3 +309 @@ int OpenDevice(PathKind kind, int flags) {
+@@ -250,3 +320 @@ int OpenDevice(PathKind kind, int flags) {
 -  SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};
 -  HANDLE h = CreateFileW(L"NUL", Access(flags), FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
 -                         OPEN_EXISTING, 0, nullptr);
 +  HANDLE h = OpenNullDevice(Access(flags), (flags & O_CLOEXEC) == 0);
-@@ -294,5 +351,8 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+@@ -287,2 +355,3 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+-  HANDLE h = HandleFromFd(dirfd);
+-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
++  const auto descriptor = CaptureDescriptor(dirfd);
++  if (!descriptor) return errno = EBADF, false;
++  HANDLE h = descriptor->handle;
+@@ -294,5 +363,9 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
 -  DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 -  std::wstring dir(n, L'\0');
 -  n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 -  if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
 -  dir.resize(n);
-+  auto dir = storage_root::DescriptorPath(h);
++  auto dir = DropDescriptorPath(descriptor);
++  if (dir.empty()) dir = storage_root::DescriptorPath(h);
 +  if (dir.empty()) {
 +    DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 +    dir.resize(n);
@@ -1521,20 +1678,27 @@ index a4f865cc4..a97226de6 100644
 +    if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
 +    dir.resize(n);
 +  }
-@@ -406 +466 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
+@@ -370,0 +444,6 @@ PathKind MapPath(const char* path, std::wstring* windows) {
++
++  if (std::string_view(path).starts_with(drop_mount::kAndroidPrefix) && drop_mount::Enabled()) {
++    *windows = Widen(path);
++    std::replace(windows->begin(), windows->end(), L'/', L'\\');
++    return PathKind::kFile;
++  }
+@@ -406 +485 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
 -bool DiskPath(const char* path, std::wstring* windows, int special) {
 +bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker) {
-@@ -410,0 +471,4 @@ bool DiskPath(const char* path, std::wstring* windows, int special) {
+@@ -410,0 +490,4 @@ bool DiskPath(const char* path, std::wstring* windows, int special) {
 +      if (!allow_broker) {
 +        const auto rooted = storage_root::Lookup(*windows);
 +        if (rooted) return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, false;
 +      }
-@@ -474,0 +539,4 @@ int PosixDelete(const std::wstring& windows, bool directory) {
+@@ -474,0 +558,4 @@ int PosixDelete(const std::wstring& windows, bool directory) {
 +  if (const auto rooted = storage_root::Lookup(windows)) {
 +    const int error = storage_root::Remove(rooted, directory);
 +    return error != 0 ? (errno = error, -1) : 0;
 +  }
-@@ -692,0 +761,8 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
+@@ -692,0 +780,8 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
 +      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +        HANDLE h;
 +        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadataWrite, &h);
@@ -1543,20 +1707,20 @@ index a4f865cc4..a97226de6 100644
 +        CloseTimeHandle(h);
 +        return result;
 +      }
-@@ -743 +819,5 @@ int mkdir(const char* path) {
+@@ -743 +838,5 @@ int mkdir(const char* path) {
 -    case PathKind::kFile:
 +    case PathKind::kFile: {
 +      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
 +        const int error = gesher::storage_root::MakeDirectory(rooted);
 +        return error != 0 ? (errno = error, -1) : 0;
 +      }
-@@ -744,0 +825 @@ int mkdir(const char* path) {
+@@ -744,0 +844 @@ int mkdir(const char* path) {
 +    }
-@@ -754 +835 @@ int unlink(const char* path) {
+@@ -754 +854 @@ int unlink(const char* path) {
 -  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;  // EACCES: /dev and /proc names
 +  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;  // EACCES: /dev and /proc names
 diff --git a/compat/posix/src/pipe_io.cc b/compat/posix/src/pipe_io.cc
-index e5928dd91..f6e641b43 100644
+index e5928dd..f6e641b 100644
 --- a/compat/posix/src/pipe_io.cc
 +++ b/compat/posix/src/pipe_io.cc
 @@ -16,0 +17 @@
@@ -1575,8 +1739,21 @@ index e5928dd91..f6e641b43 100644
 +  std::copy_n(pipe_directory, prefix, name);
 @@ -153 +161,0 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
 -  const size_t prefix = 16;
+diff --git a/compat/posix/src/procfs.cc b/compat/posix/src/procfs.cc
+index ee975dc..7aa170e 100644
+--- a/compat/posix/src/procfs.cc
++++ b/compat/posix/src/procfs.cc
+@@ -1012,0 +1013,4 @@ bool ReadLink(const std::wstring& name, std::string* target) {
++    if (const auto drop = DropDescriptorPath(snapshot); !drop.empty()) {
++      *target = LinuxPath(drop.c_str());
++      return true;
++    }
+@@ -1046,0 +1051,3 @@ int Open(const std::wstring& name, int flags) {
++      if (const auto drop = DropDescriptorPath(snapshot); !drop.empty()) {
++        return open(LinuxPath(drop.c_str()).c_str(), flags & ~(O_CREAT | O_EXCL), 0);
++      }
 diff --git a/compat/posix/src/record_lock_descriptors.cc b/compat/posix/src/record_lock_descriptors.cc
-index a33c06ac4..1313af588 100644
+index a33c06a..1313af5 100644
 --- a/compat/posix/src/record_lock_descriptors.cc
 +++ b/compat/posix/src/record_lock_descriptors.cc
 @@ -3,0 +4 @@
@@ -1797,7 +1974,7 @@ index a33c06ac4..1313af588 100644
 +  begun_ = false;
 +  return CloseFileLocks(staged_, file_, local->process);
 diff --git a/compat/posix/src/record_lock_descriptors.h b/compat/posix/src/record_lock_descriptors.h
-index 22a04c5c7..297031ba0 100644
+index 22a04c5..297031b 100644
 --- a/compat/posix/src/record_lock_descriptors.h
 +++ b/compat/posix/src/record_lock_descriptors.h
 @@ -22,0 +23,6 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock);
@@ -1810,7 +1987,7 @@ index 22a04c5c7..297031ba0 100644
 @@ -41,0 +48 @@ class ClosingDescriptor {
 +  bool brokered_ = false;
 diff --git a/compat/posix/src/record_lock_duplicate.cc b/compat/posix/src/record_lock_duplicate.cc
-index 7925d9b85..f027f3a33 100644
+index 7925d9b..f027f3a 100644
 --- a/compat/posix/src/record_lock_duplicate.cc
 +++ b/compat/posix/src/record_lock_duplicate.cc
 @@ -4,0 +5 @@
@@ -1820,7 +1997,7 @@ index 7925d9b85..f027f3a33 100644
 -        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
 +    HANDLE candidate = gesher::OpenDescriptorPlaceholder();
 diff --git a/compat/posix/src/record_lock_operation.cc b/compat/posix/src/record_lock_operation.cc
-index bf7cdb703..3e90c3e1b 100644
+index bf7cdb7..3e90c3e 100644
 --- a/compat/posix/src/record_lock_operation.cc
 +++ b/compat/posix/src/record_lock_operation.cc
 @@ -45 +45 @@ int WriteUser(void* destination, const void* source, size_t bytes) {
@@ -1866,7 +2043,7 @@ index bf7cdb703..3e90c3e1b 100644
 +  if (!error) error = ApplyOperation(state, owner, prepared, &output, mutated);
 +  return !error && prepared.query ? CopyQueryResult(output, user_flock) : error;
 diff --git a/compat/posix/src/record_lock_operation.h b/compat/posix/src/record_lock_operation.h
-index 2b7556da0..3f2e18a3d 100644
+index 2b7556d..3f2e18a 100644
 --- a/compat/posix/src/record_lock_operation.h
 +++ b/compat/posix/src/record_lock_operation.h
 @@ -23 +22,0 @@ struct PreparedOperation {
@@ -1881,7 +2058,7 @@ index 2b7556da0..3f2e18a3d 100644
 +                    const PreparedOperation& prepared, LinuxFlock* output, bool* mutated);
 +int CopyQueryResult(const LinuxFlock& output, void* user_flock);
 diff --git a/compat/posix/src/sqlite_path.cc b/compat/posix/src/sqlite_path.cc
-index 91e79de60..1694fb6f0 100644
+index 91e79de..1694fb6 100644
 --- a/compat/posix/src/sqlite_path.cc
 +++ b/compat/posix/src/sqlite_path.cc
 @@ -15 +15,3 @@ extern "C" int gesher_sqlite_full_pathname(
@@ -1890,13 +2067,13 @@ index 91e79de60..1694fb6f0 100644
 +  // wrappers. This step only builds SQLite's owned canonical filename.
 +  if (!gesher::DiskPath(path, &windows, EINVAL, true)) return SQLITE_CANTOPEN;
 diff --git a/compat/posix/src/stat.cc b/compat/posix/src/stat.cc
-index 4c0e19022..7ef4d9624 100644
+index 4c0e190..ebdcdf8 100644
 --- a/compat/posix/src/stat.cc
 +++ b/compat/posix/src/stat.cc
 @@ -10,0 +11,2 @@
 +#include "rooted_storage_client.h"
 +#include "standalone_input.h"
-@@ -91 +93,21 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
+@@ -91 +93,22 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
 -      HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
 +      auto& selected = gesher::standalone_input::Current();
 +      const bool inherited = selected.Matches(windows);
@@ -1914,18 +2091,27 @@ index 4c0e19022..7ef4d9624 100644
 +          const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
 +          if (error != 0) return errno = error, -1;
 +          const int result = FromHandle(h, buf);
++          if (result == 0 && rooted.drop_alias) buf->st_mode &= ~0222;
 +          CloseHandle(h);
 +          return result;
 +        }
 +      }
 +      HANDLE h = inherited ? selected.Open(true) : CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
-@@ -96 +118,3 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
+@@ -96 +119,3 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
 -      if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
 +      if (h == INVALID_HANDLE_VALUE) {
 +        return inherited ? (errno = EACCES, -1) : gesher::FailWithLastError();
 +      }
+@@ -163,2 +188,5 @@ int fstat(int fd, struct stat* buf) {
+-    case FILE_TYPE_DISK:
+-      return FromHandle(h, buf);
++    case FILE_TYPE_DISK: {
++      const int result = FromHandle(h, buf);
++      if (result == 0 && !gesher::DropDescriptorPath(snapshot).empty()) buf->st_mode &= ~0222;
++      return result;
++    }
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index a3bc4dfdd..0a7af110a 100644
+index a3bc4df..0a7af11 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -29,0 +30 @@
@@ -1979,7 +2165,7 @@ index a3bc4dfdd..0a7af110a 100644
 @@ -258,0 +287 @@ int fstatvfs(int fd, struct statvfs* buf) {
 +  if (!gesher::storage_root::DescriptorPath(h).empty()) return RootedStatvfs(h, buf);
 diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
-index 8e960fbb5..a15e944d0 100644
+index 8e960fb..a15e944 100644
 --- a/compat/posix/src/system_properties.cc
 +++ b/compat/posix/src/system_properties.cc
 @@ -7,0 +8 @@
@@ -2220,7 +2406,7 @@ index 8e960fbb5..a15e944d0 100644
 -      if (!lock.held || !Refresh(area)) return false;
 +      if (!Refresh(area)) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
-index 1f7b51ecc..8d2f12497 100644
+index 1f7b51e..81ab7d3 100644
 --- a/compat/posix/src/unistd.cc
 +++ b/compat/posix/src/unistd.cc
 @@ -23,0 +24,2 @@
@@ -2248,8 +2434,17 @@ index 1f7b51ecc..8d2f12497 100644
 +      h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 +                       nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 +    }
+@@ -768 +784,7 @@ char* realpath(const char* path, char* resolved_path) {
+-    bool ok = FinalPath(h, &out);
++    bool ok;
++    if (rooted.drop_alias) {
++      out = gesher::LinuxPath(wpath.c_str());
++      ok = true;
++    } else {
++      ok = FinalPath(h, &out);
++    }
 diff --git a/compat/posix/src/unix_rights.cc b/compat/posix/src/unix_rights.cc
-index c50426737..3374c5c75 100644
+index c504267..3374c5c 100644
 --- a/compat/posix/src/unix_rights.cc
 +++ b/compat/posix/src/unix_rights.cc
 @@ -26,0 +27,2 @@
