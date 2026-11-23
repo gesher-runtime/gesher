@@ -223,6 +223,7 @@ std::vector<Sensor> Find() {
   std::vector<Sensor> list;
   std::string& describe = DescribeText();
   int handle = 1;
+  bool hasAccelerometer = false;
   for (const WindowsClass& c : kWindowsClasses) {
     if (!describe.empty()) describe += ", ";
     describe += c.label;
@@ -244,6 +245,7 @@ std::vector<Sensor> Find() {
       continue;
     }
     describe += "present";
+    if (c.type == kAccelerometer) hasAccelerometer = true;
     auto source = std::make_shared<WindowsSource>(static_cast<ISensorBase*>(sensor), c.type);
     Sensor s;
     s.handle = handle++;
@@ -288,6 +290,23 @@ std::vector<Sensor> Find() {
     l.source = std::make_shared<TestSource>(kLight);
     list.push_back(l);
     describe += ", test sensors: accelerometer, light";
+  } else {
+    const char* fallback = getenv("GESHER_SENSOR_FALLBACK");
+    if (!hasAccelerometer && fallback != nullptr && *fallback != '\0' && *fallback != '0') {
+      Sensor a;
+      a.handle = handle++;
+      a.type = kAccelerometer;
+      a.name = "Gesher Stationary Accelerometer";
+      a.vendor = "Gesher";
+      a.maxRange = 8 * kGravity;
+      a.resolution = 0.01f;
+      a.power = 0.1f;
+      a.minDelayUs = 10000;
+      a.maxDelayUs = 1000000;
+      a.source = std::make_shared<TestSource>(kAccelerometer);
+      list.push_back(a);
+      describe += ", fallback sensor: accelerometer";
+    }
   }
   return list;
 }

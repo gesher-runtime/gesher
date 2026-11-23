@@ -387,6 +387,8 @@ public final class SystemServer {
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             // One window for the app's tasks, or one each (ADR 0088).
             env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
+            env.addAll(sensorEnvironment(packageName, System.getenv("GESHER_SENSOR_TEST"),
+                    System.getenv("GESHER_SENSOR_FALLBACK")));
             String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk)));
@@ -398,6 +400,22 @@ public final class SystemServer {
             return Zygote.spawn(command, env, logFile.getPath(), false);
             }
         });
+    }
+
+    /**
+     * Default stationary tabletop accelerometer fallback for regular apps when the host
+     * has no physical accelerometer, unless sensor test/fallback mode is explicitly set.
+     */
+    static List<String> sensorEnvironment(String packageName, String sensorTestEnv,
+            String sensorFallbackEnv) {
+        if (sensorTestEnv != null || sensorFallbackEnv != null) {
+            return java.util.Collections.emptyList();
+        }
+        if ("com.gesher.devices".equals(packageName)
+                || "com.gesher.nodevices".equals(packageName)) {
+            return java.util.Collections.emptyList();
+        }
+        return List.of("GESHER_SENSOR_FALLBACK=1");
     }
 
     /**

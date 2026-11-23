@@ -71,7 +71,7 @@ public final class LegacyCamera {
         boolean rear = d.get(id).isRearFacing();
         info.facing = rear ? Camera.CameraInfo.CAMERA_FACING_BACK
                 : Camera.CameraInfo.CAMERA_FACING_FRONT;
-        info.orientation = CameraService.sensorOrientation();
+        info.orientation = CameraService.sensorOrientation(rear);
         info.canDisableShutterSound = true;
     }
 

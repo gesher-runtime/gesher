@@ -63,6 +63,10 @@ Windows without them (no location service, no Media Foundation) gets clean
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.
+- `GESHER_SENSOR_FALLBACK=1` (set by default for regular app processes in
+  device mode) provides a stationary tabletop accelerometer (gravity on Z) when
+  the PC has no physical accelerometer, unless `GESHER_SENSOR_TEST` or
+  `GESHER_SENSOR_FALLBACK` is explicitly configured.
 - Each event queue is an eventfd watched by the queue's Looper, as Android's
   is a BitTube's fd; events are dispatched on the Looper's thread
   (`dispatchSensorEvent`, `dispatchFlushCompleteEvent`). No direct channels,

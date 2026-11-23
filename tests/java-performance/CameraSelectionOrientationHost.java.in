@@ -42,6 +42,20 @@ public final class CameraSelectionOrientationHost {
         int rotation;
     }
 
+    interface IBinder {
+    }
+
+    static final class ServiceManager {
+        static IBinder getService(String name) { return null; }
+    }
+
+    interface IDisplayManager {
+        DisplayInfo getDisplayInfo(int id);
+        final class Stub {
+            static IDisplayManager asInterface(IBinder b) { return null; }
+        }
+    }
+
     static final class DisplayManagerGlobal {
         private static final DisplayManagerGlobal INSTANCE = new DisplayManagerGlobal();
         static DisplayManagerGlobal getInstance() { return INSTANCE; }
@@ -79,6 +93,8 @@ public final class CameraSelectionOrientationHost {
 @CAMERA_ORIENTATION@
 
 @PM_CAMERA_FEATURES@
+
+@SENSOR_ENV@
 
     private static void check(boolean ok, String msg) {
         ++checks;
@@ -121,23 +137,34 @@ public final class CameraSelectionOrientationHost {
         check(!missing.get(0).isRearFacing() && !missing.get(1).isRearFacing(),
                 "disconnected selected device must not promote another camera");
 
-        sActiveRotation = Surface.ROTATION_0;
-        sDisplayRotation = Surface.ROTATION_270;
-        check(sensorOrientation() == 0,
-                "active window ROTATION_0 mismatch");
-        sActiveRotation = Surface.ROTATION_90;
-        check(sensorOrientation() == 0,
-                "display rotation changed the stationary sensor geometry");
-        sActiveRotation = Surface.ROTATION_180;
-        check(sensorOrientation() == 0,
-                "active window ROTATION_180 changed sensor geometry");
+        sDisplayRotation = Surface.ROTATION_0;
         sActiveRotation = Surface.ROTATION_270;
-        check(sensorOrientation() == 0,
-                "active window ROTATION_270 changed sensor geometry");
-        sActiveRotation = WindowConfiguration.ROTATION_UNDEFINED;
+        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
+                "display ROTATION_0 mismatch");
         sDisplayRotation = Surface.ROTATION_90;
-        check(sensorOrientation() == 0,
-                "display fallback changed sensor geometry");
+        sActiveRotation = Surface.ROTATION_0;
+        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
+                "display ROTATION_90 must override stale activity rotation");
+        sDisplayRotation = Surface.ROTATION_180;
+        check(sensorOrientation(true) == 180 && sensorOrientation(false) == 180,
+                "display ROTATION_180 mismatch");
+        sDisplayRotation = Surface.ROTATION_270;
+        check(sensorOrientation(true) == 270 && sensorOrientation(false) == 90,
+                "display ROTATION_270 mismatch");
+        sDisplayRotation = WindowConfiguration.ROTATION_UNDEFINED;
+        sActiveRotation = Surface.ROTATION_90;
+        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
+                "active window fallback ROTATION_90 mismatch");
+
+        check(Collections.singletonList("GESHER_SENSOR_FALLBACK=1").equals(
+                sensorEnvironment("com.example.app", null, null)),
+                "regular app must receive GESHER_SENSOR_FALLBACK=1 by default");
+        check(sensorEnvironment("com.gesher.devices", null, null).isEmpty()
+                && sensorEnvironment("com.gesher.nodevices", null, null).isEmpty(),
+                "device test packages must not inject fallback sensor");
+        check(sensorEnvironment("com.example.app", "1", null).isEmpty()
+                && sensorEnvironment("com.example.app", null, "0").isEmpty(),
+                "explicit GESHER_SENSOR_TEST or GESHER_SENSOR_FALLBACK must not be overridden");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> emptyFeat =
                 new android.util.ArrayMap<>();
