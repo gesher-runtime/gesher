@@ -120,7 +120,20 @@ function LocationChecks([string] $Mode, [string] $Out, [int] $Code, [bool] $Pend
 
 $sn = 'devices: sensors: '
 # Sensors without hardware: the runners have none (Windows.Devices.Sensors' GetDefault
-# answers null for each kind), so the list is empty and registering fails cleanly.
+# answers null for each kind). By default Gesher's stationary accelerometer stands in for
+# the missing motion sensors (gravity on Z, CONTRIBUTING.md): the production path.
+function SensorsStationaryCheck([string] $Mode, [string] $Out, [int] $Code) {
+  if ($Out -match 'sensors: (accelerometer: [^
+]*)') { $win = $Matches[1] } else { $win = '(not logged)' }
+  DevCheck "devices: sensors ($Mode): no Windows motion sensor here ($win); Gesher's stationary accelerometer by default: the list, gravity-only events on a Handler, flush, unregisterListener" $Out @(
+    ,@("${sn}1 sensors: Gesher Stationary Accelerometer (android.sensor.accelerometer)",
+      "${sn}accelerometer Gesher Stationary Accelerometer, range 78.4532, min delay 10000 us",
+      "${sn}registerListener(accelerometer) true, first event Gesher Stationary Accelerometer 0.00,0.00,9.81 accuracy 3",
+      "${sn}accelerometer events keep coming: 4 more", "${sn}flush: flush Gesher Stationary Accelerometer",
+      "${sn}after unregisterListener (nothing within 500 ms)", "${sn}no light sensor",
+      "${sn}done")) $Code $Mode
+}
+# With GESHER_SENSOR_FALLBACK=0 the list is empty and registering fails cleanly.
 function SensorsEmptyCheck([string] $Mode, [string] $Out, [int] $Code) {
   if ($Out -match 'sensors: (accelerometer: [^\r\n]*)') { $win = $Matches[1] } else { $win = '(not logged)' }
   DevCheck "devices: sensors ($Mode): SystemSensorManager over Windows.Devices.Sensors; no sensors here, an empty list, registerListener false ($win)" $Out @(
@@ -253,8 +266,14 @@ $devicesIdentity = @{ GESHER_UID = [string]$devicesUid; GESHER_BINDER_UID = [str
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400 '' $devicesIdentity
 $code = $LASTEXITCODE
 LocationChecks 'single process' $out $code $false
-SensorsEmptyCheck 'single process' $out $code
+SensorsStationaryCheck 'single process' $out $code
 CameraEmptyCheck 'single process' $out $code
+$env:GESHER_SENSOR_FALLBACK = '0'
+$env:GESHER_DEVICES_STEPS = 'sensors'
+$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400 '' $devicesIdentity
+SensorsEmptyCheck 'single process, GESHER_SENSOR_FALLBACK=0' $out $LASTEXITCODE
+Remove-Item Env:GESHER_SENSOR_FALLBACK
+Remove-Item Env:GESHER_DEVICES_STEPS
 $env:GESHER_SENSOR_TEST = '1'
 $env:GESHER_CAMERA_TEST = '1'
 $env:GESHER_DEVICES_STEPS = 'sensors,camera'

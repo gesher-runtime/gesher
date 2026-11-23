@@ -42,20 +42,6 @@ public final class CameraSelectionOrientationHost {
         int rotation;
     }
 
-    interface IBinder {
-    }
-
-    static final class ServiceManager {
-        static IBinder getService(String name) { return null; }
-    }
-
-    interface IDisplayManager {
-        DisplayInfo getDisplayInfo(int id);
-        final class Stub {
-            static IDisplayManager asInterface(IBinder b) { return null; }
-        }
-    }
-
     static final class DisplayManagerGlobal {
         private static final DisplayManagerGlobal INSTANCE = new DisplayManagerGlobal();
         static DisplayManagerGlobal getInstance() { return INSTANCE; }
@@ -93,8 +79,6 @@ public final class CameraSelectionOrientationHost {
 @CAMERA_ORIENTATION@
 
 @PM_CAMERA_FEATURES@
-
-@SENSOR_ENV@
 
     private static void check(boolean ok, String msg) {
         ++checks;
@@ -137,34 +121,38 @@ public final class CameraSelectionOrientationHost {
         check(!missing.get(0).isRearFacing() && !missing.get(1).isRearFacing(),
                 "disconnected selected device must not promote another camera");
 
+        // The Activity using the camera decides, not the focused task's system display.
         sDisplayRotation = Surface.ROTATION_0;
-        sActiveRotation = Surface.ROTATION_270;
-        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
-                "display ROTATION_0 mismatch");
-        sDisplayRotation = Surface.ROTATION_90;
-        sActiveRotation = Surface.ROTATION_0;
-        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
-                "display ROTATION_90 must override stale activity rotation");
-        sDisplayRotation = Surface.ROTATION_180;
-        check(sensorOrientation(true) == 180 && sensorOrientation(false) == 180,
-                "display ROTATION_180 mismatch");
-        sDisplayRotation = Surface.ROTATION_270;
-        check(sensorOrientation(true) == 270 && sensorOrientation(false) == 90,
-                "display ROTATION_270 mismatch");
-        sDisplayRotation = WindowConfiguration.ROTATION_UNDEFINED;
         sActiveRotation = Surface.ROTATION_90;
         check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
-                "active window fallback ROTATION_90 mismatch");
-
-        check(Collections.singletonList("GESHER_SENSOR_FALLBACK=1").equals(
-                sensorEnvironment("com.example.app", null, null)),
-                "regular app must receive GESHER_SENSOR_FALLBACK=1 by default");
-        check(sensorEnvironment("com.gesher.devices", null, null).isEmpty()
-                && sensorEnvironment("com.gesher.nodevices", null, null).isEmpty(),
-                "device test packages must not inject fallback sensor");
-        check(sensorEnvironment("com.example.app", "1", null).isEmpty()
-                && sensorEnvironment("com.example.app", null, "0").isEmpty(),
-                "explicit GESHER_SENSOR_TEST or GESHER_SENSOR_FALLBACK must not be overridden");
+                "own landscape Activity must win over another task's portrait display");
+        sDisplayRotation = Surface.ROTATION_90;
+        sActiveRotation = Surface.ROTATION_0;
+        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
+                "own portrait Activity must win over another task's landscape display");
+        sActiveRotation = Surface.ROTATION_180;
+        check(sensorOrientation(true) == 180 && sensorOrientation(false) == 180,
+                "Activity ROTATION_180 mismatch");
+        sActiveRotation = Surface.ROTATION_270;
+        check(sensorOrientation(true) == 270 && sensorOrientation(false) == 90,
+                "Activity ROTATION_270 mismatch");
+        // Android's own formulas then ask for no extra rotation, so preview sizes stay unswapped.
+        for (int r = Surface.ROTATION_0; r <= Surface.ROTATION_270; r++) {
+            sActiveRotation = r;
+            int d = r * 90;
+            check((sensorOrientation(true) - d + 360) % 360 == 0,
+                    "rear setDisplayOrientation formula must give 0 at rotation " + d);
+            check((360 - (sensorOrientation(false) + d) % 360) % 360 == 0,
+                    "front setDisplayOrientation formula must give 0 at rotation " + d);
+        }
+        // No Activity in the process (a service): the system display's rotation.
+        sActiveRotation = WindowConfiguration.ROTATION_UNDEFINED;
+        sDisplayRotation = Surface.ROTATION_90;
+        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
+                "without an Activity the system display rotation must be used");
+        sDisplayRotation = Surface.ROTATION_0;
+        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
+                "without an Activity on a natural display the orientation must be 0");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> emptyFeat =
                 new android.util.ArrayMap<>();

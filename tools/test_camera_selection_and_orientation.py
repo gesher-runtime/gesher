@@ -21,7 +21,6 @@ def main() -> None:
     wc_src = (ROOT / 'app/java/com/gesher/server/WindowsCamera.java').read_text(encoding='utf-8')
     cs_src = (ROOT / 'app/java/com/gesher/server/CameraService.java').read_text(encoding='utf-8')
     pm_src = (ROOT / 'app/java/com/gesher/server/PackageManagerService.java').read_text(encoding='utf-8')
-    ss_src = (ROOT / 'app/java/com/gesher/server/SystemServer.java').read_text(encoding='utf-8')
 
     wc_parts = '\n'.join([
         method(wc_src, 'public static final class Device'),
@@ -36,9 +35,6 @@ def main() -> None:
         method(pm_src, 'static void addCameraFeatures('),
         method(pm_src, 'private static void addFeature('),
     ])
-    ss_parts = '\n'.join([
-        method(ss_src, 'static List<String> sensorEnvironment('),
-    ])
 
     template = (ROOT / 'tests/java-performance/CameraSelectionOrientationHost.java.in').read_text(
         encoding='utf-8'
@@ -47,7 +43,6 @@ def main() -> None:
         template.replace('@WINDOWS_CAMERA@', wc_parts)
         .replace('@CAMERA_ORIENTATION@', cs_parts)
         .replace('@PM_CAMERA_FEATURES@', pm_parts)
-        .replace('@SENSOR_ENV@', ss_parts)
     )
     with tempfile.TemporaryDirectory(prefix='gesher-camera-select-') as temporary:
         work = Path(temporary)
@@ -65,7 +60,8 @@ def main() -> None:
                 str(java),
             ],
             check=True,
-            timeout=60,
+            # javac's start-up alone can take most of a minute on a loaded runner.
+            timeout=300,
         )
         subprocess.run(
             [

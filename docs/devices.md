@@ -12,7 +12,7 @@ Bluetooth, also in compat/devices, has its own page: [bluetooth.md](bluetooth.md
 | Location service (`location`) | `app/java/com/gesher/server/LocationManagerService.java` (registered in `Services.create`) |
 | Windows' location service | `app/java/com/gesher/server/WindowsLocation.java`, `compat/devices/location_win.cc` (Windows.Devices.Geolocation.Geolocator through its ABI), `compat/devices/winrt.cc` (combase's WinRT functions looked up at run time) |
 | framework-location (`LocationManager`, `ILocationManager`...) | not in framework.jar (on a device it is its own boot jar): `app/build.sh` puts the classes the framework build compiled from `frameworks/base/location/java` into gesher-app.jar, replacing app/compat-java's placeholders |
-| Sensors | `compat/devices/sensors_jni.cc` (SystemSensorManager and BaseEventQueue natives, replacing device_standins.cc's), `compat/devices/sensors.cc` (Windows.Devices.Sensors; GESHER_SENSOR_TEST's sensors; one sampling thread) |
+| Sensors | `compat/devices/sensors_jni.cc` (SystemSensorManager and BaseEventQueue natives, replacing device_standins.cc's), `compat/devices/sensors.cc` (Windows.Devices.Sensors; the stationary accelerometer; GESHER_SENSOR_TEST's sensors; one sampling thread) |
 | Cameras | `compat/devices/camera_mf.cc` (Media Foundation capture devices, NV12 through an IMFSourceReader; GESHER_CAMERA_TEST's camera), `camera_metadata_jni.cc` (CameraMetadataNative over system/media's libcamera_metadata), `camera_frames.cc` (ImageReader, SurfaceUtils, frames into surfaces) |
 | Registration | `compat/devices/devices_jni.cc` (`register_gesher_devices`, a row in `compat/framework/android_runtime.cc` after the device stand-ins); `compat/devices/devices.cmake` (included from CMakeLists.txt) |
 
@@ -58,15 +58,19 @@ Windows without them (no location service, no Media Foundation) gets clean
   TYPE_ACCELEROMETER (m/s^2, Android's sign), TYPE_GYROSCOPE (rad/s),
   TYPE_MAGNETIC_FIELD, TYPE_LIGHT and TYPE_ROTATION_VECTOR (the quaternion).
   Readings are polled at the rate asked for; on-change sensors report changes
-  only. The CI runners have none: the list is empty and `registerListener`
-  answers false (checked).
+  only. The CI runners have none.
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.
-- `GESHER_SENSOR_FALLBACK=1` (set by default for regular app processes in
-  device mode) provides a stationary tabletop accelerometer (gravity on Z) when
-  the PC has no physical accelerometer, unless `GESHER_SENSOR_TEST` or
-  `GESHER_SENSOR_FALLBACK` is explicitly configured.
+- When Windows has no accelerometer, gyrometer or orientation sensor, Gesher
+  adds "Gesher Stationary Accelerometer" (vendor Gesher): a PC stands still, so
+  it reads gravity only, on Z (lying face up), continuously, at up to 100 Hz.
+  This is a maintainer-approved desktop default (CONTRIBUTING.md). It is the
+  same in every process and mode (single process and the Gesher device's app
+  processes; the native sensor list decides, nothing is set per package), and
+  any real motion sensor replaces it. `GESHER_SENSOR_FALLBACK=0` turns it off:
+  the list is then empty on the runners and `registerListener` answers false.
+  Both are checked in the single-process mode.
 - Each event queue is an eventfd watched by the queue's Looper, as Android's
   is a BitTube's fd; events are dispatched on the Looper's thread
   (`dispatchSensorEvent`, `dispatchFlushCompleteEvent`). No direct channels,
@@ -106,6 +110,18 @@ Windows without them (no location service, no Media Foundation) gets clean
   focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
   device's sizes, LENS_FACING_EXTERNAL (the test camera: BACK), one partial
   result, the available request/result/characteristics keys.
+- Orientation (maintainer-approved desktop adaptation, CONTRIBUTING.md): the
+  frames are upright for the desktop monitor and Gesher does not rotate preview
+  buffers for the legacy `setDisplayOrientation`. So SENSOR_ORIENTATION and the
+  legacy `CameraInfo.orientation` follow the display rotation of the Activity
+  using the camera (its own `Display.getRotation()`; the focused task's only in
+  a process without an Activity, as a service): Android's formulas then ask
+  for no rotation and apps keep unswapped preview sizes in landscape tasks.
+  In a landscape task the same camera reads 90 through Camera2 (LENS_FACING_EXTERNAL, the rear
+  sign) and 270 through the legacy API when it is not the rear camera (front,
+  mirrored). An app that caches the value (CameraX caches
+  CameraCharacteristics per process) keeps the rotation of its first read; a
+  later change of its task's orientation is not followed.
 - `CameraDeviceUser` (CameraDeviceClient): streams from OutputConfigurations,
   `submitRequestList` (bursts get their frame numbers at submission; the
   repeating request one per frame), `cancelRequest`, `flush`, `waitUntilIdle`,

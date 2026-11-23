@@ -28,7 +28,6 @@ import android.hardware.camera2.params.StreamConfigurationDuration;
 import android.hardware.camera2.utils.CameraIdAndSessionConfiguration;
 import android.hardware.camera2.utils.ConcurrentCameraIdCombination;
 import android.hardware.display.DisplayManagerGlobal;
-import android.hardware.display.IDisplayManager;
 import android.os.IBinder;
 import android.os.ServiceManager;
 import android.os.ServiceSpecificException;
@@ -339,27 +338,32 @@ public final class CameraService extends ICameraService.Default {
     static final int CameraDevice_TEMPLATE_PREVIEW = ICameraDeviceUser.TEMPLATE_PREVIEW;
 
     /**
-     * Sensor orientation in degrees (0, 90, 180, 270) relative to the current display.
-     * Media Foundation supplies upright frames in the monitor's natural orientation while
-     * Android tasks may switch between portrait and landscape, so matching the active
-     * display rotation makes Android's standard camera orientation formula yield upright
-     * frames and unswapped preview dimensions (since legacy setDisplayOrientation does
-     * not rotate frames).
+     * Sensor orientation in degrees (0, 90, 180, 270), relative to the display rotation of
+     * the Activity using the camera (maintainer-approved desktop adaptation, CONTRIBUTING.md).
+     * Media Foundation supplies frames upright for the desktop monitor and Gesher does not
+     * rotate preview buffers for {@code setDisplayOrientation}, while an Android task may be
+     * portrait or landscape. Matching the Activity's own rotation makes Android's standard
+     * formulas give 0 (rear: {@code (o - d + 360) % 360}; front, mirrored:
+     * {@code (360 - (o + d) % 360) % 360}), so apps keep upright, unswapped preview sizes.
+     * Camera2 reports non-rear cameras as LENS_FACING_EXTERNAL, which uses the rear sign
+     * convention, so it passes {@code true}; the legacy API passes the camera's own facing.
+     * Apps that cache the value (CameraX caches CameraCharacteristics per process) keep the
+     * rotation of their first read (docs/devices.md).
      */
     static int sensorOrientation(boolean rearFacing) {
         int degrees = displayDegrees();
         return rearFacing ? degrees : (360 - degrees) % 360;
     }
 
+    /**
+     * The calling process's own Activity rotation, which its {@code Display.getRotation()}
+     * reports; the system display's (the focused task's) only when the process has no
+     * Activity, as in a service.
+     */
     private static int displayDegrees() {
         int rotation = WindowConfiguration.ROTATION_UNDEFINED;
         try {
-            IBinder b = ServiceManager.getService("display");
-            if (b != null) {
-                DisplayInfo info = IDisplayManager.Stub.asInterface(b)
-                        .getDisplayInfo(Display.DEFAULT_DISPLAY);
-                if (info != null) rotation = info.rotation;
-            }
+            rotation = GesherActivityWindow.activeDisplayRotation();
         } catch (Throwable ignored) {
         }
         if (rotation == WindowConfiguration.ROTATION_UNDEFINED) {
@@ -367,12 +371,6 @@ public final class CameraService extends ICameraService.Default {
                 DisplayManagerGlobal dm = DisplayManagerGlobal.getInstance();
                 DisplayInfo info = dm != null ? dm.getDisplayInfo(Display.DEFAULT_DISPLAY) : null;
                 if (info != null) rotation = info.rotation;
-            } catch (Throwable ignored) {
-            }
-        }
-        if (rotation == WindowConfiguration.ROTATION_UNDEFINED) {
-            try {
-                rotation = GesherActivityWindow.activeDisplayRotation();
             } catch (Throwable ignored) {
             }
         }
