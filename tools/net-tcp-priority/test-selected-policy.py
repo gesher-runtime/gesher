@@ -266,6 +266,38 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
 OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
+# Reverse only the exact broker output transition, including its separately
+# reviewed zero-length input-copy prerequisite, before all original OFD checks.
+# This source proof grants no supplier, controller or native runtime approval.
+BINDER_OUTPUT_QUALIFICATION_SHA256='c221504d110bf48da4dab9577a0fc50f9bd0867a553e3bb9042a2eda82cafe64'
+def preceding_binder_output_source():
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'binder-output-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==BINDER_OUTPUT_QUALIFICATION_SHA256,'Binder output source qualification changed'
+ qualification=json.loads(raw)
+ path='compat/binder/binderd.cc'
+ assert qualification['baseline']=='5aa6b39027e9c38de2781ff9cda066418d25b1ba'
+ assert qualification['native_runtime_approval'] is False
+ assert qualification['paths']==[path]
+ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==[path]
+ patch=(folder/'binder-output-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'Binder output transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+ current=(ROOT/path).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-binder-output-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
+  assert previous==expected and hashlib.sha256(previous).hexdigest()==qualification['previous_sha256'][path],path
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'Binder output forward reconstruction changed'
+ return previous
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -350,6 +382,7 @@ def preceding_ofd_sources():
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  for path,digest in qualification['source_sha256'].items():
   actual=(ROOT/path).read_bytes()
+  if path=='compat/binder/binderd.cc':actual=preceding_binder_output_source()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
@@ -558,6 +591,19 @@ def transition_negative_controls():
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
   (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
  ]
+ binder_cases=[
+  ('compat/binder/binderd.cc',b'  Out& out;',b'  Out out;'),
+  ('compat/binder/binderd.cc',b'command_start(output.bytes.size())',b'command_start(0)'),
+  ('compat/binder/binderd.cc',b'memcpy(reply.bytes.data() + sizeof(uint32_t), &ret, sizeof(int32_t));',
+   b'memcpy(reply.bytes.data(), &ret, sizeof(int32_t));'),
+  ('compat/binder/binderd.cc',b'if (n == 0) return true;',b'if (n == 0) return false;'),
+  ('compat/binder/binderd.cc',b'if (accepted && !thread->pending_buffer_claimed) return -EINVAL;',
+   b'if (false && !thread->pending_buffer_claimed) return -EINVAL;'),
+ ]
+ cases+=binder_cases+[
+  ('tools/net-tcp-priority/qualified/binder-output-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
+  ('tools/net-tcp-priority/qualified/binder-output-source.patch',b'@@',b'@x'),
+ ]
  for name,before,after in cases:
   target=ROOT/name
   assert before in original(target),name
@@ -573,7 +619,33 @@ def transition_negative_controls():
     try:check()
     except (AssertionError,subprocess.CalledProcessError):rejected=True
    assert rejected,'unqualified mutation accepted: '+name+' repin='+str(repin)
- print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4')
+ # Fresh source/manifest digests alone cannot authorize a changed broker:
+ # the reversible patch and exact original OFD bytes must still agree.
+ target=ROOT/'compat/binder/binderd.cc'
+ manifest=ROOT/'tools/net-tcp-priority/qualified/binder-output-source.json'
+ for name,before,after in binder_cases:
+  assert ROOT/name==target and original(target).count(before)==1
+  changed_source=original(target).replace(before,after,1)
+  qualification=json.loads(original(manifest))
+  qualification['source_sha256'][name]=hashlib.sha256(changed_source).hexdigest()
+  changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
+  def repinned(path):
+   return changed_source if path==target else changed_manifest if path==manifest else original(path)
+  rejected=False
+  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),BINDER_OUTPUT_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'repinned Binder output mutation accepted: '+before.decode()
+ qualification=json.loads(original(manifest))
+ qualification['native_runtime_approval']=True
+ changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
+ def elevated(path):return changed_manifest if path==manifest else original(path)
+ rejected=False
+ with patch.object(Path,'read_bytes',elevated), patch.dict(globals(),BINDER_OUTPUT_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
+  try:check()
+  except (AssertionError,subprocess.CalledProcessError):rejected=True
+ assert rejected,'repinned Binder output runtime approval accepted'
+ print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4 repinned_binder_output_controls=6')
 if __name__=='__main__':
  import sys
  check()
