@@ -141,6 +141,16 @@ cross-compilation alone supplies no session-access evidence. A successful sessio
 result would establish neither Fetch coverage nor W07 completion; all worker
 capability gates remain closed.
 
+Actual execution on head `e909052a`, CI run
+[45230894563](https://github.com/gesher-runtime/gesher/actions/runs/45230894563),
+passed on Windows 2022 with WebView2 `131.0.2903.86` and Windows 2025 with
+`157.0.4341.46`, using SDK `1.0.4258.31` and the static loader. Setup, subscription,
+discovery and cleanup succeeded, but `Target.getTargets` returned
+`{"targetInfos":[]}` and discovery observed no browser target. Consequently the
+diagnostic did not attempt attachment or session browser-scope proof. Its
+precise finding is unavailable through the tested routes, with no Fetch or
+worker capability established. This does not exclude every possible route.
+
 ### WebStorage scope
 
 Current Chromium Android WebStorage uses the quota manager's complete storage-key
@@ -149,6 +159,25 @@ actual measurements. The CDP storage API supplies per-origin measurements but
 not that registry. First-party HTTP(S) queries and deletion do not establish
 opaque-origin or partitioned third-party behavior. Complete enumeration and
 partition-aware origin deletion remain W08 requirements; neither is marked done.
+
+Direct access to the application's profile database was also investigated. The
+repository has a Win32 SQLite backend, and the SDK exposes the actual profile
+path. However, inspected Chromium 143/146 quota databases default to exclusive
+locking and retain browser-owned transactions. Bucket deletion can remain
+uncommitted until a scheduled 30-second commit, while insertion of a new bucket
+commits immediately. Android's bridge enumerates the complete storage keys and
+obtains their measurements through the live quota manager after its bootstrap
+ordering. An external SQLite connection or committed snapshot therefore does
+not establish the same live result; database rows alone also do not provide
+current per-key usage. This is a source-based finding, not an assertion that
+the tested proprietary Edge runtimes use an identical schema or locking policy.
+No live-profile database workaround was introduced.
+
+Sources: the pinned Chromium 146
+[quota database](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/storage/browser/quota/quota_database.cc),
+[database defaults](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/sql/database.h),
+[Android quota bridge](https://chromium.googlesource.com/chromium/src/+/refs/tags/146.0.7647.2/android_webview/browser/aw_quota_manager_bridge.cc),
+and [SQLite transaction isolation](https://www.sqlite.org/isolation.html).
 
 ## Prepared admission, callbacks and cleanup
 
@@ -233,8 +262,14 @@ queries, so an ABBA comparison would also be misleading. The component suites
 verify bounded concurrency and resource ownership. A future worker backend
 needs Windows/ART execution with a real WebView2 runtime for source-filter
 routing, browser response consumption during shutdown, exact redirect/error
-behavior, thread affinity and offline worker execution. Actual storage usage
-and deletion also retain their Windows validation requirement.
+behavior, thread affinity and offline worker execution. The public per-origin
+storage usage/quota and first-party deletion-isolation case subsequently passed
+on both Windows runtimes in that exact run: two real 256 KiB IndexedDB payloads,
+positive actual measurements, A converging to zero usage and its database
+absent after deletion, B's entire payload retained, and ten once-only callbacks
+on the invoking UI thread. See the [runtime evidence](../handoff/round2_validation.md#public-webstorage-runtime-acceptance).
+These results do not cover the complete storage-key registry or partition-aware
+deletion.
 
 ## Primary contract references
 

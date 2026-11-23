@@ -129,8 +129,44 @@ The unchanged APK build passes with actual Android framework/core classes,
 PowerShell transcript controls accept a complete result and reject five cases:
 zero baseline usage, missing database-absence proof, lost unrelated data, a
 callback failure after the success marker, and a nonzero process exit. These
-are harness checks only. **The real Windows/ART/WebView2 result is pending the
-successor CI windowing run**; local compilation does not establish that result.
+are harness checks only.
+
+Real Windows/ART acceptance subsequently passed on published head `e909052a`
+in [CI run 45230894563](https://github.com/gesher-runtime/gesher/actions/runs/45230894563).
+The checkout was merge `35b0626158563419fef5ea84625a12e5c3951a1c` with main
+`e505ad22`. These observations belong to that exact run; later heads still need
+their own complete CI result.
+
+| Runtime observation | Windows 2022 | Windows 2025 |
+| --- | ---: | ---: |
+| WebView2 version | 131.0.2903.86 | 157.0.4341.46 |
+| Committed payload per origin, bytes | 262,144 | 262,144 |
+| A baseline usage, bytes | 109,154 | 107,767 |
+| B baseline usage, bytes | 109,830 | 107,855 |
+| Reported quota per origin, bytes | 96,635,503,410 | 96,635,503,410 |
+| A usage after deletion | 0 | 0 |
+| A database after reopening | Absent | Absent |
+| B complete payload after deleting A | Preserved | Preserved |
+| Public queries / callbacks | 10 / 10, main thread | 10 / 10, main thread |
+
+Both executions first observed A's old usage after deletion, then converged to
+zero within the deadline. Database absence and preservation of every byte in B
+were verified independently afterward; B's final usage remained unchanged.
+Both complete WebView/windowing tracks reported zero failures.
+[Windows 2022 log](https://github.com/gesher-runtime/gesher/actions/runs/45230894563/job/137899912777)
+and [Windows 2025 log](https://github.com/gesher-runtime/gesher/actions/runs/45230894563/job/137899912709)
+were independently reviewed and then checked by the integrating reviewer.
+This closes the real-runtime acceptance gap for these per-origin operations;
+complete origin enumeration and partition-aware deletion remain open.
+
+The same jobs executed the bounded browser-session diagnostic with SDK
+`1.0.4258.31` and the static loader. Setup, `_11`, subscriptions, discovery and
+cleanup all returned success, but browser-filtered enumeration returned
+`{"targetInfos":[]}` and no browser target event was observed. Neither job
+attempted attachment or the session browser-scope command without a target ID.
+The result is unavailable through these tested routes on these runtimes; no
+Fetch coverage or worker capability was established. This is not a claim that
+every possible browser-session route is impossible.
 
 ## Limits
 
