@@ -193,7 +193,8 @@ static int BenchmarkLines() {
           "line-benchmark operation=%d sample=%d bytes=%zu registry_visits=%llu reallocations=%zu microseconds=%lld checksum=%llu\n",
           operation, sample, source.size(), static_cast<unsigned long long>(registry_visits), line_reallocations,
           static_cast<long long>(elapsed), static_cast<unsigned long long>(checksum));
-      write(STDOUT_FILENO, report, static_cast<size_t>(count));
+      if (count < 0 || static_cast<size_t>(count) >= sizeof(report) ||
+          write(STDOUT_FILENO, report, static_cast<size_t>(count)) != count) return 2;
     }
     std::free(bytes);
     adapter_fclose(stream);
