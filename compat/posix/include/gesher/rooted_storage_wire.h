@@ -10,7 +10,7 @@ constexpr uint32_t kMagic = 0x47535253;  // GSRS
 constexpr uint32_t kVersion = 1;
 constexpr uint32_t kMaxPathUnits = 32767;
 
-enum class Op : uint32_t { kOpen = 1, kMakeDirectory, kRemove, kRename };
+enum class Op : uint32_t { kOpen = 1, kMakeDirectory, kRemove, kRename, kStatAndroidData };
 constexpr uint32_t kCredential = 0;
 constexpr uint32_t kDevice = 1;
 
@@ -60,6 +60,14 @@ struct Reply {
   uint64_t handle = 0;  // Only a successful kOpen supplies a guest-owned handle.
 };
 
+// Only kStatAndroidData can return this trailing frame. It has no input path
+// or flags and reports the actual filesystem backing this run's Android /data.
+struct Filesystem {
+  uint64_t available_bytes = 0;
+  uint64_t total_bytes = 0;
+  uint64_t free_bytes = 0;
+};
+
 // A successful kOpen is an offer. The guest echoes OpenAck with kOpenAckMagic
 // and owns the handle only after the host replies with kOpenCommitMagic.
 constexpr uint32_t kOpenAckMagic = 0x47535241;     // GSRA
@@ -69,6 +77,6 @@ struct OpenAck {
   uint32_t version = kVersion;
 };
 
-static_assert(sizeof(Request) == 32 && sizeof(Reply) == 24 && sizeof(OpenAck) == 8);
+static_assert(sizeof(Request) == 32 && sizeof(Reply) == 24 && sizeof(Filesystem) == 24 && sizeof(OpenAck) == 8);
 
 }  // namespace gesher::rooted_storage_wire
