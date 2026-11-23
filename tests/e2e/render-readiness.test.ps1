@@ -9,7 +9,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-if (-not $Runner) { $Runner = Join-Path $here 'run-e2e.ps1' }
+if (-not $Runner) { $Runner = Join-Path $here 'window-workload.ps1' }
 if (-not $Manifest) { $Manifest = Join-Path $here 'apps.json' }
 $source = [IO.File]::ReadAllText((Resolve-Path $Runner))
 $tokens = $null; $parseErrors = $null
@@ -18,12 +18,14 @@ if ($parseErrors.Count) { throw ($parseErrors -join "`n") }
 $analyzer = [regex]::Match($source, "(?s)Add-Type -TypeDefinition @'\r?\n(using System;.*?public static class GesherE2E .*?)\r?\n'@")
 if (-not $analyzer.Success) { throw 'The maintained pixel analyzer was not found' }
 Add-Type -TypeDefinition $analyzer.Groups[1].Value
-foreach ($name in @('Analyze', 'PixelDiff', 'AppLogPath', 'LogMark', 'LogsSince', 'RenderReadiness', 'CaptureSettled', 'RunWindow')) {
+foreach ($name in @('Analyze', 'PixelDiff', 'AppLogPath', 'LogMark', 'LogsSince', 'RenderReadiness',
+                    'AssertMeasuredWindow', 'RegisterMeasuredParticipants', 'CaptureSettled', 'RunWindow')) {
   $function = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $true) |
     Where-Object Name -eq $name)
   # An old-source negative control lacks the newer helpers; its actual old
   # capture/close functions still run and must fail the same checks.
-  if ($function.Count -eq 0 -and $name -in @('RenderReadiness', 'AppLogPath', 'LogMark', 'LogsSince')) { continue }
+  if ($function.Count -eq 0 -and $name -in @('RenderReadiness', 'AppLogPath', 'LogMark', 'LogsSince',
+                                            'AssertMeasuredWindow', 'RegisterMeasuredParticipants')) { continue }
   if ($function.Count -ne 1) { throw "Expected one maintained $name function" }
   Invoke-Expression $function[0].Extent.Text
 }
@@ -32,7 +34,7 @@ using System;
 using System.IO;
 public static class GesherWin32 {
   public static long Millis, PageAt, RenderAt;
-  public static int Stage;
+  public static int Stage, CaptureFault;
   public static bool IgnoreAccept;
   public static int[] Initial, EmptyEditor, Edited, EditedButton, Blank, Rendered;
   public static int[] Load(string path) {
@@ -66,6 +68,10 @@ public static class GesherWin32 {
     EditedButton = directory.Length == 0 ? Frame(true, false, false, false) : Load(Path.Combine(directory, "edited-button.bin"));
   }
   public static int[] Capture(IntPtr hwnd) {
+    if (Stage > 0 && CaptureFault == 1) return null;
+    if (Stage > 0 && CaptureFault == 2) {
+      int[] resized = (int[])Initial.Clone(); resized[0] = 200; resized[1] = 360; return resized;
+    }
     if (Stage == 4) return EditedButton;
     if (Stage == 3) return Millis >= RenderAt ? Rendered : Blank;
     return Stage == 2 ? Edited : Stage == 1 ? EmptyEditor : Initial;
@@ -79,6 +85,7 @@ public static class GesherWin32 {
   public static void TypeKeys(IntPtr hwnd, string keys) { Stage = 2; }
   public static string Title(IntPtr hwnd) { return "Untitled.md"; }
   public static bool IsWindow(IntPtr hwnd) { return true; }
+  public static uint ProcessId(IntPtr hwnd) { return (uint)System.Diagnostics.Process.GetCurrentProcess().Id; }
 }
 '@
 [GesherWin32]::Frames($CapturedFrames)
@@ -114,14 +121,14 @@ function Check([bool] $condition, [string] $name) {
 $notes = (Get-Content -Raw $Manifest | ConvertFrom-Json).apps | Where-Object package -eq 'org.billthefarmer.notes'
 if ($null -eq $notes) { throw 'Pinned Notes scenario not found' }
 function Case([string] $name, [long] $pageAt, [long] $renderAt, [bool] $pass, [switch] $Normal, [switch] $NoInput,
-              [switch] $IgnoreAccept) {
+              [switch] $IgnoreAccept, [switch] $Measure) {
   $a = $notes | ConvertTo-Json -Depth 20 | ConvertFrom-Json
   if ($Normal) { $a.startupDialog = $null }
   [GesherWin32]::Millis = 0; [GesherWin32]::Stage = 0
   [GesherWin32]::PageAt = $pageAt; [GesherWin32]::RenderAt = $renderAt
   [GesherWin32]::IgnoreAccept = $IgnoreAccept.IsPresent
   $script:closeAt = -1; $script:closes = 0; $script:kills = 0
-  $result = RunWindow $a 'owned-test-process' 'launch' -NoInput:$NoInput
+  $result = RunWindow $a 'owned-test-process' 'launch' -NoInput:$NoInput -Measure:$Measure
   $count = if ($Normal) { $a.actions.Count } else { $a.startupDialog.actions.Count }
   # Three-second startup + one initial stable capture; every prior action has
   # its original two-second delay + one stable capture. Only the final action
@@ -140,6 +147,19 @@ function Case([string] $name, [long] $pageAt, [long] $renderAt, [bool] $pass, [s
     Check (@($result.Problems -match 'rendered content did not become ready').Count -gt 0) "$name fails missing readiness or content"
     Check ($script:closeAt -eq $deadline) "$name spends at most the one existing bounded wait"
   }
+  if ($Measure) {
+    $performance = $result.Performance
+    Check ($performance.FirstFrameVerified -and $performance.NonblankVerified -and
+      $performance.InputVerified -and $performance.LifecycleVerified) "$name records only verified boundaries"
+    Check (($performance.Events.name -join ',') -eq
+      'command_start,first_frame_observed,first_input,first_input_change_observed,completed') "$name retains observer boundary names"
+    Check ($performance.Participants.Count -eq 1 -and $performance.Participants[0].pid -eq $PID) "$name records process creation identity"
+    $last = 0.0
+    foreach ($event in $performance.Events) {
+      Check ($event.at_ms -ge $last) "$name uses monotonic elapsed timestamps"
+      $last = $event.at_ms
+    }
+  }
   Write-Host "READINESS_CASE $name close_ms=$script:closeAt original_deadline_ms=$deadline problems=$($result.Problems.Count) $(@($result.Problems) -join ' | ')"
 }
 Case 'pending load after old early close' 14000 14000 $true
@@ -153,6 +173,24 @@ Case 'content appearing only at the deadline is not stable' 14000 29000 $false
 Case 'preview not shown: editor still visible after the startup completion' ([long]::MaxValue) 14000 $false -IgnoreAccept
 Case 'preview not shown: editor still visible despite a later completion' 14000 14000 $false -IgnoreAccept
 Case 'association shortcut without input' ([long]::MaxValue) ([long]::MaxValue) $true -NoInput
+Case 'optional measurement preserves the workload' 17000 17000 $true -Normal -Measure
+# PixelDiff's incomparable sentinel is not evidence of an input-induced change.
+# Exercise the actual common RunWindow path with no special render predicate.
+foreach ($fault in @(1, 2)) {
+  foreach ($measure in @($false, $true)) {
+    [GesherWin32]::Millis = 0; [GesherWin32]::Stage = 0; [GesherWin32]::CaptureFault = $fault
+    $script:closes = 0; $script:kills = 0
+    $a = [pscustomobject]@{ package = 'capture.evidence.fixture'; actions = @(@{ click = @(20, 20) }) }
+    $result = RunWindow $a 'owned-test-process' 'launch' -Measure:$measure
+    Check (@($result.Problems -match 'missing or incomparable').Count -eq 1) "capture fault $fault measure=$measure fails the workload"
+    Check ($script:closes -eq 1) "capture fault $fault measure=$measure still closes normally"
+    if ($measure) {
+      Check (-not $result.Performance.InputVerified) "capture fault $fault cannot verify input"
+      Check ('first_input_change_observed' -notin $result.Performance.Events.name) "capture fault $fault cannot create a successful timing event"
+    }
+  }
+}
+[GesherWin32]::CaptureFault = 0
 # The changed-pixels requirement needs the content rectangle from before the action:
 # without that capture (PrintWindow failed) or with one it does not fit in, nothing
 # shows a change, and the requirement must fail rather than pass vacuously.
