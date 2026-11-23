@@ -32,6 +32,13 @@ foreach ($httpCacheTest in @('HttpEngineCacheTest', 'HttpEngineConnectionLifetim
   } @("${httpCacheTest} passed:")
 }
 
+$httpAdmissionOut = FixesRun ($dvmFixes + 'HttpEngineAdmissionTest') 180
+$httpAdmissionCode = $LASTEXITCODE
+Check 'network: bounded unary HTTP ownership, cancellation and independent cleanup on ART' {
+  if ($httpAdmissionCode -ne 0) { throw "HTTP admission contract failed: $httpAdmissionOut" }
+  $httpAdmissionOut
+} @('HttpEngineAdmissionTest passed:')
+
 foreach ($httpPolicyMode in @('ordinary', 'global-enabled', 'global-disabled')) {
   $httpPolicyOut = FixesRun ($dvmFixes + 'HttpEngineProtocolPolicyTest' + $httpPolicyMode) 45
   $httpPolicyCode = $LASTEXITCODE
