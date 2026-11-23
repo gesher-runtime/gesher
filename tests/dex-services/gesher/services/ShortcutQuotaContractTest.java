@@ -485,13 +485,20 @@ public final class ShortcutQuotaContractTest {
             });
         }
         set(activity, "state", state("STOPPED")); h.exhaust(OWNER);
-        set(cover, "translucent", false); set(activity, "state", state("STARTED")); h.exhaust(OWNER);
+        // Not TOP: becoming STARTED under an opaque activity is no foreground visit,
+        // so the exhausted counter stays exhausted and the next call is throttled.
+        set(cover, "translucent", false); set(activity, "state", state("STARTED"));
+        h.app(() -> check(!h.api.setDynamicShortcuts(OWNER, ParceledListSlice.emptyList(), 0),
+                "started activity under an opaque one was exempt"));
+        check(h.remaining(OWNER) == 0, "started activity under an opaque one became TOP");
         ((List<Object>) get(other, "activities")).clear();
         ((List<Object>) get(h.atm, "mActivities")).remove(cover);
         ((List<Object>) get(h.atm, "mProcesses")).remove(other);
         set(activity, "state", state("STOPPED"));
         ((List<Object>) get(h.process, "activities")).clear();
         ((List<Object>) get(h.atm, "mActivities")).clear();
+        // Only an authorized reset restores the budget of a process that never became TOP.
+        system(() -> h.api.onApplicationActive(OWNER, 0));
         h.exhaust(OWNER);
         set(h.process, "inProcessActivityState", state("STOPPED"));
         h.manualState("RESUMED"); h.manualState("STOPPED");
