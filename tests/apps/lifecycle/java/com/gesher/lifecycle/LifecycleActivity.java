@@ -6,6 +6,7 @@ package com.gesher.lifecycle;
 
 import android.app.Activity;
 import android.content.res.TypedArray;
+import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -28,6 +29,13 @@ public class LifecycleActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         report("LifecycleActivity onCreate, savedInstanceState=" + savedInstanceState);
+        if (getIntent().getBooleanExtra("com.gesher.lifecycle.CHECK_USB_SERVICE", false)) {
+            UsbManager usb = (UsbManager) getSystemService(USB_SERVICE);
+            if (usb == null || usb.getDeviceList() == null) {
+                throw new IllegalStateException("USB service unavailable in Activity.onCreate");
+            }
+            report("LifecycleActivity onCreate: USB service available");
+        }
     }
 
     @Override
