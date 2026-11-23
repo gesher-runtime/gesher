@@ -172,18 +172,39 @@ public final class AppOpsService extends IAppOpsService.Default {
         if (!owner.isCurrent() || (op != OP_READ_CLIPBOARD && op != OP_WRITE_CLIPBOARD)) {
             return false;
         }
-        ApkPackage code = owner.code();
-        if (restricted(op, code.uid(), code.packageName, null, false)) return false;
+        return scopedClipboardMode(owner.code(), op, foreground) == MODE_ALLOWED;
+    }
+
+    private int scopedClipboardMode(ApkPackage code, int op, boolean foreground) {
+        if (restricted(op, code.uid(), code.packageName, null, false)) return MODE_IGNORED;
         int switchOp = switchOp(op);
         int mode = raw(mStore.state(), switchOp, code.uid(), code.packageName);
-        if (mode != MODE_FOREGROUND) return mode == MODE_ALLOWED;
+        if (mode != MODE_FOREGROUND) return mode;
         if (foreground) {
-            return evaluateForeground(switchOp, new UidState(UID_STATE_TOP, 0)) == MODE_ALLOWED;
+            return evaluateForeground(switchOp, new UidState(UID_STATE_TOP, 0));
         }
         refreshUidStates();
         synchronized (mLock) {
-            return evaluate(op, code.uid(), mode) == MODE_ALLOWED;
+            return evaluate(op, code.uid(), mode);
         }
+    }
+
+    /** Note a transfer against the native lease's package and UID, even before installation. */
+    boolean noteScopedClipboard(PermissionPolicy.ScopedOwner owner, int op, boolean foreground) {
+        if (!owner.isCurrent() || (op != OP_READ_CLIPBOARD && op != OP_WRITE_CLIPBOARD)) {
+            return false;
+        }
+        ApkPackage code = owner.code();
+        int mode = scopedClipboardMode(code, op, foreground);
+        if (!owner.isCurrent()) return false;
+        OpKey key = new OpKey(op, code.uid(), code.packageName, null, 0);
+        synchronized (mLock) {
+            long state = foreground ? AppOpsManager.makeKey(UID_STATE_TOP, OP_FLAG_SELF)
+                    : eventKey(key.uid, OP_FLAG_SELF);
+            recordAtState(key, mode == MODE_ALLOWED, state, null);
+            notifyNoted(key, OP_FLAG_SELF, mode);
+        }
+        return mode == MODE_ALLOWED;
     }
     @Override public int checkOperationRaw(int code, int uid, String name, String tag) {
         return checkOperationRawForDevice(code, uid, name, tag, 0);
@@ -493,8 +514,11 @@ public final class AppOpsService extends IAppOpsService.Default {
         return AppOpsManager.makeKey(mUidStates.getOrDefault(uid, UidState.absent()).state, flags);
     }
     private void record(OpKey key, boolean allowed, int flags, AppOpsManager.OpEventProxyInfo proxy) {
+        recordAtState(key, allowed, eventKey(key.uid, flags), proxy);
+    }
+    private void recordAtState(OpKey key, boolean allowed, long state, AppOpsManager.OpEventProxyInfo proxy) {
         History history = mHistory.computeIfAbsent(key, ignored -> new History());
-        (allowed ? history.access : history.reject).put(eventKey(key.uid, flags),
+        (allowed ? history.access : history.reject).put(state,
                 new AppOpsManager.NoteOpEvent(System.currentTimeMillis(), -1, proxy));
     }
     private void startRunning(Started started) {

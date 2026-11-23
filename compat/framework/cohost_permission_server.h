@@ -7,6 +7,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -145,31 +146,33 @@ class Server {
   }
 
   void ServeClipboard(HANDLE pipe, const Header& request) {
-    ClipboardFrame input, result;
-    // At most one clipboard frame per lease can be buffered at a time. A
-    // malformed or stalled writer holds only this scope and has a deadline.
-    std::unique_lock lock(clipboard_transfer_, std::try_to_lock);
-    DWORD error = ERROR_BUSY;
     const ULONGLONG deadline = GetTickCount64() + kClipboardTransferTimeout;
-    if (lock.owns_lock()) {
-      if (input.Allocate(request.count)) {
-        if (!TransferClipboard(pipe, input.data(), request.count, false, deadline) ||
-            !IsLive()) return;
-        error = clipboard_(request.operation, input, &result);
-      } else {
-        error = ERROR_NOT_ENOUGH_MEMORY;
-      }
+    if (SendClipboardReply(pipe, request, deadline)) AwaitClose(pipe, deadline);
+  }
+
+  bool SendClipboardReply(HANDLE pipe, const Header& request, ULONGLONG deadline) {
+    // At most one clipboard frame per lease can be buffered at a time. A
+    // final pipe write can reach the caller before this thread is scheduled
+    // to release the slot. Give the next request its bounded turn.
+    std::unique_lock lock(clipboard_transfer_, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::milliseconds(kClipboardTransferTimeout)) ||
+        GetTickCount64() >= deadline || !IsLive()) return false;
+    ClipboardFrame input, result;
+    DWORD error = ERROR_NOT_ENOUGH_MEMORY;
+    if (input.Allocate(request.count)) {
+      if (!TransferClipboard(pipe, input.data(), request.count, false, deadline) ||
+          !IsLive()) return false;
+      error = clipboard_(request.operation, input, &result);
     }
-    if (!IsLive()) return;
+    if (!IsLive()) return false;
     if (error == ERROR_SUCCESS && !ValidClipboardReply(request.operation, result.size())) {
       error = ERROR_INVALID_DATA;
     }
     Reply reply;
     reply.error = static_cast<int32_t>(error);
     if (error == ERROR_SUCCESS) reply.count = static_cast<uint32_t>(result.size());
-    if (!binder_bootstrap::Transfer(pipe, &reply, sizeof(reply), true, deadline) ||
-        !TransferClipboard(pipe, result.data(), reply.count, true, deadline)) return;
-    AwaitClose(pipe, deadline);
+    return binder_bootstrap::Transfer(pipe, &reply, sizeof(reply), true, deadline) &&
+        TransferClipboard(pipe, result.data(), reply.count, true, deadline);
   }
 
   void AwaitClose(HANDLE pipe, ULONGLONG send_deadline) {
@@ -194,7 +197,7 @@ class Server {
   std::wstring name_;
   Decisions decide_;
   Clipboard clipboard_;
-  std::mutex clipboard_transfer_;
+  std::timed_mutex clipboard_transfer_;
   std::atomic<bool> stopped_{false};
   binder_peer::OwnedHandle child_;
   process_identity::Process generation_;

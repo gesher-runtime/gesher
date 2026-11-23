@@ -162,7 +162,11 @@ final class CohostPermissionHost implements AutoCloseable {
     }
 
     private byte[] readClipboard() {
-        if (!canReadClipboard()) return null;
+        boolean foreground = isForeground();
+        if (WindowsHost.sessionLockState() != 0 || !clipboardReadAllowed(foreground)
+                || !mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_READ_CLIPBOARD, foreground)) {
+            return null;
+        }
         int sequence = WindowsHost.clipboardSequence();
         if (sequence == 0) return null;
         byte[] image = WindowsHost.clipboardImage();
@@ -200,7 +204,7 @@ final class CohostPermissionHost implements AutoCloseable {
                     if (!WindowsHost.retainClipboardPublisher()) return null;
                     mClipboardPublisher = true;
                 }
-                if (!mAppOps.scopedClipboardAllowed(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
+                if (!mAppOps.noteScopedClipboard(mOwner, AppOpsManager.OP_WRITE_CLIPBOARD,
                         isForeground())) return null;
                 int sequence = contents == null ? WindowsHost.clearClipboardSequence()
                         : WindowsHost.setClipboardSequence(contents.text(), contents.html(), contents.image());

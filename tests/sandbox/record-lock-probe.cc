@@ -371,22 +371,20 @@ int CohostGuest() {
                 &permissions_result) == ERROR_SUCCESS &&
              permissions_result == std::vector<int32_t>{0, -1},
              "cohost permission reply retains exact request order")) return 1;
-  permissions::ClipboardFrame input, output;
+  permissions::ClipboardFrame input, empty, output;
   if (!input.Allocate(kCohostClipboardProbeBytes)) return 1;
   for (uint32_t i = 0; i < input.size(); i++) input.data()[i] = static_cast<uint8_t>(i);
-  if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardWrite, input,
-              &output) == ERROR_SUCCESS && output.size() == sizeof(uint32_t) &&
-              output.data()[0] == 0x5a,
-             "contained clipboard request preserves exact bytes across pipe buffers")) return 1;
-  if (!input.Allocate(0)) return 1;
-  if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardRead, input,
-              &output) == ERROR_SUCCESS && output.size() == kCohostClipboardProbeBytes,
-             "trusted clipboard response spans multiple pipe buffers")) return 1;
-  bool matches = true;
-  for (uint32_t i = 0; i < output.size(); i++) {
-    if (output.data()[i] != static_cast<uint8_t>(i)) { matches = false; break; }
+  for (int pass = 0; pass < 12; ++pass) {
+    if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardWrite, input,
+                &output) == ERROR_SUCCESS && output.size() == sizeof(uint32_t) &&
+                output.data()[0] == 0x5a,
+               "contained clipboard request preserves exact bytes across pipe buffers")) return 1;
+    if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardRead, empty,
+                &output) == ERROR_SUCCESS && output.size() == kCohostClipboardProbeBytes,
+               "trusted clipboard response spans multiple pipe buffers")) return 1;
+    if (!Check(std::equal(input.data(), input.data() + input.size(), output.data()),
+               "cohost clipboard response bytes match")) return 1;
   }
-  if (!Check(matches, "cohost clipboard response bytes match")) return 1;
   return Check(StandaloneChild(L" --cohost-descendant", GetStdHandle(STD_INPUT_HANDLE)),
              "enrolled cohost child inherits the sealed scope") ? 0 : 1;
 }

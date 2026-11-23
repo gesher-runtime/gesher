@@ -178,9 +178,9 @@ public final class ClipboardService extends IClipboard.Default
     private boolean access(ListenerInfo identity, int op, boolean note) {
         checkPackage(identity.uid, identity.packageName);  // AOSP ownership check precedes privileges.
         if (!current(identity)) return false;
-        if (mPm.isCohost()) {
-            if (!mHost.authorized(op)) return false;
-        } else if (op == AppOpsManager.OP_READ_CLIPBOARD && !backgroundPermission(identity)
+        // The Windows host checks and notes AppOps for actual cohost transfers.
+        if (mPm.isCohost()) return mHost.authorized(op);
+        if (op == AppOpsManager.OP_READ_CLIPBOARD && !backgroundPermission(identity)
                 && !defaultIme(identity.packageName)
                 && !mAtm.ownsForegroundProcess(identity.uid, mHost.foregroundProcess())) return false;
         // This is an internal system-server AppOps call for an already authenticated subject.

@@ -204,6 +204,7 @@ inline DWORD Exchange(Operation operation, const std::vector<std::u16string>& na
 
 inline DWORD ClipboardExchange(Operation operation, const ClipboardFrame& input,
                                ClipboardFrame* output) {
+  output->Allocate(0);
   if (!IsClipboard(operation)) return ERROR_INVALID_PARAMETER;
   Header request;
   request.operation = operation;
