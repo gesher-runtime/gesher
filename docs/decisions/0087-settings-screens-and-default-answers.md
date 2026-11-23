@@ -101,7 +101,9 @@ answered at once. Each such request gets a token (`SettingsResults`) in a file o
 `data/system/control-panel-results/<token>` holding the package, and the Control Center
 reports the tokens of the package it showed (`gesher-app settings-closed`) when the details
 close; only then does the app get its result, so a store re-checking in `onActivityResult`
-sees the user's decision. The result follows AOSP Settings (as known: packages/apps/Settings
+sees the user's decision. A request from a foreground activity also pauses the task's
+covered activity, including ordinary `startActivity` without a result, so that the
+activity can recheck access in `onResume` after the details close. The result follows AOSP Settings (as known: packages/apps/Settings
 is not in the local AOSP checkout): ExternalSourcesDetails sets a result only when the user
 turns the switch during the visit, RESULT_OK if the last turn was on and RESULT_CANCELED if
 off, so an app already allowed that is closed without a turn gets RESULT_CANCELED; the other

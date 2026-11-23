@@ -18,8 +18,8 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Results of per-app Settings screens that an app opened with startActivityForResult and that
- * Gesher shows as the Control Center's app details ({@link SettingsIntents}).
+ * Completion of per-app Settings screens that an app opened and that Gesher shows as the
+ * Control Center's app details ({@link SettingsIntents}).
  *
  * <p>On a phone the Settings screen answers when the user leaves it, after deciding; an app
  * re-checks then (its onActivityResult, and the onResume around it). Here the result waits
@@ -54,6 +54,7 @@ final class SettingsResults {
         ScheduledFuture<?> timeout;
         /** The last turn of the screen's switch during the visit (null: none). */
         Boolean toggle;
+        Runnable releaseCover;
 
         Pending(Object source, Object process, String resultWho, int requestCode, String action,
                 String packageName) {
@@ -147,9 +148,9 @@ final class SettingsResults {
             }
             pending.token = key;
             mPending.put(key, pending);
-            pending.timeout = mTimer.schedule(() -> answer(key), mTimeoutMs, TimeUnit.MILLISECONDS);
+            pending.timeout = mTimer.schedule(() -> cancel(key), mTimeoutMs, TimeUnit.MILLISECONDS);
         }
-        for (Pending old : evicted) finish(old);
+        for (Pending old : evicted) finish(old, Activity.RESULT_CANCELED);
         return key;
     }
 
@@ -159,7 +160,10 @@ final class SettingsResults {
         synchronized (mPending) {
             pending = mPending.remove(token);
         }
-        if (pending != null && pending.timeout != null) pending.timeout.cancel(false);
+        if (pending != null) {
+            if (pending.timeout != null) pending.timeout.cancel(false);
+            if (pending.releaseCover != null) pending.releaseCover.run();
+        }
     }
 
     /** The Control Center closed the details shown for these requests. */
@@ -167,27 +171,34 @@ final class SettingsResults {
         int answered = 0;
         if (tokens == null) return 0;
         for (String token : tokens) {
-            if (validToken(token) && answer(token)) answered++;
+            if (validToken(token) && answer(token, true)) answered++;
         }
         return answered;
     }
 
-    private boolean answer(String token) {
+    /** Ends a visit that was replaced or that never reported a close. */
+    void cancel(String token) {
+        answer(token, false);
+    }
+
+    private boolean answer(String token, boolean closed) {
         Pending pending;
         synchronized (mPending) {
             pending = mPending.remove(token);
         }
         if (pending == null) return false;
-        finish(pending);
+        finish(pending, closed ? resultCode(pending) : Activity.RESULT_CANCELED);
         return true;
     }
 
-    private void finish(Pending pending) {
+    private void finish(Pending pending, int resultCode) {
         if (pending.timeout != null) pending.timeout.cancel(false);
         try {
-            mDelivery.deliver(pending, resultCode(pending));
+            mDelivery.deliver(pending, resultCode);
         } catch (RuntimeException e) {
             SystemServer.log("settings result: delivery failed: " + e);
+        } finally {
+            if (pending.releaseCover != null) pending.releaseCover.run();
         }
     }
 

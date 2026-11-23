@@ -83,10 +83,16 @@ public final class SettingsResultsTest {
             String files = "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION";
 
             // Nothing is answered until the Control Center reports the request's token.
-            String a = (String)call(results, "register", pending("activity-a", 1, install, "app.install"));
+            var coverReleases = new java.util.concurrent.atomic.AtomicInteger();
+            Field releaseCover = type("SettingsResults$Pending").getDeclaredField("releaseCover");
+            releaseCover.setAccessible(true);
+            Object first = pending("activity-a", 1, install, "app.install");
+            releaseCover.set(first, (Runnable)coverReleases::incrementAndGet);
+            String a = (String)call(results, "register", first);
             check(a.matches("[0-9a-f]{32}"), "A token is 32 hex digits: " + a);
             check(delivered() == 0, "A registered request is not answered at once");
             check((Integer)call(results, "pendingCount") == 1, "The request waits");
+            check(coverReleases.get() == 0, "The activity stays covered while the request waits");
             // The user turned Install unknown apps on during the visit: RESULT_OK (AOSP
             // ExternalSourcesDetails' setResult on a change). Other apps' and ops' turns do not count.
             call(results, "toggled", "app.other", OP, true);
@@ -98,6 +104,7 @@ public final class SettingsResultsTest {
             check(a.equals(TOKENS.get(TOKENS.size() - 1)), "The answered request carries its token (its file goes)");
             check((Integer)call(results, "closed", (Object)new String[]{a}) == 0 && delivered() == 1,
                     "A token is answered once");
+            check(coverReleases.get() == 1, "Closing the screen releases its activity once");
 
             // No turn (an app already allowed, closed as is), and other screens: RESULT_CANCELED.
             String b = (String)call(results, "register", pending("activity-b", 2, install, "app.install"));
@@ -119,10 +126,13 @@ public final class SettingsResultsTest {
             check((Integer)call(results, "closed", (Object)null) == 0, "A null report answers nothing");
 
             // A request the Control Center never saw (it did not open) is dropped, not answered.
-            String d = (String)call(results, "register", pending("activity-d", 4, files, "app.other"));
+            Object abandoned = pending("activity-d", 4, files, "app.other");
+            releaseCover.set(abandoned, (Runnable)coverReleases::incrementAndGet);
+            String d = (String)call(results, "register", abandoned);
             call(results, "discard", d);
             check((Integer)call(results, "pendingCount") == 0 && delivered() == 4, "A discarded request is never answered");
             check((Integer)call(results, "closed", (Object)new String[]{d}) == 0, "A discarded token cannot be answered later");
+            check(coverReleases.get() == 2, "A failed open also releases the activity once");
 
             // Bounded: the oldest waiting request is answered when the limit is reached.
             int max = (Integer)field("MAX_PENDING");
@@ -138,12 +148,13 @@ public final class SettingsResultsTest {
             Object quick = results(timer, 150);
             before = delivered();
             call(quick, "register", pending("activity-t", 7, install, "app.install"));
+            call(quick, "toggled", "app.install", OP, true);
             synchronized (DELIVERED) {
                 long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 while (DELIVERED.size() == before && System.nanoTime() < end) DELIVERED.wait(100);
             }
             check(delivered() == before + 1 && last()[0] == 7 && last()[1] == Activity.RESULT_CANCELED,
-                    "An unreported request is answered at the timeout");
+                    "A timeout without a close cancels the visit even after a switch was turned on");
             check((Integer)call(quick, "pendingCount") == 0, "The timeout leaves nothing behind");
             Thread.sleep(300);
             check(delivered() == before + 1, "A request is never answered twice");

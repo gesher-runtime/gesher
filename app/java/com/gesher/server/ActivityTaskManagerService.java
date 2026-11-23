@@ -155,11 +155,67 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (mSettingsResults == null) {
                 mSettingsResults = new SettingsResults((pending, code) -> {
                     ControlCenter.forgetResult(pending.token);
-                    deliverResult((ActivityRecord) pending.source, pending.resultWho,
-                            pending.requestCode, code, null, (ProcessRecord) pending.process);
+                    if (pending.requestCode >= 0) {
+                        deliverResult((ActivityRecord) pending.source, pending.resultWho,
+                                pending.requestCode, code, null, (ProcessRecord) pending.process);
+                    }
                 });
             }
             return mSettingsResults;
+        }
+    }
+
+    /**
+     * While a host Settings dialog is in front of the caller's task, pause its
+     * activity through the same lifecycle path as the native document picker.
+     */
+    private Runnable coverWithSettings(ActivityRecord source, ProcessRecord sourceProcess, Intent intent) {
+        ActivityRecord covered;
+        ProcessRecord process;
+        boolean pauseNow;
+        synchronized (this) {
+            if (source.app != sourceProcess || source.finishing || !activityEnabled(source)
+                    || !mActivities.contains(source) || mHiddenTasks.contains(source.taskId)) return null;
+            covered = topOf(source.taskId);
+            process = covered == null ? null : covered.app;
+            if (process == null || process.exiting || process.dead || process.pidSuperseded) return null;
+            pauseNow = covered.state == State.RESUMED || covered.state == State.RESUMING
+                    || covered.state == State.LAUNCHING;
+            if (!pauseNow && !covered.resumeAfterNativeUi) return null;
+            covered.nativeUiCount++;
+            covered.resumeAfterNativeUi = true;
+            updateIdle();
+        }
+        Runnable release = () -> finishSettingsCover(covered, process);
+        try {
+            if (pauseNow) pause(covered, false,
+                    (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+            updateTopResumed();
+            return release;
+        } catch (RuntimeException | Error failure) {
+            release.run();
+            throw failure;
+        }
+    }
+
+    private void finishSettingsCover(ActivityRecord covered, ProcessRecord process) {
+        synchronized (mLaunchLock) {
+            boolean resumeCovered = false;
+            synchronized (this) {
+                if (--covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
+                        && covered.state != State.PAUSING) {
+                    covered.resumeAfterNativeUi = false;
+                    resumeCovered = covered.app == process && processByPid(process.pid) == process
+                            && !process.exiting && !process.dead && !process.pidSuperseded
+                            && !covered.finishing && covered.state != State.DESTROYED
+                            && mActivities.contains(covered) && activityEnabled(covered)
+                            && topOf(covered.taskId) == covered && !mHiddenTasks.contains(covered.taskId);
+                }
+                updateIdle();
+                notifyAll();
+            }
+            if (resumeCovered) { realStartActivity(covered); resume(covered); }
+            updateTopResumed();
         }
     }
 
@@ -2872,30 +2928,34 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     // Only to an activity of the calling process: another app's token
                     // must not receive a result it did not ask for.
                     ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
-                    boolean wantsResult = source != null && requestCode >= 0 && source.app != null
-                            && source.app.pid == originalPid;
-                    // An app's details: answered when the Control Center closes them
-                    // (SettingsResults), registered before the Control Center can see the
-                    // request. Windows' pages and the Control Center's own views report
-                    // nothing, so those requests are answered at once.
-                    String token = wantsResult && settings.controlCenter
-                            && settings.packageName != null
-                            ? settingsResults().register(new SettingsResults.Pending(source,
-                                    source.app, resultWho, requestCode, action,
-                                    settings.packageName))
-                            : null;
+                    ProcessRecord sourceProcess = source != null ? source.app : null;
+                    boolean ownActivity = sourceProcess != null && sourceProcess == originalProcess
+                            && sourceProcess.pid == originalPid;
+                    boolean wantsResult = ownActivity && requestCode >= 0;
+                    // Wait for the details to close, even when the app only requested a
+                    // lifecycle transition. Windows' external Settings pages and the
+                    // Control Center's main view do not report completion.
+                    String token = null;
+                    if (ownActivity && settings.controlCenter && settings.packageName != null) {
+                        SettingsResults.Pending pending = new SettingsResults.Pending(source,
+                                sourceProcess, resultWho, requestCode, action, settings.packageName);
+                        pending.releaseCover = coverWithSettings(source, sourceProcess, intent);
+                        if (wantsResult || pending.releaseCover != null) {
+                            token = settingsResults().register(pending);
+                        }
+                    }
                     // Waiting requests of other apps this one replaces before they were
                     // shown are answered now: their details will not open.
                     java.util.function.Consumer<String> replaced = old -> {
                         SettingsResults results = mSettingsResults;
-                        if (results != null) results.closed(new String[] {old});
+                        if (results != null) results.cancel(old);
                     };
                     boolean opened = settings.controlCenter
                             ? ControlCenter.open(settings.packageName, token, replaced)
                             : sOpenSettingsPage.test(settings.windowsUri);
                     SystemServer.log("startActivity: " + action + ": " + settings
                             + (opened ? " opened" : " unavailable")
-                            + (token != null ? " (result when its details close)" : ""));
+                            + (token != null ? " (waiting for details to close)" : ""));
                     if (!opened) {
                         if (token != null) settingsResults().discard(token);
                         return ActivityManager.START_INTENT_NOT_RESOLVED;
