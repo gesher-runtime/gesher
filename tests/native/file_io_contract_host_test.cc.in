@@ -1,0 +1,300 @@
+#define GESHER_TEST_MEMFD_WRITE
+@WINDOWS_IO_BOUNDARY@
+
+#include <sys/ioctl.h>
+#include <sys/random.h>
+#include <poll.h>
+#include <pthread.h>
+
+static BOOL PeekNamedPipe(HANDLE file, void*, DWORD, DWORD*, DWORD* available, DWORD*) {
+  int count = 0;
+  if (ioctl(file->fd, FIONREAD, &count) < 0) { SetLastError(errno); return FALSE; }
+  pollfd item{file->fd, POLLIN, 0};
+  if (poll(&item, 1, 0) < 0) { SetLastError(errno); return FALSE; }
+  if (count == 0 && (item.revents & POLLHUP) != 0) { SetLastError(ERROR_BROKEN_PIPE); return FALSE; }
+  *available = static_cast<DWORD>(count);
+  return TRUE;
+}
+
+namespace gesher {
+// NTFS file attributes at the declared OS boundary, keyed by the actual
+// Linux inode. The underlying files are ordinary writable files: only the
+// extracted production seal policy prevents these writes.
+static std::map<ino_t, uint32_t> seal_attributes;
+static bool ReadValue(HANDLE file, uint32_t* value) {
+  struct stat info{};
+  if (fstat(file->fd, &info)) return false;
+  auto entry = seal_attributes.find(info.st_ino);
+  if (entry == seal_attributes.end()) return false;
+  *value = entry->second;
+  return true;
+}
+static bool FileDescriptionIsMemfd(const DescriptorSnapshotPtr& value) {
+  uint32_t seals = 0;
+  return value && ReadValue(value->handle, &seals);
+}
+constexpr DWORD FILE_CURRENT = SEEK_CUR;
+@MEMFD_WRITE_POLICY@
+
+static DescriptorSnapshotPtr Capture(int fd, DescriptorKind kind = DescriptorKind::kFile) {
+  int copy = ::dup(fd);
+  if (copy < 0) return {};
+  auto value = std::make_shared<DescriptorSnapshot>();
+  value->handle = Owned(copy);
+  value->kind = kind;
+  return value;
+}
+static int ReadDevice(Device kind, void* bytes, unsigned count) {
+  if (!count) return 0;
+  if (!bytes) return errno = EFAULT, -1;
+  if (kind == Device::kZero) { std::memset(bytes, 0, count); return static_cast<int>(count); }
+  return static_cast<int>(getrandom(bytes, count, 0));
+}
+static unsigned poll_wakes;
+static bool HasPollWaiters() { return true; }
+static void WakePollers() { ++poll_wakes; }
+// Declared pipe boundary for this regular-file corpus. The complete pipe
+// implementation is executed separately by test_pipe_io_contracts.py.
+static int TransferPipe(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count, bool writing) {
+  return static_cast<int>(writing ? ::write(snapshot->handle->fd, bytes, count)
+                                 : ::read(snapshot->handle->fd, bytes, count));
+}
+}
+
+@NATIVE_FILE_IO@
+
+namespace gesher {
+@SNAPSHOT_FILE_IO@
+}
+
+@NATIVE_PIPE_ROUTE@
+
+// Socket/event/native-fence owners are outside this disk/pipe corpus. Their false lookup
+// boundary leaves the real scalar dispatcher to select the captured object.
+namespace gesher {
+namespace ws {
+struct Buffer { void* data; unsigned size; };
+struct SocketDescription {};
+template <typename... Args> static int RecvOwned(Args&&...) { std::abort(); }
+template <typename... Args> static int SendOwned(Args&&...) { std::abort(); }
+}
+struct SocketFd { uintptr_t socket = 0; std::shared_ptr<ws::SocketDescription> description; };
+static bool LookupSocket(int, SocketFd*) { return false; }
+static bool LookupDevice(int fd, Device* device) { return DeviceFromFd(fd, device); }
+static bool ReadEventObject(int, void*, unsigned, int*) { return false; }
+static bool WriteEventObject(int, const void*, unsigned, int*) { return false; }
+static bool LookupNativeFence(int) { return false; }
+static int CrtResult(int result) { return result; }
+}
+static int _read(int fd, void* bytes, unsigned count) { return static_cast<int>(::read(fd, bytes, count)); }
+static int _write(int fd, const void* bytes, unsigned count) { return static_cast<int>(::write(fd, bytes, count)); }
+using gesher::SocketFd;
+using gesher::Device;
+#define read scalar_read
+#define write scalar_write
+@SCALAR_DISPATCH@
+#undef read
+#undef write
+
+struct RouteRead { int fd; int result = -2; };
+static void* ReadPipeRoute(void* raw) {
+  auto* call = static_cast<RouteRead*>(raw);
+  char byte;
+  NativePipeIo(call->fd, &byte, 1, false, &call->result);
+  return nullptr;
+}
+
+static int checks, failures;
+static void Check(const char* message, bool ok) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL %s (errno=%d)\n", message, errno); }
+}
+static int Transfer(int fd, void* bytes, unsigned count, bool writing) {
+  int result = -2;
+  if (!NativeFileIo(fd, bytes, count, writing, &result)) return -3;
+  return result;
+}
+static int Put(int fd, const char* bytes, unsigned count) {
+  return Transfer(fd, const_cast<char*>(bytes), count, true);
+}
+int main() {
+  char path[] = "file-io-XXXXXX";
+  int fd = mkstemp(path);
+  Check("open actual regular fixture", fd >= 0);
+  if (fd < 0) return 1;
+  int alias = dup(fd);
+  Check("real duplicate retains same position", alias >= 0);
+  Check("ordinary native write advances shared position", Put(fd, "abcdefgh", 8) == 8 &&
+      lseek(alias, 0, SEEK_CUR) == 8);
+  char bytes[16]{};
+  Check("ordinary read consumes from the exact shared position", lseek(fd, 2, SEEK_SET) == 2 &&
+      Transfer(alias, bytes, 3, false) == 3 && std::memcmp(bytes, "cde", 3) == 0 && lseek(fd, 0, SEEK_CUR) == 5);
+  Check("append status changes on an alias", fcntl(alias, F_SETFL, O_APPEND) == 0);
+  Check("append is a native EOF write and advances shared position", Put(fd, "XYZ", 3) == 3 &&
+      lseek(alias, 0, SEEK_CUR) == 11 && pread(fd, bytes, 3, 8) == 3 && std::memcmp(bytes, "XYZ", 3) == 0);
+  Check("zero-byte append leaves ordinary position alone", lseek(fd, 2, SEEK_SET) == 2 &&
+      Put(fd, nullptr, 0) == 0 && lseek(alias, 0, SEEK_CUR) == 2);
+  Check("cleared append restores ordinary writes", fcntl(alias, F_SETFL, 0) == 0 && Put(fd, "K", 1) == 1 &&
+      lseek(alias, 0, SEEK_CUR) == 3 && pread(alias, bytes, 3, 0) == 3 && std::memcmp(bytes, "abK", 3) == 0);
+  Check("ordinary EOF returns zero", lseek(fd, 0, SEEK_END) == 11 && Transfer(fd, bytes, 1, false) == 0);
+  int ro = open(path, O_RDONLY), wo = open(path, O_WRONLY), pathfd = open(path, O_PATH);
+  Check("access witnesses open", ro >= 0 && wo >= 0 && pathfd >= 0);
+  errno = 0;
+  Check("read-only zero write still rejects access", Put(ro, nullptr, 0) == -1 && errno == EBADF);
+  errno = 0;
+  Check("write-only zero read still rejects access", Transfer(wo, nullptr, 0, false) == -1 && errno == EBADF);
+  errno = 0;
+  Check("path-only read is EBADF", Transfer(pathfd, bytes, 1, false) == -1 && errno == EBADF);
+  errno = 0;
+  Check("invalid descriptor is EBADF", Put(-1, "x", 1) == -1 && errno == EBADF);
+  close(ro); close(wo); close(pathfd);
+  duplicate_error = ERROR_ACCESS_DENIED;
+  Check("native pin failure is propagated", Put(fd, "x", 1) == -1 && errno == EACCES);
+  duplicate_error = 0;
+  Check("native pin failure changes no file state", lseek(fd, 0, SEEK_CUR) == 11 && live_handles == 0);
+  Check("append event failure fixture", fcntl(fd, F_SETFL, O_APPEND) == 0);
+  event_error = ERROR_ACCESS_DENIED;
+  Check("append event failure is propagated", Put(fd, "x", 1) == -1 && errno == EACCES);
+  event_error = 0;
+  Check("append event failure changes no file state", lseek(fd, 0, SEEK_CUR) == 11 && live_handles == 0);
+  pending = true; waits = 0;
+  Check("append waits for actual pending completion", Put(fd, "P", 1) == 1 && waits == 1 && lseek(alias, 0, SEEK_CUR) == 12);
+  pending = false;
+  Check("pending operation closes every private handle", live_handles == 0);
+  Check("clear append for exact-object lifetime probe", fcntl(alias, F_SETFL, 0) == 0 && lseek(fd, 1, SEEK_SET) == 1);
+  struct stat old{};
+  Check("record old native identity", fstat(fd, &old) == 0);
+  before_file_io = [fd] {
+    gesher::record_locks::DescriptorGuard guard;
+    close(fd);
+    int replacement = open("replacement", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (replacement != fd) { dup2(replacement, fd); close(replacement); }
+    if (write(fd, "new", 3) != 3) std::abort();
+  };
+  Check("in-flight write survives descriptor reuse", Put(fd, "L", 1) == 1);
+  Check("notification belongs to the pinned old file", notified_inode == old.st_ino);
+  Check("old alias received exactly the in-flight bytes", pread(alias, bytes, 3, 0) == 3 && std::memcmp(bytes, "aLK", 3) == 0);
+  Check("replacement descriptor was not written", pread(fd, bytes, 3, 0) == 3 && std::memcmp(bytes, "new", 3) == 0);
+  Check("in-flight operation releases native pin", live_handles == 0);
+  auto snapshot = gesher::Capture(alias);
+  Check("raw snapshot reads the same ordinary file position", snapshot && lseek(alias, 0, SEEK_SET) == 0 &&
+      gesher::ReadFileDescription(snapshot, bytes, 3) == 3 && std::memcmp(bytes, "aLK", 3) == 0 &&
+      lseek(alias, 0, SEEK_CUR) == 3);
+  Check("raw snapshot observes status changes through aliases", fcntl(alias, F_SETFL, O_APPEND) == 0 &&
+      gesher::WriteFileDescription(snapshot, "S", 1) == 1 && lseek(alias, 0, SEEK_CUR) == 13);
+  Check("raw snapshot does not append on a zero-byte request", lseek(alias, 2, SEEK_SET) == 2 &&
+      gesher::WriteFileDescription(snapshot, nullptr, 0) == 0 && lseek(alias, 0, SEEK_CUR) == 2);
+  snapshot.reset();
+  gesher::seal_attributes[old.st_ino] = F_SEAL_GROW;
+  Check("growth-sealed fixture retains its existing bytes", lseek(alias, 0, SEEK_SET) == 0);
+  errno = 0;
+  Check("append checks EOF despite the earlier cursor", Put(alias, "x", 1) == -1 && errno == EPERM &&
+      lseek(alias, 0, SEEK_CUR) == 0);
+  Check("growth seal permits an in-place write", fcntl(alias, F_SETFL, 0) == 0 && Put(alias, "a", 1) == 1);
+  snapshot = gesher::Capture(alias);
+  gesher::seal_attributes[old.st_ino] |= F_SEAL_FUTURE_WRITE;
+  errno = 0;
+  Check("preexisting stream snapshot observes newly added write seal",
+      gesher::WriteFileDescription(snapshot, "x", 1) == -1 && errno == EPERM);
+  int sealed_alias = dup(alias);
+  before_status = [sealed_alias, fd] {
+    if (dup2(fd, sealed_alias) != sealed_alias) std::abort();
+  };
+  errno = 0;
+  Check("write seal follows the captured file across fd replacement",
+      Put(sealed_alias, "x", 1) == -1 && errno == EPERM);
+  before_status = {};
+  Check("replacement is unsealed and was not changed", pread(sealed_alias, bytes, 3, 0) == 3 &&
+      std::memcmp(bytes, "new", 3) == 0);
+  Check("write rejection preserves the sealed file bytes", pread(alias, bytes, 3, 0) == 3 &&
+      std::memcmp(bytes, "aLK", 3) == 0);
+  close(sealed_alias);
+  snapshot.reset();
+  gesher::seal_attributes.clear();
+  int nullfd = open("/dev/null", O_RDWR);
+  auto device = gesher::Capture(nullfd, gesher::DescriptorKind::kZero);
+  std::memset(bytes, '!', 4);
+  Check("raw logical zero device is not exported as native NUL EOF", device &&
+      gesher::ReadFileDescription(device, bytes, 4) == 4 && bytes[0] == 0 && bytes[3] == 0);
+  Check("logical zero writes discard bytes as Linux does", gesher::WriteFileDescription(device, nullptr, 4) == 4);
+  device.reset();
+  auto unsupported = gesher::Capture(nullfd, gesher::DescriptorKind::kUnshareable);
+  Check("unshareable NUL reservation never becomes a successful device read",
+      gesher::ReadFileDescription(unsupported, bytes, 1) == -1 && errno == EOPNOTSUPP);
+  Check("unshareable NUL reservation never becomes a successful discarded write",
+      gesher::WriteFileDescription(unsupported, "x", 1) == -1 && errno == EOPNOTSUPP);
+  unsupported.reset(); close(nullfd);
+  int pipes[2];
+  Check("pipe dispatch witness", pipe(pipes) == 0);
+  int result = 999;
+  Check("file adapter leaves pipe I/O to the pipe backend", !NativeFileIo(pipes[0], bytes, 1, false, &result) && result == 999);
+  Check("pipe route leaves regular files to their backend", !NativePipeIo(fd, bytes, 1, false, &result) && result == 999);
+  Check("pipe route validates the captured read access", NativePipeIo(pipes[1], bytes, 0, false, &result) &&
+      result == -1 && errno == EBADF);
+  Check("pipe route validates the captured write access", NativePipeIo(pipes[0], bytes, 0, true, &result) &&
+      result == -1 && errno == EBADF);
+  Check("pipe route zero read returns without waiting", NativePipeIo(pipes[0], nullptr, 0, false, &result) && result == 0);
+  Check("pipe route nonblocking fixture", fcntl(pipes[0], F_SETFL, O_NONBLOCK) == 0);
+  Check("pipe route observes the captured nonblocking mode", NativePipeIo(pipes[0], bytes, 1, false, &result) &&
+      result == -1 && errno == EAGAIN);
+  Check("pipe route blocking mode restored", fcntl(pipes[0], F_SETFL, 0) == 0);
+  std::atomic<bool> reached_status{false};
+  before_status = [&] { reached_status.store(true); };
+  RouteRead route{pipes[0]}; pthread_t route_thread;
+  Check("pipe route cancellation worker starts", pthread_create(&route_thread, nullptr, ReadPipeRoute, &route) == 0);
+  for (int retry = 0; retry != 1000 && !reached_status.load(); ++retry) usleep(1000);
+  Check("pipe route reached status without a publication lock", reached_status.load());
+  Check("pipe route cancellation request", pthread_cancel(route_thread) == 0);
+  void* canceled = nullptr;
+  Check("pipe route cancellation releases its snapshot", pthread_join(route_thread, &canceled) == 0 &&
+      canceled == PTHREAD_CANCELED && live_handles == 0);
+  before_status = {};
+  int old_writer = dup(pipes[1]);
+  before_status = [&] {
+    close(pipes[1]);
+    int replacement = open("/dev/null", O_WRONLY);
+    if (replacement != pipes[1]) { dup2(replacement, pipes[1]); close(replacement); }
+  };
+  Check("pipe route writes through one retained object during fd reuse",
+      NativePipeIo(pipes[1], const_cast<char*>("r"), 1, true, &result) && result == 1);
+  before_status = {};
+  Check("pipe route did not redirect bytes to the replacement", read(pipes[0], bytes, 1) == 1 && bytes[0] == 'r');
+  Check("pipe route closes every transient snapshot", live_handles == 0);
+  Check("pipe route wakes waiting pollers after its real write", gesher::poll_wakes == 1);
+  gesher::poll_wakes = 0;
+  close(pipes[1]); pipes[1] = old_writer;
+  auto pipe_reader = gesher::Capture(pipes[0]), pipe_writer = gesher::Capture(pipes[1]);
+  Check("raw pipe zero read does not wait for data", gesher::ReadFileDescription(pipe_reader, nullptr, 0) == 0);
+  Check("raw nonblocking empty pipe reports EAGAIN", fcntl(pipes[0], F_SETFL, O_NONBLOCK) == 0 &&
+      gesher::ReadFileDescription(pipe_reader, bytes, 1) == -1 && errno == EAGAIN);
+  Check("raw pipe transfers actual bytes and wakes pollers", gesher::WriteFileDescription(pipe_writer, "pipe", 4) == 4 &&
+      gesher::poll_wakes == 1 && gesher::ReadFileDescription(pipe_reader, bytes, 4) == 4 && std::memcmp(bytes, "pipe", 4) == 0);
+  pipe_writer.reset(); close(pipes[1]); pipes[1] = -1;
+  Check("raw pipe EOF follows the real last writer", gesher::ReadFileDescription(pipe_reader, bytes, 1) == 0);
+  pipe_reader.reset();
+  close(pipes[0]); close(pipes[1]);
+  for (bool writing : {false, true}) {
+    int route_pipe[2];
+    Check("scalar dispatcher race fixture", pipe(route_pipe) == 0);
+    const int routed = route_pipe[writing ? 1 : 0];
+    struct stat replacement{};
+    Check("record replacement's policy identity", fstat(fd, &replacement) == 0);
+    revoked_inode = replacement.st_ino;
+    after_descriptor_transaction = [routed, fd] {
+      if (dup2(fd, routed) != routed) std::abort();
+    };
+    errno = 0;
+    int result = writing ? scalar_write(routed, "x", 1) : scalar_read(routed, bytes, 1);
+    Check("scalar fallback obeys the captured replacement's revoked policy", result == -1 && errno == EPERM);
+    Check("scalar replacement never receives unadmitted bytes", fstat(fd, &replacement) == 0 &&
+        replacement.st_size == 3 && pread(fd, bytes, 3, 0) == 3 &&
+        std::memcmp(bytes, "new", 3) == 0);
+    Check("scalar fallback retires its private snapshot", live_handles == 0);
+    revoked_inode = 0;
+    close(route_pipe[0]); close(route_pipe[1]);
+  }
+  close(fd); close(alias); unlink(path); unlink("replacement");
+  Check("all private native handles close", live_handles == 0);
+  std::printf("Production native file I/O: %d assertions, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

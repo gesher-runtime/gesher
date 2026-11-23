@@ -92,6 +92,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $ran = $false
   $consentResponded = $false
   $consentOwner = 0
+  $consentStarted = 0L
   while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
     $text = & $read
     if ($LocationConsent -and -not $consentResponded -and $text.Contains('Web3 geo requesting location permissions')) {
@@ -101,14 +102,12 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
         if (Test-Path -LiteralPath $consentReadyFile) {
           [void][int]::TryParse((Get-Content -LiteralPath $consentReadyFile -Raw).Trim(), [ref]$consentOwner)
         }
-      } elseif ($consentOwner -eq 0) {
-        # Web3Run's cmd.exe redirects the VM's logs. Only its exact VM child
-        # may own the single-process permission dialog.
-        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" |
-          Where-Object { $_.ExecutablePath -eq $Web3RuntimeExe })
-        if ($children.Count -eq 1) { $consentOwner = [int]$children[0].ProcessId }
+      } else {
+        $owner = Get-Web3StandaloneConsentOwner $p $Web3RuntimeExe
+        $consentOwner = if ($owner) { $owner.Id } else { 0 }
+        $consentStarted = if ($owner) { $owner.Started } else { 0L }
       }
-      if ([Web3LocationConsent]::Respond($consentOwner, $LocationConsent -eq 'Allow')) {
+      if ([Web3LocationConsent]::Respond($consentOwner, $LocationConsent -eq 'Allow', $consentStarted)) {
         $consentResponded = $true
         Write-Host "INFO  web3: fixture location consent $LocationConsent, owner $consentOwner"
       }
@@ -417,8 +416,9 @@ try {
       'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
       'Web3 net done') 'Web3 net done'
 
-    if (-not [GesherWeb3Proxy]::SetPac("http://127.0.0.1:$web3Http/proxy.pac")) { Write-Host 'INFO  web3: InternetSetOption (PAC) failed' }
+    # Windows may fetch the script as soon as PAC is enabled, before the app starts.
     $before = ([GesherWeb3Servers]::Log -split "`n").Count - 1
+    if (-not [GesherWeb3Proxy]::SetPac("http://127.0.0.1:$web3Http/proxy.pac")) { Write-Host 'INFO  web3: InternetSetOption (PAC) failed' }
     $null = Web3Run 'the Gesher device: web3app.apk''s NetActivity with a PAC script in Windows'' settings: a PAC default proxy, PacProxySelector answered by Windows'' evaluation of the script (one host through the proxy, the rest direct)' ($launch + '--activity', 'com.gesher.web3app.NetActivity', '--ez', 'pac', 'true') @(
       "pac http://127.0.0.1:$web3Http/proxy.pac",
       'Web3 net http://pac-proxied.test/net: 200 proxied by the test proxy for pac-proxied.test',

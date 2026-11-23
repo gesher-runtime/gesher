@@ -4,6 +4,7 @@ if (-not ('Web3LocationConsent' -as [type])) {
   Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class Web3LocationConsent {
@@ -29,14 +30,27 @@ public static class Web3LocationConsent {
         ? text.ToString() : "";
   }
   public static bool Respond(int owner, bool allow) {
+    return Respond(owner, allow, 0);
+  }
+  public static bool Respond(int owner, bool allow, long started) {
     if (owner <= 0) return false;
+    try {
+      using (var process = Process.GetProcessById(owner)) {
+        if (process.HasExited || (started != 0 && process.StartTime.Ticks != started)) return false;
+        return RespondToOwnedWindow(process, allow);
+      }
+    } catch (ArgumentException) { return false; }
+      catch (InvalidOperationException) { return false; }
+      catch (System.ComponentModel.Win32Exception) { return false; }
+  }
+  static bool RespondToOwnedWindow(Process owner, bool allow) {
     var matches = new List<IntPtr>();
     EnumWindows((window, data) => {
       uint process;
       GetWindowThreadProcessId(window, out process);
       var kind = new StringBuilder(64);
       GetClassName(window, kind, kind.Capacity);
-      if (process != (uint)owner || kind.ToString() != "#32770" || !IsWindowVisible(window)) return true;
+      if (process != (uint)owner.Id || kind.ToString() != "#32770" || !IsWindowVisible(window)) return true;
       if (Text(GetDlgItem(window, 1101)) != "com.gesher.web3app") return true;
       var details = Text(GetDlgItem(window, 1102));
       var permissions = System.Text.RegularExpressions.Regex.Matches(details, @"android\.permission\.[A-Z_]+");
@@ -50,10 +64,37 @@ public static class Web3LocationConsent {
     }, IntPtr.Zero);
     if (matches.Count != 1) return false;
     var button = GetDlgItem(matches[0], allow ? 6 : 2); // IDYES / IDCANCEL
-    if (!IsWindowEnabled(button)) return false;
+    uint processId;
+    GetWindowThreadProcessId(button, out processId);
+    if (processId != (uint)owner.Id || owner.HasExited || !IsWindowEnabled(button)) return false;
     IntPtr ignored;
     return Click(button, 0x00F5, IntPtr.Zero, IntPtr.Zero, 2, 500, out ignored) != IntPtr.Zero; // BM_CLICK
   }
 }
 '@
+}
+
+# The standalone VM can stand in as a supervisor while its canonical-UID child
+# runs the APK. Bound the search to the actual launcher and its one VM restart.
+function Get-Web3StandaloneConsentOwner([Diagnostics.Process] $Launcher, [string] $Runtime) {
+  if ($Launcher.HasExited) { return }
+  $direct = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($Launcher.Id)" |
+    Where-Object { $_.ExecutablePath -eq $Runtime -and $_.CreationDate -ge $Launcher.StartTime })
+  if ($direct.Count -ne 1) { return }
+  $first = $direct[0]
+  $restarts = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($first.ProcessId)" |
+    Where-Object { $_.ExecutablePath -eq $Runtime -and $_.CommandLine -ceq $first.CommandLine -and
+      $_.CreationDate -ge $first.CreationDate })
+  if ($restarts.Count -gt 1 -or $Launcher.HasExited) { return }
+  $active = if ($restarts.Count -eq 1) { $restarts[0] } else { $first }
+  try {
+    $process = Get-Process -Id $active.ProcessId -ErrorAction SilentlyContinue
+    if (-not $process) { return }
+    try {
+      # CIM timestamps have microsecond precision; the open Process gives the
+      # exact creation time for the final window ownership check.
+      if ($process.HasExited -or [Math]::Abs(($process.StartTime - $active.CreationDate).Ticks) -gt 10) { return }
+      [pscustomobject]@{ Id = $process.Id; Started = $process.StartTime.Ticks }
+    } finally { $process.Dispose() }
+  } catch [ArgumentException] {} catch [InvalidOperationException] {} catch [System.ComponentModel.Win32Exception] {}
 }

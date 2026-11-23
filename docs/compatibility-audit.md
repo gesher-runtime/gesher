@@ -146,11 +146,44 @@ skipped rather than silently treated as empty ELF libraries.
 
 `tools/audit_services_jni.py` inventories current source Default/Stub services,
 direct registrations and generated/attach JNI fallbacks against a supplied
-framework Java-class ZIP and pinned AOSP source. The [detailed report](research/systematic-services-jni-2026-11-05.md)
+framework Java-class ZIP and pinned AOSP source. Supply `--app-classes` with the
+compile-only `gesher-app-classes.jar` written by `app/build.sh` to measure service
+overrides. The [historical report](research/systematic-services-jni-2026-11-05.md)
 separates reviewed families from raw registration-name candidates. Alternate
 registrations, app-local service injection and later native overrides require
-individual review. AIDL inherited-method comparison is by name, not full type
-or overload resolution; explicit bodies remain semantically unverified.
+individual review.
+
+Schema 2 resolves each method by its complete compiled JVM descriptor, including
+parameter types, array dimensions and return type. It follows inherited concrete
+implementations and retains compiler bridges for covariant/generic overrides.
+Indirect and anonymous Default/Stub subclasses in the app input are included.
+Source body annotations remain separate from compiled resolution; neither is
+semantic compatibility evidence. The descriptor and lookup rules follow
+[JVMS 4.3.3](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-4.html#jvms-4.3.3)
+and [JVMS 5.4.3.3](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-5.html#jvms-5.4.3.3).
+
+The original command without `--app-classes` still produces source and JNI
+inventories, but service comparison is explicitly unmeasured. Missing app/service
+classes or incomplete hierarchies produce `null` complete counts, never zero
+coverage gaps. `observed_inherited_default_methods` is the number of proven rows
+within the supplied inputs; it is only a lower bound when any service remains
+unmeasured. Missing descriptor dependency types are listed separately from
+missing methods. The report records archive and parser hashes, framework-first
+compile-input provider selection, and duplicate app classes shadowed by that
+selection. Compile inputs can differ from shipped DEX/loaders, and their hashes
+do not replace a build receipt tying them to source.
+
+```powershell
+python tools/audit_services_jni.py `
+  --framework-jar out/microg-build-inputs/framework-classes.zip `
+  --app-classes out/app/gesher-app-classes.jar `
+  --aosp-dir out/native-build/aosp `
+  --out out/compat-audit/services-jni.json
+```
+
+The generated JNI fallback inventory remains a textual candidate list. This
+descriptor improvement does not establish JNI registration order, final native
+targets, live Binder dispatch, callbacks or Android/Windows runtime behavior.
 
 `tools/compatibility_contracts.py` indexes all Markdown documentation under
 `docs`, including architecture decisions and old handoffs, with content hashes:

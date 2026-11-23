@@ -1,0 +1,41 @@
+name: cache-prune
+
+# Deletes superseded per-commit ccache and CodeQL cache entries
+# (tools/ci/prune_caches.py) after the workflows that save them, so they do
+# not fill the repository's cache quota and evict main's AOSP, NDK and
+# framework caches.
+on:
+  workflow_run:
+    workflows: [ci, CodeQL Advanced]
+    types: [completed]
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: List the entries without deleting them
+        type: boolean
+        default: false
+
+permissions:
+  actions: write  # list and delete Actions caches
+  contents: read
+
+concurrency:
+  group: cache-prune
+  cancel-in-progress: true
+
+jobs:
+  prune:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/ci
+      - name: Delete superseded cache entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/prune_caches.py --repo "$GITHUB_REPOSITORY" \
+            ${{ inputs.dry-run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"

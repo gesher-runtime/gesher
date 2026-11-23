@@ -85,6 +85,30 @@ public final class PackageServiceQueriesTest {
             if (PackageManager.FEATURE_TOUCHSCREEN.equals(feature.name)) listedTouchscreen = true;
         }
         require(listedTouchscreen, "Available features list omitted touchscreen");
+        // The network location provider is always registered; GNSS is not claimed.
+        require(service.hasSystemFeature(PackageManager.FEATURE_LOCATION, 0)
+                        && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_NETWORK, 0)
+                        && !service.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS, 0),
+                "Location features do not match the network-only provider");
+        // FEATURE_MICROPHONE follows the audio input exactly; without the runtime
+        // natives (this process) there is no input to report.
+        boolean input;
+        try {
+            android.util.IntArray inputs = new android.util.IntArray();
+            input = android.media.AudioSystem.getSupportedDeviceTypes(
+                    android.media.AudioManager.GET_DEVICES_INPUTS, inputs)
+                    == android.media.AudioSystem.SUCCESS && inputs.size() > 0;
+        } catch (LinkageError e) {
+            input = false;
+        }
+        require(service.hasSystemFeature(PackageManager.FEATURE_MICROPHONE, 0) == input,
+                "Microphone feature disagrees with the audio input devices");
+        android.util.ArrayMap<String, FeatureInfo> mic = new android.util.ArrayMap<>();
+        PackageManagerService.addMicrophoneFeature(mic, false);
+        require(mic.isEmpty(), "Microphone claimed without an input device");
+        PackageManagerService.addMicrophoneFeature(mic, true);
+        require(mic.containsKey(PackageManager.FEATURE_MICROPHONE),
+                "Microphone omitted with an input device");
         require(service.canRequestPackageInstalls("fixture.one", 0),
                 "Package declaring REQUEST_INSTALL_PACKAGES could not request installs");
         PackageImpl installer = (PackageImpl) packages.get("fixture.one").parsed;

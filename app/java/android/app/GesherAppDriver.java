@@ -44,6 +44,7 @@ public final class GesherAppDriver {
     /** Keeps the LoadedApk alive: ActivityThread's mPackages holds it weakly. */
     private static LoadedApk sLoadedApk;
     private static volatile Activity sActivity;
+    private static volatile boolean sActivityAcceptsPermissionRequests;
     private static com.gesher.server.InProcessApplication sApplication;
     // The launched Activity's record (what ActivityClientRecord keeps; windows3 track): its
     // token, info and title, its window's config callback (to whichever instance has the
@@ -187,7 +188,8 @@ public final class GesherAppDriver {
                 .addCategory(Intent.CATEGORY_LAUNCHER)
                 .setComponent(component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        Binder token = new Binder();
+        Binder token = sApplication.registerActivity(GesherAppDriver::hasActiveActivity,
+                GesherAppDriver::dispatchActivityResult);
         // Its orientation requests and moveTaskToBack, which no system server answers in
         // this process (windows3 track): the window's ActivityClientHook asks here.
         final android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -267,6 +269,7 @@ public final class GesherAppDriver {
         }
 
         // ON_CREATE
+        sActivityAcceptsPermissionRequests = true;
         activity.mCalled = false;
         instrumentation.callActivityOnCreate(activity, (Bundle) null);
         if (!activity.mCalled) {
@@ -298,6 +301,21 @@ public final class GesherAppDriver {
     }
 
     /** Reports completed manual window lifecycle transitions to this admission. */
+    private static boolean hasActiveActivity() {
+        Activity current = sActivity;
+        return sActivityAcceptsPermissionRequests && current != null && !current.mFinished;
+    }
+
+    private static void dispatchActivityResult(Binder token, String who, int requestCode,
+            Intent data) {
+        Activity current = sActivity;
+        if (token == sToken && sActivityAcceptsPermissionRequests
+                && current != null && !current.mFinished) {
+            current.dispatchActivityResult(who, requestCode, Activity.RESULT_OK, data,
+                    "standalone permission result");
+        }
+    }
+
     static void activityPaused() { if (sApplication != null) sApplication.activityPaused(); }
     static void activityStopped() { if (sApplication != null) sApplication.activityStopped(); }
     static void activityResuming() { if (sApplication != null) sApplication.activityResuming(); }
@@ -385,6 +403,7 @@ public final class GesherAppDriver {
         Activity.NonConfigurationInstances retained = old.retainNonConfigurationInstances();
         android.view.Window window = old.getWindow();
         android.view.View decor = old.mDecor;
+        sActivityAcceptsPermissionRequests = false;
         instrumentation.callActivityOnDestroy(old);
         // Only the part of the view hierarchy the framework controls stays.
         if (window != null) window.clearContentView();
@@ -410,6 +429,7 @@ public final class GesherAppDriver {
         int theme = info.getThemeResource();
         if (theme != 0) activity.setTheme(theme);
         sActivity = activity;
+        sActivityAcceptsPermissionRequests = true;
         activity.mCalled = false;
         instrumentation.callActivityOnCreate(activity, state);
         if (!activity.mCalled) {

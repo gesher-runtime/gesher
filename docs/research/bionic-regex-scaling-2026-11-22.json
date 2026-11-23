@@ -1,0 +1,1361 @@
+{
+  "time_utc": "2026-11-22T17:57:14.779776+00:00",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "c++ (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+  "baseline": "bf7c6e2f1adac284bd00971734f7b50c63d72a94",
+  "sanitizer": false,
+  "source_hashes": {
+    "candidate": {
+      "syscall_bionic.cc": "156a34dc0b9f7a036d8a294cbe6c86941e9c09fb38fe99fce1033d0a54503977",
+      "posix_regex.h": "3722cf8ded665f84fe4ea2b7375052fb5eff6a66eaaaf64cb3b54b90eaec4a6c",
+      "posix_regex_cnames.h": "d3477f1ee720f92880785301153b60bca51e5321a911a200e4c7ec36b4dd2b3c"
+    },
+    "baseline": {
+      "syscall_bionic.cc": "156a34dc0b9f7a036d8a294cbe6c86941e9c09fb38fe99fce1033d0a54503977",
+      "posix_regex.h": "f869c00b98630053e2b0df77c66316bb1241d88e005df1b0fb16acda5e56d1d7",
+      "posix_regex_cnames.h": "d3477f1ee720f92880785301153b60bca51e5321a911a200e4c7ec36b4dd2b3c"
+    }
+  },
+  "fixture_sha256": "c5aa522a30dbf1ddb504d06188117a169afa8590d22b303af7d6a28f5d4a7145",
+  "runner_sha256": "55eaf5897ea38aacaf1a4c875d57595436d39b0144fdefd9df4b89ff515ab7cf",
+  "android_reference": {
+    "utils.h": "7729fcdd7c269cd66ccf707802df9c8e32db21e8a4b17e528432edbb36468312",
+    "regex2.h": "ba977b0ef5a3365be74423bfe49fca3223e3b33745aaeba7c09cf10dd292caeb",
+    "engine.c": "c541eb37440b60fa7ffd74ca7bfd7deb5b482d945a9dd31893296e6da1e41ae1",
+    "regexec.c": "8160d06bb401d8bcfa510954d06c5cd9c13bc765dafd13590c66e401922473e6",
+    "cname.h": "51a618a5e68bb1c5fb0c736ccf5733423f9b04ed25026150119a881efd1fd58a",
+    "regfree.c": "251771e0b34a2ee0260ee1314b0bd5f5a4595d35c3c1e2b254668a548e0ba697",
+    "regerror.c": "912d0f77e99952690a28974569e976b9bf6f824875c3e6d4bc584f087804e989",
+    "regex.h": "995a0436934bf14eb7c989d1ed8a0b6a736468e00b68246ef99d2c8c32322f57",
+    "regcomp.c": "8308c820bff17d4b1e33e2a28b6c1303aede890e6b82b63f8a584e9f10f3dc82",
+    "namespace.h": "a4df4815ab597fe63d127f21e6b9216d97b6051ebf686b51d63a00343d5f7b55",
+    "netbsd-compat.h": "0edbdb9ad49bd6228faa0cee9060b3991cc9c85708437fe868a330af21baabb4"
+  },
+  "records": [
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "nullable-hit",
+      "instructions": 1540,
+      "bytes": 128,
+      "popped": 107716,
+      "expanded": 99588,
+      "input": 128
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "nullable-miss",
+      "instructions": 1159,
+      "bytes": 129,
+      "popped": 91074,
+      "expanded": 82946,
+      "input": 129
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "nullable-search",
+      "instructions": 386,
+      "bytes": 257,
+      "popped": 104546,
+      "expanded": 96354,
+      "input": 257
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "boolean-zero-count",
+      "instructions": 11,
+      "bytes": 262145,
+      "popped": 8,
+      "expanded": 8,
+      "input": 1
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "boolean-nosub",
+      "instructions": 11,
+      "bytes": 262145,
+      "popped": 8,
+      "expanded": 8,
+      "input": 1
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "observable-long-span",
+      "instructions": 11,
+      "bytes": 262145,
+      "popped": 1835016,
+      "expanded": 1835016,
+      "input": 262145
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "ordinary-hit",
+      "instructions": 25,
+      "bytes": 16,
+      "popped": 83,
+      "expanded": 83,
+      "input": 16
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "ordinary-miss",
+      "instructions": 25,
+      "bytes": 16,
+      "popped": 24,
+      "expanded": 24,
+      "input": 16
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "literal-search",
+      "instructions": 14,
+      "bytes": 4102,
+      "popped": 4115,
+      "expanded": 4115,
+      "input": 4102
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "captures",
+      "instructions": 20,
+      "bytes": 23,
+      "popped": 143,
+      "expanded": 134,
+      "input": 17
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "repeated-captures",
+      "instructions": 18,
+      "bytes": 128,
+      "popped": 2181,
+      "expanded": 2054,
+      "input": 128
+    },
+    {
+      "source": "candidate",
+      "kind": "work",
+      "name": "backreference",
+      "instructions": 17,
+      "bytes": 8,
+      "popped": 0,
+      "expanded": 0,
+      "input": 0
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "nullable-hit",
+      "instructions": 1540,
+      "bytes": 128,
+      "popped": 3553988,
+      "expanded": 3553988,
+      "input": 128
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "nullable-miss",
+      "instructions": 1159,
+      "bytes": 129,
+      "popped": 3537346,
+      "expanded": 3537346,
+      "input": 129
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "nullable-search",
+      "instructions": 386,
+      "bytes": 257,
+      "popped": 1271906,
+      "expanded": 1271906,
+      "input": 257
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "boolean-zero-count",
+      "instructions": 11,
+      "bytes": 262145,
+      "popped": 1835016,
+      "expanded": 1835016,
+      "input": 262145
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "boolean-nosub",
+      "instructions": 11,
+      "bytes": 262145,
+      "popped": 1835016,
+      "expanded": 1835016,
+      "input": 262145
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "observable-long-span",
+      "instructions": 11,
+      "bytes": 262145,
+      "popped": 1835016,
+      "expanded": 1835016,
+      "input": 262145
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "ordinary-hit",
+      "instructions": 25,
+      "bytes": 16,
+      "popped": 83,
+      "expanded": 83,
+      "input": 16
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "ordinary-miss",
+      "instructions": 25,
+      "bytes": 16,
+      "popped": 24,
+      "expanded": 24,
+      "input": 16
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "literal-search",
+      "instructions": 14,
+      "bytes": 4102,
+      "popped": 4115,
+      "expanded": 4115,
+      "input": 4102
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "captures",
+      "instructions": 20,
+      "bytes": 23,
+      "popped": 143,
+      "expanded": 143,
+      "input": 17
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "repeated-captures",
+      "instructions": 18,
+      "bytes": 128,
+      "popped": 3451,
+      "expanded": 3451,
+      "input": 128
+    },
+    {
+      "source": "baseline",
+      "kind": "work",
+      "name": "backreference",
+      "instructions": 17,
+      "bytes": 8,
+      "popped": 0,
+      "expanded": 0,
+      "input": 0
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "nullable-hit",
+      "iterations": 8,
+      "ns_per_call": 11777125.0,
+      "checksum": 1024
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "nullable-miss",
+      "iterations": 8,
+      "ns_per_call": 14588125.0,
+      "checksum": 1040
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "nullable-search",
+      "iterations": 32,
+      "ns_per_call": 4417625.0,
+      "checksum": 14368
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "boolean-zero-count",
+      "iterations": 16,
+      "ns_per_call": 7986312.5,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "boolean-nosub",
+      "iterations": 8,
+      "ns_per_call": 13077250.0,
+      "checksum": 2097160
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 8416562.5,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "ordinary-hit",
+      "iterations": 262144,
+      "ns_per_call": 620.663,
+      "checksum": 4194304
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 251.097,
+      "checksum": 8912896
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 40694.336,
+      "checksum": 16789504
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1532.715,
+      "checksum": 1507328
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 29775.391,
+      "checksum": 524288
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 0,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 464.561,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "nullable-hit",
+      "iterations": 256,
+      "ns_per_call": 388054.688,
+      "checksum": 32768
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "nullable-miss",
+      "iterations": 256,
+      "ns_per_call": 314148.438,
+      "checksum": 33280
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "nullable-search",
+      "iterations": 256,
+      "ns_per_call": 409937.5,
+      "checksum": 114944
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "boolean-zero-count",
+      "iterations": 524288,
+      "ns_per_call": 156.261,
+      "checksum": 137439477760
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "boolean-nosub",
+      "iterations": 1048576,
+      "ns_per_call": 122.593,
+      "checksum": 274878955520
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 7744562.5,
+      "checksum": 4194320
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "ordinary-hit",
+      "iterations": 262144,
+      "ns_per_call": 599.682,
+      "checksum": 4194304
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 268.501,
+      "checksum": 8912896
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 40393.555,
+      "checksum": 16789504
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1487.717,
+      "checksum": 1507328
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 24689.941,
+      "checksum": 524288
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 0,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 393.509,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "nullable-hit",
+      "iterations": 256,
+      "ns_per_call": 389730.469,
+      "checksum": 32768
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "nullable-miss",
+      "iterations": 512,
+      "ns_per_call": 375736.328,
+      "checksum": 66560
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "nullable-search",
+      "iterations": 256,
+      "ns_per_call": 454058.594,
+      "checksum": 114944
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "boolean-zero-count",
+      "iterations": 524288,
+      "ns_per_call": 181.925,
+      "checksum": 137439477760
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "boolean-nosub",
+      "iterations": 524288,
+      "ns_per_call": 168.037,
+      "checksum": 137439477760
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 8512875.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "ordinary-hit",
+      "iterations": 131072,
+      "ns_per_call": 667.206,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "ordinary-miss",
+      "iterations": 262144,
+      "ns_per_call": 305.737,
+      "checksum": 4456448
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "literal-search",
+      "iterations": 4096,
+      "ns_per_call": 39334.961,
+      "checksum": 33579008
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1652.664,
+      "checksum": 1507328
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 25993.652,
+      "checksum": 524288
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 1,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 410.446,
+      "checksum": 2097152
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "nullable-hit",
+      "iterations": 8,
+      "ns_per_call": 11441000.0,
+      "checksum": 1024
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "nullable-miss",
+      "iterations": 8,
+      "ns_per_call": 11548375.0,
+      "checksum": 1040
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "nullable-search",
+      "iterations": 32,
+      "ns_per_call": 4484218.75,
+      "checksum": 14368
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "boolean-zero-count",
+      "iterations": 8,
+      "ns_per_call": 12733750.0,
+      "checksum": 2097160
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "boolean-nosub",
+      "iterations": 16,
+      "ns_per_call": 8095625.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 8089875.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "ordinary-hit",
+      "iterations": 262144,
+      "ns_per_call": 618.103,
+      "checksum": 4194304
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 256.535,
+      "checksum": 8912896
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 41062.012,
+      "checksum": 16789504
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1574.142,
+      "checksum": 1507328
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 29450.928,
+      "checksum": 524288
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 1,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 393.669,
+      "checksum": 2097152
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "nullable-hit",
+      "iterations": 8,
+      "ns_per_call": 10917000.0,
+      "checksum": 1024
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "nullable-miss",
+      "iterations": 8,
+      "ns_per_call": 13261875.0,
+      "checksum": 1040
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "nullable-search",
+      "iterations": 32,
+      "ns_per_call": 4237156.25,
+      "checksum": 14368
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "boolean-zero-count",
+      "iterations": 16,
+      "ns_per_call": 8288125.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "boolean-nosub",
+      "iterations": 16,
+      "ns_per_call": 8321000.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 8239000.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "ordinary-hit",
+      "iterations": 262144,
+      "ns_per_call": 592.51,
+      "checksum": 4194304
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 254.494,
+      "checksum": 8912896
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 43211.914,
+      "checksum": 16789504
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1660.446,
+      "checksum": 1507328
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 38300.781,
+      "checksum": 524288
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 2,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 451.374,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "nullable-hit",
+      "iterations": 256,
+      "ns_per_call": 506593.75,
+      "checksum": 32768
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "nullable-miss",
+      "iterations": 256,
+      "ns_per_call": 350714.844,
+      "checksum": 33280
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "nullable-search",
+      "iterations": 256,
+      "ns_per_call": 451375.0,
+      "checksum": 114944
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "boolean-zero-count",
+      "iterations": 1048576,
+      "ns_per_call": 121.589,
+      "checksum": 274878955520
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "boolean-nosub",
+      "iterations": 1048576,
+      "ns_per_call": 124.657,
+      "checksum": 274878955520
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 8408000.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "ordinary-hit",
+      "iterations": 131072,
+      "ns_per_call": 763.458,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 335.842,
+      "checksum": 8912896
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 62301.27,
+      "checksum": 16789504
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 2162.491,
+      "checksum": 1507328
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 31583.008,
+      "checksum": 524288
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 2,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 439.857,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "nullable-hit",
+      "iterations": 256,
+      "ns_per_call": 404941.406,
+      "checksum": 32768
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "nullable-miss",
+      "iterations": 256,
+      "ns_per_call": 528546.875,
+      "checksum": 33280
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "nullable-search",
+      "iterations": 256,
+      "ns_per_call": 427371.094,
+      "checksum": 114944
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "boolean-zero-count",
+      "iterations": 1048576,
+      "ns_per_call": 137.525,
+      "checksum": 274878955520
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "boolean-nosub",
+      "iterations": 1048576,
+      "ns_per_call": 136.915,
+      "checksum": 274878955520
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 9481625.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "ordinary-hit",
+      "iterations": 262144,
+      "ns_per_call": 608.181,
+      "checksum": 4194304
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 316.208,
+      "checksum": 8912896
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 40153.809,
+      "checksum": 16789504
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1493.408,
+      "checksum": 1507328
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 25841.309,
+      "checksum": 524288
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 3,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 427.368,
+      "checksum": 2097152
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "nullable-hit",
+      "iterations": 8,
+      "ns_per_call": 11007625.0,
+      "checksum": 1024
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "nullable-miss",
+      "iterations": 8,
+      "ns_per_call": 11309000.0,
+      "checksum": 1040
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "nullable-search",
+      "iterations": 32,
+      "ns_per_call": 4582375.0,
+      "checksum": 14368
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "boolean-zero-count",
+      "iterations": 16,
+      "ns_per_call": 9388875.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "boolean-nosub",
+      "iterations": 16,
+      "ns_per_call": 8104687.5,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 7870500.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "ordinary-hit",
+      "iterations": 262144,
+      "ns_per_call": 575.104,
+      "checksum": 4194304
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "ordinary-miss",
+      "iterations": 262144,
+      "ns_per_call": 322.01,
+      "checksum": 4456448
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 39815.43,
+      "checksum": 16789504
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 2174.377,
+      "checksum": 1507328
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 44958.496,
+      "checksum": 524288
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 3,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 518.055,
+      "checksum": 2097152
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "nullable-hit",
+      "iterations": 8,
+      "ns_per_call": 13626125.0,
+      "checksum": 1024
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "nullable-miss",
+      "iterations": 8,
+      "ns_per_call": 12677625.0,
+      "checksum": 1040
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "nullable-search",
+      "iterations": 16,
+      "ns_per_call": 7052625.0,
+      "checksum": 7184
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "boolean-zero-count",
+      "iterations": 8,
+      "ns_per_call": 11370625.0,
+      "checksum": 2097160
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "boolean-nosub",
+      "iterations": 16,
+      "ns_per_call": 8751187.5,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 8682687.5,
+      "checksum": 4194320
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "ordinary-hit",
+      "iterations": 131072,
+      "ns_per_call": 776.642,
+      "checksum": 2097152
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 331.619,
+      "checksum": 8912896
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 52420.41,
+      "checksum": 16789504
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1915.39,
+      "checksum": 1507328
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 30440.918,
+      "checksum": 524288
+    },
+    {
+      "source": "baseline",
+      "kind": "time",
+      "pair": 4,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 415.413,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "nullable-hit",
+      "iterations": 256,
+      "ns_per_call": 415164.062,
+      "checksum": 32768
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "nullable-miss",
+      "iterations": 256,
+      "ns_per_call": 328523.438,
+      "checksum": 33280
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "nullable-search",
+      "iterations": 256,
+      "ns_per_call": 551656.25,
+      "checksum": 114944
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "boolean-zero-count",
+      "iterations": 1048576,
+      "ns_per_call": 126.542,
+      "checksum": 274878955520
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "boolean-nosub",
+      "iterations": 1048576,
+      "ns_per_call": 125.876,
+      "checksum": 274878955520
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "observable-long-span",
+      "iterations": 16,
+      "ns_per_call": 7905500.0,
+      "checksum": 4194320
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "ordinary-hit",
+      "iterations": 131072,
+      "ns_per_call": 714.317,
+      "checksum": 2097152
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "ordinary-miss",
+      "iterations": 524288,
+      "ns_per_call": 282.455,
+      "checksum": 8912896
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "literal-search",
+      "iterations": 2048,
+      "ns_per_call": 47452.148,
+      "checksum": 16789504
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "captures",
+      "iterations": 65536,
+      "ns_per_call": 1587.845,
+      "checksum": 1507328
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "repeated-captures",
+      "iterations": 4096,
+      "ns_per_call": 24573.486,
+      "checksum": 524288
+    },
+    {
+      "source": "candidate",
+      "kind": "time",
+      "pair": 4,
+      "name": "backreference",
+      "iterations": 262144,
+      "ns_per_call": 463.673,
+      "checksum": 2097152
+    }
+  ],
+  "checks": {
+    "candidate": "REGEX_DIFFERENTIAL cases=82944 fingerprint=1128818218101492231\nregex scaling: 205154 checks, 0 failures\n",
+    "baseline": "REGEX_DIFFERENTIAL cases=82944 fingerprint=1128818218101492231\nregex scaling: 205154 checks, 0 failures\n"
+  },
+  "baseline_expected_work_failures": 4
+}

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,13 @@ def main() -> None:
             env = os.environ.copy(); env["ANDROID_DATA"] = str(work / ("data-" + mode))
             env["GESHER_MICROG_SPOOF"] = mode; env["GESHER_LOCALES"] = "en-US"
             subprocess.run(command, env=env, check=True, timeout=120)
+    if args.group == "all":
+        # The pinned framework recipe already executes this candidate-head entry
+        # point. Keep authority candidates coupled to enabled/publication coverage.
+        authority = [sys.executable, str(ROOT / "tools/test_provider_authority_index.py")]
+        for name in ("framework_classes", "core_classes", "app_classes", "apksig", "java_home"):
+            authority.extend(("--" + name.replace("_", "-"), str(getattr(args, name).resolve())))
+        subprocess.run(authority, check=True, timeout=180)
 
 
 if __name__ == "__main__":

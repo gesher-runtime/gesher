@@ -44,8 +44,10 @@ static DWORD GetCurrentProcessId() { return static_cast<DWORD>(getpid()); }
 static DWORD GetCurrentThreadId() { return static_cast<DWORD>(gettid()); }
 static int NativeFd(HANDLE handle) { return static_cast<int>(reinterpret_cast<intptr_t>(handle)); }
 static HANDLE NativeHandle(int fd) { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd)); }
-enum class Fault { none, temp_path, temp_path_long, temp_name, create, publish };
+enum class Fault { none, temp_path, temp_path_long, temp_name, create, publish, register_ofd };
 static Fault fault = Fault::none;
+static int registered_fd = -1;
+static int _close(int fd) { return ::close(fd); }
 struct OpenHandle { std::string path; DWORD access; bool delete_on_close; };
 static std::unordered_map<int, OpenHandle> handles;
 static std::vector<std::string> paths;
@@ -136,6 +138,11 @@ namespace gesher {
 static int ErrnoFromWin32(DWORD error) { return error == 0 ? EINVAL : static_cast<int>(error); }
 static int FailWithLastError() { return errno = ErrnoFromWin32(GetLastError()), -1; }
 static int CrtResult(int result) { return result; }
+static int RegisterOfd(int fd, int flags) {
+  registered_fd = fd;
+  if (fault == Fault::register_ofd) return errno = ENOMEM, -1;
+  return (flags & O_ACCMODE) == O_RDWR && ::fcntl(fd, F_GETFL) >= 0 ? 0 : (errno = EINVAL, -1);
+}
 namespace record_locks {
 static std::recursive_mutex descriptor_mutex;
 struct DescriptorGuard { std::lock_guard<std::recursive_mutex> guard{descriptor_mutex}; };
@@ -203,13 +210,18 @@ static size_t ExistingPaths() {
   return count;
 }
 static void test_faults() {
-  const Fault faults[] = {Fault::temp_path, Fault::temp_path_long, Fault::temp_name, Fault::create, Fault::publish};
-  const int errors[] = {EACCES, ENAMETOOLONG, ENOSPC, EACCES, EMFILE};
+  const Fault faults[] = {Fault::temp_path, Fault::temp_path_long, Fault::temp_name, Fault::create, Fault::publish, Fault::register_ofd};
+  const int errors[] = {EACCES, ENAMETOOLONG, ENOSPC, EACCES, EMFILE, ENOMEM};
   for (size_t i = 0; i < sizeof(faults) / sizeof(faults[0]); ++i) {
     fault = faults[i]; errno = 0;
     int fd = GesherMemfd("fault", 0);
     check("memfd actual boundary failure keeps its original errno", fd == -1 && errno == errors[i]);
     check("memfd boundary failure leaves no handle or created pathname", handles.empty() && ExistingPaths() == 0);
+    if (fault == Fault::register_ofd) {
+      errno = 0;
+      check("OFD registration failure closes its unpublished descriptor",
+            registered_fd >= 0 && fcntl(registered_fd, F_GETFD) == -1 && errno == EBADF);
+    }
     if (fd >= 0) close(fd);
     for (const auto& path : paths) unlink(path.c_str());
   }

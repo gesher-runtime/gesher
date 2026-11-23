@@ -95,7 +95,8 @@ class QueueWorkflows(unittest.TestCase):
         script = (ROOT / '.github/scripts/label-automerge.js').read_text()
         self.assertIn("payload.action === 'synchronize'", script)
         self.assertIn('p.dismissStaleApprovals(', script)
-        self.assertIn("return 'blocked'", script)
+        self.assertIn("return {mode: 'blocked', state}", script)
+        self.assertIn('deferRelease(', script)
 
     def test_app_write_events_are_skipped_before_the_shared_job_queue(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())

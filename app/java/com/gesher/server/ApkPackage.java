@@ -39,6 +39,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -95,6 +98,10 @@ public final class ApkPackage {
     private boolean mSystemAddon;
     private boolean mSigningIdentityChecked;
     private Signature[] mVerifiedSignatures;
+    // A parsed APK's verified signing identity is immutable. A replacement APK gets
+    // another ApkPackage; permission migration must not hash this certificate on
+    // each lookup after full admission verification has already succeeded.
+    private String mVerifiedSignerSha256;
     private int mVerifiedSignatureSchemeVersion;
     private com.android.apksig.SigningCertificateLineage mVerifiedLineage;
     // A parsed record can be used before a package service owns it (standalone tools).
@@ -512,6 +519,36 @@ public final class ApkPackage {
         return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
     }
 
+    /** Matches a SHA-256 certificate digest against the verified APK identity. */
+    synchronized boolean hasVerifiedSigningCertificate(byte[] certificate) {
+        Signature[] current = verifiedSignatures();
+        if (current == null) return false;
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+        for (Signature signature : current) {
+            if (MessageDigest.isEqual(certificate, digest.digest(signature.toByteArray()))) return true;
+        }
+        // Like Android, only a lone current signer can have signing history.
+        if (current.length != 1 || mVerifiedLineage == null) return false;
+        try {
+            List<X509Certificate> history = mVerifiedLineage.getCertificatesInLineage();
+            if (history.isEmpty() || !current[0].equals(new Signature(
+                    history.get(history.size() - 1).getEncoded()))) return false;
+            for (int i = 0; i < history.size() - 1; i++) {
+                if (MessageDigest.isEqual(certificate, digest.digest(history.get(i).getEncoded()))) {
+                    return true;
+                }
+            }
+        } catch (CertificateEncodingException invalid) {
+            return false;
+        }
+        return false;
+    }
+
     public static Signature[] verifySignatures(String path) {
         VerifiedIdentity identity = verifyIdentity(path);
         return identity == null ? null : identity.signatures.clone();
@@ -587,10 +624,11 @@ public final class ApkPackage {
         }
     }
 
-    public String verifiedSignerSha256() {
+    public synchronized String verifiedSignerSha256() {
+        if (mVerifiedSignerSha256 != null) return mVerifiedSignerSha256;
         Signature[] signatures = verifiedSignatures();
         if (signatures == null || signatures.length != 1) return null;
-        return certificateSha256(signatures[0].toByteArray());
+        return mVerifiedSignerSha256 = certificateSha256(signatures[0].toByteArray());
     }
 
     private static String certificateSha256(byte[] certificate) {
@@ -670,10 +708,18 @@ public final class ApkPackage {
         return certificateSha256(current[0].toByteArray());
     }
 
-    /** Full APK integrity verification, separate from our compatibility cert collection. */
+    /** Official-addon policy over this generation's fully verified, unspoofed identity. */
     synchronized boolean hasVerifiedMicrogSigner() {
         if (mVerifiedMicrogSigner == null) {
-            mVerifiedMicrogSigner = GmsSignatureSpoofing.verifyOfficialApk(apkPath);
+            // verifiedSignerSha256() first performs full content verification, then
+            // caches only on this ApkPackage. Do not derive a second, independent
+            // signer result or share trust with another APK generation. Only the
+            // v1 legacy GSF branch reads the file again, for its exact whole-file pin.
+            mVerifiedMicrogSigner = GmsSignatureSpoofing.MICROG_CERT_SHA256.equals(verifiedSignerSha256())
+                    && (mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2
+                        || mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3
+                        || mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.JAR
+                            && GmsSignatureSpoofing.isPinnedLegacyGsf(apkPath));
         }
         return mVerifiedMicrogSigner;
     }

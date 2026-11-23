@@ -44,6 +44,8 @@ import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IRemoteCallback;
@@ -191,6 +193,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         Configuration config;
         /** Actual manual-driver lifecycle; null for a server-driven application. */
         State inProcessActivityState;
+        InProcessActivity inProcessActivity;
         final List<ActivityRecord> activities = new ArrayList<>();
 
         ProcessRecord(int pid, IApplicationThread thread) {
@@ -619,6 +622,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return app;
     }
 
+    private record InProcessActivity(Binder token, Handler handler,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {}
+
+    private boolean isCurrentInProcessApplication(ProcessRecord app) {
+        return app != null && app.inProcessActivityState != null && app.ready
+                && !app.dead && !app.exiting && !app.pidSuperseded
+                && attachedProcessByPid(app.pid) == app
+                && app.packageCode != null && mPm.get(app.packageName) == app.packageCode
+                && !mPm.isRemovalPending(app.packageName)
+                && app.packageCode.matchesEnabledApplication(0)
+                && (app.enabledProcessLifetime == null || app.enabledProcessLifetime.getAsBoolean());
+    }
+
+    synchronized Binder registerInProcessActivity(ProcessRecord app,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {
+        if (!isCurrentInProcessApplication(app) || app.inProcessActivity != null
+                || app.pid != Binder.getCallingPid() || app.uid != Binder.getCallingUid()) {
+            throw new SecurityException("Standalone activity requires its admitted process");
+        }
+        Binder token = new Binder("Standalone activity");
+        app.inProcessActivity = new InProcessActivity(token, new Handler(Looper.getMainLooper()),
+                Objects.requireNonNull(active), Objects.requireNonNull(result));
+        return token;
+    }
+
     /** Manual-driver lifecycle is used for AppOps state, never as proof of Windows focus. */
     synchronized void inProcessActivityState(ProcessRecord app, State state) {
         if (app.inProcessActivityState == null || app.dead || app.exiting
@@ -636,6 +664,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.ready = false;
             app.exiting = true;
             app.inProcessActivityState = State.STOPPED;
+            app.inProcessActivity = null;
         }
         processDied(app);
     }
@@ -814,8 +843,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             creatorInfo = creatorCode != null ? creatorCode.applicationInfo(0) : mPm.getApplicationInfo(creator, 0, 0);
         }
         if (creatorInfo == null) return ActivityManager.START_CANCELED;
+        DocumentPicker.Backend documents = mDocumentDialog;
         IntentChooser request = new IntentChooser(mPm, verifiedCaller, incoming,
-                mAm == null ? null : mAm.mimeResolver(creatorInfo, process));
+                mAm == null ? null : mAm.mimeResolver(creatorInfo, process),
+                documents != null && documents.available());
+        // A document target's system picker is one of the options (IntentChooser.Option
+        // documentPicker); as the only one it auto-launches like any single choice.
         if (request.unsupported || request.options.isEmpty()) return ActivityManager.START_INTENT_NOT_RESOLVED;
         IntentChooser.Dialog dialog = mIntentChooserDialog;
         // Check the actual JNI backend before accepting a chooser that needs UI.
@@ -916,6 +949,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     private int launchIntentChoice(IntentChoice choice, int index, ActivityRecord[] started) {
         IntentChooser.Option option = choice.request.options.get(index);
+        if (option.documentPicker) return launchDocumentChoice(choice, option);
         if (!choice.active() || !option.current(mPm, choice.creator)) return ActivityManager.START_CANCELED;
         Intent launch = IntentChooser.snapshot(option.intent);
         if (choice.newTask) launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -949,6 +983,44 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 }
             }
             return result;
+        } finally { Binder.restoreCallingIdentity(identity); }
+    }
+
+    /**
+     * The chooser's system-picker entry: the original document request goes to the
+     * host picker with the chooser caller's result route, creator and task. The
+     * chooser's NEW_TASK, NO_USER_ACTION and NEW_DOCUMENT flags carry over; a
+     * new-task chooser already returned the caller's RESULT_CANCELED, so the picker
+     * then has no result recipient, as for a chosen activity. Called without ATM,
+     * launch or package locks: the picker initializes its provider transport and
+     * takes only this service's monitor for its own reservation.
+     */
+    private int launchDocumentChoice(IntentChoice choice, IntentChooser.Option option) {
+        if (!choice.active()) return ActivityManager.START_CANCELED;
+        Intent document = IntentChooser.snapshot(option.intent);
+        int forward = choice.request.chooser.getFlags() & (Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_NO_USER_ACTION | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+        if (choice.newTask) forward |= Intent.FLAG_ACTIVITY_NEW_TASK;
+        document.addFlags(forward);
+        boolean newTask = (document.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            int result = withVerifiedCreator(choice.creator, choice::creatorCurrent, choice::active,
+                    () -> startDocumentPicker(null, choice.creator, document, null,
+                            choice.origin == null ? null : choice.origin.token, choice.resultWho,
+                            newTask ? -1 : choice.requestCode, choice.taskId, choice.requiredTask));
+            if (ActivityManager.isStartResultSuccessful(result) && newTask && choice.origin != null
+                    && choice.requestCode >= 0 && !choice.cancelDelivered) {
+                choice.cancelDelivered = true;
+                deliverResult(choice.origin, choice.resultWho, choice.requestCode,
+                        android.app.Activity.RESULT_CANCELED, null);
+            }
+            return result;
+        } catch (IllegalArgumentException invalid) {
+            // IntentChooser offered only a validated request; a late failure cancels
+            // this choice (RESULT_CANCELED through finishIntentChoice), never the start.
+            SystemServer.log("intent chooser: document picker request rejected: " + invalid.getMessage());
+            return ActivityManager.START_CANCELED;
         } finally { Binder.restoreCallingIdentity(identity); }
     }
 
@@ -1047,7 +1119,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             String resolvedType, IBinder originToken, String resultWho, int requestCode, int launchTaskId,
             AppTaskRecord requiredTask) {
         final DocumentPicker.Backend backend = mDocumentDialog;
-        if (!backend.available()) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        if (!DocumentPicker.resolves(intent, resolvedType) || !backend.available()) {
+            return ActivityManager.START_INTENT_NOT_RESOLVED;
+        }
         final ApkPackage creator = mPm.get(creatorName);
         final DocumentPicker.Request request = new DocumentPicker.Request(intent, resolvedType,
                 creator == null ? 36 : creator.parsed.getTargetSdkVersion());
@@ -1118,7 +1192,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     int ownerPid = session.coveredProcess != null ? session.coveredProcess.pid
                             : session.originProcess != null ? session.originProcess.pid
                             : session.process != null ? session.process.pid : 0;
-                    String[] selected = backend.pick(request, ownerPid, session::active);
+                    if (request.rejection != null) {
+                        // Accepted like Android's picker activity, which then cancels.
+                        SystemServer.log("document-picker: request cancelled: " + request.rejection);
+                    }
+                    String[] selected = request.rejection != null ? null
+                            : backend.pick(request, ownerPid, session::active);
                     if (!session.active()) return;
                     result = DocumentPicker.select(request, selected, provider, backend);
                     synchronized (ActivityTaskManagerService.this) {
@@ -2019,24 +2098,50 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         mAm.callers().requirePackage(callingPackage);
         final ActivityRecord source;
         final ProcessRecord process;
+        final InProcessActivity standalone;
         final ApkPackage captured;
         synchronized (this) {
             source = forToken(resultToToken);
-            if (source == null || source.app == null || source.finishing
-                    || source.state == State.DESTROYED || caller == null
-                    || source.app.pid != Binder.getCallingPid()
-                    || !caller.asBinder().equals(source.app.thread.asBinder())
-                    || !source.info.packageName.equals(callingPackage)) {
-                throw new SecurityException("Permission request must come from its own activity");
+            if (source == null) {
+                process = attachedProcessByPid(Binder.getCallingPid());
+                if (!isCurrentInProcessApplication(process) || process.inProcessActivity == null
+                        || process.inProcessActivity.token() != resultToToken || caller == null
+                        || Binder.getCallingUid() != process.uid
+                        || !caller.asBinder().equals(process.thread.asBinder())
+                        || !process.packageName.equals(callingPackage)
+                        || !process.inProcessActivity.active().getAsBoolean()) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                standalone = process.inProcessActivity;
+                captured = process.packageCode;
+            } else {
+                if (source.app == null || source.finishing || source.state == State.DESTROYED
+                        || caller == null || source.app.pid != Binder.getCallingPid()
+                        || !caller.asBinder().equals(source.app.thread.asBinder())
+                        || !source.info.packageName.equals(callingPackage)) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                process = source.app;
+                standalone = null;
+                captured = mPm.get(callingPackage);
             }
-            process = source.app;
-            captured = mPm.get(callingPackage);
         }
         if (intent.getIntExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_DEVICE_ID, 0) != 0) {
             throw new SecurityException("Only the default permission device is supported");
         }
         mPermissionRequests.request(captured,
                 intent.getStringArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_NAMES), data -> {
+                    if (standalone != null) {
+                        standalone.handler().post(() -> {
+                            synchronized (ActivityTaskManagerService.this) {
+                                if (!isCurrentInProcessApplication(process)
+                                        || process.inProcessActivity != standalone
+                                        || process.packageCode != captured) return;
+                            }
+                            standalone.result().dispatch(standalone.token(), resultWho, requestCode, data);
+                        });
+                        return;
+                    }
                     synchronized (ActivityTaskManagerService.this) {
                         if (source.app != process || source.finishing
                                 || source.state == State.DESTROYED || !mActivities.contains(source)

@@ -76,7 +76,10 @@ foreach($case in @(
       if(-not $line.Wait(5000) -or $line.Result -ne 'READY') { throw 'second dialog never initialized' }
     }
     if([Web3LocationConsent]::Respond($PID,$true)) { throw 'wrong owner accepted' }
-    $acted=[Web3LocationConsent]::Respond($process.Id,[bool]$case.Allow)
+    if([Web3LocationConsent]::Respond($process.Id,$true,$process.StartTime.AddSeconds(-1).Ticks)) {
+      throw 'wrong process generation accepted'
+    }
+    $acted=[Web3LocationConsent]::Respond($process.Id,[bool]$case.Allow,$process.StartTime.Ticks)
     if($case.Expected) {
       if(-not $acted -or -not $process.WaitForExit(5000) -or $process.ExitCode -ne $case.Expected) { throw "$($case.Name) failed" }
     } elseif($acted) { throw "$($case.Name) accepted" }

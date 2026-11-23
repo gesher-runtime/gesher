@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "exec_spawn.h"
+#include <gesher/environment.h>
 #include "../../compat/art/dalvikvm_main.cc"
 
 namespace {
@@ -115,6 +116,17 @@ std::wstring Widen(const std::string& value) {
 }
 std::string Narrow(const std::wstring& value) {
   return std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(value);
+}
+}
+namespace gesher {
+// The entry policy calls the shared owner; its real storage, ABI and native
+// mutation transactions are exercised by the separate environment contracts.
+int SetWideEnvironment(const wchar_t* name, const wchar_t* value) {
+  ++crt_writes;
+  if (crt_failure || publish_failure) return -1;
+  narrow_environment[exec::Narrow(name)] = exec::Narrow(value);
+  wide_environment[name] = value;
+  return 0;
 }
 }
 int gesher_dalvikvm_main(int argc, char** argv) {

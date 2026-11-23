@@ -561,6 +561,33 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Permission policy work counts and publication contracts
+        run: |
+          python3 tools/test_permission_performance.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Verified microG identity reuse and tampered replacement contracts
+        run: |
+          microg_identity="$RUNNER_TEMP/gesher-microg-identity"
+          mkdir -p "$microg_identity"
+          curl --fail --location --retry 3 \
+            https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk \
+            --output "$microg_identity/Companion.apk"
+          curl --fail --location --retry 3 \
+            https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk \
+            --output "$microg_identity/GsfProxy.apk"
+          printf '%s  %s\n' 9b8616011cc8f026bcbbe094df850794abb9d6d9f23214d7a8f8c4d1033ea012 "$microg_identity/Companion.apk" \
+            | sha256sum --check --status
+          printf '%s  %s\n' 86891b174301f06a1c84187b545a0a2a57044c6b768f3e84e865908743349692 "$microg_identity/GsfProxy.apk" \
+            | sha256sum --check --status
+          python3 tools/test_microg_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar" \
+            --companion-apk "$microg_identity/Companion.apk" --gsf-apk "$microg_identity/GsfProxy.apk"
+
       - name: Android UI mode policy, persistence and activity configuration contracts
         run: |
           python3 tools/test_ui_mode_native.py
@@ -602,6 +629,12 @@ jobs:
           phase: save
           path: work/sdk-36/android.jar
           key: sdk-public-api-36-r02-d9eb9da824d9
+
+      - name: Floating activity roots and task window placement
+        run: |
+          python3 tools/test_window_parent_placement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
 
       - name: Speech recognition dispatch and client lifecycle contracts
         run: |
