@@ -101,6 +101,9 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   translations of those that were writable or not executable before (an
   inline hook written RWX, then mapped R-X); a range that stays R-X keeps
   them. An executable `mmap` drops its whole range (a reused address).
+  The guest's `mprotect`/`mmap`/`munmap`/`mremap` change the host mapping
+  and this record as one step (one lock), so racing calls on the same pages
+  cannot leave a writable page recorded as clean R-X.
   `arm64_abi_test`'s `test_rewritten_code` and
   `test_rewritten_code_other_thread`; `GESHER_ARM64_ABI_CRASH=ic-iallu` runs
   the SIGILL case.

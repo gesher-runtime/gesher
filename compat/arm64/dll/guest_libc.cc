@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <cstring>
 #include <string>
@@ -461,9 +462,20 @@ void* g_munmap = nullptr;
 
 int GuestProt(int prot) { return (prot & kProtExec) != 0 ? (prot & ~kProtExec) | kProtRead : prot; }
 
+// Each guest mprotect/mmap/munmap/mremap changes the host mapping and the
+// translator's record of it as one step: otherwise two threads changing the
+// same page (RW in one, R-X in the other) could leave the record clean R-X
+// while the page is writable. Held over the translator's broadcast too, so a
+// later R-X of the same pages cannot see them clean before every Jit has the
+// range. Lock order: this, then the translator's protection record, regions,
+// live-Jit list, a Jit's page record and dynarmic's own mutex; none of those
+// is held while a guest mapping call is made.
+std::mutex g_guest_mapping_mutex;
+
 int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
   int host_prot = GuestProt(prot);
   if (InTranslatorCode(addr, len)) host_prot = kProtRead | kProtWrite;
+  std::lock_guard<std::mutex> lock(g_guest_mapping_mutex);
   int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
                                                                               host_prot);
   // A conservative choice, not a Linux guarantee: arm64 Linux syncs the
@@ -479,6 +491,7 @@ int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
 }
 
 void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd, int64_t off) {
+  std::lock_guard<std::mutex> lock(g_guest_mapping_mutex);
   void* p = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, int, int, int, int64_t)>(g_mmap)(
       addr, len, GuestProt(prot), flags, fd, off);
   if (p == reinterpret_cast<void*>(-1)) return p;
@@ -491,6 +504,7 @@ void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd,
 
 // The pages' last guest protection no longer describes their contents.
 int GESHER_SYSV GuestMunmap(void* addr, size_t len) {
+  std::lock_guard<std::mutex> lock(g_guest_mapping_mutex);
   int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t)>(g_munmap)(addr, len);
   if (r == 0) ForgetGuestProtection(addr, len);
   return r;
@@ -506,6 +520,7 @@ void* g_mremap = nullptr;
 
 void* GESHER_SYSV GuestMremap(void* addr, size_t old_size, size_t new_size, int flags,
                               void* target) {
+  std::lock_guard<std::mutex> lock(g_guest_mapping_mutex);
   void* p = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, size_t, int, void*)>(g_mremap)(
       addr, old_size, new_size, flags, (flags & kMremapFixed) != 0 ? target : nullptr);
   if (p == reinterpret_cast<void*>(-1)) return p;
