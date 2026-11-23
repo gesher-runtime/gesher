@@ -220,6 +220,9 @@ Check 'media: I420 rows to RGBA give the reference pixel for every Y, U, V and w
 Check 'media: target-sized retriever pixels match the pinned full-image Skia oracle with bounded row storage' {
   & "$Dir/media_retriever_pixels_test.exe"
 } @('filtered crop/rotation, config and bounded row storage passed')
+Check 'media: actual HEVC output preserves reordered pixels and owned storage through drain and reset' {
+  & "$Dir/media_soft_hevc_output_test.exe" gate "$Dir/media-hevc-output-fixtures"
+} @('real reordered pixels and owned output storage passed')
 
 # Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
 # color says which frame it is.

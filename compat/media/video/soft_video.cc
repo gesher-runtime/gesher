@@ -469,7 +469,30 @@ class HevcDecoder : public VideoDecoder {
       times_.erase(it);
     }
     last_out_us_ = t;
-    out->push_back(CopyPicture(w, h, p, false, 8, 1, 1, true, t));
+    const int cw = (w + 1) / 2, ch = (h + 1) / 2;
+    const size_t luma = static_cast<size_t>(w) * h;
+    const size_t chroma = static_cast<size_t>(cw) * ch;
+    // Non-shared libhevc finishes writing the caller's output before returning.
+    // Transfer only our exact packed I420 allocation. Padded/cropped layouts
+    // and any provider-owned plane still use the existing row copy.
+    if (p[0].stride == w && p[1].stride == cw && p[2].stride == cw &&
+        buffer_.size() == luma + 2 * chroma && p[0].data == buffer_.data() &&
+        p[1].data == buffer_.data() + luma && p[2].data == buffer_.data() + luma + chroma) {
+      VideoFrame f;
+      f.width = w;
+      f.height = h;
+      f.stride_y = w;
+      f.stride_uv = cw;
+      f.crop_right = w - 1;
+      f.crop_bottom = h - 1;
+      f.time_us = t;
+      // The next Call must allocate fresh storage; consumers may retain or
+      // modify this frame without changing later output or prediction frames.
+      f.data.swap(buffer_);
+      out->push_back(std::move(f));
+    } else {
+      out->push_back(CopyPicture(w, h, p, false, 8, 1, 1, true, t));
+    }
   }
 
   // Flush mode: the pictures still held for display.

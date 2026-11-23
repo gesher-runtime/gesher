@@ -285,3 +285,17 @@ target_compile_options(media_retriever_pixels_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_retriever_pixels_test PRIVATE skia)
 gesher_graphics_cxx(media_retriever_pixels_test)
+
+# Complete HEVC output path and frame helpers, with the real pinned provider.
+# Unselected VPx/AV1 backends abort at the explicit test boundary.
+add_executable(media_soft_hevc_output_test
+  "${CMAKE_SOURCE_DIR}/tests/media/soft_hevc_output_test.cc"
+  "${CMAKE_SOURCE_DIR}/compat/media/video/video_decoder.cc")
+target_include_directories(media_soft_hevc_output_test PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/media/decoder-host/include")
+target_include_directories(media_soft_hevc_output_test SYSTEM PRIVATE ${GESHER_SOFT_VIDEO_INCLUDES})
+target_compile_definitions(media_soft_hevc_output_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_soft_hevc_output_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections)
+target_link_options(media_soft_hevc_output_test PRIVATE -Wl,--gc-sections)
+target_link_libraries(media_soft_hevc_output_test PRIVATE hevcdec pthread)
