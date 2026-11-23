@@ -107,6 +107,17 @@ Check 'arm64: guest ABI (TLS, stack protector, setjmp, stat, epoll, syscall, ato
 } @('arm64_abi_test: all passed', 'arm64_elf_test all passed', 'INFO  arm64 perf: compiled C kernel',
     'Bionic setjmp contracts: all passed')
 
+# IC IALLU is an EL1 instruction, UNDEFINED at EL0: guest code executing it
+# gets SIGILL, as on a device. The guest reads the mode with getenv, which the
+# shim answers from this process's environment, inherited by A64Run's process.
+$env:GESHER_ARM64_ABI_CRASH = 'ic-iallu'
+try {
+  A64Crash 'arm64: guest IC IALLU (EL1 only) is a SIGILL crash report' "$a64/arm64_elf_test.exe" `
+    @((NoDrive "$a64/arm64_abi_test.so"), (NoDrive "$a64")) @('Fatal signal 4 (SIGILL)') 132
+} finally {
+  Remove-Item Env:GESHER_ARM64_ABI_CRASH -ErrorAction SilentlyContinue
+}
+
 # Step 3/4 (guest JNI): dalvikvm runs gesher.Arm64Jni, whose System.load of an
 # arm64-v8a .so goes through ART's host libnativeloader path to the ELF loader,
 # the translator and the JNI bridge's guest proxy tables: JNI_OnLoad,
