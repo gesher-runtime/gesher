@@ -644,14 +644,10 @@ std::string A64ShimImage(bool dexfile, const std::string& oat_version) {
       chain.push_back((h & ~1u) | (i + 1 == nsyms ? 1u : 0u));
     }
     const uint32_t bucket = static_cast<uint32_t>(first_export);
-    gnu.insert(gnu.end(), reinterpret_cast<const uint8_t*>(header),
-               reinterpret_cast<const uint8_t*>(header) + sizeof(header));
-    gnu.insert(gnu.end(), reinterpret_cast<const uint8_t*>(&bloom),
-               reinterpret_cast<const uint8_t*>(&bloom) + sizeof(bloom));
-    gnu.insert(gnu.end(), reinterpret_cast<const uint8_t*>(&bucket),
-               reinterpret_cast<const uint8_t*>(&bucket) + sizeof(bucket));
-    gnu.insert(gnu.end(), reinterpret_cast<const uint8_t*>(chain.data()),
-               reinterpret_cast<const uint8_t*>(chain.data()) + chain.size() * 4);
+    Append(&gnu, header, sizeof(header), 1);
+    Append(&gnu, &bloom, sizeof(bloom), 1);
+    Append(&gnu, &bucket, sizeof(bucket), 1);
+    Append(&gnu, chain.data(), chain.size() * 4, 1);
   }
   const size_t gnu_hash = Append(&out, gnu.data(), gnu.size(), 8);
 
@@ -679,10 +675,9 @@ std::string A64ShimImage(bool dexfile, const std::string& oat_version) {
   out.resize(rx_size + kPage, 0);
   if (!dexfile) {
     syms[instance_index].st_value = data;
-    std::memcpy(out.data() + dynsym + instance_index * sizeof(Elf64_Sym), &syms[instance_index],
-                sizeof(Elf64_Sym));
-    std::memcpy(out.data() + symtab + instance_index * sizeof(Elf64_Sym), &syms[instance_index],
-                sizeof(Elf64_Sym));
+    const size_t entry = instance_index * sizeof(Elf64_Sym);
+    std::memcpy(&out[dynsym + entry], &syms[instance_index], sizeof(Elf64_Sym));
+    std::memcpy(&out[symtab + entry], &syms[instance_index], sizeof(Elf64_Sym));
   }
 
   for (size_t i = 0; i < kFunctions; ++i) {
