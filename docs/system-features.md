@@ -29,8 +29,11 @@ unavailable result.
 - The Windows probes are `WindowsHost.hardwareSummary()`
   (`compat/devsvc/devsvc_hardware.cc`), `WebView2Host.runtimeVersion()`,
   `WindowsCamera.devices()`, `WindowsBluetooth.adapter()`, the audio engine's
-  input devices and `ActivityManager.isLowRamDeviceStatic()`. Without the
-  runtime natives (a host JVM) a probe reports nothing.
+  input devices, `ActivityManager.isLowRamDeviceStatic()`,
+  `WindowsSensors.types()` (the sensor list SensorManager serves),
+  `WindowsWifi.hardware()` (the WLAN census, docs/wifi.md) and
+  `TelephonyService.bootSnapshot()` (the cellular modem, docs/telephony.md).
+  Without the runtime natives (a host JVM) a probe reports nothing.
 
 ## OpenGL ES version
 
@@ -51,7 +54,11 @@ the CPU rasterizer, as ES 3.0. hwui is not affected by default (SkiaCpu, and
 there, would keep those GPUs but needs the system server to open a Direct3D
 device at boot to learn the version; reporting ES 3.0 everywhere and serving it
 everywhere keeps one truthful value. CI's ANGLE probes
-create them on hardware and WARP (docs/angle.md).
+create them on hardware and WARP (docs/angle.md). If such a GPU's machine also
+cannot open WARP, the default display is `EGL_NO_DISPLAY` and apps get no GL,
+where they used to get ES 2.0 on the GPU; WARP ships with every supported
+Windows version, so this needs a damaged system. Without the ANGLE DLLs there
+is no GLES at all, as before, while `ro.opengles.version` still says 3.0.
 
 Not reported:
 
