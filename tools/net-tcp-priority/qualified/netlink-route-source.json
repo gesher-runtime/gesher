@@ -35,7 +35,11 @@
     "compat/posix/src/winsock.cc": "71822702d6b5f2e811bc262226ae82f306333843f4701fb27142316edd23169e",
     "tests/native/native_poll_allocations_windows.cc.in": "18c7df91e370f74eb592e7fe599339f69a98f606874da7882e110c95c15aeb98",
     "tests/native/netlink_route_test.cc": "9e3c5082e0c7c8263a0116c3a8ec40415d8da75e2e9fd4a8cfd7a549f3ccb1ce",
+    "tests/native2/net4_ifaddrs.h": "c94a0fd6f01316650ad06e5dc0c53e4f9c7a7d13f9f054e4644f5e26aec7e5cf",
     "tests/sandbox/netlink-authority-probe.cc": "ec84a5b51fcb9dcd62dfcaa9dfd4544d50fad5b77839da7f04b0baf54bbab16a",
-    "tests/windows/tracks/56-net.ps1": "8c516ff425c0d88977fba27f9a53d6993149fd9ff942c4d6593bba3a1da88c5e"
+    "tests/windows/net/IfaddrsOracle.ps1": "3299204b9c00c9ccaeb14838316602f36e289ce84507af7f7149138ad4b027b3",
+    "tests/windows/tracks/44-native2.ps1": "fefd6041adeeb5fd14b0f776a80fa3d957b4c518db79d7045a1704ddb0761c16",
+    "tests/windows/tracks/56-net.ps1": "8c516ff425c0d88977fba27f9a53d6993149fd9ff942c4d6593bba3a1da88c5e",
+    "tests/windows/tracks/72-net4-ifaddrs.ps1": "edcf79c7662441c1b5122f7721c63e168eb2cce43523884a377544b8b8a1b46c"
   }
 }

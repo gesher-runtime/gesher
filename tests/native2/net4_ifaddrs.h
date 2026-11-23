@@ -3,7 +3,6 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <net/if_arp.h>
 #include <netpacket/packet.h>
 #include <array>
 #include <cstddef>
@@ -34,7 +33,6 @@ struct Node {
   int family, prefix = -1;
   uint32_t scope = 0;
   std::array<unsigned char, 16> address{};
-  std::string hardware;
   bool operator==(const Node&) const = default;
 };
 struct Result {
@@ -42,20 +40,10 @@ struct Result {
   size_t entries = 0, oracle = 0;
   void Check(bool okay, const std::string& what) { if (!okay) failures.push_back(what); }
   std::string Summary() const {
-    return "LP64; IPv4/IPv6 loopback; netmasks/broadcast; packet index/hardware; independent lists; entries "
+    return "LP64; IPv4/IPv6 loopback; netmasks/broadcast; Android app link privacy; independent lists; entries "
         + std::to_string(entries) + "; host oracle " + std::to_string(oracle);
   }
 };
-
-inline std::string Hardware(const sockaddr_ll* packet) {
-  std::string hex;
-  for (unsigned i = 0; i < packet->sll_halen && i < sizeof(packet->sll_addr); ++i) {
-    char byte[3];
-    std::snprintf(byte, sizeof(byte), "%02x", static_cast<unsigned>(packet->sll_addr[i]));
-    hex += byte;
-  }
-  return hex.empty() ? "-" : hex;
-}
 
 inline std::vector<Node> Snapshot(ifaddrs* list, Result& result) {
   std::vector<Node> nodes;
@@ -76,16 +64,7 @@ inline std::vector<Node> Snapshot(ifaddrs* list, Result& result) {
                      && node.name == name, "actual name/index round trip");
     result.Check(p->ifa_data == nullptr, "pinned bionic ifa_data remains unused");
     if (node.family == AF_PACKET) {
-      auto* packet = reinterpret_cast<const sockaddr_ll*>(p->ifa_addr);
-      result.Check(packet->sll_ifindex > 0 && static_cast<unsigned>(packet->sll_ifindex) == node.index,
-                   "packet index matches the interface");
-      result.Check(packet->sll_halen <= sizeof(packet->sll_addr), "bounded hardware address");
-      result.Check(packet->sll_halen != 6 || packet->sll_hatype == ARPHRD_ETHER, "six-byte Ethernet hardware type");
-      result.Check(p->ifa_netmask == nullptr && p->ifa_broadaddr == nullptr, "packet has no IP mask/destination");
-      result.Check((node.flags & IFF_LOOPBACK) == 0 ||
-                       (packet->sll_hatype == ARPHRD_LOOPBACK && packet->sll_halen == 0),
-                   "loopback hardware type and empty address");
-      node.hardware = Hardware(packet);
+      result.Check(false, "ordinary Android caller sees no AF_PACKET rows");
     } else if (node.family == AF_INET || node.family == AF_INET6) {
       const unsigned char* bytes;
       const unsigned char* mask;
@@ -139,7 +118,7 @@ inline Result RunIfaddrs(const char* oracle = nullptr) {
   }
   auto original = Snapshot(first, result);
   result.entries = original.size();
-  bool loop4 = false, loop6 = false, ethernet = false;
+  bool loop4 = false, loop6 = false;
   for (const Node& node : original) {
     if ((node.flags & IFF_LOOPBACK) != 0) {
       result.Check((node.flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING), "loopback is up and running");
@@ -148,16 +127,8 @@ inline Result RunIfaddrs(const char* oracle = nullptr) {
       std::array<unsigned char, 16> one{}; one[15] = 1;
       if (node.family == AF_INET6 && node.address == one && node.prefix == 128) loop6 = true;
     }
-    if (node.family == AF_PACKET && node.hardware.size() == 12 && (node.flags & IFF_LOOPBACK) == 0) ethernet = true;
-    if (node.family == AF_INET || node.family == AF_INET6) {
-      bool packet = false;
-      for (const Node& other : original) packet |= other.family == AF_PACKET && other.name == node.name
-          && other.index == node.index && other.flags == node.flags;
-      result.Check(packet, "IP entry shares flags/index/name with its link entry");
-    }
   }
   result.Check(loop4 && loop6, "actual 127.0.0.1/8 and ::1/128 loopback addresses");
-  result.Check(ethernet, "real non-loopback six-byte hardware address");
   for (int iteration = 0; iteration < 12; ++iteration) {
     ifaddrs* second = nullptr;
     if (getifaddrs(&second) != 0 || second == nullptr) {
@@ -176,25 +147,24 @@ inline Result RunIfaddrs(const char* oracle = nullptr) {
     std::ifstream input(oracle);
     result.Check(input.is_open(), "independent Windows interface oracle opens");
     std::string line;
+    bool oracle4 = false, oracle6 = false;
     while (std::getline(input, line)) {
       std::istringstream fields(line);
       char kind; unsigned index; fields >> kind >> index;
-      if (!fields) { result.Check(false, "valid host oracle row"); continue; }
+      if (!fields || kind != 'A') { result.Check(false, "valid host IP oracle row"); continue; }
       bool found = false;
-      if (kind == 'P') {
-        std::string hardware; fields >> hardware;
-        for (const Node& node : original) found |= node.family == AF_PACKET && node.index == index && node.hardware == hardware;
-      } else if (kind == 'A') {
-        int family, prefix; unsigned scope; std::string text; fields >> family >> prefix >> text >> scope;
-        std::array<unsigned char, 16> address{};
-        result.Check(inet_pton(family, text.c_str(), address.data()) == 1, "host oracle numeric IP parses");
-        for (const Node& node : original) found |= node.family == family && node.index == index
-            && node.prefix == prefix && node.address == address && node.scope == scope;
-      }
+      int family, prefix; unsigned scope; std::string text; fields >> family >> prefix >> text >> scope;
+      if (!fields) { result.Check(false, "valid host IP oracle address"); continue; }
+      std::array<unsigned char, 16> address{};
+      result.Check(inet_pton(family, text.c_str(), address.data()) == 1, "host oracle numeric IP parses");
+      oracle4 |= family == AF_INET;
+      oracle6 |= family == AF_INET6;
+      for (const Node& node : original) found |= node.family == family && node.index == index
+          && node.prefix == prefix && node.address == address && node.scope == scope;
       result.Check(static_cast<bool>(fields) && found, "matches Windows host row: " + line);
       ++result.oracle;
     }
-    result.Check(result.oracle >= 3, "host oracle includes real link and IP records");
+    result.Check(oracle4 && oracle6, "host oracle independently includes real IPv4 and IPv6 address records");
   }
   freeifaddrs(first);
   return result;
