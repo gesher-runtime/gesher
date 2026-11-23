@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "subject": "ARM64 pending rollback fixture API composition for PR #432",
+  "parent": "4b30aac29c5e88dcc5841769544d52acbd136d46",
+  "fixture_commit": "a601e819ee74e8d785ad8481900a3f11ea0ad243",
+  "fixture_tree": "ee1842e080fbf923fa1a0a0eaeaa9c78d3f463e4",
+  "failed_run": {
+    "repository": "gesher-runtime/gesher",
+    "run_id": 45276310619,
+    "attempt": 1,
+    "head": "4b30aac29c5e88dcc5841769544d52acbd136d46",
+    "generated_checkout": "763594f818042e494eb9d9d61b6a75f889d4adc0",
+    "artifact_preflight_job": 138051494312,
+    "selected_source_job": 138051494718
+  },
+  "source": {
+    "tools/test_arm64_pending_rollback.py": {
+      "sha256": "219e21ef33c58d6e3b792c188afedffd45a4494d45989cd192f1d2f302fd566e",
+      "git_blob": "d075340f53bb40dd4108584b92e116b45039ae6a"
+    },
+    "tests/native/arm64_pending_rollback_host.cc.in": {
+      "sha256": "c09557d2c1501c7531988a620253c7032fb06b74b908d725311b9a5b9a87ef63",
+      "git_blob": "787b802f31eccd3ad4c2aa9959c01401b204ba85"
+    }
+  },
+  "validation": {
+    "proof_checks": 138,
+    "original_contract_groups": 13,
+    "original_inline_assertion_sites_preserved": 96,
+    "separately_extracted_tls_corpus": "unchanged",
+    "ordinary_pass": true,
+    "asan_ubsan_pass": true,
+    "generated_source_sha256": "4e8789d3999ac3e60974a0ecda60271470b6c37ae3491374b163120aa3696f17",
+    "original_entry": "reproduces compilation failure on exact failed/author inputs",
+    "controls": [
+      "omitted registry unregister rejects at new final ownership assertion",
+      "actual FlushIcache targeted boundary aborts explicitly",
+      "silent targeted-invalidation no-op fails the same guard expectation"
+    ]
+  },
+  "source_policy": {
+    "modified": false,
+    "qualification_modified": false,
+    "still_rejected": true,
+    "first_rejected_path": "compat/posix/src/unistd.cc",
+    "additional_protected_transition_paths": [
+      "compat/posix/src/socket.cc",
+      "compat/posix/src/socket_internal.h",
+      "compat/posix/src/winsock.cc"
+    ],
+    "native_runtime_approval": false,
+    "fsync_durability_adopted": false
+  },
+  "limits": [
+    "Synthetic Win32/Jit boundary; no guest instruction execution.",
+    "Targeted instruction-cache invalidation must abort in this adapter.",
+    "No runtime, fsync durability or socket source qualification.",
+    "No full artifact-preflight, native Windows or full-CI pass is claimed."
+  ],
+  "evidence": {
+    "path": "docs/research/evidence/arm64-pending-fixture-2026-11-23.tar.gz",
+    "bytes": 399870,
+    "members": 51,
+    "sha256": "86b08dd5255f921f5c2f46294176871d8767fc4541d18a193a51e391146872dc"
+  },
+  "scope_reference": {
+    "code": "https://github.com/gesher-runtime/gesher/blob/4b30aac29c5e88dcc5841769544d52acbd136d46/compat/posix/src/unistd.cc",
+    "native_flush_contract": "https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-flushviewoffile"
+  }
+}
