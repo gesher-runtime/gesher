@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <windows.h>
 #include <fcntl.h>
+#include <gesher/binder_endpoint.h>
 #include <io.h>
 #include <share.h>
 #include <unistd.h>
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include "exec_spawn.h"
 #include "services_zygote.h"
 
 namespace {
@@ -20,6 +22,7 @@ namespace fs = std::filesystem;
 constexpr DWORD kSharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 constexpr wchar_t kOwner[] = L"owner";
 constexpr wchar_t kObserver[] = L"observer";
+constexpr wchar_t kStandalone[] = L"standalone";
 static_assert(sizeof(flock) == 32);
 std::u16string U16(const std::wstring& value) { return {value.begin(), value.end()}; }
 std::u16string Quote(const fs::path& path) { return u"\"" + U16(path.native()) + u"\""; }
@@ -116,7 +119,7 @@ int Hold(const fs::path& dir) {
 }
 
 int Observe(const fs::path& dir, int pid) {
-  if (!Check(Lowbox(), "observer executes in another AppContainer")) return 1;
+  if (!Check(Lowbox(), "observer executes in an AppContainer")) return 1;
   const int fd = OpenData(dir);
   if (!Check(fd >= 0, "observer opens same real file")) return 1;
   auto conflict = Range(F_WRLCK);
@@ -157,10 +160,12 @@ int Server(const fs::path& dir) {
   const auto owner = Profile(dir, kOwner);
   const auto observer = Profile(dir, kObserver);
   const auto owner_log = dir / L"owner.log";
+  uint64_t start_sequence = 0;
   const auto start = [&](const std::u16string& args, const fs::path& log, const std::u16string& profile,
                          uint32_t uid, const std::array<uint8_t, 16>& id) {
     return launch::SpawnProtectedApp(Quote(exe) + args + u" " + Quote(dir), {}, {},
-                                     U16(log.native()), {profile, profile, {u"gesherBinderClient"}}, uid, id);
+                                    U16(log.native()), {profile, profile, {u"gesherBinderClient"}},
+                                    uid, id, ++start_sequence);
   };
   const int holder = start(u" --hold", owner_log, owner, 11001, owner_id);
   int check_number = 0;
@@ -191,11 +196,101 @@ int Server(const fs::path& dir) {
                Check(release_after_exit(), "broker reclaims the last OFD anchor after unclean guest exit"),
                "protected cross-process record locks") ? 0 : 1;
 }
+
+bool StandaloneChild(const std::wstring& arguments, HANDLE input) {
+  const fs::path exe(launch::ExePath());
+  gesher::exec::Launch child;
+  child.application = exe.native();
+  gesher::exec::AppendQuoted(&child.command_line, exe.native());
+  child.command_line += arguments;
+  PROCESS_INFORMATION process{};
+  // An explicit child environment does not supply any binder device name.
+  const auto environment = gesher::exec::EnvironmentBlock({});
+  const DWORD started = gesher::exec::Spawn(child, environment.c_str(), L"", input, GetStdHandle(STD_OUTPUT_HANDLE),
+      GetStdHandle(STD_ERROR_HANDLE), &process);
+  if (!Check(started == ERROR_SUCCESS, "standalone spawns through the production native path")) return false;
+  DWORD status = STILL_ACTIVE;
+  const bool passed = WaitForSingleObject(process.hProcess, 10000) == WAIT_OBJECT_0 &&
+      GetExitCodeProcess(process.hProcess, &status) && status == 0;
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return passed;
+}
+
+int QueryInheritedFile() {
+  auto own = Range(F_WRLCK);
+  auto ordinary = own;
+  return Check(Lowbox() && fcntl(STDIN_FILENO, F_OFD_GETLK, &own) == 0 && own.l_type == F_UNLCK &&
+               fcntl(STDIN_FILENO, F_GETLK, &ordinary) == 0 && ordinary.l_type == F_WRLCK &&
+               ordinary.l_pid == -1 && ordinary.l_start == 4 && ordinary.l_len == 8,
+               "standalone descendant inherits the exact OFD owner") ? 0 : 1;
+}
+
+int StandaloneGuest(const fs::path& dir) {
+  if (!Check(Lowbox(), "standalone runs in a real AppContainer")) return 1;
+  const DWORD broker_pid = gesher::binder_endpoint::Current().StandaloneRecordBrokerPid();
+  if (!Check(broker_pid != 0, "standalone can identify its retained broker process")) return 1;
+  std::printf("broker-pid %lu\n", broker_pid);
+  std::fflush(stdout);
+  const int binder = open("/dev/binder", O_RDWR);
+  if (binder >= 0) close(binder);
+  if (!Check(binder < 0, "standalone remains outside the Android Binder device")) return 1;
+  const int fd = OpenData(dir);
+  auto lock = Range(F_WRLCK);
+  if (!Check(fd >= 0 && fcntl(fd, F_SETLK, &lock) == 0, "standalone obtains a real record lock")) return 1;
+  auto args = L" --observe " + std::to_wstring(GetCurrentProcessId()) + L" ";
+  gesher::exec::AppendQuoted(&args, dir.native());
+  if (!Check(StandaloneChild(args, GetStdHandle(STD_INPUT_HANDLE)) && close(fd) == 0,
+             "authenticated standalone descendant observes its parent's range")) return 1;
+  const int alias = OpenData(dir);
+  return Check(alias >= 0 && fcntl(alias, F_OFD_SETLK, &lock) == 0 &&
+               StandaloneChild(L" --query-inherited-file", reinterpret_cast<HANDLE>(_get_osfhandle(alias))) &&
+               close(alias) == 0, "standalone keeps inherited OFD aliases") ? 0 : 1;
+}
+
+bool BrokerStopped(const fs::path& dir) {
+  std::ifstream log(dir / L"standalone.log");
+  std::string line;
+  constexpr char tag[] = "broker-pid ";
+  while (std::getline(log, line)) {
+    if (!line.starts_with(tag)) continue;
+    const auto pid = std::strtoul(line.c_str() + sizeof(tag) - 1, nullptr, 10);
+    if (pid == 0) return false;
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (!process) return GetLastError() == ERROR_INVALID_PARAMETER;
+    const bool stopped = WaitForSingleObject(process, 1000) == WAIT_OBJECT_0;
+    CloseHandle(process);
+    return stopped;
+  }
+  return false;
+}
+
+int StandaloneSupervisor(const fs::path& dir) {
+  const auto profile = Profile(dir, kStandalone);
+  const fs::path exe(launch::ExePath());
+  if (!Check(launch::EnsureAppContainer(profile, profile) == ERROR_SUCCESS &&
+             launch::GrantToAppContainer(U16(exe.native()), profile, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, false) == 0 &&
+             launch::GrantToAppContainer(U16((dir / L"shared").native()), profile,
+                                         FILE_GENERIC_READ | FILE_GENERIC_WRITE, false) == 0,
+             "standalone grants exact executable and fixture file")) return 1;
+  uint32_t exit = STILL_ACTIVE;
+  const auto result = launch::RunContainedStandalone(Quote(exe) + u" --standalone-guest " + Quote(dir),
+      {profile, profile, {}}, {}, 11003, &exit);
+  if (result != ERROR_SUCCESS || exit != 0) {
+    std::printf("standalone supervisor result %lu child exit %lu\n",
+                static_cast<unsigned long>(result), static_cast<unsigned long>(exit));
+  }
+  return Check(result == ERROR_SUCCESS && exit == 0 && BrokerStopped(dir),
+               "standalone lock-only broker completes and shuts down") ? 0 : 1;
+}
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
   if (argc == 3 && std::wstring(argv[1]) == L"--server") return Server(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--hold") return Hold(argv[2]);
+  if (argc == 3 && std::wstring(argv[1]) == L"--standalone-guest") return StandaloneGuest(argv[2]);
+  if (argc == 3 && std::wstring(argv[1]) == L"--standalone-supervisor") return StandaloneSupervisor(argv[2]);
+  if (argc == 2 && std::wstring(argv[1]) == L"--query-inherited-file") return QueryInheritedFile();
   if (argc == 4 && std::wstring(argv[1]) == L"--observe") return Observe(argv[3], _wtoi(argv[2]));
   if (argc != 3) {
     std::puts("Usage: appcontainer_record_lock_probe <runtime dir> <scratch parent>");
@@ -212,6 +307,16 @@ int wmain(int argc, wchar_t** argv) {
   const fs::path self(launch::ExePath());
   const auto probe = dir / self.filename();
   fs::copy_file(self, probe);
+  const auto standalone = dir / L"standalone";
+  fs::create_directory(standalone);
+  const auto standalone_probe = standalone / self.filename();
+  fs::copy_file(self, standalone_probe);
+  fs::copy_file(runtime / L"binderd.exe", standalone / L"binderd.exe");
+  const int supervisor = launch::Spawn(Quote(standalone_probe) + u" --standalone-supervisor " + Quote(dir),
+      {}, {}, U16((dir / L"standalone.log").native()), false);
+  const bool standalone_ok = Check(supervisor > 0 && WaitExit(supervisor), "real standalone locks");
+  if (!standalone_ok && supervisor > 0) launch::KillChild(supervisor, launch::ChildStartTime(supervisor));
+  launch::DeleteAppContainer(Profile(dir, kStandalone));
   const auto device = U16(id);
   const auto pids = launch::StartProtectedDevice(device,
       {Quote(runtime / L"binderd.exe"), Quote(runtime / L"servicemanager.exe"), Quote(probe) + u" --server " + Quote(dir)},
@@ -221,5 +326,5 @@ int wmain(int argc, wchar_t** argv) {
   if (!ok && pids.size() == 3) launch::KillChild(pids[2], launch::ChildStartTime(pids[2]));
   for (const auto* role : {kOwner, kObserver}) launch::DeleteAppContainer(Profile(dir, role));
   std::wprintf(L"Fixture logs: %ls\n", dir.c_str());
-  return ok ? 0 : 1;
+  return ok && standalone_ok ? 0 : 1;
 }

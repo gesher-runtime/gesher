@@ -30,8 +30,7 @@ class Binding {
     required_ = true;
     guest_ = startup.endpoint == binder_bootstrap::Endpoint::kApplication ||
              startup.endpoint == binder_bootstrap::Endpoint::kStandalone;
-    if (startup.endpoint == binder_bootstrap::Endpoint::kStandalone) return;
-    enrolled_guest_ = startup.endpoint == binder_bootstrap::Endpoint::kApplication;
+    standalone_ = startup.endpoint == binder_bootstrap::Endpoint::kStandalone;
     HANDLE inherited = binder_bootstrap::DecodeHandle(startup.broker);
     if (GetProcessId(inherited) == 0) return;
     if (guest_ || startup.endpoint == binder_bootstrap::Endpoint::kClient) {
@@ -97,7 +96,13 @@ class Binding {
   }
 
   bool IsGuest() const { return guest_; }
-  bool IsEnrolledGuest() const { return enrolled_guest_; }
+  bool IsStandalone() const { return standalone_; }
+
+  DWORD StandaloneRecordBrokerPid() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!standalone_ || !broker_ || WaitForSingleObject(broker_, 0) != WAIT_TIMEOUT) return 0;
+    return GetProcessId(broker_);
+  }
 
   bool DuplicateToGuestChild(HANDLE* duplicate) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -112,7 +117,7 @@ class Binding {
   bool required_ = false;
   bool operator_ = false;
   bool guest_ = false;
-  bool enrolled_guest_ = false;
+  bool standalone_ = false;
 };
 
 inline Binding& Current() {

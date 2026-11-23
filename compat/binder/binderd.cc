@@ -68,6 +68,8 @@ namespace launch = gesher::binder_launch;
 namespace peer = gesher::binder_peer;
 
 bool g_trace = false;
+bool g_record_only = false;
+gesher::process_identity::Sid g_record_container;
 
 void Log(const char* format, ...) {
   va_list args;
@@ -1624,6 +1626,7 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
                           gesher::process_identity::Principal authority) {
   peer::OwnedHandle endpoint_owner(endpoint);
   peer::Registry::Lease system;
+  bool admitted_standalone = false;
   launch::Request request;
   while (launch::Transfer(endpoint, &request, sizeof(request), false)) {
     gesher::process_identity::Principal sender;
@@ -1637,28 +1640,31 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
       case launch::Action::kEnroll: {
         peer::OwnedHandle process(launch::DecodeHandle(request.process));
         const bool app = request.role == peer::Role::kApplication;
-        const bool role_allowed = system ? app : !app;
+        const bool role_allowed = g_record_only ? app && !admitted_standalone
+                                                : app == static_cast<bool>(system);
         auto* container = request.container.bytes.data();
         const bool sid_matches = app
             ? request.container.size != 0 && request.container.size <= request.container.bytes.size() &&
-                IsValidSid(container) && GetLengthSid(container) == request.container.size
+                IsValidSid(container) && GetLengthSid(container) == request.container.size &&
+                (!g_record_only || g_record_container.Matches(container))
             : request.container.size == 0;
         if (role_allowed && sid_matches &&
             (request.role != peer::Role::kLauncher || request.pid == launcher_pid)) {
           accepted = g_peer_registry->Enroll(std::move(process), request.pid, request.birth,
               request.role, request.uid, request.installation, app ? container : nullptr);
+          if (g_record_only && accepted) admitted_standalone = true;
         }
         break;
       }
       case launch::Action::kHandoff:
-        if (!system) {
+        if (!g_record_only && !system) {
           system = g_peer_registry->FindGeneration(request.pid, request.birth, peer::Role::kSystemServer);
           accepted = static_cast<bool>(system);
         }
         break;
       case launch::Action::kRetire:
-        if (!system || g_peer_registry->FindGeneration(request.pid, request.birth,
-                                                        peer::Role::kApplication)) {
+        if (!g_record_only && (!system || g_peer_registry->FindGeneration(request.pid, request.birth,
+                                                                          peer::Role::kApplication))) {
           accepted = g_peer_registry->Retire(request.pid, request.birth);
         }
         if (accepted) ReapRevokedPeers();
@@ -1676,7 +1682,7 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
         break;
       case launch::Action::kAttachJob: {
         peer::OwnedHandle job(launch::DecodeHandle(request.process));
-        if (system) accepted = g_peer_registry->AttachJob(std::move(job));
+        if (system || g_record_only) accepted = g_peer_registry->AttachJob(std::move(job));
         break;
       }
     }
@@ -1748,6 +1754,10 @@ void ServeProc(HANDLE pipe, In in, bool operator_hello) {
   ProcRelease(proc);
 }
 
+#ifdef GESHER_RECORD_LOCK_BROKER
+bool WaitRecordClient(HANDLE pipe, bool accept_ack);
+#endif
+
 void ServeEnrollChild(HANDLE pipe, In in) {
   uint32_t version = 0;
   uint64_t source = 0;
@@ -1761,7 +1771,14 @@ void ServeEnrollChild(HANDLE pipe, In in) {
   const bool accepted = duplicated && g_peer_registry->EnrollDescendant(parent, peer::OwnedHandle(child));
   WireReply reply;
   reply.Put<int32_t>(accepted ? 0 : -EPERM);
-  if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
+  if (!WriteMessage(pipe, reply)) return;
+#ifdef GESHER_RECORD_LOCK_BROKER
+  if (g_record_only) {
+    WaitRecordClient(pipe, false);
+    return;
+  }
+#endif
+  FlushFileBuffers(pipe);
 }
 
 #ifdef GESHER_RECORD_LOCK_BROKER
@@ -2257,24 +2274,37 @@ void ServeThread(HANDLE pipe, In in) {
   ThreadRelease(thread);
 }
 
+bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  uint32_t length = 0;
+  if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) ||
+      !launch::Transfer(pipe, &length, sizeof(length), false, deadline) ||
+      length < 2 * sizeof(uint32_t) || length > 64) return false;
+  request->resize(length);
+  return launch::Transfer(pipe, request->data(), length, false, deadline);
+}
+
 void Serve(HANDLE pipe) {
   std::vector<uint8_t> msg;
-  if (ReadMessage(pipe, &msg)) {
+  if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
     In in{msg.data(), msg.data() + msg.size()};
     uint32_t op, magic;
     if (in.Get(&op) && in.Get(&magic) && magic == wire::kMagic) {
-      if (op == wire::kHelloProc || op == wire::kHelloOperator) {
-        ServeProc(pipe, in, op == wire::kHelloOperator);
-      } else if (op == wire::kHelloThread) {
-        ServeThread(pipe, in);
-      } else if (op == wire::kHelloRights) {
-        ServeRights(pipe, in);
-      } else if (op == wire::kEnrollChild) {
+      if (op == wire::kEnrollChild) {
         ServeEnrollChild(pipe, in);
 #ifdef GESHER_RECORD_LOCK_BROKER
       } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
         ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
 #endif
+      } else if (!g_record_only) {
+        if (op == wire::kHelloProc || op == wire::kHelloOperator) {
+          ServeProc(pipe, in, op == wire::kHelloOperator);
+        } else if (op == wire::kHelloThread) {
+          ServeThread(pipe, in);
+        } else if (op == wire::kHelloRights) {
+          ServeRights(pipe, in);
+        }
       }
     }
   }
@@ -2287,46 +2317,73 @@ void Serve(HANDLE pipe) {
 int main(int argc, char** argv) {
   const char* trace = getenv("GESHER_BINDER_TRACE");
   g_trace = trace != nullptr && trace[0] == '1';
+  launch::Startup bootstrap;
+  g_record_only = gesher::binder_bootstrap::ReadStartupRecord(&bootstrap) &&
+      bootstrap.endpoint == launch::Endpoint::kRecordBroker;
+  if (g_record_only && !launch::ReadStartup(launch::Endpoint::kRecordBroker, &bootstrap)) {
+    return EXIT_FAILURE;
+  }
+#ifndef GESHER_RECORD_LOCK_BROKER
+  if (g_record_only) return EXIT_FAILURE;
+#endif
+  const bool protected_launch = g_record_only || launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap);
   std::string device;
-  if (argc > 1) {
+  if (g_record_only) {
+    device = "standalone record locks";
+  } else if (argc > 1) {
     device = argv[1];
   } else if (const char* env = getenv("GESHER_BINDER"); env != nullptr && env[0] != '\0') {
     device = env;
   } else {
     device = "default";
   }
-  std::wstring name = wire::kPipePrefix;
-  for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
+  std::wstring name;
+  if (g_record_only) {
+    name = wire::kStandaloneRecordPipe + std::to_wstring(GetCurrentProcessId());
+  } else {
+    name = wire::kPipePrefix;
+    for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
 
-  // The descriptor broker's doorbell and the stream positions (binder_wire.h),
-  // which live as long as the broker does. The positions are the processes'
-  // own; the broker only keeps the section.
-  std::wstring doorbell = wire::kRightsDoorbellPrefix;
-  std::wstring positions = wire::kStreamPositionsPrefix;
-  for (char c : device) {
-    doorbell += static_cast<wchar_t>(static_cast<unsigned char>(c));
-    positions += static_cast<wchar_t>(static_cast<unsigned char>(c));
-  }
-  constexpr DWORD kDoorbellBytes = wire::kRightsDoorbellSlots * sizeof(LONG64);
-  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
-                                      kDoorbellBytes, doorbell.c_str());
-  if (section != nullptr) {
-    g_rights_doorbell = static_cast<volatile LONG64*>(
-        MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kDoorbellBytes));
-  }
-  HANDLE positions_section = CreateFileMappingW(
-      INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
-      wire::kRightsDoorbellSlots * sizeof(wire::StreamPositions), positions.c_str());
-  if (g_rights_doorbell == nullptr || positions_section == nullptr) {
-    Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
+    // The descriptor broker's doorbell and the stream positions (binder_wire.h),
+    // which live as long as the broker does. The positions are the processes'
+    // own; the broker only keeps the section.
+    std::wstring doorbell = wire::kRightsDoorbellPrefix;
+    std::wstring positions = wire::kStreamPositionsPrefix;
+    for (char c : device) {
+      doorbell += static_cast<wchar_t>(static_cast<unsigned char>(c));
+      positions += static_cast<wchar_t>(static_cast<unsigned char>(c));
+    }
+    constexpr DWORD kDoorbellBytes = wire::kRightsDoorbellSlots * sizeof(LONG64);
+    HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                        kDoorbellBytes, doorbell.c_str());
+    if (section != nullptr) {
+      g_rights_doorbell = static_cast<volatile LONG64*>(
+          MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kDoorbellBytes));
+    }
+    HANDLE positions_section = CreateFileMappingW(
+        INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+        wire::kRightsDoorbellSlots * sizeof(wire::StreamPositions), positions.c_str());
+    if (g_rights_doorbell == nullptr || positions_section == nullptr) {
+      Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
+    }
   }
 
   // GESHER_SANDBOX=appcontainer (ADR 0090): an explicit descriptor that admits the
   // app processes' AppContainers through the binder-client capability and a Low
   // label, and nothing else beyond this user and SYSTEM. Otherwise the default.
   SECURITY_ATTRIBUTES pipe_security{sizeof(pipe_security), nullptr, FALSE};
-  launch::Startup bootstrap;
-  if (launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap)) {
+  if (g_record_only) {
+    PSID sid = nullptr;
+    if (argc != 2 || !ConvertStringSidToSidA(argv[1], &sid)) return EXIT_FAILURE;
+    const bool copied = g_record_container.CopyFrom(sid);
+    const DWORD error = gesher::appcontainer::AppContainerPipeSecurity(&pipe_security.lpSecurityDescriptor, sid);
+    LocalFree(sid);
+    if (!copied || error != ERROR_SUCCESS) {
+      Log("standalone record lock pipe security unavailable: %lu", error);
+      return EXIT_FAILURE;
+    }
+  }
+  if (protected_launch) {
     gesher::process_identity::Process process;
     const HANDLE endpoint = launch::DecodeHandle(bootstrap.channel);
     ULONG launcher_pid = 0;
@@ -2342,7 +2399,7 @@ int main(int argc, char** argv) {
     std::thread(ServeLaunchAuthority, endpoint, launcher_pid, process.principal).detach();
   }
   g_sandbox = g_peer_registry || gesher::appcontainer::Enabled();
-  if (g_sandbox) {
+  if (g_sandbox && !g_record_only) {
     DWORD error = gesher::appcontainer::BinderPipeSecurity(&pipe_security.lpSecurityDescriptor);
     if (error != ERROR_SUCCESS) {
       Log("GESHER_SANDBOX=appcontainer: no pipe security descriptor: %lu", error);

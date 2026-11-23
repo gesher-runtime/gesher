@@ -112,9 +112,16 @@ struct Reader {
 };
 
 std::wstring PipeName() {
+  if (binder_endpoint::Current().IsStandalone()) return {};
   const char* device = getenv("GESHER_BINDER");
   if (device == nullptr || device[0] == '\0') return {};
   return std::wstring(wire::kPipePrefix) + Widen(device);
+}
+
+std::wstring RecordPipeName() {
+  if (!binder_endpoint::Current().IsStandalone()) return PipeName();
+  const DWORD pid = binder_endpoint::Current().StandaloneRecordBrokerPid();
+  return pid != 0 ? wire::kStandaloneRecordPipe + std::to_wstring(pid) : std::wstring{};
 }
 
 HANDLE ConnectPipe(const std::wstring& name) {
@@ -769,7 +776,7 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 
 bool binder_endpoint::EnrollChild(HANDLE process) {
   const ULONGLONG deadline = GetTickCount64() + 5000;
-  const std::wstring name = PipeName();
+  const std::wstring name = RecordPipeName();
   if (name.empty()) return false;
   HANDLE pipe = ConnectPipe(name);
   if (pipe == INVALID_HANDLE_VALUE) return false;
@@ -808,7 +815,7 @@ int ReceiveRecordStatus(HANDLE pipe, std::vector<uint8_t>* reply) {
 
 int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
   if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
-  const std::wstring name = PipeName();
+  const std::wstring name = RecordPipeName();
   if (name.empty()) return EACCES;
   RecordPipe pipe{ConnectPipe(name)};
   if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());
@@ -835,7 +842,7 @@ int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::Linu
 
 int binder_endpoint::FileRecordClosed(HANDLE* pin) {
   if (!binder_endpoint::Current().IsGuest() || !pin || !*pin) return EACCES;
-  const std::wstring name = PipeName();
+  const std::wstring name = RecordPipeName();
   if (name.empty()) return EACCES;
   RecordPipe pipe{ConnectPipe(name)};
   if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());

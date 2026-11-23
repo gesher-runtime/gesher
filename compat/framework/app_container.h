@@ -66,6 +66,8 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit);
 // processes run at Low integrity).
 // Free with LocalFree.
 DWORD BinderPipeSecurity(PSECURITY_DESCRIPTOR* descriptor);
+// The same pipe access for a single per-run standalone AppContainer SID.
+DWORD AppContainerPipeSecurity(PSECURITY_DESCRIPTOR* descriptor, PSID client);
 
 }  // namespace appcontainer
 }  // namespace gesher

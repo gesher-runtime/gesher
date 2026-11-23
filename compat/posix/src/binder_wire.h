@@ -159,6 +159,7 @@ constexpr uint32_t kRightsMaxInFlight = 65536;
 
 // The pipe name of a device: \\.\pipe\gesher-binder-<device>.
 constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
+constexpr const wchar_t kStandaloneRecordPipe[] = L"\\\\.\\pipe\\gesher-binder-standalone-record-";
 // What a client asks of the device's pipe: GENERIC_READ | FILE_WRITE_DATA |
 // FILE_WRITE_ATTRIBUTES. Not GENERIC_WRITE: for a pipe its FILE_APPEND_DATA is
 // FILE_CREATE_PIPE_INSTANCE, which binderd grants AppContainer clients no more

@@ -716,14 +716,76 @@ void WaitWithStandaloneInput(HANDLE process, StandaloneInput& code) {
   code.requests.reset();
 }
 
+struct StandaloneRecordBroker {
+  peer::OwnedHandle process;
+  peer::OwnedHandle authority;
+
+  ~StandaloneRecordBroker() {
+    // The control pipe tells the broker to release its job query handle.
+    // Closing it first also handles an early failure after the job was attached.
+    authority.reset();
+    if (process && WaitForSingleObject(process.get(), 500) == WAIT_TIMEOUT &&
+        TerminateProcess(process.get(), ERROR_BROKEN_PIPE)) {
+      WaitForSingleObject(process.get(), 500);
+    }
+  }
+
+  DWORD Start(const std::u16string& runtime, HANDLE job, PSID container) {
+    const size_t name = runtime.find_last_of(u"/\\");
+    if (name == std::u16string::npos) return ERROR_PATH_NOT_FOUND;
+    const std::u16string executable = runtime.substr(0, name + 1) + u"binderd.exe";
+    LPWSTR sid = nullptr;
+    if (!ConvertSidToStringSidW(container, &sid)) return GetLastError();
+    const auto command = u"\"" + executable + u"\" " + U(sid, wcslen(sid));
+    LocalFree(sid);
+    peer::OwnedHandle receiver;
+    if (!launch::PrivatePipe(&receiver, &authority)) return ERROR_ACCESS_DENIED;
+    const BootstrapHandles bootstrap{launch::Endpoint::kRecordBroker, receiver.get()};
+    const int pid = SpawnImpl(command, {}, {u"GESHER_BINDER"}, u"NUL",
+                              false, nullptr, &bootstrap, nullptr, job);
+    receiver.reset();
+    if (pid <= 0) return pid < 0 ? -pid : ERROR_ACCESS_DENIED;
+    {
+      std::lock_guard<std::mutex> lock(g_lock);
+      const auto child = g_children.find(pid);
+      if (child == g_children.end()) return ERROR_INVALID_HANDLE;
+      process.reset(child->second);
+      g_children.erase(child);
+    }
+    HANDLE broker_job = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), job, process.get(), &broker_job,
+                         JOB_OBJECT_QUERY, FALSE, 0)) return GetLastError();
+    launch::Request attach;
+    attach.action = launch::Action::kAttachJob;
+    attach.process = launch::EncodeHandle(broker_job);
+    if (!SubmitLaunchRequest(authority.get(), attach)) return ERROR_ACCESS_DENIED;
+
+    const auto pipe_name = binder_wire::kStandaloneRecordPipe + std::to_wstring(pid);
+    const ULONGLONG deadline = GetTickCount64() + 5000;
+    do {
+      if (WaitForSingleObject(process.get(), 0) != WAIT_TIMEOUT) return ERROR_BROKEN_PIPE;
+      peer::OwnedHandle pipe(CreateFileW(pipe_name.c_str(), binder_wire::kPipeClientAccess, 0,
+          nullptr, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr));
+      if (pipe.get() != INVALID_HANDLE_VALUE) {
+        ULONG server = 0;
+        return GetNamedPipeServerProcessId(pipe.get(), &server) && server == static_cast<DWORD>(pid)
+                   ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+      }
+      Sleep(10);
+    } while (GetTickCount64() < deadline);
+    return ERROR_TIMEOUT;
+  }
+};
+
 uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t* exit_code,
                   const Container* sandbox, uint32_t uid, StandaloneInput* code) {
   std::u16string exe = ExePath();
   if (exe.empty() || command.empty()) return ERROR_INVALID_PARAMETER;
-  OwnedHandle input, output, error, device, job, process, thread;
+  OwnedHandle input, output, error, device, job, process, thread, broker_pin;
+  StandaloneRecordBroker record_broker;
   const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
   OwnedHandle* copies[] = {&input, &output, &error};
-  HANDLE handles[7]{};
+  HANDLE handles[8]{};
   for (size_t i = 0; i < 3; ++i) {
     HANDLE original = GetStdHandle(kinds[i]);
     if (original == nullptr || original == INVALID_HANDLE_VALUE) {
@@ -741,26 +803,32 @@ uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t*
   job.value = CreateLifetimeJob();
   if (job.value == nullptr) return GetLastError();
   launch::Startup admission;
+  size_t inherited = 3;
   if (sandbox != nullptr) {
+    const DWORD failure = record_broker.Start(exe, job.value, sandbox->sid.value);
+    if (failure != ERROR_SUCCESS) return failure;
     SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
     device.value = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, nullptr);
     if (device.value == INVALID_HANDLE_VALUE) return GetLastError();
-    handles[3] = device.value;
+    if (!DuplicateHandle(GetCurrentProcess(), record_broker.process.get(), GetCurrentProcess(),
+                         &broker_pin.value, binder_endpoint::kPinRights, TRUE, 0)) return GetLastError();
+    handles[inherited++] = device.value;
+    handles[inherited++] = broker_pin.value;
     admission.endpoint = launch::Endpoint::kStandalone;
+    admission.broker = launch::EncodeHandle(broker_pin.value);
     admission.null_device = launch::EncodeHandle(device.value);
     admission.uid = uid;
   }
   if (code != nullptr) {
-    handles[4] = code->file.get();
-    handles[5] = code->child_requests.get();
-    handles[6] = code->name.get();
-    admission.code_file = launch::EncodeHandle(handles[4]);
-    admission.code_channel = launch::EncodeHandle(handles[5]);
-    admission.code_name = launch::EncodeHandle(handles[6]);
+    handles[inherited++] = code->file.get();
+    handles[inherited++] = code->child_requests.get();
+    handles[inherited++] = code->name.get();
+    admission.code_file = launch::EncodeHandle(code->file.get());
+    admission.code_channel = launch::EncodeHandle(code->child_requests.get());
+    admission.code_name = launch::EncodeHandle(code->name.get());
   }
   HandleList attributes;
-  const size_t inherited = code != nullptr ? 7 : sandbox != nullptr ? 4 : 3;
   DWORD failure = attributes.Initialize(handles, inherited,
       sandbox != nullptr ? &sandbox->security : nullptr, sandbox != nullptr ? &job.value : nullptr);
   if (failure != ERROR_SUCCESS) return failure;
@@ -800,6 +868,11 @@ uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t*
         !IsProcessInJob(process.value, job.value, &member) || !member) {
       return ERROR_ACCESS_DENIED;
     }
+    Enrollment initial{record_broker.authority.get(), record_broker.process.get(),
+        peer::Role::kApplication, uid};
+    std::memcpy(initial.installation.data(), &admitted.birth, sizeof(admitted.birth));
+    std::memcpy(initial.installation.data() + sizeof(admitted.birth), &admitted.pid, sizeof(admitted.pid));
+    if (!EnrollProcess(initial, process.value, admitted, sandbox->sid.value)) return ERROR_ACCESS_DENIED;
   }
   // Transfer only the foreground permission Windows actually gives this launcher.
   // Failure leaves the normal OS focus rules in force; it never fabricates focus.

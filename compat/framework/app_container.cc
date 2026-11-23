@@ -336,7 +336,14 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) 
 }
 
 DWORD BinderPipeSecurity(PSECURITY_DESCRIPTOR* descriptor) {
+  Sid capability;
+  const DWORD error = CapabilitySid(kBinderClientCapability, &capability);
+  return error != ERROR_SUCCESS ? error : AppContainerPipeSecurity(descriptor, capability.value);
+}
+
+DWORD AppContainerPipeSecurity(PSECURITY_DESCRIPTOR* descriptor, PSID trustee) {
   if (descriptor == nullptr) return ERROR_INVALID_PARAMETER;
+  if (!trustee || !IsValidSid(trustee)) return ERROR_INVALID_SID;
   HANDLE token = nullptr;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return GetLastError();
   alignas(TOKEN_USER) BYTE buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
@@ -346,13 +353,10 @@ DWORD BinderPipeSecurity(PSECURITY_DESCRIPTOR* descriptor) {
   CloseHandle(token);
   if (!ok) return error;
   std::wstring user = StringSid(reinterpret_cast<TOKEN_USER*>(buffer)->User.Sid);
-  Sid capability;
-  error = CapabilitySid(kBinderClientCapability, &capability);
-  if (error != ERROR_SUCCESS) return error;
-  std::wstring client = StringSid(capability.value);
+  std::wstring client = StringSid(trustee);
   if (user.empty() || client.empty()) return ERROR_INVALID_SID;
   // Protected DACL: nothing inherited, no Everyone/anonymous read of the default one.
-  // The capability gets FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES
+  // The client gets FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES
   // (0x12018b), what binder_wire.h's kPipeClientAccess asks: no FILE_APPEND_DATA,
   // which for a pipe is FILE_CREATE_PIPE_INSTANCE (serving an instance of it).
   std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;" + user + L")(A;;0x12018b;;;" + client +

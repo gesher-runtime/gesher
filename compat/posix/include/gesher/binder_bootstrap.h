@@ -10,7 +10,7 @@
 namespace gesher::binder_bootstrap {
 
 enum class Endpoint : uint32_t { kBroker = 1, kSystemServer = 2, kClient = 3,
-                                 kApplication = 4, kStandalone = 5 };
+                                 kApplication = 4, kStandalone = 5, kRecordBroker = 6 };
 
 inline uint64_t EncodeHandle(HANDLE handle) {
   return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(handle));
@@ -66,6 +66,7 @@ inline bool ReadStartup(Endpoint endpoint, Startup* result) {
   }
   switch (endpoint) {
     case Endpoint::kBroker:
+    case Endpoint::kRecordBroker:
       if (GetFileType(DecodeHandle(record.channel)) != FILE_TYPE_PIPE ||
           record.broker != 0 || record.job_delivery != 0 || record.null_device != 0 ||
           record.uid != 0) return false;
@@ -88,7 +89,8 @@ inline bool ReadStartup(Endpoint endpoint, Startup* result) {
           record.uid < 10000 || record.uid > 19999) return false;
       break;
     case Endpoint::kStandalone:
-      if (record.channel != 0 || record.broker != 0 || record.job_delivery != 0 ||
+      if (record.channel != 0 || record.job_delivery != 0 ||
+          GetProcessId(DecodeHandle(record.broker)) == 0 ||
           GetFileType(DecodeHandle(record.null_device)) != FILE_TYPE_CHAR ||
           record.uid < 10000 || record.uid > 19999 ||
           (record.code_file == 0) != (record.code_channel == 0) ||
