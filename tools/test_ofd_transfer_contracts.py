@@ -24,6 +24,31 @@ def without_includes(source):
     return re.sub(r"^#(?:include|pragma once)[^\n]*\n", "", source, flags=re.MULTILINE)
 
 
+def load_host_template():
+    bootstrap = (ROOT / "compat/posix/include/gesher/binder_bootstrap.h").read_text()
+    boundary = "\ninline bool ReadStartup(Endpoint endpoint, Startup* result)"
+    if bootstrap.count(boundary) != 1:
+        raise ValueError("Binder startup-record boundary changed")
+    startup_record = without_includes(bootstrap[:bootstrap.index(boundary)])
+    template = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
+    headers = {
+        "@PE_EXPORTS_HEADER@": str(ROOT / "compat/elf/exec/pe_exports.h"),
+        "@ENVIRONMENT_ENCODING_HEADER@": str(ROOT / "compat/posix/include/gesher/environment_utf16.h"),
+        "@BINDER_STARTUP_RECORD@": startup_record + "\n}  // namespace gesher::binder_bootstrap\n",
+    }
+    for token, value in headers.items():
+        if template.count(token) != 1:
+            raise ValueError("OFD host boundary changed: " + token)
+        template = template.replace(token, value)
+    return template
+
+
+def require_rendered_host_source(source):
+    remaining = sorted(set(re.findall(r"@[A-Z][A-Z0-9_]*@", source)))
+    if remaining:
+        raise ValueError("Unresolved OFD host source markers: " + ", ".join(remaining))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
@@ -36,20 +61,12 @@ def main():
         ":compat/posix/src/ofd.cc"], cwd=ROOT, text=True) if args.source_ref else (
         ROOT / "compat/posix/src/ofd.cc").read_text()
     spawn = (ROOT / "compat/elf/exec/exec_spawn.cc").read_text()
-    bootstrap = (ROOT / "compat/posix/include/gesher/binder_bootstrap.h").read_text()
-    boundary = "\ninline bool ReadStartup(Endpoint endpoint, Startup* result)"
-    if bootstrap.count(boundary) != 1:
-        raise ValueError("Binder startup-record boundary changed")
-    startup_record = without_includes(bootstrap[:bootstrap.index(boundary)])
     begin, end = "DWORD SpawnWithFds(", "\nstd::wstring EnvironmentBlock("
     if spawn.count(begin) != 1 or spawn.count(end) != 1:
         raise ValueError("SpawnWithFds production boundaries changed")
     builder = spawn[spawn.index(begin):spawn.index(end)]
-    template = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
+    template = load_host_template()
     sections = {
-        "@PE_EXPORTS_HEADER@": str(ROOT / "compat/elf/exec/pe_exports.h"),
-        "@ENVIRONMENT_ENCODING_HEADER@": str(ROOT / "compat/posix/include/gesher/environment_utf16.h"),
-        "@BINDER_STARTUP_RECORD@": startup_record + "\n}  // namespace gesher::binder_bootstrap\n",
         "@OFD_DECLARATIONS@": without_includes(public) + without_includes(private),
         "@OFD_IMPLEMENTATION@": without_includes(implementation),
         "@SPAWN_IMPLEMENTATION@": builder,
@@ -59,6 +76,7 @@ def main():
         if template.count(token) != 1:
             raise ValueError("OFD template boundary changed: " + token)
         template = template.replace(token, section)
+    require_rendered_host_source(template)
     print("Production ofd.cc SHA256 " + hashlib.sha256(implementation.encode()).hexdigest(), flush=True)
     print("Production SpawnWithFds SHA256 " + hashlib.sha256(builder.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-ofd-transfer-") as temporary:
