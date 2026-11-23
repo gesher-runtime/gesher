@@ -16,7 +16,9 @@ def main() -> None:
     for name in ("framework-classes", "core-classes", "app-classes", "apksig", "java-home"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--controller-source-ref", help="Compile a prior controller as a regression control")
-    parser.add_argument("--group", choices=("all", "task", "affinity", "sub"), default="all")
+    parser.add_argument("--usage-source-ref", help="Compile unchanged historical usage service/history together")
+    parser.add_argument("--usage-baseline", action="store_true", help="Report historical allocation without the candidate budget")
+    parser.add_argument("--group", choices=("all", "task", "affinity", "sub", "usage", "usage-query"), default="all")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:
@@ -25,18 +27,32 @@ def main() -> None:
             (args.app_classes, args.framework_classes, args.core_classes, args.apksig))
     with tempfile.TemporaryDirectory(prefix="gesher-activity-finish-") as directory:
         work = Path(directory); classes = work / "classes"; classes.mkdir()
+        if args.group in ("all", "usage-query") and not args.usage_source_ref:
+            # This helper is already invoked by the pinned framework recipe.
+            # Run the new package-private history model in its own ordinary JVM;
+            # the public service fixture below has a separate loader and also runs on ART.
+            model = work / "history-model"; model.mkdir()
+            subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8",
+                            "-d", str(model),
+                            str(ROOT / "app/java/com/gesher/server/ActivityUsageHistory.java"),
+                            str(ROOT / "tests/activity-usage/ActivityUsageQueryTest.java")], check=True)
+            subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData", "-cp", str(model),
+                            "com.gesher.server.ActivityUsageQueryTest"], check=True, timeout=60)
         library = work / "libactivity_finish_host.so"
         subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
                         str(ROOT / "tests/activity-finish/framework_host.c"), "-o", str(library)], check=True)
         sources = []
         for name in ("ActivityCallerState", "ActivityClientController", "ActivityTaskManagerService",
-                     "ActivityManagerService", "PendingIntents", "UriGrants"):
+                     "ActivityManagerService", "PendingIntents", "UriGrants", "ActivityUsageHistory",
+                     "DesktopUsageStatsService"):
             relative = "app/java/com/gesher/server/" + name + ".java"
             source = ROOT / relative
-            if name == "ActivityClientController" and args.controller_source_ref:
+            source_ref = args.controller_source_ref if name == "ActivityClientController" else (
+                    args.usage_source_ref if name in ("ActivityUsageHistory", "DesktopUsageStatsService") else None)
+            if source_ref:
                 source = work / (name + ".java")
-                old = subprocess.run(["git", "show", args.controller_source_ref + ":" + relative],
+                old = subprocess.run(["git", "show", source_ref + ":" + relative],
                                      cwd=ROOT, check=True, capture_output=True)
                 source.write_bytes(old.stdout)
             sources.append(str(source))
@@ -55,6 +71,7 @@ def main() -> None:
         env = os.environ.copy(); env["ANDROID_DATA"] = str(work / "data")
         env["GESHER_MICROG_SPOOF"] = "1"; env["GESHER_LOCALES"] = "en-US"
         subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData",
+                        "-Dgesher.usage.query.baseline=" + str(args.usage_baseline).lower(),
                         "--patch-module", "jdk.unsupported=" + str(work / "cleaner"),
                         "-cp", str(classes) + os.pathsep + classpath,
                         "ActivityFinishHost", str(library), args.group], env=env, check=True, timeout=90)

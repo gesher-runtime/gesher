@@ -2,6 +2,7 @@
 package android.net.http;
 
 import android.net.Network;
+import java.net.ProtocolException;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -23,9 +24,18 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     volatile boolean done;
     private boolean started, ready, headersSent, readPending, readEnded, writeEnded, endQueued;
     private ByteBuffer pendingRead;
-    private Response info;
+    private volatile Response info;
     private int initialHeaderCount;
     private int pendingCallbacks;
+    private int ioWorkers;
+    private boolean cleanupDone, terminalReleased;
+    private HttpException terminalError;
+    private boolean terminalCanceled;
+    private Response terminalInfo;
+    private static final int TRANSFER_BYTES=32768;
+    // Only the serial writer uses these bytes. Terminal publication drops its
+    // reference without modifying a buffer still owned by an in-flight write.
+    private byte[] writeScratch;
     private static void trace(String value) {
         if ("1".equals(System.getenv("GESHER_HTTP_ENGINE_TRACE"))) System.err.println("HttpEngine stream: "+value);
     }
@@ -35,7 +45,6 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         callbacks=new JavaHttpEngine.SerialExecutor(b.executor); writer=new JavaHttpEngine.SerialExecutor(engine.io);
         priority=b.priority; tag=b.tag; uid=b.uid; hasTag=b.hasTag; hasUid=b.hasUid; delay=b.delay;
         writeEnded=method.equals("GET") || method.equals("HEAD"); endQueued=writeEnded;
-        info=new Response(url.toExternalForm(),0,new JavaHttpEngine.Headers(Collections.emptyList()));
     }
     @Override public HeaderBlock getHeaders() { return headers; }
     @Override public String getHttpMethod() { return method; }
@@ -66,16 +75,25 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         }
     }
     private void io(Action action, boolean writing) {
+        synchronized (this) { if (done) return; ioWorkers++; }
         try { (writing ? writer : engine.io).execute(() -> {
-            if (done) return;
-            try { action.run(); } catch (Exception e) { fail(e); }
-        }); } catch (RuntimeException e) { fail(e); }
+            try { if (!done) action.run(); }
+            catch (Exception e) { fail(e); }
+            finally { workerRetired(); }
+        }); } catch (RuntimeException e) { workerRetired(); fail(e); }
+    }
+    private void workerRetired() {
+        synchronized (this) { ioWorkers--; }
+        publishTerminal();
     }
     @Override public synchronized void start() {
         if (started) throw new IllegalStateException("Stream has already started");
         engine.register(this); started=true;
         io(() -> {
-            Http2Transport opened=new Http2Transport();
+            // The current duplex transport requires HTTP/2. Fail through the
+            // ordinary asynchronous callback path before opening a connection.
+            if (!engine.http2Enabled) throw new ProtocolException("HTTP/2 is disabled for this engine");
+            Http2Transport opened=new Http2Transport(engine.http2Sessions);
             synchronized (this) { if (done) { opened.close(); return; } transport=opened; }
             opened.connect(url,network);
             synchronized (this) { if (done) return; ready=true; }
@@ -128,13 +146,21 @@ final class JavaBidirectionalStream extends BidirectionalStream {
             for (Write write:batch) {
                 for (;;) {
                     byte[] bytes;
+                    int count;
                     synchronized (this) {
                         if (done) return;
                         if (!write.buffer.hasRemaining()) break;
-                        bytes=new byte[Math.min(32768,write.buffer.remaining())];
-                        write.buffer.get(bytes);
+                        int desired=Math.min(TRANSFER_BYTES,write.buffer.remaining());
+                        if (writeScratch==null || writeScratch.length<desired) {
+                            int capacity=writeScratch==null ? Math.max(256,desired)
+                                    : Math.max(writeScratch.length*2,desired);
+                            writeScratch=new byte[Math.min(TRANSFER_BYTES,capacity)];
+                        }
+                        bytes=writeScratch;
+                        count=Math.min(bytes.length,write.buffer.remaining());
+                        write.buffer.get(bytes,0,count);
                     }
-                    transport.write(bytes);
+                    transport.write(bytes,0,count);
                 }
                 if (done) return;
                 transport.flush(write.end);
@@ -160,10 +186,11 @@ final class JavaBidirectionalStream extends BidirectionalStream {
      * requiring an extra application read: gRPC stops reading at message end.
      */
     private void pump() throws Exception {
+        byte[] bytes=new byte[TRANSFER_BYTES];
         for (;;) {
-            byte[] bytes=transport.read(32768);
+            int length=transport.read(bytes,0,bytes.length);
             if (done) return;
-            if (bytes==null) {
+            if (length<0) {
                 List<Map.Entry<String,String>> all=transport.headers();
                 List<Map.Entry<String,String>> trailing=new ArrayList<>();
                 for (int index=0;index<all.size();index++) {
@@ -189,13 +216,13 @@ final class JavaBidirectionalStream extends BidirectionalStream {
                 return;
             }
             int offset=0;
-            while (offset<bytes.length) {
+            while (offset<length) {
                 ByteBuffer buffer;
                 synchronized (this) {
                     while (pendingRead==null && !done) wait();
                     if (done) return;
                     buffer=pendingRead; pendingRead=null; readPending=false;
-                    int count=Math.min(buffer.remaining(),bytes.length-offset);
+                    int count=Math.min(buffer.remaining(),length-offset);
                     buffer.put(bytes,offset,count); offset+=count; info.received+=count;
                 }
                 callback(() -> callback.onReadCompleted(this,info,buffer,false));
@@ -222,18 +249,37 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         @Override public boolean isImmediatelyRetryable() { return false; }
     },false); }
     private void finish(HttpException error, boolean canceled) {
-        synchronized (this) { if (done) return; done=true; writes.clear(); pendingRead=null; notifyAll(); }
+        synchronized (this) {
+            if (done) return;
+            done=true; terminalInfo=info; terminalError=error; terminalCanceled=canceled;
+            writes.clear(); pendingRead=null; writeScratch=null; notifyAll();
+            ioWorkers++;
+        }
         trace(canceled ? "canceled" : error==null ? "succeeded" : "failed");
-        try { engine.io.execute(() -> { Http2Transport t=transport; if (t!=null) try { t.close(); } catch (Exception ignored) {} }); }
-        catch (RuntimeException ignored) {}
+        Runnable cleanup=() -> {
+            try { Http2Transport t=transport; if (t!=null) t.close(); }
+            catch (Exception ignored) { }
+            finally {
+                synchronized (this) { cleanupDone=true; }
+                workerRetired();
+            }
+        };
+        try { engine.io.execute(cleanup); }
+        catch (RuntimeException rejected) { cleanup.run(); }
+    }
+    private void publishTerminal() {
+        synchronized (this) {
+            if (!done || !cleanupDone || ioWorkers!=0 || terminalReleased) return;
+            terminalReleased=true;
+        }
         engine.release(this);
         try { callbacks.execute(() -> {
             try {
-                if (canceled) callback.onCanceled(this,info);
-                else if (error!=null) callback.onFailed(this,info,error);
-                else callback.onSucceeded(this,info);
-            } catch (RuntimeException ignored) {}
-        }); } catch (RuntimeException ignored) {}
+                if (terminalCanceled) callback.onCanceled(this,terminalInfo);
+                else if (terminalError!=null) callback.onFailed(this,terminalInfo,terminalError);
+                else callback.onSucceeded(this,terminalInfo);
+            } catch (RuntimeException ignored) { }
+        }); } catch (RuntimeException ignored) { }
     }
     private static final class Write {
         final ByteBuffer buffer; final boolean end;

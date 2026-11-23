@@ -4,6 +4,8 @@
  */
 package com.gesher.server;
 
+import android.content.pm.PackageManager;
+import android.content.pm.PackageParser.PackageParserException;
 import android.content.pm.dex.DexMetadataHelper;
 import android.content.pm.parsing.result.ParseResult;
 import android.content.pm.parsing.result.ParseTypeImpl;
@@ -33,10 +35,10 @@ import java.util.Map;
  * extracted next to it ({@code lib/x86_64}, the package's nativeLibraryDir), its data
  * directory is {@code $ANDROID_DATA/data/<package>}, and {@code
  * $ANDROID_DATA/system/packages.list} lists them (package, code path, first install and
- * last update times, tab-separated), which the system server reads at start, as
- * PackageManagerService reads packages.xml. An update (a different APK for an installed
- * package) gets a new {@code <n>}, after the package's processes are stopped; the same APK
- * again changes nothing. Uninstalling removes the code, the data and the entry.
+ * last update times, optional install attribution, tab-separated). The system server reads
+ * this at startup, as Android reads packages.xml. Updating installed APK bytes gets a new
+ * {@code <n>} after the package's processes are stopped. Opening an unchanged host APK
+ * preserves the existing record. Uninstalling removes the code, data and entry.
  */
 final class Installer {
     private static final String REGISTRY = "system/packages.list";
@@ -53,26 +55,39 @@ final class Installer {
         final String codePath;
         final long firstInstallTime;
         final long lastUpdateTime;
+        final PackageInstallSource installSource;
 
         Entry(String packageName, String codePath, long firstInstallTime,
-                long lastUpdateTime) {
+                long lastUpdateTime, PackageInstallSource installSource) {
             this.packageName = packageName;
             this.codePath = codePath;
             this.firstInstallTime = firstInstallTime;
             this.lastUpdateTime = lastUpdateTime;
+            this.installSource = installSource;
+        }
+
+        Entry withInstallSource(PackageInstallSource source) {
+            if (source == null || installSource.equals(source)) return this;
+            return new Entry(packageName, codePath, firstInstallTime, lastUpdateTime, source);
         }
     }
 
     private final PackageManagerService mPm;
     private final ActivityTaskManagerService mAtm;
     private final Map<String, Entry> mEntries;
+    // Bundled and command-line packages have an installation owner but no copied-code entry.
+    // Comment rows keep their metadata in the same atomic registry without inventing code paths.
+    private static final String ATTRIBUTION = "# install-source\t";
+    private record Attribution(String owner, PackageInstallSource source) { }
+    private final Map<String, Attribution> mAttributions;
     private boolean mRemovalActive;
 
     private Installer(PackageManagerService pm, ActivityTaskManagerService atm,
-            Map<String, Entry> entries) {
+            Map<String, Entry> entries) throws IOException {
         mPm = pm;
         mAtm = atm;
         mEntries = entries;
+        mAttributions = readAttributions();
     }
 
     private static File registry() {
@@ -98,11 +113,12 @@ final class Installer {
         File f = registry();
         if (!f.isFile()) return entries;
         for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
-            String[] fields = line.split("\t");
+            String[] fields = line.split("\t", -1);
             if (fields.length < 4 || line.startsWith("#")) continue;
             try {
                 entries.put(fields[0], new Entry(fields[0], fields[1],
-                        Long.parseLong(fields[2]), Long.parseLong(fields[3])));
+                        Long.parseLong(fields[2]), Long.parseLong(fields[3]),
+                        readInstallSource(fields)));
             } catch (NumberFormatException e) {
                 SystemServer.log("packages.list: ignoring the line " + line);
             }
@@ -110,26 +126,103 @@ final class Installer {
         return entries;
     }
 
+    private static PackageInstallSource readInstallSource(String[] fields) {
+        if (fields.length < 5) return PackageInstallSource.UNKNOWN;
+        try {
+            return PackageInstallSource.decode(fields[4]);
+        } catch (IllegalArgumentException | java.security.cert.CertificateException invalid) {
+            SystemServer.log("packages.list: invalid install attribution for " + fields[0]);
+            return PackageInstallSource.UNKNOWN;
+        }
+    }
+
+    private static Map<String, Attribution> readAttributions() throws IOException {
+        Map<String, Attribution> result = new LinkedHashMap<>();
+        File file = registry();
+        if (!file.isFile()) return result;
+        for (String line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
+            if (!line.startsWith(ATTRIBUTION)) continue;
+            String[] fields = line.substring(ATTRIBUTION.length()).split("\t", -1);
+            try {
+                if (fields.length != 3) throw new IllegalArgumentException("Invalid metadata row");
+                PackageInstallSource.checkIdentity(fields[0], fields[1]);
+                result.put(fields[0], new Attribution(fields[1], PackageInstallSource.decode(fields[2])));
+            } catch (IllegalArgumentException | java.security.cert.CertificateException invalid) {
+                SystemServer.log("packages.list: ignoring invalid install-source metadata");
+            }
+        }
+        return result;
+    }
+
     private void writeRegistry() throws IOException {
         File f = registry();
-        f.getParentFile().mkdirs();
+        Files.createDirectories(f.toPath().getParent());
         File tmp = new File(f.getPath() + ".tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp);
-                Writer w = new OutputStreamWriter(out,
-                StandardCharsets.UTF_8)) {
-            w.write("# package\tcode path\tfirst install\tlast update (Gesher, ADR 0026)\n");
-            for (Entry e : mEntries.values()) {
-                w.write(e.packageName + "\t" + e.codePath + "\t" + e.firstInstallTime + "\t"
-                        + e.lastUpdateTime + "\n");
-            }
-            w.flush(); out.getFD().sync();
-        }
+        boolean created = false;
         try {
+            try (FileOutputStream out = new FileOutputStream(tmp);
+                    Writer w = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+                created = true;
+                w.write("# package\tcode path\tfirst install\tlast update\tinstall attribution (Gesher, ADR 0026)\n");
+                for (Entry e : mEntries.values()) {
+                    String source = e.installSource.encode();
+                    w.write(e.packageName + "\t" + e.codePath + "\t" + e.firstInstallTime + "\t"
+                            + e.lastUpdateTime + (source.isEmpty() ? "" : "\t" + source) + "\n");
+                }
+                for (Map.Entry<String, Attribution> row : mAttributions.entrySet()) {
+                    w.write(ATTRIBUTION + row.getKey() + "\t" + row.getValue().owner() + "\t"
+                            + row.getValue().source().encode() + "\n");
+                }
+                w.flush(); out.getFD().sync();
+            }
+            // A failed atomic replacement must not publish either metadata or a partial registry.
             Files.move(tmp.toPath(), f.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } catch (java.nio.file.AtomicMoveNotSupportedException unavailable) {
-            Files.move(tmp.toPath(), f.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            if (created && tmp.isFile()) tmp.delete();
         }
+    }
+
+    /** Apply metadata only to the still-current installation lifetime, after PM owner admission. */
+    private synchronized void restoreInstallSources() {
+        synchronized (mPm) {
+            for (ApkPackage pkg : mPm.packages()) {
+                Attribution saved = mAttributions.get(pkg.packageName);
+                if (saved != null && saved.owner().equals(pkg.enabledStateOwner())) {
+                    pkg.setInstallSource(saved.source());
+                }
+            }
+        }
+    }
+
+    /** Caller holds Installer then PM; publish in memory only after the registry is durable. */
+    synchronized void persistInstallSource(ApkPackage target, PackageInstallSource source)
+            throws IOException {
+        if (!Thread.holdsLock(mPm)) throw new IllegalStateException("Package publication lock required");
+        if (target == null || mPm.get(target.packageName) != target || mPm.isRemovalPending(target.packageName)) {
+            throw new SecurityException("Package changed during installer reassignment");
+        }
+        if (target.installSource().equals(source)) return;
+        String name = target.packageName;
+        Entry before = mEntries.get(name);
+        Attribution metadataBefore = mAttributions.get(name);
+        if (before != null && new File(before.codePath, "base.apk").equals(new File(target.apkPath))) {
+            mEntries.put(name, before.withInstallSource(source));
+            mAttributions.remove(name);
+        } else {
+            PackageInstallSource.checkIdentity(name, target.enabledStateOwner());
+            mAttributions.put(name, new Attribution(target.enabledStateOwner(), source));
+        }
+        try {
+            writeRegistry();
+        } catch (IOException | RuntimeException failure) {
+            if (before == null) mEntries.remove(name); else mEntries.put(name, before);
+            if (metadataBefore == null) mAttributions.remove(name);
+            else mAttributions.put(name, metadataBefore);
+            throw failure;
+        }
+        target.setInstallSource(source);
+        android.content.pm.PackageManager.invalidatePackageInfoCache();
     }
 
     /**
@@ -171,10 +264,21 @@ final class Installer {
     static Installer create(PackageManagerService pm, ActivityTaskManagerService atm)
             throws IOException {
         Installer installer = new Installer(pm, atm, readRegistry());
+        installer.restoreInstallSources();
+        pm.attachInstallSourceStorage(installer);
         pm.attachInstaller(atm, installer);
+        installer.reconcileAccountRemovalsBestEffort();
         // Background dexopt with the apps' JIT profiles, while the device is idle (ADR 0054).
         Dexopt.startBackground(installer::codePaths, atm::idleSince);
         return installer;
+    }
+
+    /** Ordinary nonpersistent launches still expose the real package-manager metadata APIs. */
+    static void attachMetadata(PackageManagerService pm, ActivityTaskManagerService atm)
+            throws IOException {
+        Installer installer = new Installer(pm, atm, readRegistry());
+        installer.restoreInstallSources();
+        pm.attachInstallSourceStorage(installer);
     }
 
     /** The installed packages' code paths, by package. */
@@ -269,6 +373,7 @@ final class Installer {
                 + NativeLibs.instructionSetDir(abi != null ? abi : NativeLibs.ABI));
         p.setPrimaryCpuAbi(abi);
         p.setInstallTimes(e.firstInstallTime, e.lastUpdateTime);
+        p.setInstallSource(e.installSource);
         return p;
     }
 
@@ -278,11 +383,12 @@ final class Installer {
      * version code.
      */
     synchronized String[] install(String apk) throws Exception {
-        return install(apk, null);
+        return install(apk, null, null);
     }
 
     /** Server-owned immutable session metadata, copied before package publication. */
-    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata) throws Exception {
+    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
+            PackageInstallSource installSource) throws Exception {
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
         recoverRemovals();
@@ -292,9 +398,11 @@ final class Installer {
         Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
-            return unchanged(apk, recorded.packageName, parsed, recorded);
+            return unchanged(apk, recorded.packageName, parsed, recorded, null);
         }
         File tempDir = null;
+        File pendingCode = null;
+        String pendingPackage = null;
         try {
             if (source.getName().toLowerCase().endsWith(".xapk")
                     || source.getName().toLowerCase().endsWith(".apks")) {
@@ -331,11 +439,15 @@ final class Installer {
                 // Native code only for ABIs Gesher cannot run (32-bit armeabi-v7a, x86):
                 // refused, as a device refuses it, instead of an app whose libraries
                 // never load (and an update that replaces a working install).
-                throw new IllegalArgumentException("INSTALL_FAILED_NO_MATCHING_ABIS: "
+                String message = "INSTALL_FAILED_NO_MATCHING_ABIS: "
                         + source.getName() + " has native code only for "
                         + String.join(", ", foreign) + "; Gesher runs "
                         + String.join(" and ", NativeLibs.SUPPORTED)
-                        + " (use the app's arm64-v8a, x86_64 or universal APK)");
+                        + " (use the app's arm64-v8a, x86_64 or universal APK)";
+                if (sessionMetadata != null) {
+                    throw new PackageParserException(PackageManager.INSTALL_FAILED_NO_MATCHING_ABIS, message);
+                }
+                throw new IllegalArgumentException(message);
             }
             Entry old = mEntries.get(pkg);
             ApkPackage previous = mPm.get(pkg);
@@ -370,7 +482,8 @@ final class Installer {
                     && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
-                return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old);
+                return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
+                        installSource);
             }
             int n = 1;
             if (old != null) {
@@ -394,38 +507,33 @@ final class Installer {
                 code = new File(appRoot, pkg + "-" + (++n));
             }
             Files.createDirectory(code.toPath());
+            pendingCode = code;
+            pendingPackage = pkg;
             File base = new File(code, "base.apk");
-            copy(source, base);
-            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
+            boolean syncCode = sessionMetadata != null;
+            copy(source, base, syncCode);
+            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode);
             File[] companionSplits = companionSplits(source);
             if (companionSplits != null) {
                 for (File split : companionSplits) {
                     String targetName = split.getName().startsWith("split_")
                             ? split.getName() : "split_" + split.getName();
-                    copy(split, new File(code, targetName));
+                    copy(split, new File(code, targetName), syncCode);
                     File splitMetadata = dexMetadata(split);
                     if (splitMetadata.isFile()) copy(splitMetadata,
-                            new File(code, InstallSessionMetadata.dexName(targetName)));
+                            new File(code, InstallSessionMetadata.dexName(targetName)), syncCode);
                 }
             }
             if (sessionMetadata != null) sessionMetadata.copyTo(code);
             // Verification must apply to the bytes being published, not a mutable
             // download that could change after its initial parse/verification.
-            ApkPackage staged;
-            try {
-                staged = ApkPackage.parseCodeDirectory(code.getPath());
-            } catch (Exception invalidCluster) {
-                // Malformed/mismatched splits must not stop or replace the working app.
-                deleteTree(code);
-                throw invalidCluster;
-            }
+            ApkPackage staged = ApkPackage.parseCodeDirectory(code.getPath());
             android.content.pm.Signature[] stagedSigners = staged.verifiedSignatures();
             if (!pkg.equals(staged.packageName) || staged.versionCode() != parsed.versionCode()
                     || !Arrays.equals(newSigners, stagedSigners)
                     || (stagedSigners == null && hasSigningMaterial(base))
                     || (previous != null && previous.hasVerifiedSigningIdentity()
                             && !staged.updateContinuityFrom(previous))) {
-                deleteTree(code);
                 throw new SecurityException("INSTALL_FAILED_CHANGED_APK: " + pkg);
             }
             for (String copied : apksOf(code.getPath())) {
@@ -434,18 +542,11 @@ final class Installer {
                 android.content.pm.Signature[] copiedSigners = ApkPackage.verifySignatures(copied);
                 if (!Arrays.equals(stagedSigners, copiedSigners)
                         || (copiedSigners == null && hasSigningMaterial(split))) {
-                    deleteTree(code);
                     throw new SecurityException("INSTALL_FAILED_CHANGED_SPLIT: " + pkg);
                 }
             }
             try (PackageUids.Admission checked = PackageUids.prepare(List.of(staged), mPm.packages())) {
                 // Recheck the copied cluster before stopping the working generation.
-            }
-            if (old != null || previous != null) mAtm.forceStopPackage(pkg);
-            if (previous != null && !previous.hasVerifiedSigningIdentity()) {
-                mPm.permissions().forgetPackage(pkg);
-                NotificationManagerService notifications = NotificationManagerService.sLast;
-                if (notifications != null) notifications.packageRemoved(pkg);
             }
             // The package's ABI over base.apk and its splits: an ABI split's libraries
             // (an .xapk's config.arm64_v8a.apk) go to lib/arm64 and the package runs as
@@ -459,7 +560,7 @@ final class Installer {
             Dexopt.onInstall(pkg, code.getPath(), staged.sharedLibraries);
             long now = System.currentTimeMillis();
             Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
-                    now);
+                    now, installSource == null ? PackageInstallSource.UNKNOWN : installSource);
             ApkPackage installed = open(entry);
             if (previous != null && previous.isSystemAddon()) {
                 if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
@@ -471,6 +572,13 @@ final class Installer {
             // Boot preparation used the committed manifest before any update;
             // changing defaultToDeviceProtectedStorage later does not migrate CE.
             installed.prepareInstallDataDirectories(old != null || previous != null);
+            // Keep the running generation until parsing and native extraction succeed.
+            if (old != null || previous != null) mAtm.forceStopPackage(pkg);
+            if (previous != null && !previous.hasVerifiedSigningIdentity()) {
+                mPm.permissions().forgetPackage(pkg);
+                NotificationManagerService notifications = NotificationManagerService.sLast;
+                if (notifications != null) notifications.packageRemoved(pkg);
+            }
             publishInstalled(entry, installed);
             if (old != null && !old.codePath.equals(entry.codePath)) {
                 delete(new File(old.codePath));
@@ -483,6 +591,12 @@ final class Installer {
             mPm.packageInstalled(installed, old != null || previous != null, this);
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {
+            if (pendingCode != null) {
+                // The registry is the commit point. An unpublished generation can
+                // be removed without touching the previous package or its data.
+                Entry committed = mEntries.get(pendingPackage);
+                if (committed == null || !committed.codePath.equals(pendingCode.getPath())) delete(pendingCode);
+            }
             if (tempDir != null) deleteTree(tempDir);
         }
     }
@@ -492,36 +606,48 @@ final class Installer {
         synchronized (mPm) {
             try (PackageUids.Admission identity = mPm.prepareAdd(installed)) {
                 identity.commit();
-                Entry previous = mEntries.put(entry.packageName, entry);
-                try {
-                    writeRegistry();
-                } catch (IOException | RuntimeException failure) {
-                    if (previous == null) mEntries.remove(entry.packageName);
-                    else mEntries.put(entry.packageName, previous);
-                    // Closing the unaccepted transaction rolls back shared membership,
-                    // signer ownership and the tentative record's UID as one snapshot.
-                    throw failure;
-                }
+                // A failed registry write rolls back both attribution below and
+                // the unaccepted UID/signer membership transaction on close.
+                commitEntry(entry);
                 identity.acceptPublished();
                 mPm.publishPrepared(installed, this);
             }
         }
     }
 
+    private void commitEntry(Entry entry) throws IOException {
+        Entry previous = mEntries.put(entry.packageName, entry);
+        Attribution metadata = mAttributions.remove(entry.packageName);
+        try {
+            writeRegistry();
+        } catch (IOException | RuntimeException failure) {
+            if (previous == null) mEntries.remove(entry.packageName);
+            else mEntries.put(entry.packageName, previous);
+            if (metadata != null) mAttributions.put(entry.packageName, metadata);
+            throw failure;
+        }
+    }
+
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
-    private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old)
-            throws Exception {
+    private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
+            PackageInstallSource installSource) throws Exception {
+        Entry entry = old.withInstallSource(installSource);
         SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                 + old.codePath + ")");
         // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
         boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
-        if (libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
+        boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
+        if (recompile) {
             if (libraryChange) {
                 mAtm.forceStopPackage(pkg);
                 SystemServer.log("install " + pkg + ": shared-library context/content changed");
             }
             Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-            ApkPackage installed = open(old);
+        }
+        // A cache-only rebuild leaves attached processes and session handles valid.
+        // Replacing the PM object would retire their identity without changing code.
+        if (recompile && (libraryChange || mPm.get(pkg) == null)) {
+            ApkPackage installed = open(entry);
             ApkPackage previous = mPm.get(pkg);
             if (previous != null && previous.isSystemAddon()) {
                 if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
@@ -530,7 +656,14 @@ final class Installer {
                 installed.setSystemAddon(true);
             }
             installed.prepareInstalledDataDirectories();
-            mPm.add(installed, this);
+            if (entry != old) publishInstalled(entry, installed);
+            else mPm.add(installed, this);
+        } else if (entry != old) {
+            // An explicit session reinstall can change attribution even when code bytes
+            // are unchanged. A direct host launch of the same file keeps the old record.
+            synchronized (mPm) {
+                persistInstallSource(mPm.get(pkg), entry.installSource);
+            }
         }
         return new String[] {pkg, "unchanged", old.codePath,
                 String.valueOf(parsed.versionCode())};
@@ -627,6 +760,18 @@ final class Installer {
         if (mRemovalActive) throw new IllegalStateException("Package removal is active");
         PackageRemovalStorage.recover(codePaths());
         mPm.recoveredPackageRemovals();
+        // Finish a committed owner retirement before any reinstall can publish.
+        mPm.reconcileAccountRemovals(mEntries.keySet());
+    }
+
+    private void reconcileAccountRemovalsBestEffort() {
+        try {
+            mPm.reconcileAccountRemovals(mEntries.keySet());
+        } catch (RuntimeException failure) {
+            // The account store keeps the retirement marker. Startup and an
+            // already committed uninstall can succeed, but mutations retry it.
+            SystemServer.log("pending account retirement: " + failure.getClass().getSimpleName());
+        }
     }
 
     /** Uninstalls only a persistent ordinary package, retaining its allocated UID tombstone. */
@@ -640,6 +785,7 @@ final class Installer {
         mPm.beginPackageRemoval(target);
         mRemovalActive = true;
         boolean committed = false, restored = false;
+        Attribution metadata = mAttributions.get(packageName);
         try {
             mPm.checkPackageRemoval(packageName);
             mAtm.forceStopPackage(packageName);
@@ -655,6 +801,7 @@ final class Installer {
                 quarantine.stage();
                 identity.commit();
                 mEntries.remove(packageName);
+                mAttributions.remove(packageName);
                 writeRegistry();
                 committed = true;
                 identity.acceptPublished();
@@ -663,13 +810,17 @@ final class Installer {
         } catch (IOException | RuntimeException failure) {
             if (!committed) {
                 mEntries.put(packageName, e);
+                if (metadata != null) mAttributions.put(packageName, metadata);
                 try { quarantine.rollback(); restored = true; }
                 catch (IOException restore) { failure.addSuppressed(restore); }
             }
             throw failure;
         } finally {
             mRemovalActive = false;
-            if (committed || restored) mPm.endPackageRemoval(target);
+            if (committed || restored) {
+                mPm.endPackageRemoval(target);
+                reconcileAccountRemovalsBestEffort();
+            }
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);
@@ -729,13 +880,14 @@ final class Installer {
         return total;
     }
 
-    private static void copy(File from, File to) throws IOException {
+    private static void copy(File from, File to, boolean sync) throws IOException {
         byte[] buffer = new byte[64 * 1024];
         try (InputStream in = new FileInputStream(from);
-                OutputStream out = new FileOutputStream(to)) {
+                FileOutputStream out = new FileOutputStream(to)) {
             for (int n; (n = in.read(buffer)) > 0; ) {
                 out.write(buffer, 0, n);
             }
+            if (sync) out.getFD().sync();
         }
     }
 

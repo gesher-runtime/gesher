@@ -24,6 +24,7 @@ runs:
         script: |
           const route = require(process.env.POLICY_ACTION + '/route.cjs');
           const result = await route({github, context,
-            requested: process.env.REQUEST_LOCAL, enabled: process.env.ENABLE_LOCAL});
+            requested: process.env.REQUEST_LOCAL, enabled: process.env.ENABLE_LOCAL,
+            warn: message => core.warning(message)});
           core.setOutput('runner', JSON.stringify(result));
           core.info('BUILD_RUNNER_ROUTE ' + JSON.stringify(result));

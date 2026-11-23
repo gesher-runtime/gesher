@@ -53,7 +53,15 @@ final class IntentChooser {
         final ApkPackage code;
         final ActivityInfo info;
         final String label;
+        /**
+         * The system document/photo picker, as Android's DocumentsUI or photo picker
+         * appears among a document request's choices. It has no Android component:
+         * {@link #component}, {@link #code} and {@link #info} are null and the launch
+         * goes to the host picker with the chooser caller's own result route.
+         */
+        final boolean documentPicker;
         Option(Intent intent, ResolveInfo resolved, ApkPackage code, CharSequence suppliedLabel) {
+            this.documentPicker = false;
             this.intent = intent;
             this.info = new ActivityInfo(resolved.activityInfo);
             this.component = new ComponentName(info.packageName, info.name);
@@ -65,11 +73,20 @@ final class IntentChooser {
             this.label = text(display, info.name, 1200) + " (" + info.packageName + ")"
                     + (suspended() ? " — suspended" : "");
         }
+        private Option(Intent documentIntent, String label) {
+            this.documentPicker = true;
+            this.intent = documentIntent;
+            this.component = null;
+            this.code = null;
+            this.info = null;
+            this.label = label;
+        }
         boolean suspended() {
-            return info.applicationInfo != null
+            return info != null && info.applicationInfo != null
                     && (info.applicationInfo.flags & ApplicationInfo.FLAG_SUSPENDED) != 0;
         }
         boolean current(PackageManagerService pm, String caller) {
+            if (documentPicker) return true;
             synchronized (pm) {
                 if (suspended() || code == null || pm.get(component.getPackageName()) != code
                         || pm.isRemovalPending(component.getPackageName())) return false;
@@ -94,6 +111,12 @@ final class IntentChooser {
 
     IntentChooser(PackageManagerService pm, String caller, Intent incoming,
             android.content.ContentResolver resolver) {
+        this(pm, caller, incoming, resolver, true);
+    }
+
+    /** pickerAvailable: the host document dialog backend can open, so it may be offered. */
+    IntentChooser(PackageManagerService pm, String caller, Intent incoming,
+            android.content.ContentResolver resolver, boolean pickerAvailable) {
         this.resolver = resolver;
         chooser = snapshot(incoming);
         Object raw = chooser.getExtra(Intent.EXTRA_INTENT);
@@ -106,6 +129,12 @@ final class IntentChooser {
             throw new IllegalArgumentException("Invalid chosen component IntentSender");
         }
         callback = (IntentSender) sender;
+        // The chooser's result callbacks name the chosen Android component. The host
+        // picker has none, so a callback-bearing chooser does not offer it rather than
+        // inventing a component or skipping the callback.
+        Intent pickerTarget = pickerAvailable && target.getSelector() == null && callback == null
+                && !requested(chooser, Intent.EXTRA_CHOOSER_RESULT_INTENT_SENDER)
+                && DocumentPicker.offers(target) ? snapshot(target) : null;
         // These extras change the application's flow. Until their contracts are implemented,
         // fail the request rather than silently skipping refinement or custom actions.
         unsupported = requested(chooser, Intent.EXTRA_CHOOSER_REFINEMENT_INTENT_SENDER)
@@ -136,6 +165,14 @@ final class IntentChooser {
             if (!(extra instanceof Intent)) throw new IllegalArgumentException("Invalid alternate intent");
             rejectRecursive((Intent) extra);
             addTargets(pm, caller, (Intent) extra, excluded, targetComponents);
+        }
+        // Like DocumentsUI in Android's chooser, the system picker is always one of a
+        // document request's choices, not only a fallback when no app resolves.
+        if (pickerTarget != null) {
+            if (options.size() == MAX_OPTIONS) throw new IllegalArgumentException("Too many chooser options");
+            options.add(new Option(pickerTarget, android.provider.MediaStore.ACTION_PICK_IMAGES
+                    .equals(pickerTarget.getAction()) ? "Photos and videos (Windows file picker)"
+                    : "Files (Windows file picker)"));
         }
         autoLaunch = shouldAutoLaunch(chooser, options);
     }
@@ -225,6 +262,15 @@ final class IntentChooser {
         // sender UID. This metadata-only context never participates in camera or
         // content-provider conversion: only the two SEND actions enter here.
         if (Intent.ACTION_SEND.equals(launch.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(launch.getAction())) {
+            // A Binder-delivered target may still hold a parcelled Bundle. The
+            // framework migration deliberately refuses that state. Materialize
+            // its outer map before migration; unrelated Parcelable values remain
+            // lazy and the framework still validates the typed SEND payload.
+            Bundle extras = launch.getExtras();
+            if (extras != null) {
+                extras.size();
+                launch.replaceExtras(extras);
+            }
             ApplicationInfo origin = new ApplicationInfo(callerInfo);
             launch.migrateExtraStreamToClipData(new android.content.ContextWrapper(null) {
                 @Override public ApplicationInfo getApplicationInfo() { return origin; }

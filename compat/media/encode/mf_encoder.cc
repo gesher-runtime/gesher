@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 #include "../audio/log.h"
 #include "encoder.h"
@@ -63,6 +64,7 @@ const IID kIidCodecApi = {0x901DB4C7, 0x31CE, 0x41A2, {0x85, 0xDC, 0x8F, 0xA0, 0
 const GUID kApiGopSize = {0x95F31B26, 0x95A4, 0x41AA, {0x93, 0x03, 0x24, 0x6A, 0x7F, 0xC6, 0xEE, 0xF1}};
 const GUID kApiForceKeyFrame = {0x398C1B98, 0x8353, 0x475A, {0x9E, 0xF2, 0x8F, 0x26, 0x5D, 0x26, 0x03, 0x45}};
 const GUID kApiLowLatency = {0x9C27891A, 0xED7A, 0x40E1, {0x88, 0xE8, 0xB2, 0x27, 0x27, 0xA0, 0x24, 0xEE}};
+const GUID kApiMeanBitrate = {0xF7222374, 0x2144, 0x4815, {0xB5, 0x50, 0xA3, 0x7F, 0x8E, 0x12, 0xEE, 0x52}};
 
 struct MfApi {
   HRESULT(WINAPI* Startup)(ULONG, DWORD) = nullptr;
@@ -131,22 +133,68 @@ bool Has(const GUID& category, const GUID& major, const GUID& subtype) {
   return true;
 }
 
-IMFSample* NewSample(const uint8_t* data, size_t size, int64_t time_us, int64_t duration_us) {
+// Fill the sample's own memory before publishing it to the transform. The MFT
+// may retain an input sample after ProcessInput, so every input owns its buffer.
+template <typename Fill>
+IMFSample* NewSample(size_t size, int64_t time_us, int64_t duration_us, Fill fill) {
   const MfApi& mf = Mf();
+  if (!mf.ok || size > std::numeric_limits<DWORD>::max() ||
+      time_us > INT64_MAX / 10 || time_us < INT64_MIN / 10 ||
+      duration_us > INT64_MAX / 10 || duration_us < INT64_MIN / 10) return nullptr;
   IMFMediaBuffer* buf = nullptr;
   if (FAILED(mf.CreateMemoryBuffer(static_cast<DWORD>(std::max<size_t>(size, 1)), &buf))) return nullptr;
+  if (buf == nullptr) return nullptr;
   BYTE* p = nullptr;
-  buf->Lock(&p, nullptr, nullptr);
-  if (size > 0) memcpy(p, data, size);
-  buf->Unlock();
-  buf->SetCurrentLength(static_cast<DWORD>(size));
+  DWORD capacity = 0;
+  HRESULT hr = buf->Lock(&p, &capacity, nullptr);
+  if (SUCCEEDED(hr)) {
+    if (p == nullptr || capacity < size) {
+      hr = E_FAIL;
+    } else {
+      fill(p);
+      hr = buf->SetCurrentLength(static_cast<DWORD>(size));
+    }
+    // Even failed filling/length checks must balance the successful Lock.
+    const HRESULT unlocked = buf->Unlock();
+    if (SUCCEEDED(hr)) hr = unlocked;
+  }
   IMFSample* s = nullptr;
-  mf.CreateSample(&s);
-  s->AddBuffer(buf);
+  if (SUCCEEDED(hr)) hr = mf.CreateSample(&s);
+  if (SUCCEEDED(hr)) hr = s != nullptr ? s->AddBuffer(buf) : E_FAIL;
   buf->Release();
-  s->SetSampleTime(time_us * 10);
-  s->SetSampleDuration(duration_us * 10);
+  if (SUCCEEDED(hr)) hr = s->SetSampleTime(time_us * 10);
+  if (SUCCEEDED(hr)) hr = s->SetSampleDuration(duration_us * 10);
+  if (FAILED(hr)) {
+    if (s != nullptr) s->Release();
+    return nullptr;
+  }
   return s;
+}
+
+IMFSample* NewSample(const uint8_t* data, size_t size, int64_t time_us, int64_t duration_us) {
+  return NewSample(size, time_us, duration_us, [&](uint8_t* dst) {
+    if (size != 0) memcpy(dst, data, size);
+  });
+}
+
+// The input sample and the existing output-size estimate both use DWORD byte
+// counts. Widen before multiplication and reject an unrepresentable layout.
+bool I420SampleSize(int w, int h, size_t* size) {
+  if (w <= 0 || h <= 0 || (w & 1) || (h & 1)) return false;
+  const uint64_t pixels = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+  if (pixels > (std::numeric_limits<DWORD>::max() - 4096u) / 2) return false;
+  *size = static_cast<size_t>(pixels + pixels / 2);
+  return true;
+}
+
+bool I420FrameFits(const VideoFrame& f, int w, int h) {
+  if (f.width <= 0 || f.height <= 0 || f.height == INT32_MAX ||
+      f.stride_y < f.width || f.stride_uv < (static_cast<int64_t>(f.width) + 1) / 2 ||
+      f.crop_left < 0 || f.crop_top < 0 || f.crop_left > f.width || f.crop_top > f.height ||
+      w > f.width - f.crop_left || h > f.height - f.crop_top) return false;
+  const uint64_t y = static_cast<uint64_t>(f.stride_y) * f.height;
+  const uint64_t uv = static_cast<uint64_t>(f.stride_uv) * ((static_cast<uint64_t>(f.height) + 1) / 2);
+  return y + 2 * uv <= f.data.size();
 }
 
 // Pulls every output the MFT has now; `emit` takes each sample's bytes, time and clean point.
@@ -212,15 +260,17 @@ struct CodecApi : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE SetValue(const GUID*, VARIANT*) = 0;
 };
 
-void SetCodecApi(IMFTransform* t, const GUID& api, uint32_t value) {
+bool SetCodecApi(IMFTransform* t, const GUID& api, uint32_t value, bool require_modifiable = false) {
   CodecApi* c = nullptr;
-  if (FAILED(t->QueryInterface(kIidCodecApi, reinterpret_cast<void**>(&c))) || c == nullptr) return;
+  if (FAILED(t->QueryInterface(kIidCodecApi, reinterpret_cast<void**>(&c))) || c == nullptr) return false;
   VARIANT v;
   memset(&v, 0, sizeof(v));
   v.vt = VT_UI4;
   v.ulVal = value;
-  c->SetValue(&api, &v);
+  const bool applied = (!require_modifiable || c->IsModifiable(&api) == S_OK) &&
+                       c->SetValue(&api, &v) == S_OK;
   c->Release();
+  return applied;
 }
 
 // --- H.264 --------------------------------------------------------------------------
@@ -234,6 +284,11 @@ class MfH264Encoder : public VideoEncoder {
   std::string Name() const override { return "mf avc encoder"; }
 
   bool Init(const VideoEncoderParams& p, std::string* error) {
+    size_t size_bytes;
+    if (!I420SampleSize(p.width, p.height, &size_bytes)) {
+      *error = "H.264 encoder: unsupported buffer size";
+      return false;
+    }
     p_ = p;
     t_ = FindEncoder(kCategoryVideoEncoder, kMediaTypeVideo, kH264);
     if (t_ == nullptr) {
@@ -285,14 +340,19 @@ class MfH264Encoder : public VideoEncoder {
     return true;
   }
 
+  bool SetBitrate(int bitrate) override {
+    return bitrate > 0 && SetCodecApi(t_, kApiMeanBitrate, static_cast<uint32_t>(bitrate), true);
+  }
+
   bool Encode(const VideoFrame& f, bool key, std::vector<EncodedPacket>* out) override {
-    // The visible part, tightly packed I420.
-    const int w = p_.width, h = p_.height, cw = w / 2, ch = h / 2;
-    std::vector<uint8_t> buf(static_cast<size_t>(w) * h * 3 / 2);
-    CopyI420(f, w, h, buf.data());
-    if (key) SetCodecApi(t_, kApiForceKeyFrame, 1);
-    IMFSample* s = NewSample(buf.data(), buf.size(), f.time_us, 1000000 / std::max(p_.frame_rate, 1));
+    // Copy the visible I420 rows directly into the independently owned sample.
+    const int w = p_.width, h = p_.height;
+    size_t size;
+    if (!I420SampleSize(w, h, &size) || !I420FrameFits(f, w, h)) return false;
+    IMFSample* s = NewSample(size, f.time_us, 1000000 / std::max(p_.frame_rate, 1),
+                            [&](uint8_t* dst) { CopyI420(f, w, h, dst); });
     if (s == nullptr) return false;
+    if (key) SetCodecApi(t_, kApiForceKeyFrame, 1);
     HRESULT hr = t_->ProcessInput(0, s, 0);
     if (hr == MF_E_NOTACCEPTING) {
       if (!Pull(out)) {
@@ -302,8 +362,6 @@ class MfH264Encoder : public VideoEncoder {
       hr = t_->ProcessInput(0, s, 0);
     }
     s->Release();
-    (void)cw;
-    (void)ch;
     if (FAILED(hr)) {
       MEDIA_LOGE("%s: ProcessInput %s", Name().c_str(), Hex(hr).c_str());
       return false;
@@ -334,7 +392,7 @@ class MfH264Encoder : public VideoEncoder {
 
  private:
   bool Pull(std::vector<EncodedPacket>* out) {
-    const DWORD size = static_cast<DWORD>(p_.width * p_.height * 2 + 4096);
+    const DWORD size = static_cast<DWORD>(static_cast<uint64_t>(p_.width) * p_.height * 2 + 4096);
     return PullAll(t_, size, "mf avc encoder", [&](const uint8_t* p, size_t n, int64_t time_us, bool clean) {
       // The parameter sets go first, as the codec-config buffer; the frames without them.
       std::vector<uint8_t> config, frame;
@@ -381,8 +439,13 @@ class MfAacEncoder : public AudioEncoder {
   }
 
   std::string Name() const override { return "mf aac encoder"; }
+  int ConfiguredBitrate() const override { return p_.bitrate; }
 
   bool Init(const AudioEncoderParams& p, std::string* error) {
+    if (p.aac_profile != 2) {
+      *error = "Media Foundation AAC encoder implements LC only";
+      return false;
+    }
     p_ = p;
     if (p.sample_rate != 44100 && p.sample_rate != 48000) {
       *error = "Media Foundation's AAC encoder takes 44100 or 48000 Hz, not " + std::to_string(p.sample_rate);
@@ -430,6 +493,7 @@ class MfAacEncoder : public AudioEncoder {
       *error = "AAC encoder: SetOutputType " + Hex(hr);
       return false;
     }
+    p_.bitrate = static_cast<int>(bytes * 8);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
     return true;

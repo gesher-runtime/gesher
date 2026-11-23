@@ -341,6 +341,35 @@ int main(int argc, char** argv) {
   // 7. Protection changes and ordinary accesses during physical page release.
   ConcurrentZeroing();
 
+  // 8. A hint that is page aligned but not on an allocation granularity
+  // boundary (PartitionAlloc's randomized pool addresses) never makes an
+  // ordinary mapping fail: Chromium's 8 GiB PROT_NONE pool reservation did.
+  {
+    uint8_t* probe = static_cast<uint8_t*>(mmap(nullptr, 1 << 20, PROT_NONE,
+                                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    Check("a free range for the hint", probe != MAP_FAILED);
+    uint8_t* hint = probe + 9 * kPage;  // page aligned, not 64 KiB aligned
+    Check("its probe mapping is released", munmap(probe, 1 << 20) == 0);
+    const size_t pool = size_t{8} << 30;
+    uint8_t* hinted = static_cast<uint8_t*>(mmap(hint, pool, PROT_NONE,
+                                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    Check("8 GiB PROT_NONE with an unaligned hint is mapped", hinted != MAP_FAILED);
+    if (hinted != MAP_FAILED) {
+      Check("it reserves without committing", State(hinted) == MEM_RESERVE &&
+            State(hinted + pool - kPage) == MEM_RESERVE);
+      Check("its first page becomes accessible",
+            mprotect(hinted, kPage, PROT_READ | PROT_WRITE) == 0 && (hinted[0] = 1) == 1);
+      Check("and it unmaps", munmap(hinted, pool) == 0);
+    }
+    uint8_t* small = static_cast<uint8_t*>(mmap(hint, 4 * kPage, PROT_READ | PROT_WRITE,
+                                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    Check("a small mapping with an unaligned hint is mapped", small != MAP_FAILED);
+    if (small != MAP_FAILED) {
+      small[4 * kPage - 1] = 2;
+      Check("and it unmaps too", munmap(small, 4 * kPage) == 0);
+    }
+  }
+
   _close(fd);
   printf(failures == 0 ? "mman probe: all passed\n" : "mman probe: %d failed\n", failures);
   return failures == 0 ? 0 : 1;

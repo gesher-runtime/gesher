@@ -47,11 +47,16 @@ bool ClipboardText(std::u16string* text);
 // The fragment of the "HTML Format" (CF_HTML) data, as UTF-16; false if none.
 bool ClipboardHtml(std::u16string* html);
 // Replaces the clipboard's contents with `text` (CF_UNICODETEXT) and, when not
-// empty, `html` as CF_HTML; the event window is the owner. Empty text and html
-// just empty the clipboard.
-bool SetClipboard(const std::u16string& text, const std::u16string& html);
+// empty, `html` as CF_HTML on the shared owned OLE STA. Text presence is
+// explicit: absent text plus absent HTML clears; present empty text remains text.
+bool SetClipboard(const std::u16string& text, const std::u16string& html,
+                  uint32_t* written_sequence = nullptr, bool has_text = true);
 // GetClipboardSequenceNumber.
 uint32_t ClipboardSequence();
+// Stable foreground process identity (native creation FILETIME), false if unknown.
+bool ForegroundProcess(uint32_t* pid, uint64_t* created);
+// The server's Windows session: 0 unlocked, 1 locked, -1 unknown. Windows 10+.
+int SessionLockState();
 
 // --- alarms ----------------------------------------------------------------------------
 // Waits until the wall clock reaches `utc_ms` (milliseconds since 1970, a
@@ -67,6 +72,8 @@ void AlarmKick();
 // (bits: 1 high, 2 low, 4 critical, 8 charging, 128 no battery; 255 unknown),
 // battery percent (255 unknown), system status flag (1: battery saver on).
 bool PowerStatus(int out[4]);
+// HKCU AppsUseLightTheme: 0 dark, 1 light, -1 unknown/unreadable.
+int AppsUseLightTheme();
 // A power request for the process (PowerCreateRequest/PowerSetRequest, shown by
 // `powercfg /requests` with `reason`): `system` keeps Windows from sleeping,
 // `display` the display on. Both false clears it.
@@ -100,6 +107,8 @@ long ShowToast(const std::u16string& app_id, const std::u16string& tag,
 // Removes the toast from the screen and from the notification center.
 long RemoveToast(const std::u16string& app_id, const std::u16string& tag,
                  const std::u16string& group);
+long RemoveToastIfLaunch(const std::u16string& app_id, const std::u16string& tag,
+                         const std::u16string& group, const std::u16string& launch);
 // Removes every toast of `app_id`.
 long ClearToasts(const std::u16string& app_id);
 // HKCU\Software\Classes\AppUserModelId\<app_id>: DisplayName and IconUri, which

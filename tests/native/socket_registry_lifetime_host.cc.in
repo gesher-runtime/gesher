@@ -1,0 +1,70 @@
+// The production socket registry and its ownership operations, with only the
+// native socket/description payload replaced. No Winsock behavior is modeled.
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <unordered_map>
+#include <unistd.h>
+
+static int checks, failures;
+static void Check(bool ok, const char* message) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL socket registry: %s\n", message); }
+}
+namespace gesher {
+struct Description { unsigned descriptor_refs = 0; };
+struct SocketFd { unsigned long long socket = 0; std::shared_ptr<Description> description; };
+bool LookupSocket(int, SocketFd*);
+void ObserveAfterDestruction() {
+  // As with the early shared-stdio final flush, this runs after ordinary
+  // static destructors. Both a real lookup and an absent-fd dispatch must work.
+  SocketFd actual;
+  if (!LookupSocket(37, &actual) || actual.socket != 123 ||
+      !actual.description || actual.description->descriptor_refs != 1 ||
+      LookupSocket(38, &actual)) {
+    static const char failure[] = "FAIL socket registry: late exit lookup lost live ownership\n";
+    if (::write(STDERR_FILENO, failure, sizeof(failure) - 1) != sizeof(failure) - 1) _exit(3);
+    _exit(2);
+  }
+  static const char success[] = "socket registry late exit lookup: passed\n";
+  if (::write(STDOUT_FILENO, success, sizeof(success) - 1) != sizeof(success) - 1) _exit(3);
+}
+__attribute__((constructor(101))) void BeforeOrdinaryDestructors() {
+  if (std::atexit(ObserveAfterDestruction)) std::abort();
+}
+namespace {
+@REGISTRY@
+}
+@LOOKUP@
+}
+
+int main() {
+  auto first = std::make_shared<gesher::Description>();
+  auto second = std::make_shared<gesher::Description>();
+  gesher::SocketFd state, previous;
+  bool last = false;
+  Check(!gesher::LookupSocket(37, &state), "empty table lookup");
+  gesher::Insert(37, {123, first});
+  Check(first->descriptor_refs == 1, "initial owner reference");
+  gesher::Insert(37, {123, first});
+  Check(first->descriptor_refs == 1, "same slot is not counted twice");
+  gesher::Insert(38, {123, first});
+  Check(first->descriptor_refs == 2, "alias owns a separate descriptor reference");
+  Check(gesher::LookupSocket(38, &state) && state.description == first, "alias lookup retains original owner");
+  Check(gesher::Remove(38, &state, &last) && !last && first->descriptor_refs == 1, "alias removal preserves live source");
+  gesher::SocketFd replacement{456, second};
+  Check(gesher::ReplaceSocket(37, &replacement, &previous, &last) && last &&
+      previous.description == first && first->descriptor_refs == 0 && second->descriptor_refs == 1,
+      "replacement transfers both descriptor reference counts");
+  Check(gesher::LookupSocket(37, &state) && state.description == second && state.socket == 456,
+      "replacement lookup sees new owner");
+  Check(gesher::Remove(37, &state, &last) && last && second->descriptor_refs == 0, "last removal identifies final native owner");
+  Check(!gesher::LookupSocket(37, &state), "removed slot is absent");
+  gesher::Insert(37, {123, first});
+  Check(first->descriptor_refs == 1, "live owner retained for final-flush dispatch");
+  std::printf("socket registry production ownership: %d checks, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

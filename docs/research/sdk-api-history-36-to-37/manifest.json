@@ -1,0 +1,133 @@
+{
+  "after": {
+    "archive": {
+      "bytes": 67281901,
+      "member_root": "android-37.0",
+      "sha1": "ed8ebf7f8822a4de5686d427f237d2fa30ff7410",
+      "sha256": "840b23e827f96e64aea4c89a1194aac3dc5f6bad37edb231c5c795d890330e8d",
+      "url": "https://dl.google.com/android/repository/platform-37.0_r02.zip"
+    },
+    "artifacts": {
+      "data/api-versions.xml": {
+        "bytes": 5911928,
+        "sha256": "9fd47aaab29946a5f5d179797365b2d04e38132d2e7e942f5ea8504e41e6c8e5"
+      },
+      "source.properties": {
+        "bytes": 343,
+        "sha256": "fa89029fc0cee414cb5e44a37cd3033771217eeecb5086577bb6d9b1b03b5b5f"
+      }
+    },
+    "id": "sdk-37.0-base-ext22-r2",
+    "package_path": "platforms;android-37.0",
+    "repository_package": {
+      "api_level_raw": "37.0",
+      "base_extension_raw": "true",
+      "channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "codename": "",
+      "codename_element_present": true,
+      "complete_archive": {
+        "bytes": 67281901,
+        "checksum": "ed8ebf7f8822a4de5686d427f237d2fa30ff7410",
+        "checksum_type": "sha1",
+        "url": "platform-37.0_r02.zip"
+      },
+      "display_name": "Android SDK Platform 37.0",
+      "extension_level_raw": "22",
+      "license_ref": "android-sdk-license",
+      "revision": "2",
+      "revision_components": {
+        "major": "2",
+        "micro": null,
+        "minor": null
+      }
+    },
+    "source_properties": {
+      "AndroidVersion.ApiLevel": "37.0",
+      "AndroidVersion.BetaVersion": "",
+      "AndroidVersion.CodeName": "",
+      "AndroidVersion.ExtensionLevel": "22",
+      "AndroidVersion.IsBaseSdk": "true",
+      "AndroidVersion.PreviewSdkInt": "0",
+      "Layoutlib.Api": "15",
+      "Layoutlib.Revision": "1",
+      "Pkg.Desc": "Android SDK Platform 17",
+      "Pkg.Revision": "2",
+      "Pkg.UserSrc": "false",
+      "Platform.CodeName": "",
+      "Platform.MinToolsRev": "22",
+      "Platform.Version": "17"
+    }
+  },
+  "before": {
+    "archive": {
+      "bytes": 65878410,
+      "member_root": "android-36",
+      "sha1": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
+      "sha256": "37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e",
+      "url": "https://dl.google.com/android/repository/platform-36_r02.zip"
+    },
+    "artifacts": {
+      "data/api-versions.xml": {
+        "bytes": 5674817,
+        "sha256": "923f7e6367759e127679b6b5a4156ee801100e3cc07dc1d99cb811e791e45435"
+      },
+      "source.properties": {
+        "bytes": 257,
+        "sha256": "72291ff6611dbfc46fdfb6de2821c4a62c87befa5200713847eda426e3a501c2"
+      }
+    },
+    "id": "sdk-36-base-ext17-r2",
+    "package_path": "platforms;android-36",
+    "repository_package": {
+      "api_level_raw": "36",
+      "base_extension_raw": "true",
+      "channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "codename": null,
+      "codename_element_present": false,
+      "complete_archive": {
+        "bytes": 65878410,
+        "checksum": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
+        "checksum_type": "sha1",
+        "url": "platform-36_r02.zip"
+      },
+      "display_name": "Android SDK Platform 36",
+      "extension_level_raw": "17",
+      "license_ref": "android-sdk-license",
+      "revision": "2",
+      "revision_components": {
+        "major": "2",
+        "micro": null,
+        "minor": null
+      }
+    },
+    "source_properties": {
+      "AndroidVersion.ApiLevel": "36",
+      "AndroidVersion.ExtensionLevel": "17",
+      "AndroidVersion.IsBaseSdk": "true",
+      "Layoutlib.Api": "15",
+      "Layoutlib.Revision": "1",
+      "Pkg.Desc": "Android SDK Platform 16",
+      "Pkg.Revision": "2",
+      "Pkg.UserSrc": "false",
+      "Platform.CodeName": "",
+      "Platform.MinToolsRev": "22",
+      "Platform.Version": "16"
+    }
+  },
+  "comparison_id": "official-sdk-36-r02-to-37.0-r02-api-history",
+  "repository_metadata_provenance": {
+    "captured_utc_date": "2026-11-18",
+    "selection": "The two package records and channel labels below were extracted from this hashed official XML snapshot. The comparison verifies archives and measured files against these pins; it does not fetch or revalidate the mutable repository URL.",
+    "snapshot_bytes": 436016,
+    "snapshot_sha256": "8db7cc1bd65bf8c9dffc3678a70d6dc98b02781a24d1ef0d31ecf111a55cc2d5",
+    "source_url": "https://dl.google.com/android/repository/repository2-3.xml"
+  },
+  "schema_version": 1,
+  "source_platform_manifest_sha256": "24b22fb2cb012aced9efa7ab036364ced68dfd284ad0c387b3a31e895bc4e325"
+}

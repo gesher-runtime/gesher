@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace gesher::elf {
@@ -36,14 +37,27 @@ struct Arena {
   uint8_t* reservation = nullptr;
   uintptr_t tp = 0;
   size_t committed = 0;              // bytes committed below tp
-  std::vector<uint8_t*> module_base;  // by module id: tp + tp_offset, or a dynamic copy
+  // Provisional entries are guarded by g_mutex because rollback visits every
+  // arena. A published entry moves to the thread-owned cache on its next use.
+  std::unordered_map<size_t, uint8_t*> module_base;
+  // Only the owning thread reads or writes this cache. Published modules cannot
+  // be rolled back and their IDs are never reused, so no registry lock is
+  // needed on an already cached access. Future successful-unload support must
+  // establish its own invalidation contract before retiring these addresses.
+  std::unordered_map<size_t, uint8_t*> published_base;
   std::vector<void*> dynamic;         // dynamic copies to free
 };
 
+struct ModuleRecord {
+  TlsModule* module;
+  DWORD owner_thread;  // only this thread may use or discard an unpublished module
+  bool prepared = false;  // relocated image is usable by the owner before graph publication
+};
+
 std::mutex g_mutex;                 // guards everything below
-size_t g_static_size = 0;           // bytes assigned below TP so far
+size_t g_static_size = 0;           // highest live extent below TP
 size_t g_next_module_id = 1;
-std::vector<TlsModule*> g_modules;  // every assigned module
+std::unordered_map<size_t, ModuleRecord> g_modules;  // only live assigned modules
 std::vector<Arena*> g_arenas;       // every live thread's block
 
 INIT_ONCE g_once = INIT_ONCE_STATIC_INIT;
@@ -101,6 +115,20 @@ bool CommitBelow(Arena* a, size_t bytes) {
   return true;
 }
 
+// Decommit only the unused tail below every surviving static module. Keep the
+// old accounting if Windows refuses the decommit, so later reuse remains safe.
+// Under g_mutex; also undoes commits made before a later arena's commit failed.
+void TrimCommittedTail() {
+  const size_t bytes = AlignUp(g_static_size, kPage);
+  for (Arena* a : g_arenas) {
+    if (a->committed > bytes &&
+        VirtualFree(reinterpret_cast<void*>(a->tp - a->committed),
+                    a->committed - bytes, MEM_DECOMMIT)) {
+      a->committed = bytes;
+    }
+  }
+}
+
 void CopyImage(uint8_t* dst, const TlsModule* m) {
   if (m->init_size) std::memcpy(dst, m->init_image, m->init_size);
   if (m->total_size > m->init_size) {
@@ -129,9 +157,13 @@ Arena* BuildArena() {
   void** tcb = reinterpret_cast<void**>(a->tp);
   tcb[kSlotSelf] = reinterpret_cast<void*>(a->tp);
   tcb[kSlotStackGuard] = NtCurrentTeb();
-  for (TlsModule* m : g_modules) {
-    if (m->is_static && m->ready) {
-      CopyImage(reinterpret_cast<uint8_t*>(a->tp + m->tp_offset), m);
+  for (const auto& entry : g_modules) {
+    const TlsModule* m = entry.second.module;
+    if (m->is_static && (m->ready || (entry.second.prepared &&
+                                    entry.second.owner_thread == GetCurrentThreadId()))) {
+      auto* base = reinterpret_cast<uint8_t*>(a->tp + m->tp_offset);
+      CopyImage(base, m);
+      if (!m->ready) a->module_base.emplace(m->module_id, base);
     }
   }
   g_arenas.push_back(a);
@@ -200,23 +232,58 @@ uintptr_t TlsCurrentThreadPointer() {
 }
 
 bool TlsAssignModule(TlsModule* m, bool executable) {
+  if (m == nullptr) return false;
   if (!m->present) return true;
+  if (m->init_size > m->total_size || (m->init_size != 0 && m->init_image == nullptr)) return false;
   std::lock_guard<std::mutex> lock(g_mutex);
   size_t align = m->align ? m->align : 1;
   if ((align & (align - 1)) != 0) return false;
-  if (m->module_id != 0)
+  if (m->module_id != 0) {
+    auto existing = g_modules.find(m->module_id);
+    if (existing == g_modules.end() || existing->second.module != m ||
+        (!m->ready && existing->second.owner_thread != GetCurrentThreadId())) return false;
     return !executable || (m->is_static && m->tp_offset == -static_cast<int64_t>(AlignUp(m->total_size, align)));
+  }
+  // Never wrap to a previously issued id, even after many failed loads.
+  if (m->ready || g_next_module_id == 0) return false;
   if (executable && (g_static_size != 0 || align > kPage ||
                      m->total_size > kStaticReserve ||
                      (reinterpret_cast<uintptr_t>(m->init_image) & (align - 1)) != 0))
     return false;
-  size_t new_size = AlignUp(g_static_size + m->total_size, align);
-  // The thread pointer is page-aligned, so any alignment up to a page holds.
-  bool fits = new_size >= m->total_size && new_size <= kStaticReserve && align <= kPage;
+  // Static offsets cannot move after publication. Find an aligned gap among
+  // live extents instead of consuming a bump cursor: an outer failed load can
+  // leave a hole above an independent module committed by its IFUNC callback.
+  // Deriving gaps from the live registry also coalesces adjacent retired spans
+  // without retaining allocation records that refer to discarded modules.
+  bool fits = false;
+  size_t extent = 0;
+  if (align <= kPage && m->total_size <= kStaticReserve) {
+    std::vector<std::pair<size_t, size_t>> occupied;
+    occupied.reserve(g_modules.size());
+    for (const auto& entry : g_modules) {
+      const TlsModule* other = entry.second.module;
+      if (!other->is_static) continue;
+      const size_t end = static_cast<size_t>(-other->tp_offset);
+      occupied.emplace_back(end - other->total_size, end);
+    }
+    std::sort(occupied.begin(), occupied.end());
+    size_t cursor = 0;
+    auto gap = [&](size_t end) {
+      if (cursor > end || m->total_size > end - cursor) return false;
+      extent = AlignUp(cursor + m->total_size, align);
+      return extent <= end;
+    };
+    for (const auto& range : occupied) {
+      if (gap(range.first)) { fits = true; break; }
+      cursor = std::max(cursor, range.second);
+    }
+    if (!fits) fits = gap(kStaticReserve);
+  }
   if (fits) {
     for (Arena* a : g_arenas) {
-      if (!CommitBelow(a, new_size)) {
+      if (!CommitBelow(a, std::max(g_static_size, extent))) {
         fits = false;
+        TrimCommittedTail();
         break;
       }
     }
@@ -225,25 +292,88 @@ bool TlsAssignModule(TlsModule* m, bool executable) {
   m->module_id = g_next_module_id++;
   if (fits) {
     m->is_static = true;
-    m->tp_offset = -static_cast<int64_t>(new_size);
-    g_static_size = new_size;
+    m->tp_offset = -static_cast<int64_t>(extent);
+    g_static_size = std::max(g_static_size, extent);
   } else {
     m->is_static = false;
     m->tp_offset = 0;
   }
-  g_modules.push_back(m);
+  g_modules.emplace(m->module_id, ModuleRecord{m, GetCurrentThreadId()});
+  return true;
+}
+
+bool TlsPrepareModule(TlsModule* m) {
+  if (m == nullptr) return false;
+  if (!m->present) return true;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  auto entry = g_modules.find(m->module_id);
+  if (entry == g_modules.end() || entry->second.module != m || m->ready ||
+      entry->second.owner_thread != GetCurrentThreadId()) return false;
+  entry->second.prepared = true;
+  // A parent's IFUNC can use a linked child's initial-exec TLS directly.
+  // Prepare only this thread; a later Arena on this thread also sees the
+  // prepared image. Foreign Arenas remain excluded until graph publication.
+  Arena* a = CurrentArena();
+  if (m->is_static && a != nullptr && a->module_base.count(m->module_id) == 0) {
+    auto* base = reinterpret_cast<uint8_t*>(a->tp + m->tp_offset);
+    CopyImage(base, m);
+    a->module_base.emplace(m->module_id, base);
+  }
   return true;
 }
 
 void TlsPublishModule(TlsModule* m) {
-  if (!m->present) return;
+  if (m == nullptr || !m->present) return;
   std::lock_guard<std::mutex> lock(g_mutex);
-  if (m->ready) return;
+  auto entry = g_modules.find(m->module_id);
+  if (entry == g_modules.end() || entry->second.module != m || m->ready ||
+      entry->second.owner_thread != GetCurrentThreadId()) return;
   m->ready = true;
   if (!m->is_static) return;
-  // Threads that already have a block get the module's initial image now; its
-  // code cannot have run on them yet (the object's init has not run).
-  for (Arena* a : g_arenas) CopyImage(reinterpret_cast<uint8_t*>(a->tp + m->tp_offset), m);
+  // Preserve private resolver writes on the owner. Other existing threads
+  // receive the initial image only after the complete graph has succeeded.
+  for (Arena* a : g_arenas) {
+    if (a->module_base.count(m->module_id) == 0)
+      CopyImage(reinterpret_cast<uint8_t*>(a->tp + m->tp_offset), m);
+  }
+}
+
+bool TlsRollbackModule(TlsModule* m) {
+  if (m == nullptr) return false;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  auto entry = g_modules.find(m->module_id);
+  if (entry == g_modules.end() || entry->second.module != m || m->ready ||
+      entry->second.owner_thread != GetCurrentThreadId()) return false;
+  for (Arena* a : g_arenas) {
+    auto cached = a->module_base.find(m->module_id);
+    if (cached != a->module_base.end()) {
+      if (!m->is_static) {
+        auto dynamic = std::find(a->dynamic.begin(), a->dynamic.end(), cached->second);
+        if (dynamic != a->dynamic.end()) a->dynamic.erase(dynamic);
+        _aligned_free(cached->second);
+      }
+      a->module_base.erase(cached);
+    }
+    if (m->is_static && m->total_size != 0) {
+      // A page can also contain a surviving module; clear only this allocation.
+      std::memset(reinterpret_cast<void*>(a->tp + m->tp_offset), 0, m->total_size);
+    }
+  }
+  g_modules.erase(entry);
+  m->module_id = 0;
+  m->tp_offset = 0;
+  m->is_static = false;
+  // An IFUNC may have committed a newer, independent library during this load.
+  // Reclaim only space below all survivors, never a saved global checkpoint.
+  g_static_size = 0;
+  for (const auto& live : g_modules) {
+    const TlsModule* other = live.second.module;
+    if (other->is_static) {
+      g_static_size = std::max(g_static_size, static_cast<size_t>(-other->tp_offset));
+    }
+  }
+  TrimCommittedTail();
+  return true;
 }
 
 int64_t TlsTpOffset(const TlsModule& m) { return m.tp_offset; }
@@ -267,22 +397,28 @@ void* TlsGetAddr(size_t module_id, size_t offset) {
     if (!TlsSetupThread()) return nullptr;
     a = CurrentArena();
   }
-  // Fast path: this thread already resolved the module.
-  if (module_id < a->module_base.size() && a->module_base[module_id] != nullptr) {
-    return a->module_base[module_id] + offset;
-  }
+  const auto published = a->published_base.find(module_id);
+  if (published != a->published_base.end()) return published->second + offset;
   std::lock_guard<std::mutex> lock(g_mutex);
-  TlsModule* m = nullptr;
-  for (TlsModule* candidate : g_modules) {
-    if (candidate->module_id == module_id) {
-      m = candidate;
-      break;
-    }
+  auto entry = g_modules.find(module_id);
+  if (entry == g_modules.end()) return nullptr;
+  const TlsModule* m = entry->second.module;
+  // Provisional cached addresses still require the owner check: an IFUNC can
+  // resolve pending TLS, but another thread cannot observe that transaction.
+  if (!m->ready && entry->second.owner_thread != GetCurrentThreadId()) return nullptr;
+  auto cached = a->module_base.find(module_id);
+  if (cached != a->module_base.end()) {
+    uint8_t* base = cached->second;
+    if (m->ready) a->published_base.insert(a->module_base.extract(cached));
+    return base + offset;
   }
-  if (m == nullptr) return nullptr;
   uint8_t* base;
   if (m->is_static) {
     base = reinterpret_cast<uint8_t*>(a->tp + m->tp_offset);
+    // General-dynamic access during the owner's relocation uses the initial
+    // image, like a dynamic-only module. Caching preserves resolver writes
+    // across later preparation and publication.
+    if (!m->ready) CopyImage(base, m);
   } else {
     // Dynamic-only module: this thread's own copy, made on first use.
     size_t align = m->align < sizeof(void*) ? sizeof(void*) : m->align;
@@ -291,8 +427,8 @@ void* TlsGetAddr(size_t module_id, size_t offset) {
     CopyImage(base, m);
     a->dynamic.push_back(base);
   }
-  if (a->module_base.size() <= module_id) a->module_base.resize(module_id + 1, nullptr);
-  a->module_base[module_id] = base;
+  if (m->ready) a->published_base.emplace(module_id, base);
+  else a->module_base.emplace(module_id, base);
   return base + offset;
 }
 

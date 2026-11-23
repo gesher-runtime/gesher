@@ -15,6 +15,7 @@ import static com.gesher.app.locale.UiText.text;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -76,6 +77,41 @@ public final class SystemServer {
         }
         selected.removeIf(p -> p.packageName.equals(current.packageName));
         selected.add(current);
+    }
+
+    /**
+     * The package for the staged microG addon slot {@code name}: the staged addon, or a
+     * valid microG-signed installed update at least as new (both as system addons), or
+     * null when an installed package of that name is verifiably signed by another
+     * signer. Such a package is an ordinary installed app (Google's own Play Store, say):
+     * it keeps its name, data and lack of privileges, the staged addon is not published,
+     * and nothing else of the device changes. (AOSP's scan instead deletes a user app
+     * whose signer differs from a new system package's, with its data; this optional
+     * addon does not justify that.) Any other verification failure, such as changed
+     * content of a microG update, still fails startup: it is not a different signer.
+     */
+    static ApkPackage selectStagedAddon(List<ApkPackage> installed, String name, ApkPackage staged) {
+        List<ApkPackage> updates = new ArrayList<>();
+        for (ApkPackage current : installed) {
+            if (!name.equals(current.packageName)) continue;
+            if (GmsSignatureSpoofing.verifyAddonApk(name, current.apkPath)) {
+                updates.add(current);
+            } else if (current.hasVerifiedSigningIdentity() && !current.hasVerifiedMicrogSigner()) {
+                return null;
+            } else {
+                throw new SecurityException("Untrusted installed microG addon override: " + name);
+            }
+        }
+        ApkPackage selected = staged;
+        for (ApkPackage current : updates) {
+            // Even when selecting the bundled fallback, the old committed
+            // manifest is the authority for any legacy storage migration.
+            current.setSystemAddon(true);
+            // As an updated system app: preserve a valid newer user-installed
+            // release and its privileges, with the staged APK as fallback.
+            if (current.versionCode() >= selected.versionCode()) selected = current;
+        }
+        return selected;
     }
 
     /** Prepare only the final selection, retaining the committed records' migration authority. */
@@ -180,19 +216,31 @@ public final class SystemServer {
             for (String name : MicrogAddons.PACKAGES) {
                 File apk = new File(androidRoot, "priv-app/" + name + "/base.apk");
                 if (!apk.isFile()) continue;
-                ApkPackage p = MicrogAddons.load(apk, name);
-                for (ApkPackage installed : packages) {
-                    if (!name.equals(installed.packageName)) continue;
-                    if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
-                        throw new SecurityException("Untrusted installed microG addon override: " + name);
-                    }
-                    // Even when selecting the bundled fallback, the old committed
-                    // manifest is the authority for any legacy storage migration.
-                    installed.setSystemAddon(true);
-                    // As an updated system app: preserve a valid newer user-installed
-                    // release and its privileges, with the staged APK as fallback.
-                    if (installed.versionCode() >= p.versionCode()) {
-                        p = installed;
+                ApkPackage staged = MicrogAddons.load(apk, name);
+                ApkPackage p = selectStagedAddon(packages, name, staged);
+                if (p == null) {
+                    log("microg addon " + name + ": not loaded, the installed " + name
+                            + " has another signer and stays an ordinary app (uninstall it"
+                            + " to use the microG addon)");
+                    continue;
+                }
+                if (p == staged) {
+                    // As the package manager's scan of a system package: its libraries
+                    // on disk for every process that loads its code (Dynamite modules).
+                    try {
+                        int libs = MicrogAddons.prepareNativeLibraries(p);
+                        if (libs > 0) {
+                            log("microg addon " + name + ": " + libs + " native "
+                                    + (libs == 1 ? "library" : "libraries") + " in "
+                                    + p.nativeLibraryDir());
+                        }
+                    } catch (IOException | java.io.UncheckedIOException
+                            | java.nio.file.InvalidPathException e) {
+                        // Not published: the package keeps its default library path,
+                        // which a device run does not fill, so it runs without native
+                        // libraries until a later startup prepares them (fail closed).
+                        log("microg addon " + name + ": native libraries not prepared: "
+                                + e.getMessage());
                     }
                 }
                 packages.removeIf(old -> name.equals(old.packageName));
@@ -222,6 +270,8 @@ public final class SystemServer {
             device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
                     idleTimeoutS);
             services.put(GesherService.NAME, new GesherService(device));
+        } else {
+            Installer.attachMetadata(created.pm, created.atm);
         }
         for (Map.Entry<String, IBinder> e : services.entrySet()) {
             ServiceManager.addService(e.getKey(), e.getValue());
@@ -305,6 +355,8 @@ public final class SystemServer {
             if (inet != null) env.add(inet);
             // Gesher's own proxy for the package, over Windows' (docs/network.md).
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
+            // One window for the app's tasks, or one each (ADR 0088).
+            env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);
@@ -478,6 +530,7 @@ public final class SystemServer {
                 SystemClock.sleep(200);
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
+                mServices.atm.flushUsageStats();
                 java.util.Properties state = Device.read(Device.stateFile());
                 if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
                     Device.stateFile().delete();

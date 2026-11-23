@@ -1,0 +1,228 @@
+// Compile the complete production epoll.cc. Declared host boundaries replace
+// Win32 events, CRT fd reservations, unrelated sockets/timer/inotify and PollFds.
+// EventFd producers, epoll ctl/registry/entries/delivery/nesting are unmodified.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <fcntl.h>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <poll.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+
+struct HostEvent { bool manual, signaled; };
+using HANDLE = HostEvent*;
+using DWORD = uint32_t;
+using ULONGLONG = unsigned long long;
+static constexpr bool TRUE = true, FALSE = false;
+static const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t(-1));
+static constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258, INFINITE = 0xffffffffUL;
+static constexpr DWORD FILE_TYPE_CHAR = 2, FILE_TYPE_DISK = 1;
+struct FILETIME { uint32_t dwLowDateTime, dwHighDateTime; };
+static std::mutex host_events_mutex;
+static std::condition_variable host_events_changed;
+static uint64_t host_epoch;
+static DWORD host_handles;
+static std::recursive_mutex host_descriptors;
+static std::atomic<unsigned> host_poll_calls{0};
+static HANDLE CreateEventW(void*, bool manual, bool signaled, void*) {
+  std::lock_guard<std::mutex> lock(host_events_mutex);
+  ++host_handles; return new HostEvent{manual, signaled};
+}
+static void CloseHandle(HANDLE event) {
+  if (!event) return;
+  std::lock_guard<std::mutex> lock(host_events_mutex);
+  --host_handles; delete event;
+}
+static void SetEvent(HANDLE event) {
+  std::lock_guard<std::mutex> lock(host_events_mutex);
+  event->signaled = true; ++host_epoch; host_events_changed.notify_all();
+}
+static void ResetEvent(HANDLE event) {
+  std::lock_guard<std::mutex> lock(host_events_mutex); event->signaled = false;
+}
+static DWORD WaitForSingleObject(HANDLE event, DWORD timeout) {
+  std::unique_lock<std::mutex> lock(host_events_mutex);
+  if (timeout == INFINITE) host_events_changed.wait(lock, [&] { return event->signaled; });
+  else if (!host_events_changed.wait_for(lock, std::chrono::milliseconds(timeout), [&] { return event->signaled; })) return WAIT_TIMEOUT;
+  if (!event->manual) event->signaled = false;
+  return WAIT_OBJECT_0;
+}
+static HANDLE GetCurrentProcess() { return nullptr; }
+static HANDLE GetCurrentThread() { return nullptr; }
+static bool GetProcessHandleCount(HANDLE, DWORD* count) {
+  std::lock_guard<std::mutex> lock(host_events_mutex); *count = host_handles; return true;
+}
+static bool GetThreadTimes(HANDLE, FILETIME* created, FILETIME* exited, FILETIME* kernel, FILETIME* user) {
+  timespec now; if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) return false;
+  uint64_t value = uint64_t(now.tv_sec) * 10000000 + now.tv_nsec / 100;
+  *created = {}; *exited = {}; *kernel = {};
+  *user = {uint32_t(value), uint32_t(value >> 32)}; return true;
+}
+static DWORD GetFileType(HANDLE) { return FILE_TYPE_CHAR; }
+static int HostReserve() { return ::open("/dev/null", O_RDWR | O_CLOEXEC); }
+static int HostClose(int fd) { return ::close(fd); }
+static int HostDup(int fd) { return ::dup(fd); }
+static bool HostValid(int fd) { return ::fcntl(fd, F_GETFD) >= 0; }
+static int HostRead(int fd, void* buffer, unsigned count) { return int(::read(fd, buffer, count)); }
+static int HostWrite(int fd, const void* buffer, unsigned count) { return int(::write(fd, buffer, count)); }
+
+namespace gesher {
+struct EventFd; struct Inotify; struct TimerFd; class NativeFence;
+// This corpus creates eventfds, not GPU fences. The latter's Win32 descriptor
+// boundary is exercised by the dedicated native-fence Windows fixture.
+static std::shared_ptr<NativeFence> LookupNativeFence(int) { return nullptr; }
+// Records the production ForgetEventObject retirement call; the native fence
+// registry itself is covered by the Windows fence fixture.
+static std::atomic<int> native_fence_forgets{0}, last_native_fence_forget{-1};
+static void ForgetNativeFence(int fd) { ++native_fence_forgets; last_native_fence_forget = fd; }
+struct SocketFd {};
+static bool LookupSocket(int, SocketFd*) { return false; }
+static HANDLE HandleFromFd(int fd) { return HostValid(fd) ? reinterpret_cast<HANDLE>(intptr_t(fd + 1)) : INVALID_HANDLE_VALUE; }
+static int ReserveFd() { return HostReserve(); }
+static int FailWithLastError() { return errno = ENOMEM, -1; }
+static ULONGLONG MonotonicMicros() {
+  timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+  return ULONGLONG(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+}
+static ULONGLONG DeadlineAfter(int timeout) { return timeout < 0 ? ~0ULL : MonotonicMicros() + ULONGLONG(timeout) * 1000; }
+static int MillisUntil(ULONGLONG deadline) { auto now = MonotonicMicros(); return now >= deadline ? 0 : int((deadline - now + 999) / 1000); }
+static void WakePollers() {
+  std::lock_guard<std::mutex> lock(host_events_mutex); ++host_epoch; host_events_changed.notify_all();
+}
+#ifdef GESHER_READONLY_EDGES
+void RefreshTimerFd(TimerFd&);
+int ReadTimerFd(TimerFd&, void*, unsigned);
+int ReadInotify(Inotify&, void*, unsigned);
+#else
+static void RefreshTimerFd(TimerFd&) {}
+static int ReadTimerFd(TimerFd&, void*, unsigned) { return errno = EINVAL, -1; }
+static int ReadInotify(Inotify&, void*, unsigned) { return errno = EINVAL, -1; }
+#endif
+static int PollFds(pollfd*, nfds_t, int, HANDLE, bool*);
+namespace record_locks {
+struct DescriptorGuard { std::lock_guard<std::recursive_mutex> guard{host_descriptors}; };
+}
+}
+extern "C" int adapted_read(int, void*, unsigned);
+extern "C" int adapted_write(int, const void*, unsigned);
+static int adapted_close(int);
+static int adapted_dup(int);
+static int adapted_poll(pollfd*, nfds_t, int);
+#define read adapted_read
+#define write adapted_write
+#define close adapted_close
+#define dup adapted_dup
+#define poll adapted_poll
+#define eventfd adapted_eventfd
+#define eventfd_read adapted_eventfd_read
+#define eventfd_write adapted_eventfd_write
+#define epoll_create1 adapted_epoll_create1
+#define epoll_create adapted_epoll_create
+#define epoll_ctl adapted_epoll_ctl
+#define epoll_wait adapted_epoll_wait
+#define epoll_pwait adapted_epoll_pwait
+@EPOLL_SOURCE@
+
+namespace gesher {
+static int PollFds(pollfd* fds, nfds_t count, int timeout, HANDLE interrupt, bool* interrupted) {
+  ++host_poll_calls;
+  if (interrupted) *interrupted = false;
+  ULONGLONG deadline = DeadlineAfter(timeout);
+  for (;;) {
+    uint64_t before;
+    { std::lock_guard<std::mutex> lock(host_events_mutex); before = host_epoch; }
+    int ready = 0;
+    for (nfds_t i = 0; i < count; ++i) {
+      auto& item = fds[i]; item.revents = 0;
+      if (item.fd < 0) continue;
+      if (!HostValid(item.fd)) item.revents = POLLNVAL;
+      else if (auto source = LookupEventFd(item.fd)) item.revents = PollEventFd(*source, item.events, nullptr);
+      else PollEpoll(item.fd, item.events, &item.revents);
+      ready += item.revents != 0;
+    }
+    if (interrupt && WaitForSingleObject(interrupt, 0) == WAIT_OBJECT_0) {
+      if (interrupted) *interrupted = true;
+      return ready;
+    }
+    if (ready || timeout == 0 || (timeout > 0 && MillisUntil(deadline) == 0)) return ready;
+    std::unique_lock<std::mutex> lock(host_events_mutex);
+    if (timeout < 0) host_events_changed.wait(lock, [&] { return before != host_epoch; });
+    else host_events_changed.wait_for(lock, std::chrono::milliseconds(MillisUntil(deadline)), [&] { return before != host_epoch; });
+    if (interrupt && before != host_epoch) {
+      if (interrupted) *interrupted = true;
+      return 0;
+    }
+  }
+}
+}
+extern "C" int adapted_read(int fd, void* buffer, unsigned count) {
+  int result; return gesher::ReadEventObject(fd, buffer, count, &result) ? result : HostRead(fd, buffer, count);
+}
+extern "C" int adapted_write(int fd, const void* buffer, unsigned count) {
+  int result; return gesher::WriteEventObject(fd, buffer, count, &result) ? result : HostWrite(fd, buffer, count);
+}
+static int adapted_close(int fd) {
+  gesher::record_locks::DescriptorGuard descriptors;
+  gesher::ForgetEpollEntries(fd); gesher::ForgetEventObject(fd); return HostClose(fd);
+}
+static int adapted_dup(int fd) {
+  gesher::record_locks::DescriptorGuard descriptors;
+  int result = HostDup(fd); if (result >= 0) gesher::DupEventObject(fd, result); return result;
+}
+static int adapted_poll(pollfd* fds, nfds_t count, int timeout) { return gesher::PollFds(fds, count, timeout, nullptr, nullptr); }
+static int failed, checked;
+static void check(const char* label, int passed) {
+  ++checked; if (!passed) { ++failed; std::printf("FAIL %s\n", label); }
+}
+#include "epoll_eventfd_edge_test.inc"
+#include "epoll_eventfd_edge_wait_test.inc"
+#ifdef GESHER_READONLY_EDGES
+#include "epoll_readonly_edges_host.cc"
+#else
+int main() {
+  {
+    // Every close path retires a possible native fence identity of that slot
+    // through the same production ForgetEventObject body.
+    int probe = eventfd(0, EFD_NONBLOCK);
+    const int before = gesher::native_fence_forgets.load();
+    check("descriptor close retires its native fence identity through ForgetEventObject",
+          probe >= 0 && close(probe) == 0 && gesher::native_fence_forgets.load() == before + 1 &&
+          gesher::last_native_fence_forget.load() == probe);
+  }
+  test_epoll_eventfd_edges();
+  test_epoll_eventfd_edge_waits();
+  // Actual production wait code must call its blocking boundary a bounded
+  // number of times for suppressed readiness, not loop until wall timeout.
+  int ep = epoll_create1(0), fd = eventfd(1, EFD_NONBLOCK);
+  check("eventfd host spin-control setup", edge_ctl(ep, EPOLL_CTL_ADD, fd, EPOLLIN | EPOLLET, 91) == 0 && edge_wait(ep, EPOLLIN, 91, 0));
+  unsigned before = host_poll_calls.load();
+  check("eventfd host suppressed timeout", edge_empty(ep, 30));
+  check("eventfd host blocking-boundary call bound", host_poll_calls.load() - before <= 2);
+  check("eventfd host oneshot producer setup", edge_ctl(ep, EPOLL_CTL_MOD, fd, EPOLLIN | EPOLLET | EPOLLONESHOT, 92) == 0 && edge_wait(ep, EPOLLIN, 92, 0));
+  bool wrote = true;
+  std::thread producer([&] {
+    usleep(5000);
+    for (int i = 0; i < 32; ++i) { wrote &= eventfd_write(fd, 1) == 0; usleep(1000); }
+  });
+  before = host_poll_calls.load();
+  check("eventfd host disarmed producer timeout", edge_empty(ep, 100));
+  producer.join();
+  check("eventfd host disarmed producers succeed", wrote);
+  check("eventfd host disarmed subscription stays asleep", host_poll_calls.load() - before <= 2);
+  close(ep); close(fd);
+  check("eventfd host releases all Win32 boundary handles", host_handles == 0);
+  printf("eventfd edge production host: %d checks, %d failures\n", checked, failed);
+  return failed != 0;
+}
+#endif

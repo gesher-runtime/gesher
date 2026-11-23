@@ -2,6 +2,9 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 """Run exact Camera2 capture-loop/open methods at declared device/framework seams.
 
+The configuration-time open (endConfigure) and the first request's retry of a
+failed open run through the same production methods.
+
 Real Java maps, locking, iteration and production delivery/control flow remain.
 Native capture, framework metadata/surfaces, callbacks and request admission are
 adapters. Counts describe map queries in the loop, not physical-camera latency.
@@ -32,7 +35,9 @@ def main() -> None:
                                          ROOT / path).read_text(encoding='utf-8')
     exact = '\n'.join(method(source, marker) for marker in (
         'private void captureFrames()',
-        'private WindowsCamera.Capture open(',
+        'private Size configuredSize()',
+        'private void openForConfiguration()',
+        'private void open(Size size)',
         'private static final class CaptureTiming',
     ))
     print('Camera2 capture dispatch production SHA256', hashlib.sha256(exact.encode()).hexdigest(), flush=True)

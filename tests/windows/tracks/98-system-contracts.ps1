@@ -94,6 +94,34 @@ try {
   } @('ProviderSecurityTest: provider counts, connection ownership, lock order and atomic retirement passed',
     'ProviderSecurityTest all passed')
 
+  $providerOrderOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'ProviderInitOrderTest') 90
+  $providerOrderCode = $LASTEXITCODE
+  Check 'services: content providers ordered by descending initOrder before bindApplication' {
+    $global:LASTEXITCODE = $providerOrderCode
+    $providerOrderOut
+  } @('ProviderInitOrderTest all passed')
+
+  $providerIndexOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'ProviderAuthorityIndexTest') 90
+  $providerIndexCode = $LASTEXITCODE
+  Check 'services: provider authority index preserves generations, ownership and flags' {
+    $global:LASTEXITCODE = $providerIndexCode
+    $providerIndexOut
+  } @('ProviderAuthorityIndexTest all passed', 'PROVIDER_WORK packages=1000 queries=32')
+
+  $intentIndexOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'IntentCandidateIndexTest') 120
+  $intentIndexCode = $LASTEXITCODE
+  Check 'services: intent candidates preserve Android matching and package generations' {
+    $global:LASTEXITCODE = $intentIndexCode
+    $intentIndexOut
+  } @('IntentCandidateIndexTest contracts passed', 'INTENT_WORK packages=1000 kind=PROVIDER queries=32')
+
+  $microgLibsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'MicrogAddonNativeLibsTest') 90
+  $microgLibsCode = $LASTEXITCODE
+  Check 'services: microG priv-app native libraries extracted idempotently with stale cleanup' {
+    $global:LASTEXITCODE = $microgLibsCode
+    $microgLibsOut
+  } @('MicrogAddonNativeLibsTest all passed')
+
   # Constructed package metadata uses the existing synthetic-fixture capability.
   $env:GESHER_MICROG_SPOOF = '1'
   $syncContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SyncManagerContractTest') 120

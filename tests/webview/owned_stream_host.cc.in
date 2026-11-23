@@ -1,0 +1,701 @@
+// Production OwnedStream, Host::Navigate, Host::RespondToRequest, Do and
+// NavigationStarting, with declared COM/WebView/task-queue adapters.
+// No browser, network or JNI is used.
+#include <objbase.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <set>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+std::atomic<bool> tracking{false}, fail_nothrow{false};
+std::atomic<uint64_t> allocation_count{0}, allocation_bytes{0}, payload_count{0}, payload_bytes{0};
+constexpr size_t kPayload = 4u << 20;
+
+void* operator new(size_t size) {
+  void* p = std::malloc(std::max<size_t>(size, 1));
+  if (p == nullptr) std::abort();
+  if (tracking.load(std::memory_order_relaxed)) {
+    ++allocation_count;
+    allocation_bytes += size;
+    if (size >= kPayload) { ++payload_count; payload_bytes += size; }
+  }
+  return p;
+}
+void* operator new(size_t n, const std::nothrow_t&) noexcept {
+  if (fail_nothrow.exchange(false)) return nullptr;
+  return ::operator new(n);
+}
+void* operator new[](size_t size) { return ::operator new(size); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, size_t) noexcept { std::free(p); }
+void operator delete[](void* p, size_t) noexcept { std::free(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
+
+std::atomic<int> failures{0}, checks{0}, marshal_created{0}, marshal_destroyed{0};
+HRESULT marshal_error = S_OK;
+void Check(bool value, const char* label) {
+  ++checks;
+  if (!value) { ++failures; std::fprintf(stderr, "FAIL: %s\n", label); }
+}
+
+// The portable seam models aggregation identity and reference ownership only;
+// it does not claim Windows COM marshaling execution.
+class TestMarshaler final : public IUnknown {
+ public:
+  class Face final : public IUnknown {
+   public:
+    explicit Face(IUnknown* outer) : outer_(outer) {}
+    HRESULT QueryInterface(REFIID iid, void** out) override { return outer_->QueryInterface(iid, out); }
+    ULONG AddRef() override { return outer_->AddRef(); }
+    ULONG Release() override { return outer_->Release(); }
+   private:
+    IUnknown* outer_;
+  };
+  explicit TestMarshaler(IUnknown* outer) : face_(outer) { ++marshal_created; }
+  HRESULT QueryInterface(REFIID iid, void** out) override {
+    if (out == nullptr) return E_POINTER;
+    *out = nullptr;
+    if (!IsEqualIID(iid, IID_IMarshal)) return E_NOINTERFACE;
+    *out = &face_; face_.AddRef(); return S_OK;
+  }
+  ULONG AddRef() override { return ++refs_; }
+  ULONG Release() override { ULONG n = --refs_; if (!n) delete this; return n; }
+ private:
+  ~TestMarshaler() { ++marshal_destroyed; }
+  ULONG refs_ = 1;
+  Face face_;
+};
+HRESULT CoCreateFreeThreadedMarshaler(IUnknown* outer, IUnknown** out) {
+  *out = nullptr;
+  if (FAILED(marshal_error)) return marshal_error;
+  *out = new TestMarshaler(outer);
+  return S_OK;
+}
+
+#include "@OWNED_STREAM@"
+
+namespace gesher::webview {
+@COM_POINTER@
+
+constexpr IID IID_ICoreWebView2_2{10}, IID_ICoreWebView2Environment2{11};
+constexpr int kFailed = 7, kPageStarted = 3;
+using UINT64 = uint64_t;
+using BOOL = int;
+constexpr BOOL FALSE = 0, TRUE = 1;
+#define NUMBERED_NAVIGATION @NUMBERED_NAVIGATION@
+constexpr size_t kBridgeBodyLimit = 1024 * 1024;
+uint64_t tick = 100;
+ULONGLONG GetTickCount64() { return tick; }
+std::wstring Hex(HRESULT) { return L"HRESULT"; }
+template <typename T> struct RecordedObject {
+  ULONG refs = 1;
+  bool available = true;
+  HRESULT QueryInterface(REFIID, void** out) {
+    *out = nullptr;
+    if (!available) return E_NOINTERFACE;
+    *out = static_cast<T*>(this); AddRef(); return S_OK;
+  }
+  ULONG AddRef() { return ++refs; }
+  ULONG Release() { ULONG n = --refs; if (!n) delete static_cast<T*>(this); return n; }
+};
+struct ICoreWebView2WebResourceRequest : RecordedObject<ICoreWebView2WebResourceRequest> {
+  Com<IStream> content;
+  std::wstring url, method, headers;
+};
+struct ICoreWebView2WebResourceResponse : RecordedObject<ICoreWebView2WebResourceResponse> {
+  Com<IStream> content;
+  int status = 0;
+  std::wstring reason, headers;
+};
+struct ICoreWebView2Environment2 : RecordedObject<ICoreWebView2Environment2> {
+  int requests = 0, responses = 0;
+  HRESULT result = S_OK;
+  HRESULT CreateWebResourceRequest(LPCWSTR url, LPCWSTR method, IStream* stream,
+                                   LPCWSTR headers, ICoreWebView2WebResourceRequest** out) {
+    ++requests; *out = nullptr;
+    if (FAILED(result)) return result;
+    auto* r = new ICoreWebView2WebResourceRequest;
+    r->url = url; r->method = method; r->headers = headers; r->content = Com<IStream>(stream);
+    *out = r; return S_OK;
+  }
+  HRESULT CreateWebResourceResponse(IStream* stream, int status, LPCWSTR reason,
+                                    LPCWSTR headers, ICoreWebView2WebResourceResponse** out) {
+    ++responses; *out = nullptr;
+    if (FAILED(result)) return result;
+    auto* r = new ICoreWebView2WebResourceResponse;
+    r->status = status; r->reason = reason; r->headers = headers; r->content = Com<IStream>(stream);
+    *out = r; return S_OK;
+  }
+};
+struct ICoreWebView2_2 : RecordedObject<ICoreWebView2_2> {
+  int plain = 0, sent = 0;
+  HRESULT result = S_OK;
+  std::wstring url;
+  Com<ICoreWebView2WebResourceRequest> request;
+  std::function<void()> on_navigate;
+  HRESULT Navigate(LPCWSTR value) {
+    ++plain; url = value; if (on_navigate) on_navigate(); return result;
+  }
+  HRESULT NavigateWithWebResourceRequest(ICoreWebView2WebResourceRequest* value) {
+    ++sent; request = Com<ICoreWebView2WebResourceRequest>(value);
+    if (on_navigate) on_navigate();
+    return result;
+  }
+};
+using ICoreWebView2 = ICoreWebView2_2;
+struct CoString {
+  wchar_t* value = nullptr;
+  wchar_t** Put() { return &value; }
+  std::wstring str() const { return value ? value : L""; }
+};
+// SDK ownership is an explicit adapter: get_Uri lends the argument's stable
+// string for this call. Production callback statements are extracted unchanged.
+struct ICoreWebView2NavigationStartingEventArgs {
+  std::wstring url;
+  UINT64 id;
+  BOOL user = FALSE, redirect = FALSE, cancelled = FALSE;
+  HRESULT get_Uri(wchar_t** out) { *out = url.data(); return S_OK; }
+  HRESULT get_IsUserInitiated(BOOL* out) { *out = user; return S_OK; }
+  HRESULT get_IsRedirected(BOOL* out) { *out = redirect; return S_OK; }
+  HRESULT get_NavigationId(UINT64* out) { *out = id; return S_OK; }
+  HRESULT put_Cancel(BOOL value) { cancelled = value; return S_OK; }
+};
+struct StartListener {
+  int calls = 0;
+  int64_t handed = -1;
+  std::function<bool()> callback;
+  // The default preserves the old three-argument handler in negative controls.
+  bool OnNavigationStarting(const std::wstring&, bool, bool, int64_t number = -1) {
+    ++calls; handed = number; return callback ? callback() : false;
+  }
+};
+struct Deferral { int completed = 0; void Complete() { ++completed; } };
+struct RequestArgs {
+  int published = 0;
+  Com<ICoreWebView2WebResourceResponse> response;
+  void put_Response(ICoreWebView2WebResourceResponse* r) { ++published; response = Com<ICoreWebView2WebResourceResponse>(r); }
+};
+struct Impl {
+  struct Request {
+    bool bridge = false;
+    uint64_t generation = 7, deadline = 200;
+    std::shared_ptr<Deferral> deferral = std::make_shared<Deferral>();
+    std::shared_ptr<RequestArgs> args = std::make_shared<RequestArgs>();
+  };
+  bool api_navigation = false, destroyed = false, closing = false, failed = false, ready = true;
+@NAVIGATION_STATE@
+  std::wstring main_document, auth_retry;
+  std::set<UINT64> cancelled;
+  StartListener* listener = nullptr;
+  int bridge_cancellations = 0;
+  bool bridge_guarded = true;
+  uint64_t bridge_generation = 7;
+  int reports = 0;
+  HRESULT reported = S_OK;
+  std::vector<std::function<void(Impl*)>> pending;
+  std::map<int64_t, Request> requests;
+  Com<ICoreWebView2_2> webview{new ICoreWebView2_2, false};
+  Com<ICoreWebView2Environment2> env{new ICoreWebView2Environment2, false};
+  struct Event { int type; int64_t id; int32_t arg; std::wstring a, b; };
+  std::vector<Event> events;
+  void Report(int type, int64_t id, int32_t error, const std::wstring& a,
+              const std::wstring& b = L"") {
+    ++reports; reported = error; events.push_back({type, id, error, a, b});
+  }
+};
+struct Host {
+  explicit Host(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
+  @NAVIGATE_DECLARATION@
+  @NUMBER_DECLARATION@
+  void RespondToRequest(int64_t, int32_t, const std::wstring&, const std::wstring&, std::vector<uint8_t>);
+  std::shared_ptr<Impl> impl_;
+};
+std::vector<std::function<void()>> tasks;
+bool copy_posted = false, reject_posted = false;
+void PostToWebViewThread(std::function<void()> task) {
+  if (reject_posted) return;
+  if (copy_posted) tasks.push_back(task);
+  else tasks.push_back(std::move(task));
+}
+void RunTasks() {
+  auto running = std::move(tasks);
+  for (auto& task : running) task();
+}
+void RunOneTask() {
+  Check(!tasks.empty(), "one queued task is available");
+  if (tasks.empty()) return;
+  auto task = std::move(tasks.front()); tasks.erase(tasks.begin()); task();
+}
+@DO@
+
+// SHCreateMemStream's documented copied-buffer boundary, adapted only for the
+// exact baseline dispatch; its Windows allocator/COM internals are not measured.
+[[maybe_unused]] IStream* SHCreateMemStream(const BYTE* input, UINT length) {
+  if (FAILED(marshal_error)) return nullptr;
+  std::vector<uint8_t> bytes;
+  if (length != 0) bytes.assign(input, input + length);
+  IStream* stream = nullptr;
+  auto body = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+  if (FAILED(OwnedStream::Create(std::move(body), &stream))) return nullptr;
+  return stream;
+}
+
+@NAVIGATE@
+@NUMBER_FUNCTION@
+@RESPOND@
+@DOCUMENT_MATCH@
+bool MainResource(Impl* impl, const std::wstring& url, bool document) {
+  // The exact production WebResourceRequested main-frame predicate.
+  return @RESOURCE_MATCH@;
+}
+void CancelBridgeRequests(Impl* impl) { ++impl->bridge_cancellations; }
+@NAV_START_CALLBACK@
+#if NUMBERED_NAVIGATION
+void NavigateNumbered(Host& host, const std::wstring& url, const std::wstring& headers,
+                       const std::wstring& method, std::vector<uint8_t> body, int64_t number) {
+  @NUMBERED_CALL@
+}
+#endif
+}  // namespace gesher::webview
+
+using namespace gesher::webview;
+
+std::vector<uint8_t> Payload(size_t n) {
+  std::vector<uint8_t> bytes(n);
+  for (size_t i = 0; i < n; ++i) bytes[i] = static_cast<uint8_t>((i * 37 + 11) % 251);
+  return bytes;
+}
+SharedBody Body(size_t n) { return std::make_shared<const std::vector<uint8_t>>(Payload(n)); }
+void CheckBytes(IStream* stream, size_t length, size_t offset = 0) {
+  Check(stream != nullptr, "retained content stream exists");
+  if (stream == nullptr) return;
+  STATSTG stat{};
+  Check(stream->Stat(&stat, STATFLAG_NONAME) == S_OK && stat.cbSize.QuadPart == length,
+        "exact stream length");
+  Check(stream->Seek({static_cast<int64_t>(offset)}, STREAM_SEEK_SET, nullptr) == S_OK, "seek retained body");
+  std::array<uint8_t, 16384> block;
+  size_t at = offset;
+  while (at < length) {
+    ULONG n = 0;
+    ULONG want = static_cast<ULONG>(std::min(block.size(), length - at));
+    Check(stream->Read(block.data(), want, &n) == S_OK && n == want, "complete content read");
+    for (size_t i = 0; i < n; ++i) Check(block[i] == static_cast<uint8_t>(((at + i) * 37 + 11) % 251), "body bytes unchanged");
+    at += n;
+    if (n == 0) break;
+  }
+  ULONG n = 1;
+  Check(stream->Read(block.data(), 1, &n) == S_FALSE && n == 0, "EOF is short read");
+}
+
+class WriteTarget final : public IStream {
+ public:
+  std::vector<uint8_t> bytes;
+  IStream* source = nullptr;
+  HRESULT result = S_OK;
+  ULONG cap = UINT32_MAX;
+  bool excess = false;
+  HRESULT QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
+  ULONG AddRef() override { return 1; }
+  ULONG Release() override { return 1; }
+  HRESULT Read(void*, ULONG, ULONG*) override { return E_FAIL; }
+  HRESULT Write(const void* p, ULONG count, ULONG* written) override {
+    if (source) {
+      ULARGE_INTEGER position{};
+      Check(source->Seek({0}, STREAM_SEEK_CUR, &position) == S_OK, "CopyTo target reenters cursor");
+    }
+    *written = excess ? count + 1 : std::min(count, cap);
+    if (!excess) bytes.insert(bytes.end(), static_cast<const uint8_t*>(p), static_cast<const uint8_t*>(p) + *written);
+    return result;
+  }
+  HRESULT Seek(LARGE_INTEGER, DWORD, ULARGE_INTEGER*) override { return E_FAIL; }
+  HRESULT SetSize(ULARGE_INTEGER) override { return E_FAIL; }
+  HRESULT CopyTo(IStream*, ULARGE_INTEGER, ULARGE_INTEGER*, ULARGE_INTEGER*) override { return E_FAIL; }
+  HRESULT Commit(DWORD) override { return E_FAIL; }
+  HRESULT Revert() override { return E_FAIL; }
+  HRESULT LockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override { return E_FAIL; }
+  HRESULT UnlockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override { return E_FAIL; }
+  HRESULT Stat(STATSTG*, DWORD) override { return E_FAIL; }
+  HRESULT Clone(IStream**) override { return E_FAIL; }
+};
+
+void StreamContracts() {
+  Com<IStream> stream;
+  auto body = Body(200003);
+  std::weak_ptr<const std::vector<uint8_t>> lifetime = body;
+  Check(OwnedStream::Create(body, stream.Put()) == S_OK, "create stream");
+  body.reset();
+  for (IID iid : {IID_IUnknown, IID_ISequentialStream, IID_IStream, IID_IAgileObject, IID_IMarshal}) {
+    IUnknown* q = nullptr;
+    Check(stream->QueryInterface(iid, reinterpret_cast<void**>(&q)) == S_OK && q != nullptr, "supported COM interface");
+    IUnknown* identity = nullptr;
+    Check(q->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&identity)) == S_OK && identity == static_cast<IUnknown*>(stream.get()), "canonical COM identity");
+    if (identity) identity->Release();
+    q->Release();
+  }
+  void* unknown = reinterpret_cast<void*>(1);
+  Check(stream->QueryInterface(IID{99}, &unknown) == E_NOINTERFACE && unknown == nullptr, "unsupported interface clears result");
+  Check(stream->QueryInterface(IID_IStream, nullptr) == E_POINTER, "null QI output");
+  CheckBytes(stream.get(), 200003);
+  ULONG n = 9;
+  Check(stream->Read(nullptr, 1, &n) == STG_E_INVALIDPOINTER && n == 0, "null read rejected");
+  Check(stream->Read(nullptr, 0, &n) == S_OK && n == 0, "zero read");
+  Check(stream->Seek({-1}, STREAM_SEEK_END, nullptr) == S_OK, "negative end seek");
+  std::array<uint8_t, 8> guard; guard.fill(0xaa);
+  Check(stream->Read(guard.data(), guard.size(), &n) == S_FALSE && n == 1 && guard[1] == 0xaa, "short read preserves suffix");
+  ULARGE_INTEGER pos{};
+  Check(stream->Seek({-1}, STREAM_SEEK_SET, &pos) == S_OK && pos.QuadPart == UINT64_MAX, "absolute high-bit offset is unsigned");
+  Check(stream->Read(guard.data(), 1, &n) == S_FALSE && n == 0, "read beyond EOF");
+  Check(stream->Seek({1}, STREAM_SEEK_CUR, nullptr) == STG_E_INVALIDFUNCTION, "relative positive overflow rejected");
+  Check(stream->Seek({INT64_MIN}, STREAM_SEEK_CUR, &pos) == S_OK && pos.QuadPart == INT64_MAX, "INT64_MIN subtraction without overflow");
+  Check(stream->Seek({0}, STREAM_SEEK_SET, nullptr) == S_OK, "reset cursor");
+  Check(stream->Seek({INT64_MIN}, STREAM_SEEK_CUR, nullptr) == STG_E_INVALIDFUNCTION, "seek before start rejected");
+  Check(stream->Seek({1}, 55, nullptr) == STG_E_INVALIDFUNCTION, "invalid seek origin rejected");
+  Check(stream->Seek({23}, STREAM_SEEK_SET, nullptr) == S_OK, "clone source position");
+  Com<IStream> clone;
+  Check(stream->Clone(clone.Put()) == S_OK, "clone stream");
+  Check(clone->Seek({0}, STREAM_SEEK_CUR, &pos) == S_OK && pos.QuadPart == 23, "clone starts at source cursor");
+  Check(clone->Read(guard.data(), 1, nullptr) == S_OK, "clone can read");
+  Check(stream->Seek({0}, STREAM_SEEK_CUR, &pos) == S_OK && pos.QuadPart == 23, "clone cursor independent");
+  stream.Reset();
+  Check(!lifetime.expired(), "clone owns backing after original release");
+  CheckBytes(clone.get(), 200003);
+  for (DWORD flags : {STATFLAG_DEFAULT, STATFLAG_NONAME, STATFLAG_NOOPEN}) {
+    STATSTG stat{};
+    Check(clone->Stat(&stat, flags) == S_OK && stat.type == STGTY_STREAM && stat.grfMode == STGM_READ && stat.pwcsName == nullptr, "read-only anonymous stat");
+  }
+  STATSTG stat{};
+  Check(clone->Stat(&stat, 77) == STG_E_INVALIDFLAG, "invalid stat flag");
+  Check(clone->Stat(nullptr, 0) == STG_E_INVALIDPOINTER, "null stat output");
+  Check(clone->Write(guard.data(), 1, &n) == STG_E_ACCESSDENIED && n == 0, "content immutable");
+  Check(clone->SetSize({1}) == STG_E_ACCESSDENIED, "resizing denied");
+  Check(clone->Commit(0) == S_OK && clone->Revert() == S_OK, "read-only direct mode no-op");
+  Check(clone->LockRegion({0}, {1}, 0) == STG_E_INVALIDFUNCTION && clone->UnlockRegion({0}, {1}, 0) == STG_E_INVALIDFUNCTION, "region locking unsupported");
+  for (int mode = 0; mode < 5; ++mode) {
+    clone->Seek({0}, STREAM_SEEK_SET, nullptr);
+    WriteTarget target; target.source = clone.get();
+    if (mode == 1) target.cap = 31;
+    if (mode == 2) target.result = E_FAIL;
+    if (mode == 3) target.excess = true;
+    ULARGE_INTEGER read{}, written{};
+    HRESULT hr = clone->CopyTo(mode == 4 ? clone.get() : &target, {UINT64_MAX}, &read, &written);
+    if (mode == 0) Check(hr == S_OK && read.QuadPart == 200003 && written.QuadPart == 200003 && target.bytes == Payload(200003), "CopyTo reads full remaining data");
+    if (mode == 1) Check(hr == STG_E_MEDIUMFULL && written.QuadPart == 31 && read.QuadPart == 65536, "short destination write reported");
+    if (mode == 2) Check(hr == E_FAIL, "destination write failure propagated");
+    if (mode == 3) Check(hr == STG_E_WRITEFAULT, "invalid destination count rejected");
+    if (mode == 4) Check(hr == STG_E_ACCESSDENIED, "self CopyTo rejects readonly write without deadlock");
+  }
+  ULARGE_INTEGER read{123}, written{123};
+  Check(clone->CopyTo(nullptr, {10}, &read, &written) == STG_E_INVALIDPOINTER && read.QuadPart == 0 && written.QuadPart == 0, "null CopyTo destination");
+  clone->Seek({0}, STREAM_SEEK_SET, nullptr);
+  WriteTarget alias_target;
+  Check(clone->CopyTo(&alias_target, {70003}, &read, &read) == S_OK && read.QuadPart == 70003,
+        "CopyTo accepts aliased output counts");
+  clone->Seek({0}, STREAM_SEEK_SET, nullptr);
+  WriteTarget null_counts;
+  Check(clone->CopyTo(&null_counts, {9}, nullptr, nullptr) == S_OK && null_counts.bytes == std::vector<uint8_t>(Payload(9)),
+        "CopyTo optional counts may be absent");
+  Check(clone->Clone(nullptr) == STG_E_INVALIDPOINTER, "null clone result");
+  IStream* failed_clone = reinterpret_cast<IStream*>(1);
+  fail_nothrow = true;
+  Check(clone->Clone(&failed_clone) == STG_E_INSUFFICIENTMEMORY && failed_clone == nullptr,
+        "clone allocation failure clears result with storage error");
+  clone.Reset(); Check(lifetime.expired(), "last stream releases body");
+  Check(OwnedStream::Create({}, stream.Put()) == S_OK, "empty stream needs no backing allocation");
+  CheckBytes(stream.get(), 0);
+  stream.Reset();
+  Check(OwnedStream::Create({}, nullptr) == E_POINTER, "null factory result");
+  marshal_error = E_FAIL;
+  Check(OwnedStream::Create({}, stream.Put()) == E_FAIL && !stream, "marshaler failure publishes no stream");
+  marshal_error = S_OK; fail_nothrow = true;
+  Check(OwnedStream::Create({}, stream.Put()) == E_OUTOFMEMORY && !stream, "object allocation failure publishes no stream");
+}
+
+void ConcurrentCursors() {
+  constexpr size_t count = 16000;
+  std::vector<uint8_t> data(count * sizeof(uint32_t));
+  for (uint32_t i = 0; i < count; ++i) std::memcpy(data.data() + i * sizeof(i), &i, sizeof(i));
+  Com<IStream> stream;
+  OwnedStream::Create(std::make_shared<const std::vector<uint8_t>>(std::move(data)), stream.Put());
+  std::array<std::atomic<unsigned>, count> seen{};
+  std::vector<std::thread> readers;
+  for (int t = 0; t < 8; ++t) readers.emplace_back([&] {
+    for (;;) {
+      uint32_t value = UINT32_MAX; ULONG n;
+      HRESULT hr = stream->Read(&value, sizeof(value), &n);
+      if (hr == S_FALSE) { Check(n == 0, "concurrent readers end at record boundary"); break; }
+      Check(hr == S_OK && n == sizeof(value) && value < count, "concurrent record read valid");
+      if (value < count) ++seen[value];
+    }
+  });
+  for (auto& t : readers) t.join();
+  for (const auto& n : seen) Check(n == 1, "shared cursor serves each record once");
+}
+
+void DispatchContracts() {
+  for (bool copy : {false, true}) {
+    copy_posted = copy;
+    auto impl = std::make_shared<Impl>(); Host host(impl);
+    impl->ready = false;
+    host.Navigate(L"https://example.test/post", L"X-Exact: yes\r\n", L"POST", Payload(70001));
+    RunTasks();
+    Check(impl->pending.size() == 1 && impl->webview->sent == 0, "navigation waits for readiness");
+    auto pending = impl->pending; impl->pending.clear();
+    pending.front()(impl.get()); pending.clear();
+    auto request = impl->webview->request;
+    Check(impl->webview->sent == 1 && request->method == L"POST" && request->headers == L"X-Exact: yes\r\n" && request->url == L"https://example.test/post", "POST metadata preserved");
+    host.impl_.reset(); impl.reset();
+    CheckBytes(request->content.get(), 70001);
+  }
+  copy_posted = false;
+  for (int mode = 0; mode < 12; ++mode) {
+    auto impl = std::make_shared<Impl>(); Host host(impl);
+    Impl::Request r; r.bridge = mode >= 2 && mode <= 7;
+    auto deferral = r.deferral; auto args = r.args;
+    int status = mode == 0 ? 0 : mode == 2 ? 403 : r.bridge ? 200 : 206;
+    size_t length = mode == 7 ? kBridgeBodyLimit + 1 : 1003;
+    if (mode == 3) impl->destroyed = true;
+    if (mode == 4) impl->bridge_guarded = false;
+    if (mode == 5) --r.generation;
+    if (mode == 6) r.deadline = tick;
+    if (mode == 9) impl->env->result = E_FAIL;
+    if (mode == 10) impl->destroyed = true;
+    if (mode == 11) impl->env.Reset();
+    impl->requests.emplace(42, r);
+    host.RespondToRequest(42, status, L"Partial", L"Content-Range: bytes 0-1002/3000\r\n", Payload(length));
+    RunTasks();
+    bool expected = mode == 1 || mode == 8;
+    Check(deferral->completed == 1 && impl->requests.empty(), "response retires request and completes deferral once");
+    Check(args->published == (expected ? 1 : 0), "response admission preserved");
+    if (expected) {
+      auto response = args->response;
+      Check(response->status == status && response->reason == L"Partial" && response->headers == L"Content-Range: bytes 0-1002/3000\r\n", "response metadata unchanged");
+      host.impl_.reset(); impl.reset(); CheckBytes(response->content.get(), length);
+    }
+  }
+  {
+    auto impl = std::make_shared<Impl>(); Host host(impl);
+    Impl::Request r; r.bridge = true; auto args = r.args; auto completed = r.deferral;
+    impl->requests.emplace(1, r);
+    host.RespondToRequest(1, 200, L"OK", L"Untrusted: ignored\r\n", Payload(33)); RunTasks();
+    Check(args->published == 1 && completed->completed == 1 && args->response->headers == L"Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n", "accepted bridge retains fixed security headers");
+    CheckBytes(args->response->content.get(), 33);
+    host.RespondToRequest(999, 200, L"OK", L"", Payload(20)); RunTasks();
+    Check(impl->env->responses == 1, "unknown response id ignored");
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto impl = std::make_shared<Impl>(); Host host(impl);
+    if (mode == 0) marshal_error = E_OUTOFMEMORY;
+    if (mode == 1) fail_nothrow = true;
+    if (mode == 2) impl->env->result = E_FAIL;
+    if (mode == 3) impl->webview->result = E_FAIL;
+    host.Navigate(L"https://example.test/", L"", L"POST", Payload(10)); RunTasks();
+    Check(impl->reports == 1 && !impl->api_navigation, "POST failure reported");
+    if (mode < 2) Check(impl->env->requests == 0 && impl->webview->sent == 0, "stream failure never submits bodyless POST");
+    marshal_error = S_OK; fail_nothrow = false;
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto impl = std::make_shared<Impl>(); Host host(impl);
+    if (mode == 0) impl->destroyed = true;
+    if (mode == 1) impl->closing = true;
+    if (mode == 2) impl->failed = true;
+    if (mode == 3) reject_posted = true;
+    host.Navigate(L"https://example.test/", L"", L"POST", Payload(10)); RunTasks();
+    Check(impl->webview->sent == 0, "unavailable host drops queued navigation");
+    reject_posted = false;
+  }
+}
+
+void NavigationIdentityContracts() {
+  auto impl = std::make_shared<Impl>();
+  struct Case { const wchar_t* document; const wchar_t* request; bool same; };
+  for (const auto& c : {
+      Case{L"https://example.test/note#part", L"https://example.test/note", true},
+      Case{L"https://example.test/note?x=1#part", L"https://example.test/note?x=1", true},
+      Case{L"https://example.test/note#part", L"https://example.test/note#other", true},
+      Case{L"https://example.test/note#", L"https://example.test/note", true},
+      Case{L"https://example.test/note?x=1#part", L"https://example.test/note?x=2", false},
+      Case{L"https://example.test/note#part", L"https://example.test/other", false},
+      Case{L"https://example.test/note%23part", L"https://example.test/note", false},
+      Case{L"https://example.test/note%23part#anchor", L"https://example.test/note%23part", true},
+      Case{L"https://example.test/note?x=%23part#anchor", L"https://example.test/note?x=%23part", true},
+      Case{L"https://example.test/note?x=%23part", L"https://example.test/note?x=", false},
+      Case{L"https://example.test/note%2523part", L"https://example.test/note%23part", false},
+      Case{L"https://example.test/Note", L"https://example.test/note", false}}) {
+    impl->main_document = c.document;
+    Check(MainResource(impl.get(), c.request, true) == c.same,
+          "document resource ignores only literal fragments");
+    Check(!MainResource(impl.get(), c.request, false), "subresource never becomes the main document");
+  }
+#if NUMBERED_NAVIGATION
+  for (bool held : {false, true}) {
+    auto state = std::make_shared<Impl>(); Host host(state);
+    state->api_number = 4;
+    state->ready = !held;
+    state->webview->on_navigate = [&] {
+      Check(state->api_number == 5, "number is published before the actual WebView handoff");
+    };
+    NavigateNumbered(host, L"https://example.test/next", L"", L"GET", {}, 5);
+    Check(state->api_number == 4 && state->webview->plain == 0,
+          "queuing a navigation does not publish its number");
+    Check(tasks.size() == 1, "number and navigation use one queued task");
+    if (held) {
+      RunTasks();
+      Check(state->api_number == 4 && state->webview->plain == 0,
+            "unready navigation does not publish its number");
+      Check(state->pending.size() == 1, "readiness holds number and navigation together");
+      state->ready = true;
+      auto pending = std::move(state->pending);
+      pending.front()(state.get());
+      Check(state->api_number == 5 && state->webview->plain == 1,
+            "first held callback hands off both number and navigation");
+      for (size_t i = 1; i < pending.size(); ++i) pending[i](state.get());
+    } else {
+      RunOneTask();
+      Check(state->api_number == 5 && state->webview->plain == 1,
+            "one dispatch cannot expose a number without its navigation");
+      RunTasks();
+    }
+    state->webview->on_navigate = nullptr;
+    NavigateNumbered(host, L"https://example.test/unnumbered", L"", L"GET", {}, 0);
+    RunTasks();
+    Check(state->api_number == 5, "unnumbered native probe does not reset handed watermark");
+    NavigateNumbered(host, L"https://example.test/earlier", L"", L"GET", {}, 3);
+    RunTasks();
+    Check(state->api_number == 5, "older number does not lower handed watermark");
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto state = std::make_shared<Impl>(); Host host(state); state->api_number = 4;
+    if (mode == 0) state->destroyed = true;
+    if (mode == 1) state->closing = true;
+    if (mode == 2) state->failed = true;
+    if (mode == 3) reject_posted = true;
+    NavigateNumbered(host, L"https://example.test/dropped", L"", L"GET", {}, 5);
+    RunTasks(); reject_posted = false;
+    Check(state->api_number == 4 && state->webview->plain == 0,
+          "rejected or unavailable dispatch cannot advance the watermark");
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto state = std::make_shared<Impl>(); Host host(state); state->api_number = 4;
+    if (mode == 0) marshal_error = E_OUTOFMEMORY;
+    if (mode == 1) fail_nothrow = true;
+    if (mode == 2) state->env->result = E_FAIL;
+    if (mode == 3) state->webview->result = E_FAIL;
+    NavigateNumbered(host, L"https://example.test/post", L"", L"POST", Payload(10), 5);
+    RunTasks(); marshal_error = S_OK; fail_nothrow = false;
+    Check(state->reports == 1 && !state->api_navigation, "numbered submission failure is reported");
+    Check(state->api_number == (mode == 3 ? 5 : 4),
+          "only an actual WebView call advances number, including its synchronous failure");
+    Check(state->webview->sent == (mode == 3 ? 1 : 0), "failed preparation never submits a request");
+  }
+  {
+    auto state = std::make_shared<Impl>(); Host host(state); state->api_number = 4;
+    StartListener listener; state->listener = &listener;
+    listener.callback = [&] {
+      NavigateNumbered(host, L"https://example.test/same", L"", L"GET", {}, 5);
+      Check(state->api_number == 4, "client-queued same-URL load is not handed yet");
+      return false;
+    };
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/same", 42};
+    Check(NavigationStartHandler(state)(nullptr, &args) == S_OK, "actual native starting handler succeeds");
+    Check(listener.calls == 1 && listener.handed == 4, "client receives only previously handed loads");
+    Check(state->events.size() == 1 && state->events[0].type == kPageStarted &&
+          state->events[0].id == 42 && state->events[0].arg == 0 && state->events[0].b == L"4",
+          "PAGE_STARTED carries original handed cutoff after client queues a load");
+    Check(state->NavigationEnded(42) == 4 && state->NavigationEnded(42) == 0,
+          "completion consumes the same start cutoff exactly once");
+    RunTasks();
+    Check(state->api_number == 5, "newer queued load becomes handed after starting callback");
+  }
+  {
+    // A controlled callback boundary stresses capture-before-client ordering;
+    // it does not simulate a nested WebView2 event (those are serialized).
+    auto state = std::make_shared<Impl>(); state->api_number = 4;
+    StartListener listener; state->listener = &listener;
+    listener.callback = [&] { state->api_number = 9; return false; };
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/old", 43};
+    NavigationStartHandler(state)(nullptr, &args);
+    Check(listener.handed == 4 && state->events.back().b == L"4" && state->NavigationEnded(43) == 4,
+          "listener, start and finish use one number captured before the callback");
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto state = std::make_shared<Impl>(); state->api_number = 4;
+    StartListener listener; state->listener = &listener;
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/start", 44};
+    if (mode == 0) { state->auth_retry = args.url; }
+    if (mode == 1) { listener.callback = [] { return true; }; }
+    if (mode == 2) { state->api_navigation = true; }
+    if (mode == 3) { args.redirect = TRUE; }
+    NavigationStartHandler(state)(nullptr, &args);
+    if (mode == 0) Check(listener.calls == 0 && state->events.empty() &&
+                        state->NavigationEnded(44) == 4, "authentication retry retains completion cutoff without a duplicate start");
+    if (mode == 1) Check(args.cancelled && state->cancelled.count(44) == 1 && state->events.empty() &&
+                        state->NavigationEnded(44) == 0, "client cancellation emits no start or retained finish");
+    if (mode == 2) Check(listener.calls == 0 && state->events.size() == 1 &&
+                        state->events[0].arg == 1 && state->events[0].b == L"4" &&
+                        state->NavigationEnded(44) == 4, "API start carries its cutoff without asking the page client");
+    if (mode == 3) Check(listener.calls == 1 && listener.handed == 4 && state->events.empty() &&
+                        state->NavigationEnded(44) == 0, "redirect keeps client cutoff without duplicating the start");
+  }
+#endif
+}
+
+void BeginMeasure() {
+  allocation_count = 0; allocation_bytes = 0; payload_count = 0; payload_bytes = 0;
+  tasks.reserve(32); tracking = true;
+}
+void Measure(bool gates) {
+  for (bool response : {false, true}) for (bool copy : {false, true}) {
+    copy_posted = copy;
+    auto impl = std::make_shared<Impl>(); Host host(impl);
+    Impl::Request r; auto args = r.args; impl->requests.emplace(1, r);
+    auto body = Payload(kPayload);
+    BeginMeasure();
+    if (response) host.RespondToRequest(1, 200, L"OK", L"", std::move(body));
+    else host.Navigate(L"https://example.test/post", L"", L"POST", std::move(body));
+    RunTasks(); tracking = false;
+    std::printf("MEASURE %s copied_queue=%d payload_allocations=%llu payload_bytes=%llu all_allocations=%llu all_bytes=%llu\n",
+        response ? "response" : "post", copy, static_cast<unsigned long long>(payload_count.load()),
+        static_cast<unsigned long long>(payload_bytes.load()), static_cast<unsigned long long>(allocation_count.load()),
+        static_cast<unsigned long long>(allocation_bytes.load()));
+    if (gates) Check(payload_count == 0 && payload_bytes == 0, "native dispatch adds no payload allocation or copy");
+    CheckBytes(response ? args->response->content.get() : impl->webview->request->content.get(), kPayload);
+  }
+  copy_posted = false;
+  for (bool response : {false, true}) {
+    auto impl = std::make_shared<Impl>(); Host host(impl);
+    Impl::Request r; impl->requests.emplace(1, r);
+    BeginMeasure();
+    if (response) host.RespondToRequest(1, 0, L"", L"", {});
+    else host.Navigate(L"x", L"", L"GET", {});
+    RunTasks(); tracking = false;
+    std::printf("MEASURE %s all_allocations=%llu all_bytes=%llu\n", response ? "passthrough" : "get",
+        static_cast<unsigned long long>(allocation_count.load()), static_cast<unsigned long long>(allocation_bytes.load()));
+    if (gates) Check(allocation_count <= (response ? 1 : 2), "empty GET and passthrough add no backing allocation");
+  }
+}
+
+int main(int argc, char**) {
+  bool measure_only = argc > 1;
+  if (!measure_only) {
+    StreamContracts(); ConcurrentCursors(); DispatchContracts(); NavigationIdentityContracts();
+  }
+  Measure(!measure_only);
+  tasks.clear();
+  Check(marshal_created == marshal_destroyed, "all stream marshalers released");
+  std::printf("WebView owned stream: %d checks, %d failures\n", checks.load(), failures.load());
+  return failures == 0 ? 0 : 1;
+}

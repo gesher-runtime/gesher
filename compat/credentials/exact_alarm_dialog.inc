@@ -38,8 +38,7 @@ static INT_PTR CALLBACK ExactAlarmDialogProc(HWND dialog, UINT message, WPARAM w
     if (!heading || !label || !packages || !allowed || !details || !close || !apply) {
       EndDialog(dialog, IDCANCEL); return FALSE;
     }
-    state->heading_font = PermissionFont(dialog, 140, FW_SEMIBOLD);
-    if (state->heading_font) SendMessageW(heading, WM_SETFONT, (WPARAM)state->heading_font, FALSE);
+    GesherHostSetFont(heading, &state->heading_font, 140, FW_SEMIBOLD);
     for (int i = 0; i < state->count; ++i) {
       if (SendMessageW(packages, CB_ADDSTRING, 0, (LPARAM)state->packages[i]) < 0) {
         EndDialog(dialog, IDCANCEL); return FALSE;

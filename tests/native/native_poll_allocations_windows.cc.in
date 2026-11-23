@@ -44,7 +44,63 @@ void operator delete(void* p, size_t) noexcept { ::operator delete(p); }
 void operator delete[](void* p, size_t) noexcept { ::operator delete(p); }
 
 static std::atomic<int> inject_native_error{0};
+// These scripts control only the native call boundary around the extracted
+// production Poll. Socket identity/queries, zero-time confirmation, and the
+// remaining UDP/TCP controls still execute real Winsock operations.
+struct NativeStep {
+  int timeout;
+  std::vector<WSAPOLLFD> input;
+  std::vector<SHORT> add_revents{};
+  int error = 0;
+  SOCKET retire_socket = INVALID_SOCKET;
+  gesher::ws::SocketDescription* retire_description = nullptr;
+  SOCKET drain_socket = INVALID_SOCKET;
+};
+struct NativeScript {
+  std::vector<NativeStep> steps;
+  size_t calls = 0;
+  bool valid = true;
+};
+static thread_local NativeScript* native_script = nullptr;
 static int NativePoll(WSAPOLLFD* fds, ULONG count, INT milliseconds) {
+  if (native_script != nullptr) {
+    auto& script = *native_script;
+    const size_t call = script.calls++;
+    if (call >= script.steps.size()) {
+      script.valid = false;
+      WSASetLastError(WSAEINVAL);
+      return SOCKET_ERROR;
+    }
+    const auto& step = script.steps[call];
+    script.valid &= milliseconds == step.timeout && count == step.input.size() &&
+        (step.add_revents.empty() || step.add_revents.size() == count);
+    for (size_t i = 0; i < count && i < step.input.size(); ++i)
+      script.valid &= fds[i].fd == step.input[i].fd && fds[i].events == step.input[i].events;
+    if (!script.valid) {
+      WSASetLastError(WSAEINVAL);
+      return SOCKET_ERROR;
+    }
+    if (step.retire_socket != INVALID_SOCKET) {
+      script.valid &= ::closesocket(step.retire_socket) == 0 && step.retire_description != nullptr;
+      if (step.retire_description != nullptr) {
+        std::lock_guard<std::mutex> lock(step.retire_description->error_mutex);
+        step.retire_description->native_closed = true;
+      }
+    }
+    if (step.drain_socket != INVALID_SOCKET) {
+      char byte = 0;
+      script.valid &= ::recv(step.drain_socket, &byte, 1, 0) == 1 && byte == 'x';
+    }
+    if (step.error != 0) { WSASetLastError(step.error); return SOCKET_ERROR; }
+    const int result = ::WSAPoll(fds, count, milliseconds);
+    if (result == SOCKET_ERROR) return result;
+    int ready = 0;
+    for (size_t i = 0; i < count; ++i) {
+      if (!step.add_revents.empty()) fds[i].revents |= step.add_revents[i];
+      ready += fds[i].revents != 0;
+    }
+    return ready;
+  }
   const int error = inject_native_error.exchange(0);
   if (error) { WSASetLastError(error); return SOCKET_ERROR; }
   return ::WSAPoll(fds, count, milliseconds);
@@ -110,6 +166,173 @@ static void Empty(SOCKET receiver) {
   while (::recv(receiver, bytes, sizeof(bytes), 0) >= 0) {}
   Check(WSAGetLastError() == WSAEWOULDBLOCK, "drain native UDP queue");
 }
+struct TcpPair { SOCKET sender, receiver; };
+static SOCKET TcpSocket() {
+  const SOCKET socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0,
+                                   WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+  Check(socket != INVALID_SOCKET, "create native TCP socket");
+  return socket;
+}
+static TcpPair Tcp() {
+  const SOCKET listener = TcpSocket();
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  Check(::bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "bind native TCP listener");
+  int length = sizeof(address);
+  Check(::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0, "native TCP listener address");
+  Check(::listen(listener, 1) == 0, "listen native TCP");
+  const SOCKET sender = TcpSocket();
+  Check(::connect(sender, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "connect native TCP");
+  const SOCKET receiver = ::accept(listener, nullptr, nullptr);
+  Check(receiver != INVALID_SOCKET, "accept native TCP");
+  const DWORD timeout = 2000;
+  Check(::setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO,
+                     reinterpret_cast<const char*>(&timeout), sizeof(timeout)) == 0, "bound native TCP receive");
+  Check(::closesocket(listener) == 0, "close native TCP listener");
+  return {sender, receiver};
+}
+static void CloseTcp(TcpPair pair) {
+  Check(::closesocket(pair.sender) == 0 && ::closesocket(pair.receiver) == 0, "close native TCP pair");
+}
+static int ScriptedPoll(NativeScript& script, gesher::ws::PollEntry* entries, size_t count,
+                        int timeout, SOCKET wake = INVALID_SOCKET, bool* woken = nullptr,
+                        gesher::ws::NativePollObserver observer = nullptr, void* context = nullptr) {
+  Check(native_script == nullptr, "native script starts outside another sample");
+  native_script = &script;
+  const int result = gesher::ws::Poll(entries, count, timeout, observer, context, wake, woken);
+  native_script = nullptr;
+  return result;
+}
+static bool ScriptComplete(const NativeScript& script) {
+  return script.valid && script.calls == script.steps.size();
+}
+struct PriorityObserver { unsigned before = 0, after = 0; int result = 0, error = 0; };
+static void ObservePriority(bool before, int result, int error, void* context) {
+  auto& observed = *static_cast<PriorityObserver*>(context);
+  if (before) ++observed.before;
+  else { ++observed.after; observed.result = result; observed.error = error; }
+}
+static void PriorityConfirmationControls(SOCKET queued, SOCKET sender) {
+  using namespace gesher::ws;
+  TcpPair tcp = Tcp();
+  PollEntry priority{tcp.receiver, kPollPri, 123, {}};
+  const std::vector<WSAPOLLFD> input{{tcp.receiver, POLLRDBAND, 0}};
+  NativeScript early{{{10, input, {POLLRDBAND}}, {0, input}}};
+  PriorityObserver observed;
+  const int early_result = ScriptedPoll(early, &priority, 1, 10, INVALID_SOCKET, nullptr,
+                                        ObservePriority, &observed);
+  // This unique assertion is the old-source negative-control signature.
+  Check(early_result == 0 && priority.revents == 0 && ScriptComplete(early),
+        "early TCP priority wake must be confirmed before exposing readiness");
+  Check(observed.before == 1 && observed.after == 1 && observed.result == 1 && observed.error == 0,
+        "priority observer describes only the original native sample");
+
+  NativeScript confirmed{{{10, input, {POLLRDBAND}}, {0, input, {POLLRDBAND}}}};
+  Check(ScriptedPoll(confirmed, &priority, 1, 10) == 1 && priority.revents == kPollPri &&
+            ScriptComplete(confirmed), "confirmed priority performs exactly one zero-time sample");
+  NativeScript immediate{{{0, input, {POLLRDBAND}}}};
+  Check(ScriptedPoll(immediate, &priority, 1, 0) == 1 && priority.revents == kPollPri &&
+            ScriptComplete(immediate), "caller zero-time priority sample is not confirmed again");
+
+  PollEntry ordinary{queued, kPollIn, 0, {}};
+  NativeScript normal{{{10, {{queued, POLLRDNORM, 0}}}}};
+  Check(ScriptedPoll(normal, &ordinary, 1, 10) == 1 && ordinary.revents == kPollIn &&
+            ScriptComplete(normal), "ordinary readable wait performs only its native sample");
+  NativeScript unrequested{{{10, {{queued, POLLRDNORM, 0}}, {POLLRDBAND}}}};
+  Check(ScriptedPoll(unrequested, &ordinary, 1, 10) == 1 && ordinary.revents == kPollIn &&
+            ScriptComplete(unrequested), "unrequested priority bits do not trigger confirmation");
+
+  for (int error : {WSAENETDOWN, WSAENOTSOCK, WSAEINVAL}) {
+    NativeScript failure{{{10, input, {POLLRDBAND}}, {0, input}}};
+    failure.steps[1].error = error;
+    errno = 0;
+    Check(ScriptedPoll(failure, &priority, 1, 10) == -1 && errno == ErrnoFromWsa(error) &&
+              ScriptComplete(failure), "genuine confirmation error is preserved without an unowned retry");
+  }
+
+  sockaddr_in wake_address;
+  const SOCKET wake = Udp(&wake_address);
+  Queue(sender, wake_address);
+  WSAPOLLFD wake_ready{wake, POLLRDNORM, 0};
+  Check(::WSAPoll(&wake_ready, 1, 2000) == 1 && wake_ready.revents == POLLRDNORM,
+        "queued wake is readable before the mixed confirmation observation");
+  const std::vector<WSAPOLLFD> mixed_input{
+      {tcp.receiver, POLLRDBAND, 0}, {queued, POLLRDNORM, 0},
+      {tcp.sender, POLLWRNORM, 0}, {wake, POLLRDNORM, 0}};
+  NativeScript mixed{{{10, mixed_input, {POLLRDBAND, 0, 0, 0}}, {0, mixed_input}}};
+  // Another consumer drains the already-observed wake before confirmation.
+  // Ordinary readiness remains real and must survive on its original entry.
+  mixed.steps[1].drain_socket = wake;
+  PollEntry mixed_entries[] = {{tcp.receiver, kPollPri, 0, {}}, {queued, kPollIn, 0, {}},
+                               {tcp.sender, kPollOut, 0, {}}};
+  bool woken = false;
+  Check(ScriptedPoll(mixed, mixed_entries, 3, 10, wake, &woken) == 2 &&
+            mixed_entries[0].revents == 0 && mixed_entries[1].revents == kPollIn &&
+            mixed_entries[2].revents == kPollOut && woken &&
+            ScriptComplete(mixed), "confirmation preserves mixed readiness and an already-observed wake");
+  Check(::closesocket(wake) == 0, "close confirmation wake socket");
+
+  sockaddr_in retired_address;
+  const SOCKET retiring = Udp(&retired_address);
+  auto description = std::make_shared<SocketDescription>();
+  const std::vector<WSAPOLLFD> retiring_input{
+      {retiring, POLLRDBAND, 0}, {tcp.receiver, POLLRDBAND, 0},
+      {retiring, POLLRDBAND, 0}, {queued, POLLRDNORM, 0}};
+  NativeScript retired{{{10, retiring_input, {POLLRDBAND, 0, POLLRDBAND, 0}}, {0, retiring_input},
+                       {0, {{tcp.receiver, POLLRDBAND, 0}, {queued, POLLRDNORM, 0}}}}};
+  retired.steps[1].retire_socket = retiring;
+  retired.steps[1].retire_description = description.get();
+  retired.steps[1].error = WSAENOTSOCK;
+  PollEntry retirement[] = {{retiring, kPollPri, 0, description},
+                            {tcp.receiver, kPollPri, 0, {}}, {retiring, kPollPri, 0, description},
+                            {queued, kPollIn, 0, {}}};
+  Check(ScriptedPoll(retired, retirement, 4, 10) == 3 &&
+            retirement[0].revents == kPollNval && retirement[1].revents == 0 &&
+            retirement[2].revents == kPollNval && retirement[3].revents == kPollIn && ScriptComplete(retired),
+        "confirmation error retires owned aliases and preserves compacted identities");
+  CloseTcp(tcp);
+  std::puts("native priority confirmation: early/current/zero/read/error/wake/retirement PASS");
+}
+static void RealDelayedPriority() {
+  using namespace gesher::ws;
+  for (int cycle = 0; cycle < 64; ++cycle) {
+    TcpPair pair = Tcp();
+    std::atomic<bool> sent{false};
+    std::thread sender([&] {
+      Sleep(40);
+      char byte = '?';
+      WSABUF buffer{1, &byte};
+      DWORD bytes = 0;
+      sent = WSASendTo(pair.sender, &buffer, 1, &bytes, MSG_OOB,
+                       nullptr, 0, nullptr, nullptr) == 0 && bytes == 1;
+    });
+    PollEntry priority{pair.receiver, kPollPri, 0, {}};
+    // fd.cc owns the public deadline and bounds native socket waits to 10ms.
+    // Exercise that interface here without changing the full TCP contract.
+    const ULONGLONG deadline = GetTickCount64() + 2000;
+    int result = 0;
+    for (;;) {
+      const ULONGLONG now = GetTickCount64();
+      const int wait = now >= deadline ? 0 : static_cast<int>(std::min<ULONGLONG>(10, deadline - now));
+      result = Poll(&priority, 1, wait);
+      if (result != 0 || GetTickCount64() >= deadline) break;
+    }
+    Check(result == 1 && priority.revents == kPollPri, "real delayed urgent arrival meets original deadline");
+    Check(Poll(&priority, 1, 0) == 1 && priority.revents == kPollPri,
+          "real delayed urgent level survives immediate zero sample before sender join");
+    sender.join();
+    Check(sent, "real delayed urgent send completed exactly one byte");
+    char byte = 0;
+    WSABUF buffer{1, &byte};
+    DWORD bytes = 0, flags = MSG_OOB;
+    Check(WSARecvFrom(pair.receiver, &buffer, 1, &bytes, &flags, nullptr, nullptr, nullptr, nullptr) == 0 &&
+              bytes == 1 && byte == '?', "real delayed urgent byte is preserved until receive");
+    Check(Poll(&priority, 1, 0) == 0 && priority.revents == 0, "real consumed urgent level is not cached");
+    CloseTcp(pair);
+  }
+  std::puts("native priority confirmation: 64 real delayed arrivals and strict before-join repolls PASS");
+}
 struct Reentry {
   SOCKET queued, empty;
   bool when_before = true;
@@ -152,6 +375,8 @@ int main(int argc, char** argv) {
   sockaddr_in queued_address, empty_address, sender_address;
   const SOCKET queued = Udp(&queued_address), empty = Udp(&empty_address), sender = Udp(&sender_address);
   Queue(sender, queued_address);
+  PriorityConfirmationControls(queued, sender);
+  RealDelayedPriority();
   PollEntry pair[] = {{queued, kPollIn, 0, {}}, {empty, kPollIn, 0, {}}};
   Check(Poll(pair, 2, 0) == 1 && pair[0].revents == kPollIn && pair[1].revents == 0, "real native readiness order");
   for (int mask = 0; mask < 8; ++mask) {

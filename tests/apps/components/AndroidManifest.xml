@@ -11,6 +11,7 @@
     android:versionName="1.0">
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <application
         android:name=".ComponentsApplication"
         android:label="@string/app_name"
@@ -18,25 +19,35 @@
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <!-- PackageQueryContractTest reads actual parsed properties at each location. -->
         <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:value="73" />
+        <meta-data android:name="android.app.default_searchable"
+            android:value="com.gesher.components.SecondActivity" />
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:value="activity-value" />
+            <meta-data android:name="android.app.default_searchable" android:value=".SecondActivity" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".SecondActivity" android:exported="false" />
+        <activity android:name=".SecondActivity" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.SEARCH" />
+            </intent-filter>
+            <meta-data android:name="android.app.searchable" android:resource="@xml/searchable" />
+        </activity>
         <!-- Real cross-process ComponentCaller lifecycle/URI capability contract. -->
         <activity android:name=".CallerContractActivity" android:exported="true" />
         <activity android:name=".CallerRelayActivity" android:exported="true" />
         <activity android:name=".CallerResultActivity" android:exported="true" />
+        <activity android:name=".SettingsAccessActivity" android:exported="true" />
         <!-- Uses another package's activity and provider (tests/apps/peer); the launcher
              starts it explicitly. Its BROWSABLE custom scheme (as an OAuth redirect's) makes
              gesher-app install register the URL protocol gesher-components (the package
              job, docs/installer.md); nothing starts it through it. -->
         <activity android:name=".CrossActivity" android:exported="true">
+            <meta-data android:name="android.app.default_searchable" android:value="*" />
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -53,10 +64,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <activity android:name=".SpellCheckerActivity" android:exported="true" />
         <service android:name=".CounterService" android:exported="false">
             <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:resource="@string/app_name" />
         </service>
         <service android:name=".LocalService" android:exported="false" />
+        <service android:name=".TestSpellChecker" android:exported="true"
+            android:permission="android.permission.BIND_TEXT_SERVICE" android:process=":checker">
+            <intent-filter>
+                <action android:name="android.service.textservice.SpellCheckerService" />
+            </intent-filter>
+            <meta-data android:name="android.view.textservice.scs" android:resource="@xml/test_spell_checker" />
+        </service>
         <service
             android:name=".ForegroundService"
             android:foregroundServiceType="specialUse"

@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "scope": "Complete SDK36 Wi-Fi Direct service-discovery values; no radio or manager implementation",
+  "source_tag": "android-16.0.0_r4",
+  "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+  "aosp_connectivity_commit": "f930245ec39a510f37a9a7dfaded96d287491a61",
+  "sdk_artifact": {
+    "profile": "SDK36r02",
+    "sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "types": 8,
+    "declared_public_protected_members": 40,
+    "interpretation": "Exact declaration presence denominator, not runtime or behavior coverage percentage"
+  },
+  "production_files": [
+    {
+      "runtime_path": "app/java/android/net/wifi/p2p/nsd/WifiP2pServiceInfo.java",
+      "upstream_path": "framework/java/android/net/wifi/p2p/nsd/WifiP2pServiceInfo.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/nsd/WifiP2pServiceInfo.java",
+      "upstream_git_blob": "3ecc9c28dce2f1cc36e9c21fe7bc8cf686f3c911",
+      "upstream_bytes": 10929,
+      "raw_sha256": "538cbd92c8bdd43932ac5bd6613145e82a74a17b5550f79d3a6fc13a28f7d2c6",
+      "candidate_sha256": "d82cf39aca0fbf0b921cee403523ea7e65ce72b3477efd860fcaa1c3eb4c64d9",
+      "removed_build_annotations": 4,
+      "inlined_release_predicates": 1,
+      "read_only_profile_constants": 1,
+      "tokens_after_listed_adaptations": 748,
+      "adapted_tokens_sha256": "ec01b33ce99a60e66df3624d8b5fa040e69491ece08f69bae9e4784b95cc2c85",
+      "exact_remaining_token_match": true
+    },
+    {
+      "runtime_path": "app/java/android/net/wifi/p2p/nsd/WifiP2pServiceRequest.java",
+      "upstream_path": "framework/java/android/net/wifi/p2p/nsd/WifiP2pServiceRequest.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/nsd/WifiP2pServiceRequest.java",
+      "upstream_git_blob": "a3bebf014c0cd38f76ad63277d8f4107b69213e6",
+      "upstream_bytes": 13728,
+      "raw_sha256": "5e043beb45e51c9755f33bb2403c192a816f6174ccae367c96d33409036c08da",
+      "candidate_sha256": "24cf9e90489834a22d71eee1a8472419719193de8cb40795b577bf245fb291fe",
+      "removed_build_annotations": 4,
+      "inlined_release_predicates": 1,
+      "read_only_profile_constants": 1,
+      "tokens_after_listed_adaptations": 1023,
+      "adapted_tokens_sha256": "5b0727de550aa592ce70790d2e56e47bf77fb1048e94179d4bc70a2c76995f1e",
+      "exact_remaining_token_match": true
+    },
+    {
+      "runtime_path": "app/java/android/net/wifi/p2p/nsd/WifiP2pDnsSdServiceInfo.java",
+      "upstream_path": "framework/java/android/net/wifi/p2p/nsd/WifiP2pDnsSdServiceInfo.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/nsd/WifiP2pDnsSdServiceInfo.java",
+      "upstream_git_blob": "e2f40cfa058c6b5893686ccdb9817e23eaa47b22",
+      "upstream_bytes": 7694,
+      "raw_sha256": "4d483ad5f1f4817eed5a8db96e880df1d2fa37e3af5524e07446c1e8748df56f",
+      "candidate_sha256": "4d483ad5f1f4817eed5a8db96e880df1d2fa37e3af5524e07446c1e8748df56f",
+      "removed_build_annotations": 0,
+      "inlined_release_predicates": 0,
+      "read_only_profile_constants": 0,
+      "tokens_after_listed_adaptations": 844,
+      "adapted_tokens_sha256": "0a3ba40bebeb35901f9c926253403b8ebbde05ddab94b6f1a504c4712fe36c5b",
+      "exact_remaining_token_match": true
+    },
+    {
+      "runtime_path": "app/java/android/net/wifi/p2p/nsd/WifiP2pDnsSdServiceRequest.java",
+      "upstream_path": "framework/java/android/net/wifi/p2p/nsd/WifiP2pDnsSdServiceRequest.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/nsd/WifiP2pDnsSdServiceRequest.java",
+      "upstream_git_blob": "d5415e055b2182726a67842a2703e269d2343156",
+      "upstream_bytes": 3785,
+      "raw_sha256": "4282a265191a82562e71d0643c58669a3db11d78952e753cef6302c918c30dba",
+      "candidate_sha256": "4a9d8c2cf6e049bc7d5ebc919be6d497872bf660e425738af1b67f03d5dba9ce",
+      "removed_build_annotations": 0,
+      "inlined_release_predicates": 0,
+      "read_only_profile_constants": 0,
+      "tokens_after_listed_adaptations": 196,
+      "adapted_tokens_sha256": "18c8e6a4392a13ea04d99de49b6593c415115d21cc94f24d7251bed809a91f52",
+      "exact_remaining_token_match": true
+    },
+    {
+      "runtime_path": "app/java/android/net/wifi/p2p/nsd/WifiP2pUpnpServiceInfo.java",
+      "upstream_path": "framework/java/android/net/wifi/p2p/nsd/WifiP2pUpnpServiceInfo.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/nsd/WifiP2pUpnpServiceInfo.java",
+      "upstream_git_blob": "a4cdfd97f20d6f439c6caa9dad6e87e2a34f78e1",
+      "upstream_bytes": 3784,
+      "raw_sha256": "6f4f2b9a513d334b967ac3fef5292dabbb64db625e44a903afef0b1e7f14374c",
+      "candidate_sha256": "6f4f2b9a513d334b967ac3fef5292dabbb64db625e44a903afef0b1e7f14374c",
+      "removed_build_annotations": 0,
+      "inlined_release_predicates": 0,
+      "read_only_profile_constants": 0,
+      "tokens_after_listed_adaptations": 291,
+      "adapted_tokens_sha256": "05f6b664eafcf76731d1fc41f06bd5df80b8cc9351962f25231fb3d1c7e8df1e",
+      "exact_remaining_token_match": true
+    },
+    {
+      "runtime_path": "app/java/android/net/wifi/p2p/nsd/WifiP2pUpnpServiceRequest.java",
+      "upstream_path": "framework/java/android/net/wifi/p2p/nsd/WifiP2pUpnpServiceRequest.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/nsd/WifiP2pUpnpServiceRequest.java",
+      "upstream_git_blob": "98e447e37bae97bab51857a7337822193e5cacf3",
+      "upstream_bytes": 2697,
+      "raw_sha256": "bb2267a4c07d9d9ebdfd220bc6b9ca1499006a1b90c29fe2b14eb45754ccafd2",
+      "candidate_sha256": "1f082ead8fd769d3f3bb8ac98881e6e6863a9af201c4d57399fd5ae8636f79f0",
+      "removed_build_annotations": 0,
+      "inlined_release_predicates": 0,
+      "read_only_profile_constants": 0,
+      "tokens_after_listed_adaptations": 151,
+      "adapted_tokens_sha256": "7caedbc0f34954c2709e76763535a5d7ba0da11deeeb948e916cd0c48ed76339",
+      "exact_remaining_token_match": true
+    },
+    {
+      "runtime_path": "app/java/android/net/wifi/p2p/nsd/WifiP2pUsdBasedServiceConfig.java",
+      "upstream_path": "framework/java/android/net/wifi/p2p/nsd/WifiP2pUsdBasedServiceConfig.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/nsd/WifiP2pUsdBasedServiceConfig.java",
+      "upstream_git_blob": "74834f3d4433fc720f35dd48628a4bf34679fc20",
+      "upstream_bytes": 10034,
+      "raw_sha256": "b89c291dd9e5e296f880150b853a111cac1f32a22275ba09da2bdc938e0992e5",
+      "candidate_sha256": "d56e3a307edfcbd753e2deffa7e180bb9f00aa913973e45e84c7594b2e95aec7",
+      "removed_build_annotations": 2,
+      "inlined_release_predicates": 0,
+      "read_only_profile_constants": 0,
+      "tokens_after_listed_adaptations": 726,
+      "adapted_tokens_sha256": "4d1d853949db613cbd96bb89499ae75ac6897f36a63317533ba7bd078b27dee7",
+      "exact_remaining_token_match": true
+    }
+  ],
+  "helper": {
+    "repository": "platform/packages/modules/Connectivity",
+    "tag": "android-16.0.0_r4",
+    "commit": "f930245ec39a510f37a9a7dfaded96d287491a61",
+    "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/f930245ec39a510f37a9a7dfaded96d287491a61/staticlibs/framework/com/android/net/module/util/DnsSdTxtRecord.java?format=TEXT",
+    "path": "staticlibs/framework/com/android/net/module/util/DnsSdTxtRecord.java",
+    "raw_sha256": "65b124f656064af1dee6de5646305ac9b06668ae7fc2a423c0a84a56ec27962f",
+    "git_blob": "760891b9fca570ccff5a390046252b23738a109b",
+    "production_adaptation": "none: retain existing complete framework runtime provider; no new app duplicate",
+    "cached_classfile_limit": "directory name not source identity; disassembly and retained runtime DEX checked independently",
+    "source_selection": "framework-minus-apex -> framework-non-updatable-sources -> net-utils-framework-common-srcs -> Connectivity staticlibs/framework/**/*.java; DnsSdTxtRecord not renamed by pinned framework jarjar rules",
+    "isolated_oracle": "fresh complete pinned helper compiled into candidate and pinned graphs; no SDK-only implementations"
+  },
+  "helper_class_evidence": {
+    "DnsSdTxtRecord": {
+      "fresh_sha256": "9902098c130fe739723c108e31eb5dbbe0478b25c111702b5bc366f261f2a12d",
+      "cached_sha256": "54a9659343b4fc95c74cadcfc40f12deb0a0bcc9591c97d95ea2a8d32feb3a54",
+      "byte_identical": false,
+      "exact_javap_disassembly_match": true
+    },
+    "DnsSdTxtRecord$1": {
+      "fresh_sha256": "07f7e0f7dc5681138b12c2491d734f8c4c4cc90bd670b5e14d4f64efb4440d65",
+      "cached_sha256": "794c697303fecaff9e033d2016be253cce8d323600b1e18f66dcad6fe0ea9741",
+      "byte_identical": false,
+      "exact_javap_disassembly_match": true
+    }
+  },
+  "adaptations": [
+    "Remove unavailable FlaggedApi/RequiresApi build annotations and their imports.",
+    "Inline exact Environment.isSdkAtLeastB predicate in the two base classes: codename Baklava or SDK_INT >= BAKLAVA.",
+    "Select verified bp4a READ_ONLY wifi_direct_r2=true in the two base Parcel guards.",
+    "Remove three unused Javadoc-only WifiP2pManager imports."
+  ],
+  "release_profile": {
+    "name": "bp4a",
+    "wifi_direct_r2": {
+      "enabled": true,
+      "read_only": true
+    },
+    "verified_inputs": {
+      "release_configs/bp4a.textproto": "3f0a1de927826a70b2165ea6b2b378b87a78995d30645b44e741d82b5792871a",
+      "release_configs/bp3a.textproto": "31b921df4dc487f4aa4dcb5ff3a019db1899817a1d134506541066b35cd2810b",
+      "release_configs/bp2a.textproto": "ec6eff13fe0f08bed831f59a50bc33289efdcbb5136a618dfae18cee0cda9e5f",
+      "aconfig/bp2a/com.android.wifi.flags/wifi_direct_r2_flag_values.textproto": "22dfdbf299d52f56193a4036f2ad4a310b99107e448c298b6e7e21517c77420f"
+    },
+    "all_generated_values_sha256": "adb87bdc6e6c522fabf78ae64774adc4b4158f24318c05cf4f100a8ef3e632d2"
+  },
+  "licenses": "Original Apache-2.0 Wi-Fi headers retained; complete helper retains Apple copyright and Apache-2.0 notice.",
+  "isolated_reference": {
+    "manifest_sha256": "52227974fcbad8e6f76c30a3f9084abe03d4908bb81f945aef64a8a17bb77eb1",
+    "upstream_sources": {
+      "WifiP2pServiceInfo.java": {
+        "raw_sha256": "538cbd92c8bdd43932ac5bd6613145e82a74a17b5550f79d3a6fc13a28f7d2c6",
+        "compiled_source_sha256": "b6ac6d4b10fe4b69f50dcf737b8301d027a2c107ff3cfa1152dea76574274507",
+        "removed_build_annotations": 4,
+        "adaptations": [
+          "unavailable build annotations removed"
+        ],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "WifiP2pServiceRequest.java": {
+        "raw_sha256": "5e043beb45e51c9755f33bb2403c192a816f6174ccae367c96d33409036c08da",
+        "compiled_source_sha256": "7868071589b90238d4e3929af207411daf19abac90f52b2f9a15836041482687",
+        "removed_build_annotations": 4,
+        "adaptations": [
+          "unavailable build annotations removed"
+        ],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "WifiP2pDnsSdServiceInfo.java": {
+        "raw_sha256": "4d483ad5f1f4817eed5a8db96e880df1d2fa37e3af5524e07446c1e8748df56f",
+        "compiled_source_sha256": "4d483ad5f1f4817eed5a8db96e880df1d2fa37e3af5524e07446c1e8748df56f",
+        "removed_build_annotations": 0,
+        "adaptations": [],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "WifiP2pDnsSdServiceRequest.java": {
+        "raw_sha256": "4282a265191a82562e71d0643c58669a3db11d78952e753cef6302c918c30dba",
+        "compiled_source_sha256": "4282a265191a82562e71d0643c58669a3db11d78952e753cef6302c918c30dba",
+        "removed_build_annotations": 0,
+        "adaptations": [],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "WifiP2pUpnpServiceInfo.java": {
+        "raw_sha256": "6f4f2b9a513d334b967ac3fef5292dabbb64db625e44a903afef0b1e7f14374c",
+        "compiled_source_sha256": "6f4f2b9a513d334b967ac3fef5292dabbb64db625e44a903afef0b1e7f14374c",
+        "removed_build_annotations": 0,
+        "adaptations": [],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "WifiP2pUpnpServiceRequest.java": {
+        "raw_sha256": "bb2267a4c07d9d9ebdfd220bc6b9ca1499006a1b90c29fe2b14eb45754ccafd2",
+        "compiled_source_sha256": "bb2267a4c07d9d9ebdfd220bc6b9ca1499006a1b90c29fe2b14eb45754ccafd2",
+        "removed_build_annotations": 0,
+        "adaptations": [],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "WifiP2pUsdBasedServiceConfig.java": {
+        "raw_sha256": "b89c291dd9e5e296f880150b853a111cac1f32a22275ba09da2bdc938e0992e5",
+        "compiled_source_sha256": "76f417273e7345e69f210540d5de80d028090d1d2752ccc97a325ffbb07d56cf",
+        "removed_build_annotations": 2,
+        "adaptations": [
+          "unavailable build annotations removed"
+        ],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "DnsSdTxtRecord.java": {
+        "raw_sha256": "65b124f656064af1dee6de5646305ac9b06668ae7fc2a423c0a84a56ec27962f",
+        "compiled_source_sha256": "65b124f656064af1dee6de5646305ac9b06668ae7fc2a423c0a84a56ec27962f",
+        "removed_build_annotations": 0,
+        "adaptations": [],
+        "full_value_fields_and_original_readers_retained": true
+      },
+      "Environment.java": {
+        "raw_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+        "compiled_source_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+        "removed_build_annotations": 0,
+        "adaptations": [],
+        "full_value_fields_and_original_readers_retained": true
+      }
+    },
+    "artifacts": {
+      "candidate-classes.jar": {
+        "sha256": "c56253ac5fe2ee8a3cc625922caeaef6cf2bdb3cb9e137f9b5a6de2265f9e679",
+        "bytes": 41373
+      },
+      "candidate.jar": {
+        "sha256": "a5b9e947b314dbfc83c8e8822df32a8ba5cc700f78e4ae94dcd0883c79fed90e",
+        "bytes": 24728
+      },
+      "launcher-classes.jar": {
+        "sha256": "e0382d4fd5f7350650d8c7730f681f70a3d88a781a07fa2fa56cb51856c83587",
+        "bytes": 5260
+      },
+      "launcher.jar": {
+        "sha256": "07f7ce61447cc820371f00ff825174e219efc4ce884420c9a9d0f6be26d25630",
+        "bytes": 4998
+      },
+      "pinned-r4-classes.jar": {
+        "sha256": "1fa9a7ea7034c730b9aab42d672419c54902c618dd023f794a4419fe36cf7efd",
+        "bytes": 49773
+      },
+      "pinned-r4.jar": {
+        "sha256": "3f027785d96c395d36f9d0ac3c0f77381c8c53f038eb9c4dd8c43e8ff1128b2a",
+        "bytes": 30418
+      },
+      "stock-classes.jar": {
+        "sha256": "c55c343c37c5dd11327ffead3783316070ca5a96f8e0373f749843d7e241b9d7",
+        "bytes": 20259
+      },
+      "stock.jar": {
+        "sha256": "8f810b25d60b320c2037cc438dc56ebc336fba9eb8de72e26dab07c96675194e",
+        "bytes": 16974
+      }
+    },
+    "source_freeze": {
+      "review_commit": "3869fe7aaa80d2e63cc214b5353d3451caadc9b9",
+      "review_tree": "da561ee2d36e15371cfe6a0d9289aee2542bb99f",
+      "clean": true,
+      "all_capsule_source_files_match": true,
+      "capsule_manifest_sha256": "52227974fcbad8e6f76c30a3f9084abe03d4908bb81f945aef64a8a17bb77eb1",
+      "capsule_build_head": "046cc3d531f9c67a280baeda26c09dad912d95de",
+      "note": "capsule binds exact file hashes; review source committed after successful local build without source changes",
+      "author": "palmoni5 <216508796+palmoni5@users.noreply.github.com>",
+      "committer": "palmoni5 <216508796+palmoni5@users.noreply.github.com>",
+      "push_url": "disabled://connector-only"
+    }
+  },
+  "independent_preflight": {
+    "reviewer": "/root",
+    "receipt_sha256": "65f8ac5a88836f5cc0b0eb965a52aa76d75123d199d8473d760c344d3bfb48fc",
+    "scope": "Source/graph/artifact preflight only; final implementation QA separate"
+  }
+}

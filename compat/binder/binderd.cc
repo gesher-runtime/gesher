@@ -29,6 +29,7 @@
 // (BR_TRANSACTION_SEC_CTX), freezing, priority inheritance, polling; such
 // transactions fail with BR_FAILED_REPLY.
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -38,8 +39,10 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <deque>
 #include <list>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -49,6 +52,7 @@
 #include <linux/android/binder.h>
 
 #include "../posix/src/binder_wire.h"
+#include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 
 namespace {
@@ -157,15 +161,15 @@ struct Buffer {
   std::vector<uint8_t> data;
   std::vector<uint64_t> offsets;
   std::vector<uint8_t> extra;
+  std::vector<wire::FileDescription> descriptions;
 };
 
 struct Transaction : Work {
   int debug_id = 0;
-  Thread* from = nullptr;
+  std::shared_ptr<Thread> from;
   int from_pid = 0;
   Transaction* from_parent = nullptr;
-  Proc* to_proc = nullptr;
-  Thread* to_thread = nullptr;
+  std::shared_ptr<Thread> to_thread;
   Transaction* to_parent = nullptr;
   bool need_reply = false;
   uint32_t code = 0;
@@ -175,8 +179,8 @@ struct Transaction : Work {
   Transaction() : Work(WorkType::kTransaction) {}
 };
 
-struct Thread {
-  Proc* proc = nullptr;
+struct Thread : std::enable_shared_from_this<Thread> {
+  std::shared_ptr<Proc> proc;
   int tid = 0;
   uint32_t looper = 0;
   bool looper_need_return = true;
@@ -213,10 +217,11 @@ struct Proc {
 
 // Every object is guarded by one lock, as the driver's are by its locks; the
 // broker's threads only block on their thread's condition variable, which
-// releases it. Procs and threads are never freed (transactions may still
-// name them after they die); nodes, refs, transactions and buffers are.
+// releases it. Connection scopes own threads and processes; transactions pin
+// their caller/receiver threads, and each thread pins its process. Registry
+// lists remain non-owning and are detached under this lock before destruction.
 std::mutex g_lock;
-std::map<uint32_t, Proc*> g_procs;
+std::map<uint32_t, std::shared_ptr<Proc>> g_procs;
 Node* g_context_mgr_node = nullptr;
 uint32_t g_next_proc_id = 1;
 uint64_t g_next_buffer_id = 1;
@@ -492,6 +497,20 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
   CloseHandle(p);
 }
 
+wire::FileDescription* DescriptionAt(Buffer* buffer, uint64_t offset) {
+  // The manifest is ordered like the validated, strictly increasing offsets.
+  auto found = std::lower_bound(buffer->descriptions.begin(), buffer->descriptions.end(), offset,
+      [](const wire::FileDescription& entry, uint64_t value) { return entry.object_offset < value; });
+  return found != buffer->descriptions.end() && found->object_offset == offset ? &*found : nullptr;
+}
+
+void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
+  if (auto* description = DescriptionAt(buffer, offset)) {
+    CloseRemoteHandle(buffer->proc->pid, description->shared_handle);
+    description->shared_handle = 0;
+  }
+}
+
 // binder_transaction_buffer_release: drops the references a buffer's objects
 // hold, in the receiver's terms.
 void ReleaseBufferObjects(Buffer* buffer) {
@@ -517,6 +536,7 @@ void ReleaseBufferObjects(Buffer* buffer) {
         // Staging handles always belong to the broker. Successful delivery
         // already closes/zeros them; abort/release closes any still present.
         CloseRemoteHandle(proc->pid, fp.binder);
+        CloseStagingDescription(buffer, off);
         break;
       default:
         break;
@@ -558,7 +578,7 @@ void PopTransaction(Thread* target_thread, Transaction* t) {
 // that its call failed.
 void SendFailedReply(Transaction* t, uint32_t error_code) {
   for (;;) {
-    Thread* target_thread = t->from;
+    Thread* target_thread = t->from.get();
     if (target_thread != nullptr && !target_thread->is_dead) {
       PopTransaction(target_thread, t);
       if (target_thread->reply_error.cmd == BR_OK) {
@@ -637,6 +657,7 @@ struct TransactionData {
   uint64_t buffers_size = 0;
   int32_t copy_error = 0;
   std::vector<uint8_t> extra;
+  std::vector<wire::FileDescription> descriptions;
 };
 
 // Translates the objects of a buffer from the sender's terms (proc) to the
@@ -684,6 +705,17 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
       }
       uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
       if (dup == 0) return BR_FAILED_REPLY;
+      auto* description = DescriptionAt(buffer, off);
+      uint64_t shared = description
+          ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
+      // Sockets and completed native fences are typed handles without an OFD.
+      const bool typed = description && (description->kind == wire::kSocketFileDescription ||
+                                         description->kind == wire::kNativeFenceFileDescription);
+      if (!description || (!typed && shared == 0)) {
+        CloseRemoteHandle(target_proc->pid, dup);
+        return BR_FAILED_REPLY;
+      }
+      description->shared_handle = shared;
       TRACE("proc %u: fd handle %llx -> %llx in proc %u", proc->id,
             (unsigned long long)fp.binder, (unsigned long long)dup, target_proc->id);
       fp.binder = dup;
@@ -759,20 +791,20 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       Log("proc %u thread %d: reply with no transaction stack", proc->id, thread->tid);
       return fail(BR_FAILED_REPLY);
     }
-    if (in_reply_to->to_thread != thread) {
+    if (in_reply_to->to_thread.get() != thread) {
       Log("proc %u thread %d: reply to a transaction of another thread", proc->id, thread->tid);
       in_reply_to = nullptr;
       return fail(BR_FAILED_REPLY);
     }
     thread->transaction_stack = in_reply_to->to_parent;
-    target_thread = in_reply_to->from;
+    target_thread = in_reply_to->from.get();
     if (target_thread == nullptr || target_thread->is_dead) return fail(BR_DEAD_REPLY);
     if (target_thread->transaction_stack != in_reply_to) {
       Log("proc %u: reply out of order", proc->id);
       in_reply_to = nullptr;
       return fail(BR_FAILED_REPLY);
     }
-    target_proc = target_thread->proc;
+    target_proc = target_thread->proc.get();
   } else {
     Node* node;
     if (tr.target.handle != 0) {
@@ -797,7 +829,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
     }
     if ((tr.flags & TF_ONE_WAY) == 0 && thread->transaction_stack != nullptr) {
       Transaction* tmp = thread->transaction_stack;
-      if (tmp->to_thread != thread) {
+      if (tmp->to_thread.get() != thread) {
         Log("proc %u thread %d: new transaction not at the top of its stack", proc->id,
             thread->tid);
         return fail(BR_FAILED_REPLY);
@@ -805,8 +837,8 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       // A nested call goes to the thread of the target process that waits
       // for this thread's (or an outer) call.
       while (tmp != nullptr) {
-        Thread* from = tmp->from;
-        if (from != nullptr && from->proc == target_proc) {
+        Thread* from = tmp->from.get();
+        if (from != nullptr && from->proc.get() == target_proc) {
           target_thread = from;
           break;
         }
@@ -816,18 +848,18 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   }
   gesher::binder_sg::Layout sg_layout;
   if (td.copy_error != 0 ||
-      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout)) {
+      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout) ||
+      !wire::ValidFileDescriptions(td.data, td.offsets, td.descriptions)) {
     Log("proc %u: invalid transaction user copy or scatter-gather layout", proc->id);
     return fail(BR_FAILED_REPLY);
   }
 
   Transaction* t = new Transaction;
   t->debug_id = g_next_debug_id++;
-  t->from = (!reply && (tr.flags & TF_ONE_WAY) == 0) ? thread : nullptr;
+  t->from = (!reply && (tr.flags & TF_ONE_WAY) == 0) ? thread->shared_from_this() : nullptr;
   t->from_pid = proc->pid;
   t->sender_euid = proc->uid;
-  t->to_proc = target_proc;
-  t->to_thread = target_thread;
+  t->to_thread = target_thread != nullptr ? target_thread->shared_from_this() : nullptr;
   t->code = tr.code;
   t->flags = tr.flags;
 
@@ -841,6 +873,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   buffer->data = std::move(td.data);
   buffer->offsets = std::move(td.offsets);
   buffer->extra = std::move(td.extra);
+  buffer->descriptions = std::move(td.descriptions);
   target_proc->buffers[buffer->id] = buffer;
   t->buffer = buffer;
 
@@ -930,18 +963,19 @@ void CloseStagingFds(Buffer* buffer) {
     object.pad_binder = 0;
     memcpy(buffer->data.data() + offset, &object, sizeof(object));
     CloseRemoteHandle(buffer->proc->pid, staging);
+    CloseStagingDescription(buffer, offset);
   }
 }
 
 // Roll back a delivery the receiver could not publish. A synchronous caller
 // gets a genuine failed reply; oneway queue ownership is released normally.
 int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
-  Proc* proc = thread->proc;
+  Proc* proc = thread->proc.get();
   auto found = proc->buffers.find(id);
   if (id == 0 || thread->pending_buffer != id || found == proc->buffers.end()) return -EINVAL;
   Buffer* buffer = found->second;
   Transaction* transaction = buffer->transaction;
-  if (transaction != nullptr && (transaction->to_thread != thread || thread->transaction_stack != transaction)) {
+  if (transaction != nullptr && (transaction->to_thread.get() != thread || thread->transaction_stack != transaction)) {
     return -EINVAL;
   }
   if (accepted && !thread->pending_buffer_claimed) return -EINVAL;
@@ -966,7 +1000,7 @@ int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
 void ThreadRelease(Thread* thread) {
   if (thread->is_dead) return;
   if (thread->pending_buffer != 0) FinishBuffer(thread, thread->pending_buffer, false);
-  Proc* proc = thread->proc;
+  Proc* proc = thread->proc.get();
   proc->threads.remove(thread);
   if (thread->waiting) {
     proc->waiting_threads.remove(thread);
@@ -974,14 +1008,13 @@ void ThreadRelease(Thread* thread) {
   }
   Transaction* t = thread->transaction_stack;
   Transaction* send_reply = nullptr;
-  if (t != nullptr && t->to_thread == thread) send_reply = t;
+  if (t != nullptr && t->to_thread.get() == thread) send_reply = t;
   thread->is_dead = true;
   while (t != nullptr) {
-    if (t->to_thread == thread) {
-      t->to_proc = nullptr;
+    if (t->to_thread.get() == thread) {
       t->to_thread = nullptr;
       t = t->to_parent;
-    } else if (t->from == thread) {
+    } else if (t->from.get() == thread) {
       t->from = nullptr;
       t = t->from_parent;
     } else {
@@ -1166,14 +1199,22 @@ int ThreadWrite(Proc* proc, Thread* thread, In in, uint32_t* consumed) {
         if (!in.Get(&td.copy_error)) return -EFAULT;
         if (td.copy_error == 0) {
           if (!gesher::binder_sg::Dimensions(td.tr.data_size, td.tr.offsets_size, td.buffers_size)) return -EINVAL;
-          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size;
+          uint32_t description_count;
+          if (!in.Get(&description_count) || description_count > td.tr.offsets_size / sizeof(binder_size_t) ||
+              description_count > wire::kMaxFileDescriptions)
+            return -EINVAL;
+          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size +
+              static_cast<uint64_t>(description_count) * sizeof(wire::FileDescription);
           if (body_size > static_cast<uint64_t>(in.end - in.p)) return -EFAULT;
           td.data.resize(td.tr.data_size);
           td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
           td.extra.resize(td.buffers_size);
+          td.descriptions.resize(description_count);
           if (!in.Read(td.data.data(), td.data.size()) ||
               !in.Read(td.offsets.data(), td.tr.offsets_size) ||
-              !in.Read(td.extra.data(), td.extra.size())) return -EFAULT;
+              !in.Read(td.extra.data(), td.extra.size()) ||
+              !in.Read(td.descriptions.data(), td.descriptions.size() * sizeof(wire::FileDescription)))
+            return -EFAULT;
         }
         DoTransaction(proc, thread, td, cmd == BC_REPLY || cmd == BC_REPLY_SG);
         break;
@@ -1452,14 +1493,16 @@ retry:
     rs->size += sizeof(tr);
     rs->out.Put(buffer->id);
     rs->out.Put<uint64_t>(buffer->extra.size());
+    rs->out.Put<uint32_t>(static_cast<uint32_t>(buffer->descriptions.size()));
     rs->out.Write(buffer->data.data(), buffer->data.size());
     rs->out.Write(buffer->offsets.data(), tr.offsets_size);
     rs->out.Write(buffer->extra.data(), buffer->extra.size());
+    rs->out.Write(buffer->descriptions.data(), buffer->descriptions.size() * sizeof(wire::FileDescription));
     TRACE("proc %u thread %d: %s %d delivered", proc->id, thread->tid,
           cmd == BR_REPLY ? "reply" : "transaction", t->debug_id);
     if (cmd != BR_REPLY && (t->flags & TF_ONE_WAY) == 0) {
       t->to_parent = thread->transaction_stack;
-      t->to_thread = thread;
+      t->to_thread = thread->shared_from_this();
       thread->transaction_stack = t;
     } else {
       FreeTransaction(t);
@@ -1535,14 +1578,15 @@ uint64_t RandomKey() {
 void ServeProc(HANDLE pipe, In in) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
-  Proc* proc = new Proc;
+  auto proc_owner = std::make_shared<Proc>();
+  Proc* proc = proc_owner.get();
   {
     std::lock_guard<std::mutex> lock(g_lock);
     proc->id = g_next_proc_id++;
     proc->key = RandomKey();
     proc->pid = static_cast<int>(pid);
     proc->uid = uid;
-    g_procs[proc->id] = proc;
+    g_procs[proc->id] = proc_owner;
   }
   TRACE("proc %u: pid %u opened the device", proc->id, pid);
   WireReply reply;
@@ -1557,6 +1601,240 @@ void ServeProc(HANDLE pipe, In in) {
     }
   }
   ProcRelease(proc);
+}
+
+// --- the descriptor broker (ADR 0088 section 3) --------------------------------------
+//
+// SCM_RIGHTS on Gesher's AF_UNIX socketpairs. A deposited group of
+// descriptors is a set of handles this process owns (duplicated from the
+// sender), with each descriptor's metadata. It leaves when a receiver claims
+// it (by token: datagram pairs carry the token in the message), takes it from
+// its stream connection's queue once it has read the bytes sent with it (the
+// group's position, binder_wire.h), or the sender cancels it. As on Linux,
+// descriptors in flight outlive their sender.
+
+struct RightsEntry {
+  HANDLE handle;
+  uint64_t metadata;
+  HANDLE shared;
+  uint32_t kind;
+};
+
+struct RightsGroup {
+  uint64_t token[2] = {};
+  uint64_t queue = 0;  // 0: claimed by token only
+  uint64_t position = 0;  // a queued group's: where its bytes begin
+  std::vector<RightsEntry> entries;
+};
+
+std::mutex g_rights_lock;
+std::map<std::pair<uint64_t, uint64_t>, std::shared_ptr<RightsGroup>> g_rights_groups;
+std::map<uint64_t, std::deque<std::shared_ptr<RightsGroup>>> g_rights_queues;
+uint32_t g_rights_in_flight = 0;
+volatile LONG64* g_rights_doorbell = nullptr;  // wire::kRightsDoorbellSlots values
+
+// Publishes the lowest position waiting for the receiving port of `queue`
+// (binder_wire.h's doorbell); g_rights_lock held. Every queue of that port
+// counts: the doorbell is per port.
+void RefreshDoorbell(uint64_t queue) {
+  if (g_rights_doorbell == nullptr || queue == 0) return;
+  const uint64_t port = (queue >> 16) & 0xffff;
+  uint64_t lowest = UINT64_MAX;
+  for (auto it = g_rights_queues.lower_bound(port << 16);
+       it != g_rights_queues.end() && (it->first >> 16) == port; ++it) {
+    for (const auto& group : it->second) lowest = std::min(lowest, group->position);
+  }
+  InterlockedExchange64(&g_rights_doorbell[port],
+                        lowest == UINT64_MAX ? 0 : static_cast<LONG64>(lowest + 1));
+}
+
+// g_rights_lock held.
+void CloseRightsGroup(RightsGroup* group) {
+  for (const RightsEntry& e : group->entries) {
+    CloseHandle(e.handle);
+    if (e.shared) CloseHandle(e.shared);
+  }
+  g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
+  group->entries.clear();
+}
+
+// Moves a group's handles into `to` (the caller's process); g_rights_lock held.
+// Each handle the broker held is closed, delivered or not; one that cannot be
+// delivered is reported as handle 0, which the receiver reports as a failure.
+void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
+  for (const RightsEntry& e : group->entries) {
+    HANDLE out = nullptr, shared = nullptr;
+    bool ok = DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE,
+                               DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE);
+    if (e.shared && !DuplicateHandle(GetCurrentProcess(), e.shared, to, &shared, 0, FALSE,
+                                    DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)) ok = false;
+    if (!ok) {
+      Log("rights: DuplicateHandle into the receiver failed: %lu", GetLastError());
+      if (out) DuplicateHandle(to, out, nullptr, nullptr, 0, FALSE, DUPLICATE_CLOSE_SOURCE);
+      if (shared) DuplicateHandle(to, shared, nullptr, nullptr, 0, FALSE, DUPLICATE_CLOSE_SOURCE);
+      out = shared = nullptr;
+    }
+    reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out)));
+    reply->Put<uint64_t>(e.metadata);
+    reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(shared)));
+    reply->Put<uint32_t>(e.kind);
+  }
+  g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
+  group->entries.clear();
+}
+
+void ServeRights(HANDLE pipe, In in) {
+  uint32_t version;
+  ULONG client_pid = 0;
+  HANDLE client = nullptr;
+  if (in.Get(&version) && version == wire::kRightsVersion &&
+      GetNamedPipeClientProcessId(pipe, &client_pid)) {
+    client = OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid);
+  }
+  WireReply hello;
+  hello.Put<int32_t>(client != nullptr ? 0 : -ESRCH);
+  if (!WriteMessage(pipe, hello) || client == nullptr) {
+    if (client != nullptr) CloseHandle(client);
+    return;
+  }
+  std::vector<uint8_t> msg;
+  while (ReadMessage(pipe, &msg)) {
+    In req{msg.data(), msg.data() + msg.size()};
+    uint32_t op;
+    if (!req.Get(&op)) break;
+    WireReply reply;
+    if (op == wire::kRightsDeposit) {
+      uint64_t queue, position;
+      uint32_t count;
+      if (!req.Get(&queue) || !req.Get(&position) || !req.Get(&count) || count == 0 ||
+          count > wire::kRightsMaxPerMessage) {
+        break;
+      }
+      auto group = std::make_shared<RightsGroup>();
+      group->queue = queue;
+      group->position = position;
+      int32_t status = 0;
+      for (uint32_t i = 0; i < count; ++i) {
+        uint64_t handle, metadata, shared_handle;
+        uint32_t kind;
+        if (!req.Get(&handle) || !req.Get(&metadata) || !req.Get(&shared_handle) || !req.Get(&kind) ||
+            handle == 0 || handle > UINTPTR_MAX || shared_handle > UINTPTR_MAX ||
+            (kind == wire::kSocketFileDescription
+              ? shared_handle != 0 || (metadata & 1) == 0
+              : kind == wire::kNativeFenceFileDescription
+              ? shared_handle != 0 || metadata != wire::kCompletedNativeFenceMetadata
+              : kind > 2 || shared_handle == 0 || metadata != 0)) {
+          status = -EINVAL;
+          break;
+        }
+        HANDLE own = nullptr, shared = nullptr;
+        if (!DuplicateHandle(client, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)),
+                             GetCurrentProcess(), &own, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          Log("rights: DuplicateHandle from pid %lu failed: %lu", client_pid, GetLastError());
+          status = -EBADF;
+          break;
+        }
+        if (shared_handle && !DuplicateHandle(client,
+              reinterpret_cast<HANDLE>(static_cast<uintptr_t>(shared_handle)), GetCurrentProcess(),
+              &shared, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          CloseHandle(own);
+          status = -EBADF;
+          break;
+        }
+        group->entries.push_back({own, metadata, shared, kind});
+      }
+      if (status == 0 &&
+          !BCRYPT_SUCCESS(BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(group->token),
+                                          sizeof(group->token),
+                                          BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+        status = -EIO;
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_rights_lock);
+        g_rights_in_flight += static_cast<uint32_t>(group->entries.size());
+        if (status == 0 && g_rights_in_flight > wire::kRightsMaxInFlight) status = -ETOOMANYREFS;
+        if (status != 0) {
+          CloseRightsGroup(group.get());
+        } else {
+          g_rights_groups[{group->token[0], group->token[1]}] = group;
+          if (queue != 0) {
+            g_rights_queues[queue].push_back(group);
+            RefreshDoorbell(queue);
+          }
+        }
+      }
+      TRACE("rights: pid %lu deposited %u descriptor(s), queue %llx at %llu: %d", client_pid,
+            count, (unsigned long long)queue, (unsigned long long)position, status);
+      reply.Put<int32_t>(status);
+      reply.Put<uint64_t>(status == 0 ? group->token[0] : 0);
+      reply.Put<uint64_t>(status == 0 ? group->token[1] : 0);
+    } else if (op == wire::kRightsClaim || op == wire::kRightsCancel) {
+      uint64_t token[2];
+      if (!req.Get(&token[0]) || !req.Get(&token[1])) break;
+      std::lock_guard<std::mutex> lock(g_rights_lock);
+      auto it = g_rights_groups.find({token[0], token[1]});
+      std::shared_ptr<RightsGroup> group;
+      if (it != g_rights_groups.end()) {
+        group = it->second;
+        if (group->queue != 0) {
+          // A queued group leaves by its queue (take) or its sender's cancel.
+          auto q = g_rights_queues.find(group->queue);
+          bool queued = false;
+          if (q != g_rights_queues.end()) {
+            auto at = std::find(q->second.begin(), q->second.end(), group);
+            if (at != q->second.end() && op == wire::kRightsCancel) {
+              q->second.erase(at);
+              if (q->second.empty()) g_rights_queues.erase(q);
+              RefreshDoorbell(group->queue);
+              queued = true;
+            }
+          }
+          if (!queued) group = nullptr;
+        }
+        if (group != nullptr) g_rights_groups.erase(it);
+      }
+      if (group == nullptr) {
+        reply.Put<int32_t>(-ENOENT);
+        if (op == wire::kRightsClaim) reply.Put<uint32_t>(0);
+      } else if (op == wire::kRightsCancel) {
+        CloseRightsGroup(group.get());
+        reply.Put<int32_t>(0);
+      } else {
+        reply.Put<int32_t>(0);
+        reply.Put<uint32_t>(static_cast<uint32_t>(group->entries.size()));
+        DeliverRights(client, group.get(), &reply);
+      }
+    } else if (op == wire::kRightsTake) {
+      uint64_t queue, limit;
+      if (!req.Get(&queue) || queue == 0 || !req.Get(&limit)) break;
+      std::lock_guard<std::mutex> lock(g_rights_lock);
+      // The groups whose bytes the receiver has begun to read; the others
+      // stay queued, in order.
+      std::deque<std::shared_ptr<RightsGroup>> groups;
+      auto it = g_rights_queues.find(queue);
+      if (it != g_rights_queues.end()) {
+        std::deque<std::shared_ptr<RightsGroup>> waiting;
+        for (auto& group : it->second) {
+          (group->position < limit ? groups : waiting).push_back(std::move(group));
+        }
+        if (waiting.empty()) g_rights_queues.erase(it);
+        else it->second.swap(waiting);
+        RefreshDoorbell(queue);
+      }
+      uint32_t count = 0;
+      for (const auto& group : groups) count += static_cast<uint32_t>(group->entries.size());
+      reply.Put<int32_t>(0);
+      reply.Put<uint32_t>(count);
+      for (const auto& group : groups) {
+        g_rights_groups.erase({group->token[0], group->token[1]});
+        DeliverRights(client, group.get(), &reply);
+      }
+    } else {
+      break;
+    }
+    if (!WriteMessage(pipe, reply)) break;
+  }
+  CloseHandle(client);
 }
 
 int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
@@ -1611,22 +1889,32 @@ void ServeThread(HANDLE pipe, In in) {
       !in.Get(&tid)) {
     return;
   }
+  std::shared_ptr<Thread> thread_owner;
+  std::shared_ptr<Proc> proc_owner;
   Thread* thread = nullptr;
   Proc* proc = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto it = g_procs.find(proc_id);
     if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
-      proc = it->second;
-      thread = new Thread;
-      thread->proc = proc;
+      proc_owner = it->second;
+      proc = proc_owner.get();
+      thread_owner = std::make_shared<Thread>();
+      thread = thread_owner.get();
+      thread->proc = proc_owner;
       thread->tid = static_cast<int>(tid);
       proc->threads.push_back(thread);
     }
   }
   WireReply hello;
   hello.Put<int32_t>(thread != nullptr ? 0 : -ESRCH);
-  if (!WriteMessage(pipe, hello) || thread == nullptr) return;
+  if (!WriteMessage(pipe, hello) || thread == nullptr) {
+    if (thread != nullptr) {
+      std::lock_guard<std::mutex> lock(g_lock);
+      ThreadRelease(thread);
+    }
+    return;
+  }
 
   std::vector<uint8_t> msg;
   while (ReadMessage(pipe, &msg)) {
@@ -1700,6 +1988,8 @@ void Serve(HANDLE pipe) {
         ServeProc(pipe, in);
       } else if (op == wire::kHelloThread) {
         ServeThread(pipe, in);
+      } else if (op == wire::kHelloRights) {
+        ServeRights(pipe, in);
       }
     }
   }
@@ -1722,6 +2012,29 @@ int main(int argc, char** argv) {
   }
   std::wstring name = wire::kPipePrefix;
   for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
+
+  // The descriptor broker's doorbell and the stream positions (binder_wire.h),
+  // which live as long as the broker does. The positions are the processes'
+  // own; the broker only keeps the section.
+  std::wstring doorbell = wire::kRightsDoorbellPrefix;
+  std::wstring positions = wire::kStreamPositionsPrefix;
+  for (char c : device) {
+    doorbell += static_cast<wchar_t>(static_cast<unsigned char>(c));
+    positions += static_cast<wchar_t>(static_cast<unsigned char>(c));
+  }
+  constexpr DWORD kDoorbellBytes = wire::kRightsDoorbellSlots * sizeof(LONG64);
+  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                      kDoorbellBytes, doorbell.c_str());
+  if (section != nullptr) {
+    g_rights_doorbell = static_cast<volatile LONG64*>(
+        MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kDoorbellBytes));
+  }
+  HANDLE positions_section = CreateFileMappingW(
+      INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+      wire::kRightsDoorbellSlots * sizeof(wire::StreamPositions), positions.c_str());
+  if (g_rights_doorbell == nullptr || positions_section == nullptr) {
+    Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
+  }
 
   bool first = true;
   for (;;) {

@@ -21,6 +21,12 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway);
 
+// Re-enters this executable/command under `uid` before ART caches its identity.
+// Inherits only duplicates of the three standard handles, retains the original
+// process handle, and owns the child tree in a kill-on-close job. On success,
+// returns 0 and the exact DWORD exit status; otherwise returns a Win32 error.
+uint32_t RestartWithUid(int uid, uint32_t* exit_code);
+
 // The process's creation time (a FILETIME), or 0 when no such process runs.
 int64_t StartTime(int pid);
 

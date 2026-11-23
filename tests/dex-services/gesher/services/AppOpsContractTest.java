@@ -43,6 +43,7 @@ import static android.content.PermissionChecker.*;
 /** AOSP Android 16 contracts, using real installed metadata, caller policy and delivery code.
  * Only APK construction and explicit Binder/native boundary fixtures are synthetic. */
 public final class AppOpsContractTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     private static final int UID = 12772, PID = 887720;
     private static final String NAME = "fixture.appops.owner", PEER = "fixture.appops.peer";
     private static int checks;
@@ -124,7 +125,11 @@ public final class AppOpsContractTest {
         final AppOpsService service;
         final IAppOpsService ops;
         final IPermissionChecker checker;
-        @SuppressWarnings("unchecked") Harness() throws Exception {
+        Harness() throws Exception { this(null); }
+        @SuppressWarnings("unchecked") Harness(Integer ownerTarget, String... permissions) throws Exception {
+            // Metadata must be final before PM boot admission reconciles the UID's
+            // legacy/runtime grant basis. Mutating an admitted owner is not an install.
+            if (ownerTarget != null) requested(owner, ownerTarget, permissions);
             pm = (PackageManagerService)make(PackageManagerService.class, new Class<?>[]{Collection.class, boolean.class}, List.of(owner, peer), false);
             // This isolated PM has no remote broadcast transport; keep its production
             // publication executor and lifecycle listeners, replacing only that boundary.
@@ -160,6 +165,9 @@ public final class AppOpsContractTest {
                     definitions.put(name, info);
                 }
                 set(catalog, "mLoaded", true);
+                // Native ART had the real catalog during PM construction. The host
+                // boundary must perform that same production boot reconciliation now.
+                call(pm.permissions(), "initializePackages", new Class<?>[0]);
             }
             service = pm.appOps();
             ops = binder ? IAppOpsService.Stub.asInterface(parcelTransport(StandIn.of(IAppOpsService.class, service).asBinder())) : service;
@@ -236,6 +244,34 @@ public final class AppOpsContractTest {
     private static void drain(Harness h) throws Exception {
         ((java.util.concurrent.ScheduledThreadPoolExecutor)get(h.service, "mEvents"))
                 .submit(() -> { }).get(5, TimeUnit.SECONDS);
+    }
+    private static void fixedModeRefreshCost(Harness h) throws Exception {
+        drain(h);
+        Supplier<?> source = (Supplier<?>)get(h.service, "mStateSource");
+        AtomicInteger scans = new AtomicInteger();
+        set(h.service, "mStateSource", (Supplier<?>)() -> { scans.incrementAndGet(); return source.get(); });
+        try {
+            for (int mode : new int[]{MODE_ALLOWED, MODE_IGNORED, MODE_DEFAULT, MODE_ERRORED}) {
+                h.ops.setMode(OP_VIBRATE, UID, NAME, mode); drain(h); scans.set(0);
+                for (int i = 0; i < 1000; i++) {
+                    if (h.ops.checkOperation(OP_VIBRATE, UID, NAME) != mode) throw new AssertionError("Fixed operation mode changed");
+                }
+                check(scans.get() == 0, "1000 fixed-mode checks must not rebuild global process/activity/service state: " + scans.get());
+            }
+            h.ops.setMode(OP_VIBRATE, UID, NAME, MODE_FOREGROUND); drain(h); scans.set(0);
+            check(h.ops.checkOperation(OP_VIBRATE, UID, NAME) == MODE_IGNORED && scans.get() == 1,
+                    "Foreground checks still refresh actual lifecycle state before evaluating access");
+            h.ops.setMode(OP_VIBRATE, UID, NAME, MODE_ALLOWED); drain(h); scans.set(0);
+            h.ops.noteOperation(OP_VIBRATE, UID, NAME, null, false, null, false);
+            check(scans.get() == 1, "Fixed-mode notes still refresh the UID state used for access history");
+            Token token = new Token();
+            start(h.ops, token, "one", false);
+            check(scans.get() == 2, "Fixed-mode starts still refresh the UID state used for operation history");
+            h.ops.finishOperation(token, OP_VIBRATE, UID, NAME, "one");
+        } finally {
+            set(h.service, "mStateSource", source);
+            h.ops.setMode(OP_VIBRATE, UID, NAME, AppOpsManager.opToDefaultMode(OP_VIBRATE));
+        }
     }
     private static void flags(Harness h, String permission, int mask, int values) {
         h.pm.permissions().updatePermissionFlags(NAME, permission, mask, values, true, "default:0", 0);
@@ -936,8 +972,7 @@ public final class AppOpsContractTest {
 
     private static Object activateServices(Harness h) throws Exception {
         Object previous = field(type("Services"), "sLast").get(null);
-        field(type("Services"), "sLast").set(null, make(type("Services$Created"),
-                new Class<?>[]{PackageManagerService.class, h.atm.getClass(), h.am.getClass()}, h.pm, h.atm, h.am));
+        field(type("Services"), "sLast").set(null, serviceContexts.runtime(h.pm, h.atm, h.am));
         return previous;
     }
 
@@ -1144,8 +1179,7 @@ public final class AppOpsContractTest {
 
     /** Real uninstall stages and killUid/processDied, with only APK, client death and disk boundaries controlled. */
     private static void sharedRetirement(boolean stillRequested, boolean legacy, boolean failDisk) throws Exception {
-        Harness h = new Harness();
-        requested(h.owner, legacy ? 22 : 36, Manifest.permission.READ_CONTACTS);
+        Harness h = new Harness(legacy ? 22 : 36, Manifest.permission.READ_CONTACTS);
         ApkPackage sibling = pkg("fixture.appops.remaining", UID, (byte)7);
         requested(sibling, 36, stillRequested ? new String[]{Manifest.permission.READ_CONTACTS} : new String[0]);
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, sibling);
@@ -1158,8 +1192,7 @@ public final class AppOpsContractTest {
         android.util.AtomicFile originalFile = (android.util.AtomicFile)get(policy, "mPermissionFile");
         ControlledFile disk = new ControlledFile(originalFile.getBaseFile()); disk.failFinish = failDisk;
         Object previousServices = field(type("Services"), "sLast").get(null);
-        Object currentServices = make(type("Services$Created"),
-                new Class<?>[]{PackageManagerService.class, h.atm.getClass(), h.am.getClass()}, h.pm, h.atm, h.am);
+        Object currentServices = serviceContexts.runtime(h.pm, h.atm, h.am);
         Token operation = new Token(), delivery = new Token(), secondOperation = new Token(), unrelatedOperation = new Token();
         AtomicInteger exits = new AtomicInteger(), secondExits = new AtomicInteger(), unrelatedExits = new AtomicInteger();
         java.util.concurrent.atomic.AtomicBoolean unlocked = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -1320,8 +1353,7 @@ public final class AppOpsContractTest {
         check(blocked.await(5, TimeUnit.SECONDS), "The lifecycle race holds only the explicit callback boundary");
         Object previousServices = field(type("Services"), "sLast").get(null);
         try {
-            field(type("Services"), "sLast").set(null, make(type("Services$Created"),
-                    new Class<?>[]{PackageManagerService.class, h.atm.getClass(), h.am.getClass()}, h.pm, h.atm, h.am));
+            field(type("Services"), "sLast").set(null, serviceContexts.runtime(h.pm, h.atm, h.am));
             call(h.pm, "beginPackageRemoval", new Class<?>[]{ApkPackage.class}, h.owner);
             call(h.pm, "revokePackageCapabilities", new Class<?>[]{String.class}, NAME);
             h.pm.permissions().forgetPackage(NAME);
@@ -1475,8 +1507,16 @@ public final class AppOpsContractTest {
         return service;
     }
     public static int run(boolean parcel) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            return runWithServiceContext(parcel);
+        } finally { serviceContexts = previous; }
+    }
+
+    private static int runWithServiceContext(boolean parcel) throws Exception {
         binder = parcel; checks = 0;
-        Harness h = new Harness(); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
+        Harness h = new Harness(); fixedModeRefreshCost(h); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
         permissionCheckerEdges();
         foregroundServiceExit();
         return checks;

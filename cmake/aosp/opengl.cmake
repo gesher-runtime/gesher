@@ -29,7 +29,9 @@ add_custom_command(OUTPUT ${_ogl_gen}/gl_forwarders.cc
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/compat/opengl/gen_gl_forwarders.py
     ${_ogl_gen}/gl_forwarders.cc ${_ogl_include} ${_ogl_handwritten}
   DEPENDS ${CMAKE_SOURCE_DIR}/compat/opengl/gen_gl_forwarders.py
-    ${CMAKE_SOURCE_DIR}/compat/bionic/gen_gl_thunks.py ${_ogl_headers} ${_ogl_handwritten}
+    ${CMAKE_SOURCE_DIR}/compat/bionic/gen_gl_thunks.py
+    ${CMAKE_SOURCE_DIR}/compat/bionic/third_party/angle/GLES2/gl2ext_angle.h
+    ${_ogl_headers} ${_ogl_handwritten}
   COMMENT "Generating the EGL/GLES forwarders to ANGLE"
   VERBATIM)
 

@@ -21,29 +21,66 @@ static int stream_depth;
 static int transactions;
 static int completions;
 static int crt_calls;
+static int crt_successes;
+static int crt_closes;
+static int ofd_retirements;
+static int ofd_registrations;
+static bool fail_next_flush;
+static constexpr int INVALID_HANDLE_VALUE = -1;
+static int expected_depth = 1;
 struct StreamLock {
   explicit StreamLock(FILE*) { ++stream_depth; }
   ~StreamLock() { --stream_depth; }
+  explicit operator bool() const { return true; }
 };
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
-// Device identity is exercised separately by test_stream_device_lifetime.py.
+// Device/OFD identity is exercised by test_stream_device_lifetime.py and the complete OFD corpus.
 void ForgetStreamDevice(int, bool) {}
+int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }
+void ForgetOfd(int) {
+  check("stdio retires OFD under its descriptor transaction",
+        stream_depth == expected_depth && transactions > completions);
+  ++ofd_retirements;
+}
+int RegisterOfd(int fd, int flags) {
+  check("freopen publishes OFD under its descriptor transaction",
+        stream_depth == expected_depth && transactions > completions);
+  const int mask = O_ACCMODE | O_APPEND | O_NONBLOCK;
+  check("freopen publishes actual replacement access and status flags",
+        (fcntl(fd, F_GETFL) & mask) == (flags & mask));
+  ++ofd_registrations;
+  return 0;
+}
+struct RetiredDescriptor {
+  void Retire(int fd) { ForgetOfd(fd); }
+  int Finish() { return 0; }
+};
 PathKind MapPath(const char* path, std::wstring* out) {
   *out = std::wstring(path, path + std::strlen(path));
   return PathKind::kFile;
+}
+namespace stdio {
+// This envelope exercises stream lifecycle/mode behavior. Output buffering is
+// separately executed from stdio_output_buffer.h with real descriptors.
+int FlushOutput(FILE*) { return 0; }
+void Forget(FILE*) {}
+int PrepareReopenedStream(FILE* stream, int flags) {
+  const int actual = fcntl(fileno(stream), F_GETFL);
+  return actual >= 0 && (actual & O_ACCMODE) == (flags & O_ACCMODE) ? 0 : -1;
+}
 }
 namespace record_locks {
 class ClosingDescriptor {
  public:
   explicit ClosingDescriptor(int) {
-    check("freopen descriptor transaction starts inside its stream lock", stream_depth == 1);
+    check("freopen descriptor transaction starts inside its stream lock", stream_depth == expected_depth);
     ++transactions;
   }
   int Error() const { return 0; }
   int Finish(bool) {
     check("freopen descriptor transaction completes once inside its stream lock",
-          !finished_ && stream_depth == 1);
+          !finished_ && stream_depth == expected_depth);
     finished_ = true;
     ++completions;
     return 0;
@@ -56,21 +93,35 @@ class ClosingDescriptor {
 }  // namespace gesher
 
 static int _fileno(FILE* stream) { return fileno(stream); }
-static int _fclose_nolock(FILE* stream) { return std::fclose(stream); }
+static int _fclose_nolock(FILE* stream) {
+  ++crt_closes;
+  const int result = std::fclose(stream);
+  // A failed flush may still close the descriptor. Exercise that branch
+  // without depending on the host's available disk space or device nodes.
+  if (fail_next_flush) {
+    fail_next_flush = false;
+    errno = EIO;
+    return EOF;
+  }
+  return result;
+}
 static int gesher_errno_from_crt(int error) { return error; }
 static bool HasNonDirectoryParent(const std::wstring&) { return false; }
 static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
   ++crt_calls;
-  check("freopen keeps the CRT reopen inside its stream transaction", stream_depth == 1);
+  check("freopen keeps the CRT reopen inside its stream transaction", stream_depth == expected_depth);
   std::wstring wide_path(path), wide_mode(mode);
   std::string narrow_path(wide_path.begin(), wide_path.end());
   std::string linux_mode(wide_mode.begin(), wide_mode.end());
   for (char& option : linux_mode) if (option == 'N') option = 'e';
-  return std::freopen(narrow_path.c_str(), linux_mode.c_str(), stream);
+  FILE* result = std::freopen(narrow_path.c_str(), linux_mode.c_str(), stream);
+  if (result) ++crt_successes;
+  return result;
 }
 
 namespace host {
 @HOST_PARSE_MODE@
+@HOST_FCLOSE@
 @HOST_FREOPEN@
 }  // namespace host
 
@@ -78,10 +129,13 @@ namespace guest {
 #define BIONIC_SYSV
 constexpr int kEINVAL = EINVAL;
 static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
-static FILE* HostFreopen(const char* path, const char* mode, FILE* stream) {
-  return host::freopen(path, mode, stream);
+static FILE* HostFreopen(const char* path, const char* mode, FILE* stream, int* retired) {
+  return host::gesher_freopen_state(path, mode, stream, retired);
 }
+// Actual state retirement is covered by test_stdio_lifetime_contracts.py.
+static void ResetStream(FILE*) {}
 @GUEST_CRT_MODE@
+@GUEST_CLOSE@
 @GUEST_FREOPEN@
 }  // namespace guest
 
@@ -100,13 +154,32 @@ int main(int argc, char** argv) {
     reopen_call = host::freopen;
     reopen64_call = host::freopen64;
   } else if (std::strcmp(argv[1], "guest") == 0) {
+    expected_depth = 2;  // Both layers hold the same recursive CRT stream lock.
     reopen_call = reopen64_call = GuestReopen;
   } else {
     return 2;
   }
   test_freopen_mode_contracts();
+  expected_depth = 1;  // The independent close controls call the host layer directly.
+  for (bool flush_error : {false, true}) {
+    FILE* stream = std::tmpfile();
+    check("fclose OFD retirement fixture opens", stream != nullptr);
+    if (!stream) continue;
+    const int descriptor = fileno(stream);
+    const int retired_before = ofd_retirements;
+    fail_next_flush = flush_error;
+    errno = 0;
+    const int result = host::fclose(stream);
+    const int saved = errno;
+    check("fclose preserves actual close or flush result",
+          flush_error ? result == EOF && saved == EIO : result == 0);
+    check("fclose retires closed OFD even after flush error",
+          fcntl(descriptor, F_GETFD) == -1 && ofd_retirements == retired_before + 1);
+  }
   check("freopen leaves no stream lock or descriptor transaction active",
-        stream_depth == 0 && transactions == completions && completions == crt_calls);
+        stream_depth == 0 && transactions == completions && completions == crt_calls + crt_closes);
+  check("every completed stdio close or reopen retires its original OFD",
+        ofd_retirements == completions && ofd_registrations == crt_successes);
   std::printf("freopen %s: %d checks, %d failures\n", argv[1], checks, failures);
   return failures ? 1 : 0;
 }

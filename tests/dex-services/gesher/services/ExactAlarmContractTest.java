@@ -1285,7 +1285,7 @@ public final class ExactAlarmContractTest {
                         check(window.start(source, EXACT_PKG) == ActivityManager.START_SUCCESS,
                                 "Opaque Settings admitted above the document window");
                     }
-                    check(settingsState(source).equals("STOPPED") && (int)get(source, "documentPickers") == 1,
+                    check(settingsState(source).equals("STOPPED") && (int)get(source, "nativeUiCount") == 1,
                             "Opaque Settings retains document coverage while stopping its source");
                     if (settingsFinishFirst) {
                         window.finish();
@@ -1303,7 +1303,7 @@ public final class ExactAlarmContractTest {
                         window.finish();
                     }
                     check(settingsState(source).equals("RESUMED") && Collections.frequency(events, "ResumeActivityItem") == 1
-                            && (int)get(source, "documentPickers") == 0 && window.pending() == 0,
+                            && (int)get(source, "nativeUiCount") == 0 && window.pending() == 0,
                             "Both opening and completion orders restore the underlying activity exactly once");
                     check(delivered.stream().filter(value -> value.target == getToken(source)
                                 && value.result.mResultCode == android.app.Activity.RESULT_CANCELED
@@ -1487,7 +1487,8 @@ public final class ExactAlarmContractTest {
             Object recipient = settingsRecord(h, UNPRIV_PKG, 2, "RESUMED");
             settingsRecord(h, EXACT_PKG, 3, "STOPPED");
             Object source = settingsRecord(h, EXACT_PKG, 1, "RESUMED", recipient, "original-who", 73);
-            List<String> events = acknowledgeSettings(h);
+            acknowledgeSettings(h);
+            List<IBinder> resumed = new ArrayList<>();
             List<DeliveredResult> delivered = recordResults(h);
             android.app.IAppTask[] handle = {null};
             runAs(EXACT_UID, EXACT_PID, () -> {
@@ -1501,6 +1502,9 @@ public final class ExactAlarmContractTest {
             h.thread.onTransaction = transaction -> {
                 acknowledge.accept(transaction);
                 for (var item : transaction.getTransactionItems()) {
+                    if (item instanceof android.app.servertransaction.ResumeActivityItem resume) {
+                        resumed.add(resume.getActivityToken());
+                    }
                     if (replacement[0] == null && item instanceof android.app.servertransaction.ActivityResultItem result
                             && result.getActivityToken() == getToken(recipient)) {
                         try {
@@ -1514,9 +1518,9 @@ public final class ExactAlarmContractTest {
             try (SettingsWindow window = new SettingsWindow(h, null, () -> 1)) {
                 check(window.start(source, EXACT_PKG, Intent.FLAG_ACTIVITY_FORWARD_RESULT, null, -1)
                         == ActivityManager.START_SUCCESS, "Forwarded Settings admitted before result-driven task replacement");
-                events.clear(); window.finish();
+                resumed.clear(); window.finish();
                 check(replacement[0] != null && settingsState(replacement[0]).equals("PAUSED")
-                        && !events.contains("ResumeActivityItem"),
+                        && !resumed.contains(getToken(replacement[0])),
                         "Result callback can retire the captured task without letting restoration resume its numeric-ID replacement");
                 check(window.pending() == 0 && delivered.stream().filter(value -> value.target == getToken(recipient)
                             && value.result.mRequestCode == 73 && value.result.mResultCode == android.app.Activity.RESULT_OK).count() == 1,

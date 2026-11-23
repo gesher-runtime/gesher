@@ -212,6 +212,7 @@ $env:ANDROID_DATA = NoDrive "$root/data-windows4"
 $env:GESHER_LOGS = NoDrive "$root/logs-windows4"
 $env:GESHER_SHORTCUTS = '0'
 New-Item -ItemType Directory -Force "$root/data-windows4" | Out-Null
+W3SeparateWindows windows4 com.gesher.winapp "$root/data-windows4"
 try {
   $env:GESHER_TSF_TEST_SERVICE = [IO.Path]::GetFullPath("$Dir/windows4_tsf_service.dll")
   W4Run 'device, TSF' @('com.gesher.app.Launcher', 'launch', $w4Apk, '--window', '--activity', 'com.gesher.winapp.TsfActivity') {

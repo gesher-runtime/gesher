@@ -43,8 +43,9 @@ Tests: `tests/windows/tracks/49-locale.ps1`, `tests/apps/localeapp`.
 - **Single process** (`com.gesher.app.Main`, gesher-app without the device: no activity manager): the
   change is applied to the process (resources, default locales,
   `Application.onConfigurationChanged`) and to the activity when it handles it;
-  an activity that does not is not recreated (logged:
-  `locale: X is not recreated in a single process`).
+  an activity that does not is relaunched by gesher-app, its saved state kept
+  (logged: `locale: configuration change in this process (...)` and
+  `X relaunching for configuration changes 0x... it does not handle (single process)`).
 - **Not carried over**: custom decimal and grouping symbols, custom date and
   time patterns (Android has no setting for them; logged by the system server
   as `Windows' custom formats not carried over`); `ACTION_APPLICATION_LOCALE_CHANGED`

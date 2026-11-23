@@ -1,0 +1,538 @@
+// Production translator methods are inserted verbatim. The Win32/Jit adapter
+// below does not execute guest instructions or generated stubs. Its Jit retains
+// instruction bytes until ClearCache, making missing retirement observable.
+#include "translator.h"
+#include <sys/mman.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <barrier>
+#include <cfenv>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+void Require(bool ok, const char* expression, int line) {
+  if (!ok) {
+    std::fprintf(stderr, "FAIL ARM64 pending rollback line %d: %s\n", line, expression);
+    std::abort();
+  }
+}
+#define REQUIRE(expression) Require((expression), #expression, __LINE__)
+
+// Win32 boundary: pages are writable, never executed. Exact-address remapping
+// is used only for a fixture mapping that has just been released.
+using DWORD = uint32_t;
+using BOOL = int;
+using HANDLE = void*;
+constexpr DWORD MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000;
+constexpr DWORD PAGE_READWRITE = 4, PAGE_EXECUTE_READWRITE = 0x40;
+constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
+constexpr BOOL FALSE = 0;
+constexpr size_t kPage = 4096;
+std::mutex allocation_mutex;
+std::unordered_map<void*, size_t> allocations;
+size_t allocation_calls = 0;
+std::atomic<DWORD> next_thread_id{1};
+thread_local DWORD thread_id = next_thread_id.fetch_add(1);
+DWORD GetCurrentThreadId() { return thread_id; }
+HANDLE GetCurrentProcess() { return nullptr; }
+HANDLE GetCurrentThread() { return nullptr; }
+DWORD GetEnvironmentVariableA(const char*, char*, DWORD) { return 0; }
+BOOL FlushInstructionCache(HANDLE, const void*, size_t) { return 1; }
+BOOL DuplicateHandle(HANDLE, HANDLE, HANDLE, HANDLE*, DWORD, BOOL, DWORD) {
+  REQUIRE(false);  // Profiling is disabled.
+  return 0;
+}
+void* VirtualAlloc(void* address, size_t size, DWORD flags, DWORD protect) {
+  REQUIRE(flags == (MEM_COMMIT | MEM_RESERVE));
+  REQUIRE(protect == PAGE_READWRITE || protect == PAGE_EXECUTE_READWRITE);
+  REQUIRE(size != 0 && size % kPage == 0);
+  const int fixed = address == nullptr ? 0 : MAP_FIXED_NOREPLACE;
+  void* result = mmap(address, size, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS | fixed, -1, 0);
+  if (result == MAP_FAILED) return nullptr;
+  REQUIRE(address == nullptr || result == address);
+  std::lock_guard<std::mutex> lock(allocation_mutex);
+  REQUIRE(allocations.emplace(result, size).second);
+  ++allocation_calls;
+  return result;
+}
+BOOL VirtualFree(void* address, size_t size, DWORD flags) {
+  REQUIRE(flags == MEM_RELEASE && size == 0);
+  std::lock_guard<std::mutex> lock(allocation_mutex);
+  auto entry = allocations.find(address);
+  REQUIRE(entry != allocations.end());
+  REQUIRE(munmap(address, entry->second) == 0);
+  allocations.erase(entry);
+  return 1;
+}
+size_t AllocationCalls() {
+  std::lock_guard<std::mutex> lock(allocation_mutex);
+  return allocation_calls;
+}
+
+namespace Dynarmic {
+enum class HaltReason : unsigned { UserDefined1 = 1, UserDefined2 = 2 };
+HaltReason operator|(HaltReason a, HaltReason b) {
+  return static_cast<HaltReason>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+}
+namespace A64 {
+class UserCallbacks {
+ public:
+  virtual ~UserCallbacks() = default;
+  virtual void CallSVC(uint32_t) = 0;
+};
+class Jit {
+ public:
+  bool running = false;
+  unsigned clear_count = 0;
+  std::function<void(Jit&)> run;
+  std::unordered_map<uintptr_t, uint32_t> code;
+  std::array<uint64_t, 31> registers{};
+  uint64_t pc = 0;
+  unsigned halt = 0;
+  void Run() {
+    REQUIRE(!running && static_cast<bool>(run));
+    running = true;
+    run(*this);
+    running = false;
+  }
+  void ClearCache() {
+    REQUIRE(!running);
+    code.clear();
+    ++clear_count;
+  }
+  uint32_t Instruction(const void* address) {
+    REQUIRE(running);
+    const uintptr_t key = reinterpret_cast<uintptr_t>(address);
+    auto entry = code.find(key);
+    if (entry != code.end()) return entry->second;
+    uint32_t value;
+    std::memcpy(&value, address, sizeof(value));
+    code.emplace(key, value);
+    return value;
+  }
+  void ClearHalt(Dynarmic::HaltReason reason) { halt &= ~static_cast<unsigned>(reason); }
+  void HaltExecution(Dynarmic::HaltReason reason = Dynarmic::HaltReason::UserDefined1) {
+    halt |= static_cast<unsigned>(reason);
+  }
+  uint64_t GetPC() const { return pc; }
+  uint64_t GetRegister(size_t index) const { return registers.at(index); }
+  void SetRegister(size_t index, uint64_t value) { registers.at(index) = value; }
+};
+}  // namespace A64
+}  // namespace Dynarmic
+namespace A64 = Dynarmic::A64;
+
+// Reaching any unexercised guest/ABI path fails the fixture.
+[[noreturn]] void GuestCrash(int, int, const char*, uint64_t, const char*) { std::abort(); }
+int64_t GuestRawSyscall(uint64_t, const uint64_t*) { std::abort(); }
+extern "C" void gesher_guest_entry_shim() { std::abort(); }
+
+namespace fixture {
+constexpr int kSigSys = 31;
+const gesher_arm64_host* g_host = nullptr;
+thread_local int t_guest_running = 0;
+std::shared_mutex g_host_pages_mutex;
+std::unordered_map<uintptr_t, bool> g_host_pages;
+@FENV@
+@PROFILE@
+@REGISTRY@
+@TLS@
+@ENTRIES@
+@RETIRE@
+@CLASSIFY@
+@BINDINGS@
+@COUNTERS@
+
+// Adapter around the real dispatch/SVC/Attach methods. Host ABI marshalling
+// and Jit construction are represented by controllable callbacks.
+class Env final : public A64::UserCallbacks {
+ public:
+  static constexpr size_t kStackSize = 8 << 20, kGuardSize = 0x10000;
+  uint8_t* tls_block_ = static_cast<uint8_t*>(
+      VirtualAlloc(nullptr, kTlsBlockSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  uint8_t* stack_base_ = nullptr;
+  uint64_t stack_top_ = 0, stack_cur_ = 0, tls_pointer_ = 0, wait_pc_ = 0;
+  size_t depth_ = 0;
+  uint32_t fpcr_ = 0, fpsr_ = 0;
+  DWORD tid_ = 0;
+  HANDLE thread_ = nullptr;
+  bool used_before_ = false, event_ = false;
+  std::vector<std::unique_ptr<A64::Jit>> jits_;
+  std::vector<uint64_t> code_generations_;
+  std::atomic<A64::Jit*> running_jit_{nullptr};
+  std::atomic<uint64_t> last_syscall_{0};
+  ThreadCounters counters_;
+  std::function<void(A64::Jit*, void*, int, int)> host_call;
+  Env() { REQUIRE(tls_block_ != nullptr); }
+  ~Env() override {
+    UnattachForTest();
+    REQUIRE(VirtualFree(tls_block_, 0, MEM_RELEASE));
+  }
+  void UnattachForTest() {
+    std::lock_guard<std::mutex> lock(g_tls_mutex);
+    std::erase_if(g_tls_blocks, [this](const TlsBlock& block) { return block.base == tls_block_; });
+  }
+  A64::Jit* JitAt(size_t depth) {
+    while (jits_.size() <= depth) {
+      jits_.push_back(std::make_unique<A64::Jit>());
+      code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
+    }
+    return jits_[depth].get();
+  }
+  A64::Jit* CurrentJit() { return depth_ == 0 ? nullptr : jits_[depth_ - 1].get(); }
+  void Dispatch(size_t depth, std::function<void(A64::Jit&)> run) {
+    A64::Jit* jit = JitAt(depth);
+    jit->run = std::move(run);
+    const size_t previous_depth = depth_;
+    depth_ = depth + 1;
+    RunGuest(jit);
+    depth_ = previous_depth;
+  }
+  void CallHost(A64::Jit* jit, void* fn, int index, int pointer_variadic_fixed) {
+    REQUIRE(!jit->running && t_guest_running == 0 && static_cast<bool>(host_call));
+    host_call(jit, fn, index, pointer_variadic_fixed);
+  }
+@ATTACH@
+@CALLSVC@
+@DISPATCH@
+  PendingHostCall pending_call_;
+};
+
+@TLS_TEST@
+
+void TestClassificationAndEntries() {
+  auto* image = static_cast<uint8_t*>(
+      VirtualAlloc(nullptr, 4 * kPage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  REQUIRE(image != nullptr);
+  const uintptr_t base = reinterpret_cast<uintptr_t>(image);
+  AddRegion(base, 4 * kPage);
+  void* stable_fn = image + 16;
+  void* pending_fn = image + kPage + 16;
+  auto* stable_entry = static_cast<uint8_t*>(MakeHostEntry(stable_fn));
+  auto* entry = static_cast<uint8_t*>(MakeHostEntry(pending_fn));
+  REQUIRE(stable_entry != nullptr && entry != nullptr && entry != stable_entry);
+  const size_t calls = AllocationCalls(), used = g_entry_used;
+  std::barrier barrier(2);
+  std::thread classifier([&] {
+    REQUIRE(InGuestCode(reinterpret_cast<uintptr_t>(pending_fn)));
+    REQUIRE(InGuestCode(reinterpret_cast<uintptr_t>(pending_fn)));  // Prime cached hit.
+    barrier.arrive_and_wait();
+    barrier.arrive_and_wait();
+    REQUIRE(!InGuestCode(reinterpret_cast<uintptr_t>(pending_fn)));
+    REQUIRE(InGuestCode(base + 1) && InGuestCode(base + 3 * kPage));
+  });
+  barrier.arrive_and_wait();
+  REQUIRE(InGuestCode(reinterpret_cast<uintptr_t>(pending_fn)));
+  ApiRemoveCode(image + kPage, 2 * kPage);
+  barrier.arrive_and_wait();
+  classifier.join();
+  REQUIRE(!InGuestCode(reinterpret_cast<uintptr_t>(pending_fn)));
+  REQUIRE(g_entries.count(pending_fn) == 0 && g_entries.at(stable_fn) == stable_entry);
+  REQUIRE(stable_entry[0] == 0x49);
+  for (size_t i = 0; i < kEntryStub; ++i) REQUIRE(entry[i] == 0xcc);
+  for (unsigned retry = 0; retry < 128; ++retry) {
+    AddRegion(base + kPage, 2 * kPage);
+    REQUIRE(MakeHostEntry(pending_fn) == entry);
+    uint64_t embedded = 0;
+    std::memcpy(&embedded, entry + 2, sizeof(embedded));
+    REQUIRE(embedded == reinterpret_cast<uintptr_t>(pending_fn));
+    ApiRemoveCode(image + kPage, 2 * kPage);
+    REQUIRE(g_entries.count(pending_fn) == 0 && g_entries.at(stable_fn) == stable_entry);
+    for (size_t i = 0; i < kEntryStub; ++i) REQUIRE(entry[i] == 0xcc);
+  }
+  REQUIRE(AllocationCalls() == calls && g_entry_used == used && g_free_entries.size() == 1);
+  REQUIRE(InGuestCode(base) && !InGuestCode(base + kPage) && InGuestCode(base + 3 * kPage));
+  const size_t regions_before = g_regions.size();
+  ApiRemoveCode(image, 0);
+  ApiRemoveCode(reinterpret_cast<void*>(UINTPTR_MAX - 1), 4);
+  AddRegion(base, 0);
+  AddRegion(UINTPTR_MAX - 1, 4);
+  REQUIRE(g_regions.size() == regions_before);
+  ApiRemoveCode(image, 4 * kPage);
+  REQUIRE(g_entries.empty() && !InGuestCode(base));
+  REQUIRE(VirtualFree(image, 0, MEM_RELEASE));
+  std::puts("PASS ARM64 pending rollback: cached classification, split regions and bounded recycled host entries");
+}
+
+void StableHost() {}
+void NestedHost() {}
+
+void TestNestedAndPooledDispatch() {
+  auto* image = static_cast<uint32_t*>(
+      VirtualAlloc(nullptr, kPage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  REQUIRE(image != nullptr);
+  *image = 17;
+  AddRegion(reinterpret_cast<uintptr_t>(image), kPage);
+  auto* trampoline = static_cast<uint32_t*>(BindHost(reinterpret_cast<void*>(&NestedHost), -1));
+  REQUIRE(trampoline != nullptr);
+  const uint32_t service = (trampoline[0] >> 5) & 0xffff;
+  Env env;
+  env.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(image) == 17); });
+  A64::Jit* outer = env.jits_[0].get();
+  REQUIRE(env.code_generations_.capacity() == 1);
+  const unsigned old_clears = outer->clear_count;
+  unsigned outer_runs = 0, callbacks = 0;
+  env.host_call = [&](A64::Jit* jit, void* fn, int index, int pointer_variadic_fixed) {
+    REQUIRE(jit == outer && fn == reinterpret_cast<void*>(&NestedHost) && index == -1);
+    REQUIRE(pointer_variadic_fixed == -1);
+    REQUIRE(!outer->running && env.depth_ == 1);
+    ++callbacks;
+    ApiRemoveCode(image, kPage);
+    REQUIRE(VirtualFree(image, 0, MEM_RELEASE));
+    REQUIRE(VirtualAlloc(image, kPage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) == image);
+    *image = 29;
+    AddRegion(reinterpret_cast<uintptr_t>(image), kPage);
+    env.Dispatch(1, [&](A64::Jit& inner) { REQUIRE(inner.Instruction(image) == 29); });
+    REQUIRE(env.depth_ == 1 && env.code_generations_.size() == 2);
+  };
+  env.Dispatch(0, [&](A64::Jit& jit) {
+    if (outer_runs++ == 0) {
+      REQUIRE(jit.Instruction(image) == 17);
+      env.CallSVC(service);
+    } else {
+      REQUIRE(jit.Instruction(image) == 29);
+      env.CallSVC(kReturnSvc);
+    }
+  });
+  REQUIRE(callbacks == 1 && outer_runs == 2 && outer->clear_count == old_clears + 1);
+  REQUIRE(env.code_generations_[0] == g_code_generation.load());
+  const unsigned pooled_clears = outer->clear_count;
+  const unsigned inner_clears = env.jits_[1]->clear_count;
+  ApiRemoveCode(image, kPage);
+  REQUIRE(VirtualFree(image, 0, MEM_RELEASE));
+  REQUIRE(VirtualAlloc(image, kPage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) == image);
+  *image = 43;
+  AddRegion(reinterpret_cast<uintptr_t>(image), kPage);
+  // An idle Env/Jit pair transfers to another thread with its old cache and
+  // generation. Each nesting depth must refresh at its next dispatch.
+  std::thread new_owner([&] {
+    env.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(image) == 43); });
+    env.Dispatch(1, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(image) == 43); });
+  });
+  new_owner.join();
+  REQUIRE(outer->clear_count == pooled_clears + 1 && env.jits_[1]->clear_count == inner_clears + 1);
+  ApiRemoveCode(image, kPage);
+  REQUIRE(VirtualFree(image, 0, MEM_RELEASE));
+  ApiUnbindHostFunction(reinterpret_cast<void*>(&NestedHost));
+  std::puts("PASS ARM64 pending rollback: paused outer dispatch and pooled Jits refresh safely after remapping");
+}
+
+void TestTrampolineReuse() {
+  void* stable_fn = reinterpret_cast<void*>(&StableHost);
+  auto* stable = static_cast<uint32_t*>(BindHost(stable_fn, -1));
+  auto* owned = VirtualAlloc(nullptr, kPage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  REQUIRE(stable != nullptr && owned != nullptr);
+  AddVaListFunction(owned, 3);
+  auto* slot = static_cast<uint32_t*>(BindHost(owned, -2));
+  REQUIRE(slot != nullptr && slot != stable);
+  const size_t index = g_tramp_by_fn.at(owned);
+  const uint32_t expected_svc = Svc(static_cast<uint32_t>(index + 1));
+  REQUIRE(ReadTrampoline(index).va_list_index == 3);
+  g_host_pages[reinterpret_cast<uintptr_t>(owned) & ~uintptr_t{0xfff}] = true;
+  Env env;
+  slot[0] = kRet;  // A guest-installed in-place hook must not survive reuse.
+  env.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(slot) == kRet); });
+  const unsigned previous_clears = env.jits_[0]->clear_count;
+  ApiUnbindHostFunction(owned);
+  REQUIRE(g_tramp_by_fn.count(owned) == 0 && ReadTrampoline(index).host_fn == nullptr);
+  REQUIRE(g_va_functions.count(owned) == 0 && g_host_pages.count(reinterpret_cast<uintptr_t>(owned)) == 0);
+  for (size_t i = 0; i < kTrampWords; ++i) REQUIRE(slot[i] == kBrk);
+  REQUIRE(BindHost(owned, -1) == slot);
+  env.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(slot) == expected_svc); });
+  REQUIRE(env.jits_[0]->clear_count == previous_clears + 1);
+  ApiUnbindHostFunction(owned);
+  const size_t count = g_tramp_count.load(), calls = AllocationCalls(), used = g_code_used;
+  const size_t pages = g_code_pages.size();
+  for (size_t retry = 0; retry < kMaxTramps + 257; ++retry) {
+    REQUIRE(BindHost(owned, -1) == slot && g_tramp_by_fn.at(owned) == index);
+    REQUIRE(slot[0] == expected_svc && slot[1] == kRet);
+    ApiUnbindHostFunction(owned);
+    REQUIRE(g_tramp_by_fn.count(owned) == 0 && ReadTrampoline(index).host_fn == nullptr);
+    for (size_t i = 0; i < kTrampWords; ++i) REQUIRE(slot[i] == kBrk);
+  }
+  REQUIRE(g_tramp_count.load() == count && AllocationCalls() == calls);
+  REQUIRE(g_code_used == used && g_code_pages.size() == pages && g_free_tramps.size() == 1);
+  REQUIRE(BindHost(stable_fn, -1) == stable && ReadTrampoline(g_tramp_by_fn.at(stable_fn)).host_fn == stable_fn);
+  const uint64_t generation = g_code_generation.load();
+  ApiUnbindHostFunction(owned);
+  REQUIRE(g_code_generation.load() == generation);
+  REQUIRE(VirtualFree(owned, 0, MEM_RELEASE));
+  std::puts("PASS ARM64 pending rollback: trampoline retirement erases pointers/hooks and recycles past kMaxTramps");
+}
+
+void TestSvcSnapshot() {
+  void* fn = reinterpret_cast<void*>(&StableHost);
+  AddVaListFunction(fn, 0);
+  auto* trampoline = static_cast<uint32_t*>(BindHost(fn, -2));
+  REQUIRE(trampoline != nullptr);
+  const uint32_t service = (trampoline[0] >> 5) & 0xffff;
+  std::barrier barrier(2);
+  constexpr unsigned iterations = 12000;
+  std::atomic<unsigned> calls{0};
+  std::thread reader([&] {
+    Env env;
+    unsigned runs = 0;
+    env.host_call = [&](A64::Jit*, void* target, int index, int pointer_variadic_fixed) {
+      REQUIRE(target == fn && (index == 0 || index == 1) && pointer_variadic_fixed == -1);
+      calls.fetch_add(1, std::memory_order_relaxed);
+    };
+    barrier.arrive_and_wait();
+    env.Dispatch(0, [&](A64::Jit&) {
+      if (runs++ < iterations) env.CallSVC(service);
+      else env.CallSVC(kReturnSvc);
+    });
+  });
+  barrier.arrive_and_wait();
+  for (unsigned i = 0; i < iterations; ++i) AddVaListFunction(fn, static_cast<int>(i & 1));
+  reader.join();
+  REQUIRE(calls.load() == iterations);
+
+  // Register a pointer-variadic target after binding and dispatch the same SVC.
+  // The changed signature must reach the host callback without replacing the slot.
+  void* variadic_target = reinterpret_cast<void*>(&NestedHost);
+  AddPointerVariadicFunction(fn, variadic_target, 2);
+  REQUIRE(BindHost(fn, -2) == trampoline);
+  Env env;
+  unsigned runs = 0, pointer_calls = 0;
+  env.host_call = [&](A64::Jit*, void* target, int index, int pointer_variadic_fixed) {
+    REQUIRE(target == variadic_target && index == -1 && pointer_variadic_fixed == 2);
+    ++pointer_calls;
+  };
+  env.Dispatch(0, [&](A64::Jit&) {
+    env.CallSVC(runs++ == 0 ? service : kReturnSvc);
+  });
+  REQUIRE(pointer_calls == 1);
+  ApiUnbindHostFunction(fn);
+  std::puts("PASS ARM64 pending rollback: real CallSVC snapshots synchronized metadata during va_list updates");
+}
+
+void TestAttachAfterRollback() {
+  REQUIRE(!g_tls_images.empty() && g_tls_blocks.empty());
+  const int64_t stable = g_tls_images.front().offset;
+  const uint8_t initial = static_cast<const uint8_t*>(g_tls_images.front().image)[0];
+  Env existing;
+  existing.Attach();
+  REQUIRE(existing.tls_block_[stable] == initial && g_tls_blocks.size() == 1);
+  existing.tls_block_[stable] = 0xa5;
+  const int64_t pending = ApiTlsRegister(128, 16);
+  REQUIRE(pending >= 0);
+  Env late;
+  late.Attach();
+  REQUIRE(late.tls_block_[stable] == initial && late.tls_block_[pending] == 0);
+  std::memset(existing.tls_block_ + pending, 0xcc, 128);
+  std::memset(late.tls_block_ + pending, 0xdd, 128);
+  REQUIRE(ApiTlsRollback(pending, 128));
+  for (size_t i = 0; i < 128; ++i) {
+    REQUIRE(existing.tls_block_[pending + i] == 0 && late.tls_block_[pending + i] == 0);
+  }
+  REQUIRE(existing.tls_block_[stable] == 0xa5 && late.tls_block_[stable] == initial);
+  static const uint8_t image[] = {0x81, 0x92, 0xa3};
+  const int64_t next = ApiTlsRegister(128, 16);
+  REQUIRE(next == pending);
+  ApiTlsPublish(next, image, sizeof(image), 128);
+  REQUIRE(std::memcmp(existing.tls_block_ + next, image, sizeof(image)) == 0);
+  REQUIRE(std::memcmp(late.tls_block_ + next, image, sizeof(image)) == 0);
+  late.UnattachForTest();
+  std::memset(late.tls_block_, 0xee, g_tls_offset);
+  late.Attach();
+  for (size_t i = 0; i < kTcbSize; ++i) REQUIRE(late.tls_block_[i] == 0);
+  REQUIRE(late.tls_block_[stable] == initial && late.tls_block_[next] == image[0]);
+  REQUIRE(existing.tls_block_[stable] == 0xa5 && g_tls_blocks.size() == 2);
+
+  // Park may fail to decommit a detached block. Rollback visits live blocks
+  // only; Attach must still clear this detached block's reclaimed dirty tail.
+  const size_t before = g_tls_offset;
+  const int64_t tail = ApiTlsRegister(3 * kPage, 16);
+  REQUIRE(tail >= 0);
+  late.UnattachForTest();
+  std::memset(late.tls_block_ + tail, 0x77, 3 * kPage);
+  REQUIRE(ApiTlsRollback(tail, 3 * kPage) && g_tls_offset == before);
+  REQUIRE(late.tls_block_[tail + 3 * kPage - 1] == 0x77);
+  late.Attach();
+  for (size_t i = 0; i < 3 * kPage; ++i) REQUIRE(late.tls_block_[tail + i] == 0);
+  REQUIRE(late.tls_block_[stable] == initial && existing.tls_block_[stable] == 0xa5);
+  std::puts("PASS ARM64 pending rollback: actual Attach restores images and clears retained pooled tails after reclaim");
+}
+
+void TestPreparedAttach() {
+  REQUIRE(g_tls_blocks.empty());
+  static const uint32_t initial = 37;
+  const int64_t offset = ApiTlsRegister(16, 4);
+  REQUIRE(offset >= 0 && ApiTlsPrepare(offset, &initial, sizeof(initial), 16));
+  const auto read = [offset](const Env& env) {
+    uint32_t value;
+    std::memcpy(&value, env.tls_block_ + offset, sizeof(value));
+    return value;
+  };
+  Env owner;
+  owner.Attach();
+  REQUIRE(read(owner) == 37);
+  const uint32_t changed = 93;
+  std::memcpy(owner.tls_block_ + offset, &changed, sizeof(changed));
+  REQUIRE(ApiTlsPrepare(offset, &initial, sizeof(initial), 16) && read(owner) == 93);
+  std::barrier rendezvous(2);
+  std::thread foreign([&] {
+    Env other;
+    other.Attach();
+    REQUIRE(read(other) == 0);
+    rendezvous.arrive_and_wait();
+    rendezvous.arrive_and_wait();
+    REQUIRE(read(other) == 37);
+  });
+  rendezvous.arrive_and_wait();
+  ApiTlsPublish(offset, &initial, sizeof(initial), 16);
+  REQUIRE(read(owner) == 93);
+  rendezvous.arrive_and_wait();
+  foreign.join();
+  std::thread late([&] {
+    Env other;
+    other.Attach();
+    REQUIRE(read(other) == 37);
+  });
+  late.join();
+  REQUIRE(read(owner) == 93 && !ApiTlsRollback(offset, 16));
+  std::puts("PASS ARM64 pending rollback: owner Attach sees private prepared TLS, foreign threads see only committed images");
+}
+
+void Cleanup() {
+  REQUIRE(g_tls_blocks.empty());
+  g_entries.clear();
+  g_free_entries.clear();
+  g_regions.clear();
+  g_tramp_by_fn.clear();
+  g_free_tramps.clear();
+  g_va_functions.clear();
+  g_host_pages.clear();
+  g_tls_images.clear();
+  g_code_pages.clear();
+  std::vector<void*> pages;
+  for (const auto& entry : allocations) pages.push_back(entry.first);
+  for (void* page : pages) REQUIRE(VirtualFree(page, 0, MEM_RELEASE));
+  REQUIRE(allocations.empty());
+}
+}  // namespace fixture
+
+int main() {
+  fixture::TestTls();
+  fixture::TestClassificationAndEntries();
+  fixture::TestNestedAndPooledDispatch();
+  fixture::TestTrampolineReuse();
+  fixture::TestSvcSnapshot();
+  fixture::TestAttachAfterRollback();
+  fixture::TestTlsInteriorReuse();
+  fixture::TestTlsPreparation();
+  fixture::TestPreparedAttach();
+  fixture::Cleanup();
+  std::puts("ARM64 pending rollback host contracts passed (verbatim production methods; Win32/Jit adapter, no guest execution)");
+}

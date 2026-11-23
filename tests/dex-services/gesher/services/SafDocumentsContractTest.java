@@ -12,6 +12,7 @@ import android.permission.PermissionCheckerManager;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
 import android.provider.DocumentsProvider;
+import android.provider.MediaStore;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedActivityImpl;
@@ -26,13 +27,19 @@ import sun.misc.Unsafe;
 
 /** Actual registry, AOSP transport, filesystem, grant store and ATM callbacks. */
 public final class SafDocumentsContractTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     static final String CLIENT="org.gesher.fixture.saf.client", OTHER="org.gesher.fixture.saf.other";
     static final String AUTH=DocumentsStorageProvider.AUTHORITY;
-    static final int UID=10601, PID=911201, OTHER_UID=10602, OTHER_PID=911202;
+    static final int UID=10601, OTHER_UID=10602;
+    static int PID=911201, OTHER_PID=911202;
     static final int READ=Intent.FLAG_GRANT_READ_URI_PERMISSION, WRITE=Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
     static final int PERSIST=Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION, PREFIX=Intent.FLAG_GRANT_PREFIX_URI_PERMISSION;
     static final Unsafe U;
     static int checks; static boolean nativeFiles;
+    static final String RELAY="gesher.fixture.saf.relay.";
+    static final Map<Integer,IBinder> relayControls=new HashMap<>();
+    static final java.util.concurrent.atomic.AtomicInteger nativeIncoming=new java.util.concurrent.atomic.AtomicInteger();
+    static final java.util.concurrent.atomic.AtomicInteger nativeOtherIncoming=new java.util.concurrent.atomic.AtomicInteger();
     static { try { Field f=Unsafe.class.getDeclaredField("theUnsafe"); f.setAccessible(true); U=(Unsafe)f.get(null); }
         catch(Exception e){throw new ExceptionInInitializerError(e);} }
     interface Work { void run() throws Exception; }
@@ -61,6 +68,166 @@ public final class SafDocumentsContractTest {
         long old=Binder.clearCallingIdentity();try{Binder.restoreCallingIdentity(((long)uid<<32)|pid);work.run();}
         finally{Binder.restoreCallingIdentity(old);}
     }
+
+    static void relayReady(String ready)throws IOException{
+        java.nio.file.Path path=new File(ready).toPath(),pending=new File(ready+".writing").toPath();
+        Files.writeString(pending,android.os.Process.myUid()+" "+android.os.Process.myPid()+"\n");
+        Files.move(pending,path);
+    }
+
+    /** Ordinary app UIDs cannot register ServiceManager names; the operator owns discovery. */
+    static void registryMain(String ready)throws Exception{
+        String root=System.getenv("ANDROID_ROOT");
+        com.gesher.app.Main.bootstrap("saf-binder-registry",root+"/build.prop",root+"/framework/framework-res.apk");
+        if(android.os.Process.myUid()!=android.os.Process.SYSTEM_UID)throw new SecurityException("SAF registry operator UID");
+        Map<Integer,IBinder> peers=new HashMap<>();
+        Map<Integer,Integer> pids=new HashMap<>();
+        ServiceManager.addService(RELAY+"registry",new Binder(){
+            { attachInterface(null,RELAY+"registry"); }
+            @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
+                if(code==INTERFACE_TRANSACTION)return super.onTransact(code,data,reply,flags);
+                if(!Binder.isDirectlyHandlingTransaction())throw new SecurityException("SAF registry requires incoming Binder transport");
+                data.enforceInterface(RELAY);
+                if(code==1){
+                    int uid=Binder.getCallingUid(),pid=Binder.getCallingPid();
+                    IBinder peer=data.readStrongBinder();
+                    if((uid!=UID&&uid!=OTHER_UID)||peer==null||peer instanceof Binder||pid<=0||
+                            !RELAY.equals(peer.getInterfaceDescriptor()))
+                        throw new SecurityException("SAF registration requires a real ordinary peer");
+                    synchronized(peers){
+                        if(peers.containsKey(uid))throw new SecurityException("SAF peer already registered");
+                        peers.put(uid,peer);pids.put(uid,pid);
+                        peer.linkToDeath(()->{synchronized(peers){if(peers.get(uid)==peer){peers.remove(uid);pids.remove(uid);}}},0);
+                    }
+                    reply.writeNoException();reply.writeInt(uid);reply.writeInt(pid);return true;
+                }
+                if(code==2){
+                    if(Binder.getCallingUid()!=android.os.Process.SYSTEM_UID)throw new SecurityException("SAF discovery requires operator");
+                    int uid=data.readInt();
+                    synchronized(peers){
+                        IBinder peer=peers.get(uid);
+                        if(peer==null)throw new IllegalStateException("SAF peer is not registered");
+                        reply.writeNoException();reply.writeStrongBinder(peer);reply.writeInt(pids.get(uid));
+                    }
+                    return true;
+                }
+                return super.onTransact(code,data,reply,flags);
+            }
+        });
+        SystemServer.startBinderThreads("saf-binder-registry",4);relayReady(ready);Binder.joinThreadPool();
+    }
+
+    /** A real separate process forwards to the provider through a BinderProxy. */
+    static void relayMain(int expectedUid,String ready)throws Exception{
+        String root=System.getenv("ANDROID_ROOT");
+        com.gesher.app.Main.bootstrap("saf-binder-relay",root+"/build.prop",root+"/framework/framework-res.apk");
+        if((expectedUid!=UID&&expectedUid!=OTHER_UID)||android.os.Process.myUid()!=expectedUid)
+            throw new SecurityException("SAF relay requires its ordinary fixture UID");
+        IBinder control=new Binder(){
+            { attachInterface(null,RELAY); }
+            @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
+                if(!Binder.isDirectlyHandlingTransaction()||Binder.getCallingUid()!=android.os.Process.SYSTEM_UID)
+                    throw new SecurityException("SAF relay control requires the test operator");
+                if(code==INTERFACE_TRANSACTION)return super.onTransact(code,data,reply,flags);
+                data.enforceInterface(RELAY);
+                if(code==1){
+                    reply.writeNoException();reply.writeInt(android.os.Process.myUid());reply.writeInt(android.os.Process.myPid());return true;
+                }
+                if(code==2){
+                    IBinder target=data.readStrongBinder();
+                    if(target==null||target instanceof Binder)throw new SecurityException("Provider must reside in the other process");
+                    IBinder forwarding=new Binder(){
+                        @Override protected boolean onTransact(int transaction,Parcel request,Parcel response,int options)throws RemoteException{
+                            if(Binder.getCallingUid()!=android.os.Process.SYSTEM_UID)
+                                throw new SecurityException("SAF forwarding requires the test operator");
+                            long identity=Binder.clearCallingIdentity();
+                            try{return target.transact(transaction,request,response,options);}
+                            finally{Binder.restoreCallingIdentity(identity);}
+                        }
+                    };
+                    reply.writeNoException();reply.writeStrongBinder(forwarding);return true;
+                }
+                return super.onTransact(code,data,reply,flags);
+            }
+        };
+        SystemServer.startBinderThreads("saf-binder-relay",4);
+        IBinder registry=ServiceManager.getService(RELAY+"registry");
+        if(registry==null||registry instanceof Binder)throw new IllegalStateException("SAF operator registry is unavailable");
+        Parcel request=Parcel.obtain(),reply=Parcel.obtain();
+        try{
+            request.writeInterfaceToken(RELAY);request.writeStrongBinder(control);
+            if(!registry.transact(1,request,reply,0))throw new IllegalStateException("SAF peer registration failed");
+            reply.readException();
+            if(reply.readInt()!=expectedUid||reply.readInt()!=android.os.Process.myPid())
+                throw new SecurityException("SAF registry observed different native peer credentials");
+        }finally{reply.recycle();request.recycle();}
+        relayReady(ready);
+        Binder.joinThreadPool();
+    }
+
+    static void connectRelays()throws Exception{
+        check(android.os.Process.myUid()==android.os.Process.SYSTEM_UID,"SAF fixture operator has its real system identity");
+        SystemServer.startBinderThreads("saf-provider-fixture",4);
+        IBinder registry=ServiceManager.getService(RELAY+"registry");
+        check(registry!=null&&!(registry instanceof Binder),"SAF discovery registry is cross-process");
+        for(int uid:new int[]{UID,OTHER_UID}){
+            IBinder relay;int registeredPid;
+            Parcel find=Parcel.obtain(),found=Parcel.obtain();
+            try{
+                find.writeInterfaceToken(RELAY);find.writeInt(uid);
+                check(registry.transact(2,find,found,0),"SAF peer discovery transaction");
+                found.readException();relay=found.readStrongBinder();registeredPid=found.readInt();
+            }finally{found.recycle();find.recycle();}
+            check(relay!=null&&!(relay instanceof Binder),"SAF relay is an actual cross-process BinderProxy");
+            check(RELAY.equals(relay.getInterfaceDescriptor()),"SAF relay control descriptor is authenticated");
+            Parcel request=Parcel.obtain(),reply=Parcel.obtain();
+            try{
+                request.writeInterfaceToken(RELAY);
+                check(relay.transact(1,request,reply,0),"SAF relay identity transaction");
+                reply.readException();
+                check(reply.readInt()==uid,"SAF peer native UID agrees with the declared fixture client");
+                int pid=reply.readInt();
+                check(pid>0&&pid==registeredPid&&pid!=android.os.Process.myPid(),"SAF peer has a distinct authenticated process ID");
+                if(uid==UID)PID=pid;else OTHER_PID=pid;
+                relayControls.put(uid,relay);
+            }finally{reply.recycle();request.recycle();}
+        }
+        check(PID!=OTHER_PID,"SAF positive and negative callers use separate native processes");
+    }
+
+    static IContentProvider remoteTransport(IContentProvider local)throws Exception{
+        IBinder target=local.asBinder();
+        IBinder checked=new Binder(){
+            @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
+                int uid=Binder.getCallingUid(),pid=Binder.getCallingPid();
+                if(!Binder.isDirectlyHandlingTransaction()||
+                        !((uid==UID&&pid==PID)||(uid==OTHER_UID&&pid==OTHER_PID)))
+                    throw new SecurityException("Provider requires actual incoming peer Binder credentials");
+                nativeIncoming.incrementAndGet();
+                if(uid==OTHER_UID)nativeOtherIncoming.incrementAndGet();
+                return target.transact(code,data,reply,flags);
+            }
+        };
+        Map<Integer,IContentProvider> peers=new HashMap<>();
+        for(var entry:relayControls.entrySet()){
+            Parcel request=Parcel.obtain(),reply=Parcel.obtain();
+            try{
+                request.writeInterfaceToken(RELAY);request.writeStrongBinder(checked);
+                check(entry.getValue().transact(2,request,reply,0),"SAF provider is exported through the remote relay");
+                reply.readException();IBinder forwarding=reply.readStrongBinder();
+                check(forwarding!=null&&!(forwarding instanceof Binder),"SAF provider transport uses a real BinderProxy");
+                peers.put(entry.getKey(),ContentProviderNative.asInterface(forwarding));
+            }finally{reply.recycle();request.recycle();}
+        }
+        return (IContentProvider)Proxy.newProxyInstance(IContentProvider.class.getClassLoader(),
+                new Class<?>[]{IContentProvider.class},(proxy,method,args)->{
+                    IContentProvider peer=peers.get(Binder.getCallingUid());
+                    if(peer==null)throw new SecurityException("No native SAF peer for the selected fixture caller");
+                    // This selects a real process; the attributed UID in the original
+                    // request stays untouched, including the forged-attribution control.
+                    try{return method.invoke(peer,args);}catch(InvocationTargetException failure){throw failure.getCause();}
+                });
+    }
     @SuppressWarnings({"unchecked","rawtypes"}) static Object state(String n)throws Exception{return Enum.valueOf((Class)type("ActivityTaskManagerService$State"),n);}
     static ApkPackage code(String name,int uid)throws Exception{
         PackageImpl p=(PackageImpl)PackageImpl.forTesting(name,"/fixture/"+name+"/base.apk");p.setEnabled(true);p.setTargetSdkVersion(36);
@@ -83,6 +250,28 @@ public final class SafDocumentsContractTest {
             List<ResultInfo> r=new ArrayList<>();synchronized(events){for(var e:events)if(e instanceof ActivityResultItem)r.addAll((List<ResultInfo>)get(e,"mResultInfoList"));}return r;
         }
     }
+    /** Restore only the genuine service bindings installed by this isolated fixture. */
+    private static final class FixtureBindings implements AutoCloseable {
+        private final Field packageManager = field(ActivityThread.class, "sPackageManager");
+        private final Object previousPackageManager = packageManager.get(null);
+        private final Map<String, IBinder> cache;
+        private final boolean hadMount;
+        private final IBinder previousMount;
+
+        @SuppressWarnings("unchecked") FixtureBindings() throws Exception {
+            cache = (Map<String, IBinder>)field(ServiceManager.class, "sCache").get(null);
+            hadMount = cache.containsKey("mount");
+            previousMount = cache.get("mount");
+        }
+
+        @Override public void close() throws Exception {
+            try { packageManager.set(null, previousPackageManager); }
+            finally {
+                if (hadMount) cache.put("mount", previousMount); else cache.remove("mount");
+            }
+        }
+    }
+
     static final class Harness{
         final ApkPackage client=code(CLIENT,UID),other=code(OTHER,OTHER_UID);
         final PackageManagerService pm=new PackageManagerService(List.of(client,other,
@@ -101,22 +290,14 @@ public final class SafDocumentsContractTest {
             as(OTHER_UID,OTHER_PID,()->holder[0]=make(type("ActivityTaskManagerService$ProcessRecord"),new Class<?>[]{ActivityTaskManagerService.class,int.class,IApplicationThread.class},atm,OTHER_PID,new AppThread()));
             set(holder[0],"packageName",OTHER);set(holder[0],"processName",OTHER);set(holder[0],"packageCode",other);set(holder[0],"ready",true);((List<Object>)get(atm,"mProcesses")).add(holder[0]);
             thread.controller=(IActivityClientController)get(atm,"mClientImpl");
-            Object created=make(type("Services$Created"),new Class<?>[]{PackageManagerService.class,ActivityTaskManagerService.class,ActivityManagerService.class},pm,atm,am);
+            IBinder mount=StandIn.of(android.os.storage.IStorageManager.class,new Services.StorageService()).asBinder();
+            Object created=serviceContexts.runtime(pm,atm,am,Map.of("mount",mount));
             field(Services.class,"sLast").set(null,created);
             field(ActivityThread.class,"sPackageManager").set(null,pm);
-            ((Map<String,IBinder>)field(ServiceManager.class,"sCache").get(null)).put("mount",
-                    StandIn.of(android.os.storage.IStorageManager.class,new Services.StorageService()).asBinder());
+            ((Map<String,IBinder>)field(ServiceManager.class,"sCache").get(null)).put("mount",mount);
             context=new TestContext(this);call(provider,"attachTo",new Class<?>[]{Context.class},context);
             IContentProvider local=((ContentProviderHolder)call(provider,"holder",new Class<?>[0])).provider;
-            if(nativeFiles){
-                IBinder target=local.asBinder();
-                IBinder remote=new Binder(){
-                    @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
-                        return target.transact(code,data,reply,flags);
-                    }
-                };
-                transport=ContentProviderNative.asInterface(remote);
-            }else transport=local;
+            transport=nativeFiles?remoteTransport(local):local;
             ugm=new UriGrantsManagerService(pm,atm,am);
         }
         @SuppressWarnings("unchecked") Object activity(String name,String lifecycle)throws Exception{
@@ -193,13 +374,14 @@ public final class SafDocumentsContractTest {
     static final class ChoiceDialog {
         final CountDownLatch opened = new CountDownLatch(1), finish = new CountDownLatch(1);
         volatile BooleanSupplier active;
+        volatile String[] labels;
         int selected = -1;
         void install(Harness h) throws Exception {
             Class<?> api = type("IntentChooser$Dialog");
             Object dialog = Proxy.newProxyInstance(api.getClassLoader(), new Class<?>[]{api}, (o, m, a) -> {
                 if (m.getName().equals("available")) return true;
                 if (!m.getName().equals("choose")) throw new AssertionError(m);
-                active = (BooleanSupplier)a[4]; opened.countDown();
+                labels = ((String[])a[2]).clone(); active = (BooleanSupplier)a[4]; opened.countDown();
                 if (!finish.await(8, TimeUnit.SECONDS)) throw new AssertionError("Choice fixture was not closed");
                 return selected;
             });
@@ -585,6 +767,275 @@ public final class SafDocumentsContractTest {
         }
     }
 
+    static void pickImagesAndChooser(File dir) throws Exception {
+        File photo = new File(dir, "pick-photo.jpg");
+        File photo2 = new File(dir, "pick-photo-2.png");
+        File video = new File(dir, "pick-video.mp4");
+        File text = new File(dir, "pick-note.txt");
+        Files.writeString(photo.toPath(), "jpeg-bytes");
+        Files.writeString(photo2.toPath(), "png-bytes");
+        Files.writeString(video.toPath(), "mp4-bytes");
+        Files.writeString(text.toPath(), "plain-text");
+
+        // Single ACTION_PICK_IMAGES with omitted type defaults to image/* + video/* and persistable read-only grants.
+        Harness pickSingle = new Harness(new File(dir, "pick-single.xml"));
+        Object singleOrigin = pickSingle.activity("Origin", "RESUMED");
+        Dialog singleDialog = new Dialog(); singleDialog.install(pickSingle);
+        check(pickSingle.start(new Intent(MediaStore.ACTION_PICK_IMAGES), singleOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES starts without explicit MIME type");
+        ResultInfo singleResult = finishSelection(pickSingle, singleDialog, photo.getPath());
+        check((boolean)get(singleDialog.request, "pickImages")
+                && !(boolean)get(singleDialog.request, "multiple")
+                && (int)get(singleDialog.request, "maxItems") == 1
+                && "Select a photo or video".equals(get(singleDialog.request, "title"))
+                && Arrays.equals((String[])get(singleDialog.request, "mimeTypes"), new String[]{"image/*", "video/*"}),
+                "ACTION_PICK_IMAGES sets media defaults and single-pick bounds");
+        check(singleResult.mResultCode == Activity.RESULT_OK && singleResult.mData.getData().equals(document(photo)),
+                "ACTION_PICK_IMAGES returns selected media URI");
+        check((singleResult.mData.getFlags() & (READ | WRITE | PERSIST | PREFIX)) == (READ | PERSIST)
+                && pickSingle.grants.canAccess(pickSingle.client, document(photo), READ, 0)
+                && !pickSingle.grants.canAccess(pickSingle.client, document(photo), WRITE, 0),
+                "ACTION_PICK_IMAGES grants read-only persistable URI permission");
+        as(UID, PID, () -> pickSingle.ugm.takePersistableUriPermission(document(photo), READ, null, 0));
+        rejects(SecurityException.class, () -> as(UID, PID,
+                () -> pickSingle.ugm.takePersistableUriPermission(document(photo), WRITE, null, 0)));
+        pickSingle.grants.flush();
+
+        // ACTION_PICK_IMAGES rejects non-media MIME files when defaulting to image/* + video/*.
+        Harness rejectNonMedia = new Harness(new File(dir, "pick-nonmedia.xml"));
+        Object nonMediaOrigin = rejectNonMedia.activity("Origin", "RESUMED");
+        Dialog nonMediaDialog = new Dialog(); nonMediaDialog.install(rejectNonMedia);
+        check(rejectNonMedia.start(new Intent(MediaStore.ACTION_PICK_IMAGES), nonMediaOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES starts for non-media rejection check");
+        ResultInfo nonMediaResult = finishSelection(rejectNonMedia, nonMediaDialog, text.getPath());
+        check(nonMediaResult.mResultCode == Activity.RESULT_CANCELED && nonMediaResult.mData == null
+                && !rejectNonMedia.grants.canAccess(rejectNonMedia.client, document(text), READ, 0),
+                "ACTION_PICK_IMAGES rejects text/plain selection");
+        rejectNonMedia.grants.flush();
+
+        // EXTRA_PICK_IMAGES_MAX enforces upper bound on selection count.
+        Harness pickMax = new Harness(new File(dir, "pick-max.xml"));
+        Object maxOrigin = pickMax.activity("Origin", "RESUMED");
+        Dialog maxDialog = new Dialog(); maxDialog.install(pickMax);
+        check(pickMax.start(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2), maxOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES accepts EXTRA_PICK_IMAGES_MAX=2");
+        ResultInfo maxOk = finishSelection(pickMax, maxDialog, photo.getPath(), video.getPath());
+        check((boolean)get(maxDialog.request, "multiple") && (int)get(maxDialog.request, "maxItems") == 2
+                && maxOk.mResultCode == Activity.RESULT_OK && maxOk.mData.getClipData().getItemCount() == 2,
+                "ACTION_PICK_IMAGES multi-select returns up to EXTRA_PICK_IMAGES_MAX items");
+
+        pickMax.grants.flush();
+
+        Harness pickOverMax = new Harness(new File(dir, "pick-over-max.xml"));
+        Object overMaxOrigin = pickOverMax.activity("Origin", "RESUMED");
+        Dialog overMaxDialog = new Dialog(); overMaxDialog.install(pickOverMax);
+        check(pickOverMax.start(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2), overMaxOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES starts for over-limit check");
+        ResultInfo overMax = finishSelection(pickOverMax, overMaxDialog, photo.getPath(), photo2.getPath(), video.getPath());
+        check("Select up to 2 photos or videos".equals(get(overMaxDialog.request, "title")),
+                "The Windows multi-select dialog states the EXTRA_PICK_IMAGES_MAX limit");
+        check(overMax.mResultCode == Activity.RESULT_CANCELED && overMax.mData == null
+                && !pickOverMax.grants.canAccess(pickOverMax.client, document(photo), READ, 0),
+                "ACTION_PICK_IMAGES rejects selection exceeding EXTRA_PICK_IMAGES_MAX");
+        pickOverMax.grants.flush();
+
+        // AOSP's picker starts and then cancels an illegal limit: no exception from startActivity.
+        int badIndex = 0;
+        for (int badLimit : new int[]{0, -1, MediaStore.getPickImagesMaxLimit() + 1}) {
+            cancelledWithoutUi(dir, "pick-bad-limit-" + badIndex++, new Intent(MediaStore.ACTION_PICK_IMAGES)
+                    .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, badLimit), "EXTRA_PICK_IMAGES_MAX=" + badLimit);
+        }
+        cancelledWithoutUi(dir, "pick-bad-limit-type", new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2L), "non-int EXTRA_PICK_IMAGES_MAX");
+        // Non-media EXTRA_MIME_TYPES without the wildcard type is an illegal photo picker filter.
+        cancelledWithoutUi(dir, "pick-nonmedia-extra", new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/png", "application/pdf"}),
+                "non-media EXTRA_MIME_TYPES");
+        cancelledWithoutUi(dir, "pick-nonmedia-list", new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putStringArrayListExtra(Intent.EXTRA_MIME_TYPES, new ArrayList<>(List.of("text/plain"))),
+                "non-media EXTRA_MIME_TYPES list");
+
+        // The photo picker's filters accept only image/*, video/* or no type: other types do not resolve.
+        Harness pickPdf = new Harness(new File(dir, "pick-pdf.xml"));
+        Object pdfOrigin = pickPdf.activity("Origin", "RESUMED");
+        Dialog pdfDialog = new Dialog(); pdfDialog.install(pickPdf);
+        check(pickPdf.start(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("application/pdf"), pdfOrigin)
+                == ActivityManager.START_INTENT_NOT_RESOLVED
+                && pickPdf.start(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                        .setData(Uri.parse("https://example.invalid/a.jpg")), pdfOrigin)
+                == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_PICK_IMAGES with an explicit non-media type or untyped data is not resolved");
+        pickPdf.settled();
+        check(pdfDialog.opened.getCount() == 1 && pickPdf.thread.results().isEmpty()
+                && get(pdfOrigin, "state") == state("RESUMED"),
+                "An unresolved photo picker request opens no UI and delivers no result");
+        pickPdf.grants.flush();
+
+        // An explicit wildcard type, or a wildcard among mixed EXTRA_MIME_TYPES, means all media.
+        for (int variant = 0; variant < 2; variant++) {
+            Harness pickAll = new Harness(new File(dir, "pick-all-" + variant + ".xml"));
+            Object allOrigin = pickAll.activity("Origin", "RESUMED");
+            Dialog allDialog = new Dialog(); allDialog.install(pickAll);
+            Intent all = variant == 0 ? new Intent(MediaStore.ACTION_PICK_IMAGES).setType("*/*")
+                    : new Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/png")
+                            .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"text/plain", "*/*"});
+            check(pickAll.start(all, allOrigin) == ActivityManager.START_SUCCESS,
+                    "ACTION_PICK_IMAGES accepts the wildcard type: " + variant);
+            ResultInfo allRes = finishSelection(pickAll, allDialog, video.getPath());
+            check(Arrays.equals((String[])get(allDialog.request, "mimeTypes"), new String[]{"image/*", "video/*"})
+                    && allRes.mResultCode == Activity.RESULT_OK && allRes.mData.getData().equals(document(video)),
+                    "The wildcard type is narrowed to image/* and video/*: " + variant);
+            pickAll.grants.flush();
+        }
+
+        // EXTRA_ALLOW_MULTIPLE is not an ACTION_PICK_IMAGES extra: the default limit stays 1.
+        Harness pickAllowMulti = new Harness(new File(dir, "pick-allow-multi.xml"));
+        Object allowOrigin = pickAllowMulti.activity("Origin", "RESUMED");
+        Dialog allowDialog = new Dialog(); allowDialog.install(pickAllowMulti);
+        check(pickAllowMulti.start(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), allowOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES with EXTRA_ALLOW_MULTIPLE starts");
+        ResultInfo allowRes = finishSelection(pickAllowMulti, allowDialog, photo.getPath(), photo2.getPath());
+        check(!(boolean)get(allowDialog.request, "multiple") && (int)get(allowDialog.request, "maxItems") == 1
+                && allowRes.mResultCode == Activity.RESULT_CANCELED && allowRes.mData == null,
+                "EXTRA_ALLOW_MULTIPLE does not enable ACTION_PICK_IMAGES multi-select");
+        pickAllowMulti.grants.flush();
+
+        // ACTION_CHOOSER wrapping ACTION_GET_CONTENT offers the system picker; as the only choice it auto-launches.
+        Harness chooserGet = new Harness(new File(dir, "chooser-get.xml"));
+        Object chooserOrigin = chooserGet.activity("Origin", "RESUMED");
+        Dialog chooserDialog = new Dialog(); chooserDialog.install(chooserGet);
+        Intent getContent = new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        Intent wrappedGet = Intent.createChooser(getContent, "Choose photo");
+        check(chooserGet.start(wrappedGet, chooserOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_CHOOSER wrapping ACTION_GET_CONTENT auto-launches its only choice, the system picker");
+        ResultInfo chooserGetRes = finishSelection(chooserGet, chooserDialog, photo.getPath());
+        check((boolean)get(chooserDialog.request, "getContent")
+                && chooserGetRes.mResultCode == Activity.RESULT_OK
+                && chooserGetRes.mData.getData().equals(document(photo))
+                && (chooserGetRes.mData.getFlags() & (READ | WRITE | PERSIST)) == READ,
+                "Delegated ACTION_CHOOSER GET_CONTENT returns read-only selected URI");
+        chooserGet.grants.flush();
+
+        // ACTION_CHOOSER wrapping ACTION_PICK_IMAGES offers the system picker in the same way.
+        Harness chooserPick = new Harness(new File(dir, "chooser-pick.xml"));
+        Object chooserPickOrigin = chooserPick.activity("Origin", "RESUMED");
+        Dialog chooserPickDialog = new Dialog(); chooserPickDialog.install(chooserPick);
+        Intent wrappedPick = Intent.createChooser(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("video/*"), "Choose video");
+        check(chooserPick.start(wrappedPick, chooserPickOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_CHOOSER wrapping ACTION_PICK_IMAGES auto-launches the system picker");
+        ResultInfo chooserPickRes = finishSelection(chooserPick, chooserPickDialog, video.getPath());
+        check((boolean)get(chooserPickDialog.request, "pickImages")
+                && chooserPickRes.mResultCode == Activity.RESULT_OK
+                && chooserPickRes.mData.getData().equals(document(video)),
+                "Delegated ACTION_CHOOSER PICK_IMAGES returns selected video URI");
+        chooserPick.grants.flush();
+
+        // ACTION_CHOOSER with chosen callback or unsupported extra must not silently bypass chooser rejection.
+        IntentSender callbackSender = new IntentSender(new IIntentSender.Default());
+        Intent withCallback = Intent.createChooser(getContent, "With callback", callbackSender);
+        check(chooserGet.start(withCallback, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with callback does not bypass into DocumentPicker");
+        Intent withChosenCallback = Intent.createChooser(getContent, "With chosen callback")
+                .putExtra(Intent.EXTRA_CHOSEN_COMPONENT_INTENT_SENDER, callbackSender);
+        check(chooserGet.start(withChosenCallback, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with EXTRA_CHOSEN_COMPONENT_INTENT_SENDER does not bypass into DocumentPicker");
+        Intent withRefinement = Intent.createChooser(getContent, "With refinement")
+                .putExtra(Intent.EXTRA_CHOOSER_REFINEMENT_INTENT_SENDER, new Intent());
+        check(chooserGet.start(withRefinement, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with unsupported extra does not bypass into DocumentPicker");
+        Intent withResultSender = Intent.createChooser(getContent, "With result callback")
+                .putExtra(Intent.EXTRA_CHOOSER_RESULT_INTENT_SENDER, callbackSender);
+        check(chooserGet.start(withResultSender, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with EXTRA_CHOOSER_RESULT_INTENT_SENDER does not offer the componentless picker");
+        // Picker request validation in a chooser is "not offered", never an exception from startActivity.
+        check(chooserGet.start(Intent.createChooser(new Intent(Intent.ACTION_GET_CONTENT), "Untyped"),
+                chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED
+                && chooserGet.start(Intent.createChooser(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                        .setType("application/pdf"), "Non-media"), chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "An invalid or unresolvable document target leaves the chooser without a picker entry");
+        chooserGet.settled();
+        check(chooserGet.thread.results().size() == 1, "Rejected choosers deliver no extra result");
+        chooserGet.grants.flush();
+
+        // With other choices the system picker is still listed, like DocumentsUI in Android's chooser.
+        Harness chooserBoth = new Harness(new File(dir, "chooser-both.xml"));
+        Object bothOrigin = chooserBoth.activity("Origin", "RESUMED");
+        Dialog bothDocuments = new Dialog(); bothDocuments.install(chooserBoth);
+        ChoiceDialog bothChoices = new ChoiceDialog(); bothChoices.selected = 1; bothChoices.install(chooserBoth);
+        Intent wrappedBoth = Intent.createChooser(getContent, "Choose source").putExtra(Intent.EXTRA_INITIAL_INTENTS,
+                new Intent[]{new Intent().setComponent(new ComponentName(CLIENT, CLIENT + ".Top"))});
+        check(chooserBoth.start(wrappedBoth, bothOrigin) == ActivityManager.START_SUCCESS
+                && bothChoices.opened.await(3, TimeUnit.SECONDS),
+                "A document chooser with an application choice shows the host chooser");
+        check(bothChoices.labels.length == 2 && bothChoices.labels[0].contains("(" + CLIENT + ")")
+                && "Files (Windows file picker)".equals(bothChoices.labels[1]),
+                "The system picker is listed beside the application choice");
+        bothChoices.finish.countDown();
+        ResultInfo bothRes = finishSelection(chooserBoth, bothDocuments, photo.getPath());
+        workersRetired("intent-chooser");
+        check((boolean)get(bothDocuments.request, "getContent") && bothRes.mResultCode == Activity.RESULT_OK
+                && bothRes.mData.getData().equals(document(photo))
+                && chooserBoth.grants.canAccess(chooserBoth.client, document(photo), READ, 0),
+                "Choosing the system picker returns its selection to the chooser's caller");
+        check(get(bothOrigin, "state") == state("RESUMED") && (int)get(bothOrigin, "nativeUiCount") == 0
+                && (int)get(bothOrigin, "chooserCoverCount") == 0,
+                "Chooser and picker release their own coverage and the caller resumes once");
+        chooserBoth.grants.flush();
+
+        // EXTRA_AUTO_LAUNCH_SINGLE_CHOICE=false shows the chooser even for the picker alone.
+        Harness chooserSingle = new Harness(new File(dir, "chooser-single.xml"));
+        Object singleChoiceOrigin = chooserSingle.activity("Origin", "RESUMED");
+        Dialog singleDocuments = new Dialog(); singleDocuments.install(chooserSingle);
+        ChoiceDialog singleChoices = new ChoiceDialog(); singleChoices.selected = 0; singleChoices.install(chooserSingle);
+        check(chooserSingle.start(Intent.createChooser(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 3), "Choose media")
+                .putExtra(Intent.EXTRA_AUTO_LAUNCH_SINGLE_CHOICE, false), singleChoiceOrigin) == ActivityManager.START_SUCCESS
+                && singleChoices.opened.await(3, TimeUnit.SECONDS)
+                && Arrays.equals(singleChoices.labels, new String[]{"Photos and videos (Windows file picker)"}),
+                "A chooser that must not auto-launch lists the photo picker as its one choice");
+        singleChoices.finish.countDown();
+        ResultInfo singleChoiceRes = finishSelection(chooserSingle, singleDocuments, photo.getPath(), video.getPath());
+        workersRetired("intent-chooser");
+        check((int)get(singleDocuments.request, "maxItems") == 3 && singleChoiceRes.mResultCode == Activity.RESULT_OK
+                && singleChoiceRes.mData.getClipData().getItemCount() == 2,
+                "The chosen photo picker keeps the target's EXTRA_PICK_IMAGES_MAX");
+        chooserSingle.grants.flush();
+
+        // A NEW_TASK chooser cancels the caller's result once; the picker then has no result recipient.
+        Harness chooserTask = new Harness(new File(dir, "chooser-new-task.xml"));
+        Object taskOrigin = chooserTask.activity("Origin", "RESUMED");
+        Dialog taskDocuments = new Dialog(); taskDocuments.install(chooserTask);
+        Intent wrappedTask = Intent.createChooser(getContent, "New task").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        check(chooserTask.start(wrappedTask, taskOrigin) == ActivityManager.START_SUCCESS,
+                "A NEW_TASK document chooser starts the system picker");
+        ResultInfo taskRes = finishSelection(chooserTask, taskDocuments, photo.getPath());
+        check(taskRes.mResultCode == Activity.RESULT_CANCELED && taskRes.mData == null
+                && (int)get(taskDocuments.request, "mode") == 0
+                && !chooserTask.grants.canAccess(chooserTask.client, document(photo), READ, 0),
+                "NEW_TASK is forwarded: one immediate RESULT_CANCELED and no late result or grant");
+        check(get(taskOrigin, "state") == state("RESUMED") && (int)get(taskOrigin, "nativeUiCount") == 0,
+                "The NEW_TASK picker covered and then released the focused caller");
+        chooserTask.grants.flush();
+    }
+
+    /** An accepted ACTION_PICK_IMAGES request that AOSP's picker cancels without showing media. */
+    static void cancelledWithoutUi(File dir, String name, Intent request, String why) throws Exception {
+        Harness h = new Harness(new File(dir, name + ".xml"));
+        Object origin = h.activity("Origin", "RESUMED");
+        Dialog dialog = new Dialog(); dialog.install(h);
+        check(h.start(request, origin) == ActivityManager.START_SUCCESS, "Illegal photo picker request still starts: " + why);
+        h.settled();
+        List<ResultInfo> results = h.thread.results();
+        check(results.size() == 1 && results.get(0).mResultCode == Activity.RESULT_CANCELED
+                && results.get(0).mData == null && dialog.opened.getCount() == 1,
+                "Illegal photo picker request returns RESULT_CANCELED without UI: " + why);
+        check(get(origin, "state") == state("RESUMED"), "Caller resumes after the cancelled request: " + why);
+        h.grants.flush();
+    }
+
     static void lifecycle(File dir) throws Exception {
         Harness h = new Harness(new File(dir, "covered.xml"));
         Object origin = h.activity("Origin", "PAUSED"), top = h.activity("Top", "RESUMED");
@@ -709,7 +1160,7 @@ public final class SafDocumentsContractTest {
                 documents.finish.countDown(); choices.finish.countDown();
                 h.settled(); workersRetired("intent-chooser"); awaitPending(h, 0, 0);
                 check(h.thread.results().isEmpty(), "AppTask launch does not invent an activity-result recipient");
-                check((int)get(origin, "documentPickers") == 0 && (int)get(origin, "chooserCoverCount") == 0,
+                check((int)get(origin, "nativeUiCount") == 0 && (int)get(origin, "chooserCoverCount") == 0,
                         "Native session releases exactly its own coverage");
                 if (retire) {
                     check(!created.exists() && get(replacement, "state") == state("RESUMED")
@@ -860,8 +1311,22 @@ public final class SafDocumentsContractTest {
         }
     }
 
+    /** Also used by the detached-window fixture, which shares this actual Harness. */
+    static void withServiceContext(Work operation) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureBindings bindings = new FixtureBindings();
+                FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            operation.run();
+        } finally { serviceContexts = previous; }
+    }
+
     /** Invoked in three separate JVM/ART processes; only the real XML store is shared. */
     public static void restartPhase(String phase, File directory) throws Exception {
+        withServiceContext(() -> restartPhaseWithServiceContext(phase, directory));
+    }
+
+    private static void restartPhaseWithServiceContext(String phase, File directory) throws Exception {
         field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File data = new File(directory, "persisted.txt"), state = new File(directory, "grants.xml");
         if (phase.equals("write")) Files.writeString(data.toPath(), "survives process exit");
@@ -885,15 +1350,50 @@ public final class SafDocumentsContractTest {
         } else throw new IllegalArgumentException("Unknown restart phase");
         System.out.println("SafDocumentsContractTest restart " + phase + " passed");
     }
-    public static void contracts(boolean descriptors)throws Exception{
+    public static void contracts(boolean descriptors) throws Exception {
+        withServiceContext(() -> contractsWithServiceContext(descriptors));
+    }
+
+    /**
+     * Test-only: Main.bootstrap installs Android's MIME map in production processes,
+     * and these fixtures do not run it. Use the framework factory when its jar
+     * resources are present (ART); a host JVM without them gets an isolated map with
+     * the media extensions the fixtures name.
+     */
+    static void fixtureMimeMap() {
+        libcore.content.type.MimeMap map;
+        try {
+            map = android.content.type.DefaultMimeMapFactory.create();
+        } catch (RuntimeException missingResources) {
+            map = libcore.content.type.MimeMap.getDefault().buildUpon()
+                    .addMimeMapping("image/png", "png").addMimeMapping("video/mp4", "mp4")
+                    .addMimeMapping("image/webp", "webp").addMimeMapping("video/quicktime", "mov")
+                    .build();
+        }
+        libcore.content.type.MimeMap fixture = map;
+        libcore.content.type.MimeMap.setDefaultSupplier(() -> fixture);
+    }
+
+    private static void contractsWithServiceContext(boolean descriptors) throws Exception {
+        fixtureMimeMap();
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
-        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);System.out.println("SafDocumentsContractTest passed: "+checks+" checks; nativeFiles="+nativeFiles);}
+        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
+            if(nativeFiles){
+                check(nativeIncoming.get()>nativeOtherIncoming.get()&&nativeOtherIncoming.get()>0,
+                        "SAF exercised actual incoming Binder transactions from both ordinary peers");
+                System.out.println("SAF_BINDER_NATIVE peer credential provenance verified: "+UID+"/"+PID+" and "+OTHER_UID+"/"+OTHER_PID+
+                        "; incoming="+nativeIncoming.get()+"; ungranted="+nativeOtherIncoming.get());
+            }
+            System.out.println("SafDocumentsContractTest passed: "+checks+" checks; nativeFiles="+nativeFiles);}
         finally{try(var paths=Files.walk(dir.toPath())){for(var p:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(p);}}
     }
     public static void main(String[] args)throws Exception{
+        if(args.length==2&&args[0].equals("registry")){registryMain(args[1]);return;}
+        if(args.length==3&&args[0].equals("relay")){relayMain(Integer.parseInt(args[1]),args[2]);return;}
         System.loadLibrary("android_runtime");
         nativeFiles=true;
+        connectRelays();
         if(args.length==2)restartPhase(args[0],new File(args[1]));else contracts(true);
     }
 }

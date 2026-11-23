@@ -196,12 +196,13 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
     text[at++] = 0x2069;
   }
   if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
-  int choice = MessageBoxW(NULL, text, GesherUiText(lang, "account_title"),
-                          MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND
-                          | (GesherUiRtl(lang) ? MB_RTLREADING | MB_RIGHT : 0));
+  // The shared host prompt keeps No as the default, including Esc and close.
+  BOOL allowed = GesherHostPrompt(GesherUiText(lang, "account_title"), text,
+      GesherUiText(lang, "permission_allow"), GesherUiText(lang, "permission_deny"),
+      GesherUiRtl(lang), NULL);
   SecureZeroMemory(text, total * sizeof(WCHAR));
   HeapFree(GetProcessHeap(), 0, text);
-  return choice == IDYES ? JNI_TRUE : JNI_FALSE;
+  return allowed ? JNI_TRUE : JNI_FALSE;
 }
 
 #include "account_chooser.inc"

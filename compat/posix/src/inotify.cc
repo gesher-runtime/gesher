@@ -6,12 +6,13 @@
 // LinuxWatchService) wait on it like on any other fd.
 //
 // Each watch is an overlapped ReadDirectoryChangesW on its directory (a
-// watched file: on its parent, filtered by name), completed on the inotify's
-// I/O completion port, which a worker thread reads and turns into Linux
-// events:
+// watched file: on its parent, filtered by name). The inotify's worker
+// wakes on the completion port and translates the native records:
 //   added -> IN_CREATE, removed -> IN_DELETE, renamed -> IN_MOVED_FROM and
 //   IN_MOVED_TO with one cookie, modified -> IN_MODIFY, or IN_ATTRIB when
 //   only the change time moved (metadata);
+//   a watched file renamed within its parent -> IN_MOVE_SELF, then events
+//   continue on the same watch descriptor under the new name;
 //   the watched directory gone -> IN_DELETE_SELF, IN_IGNORED;
 //   a lost buffer -> IN_Q_OVERFLOW.
 // Windows reports no close: IN_CLOSE_WRITE is reported once a created or
@@ -22,8 +23,8 @@
 // NTFS reports a write only when it updates the file's directory entry,
 // often not before the writer closes the file. Writes through this
 // process's write()/pwrite() therefore report IN_MODIFY themselves
-// (InotifyNoteWrite, ADR 0057); ReadDirectoryChangesW's later report of the
-// same change is another IN_MODIFY, as a second write would be on Linux.
+// (InotifyNoteWrite, ADR 0057). File watches drain completed native reads
+// first, preserving the order of earlier renames and this write.
 #include <sys/inotify.h>
 
 #include <errno.h>
@@ -33,6 +34,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -53,8 +55,10 @@ namespace {
 
 constexpr DWORD kBufferSize = 64 * 1024;
 constexpr size_t kMaxQueued = 16384;  // Linux's max_queued_events
+constexpr int kMaxDrainReads = 64;
 constexpr ULONG_PTR kQuit = 0;
 constexpr ULONG_PTR kWake = 1;  // a write was noted: probe for IN_CLOSE_WRITE
+constexpr ULONG_PTR kFileReady = 2;
 constexpr DWORD kNotifyFilter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
                                 FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
                                 FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_CREATION |
@@ -91,16 +95,45 @@ struct Watch {
   std::wstring file;  // a watched file's name; empty for a directory
   unsigned long long volume = 0, index = 0;
   HANDLE handle = INVALID_HANDLE_VALUE;
+  HANDLE identity = INVALID_HANDLE_VALUE;  // the watched inode, not its current name
+  HANDLE event = nullptr;  // file-watch reads can also be consumed by a writer
+  HANDLE port = nullptr;
+  PTP_WAIT wait = nullptr;
   OVERLAPPED ov = {};
   std::vector<DWORD> buffer = std::vector<DWORD>(kBufferSize / sizeof(DWORD));
+  bool pending = false;
   bool extended = false;
   bool removed = false;  // rm'd or ended: dropped when its read completes
   bool ignored_sent = false;
+  bool awaiting_rename = false;
   std::set<std::wstring> writing;  // names to report IN_CLOSE_WRITE for
   // Each name's last modification time and size (extended records): a change
   // that moves neither is to metadata only (IN_ATTRIB).
   std::map<std::wstring, std::pair<long long, long long>> contents;
+
+  ~Watch() {
+    if (wait != nullptr) {
+      SetThreadpoolWait(wait, nullptr, nullptr);
+      WaitForThreadpoolWaitCallbacks(wait, TRUE);
+      CloseThreadpoolWait(wait);
+    }
+    if (event != nullptr && pending) {
+      CancelIoEx(handle, &ov);
+      DWORD bytes;
+      GetOverlappedResult(handle, &ov, &bytes, TRUE);
+    }
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    if (event != nullptr) CloseHandle(event);
+    if (identity != INVALID_HANDLE_VALUE) CloseHandle(identity);
+  }
 };
+
+void CALLBACK FileReadReady(PTP_CALLBACK_INSTANCE, void* context, PTP_WAIT, TP_WAIT_RESULT) {
+  const Watch& w = *static_cast<Watch*>(context);
+  // A writer may consume this read before the wake is handled. The
+  // worker looks up the descriptor and checks its current read's event.
+  PostQueuedCompletionStatus(w.port, static_cast<DWORD>(w.wd), kFileReady, nullptr);
+}
 
 }  // namespace
 
@@ -113,6 +146,7 @@ struct Inotify {
   std::mutex mutex;
   std::condition_variable changed;
   std::deque<std::string> queue;  // events, in Linux's layout
+  bool overflow_queued = false;  // one loss marker, until ReadInotify removes it
   std::map<int, std::unique_ptr<Watch>> watches;
   int next_wd = 1;
   uint32_t next_cookie = 1;
@@ -133,28 +167,26 @@ struct Inotify {
       PostQueuedCompletionStatus(port, 0, kQuit, nullptr);
       worker.join();
     }
-    for (auto& [wd, w] : watches) {
-      if (w->handle != INVALID_HANDLE_VALUE) CloseHandle(w->handle);
-    }
+    watches.clear();
     if (port != nullptr) CloseHandle(port);
   }
 
   // Queues an event; called with `mutex` held.
   void Emit(int wd, uint32_t mask, uint32_t cookie, const std::string& name) {
-    size_t len = name.empty() ? 0 : (name.size() + 1 + 15) / 16 * 16;
+    // Overflow precedes ordinary duplicate merging, including a duplicate at
+    // capacity. Keep one marker anywhere in the queue, not just at its tail.
+    const bool overflow = mask == IN_Q_OVERFLOW || queue.size() >= kMaxQueued;
+    if (overflow && overflow_queued) return;
+    size_t len = overflow || name.empty() ? 0 : (name.size() + 1 + 15) / 16 * 16;
     std::string event(sizeof(inotify_event) + len, '\0');
-    inotify_event header = {wd, mask, cookie, static_cast<uint32_t>(len)};
+    inotify_event header = overflow ? inotify_event{-1, IN_Q_OVERFLOW, 0, 0}
+                                   : inotify_event{wd, mask, cookie, static_cast<uint32_t>(len)};
     memcpy(event.data(), &header, sizeof(header));
-    memcpy(event.data() + sizeof(header), name.data(), name.size());
+    if (!overflow) memcpy(event.data() + sizeof(header), name.data(), name.size());
     // Linux merges an event with the identical one before it, if unread.
-    if (!queue.empty() && queue.back() == event) return;
-    if (queue.size() >= kMaxQueued) {
-      inotify_event overflow = {-1, IN_Q_OVERFLOW, 0, 0};
-      std::string o(reinterpret_cast<const char*>(&overflow), sizeof(overflow));
-      if (queue.back() != o) queue.push_back(o);
-      return;
-    }
+    if (!overflow && !queue.empty() && queue.back() == event) return;
     queue.push_back(std::move(event));
+    overflow_queued |= overflow;
     SetReadable(*ready, true);
     changed.notify_all();
   }
@@ -174,22 +206,29 @@ struct Inotify {
     }
     if (!w.removed) {
       w.removed = true;
-      CancelIoEx(w.handle, &w.ov);
+      if (w.pending) CancelIoEx(w.handle, &w.ov);
     }
   }
 
   bool Issue(Watch& w) {
     memset(&w.ov, 0, sizeof(w.ov));
-    DWORD unused;
-    if (w.extended) {
-      return ExtendedReader()(w.handle, w.buffer.data(), kBufferSize, FALSE, kNotifyFilter, &unused,
-                              &w.ov, nullptr, kReadDirectoryNotifyExtendedInformation);
+    if (w.event != nullptr) {
+      ResetEvent(w.event);
+      w.ov.hEvent = w.event;
     }
-    return ReadDirectoryChangesW(w.handle, w.buffer.data(), kBufferSize, FALSE, kNotifyFilter,
-                                 &unused, &w.ov, nullptr);
+    DWORD unused;
+    w.pending = w.extended
+                    ? ExtendedReader()(w.handle, w.buffer.data(), kBufferSize, FALSE, kNotifyFilter,
+                                       &unused, &w.ov, nullptr, kReadDirectoryNotifyExtendedInformation)
+                    : ReadDirectoryChangesW(w.handle, w.buffer.data(), kBufferSize, FALSE, kNotifyFilter,
+                                            &unused, &w.ov, nullptr);
+    if (w.pending && w.wait != nullptr) SetThreadpoolWait(w.wait, w.event, nullptr);
+    return w.pending;
   }
 
   void Changes(Watch& w, DWORD bytes);
+  void Complete(Watch& w, BOOL ok, DWORD bytes);
+  bool DrainFile(Watch& w);
   void ProbeWriters();
   void Run();
 };
@@ -205,69 +244,133 @@ std::wstring Join(const std::wstring& dir, const std::wstring& name) {
   return dir.empty() || dir.back() == L'\\' ? dir + name : dir + L'\\' + name;
 }
 
+unsigned long long FileIndex(const BY_HANDLE_FILE_INFORMATION& info) {
+  return (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+}
+
+bool MatchesFile(const Watch& w, const BY_HANDLE_FILE_INFORMATION& info) {
+  return info.dwVolumeSerialNumber == w.volume && FileIndex(info) == w.index;
+}
+
+bool MatchesNamedEntry(const Watch& w, const std::wstring& name) {
+  // Following a symlink here could identify its target as the watched file.
+  HANDLE candidate = CreateFileW(Join(w.dir, name).c_str(), FILE_READ_ATTRIBUTES,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 nullptr, OPEN_EXISTING,
+                                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (candidate == INVALID_HANDLE_VALUE) return false;
+  BY_HANDLE_FILE_INFORMATION info;
+  bool same = GetFileInformationByHandle(candidate, &info) && MatchesFile(w, info);
+  CloseHandle(candidate);
+  return same;
+}
+
 }  // namespace
+
+// Case-only renames can report a transient removal before their rename pair.
+// The retained file handle distinguishes a live inode from an actual unlink;
+// looking up the old pathname races subsequent renames and replacements.
+bool FileStillLinked(const Watch& w) {
+  FILE_STANDARD_INFO info;
+  return w.identity != INVALID_HANDLE_VALUE &&
+         GetFileInformationByHandleEx(w.identity, FileStandardInfo, &info, sizeof(info)) &&
+         !info.DeletePending && info.NumberOfLinks != 0;
+}
 
 // One completed read's records.
 void Inotify::Changes(Watch& w, DWORD bytes) {
   const unsigned char* p = reinterpret_cast<const unsigned char*>(w.buffer.data());
-  const unsigned char* end = p + bytes;
+  size_t remaining = (std::min)(bytes, kBufferSize);
+  const size_t header = w.extended ? offsetof(NotifyExtended, name)
+                                   : offsetof(FILE_NOTIFY_INFORMATION, FileName);
   uint32_t cookie = 0;
-  for (;;) {
-    if (p + sizeof(FILE_NOTIFY_INFORMATION) > end) break;
+  while (!w.removed && remaining >= header) {
     DWORD next, action, attributes = 0, name_length;
-    const WCHAR* name_ptr;
+    unsigned long long file_id = 0;
+    std::pair<long long, long long> now;
     bool attrib_only = false, known_attributes = false;
     if (w.extended) {
-      const NotifyExtended* e = reinterpret_cast<const NotifyExtended*>(p);
-      next = e->next;
-      action = e->action;
-      attributes = e->attributes;
+      NotifyExtended e;
+      // Records are DWORD-aligned; the extended header contains 64-bit values.
+      memcpy(&e, p, header);
+      next = e.next;
+      action = e.action;
+      attributes = e.attributes;
+      file_id = static_cast<unsigned long long>(e.file_id.QuadPart);
       known_attributes = true;
-      name_length = e->name_length;
-      name_ptr = e->name;
-      std::wstring key(e->name, e->name_length / sizeof(WCHAR));
-      std::pair<long long, long long> now(e->modification_time.QuadPart, e->file_size.QuadPart);
-      auto seen = w.contents.find(key);
+      name_length = e.name_length;
+      now = {e.modification_time.QuadPart, e.file_size.QuadPart};
+    } else {
+      FILE_NOTIFY_INFORMATION e;
+      memcpy(&e, p, header);
+      next = e.NextEntryOffset;
+      action = e.Action;
+      name_length = e.FileNameLength;
+    }
+    size_t record = next == 0 ? remaining : next;
+    if (record > remaining || record < header || name_length > record - header ||
+        name_length % sizeof(WCHAR) != 0 || next % sizeof(DWORD) != 0) {
+      break;
+    }
+    std::wstring name(reinterpret_cast<const WCHAR*>(p + header), name_length / sizeof(WCHAR));
+    if (known_attributes) {
+      auto seen = w.contents.find(name);
       if (action == FILE_ACTION_MODIFIED && seen != w.contents.end()) {
         attrib_only = seen->second == now;  // chmod, times: content unchanged
       }
       if (action == FILE_ACTION_REMOVED || action == FILE_ACTION_RENAMED_OLD_NAME) {
-        w.contents.erase(key);
+        w.contents.erase(name);
       } else {
-        w.contents[key] = now;
+        w.contents[name] = now;
       }
-    } else {
-      const FILE_NOTIFY_INFORMATION* e = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(p);
-      next = e->NextEntryOffset;
-      action = e->Action;
-      name_length = e->FileNameLength;
-      name_ptr = e->FileName;
     }
-    std::wstring name(name_ptr, name_length / sizeof(WCHAR));
     if (!known_attributes && action != FILE_ACTION_REMOVED &&
         action != FILE_ACTION_RENAMED_OLD_NAME && IsDirectory(Join(w.dir, name))) {
       attributes = FILE_ATTRIBUTE_DIRECTORY;
     }
     uint32_t isdir = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? IN_ISDIR : 0;
     if (!w.file.empty()) {
-      // A watched file: only its own name, and events without a name.
-      if (CompareStringOrdinal(name.c_str(), -1, w.file.c_str(), -1, TRUE) == CSTR_EQUAL) {
+      // Track renames even when the user did not request IN_MOVE_SELF.
+      if (w.awaiting_rename && action == FILE_ACTION_RENAMED_NEW_NAME) {
+        // Basic records carry no identity or guaranteed pairing. Only
+        // follow a destination that still identifies the watched file.
+        bool same_file = w.index != 0 &&
+                         (file_id != 0 ? file_id == w.index : MatchesNamedEntry(w, name));
+        if (same_file) {
+          w.file = name;
+          w.awaiting_rename = false;
+        } else if (file_id == 0 || w.index == 0) {
+          // The destination may already have moved or been deleted. Basic
+          // records cannot reconstruct that history by their current names.
+          // Tell the caller to rescan/rebuild instead of silently losing it.
+          Emit(-1, IN_Q_OVERFLOW, 0, "");
+        }
+      } else if (w.awaiting_rename
+                     ? file_id != 0 && file_id == w.index
+                     : (file_id == 0 || w.index == 0 || file_id == w.index) &&
+                           CompareStringOrdinal(name.c_str(), -1, w.file.c_str(), -1,
+                                                TRUE) == CSTR_EQUAL) {
         switch (action) {
           case FILE_ACTION_MODIFIED:
             EmitFor(w, attrib_only ? IN_ATTRIB : IN_MODIFY, 0, L"");
             if (!attrib_only) w.writing.insert(L"");
             break;
           case FILE_ACTION_REMOVED:
+            if (FileStillLinked(w)) break;
             EmitFor(w, IN_DELETE_SELF, 0, L"");
             End(w);
             break;
           case FILE_ACTION_RENAMED_OLD_NAME:
             EmitFor(w, IN_MOVE_SELF, 0, L"");
-            End(w);  // the name now belongs to no file this watch knows
+            w.awaiting_rename = !w.removed;
             break;
           default:
             break;
         }
+      } else if (w.awaiting_rename && file_id == 0) {
+        // An unidentifiable basic record may belong to the renamed file.
+        // Do not invent a modification/deletion or imply a complete stream.
+        Emit(-1, IN_Q_OVERFLOW, 0, "");
       }
     } else {
       switch (action) {
@@ -301,7 +404,36 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
     }
     if (next == 0) break;
     p += next;
+    remaining -= next;
   }
+}
+
+void Inotify::Complete(Watch& w, BOOL ok, DWORD bytes) {
+  w.pending = false;
+  if (w.removed) return;
+  if (ok && bytes > 0) {
+    Changes(w, bytes);
+  } else if (ok && IsDirectory(w.dir)) {
+    Emit(-1, IN_Q_OVERFLOW, 0, "");  // more changes than the buffer held
+  }
+  if (!w.removed && (!ok || (bytes == 0 && !IsDirectory(w.dir)) || !Issue(w))) {
+    if (w.file.empty()) EmitFor(w, IN_DELETE_SELF, 0, L"");
+    End(w);
+  }
+}
+
+// File-watch reads signal directly, even if the worker is busy. Reissue
+// after each completed read to collect records buffered by the filesystem
+// between requests. Always consume and rearm under the inotify mutex.
+bool Inotify::DrainFile(Watch& w) {
+  for (int reads = 0; w.pending && WaitForSingleObject(w.event, 0) == WAIT_OBJECT_0; ++reads) {
+    if (reads == kMaxDrainReads) return false;
+    SetThreadpoolWait(w.wait, nullptr, nullptr);
+    DWORD bytes = 0;
+    BOOL ok = GetOverlappedResult(w.handle, &w.ov, &bytes, FALSE);
+    Complete(w, ok, bytes);
+  }
+  return true;
 }
 
 // IN_CLOSE_WRITE for the files no one has open for writing any more.
@@ -310,7 +442,7 @@ void Inotify::ProbeWriters() {
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto& [wd, w] : watches) {
-      if (w->removed) continue;
+      if (w->removed || w->awaiting_rename) continue;
       if ((w->mask & IN_CLOSE_WRITE) == 0) {
         w->writing.clear();
         continue;
@@ -319,23 +451,38 @@ void Inotify::ProbeWriters() {
     }
   }
   for (auto& [wd, name] : probes) {
+    bool file_watch = name.empty();
     std::wstring path;
     {
       std::lock_guard<std::mutex> lock(mutex);
       auto it = watches.find(wd);
-      if (it == watches.end()) continue;
-      path = name.empty() ? Join(it->second->dir, it->second->file) : Join(it->second->dir, name);
+      if (it == watches.end() || it->second->removed) continue;
+      if (file_watch && it->second->awaiting_rename) continue;
+      path = Join(it->second->dir, file_watch ? it->second->file : name);
     }
     // Denying write sharing fails while any handle can write.
+    DWORD flags = file_watch ? FILE_FLAG_OPEN_REPARSE_POINT : FILE_ATTRIBUTE_NORMAL;
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                           OPEN_EXISTING, flags, nullptr);
     DWORD error = h == INVALID_HANDLE_VALUE ? GetLastError() : 0;
-    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
     if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) continue;
+    // The file may have moved while its rename notification was queued.
+    if (file_watch && (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
+                       error == ERROR_DELETE_PENDING)) {
+      continue;
+    }
+    BY_HANDLE_FILE_INFORMATION info;
+    bool got_info = file_watch && error == 0 && GetFileInformationByHandle(h, &info);
     std::lock_guard<std::mutex> lock(mutex);
     auto it = watches.find(wd);
-    if (it == watches.end() || it->second->writing.erase(name) == 0) continue;
-    if (error == 0) EmitFor(*it->second, IN_CLOSE_WRITE, 0, name);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (it == watches.end() || it->second->removed) continue;
+    Watch& w = *it->second;
+    if (file_watch) {
+      if (w.awaiting_rename || path != Join(w.dir, w.file)) continue;
+      if (error == 0 && w.index != 0 && (!got_info || !MatchesFile(w, info))) continue;
+    }
+    if (w.writing.erase(name) != 0 && error == 0) EmitFor(w, IN_CLOSE_WRITE, 0, name);
   }
 }
 
@@ -346,7 +493,9 @@ void Inotify::Run() {
     {
       std::lock_guard<std::mutex> lock(mutex);
       probing = false;
-      for (auto& [wd, w] : watches) probing |= !w->writing.empty() && !w->removed;
+      for (auto& [wd, w] : watches) {
+        probing |= !w->writing.empty() && !w->removed && !w->awaiting_rename;
+      }
     }
     DWORD bytes = 0;
     ULONG_PTR key = 0;
@@ -354,6 +503,19 @@ void Inotify::Run() {
     BOOL ok = GetQueuedCompletionStatus(port, &bytes, &key, &ov, probing ? 50 : INFINITE);
     DWORD error = ok ? 0 : GetLastError();
     if (ov == nullptr) {
+      if (ok && key == kFileReady) {
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          auto it = watches.find(static_cast<int>(bytes));
+          if (it != watches.end()) {
+            DrainFile(*it->second);
+            if (it->second->removed && !it->second->pending) watches.erase(it);
+          }
+          if (quitting && watches.empty()) return;
+        }
+        ProbeWriters();
+        continue;
+      }
       if ((!ok && error == WAIT_TIMEOUT) || (ok && key == kWake)) {
         ProbeWriters();
         continue;
@@ -365,7 +527,7 @@ void Inotify::Run() {
       for (auto& [wd, w] : watches) {
         if (!w->removed) {
           w->removed = true;
-          CancelIoEx(w->handle, &w->ov);
+          if (w->pending) CancelIoEx(w->handle, &w->ov);
         }
       }
       if (watches.empty()) return;
@@ -373,30 +535,10 @@ void Inotify::Run() {
     }
     std::unique_lock<std::mutex> lock(mutex);
     Watch* w = reinterpret_cast<Watch*>(key);
+    Complete(*w, ok, bytes);
     if (w->removed) {
-      // Its read has ended: drop it.
-      int wd = w->wd;
-      CloseHandle(w->handle);
-      watches.erase(wd);
+      watches.erase(w->wd);
       if (quitting && watches.empty()) return;
-      continue;
-    }
-    if (ok && bytes > 0) {
-      Changes(*w, bytes);
-    } else if (ok && IsDirectory(w->dir)) {
-      Emit(-1, IN_Q_OVERFLOW, 0, "");  // more changes than the buffer held
-    }
-    // The directory is gone (deleted, or its volume) when the read fails.
-    if (!w->removed && (!ok || (bytes == 0 && !IsDirectory(w->dir)) || !Issue(*w))) {
-      if (w->file.empty()) EmitFor(*w, IN_DELETE_SELF, 0, L"");
-      End(*w);
-    }
-    if (w->removed) {
-      // Ended (IN_ONESHOT, its file gone, its directory gone) with no read
-      // pending: drop it now.
-      int wd = w->wd;
-      CloseHandle(w->handle);
-      watches.erase(wd);
       continue;
     }
     lock.unlock();
@@ -422,22 +564,42 @@ void InotifyNoteWrite(HANDLE h) {
   auto same = [](const std::wstring& a, const std::wstring& b) {
     return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
   };
+  BY_HANDLE_FILE_INFORMATION info;
+  bool queried_info = false;
+  bool got_info = false;
   std::lock_guard<std::mutex> live(g_live_mutex);
   for (Inotify* in : g_live) {
     bool noted = false;
     {
       std::lock_guard<std::mutex> lock(in->mutex);
-      for (auto& [wd, w] : in->watches) {
-        if (w->removed || !same(w->dir, dir)) continue;
-        if (w->file.empty()) {
-          in->EmitFor(*w, IN_MODIFY, 0, name);
-          if (!w->removed) w->writing.insert(name);
-          noted = true;
-        } else if (same(w->file, name)) {
-          in->EmitFor(*w, IN_MODIFY, 0, L"");
-          if (!w->removed) w->writing.insert(L"");
-          noted = true;
+      for (auto it = in->watches.begin(); it != in->watches.end();) {
+        auto current = it++;
+        Watch& w = *current->second;
+        if (w.removed || !same(w.dir, dir)) continue;
+        if (w.file.empty()) {
+          in->EmitFor(w, IN_MODIFY, 0, name);
+          if (!w.removed) w.writing.insert(name);
+        } else {
+          if ((w.mask & (IN_MODIFY | IN_CLOSE_WRITE)) == 0) continue;
+          if (!queried_info) {
+            got_info = GetFileInformationByHandle(h, &info);
+            queried_info = true;
+          }
+          if (w.index != 0 ? !got_info || !MatchesFile(w, info) : !same(w.file, name)) continue;
+          if (!in->DrainFile(w)) {
+            // The producer is outrunning this bounded synchronous drain.
+            // An overflow is better than publishing the write out of order.
+            in->Emit(-1, IN_Q_OVERFLOW, 0, "");
+            continue;
+          }
+          if (w.removed) {
+            if (!w.pending) in->watches.erase(current);
+            continue;
+          }
+          in->EmitFor(w, IN_MODIFY, 0, L"");
+          if (!w.removed) w.writing.insert(L"");
         }
+        noted = true;
       }
     }
     if (noted) PostQueuedCompletionStatus(in->port, 0, kWake, nullptr);
@@ -454,6 +616,11 @@ int ReadInotify(Inotify& in, void* buf, unsigned int count) {
   while (!in.queue.empty() && total + in.queue.front().size() <= count) {
     memcpy(static_cast<char*>(buf) + total, in.queue.front().data(), in.queue.front().size());
     total += in.queue.front().size();
+    if (in.overflow_queued) {
+      inotify_event header;
+      memcpy(&header, in.queue.front().data(), sizeof(header));
+      if (header.mask == IN_Q_OVERFLOW) in.overflow_queued = false;
+    }
     in.queue.pop_front();
   }
   if (in.queue.empty()) SetReadable(*in.ready, false);
@@ -501,10 +668,12 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
   DWORD open_flags = FILE_FLAG_BACKUP_SEMANTICS |
                      ((mask & IN_DONT_FOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0);
+  auto w = std::make_unique<Watch>();
   HANDLE target = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                               OPEN_EXISTING, open_flags, nullptr);
   if (target == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  w->identity = target;
   BY_HANDLE_FILE_INFORMATION info;
   wchar_t final_path[32768];
   DWORD n = 0;
@@ -513,15 +682,13 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
                                            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)) != 0 &&
             n < 32768;
   DWORD error = GetLastError();
-  CloseHandle(target);
   if (!ok) {
     SetLastError(error);
     return gesher::FailWithLastError();
   }
   bool directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
   if ((mask & IN_ONLYDIR) != 0 && !directory) return errno = ENOTDIR, -1;
-  unsigned long long index =
-      (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+  unsigned long long index = gesher::FileIndex(info);
   uint32_t events = mask & (IN_ALL_EVENTS | IN_ONESHOT | IN_EXCL_UNLINK);
 
   std::lock_guard<std::mutex> lock(in->mutex);
@@ -532,7 +699,6 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
       return wd;
     }
   }
-  auto w = std::make_unique<Watch>();
   w->wd = in->next_wd++;
   w->mask = events;
   w->volume = info.dwVolumeSerialNumber;
@@ -550,21 +716,25 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
   if (w->handle == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
   w->extended = gesher::ExtendedReader() != nullptr;
-  if (CreateIoCompletionPort(w->handle, in->port, reinterpret_cast<ULONG_PTR>(w.get()), 0) == nullptr) {
-    int r = gesher::FailWithLastError();
-    CloseHandle(w->handle);
-    return r;
+  if (directory) {
+    if (CreateIoCompletionPort(w->handle, in->port, reinterpret_cast<ULONG_PTR>(w.get()), 0) == nullptr) {
+      return gesher::FailWithLastError();
+    }
+  } else {
+    // Unlike an IOCP-associated handle, an event-backed read's result is
+    // available before the worker dequeues its wakeup.
+    w->event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (w->event == nullptr) return gesher::FailWithLastError();
+    w->port = in->port;
+    w->wait = CreateThreadpoolWait(gesher::FileReadReady, w.get(), nullptr);
+    if (w->wait == nullptr) return gesher::FailWithLastError();
   }
   bool issued = in->Issue(*w);
   if (!issued && w->extended) {
     w->extended = false;  // a volume without extended information (FAT, network)
     issued = in->Issue(*w);
   }
-  if (!issued) {
-    int r = gesher::FailWithLastError();
-    CloseHandle(w->handle);
-    return r;
-  }
+  if (!issued) return gesher::FailWithLastError();
   int wd = w->wd;
   in->watches[wd] = std::move(w);
   return wd;

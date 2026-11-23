@@ -5,6 +5,8 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.IPackageManager;
+import android.content.pm.InstallSourceInfo;
+import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.net.Uri;
@@ -25,7 +27,6 @@ import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.gesher.server.ApkPackage;
-import com.gesher.server.GmsSignatureSpoofing;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.PackageUids;
 import com.gesher.server.StandIn;
@@ -152,7 +153,7 @@ public final class PackageVisibilityContractTest {
         // inherited Binder implementation returns null and the wrapper indexes [0].
         check(client.canPackageQuery(A, A), "Public self-package query failed");
         boolean shared = a.uid() == b.uid();
-        check(shared != GmsSignatureSpoofing.isEnabled(), "Fixture did not use actual runtime UID mode");
+        check(!shared, "Unrelated packages shared an identity in the current runtime UID mode");
         check(client.canPackageQuery(A, B) == shared, "Unrelated distinct UID became visible");
         check(Arrays.equals(client.canPackageQuery(A, new String[]{B, A, "android", B}),
                 new boolean[]{shared, true, true, shared}), "Bulk query lost order, duplicate or false values");
@@ -282,9 +283,123 @@ public final class PackageVisibilityContractTest {
         check(f.hasAction(ACTION) && !f.hasAction("*") && f.countDataTypes() == 1,
                 "Visibility matching mutated installed filters");
     }
+    private static void installSourceVisibility() throws Exception {
+        ApkPackage target = record(parsed(A)), installer = record(parsed(B));
+        PackageImpl observer = parsed(C);
+        observer.addQueriesPackage(A);
+        ApkPackage observerRecord = record(observer);
+        PackageManagerService pm = service(target, installer, observerRecord);
+        String generation = "951630b6-0775-4a4c-9366-7d4a7cc2c433";
+        // Bind the controlled test record to a specific installation, as Session does.
+        set(installer, "mEnabledOwner", generation);
+        Class<?> type = Class.forName("com.gesher.server.PackageInstallSource");
+        var decode = type.getDeclaredMethod("decode", String.class);
+        decode.setAccessible(true);
+        Object attribution = decode.invoke(null, B + "," + generation + ",2");
+        set(target, "mInstallSource", attribution);
+        PackageManager publicClient = client(pm);
+        as(target.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInstallingPackageName()) && B.equals(source.getInitiatingPackageName())
+                    && source.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE,
+                    "Own authenticated installer was filtered");
+            check(B.equals(publicClient.getInstallerPackageName(A)) && publicClient.canPackageQuery(A, B),
+                    "Legacy getter or installer visibility edge disagreed with install source");
+        });
+        if (target.uid() != observerRecord.uid()) {
+            as(observerRecord.uid(), () -> check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                    "Observer learned about an otherwise hidden installer"));
+            as(installer.uid(), () -> expect(PackageManager.NameNotFoundException.class,
+                    () -> publicClient.getInstallSourceInfo(A), "Installer visibility was made bidirectional"));
+        }
+        // AOSP grants separate visibility edges to the still-installed initiator and
+        // the reassigned installer. Third-party callers filter those two roles independently.
+        String d = "fixture.visibility.d", e = "fixture.visibility.e";
+        ApkPackage nextInstaller = record(parsed(d));
+        set(nextInstaller, "mEnabledOwner", "932c12b3-57c3-40eb-9d6e-d0913c506914");
+        PackageImpl seesNext = parsed(C); seesNext.addQueriesPackage(A); seesNext.addQueriesPackage(d);
+        observerRecord = record(seesNext);
+        PackageImpl seesInitiator = parsed(e); seesInitiator.addQueriesPackage(A); seesInitiator.addQueriesPackage(B);
+        ApkPackage initiatingObserver = record(seesInitiator);
+        var replace = type.getDeclaredMethod("withInstaller", ApkPackage.class); replace.setAccessible(true);
+        set(target, "mInstallSource", replace.invoke(attribution, nextInstaller));
+        set(pm, "mPackages", Map.of(A, target, B, installer, C, observerRecord, d, nextInstaller, e, initiatingObserver));
+        as(target.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInitiatingPackageName()) && d.equals(source.getInstallingPackageName()),
+                    "Reassignment replaced the historical initiator");
+            check(publicClient.canPackageQuery(A, B) && publicClient.canPackageQuery(A, d),
+                    "Installed initiator lost its visibility edge after reassignment");
+        });
+        if (target.uid() != observerRecord.uid()) {
+            as(observerRecord.uid(), () -> {
+                InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+                check(source.getInitiatingPackageName() == null && d.equals(source.getInstallingPackageName()),
+                        "Current installer visibility leaked the independent initiator");
+            });
+            as(initiatingObserver.uid(), () -> {
+                InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+                check(B.equals(source.getInitiatingPackageName()) && source.getInstallingPackageName() == null,
+                        "Initiator visibility depended on visibility of the current installer");
+            });
+        }
+        set(pm, "mPackages", Map.of(A, target, C, observerRecord));
+        check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                "Removed installer remained installer of record");
+        ApkPackage replacement = record(parsed(B));
+        set(replacement, "mEnabledOwner", "5cebb932-01c0-4015-b0fa-b8218e4df7cd");
+        set(pm, "mPackages", Map.of(A, target, B, replacement, C, observerRecord));
+        check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                "A same-name reinstall inherited attribution from an earlier generation");
+
+        var fromSession = type.getDeclaredMethod("fromSession", ApkPackage.class, int.class);
+        fromSession.setAccessible(true);
+        var encode = type.getDeclaredMethod("encode");
+        encode.setAccessible(true);
+        Object categoryOnly = fromSession.invoke(null, null, PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE);
+        set(target, "mInstallSource", decode.invoke(null, encode.invoke(categoryOnly)));
+        InstallSourceInfo categorySource = publicClient.getInstallSourceInfo(A);
+        check(categorySource.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE
+                && categorySource.getInitiatingPackageName() == null
+                && categorySource.getInstallingPackageName() == null,
+                "Durable source category required or manufactured an installer identity");
+    }
+
+    private static boolean serviceQuery(PackageManagerService pm, String source, String target)
+            throws Exception {
+        var query = PackageManagerService.class.getDeclaredMethod(
+                "canSeeInstalledPackage", String.class, String.class);
+        query.setAccessible(true);
+        return (Boolean) query.invoke(pm, source, target);
+    }
+    private static void authenticatedServiceVisibility() throws Exception {
+        ApkPackage a = record(parsed(A)), b = record(parsed(B));
+        PackageManagerService hidden = service(a, b);
+        check(serviceQuery(hidden, A, A), "Authenticated service lookup hid its own package");
+        check(!serviceQuery(hidden, A, B), "Authenticated service lookup exposed an unrelated package");
+        check(!serviceQuery(hidden, "absent", B), "Unknown service caller gained visibility");
+        PackageImpl queries = parsed(A); queries.addQueriesPackage(B);
+        PackageManagerService visible = service(record(queries), b);
+        check(serviceQuery(visible, A, B), "Authenticated service lookup ignored manifest queries");
+        set(visible, "mRemoving", Map.of(B, b));
+        check(!serviceQuery(visible, A, B), "Removing provider remained visible to service lookup");
+        PackageImpl siblingQueries = parsed(C); siblingQueries.addQueriesPackage(B);
+        ApkPackage sibling = record(siblingQueries); set(sibling, "mUid", a.uid());
+        PackageManagerService shared = service(a, sibling, b);
+        check(serviceQuery(shared, A, C), "Authenticated shared UID lost sibling visibility");
+        check(serviceQuery(shared, A, B), "Authenticated shared UID lost sibling provider queries");
+        set(shared, "mPackages", Map.of(A, a, B, b));
+        check(!serviceQuery(shared, A, B), "Removed shared UID sibling kept its provider queries");
+        PackageImpl legacy = parsed(A); legacy.setTargetSdkVersion(29);
+        check(serviceQuery(service(record(legacy), b), A, B), "Legacy target lost provider visibility");
+        PackageImpl all = parsed(A); permission(all, Manifest.permission.QUERY_ALL_PACKAGES);
+        check(serviceQuery(service(record(all), b), A, B), "QUERY_ALL_PACKAGES lost provider visibility");
+    }
     public static int run(boolean onArt) throws Exception {
         art = onArt; checks = 0; shapesAndCallers();
-        if (GmsSignatureSpoofing.isEnabled()) { declarations(); components(); }
+        installSourceVisibility();
+        authenticatedServiceVisibility();
+        declarations(); components();
         return checks;
     }
     public static void main(String[] args) throws Exception {

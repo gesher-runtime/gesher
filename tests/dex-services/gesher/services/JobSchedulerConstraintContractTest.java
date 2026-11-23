@@ -10,6 +10,7 @@ import android.app.job.JobInfo;
 import android.app.job.JobParameters;
 import android.app.job.JobScheduler;
 import android.app.job.JobWorkItem;
+import android.app.job.PendingJobReasonsInfo;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -33,9 +34,14 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import sun.misc.Unsafe;
 
 /**
@@ -112,7 +118,7 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static class TestService extends IJobService.Stub {
+    static class TestService extends IJobService.Stub {
         int starts;
         int stops;
         int networkChanges;
@@ -170,7 +176,7 @@ public final class JobSchedulerConstraintContractTest {
         public void getTransferredUploadBytes(JobParameters params, JobWorkItem item) { }
     }
 
-    private static final class TestRunHandle {
+    static final class TestRunHandle {
         final Object job;
         final Object run;
         final TestService service;
@@ -184,15 +190,19 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static final class Harness implements AutoCloseable {
+    static final class Harness implements AutoCloseable {
         final Object pm, atm, am, scheduler;
         final Class<?> schedulerType, jobType, runType;
         final PackageImpl parsed;
 
         Harness() throws Exception { this(true); }
 
+        Harness(boolean networkPermission) throws Exception { this(networkPermission, false); }
+
+        // The parsed package is sealed by hideAsFinal(), so permissions such as
+        // RECEIVE_BOOT_COMPLETED must be declared here rather than added later.
         @SuppressWarnings("unchecked")
-        Harness(boolean networkPermission) throws Exception {
+        Harness(boolean networkPermission, boolean bootPermission) throws Exception {
             parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".TestJobService");
@@ -207,6 +217,8 @@ public final class JobSchedulerConstraintContractTest {
                     android.Manifest.permission.ACCESS_NETWORK_STATE, 0, java.util.Set.of()));
             parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                     "android.permission.RUN_USER_INITIATED_JOBS", 0, java.util.Set.of()));
+            if (bootPermission) parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                    android.Manifest.permission.RECEIVE_BOOT_COMPLETED, 0, java.util.Set.of()));
             parsed.hideAsFinal();
 
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
@@ -326,6 +338,17 @@ public final class JobSchedulerConstraintContractTest {
 
         int reason(int id) throws Exception {
             return (Integer) invoke(scheduler, "getPendingJobReason", new Class<?>[]{String.class, int.class}, NAMESPACE, id);
+        }
+
+        int[] reasons(int id) throws Exception {
+            return (int[]) invoke(scheduler, "getPendingJobReasons",
+                    new Class<?>[]{String.class, int.class}, NAMESPACE, id);
+        }
+
+        @SuppressWarnings("unchecked")
+        List<PendingJobReasonsInfo> history(int id) throws Exception {
+            return (List<PendingJobReasonsInfo>) invoke(scheduler, "getPendingJobReasonsHistory",
+                    new Class<?>[]{String.class, int.class}, NAMESPACE, id);
         }
 
         void setNetworkState(Integer state) throws Exception {
@@ -951,7 +974,12 @@ public final class JobSchedulerConstraintContractTest {
                 "Network callback death stranded/dropped running job instead of retrying");
         check((Integer) get(run.job, "failures") == 0 && (Integer) get(run.job, "systemStops") == 1,
                 "Network callback death fabricated an application completion failure");
-        invoke(h.scheduler, "updateNetwork", new Class<?>[]{h.runType, Network.class}, run.run, new Network(145));
+        long generation = (Long) get(h.scheduler, "mHostGeneration");
+        synchronized (get(run.run, "dispatch")) {
+            long observation = (Long) get(h.scheduler, "mConstraintObservation");
+            invoke(h.scheduler, "updateNetwork", new Class<?>[]{h.runType, Network.class, long.class, long.class},
+                    run.run, new Network(145), generation, observation);
+        }
         check(service.networkChanges == 2, "Finished run received a late network callback");
         h.cancel(127);
     }
@@ -1013,6 +1041,11 @@ public final class JobSchedulerConstraintContractTest {
         TestRunHandle pending = h.start(131, starting);
         h.setNetworkSnapshot(snapshot(48, "wifi", false, false));
         check(starting.networkChanges == 0, "Network callback arrived before start acknowledgement");
+        long acceptedObservation = (Long) get(h.scheduler, "mConstraintObservation");
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        check((Long) get(h.scheduler, "mConstraintObservation") > acceptedObservation
+                        && starting.networkChanges == 0,
+                "Unchanged polling did not leave the accepted handover waiting for start acknowledgement");
         pending.params.getCallback().acknowledgeStartMessage(131, true);
         check(starting.networkChanges == 1 && new Network(148).equals(pending.params.getNetwork()),
                 "Deferred network handover was not delivered after start acknowledgement");
@@ -1175,6 +1208,345 @@ public final class JobSchedulerConstraintContractTest {
         h.cancel(138);
     }
 
+    private static void testTopPackageChargingExemption(Harness h) throws Exception {
+        int id = 170;
+        h.setPowerStatus(new int[]{1, 2 | 8, 10});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true).build());
+        Object record = UNSAFE.allocateInstance(type("ActivityTaskManagerService$ActivityRecord"));
+        Object process = UNSAFE.allocateInstance(type("ActivityTaskManagerService$ProcessRecord"));
+        set(process, "uid", UID); // The legacy profile may assign unrelated packages the same UID.
+        set(process, "packageName", "different.top.package");
+        set(record, "app", process);
+        set(h.atm, "mTopResumed", record);
+        try {
+            check(h.reason(id) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CHARGING,
+                    "A different top package granted the charging exemption through a shared UID");
+            set(process, "packageName", PACKAGE);
+            check(h.reason(id) == JobScheduler.PENDING_JOB_REASON_UNDEFINED,
+                    "The actual top job package did not receive its charging exemption");
+        } finally {
+            set(h.atm, "mTopResumed", null);
+            h.cancel(id);
+        }
+    }
+
+    private static void testStoragePressureWithoutNotification(Harness h) throws Exception {
+        int jobId = 171;
+        long gib = 1024L * 1024 * 1024;
+        long lowThreshold = 500L * 1024 * 1024;
+        h.setStorageSpace(20 * gib, gib);
+        h.schedule(new JobInfo.Builder(jobId, serviceComponent()).setRequiresStorageNotLow(true).build());
+        TestService service = new TestService();
+        service.rescheduleOnStop = true;
+        TestRunHandle run = h.start(jobId, service);
+
+        // Other Windows processes can consume disk space without sending a Gesher event.
+        set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, lowThreshold});
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        check(service.stops == 1 && service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW,
+                "Periodic host observation missed the low storage threshold");
+        List<PendingJobReasonsInfo> activeHistory = h.history(jobId);
+        check(!activeHistory.isEmpty() && Arrays.equals(
+                        activeHistory.get(activeHistory.size() - 1).getPendingJobReasons(),
+                        new int[]{JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW}),
+                "Active-run constraint loss was not recorded before stop acknowledgement");
+        check(h.reason(jobId) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW,
+                "Retry lost its original storage requirement");
+        check((Integer) get(run.job, "systemStops") == 1, "Storage loss was not recorded as a system stop");
+        h.setStorageSpace(20 * gib, lowThreshold + 1);
+        check(h.reason(jobId) == JobScheduler.PENDING_JOB_REASON_UNDEFINED,
+                "Recovered storage did not make the job eligible again");
+        h.cancel(jobId);
+    }
+
+    private static void testPendingReasonsAndHistory(Harness h) throws Exception {
+        int id = 172;
+        long gib = 1024L * 1024 * 1024;
+        h.setNetworkState(0);
+        h.setPowerStatus(new int[]{0, 2, 10});
+        h.setStorageSpace(20 * gib, 0);
+        JobInfo job = new JobInfo.Builder(id, serviceComponent())
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setRequiresCharging(true).setRequiresBatteryNotLow(true)
+                .setRequiresStorageNotLow(true).setMinimumLatency(60_000)
+                .setOverrideDeadline(120_000)
+                .build();
+        h.schedule(job);
+        h.setStorageSpace(20 * gib, 0); // Record the production scheduler observation.
+        int[] blocked = {
+                JobScheduler.PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW,
+                JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CHARGING,
+                JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY,
+                JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW,
+                JobScheduler.PENDING_JOB_REASON_CONSTRAINT_MINIMUM_LATENCY,
+                JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEADLINE,
+        };
+        check(Arrays.equals(h.reasons(id), blocked), "Pending API did not report all active constraints");
+        check(h.reason(id) == blocked[0], "Legacy pending API diverged from the all-reasons API");
+        List<PendingJobReasonsInfo> history = h.history(id);
+        check(history.size() == 1 && Arrays.equals(history.get(0).getPendingJobReasons(), blocked),
+                "Missing initial pending constraint history");
+        check(Math.abs(history.get(0).getTimestampMillis() - System.currentTimeMillis()) < 10_000,
+                "History timestamp is not wall-clock time");
+        history.get(0).getPendingJobReasons()[0] = -999;
+        check(Arrays.equals(h.history(id).get(0).getPendingJobReasons(), blocked),
+                "Local client could mutate server history");
+        h.setStorageSpace(20 * gib, 0);
+        check(h.history(id).size() == 1, "Identical host observation duplicated history");
+        for (int i = 0; i < 14; i++) h.setStorageSpace(20 * gib, i % 2 == 0 ? gib : 0);
+        history = h.history(id);
+        check(history.size() == 10, "History did not enforce Android's ten-entry bound");
+        check(Arrays.equals(history.get(9).getPendingJobReasons(), blocked),
+                "History omitted most recent constraint state");
+        long previous = 0;
+        for (PendingJobReasonsInfo entry : history) {
+            check(entry.getTimestampMillis() >= previous, "History is not returned in observation order");
+            previous = entry.getTimestampMillis();
+        }
+        h.cancel(id);
+        check(Arrays.equals(h.reasons(id), new int[]{JobScheduler.PENDING_JOB_REASON_INVALID_JOB_ID}),
+                "Canceled ID was reported as merely unknown");
+        try {
+            h.history(id);
+            throw new AssertionError("Canceled ID exposed a history");
+        } catch (IllegalArgumentException expected) { checks++; }
+        h.schedule(job);
+        h.setStorageSpace(20 * gib, gib);
+        check(h.history(id).size() == 1, "Replacement inherited history for its reused ID");
+        h.cancel(id);
+    }
+
+    private static void testAdmissionOrderAndCapacity(Harness h) throws Exception {
+        List<Object> eligible = new ArrayList<>();
+        h.schedule(new JobInfo.Builder(173, serviceComponent()).setPriority(JobInfo.PRIORITY_LOW).build());
+        h.schedule(new JobInfo.Builder(174, serviceComponent()).setPriority(JobInfo.PRIORITY_HIGH).build());
+        h.schedule(new JobInfo.Builder(175, serviceComponent()).setExpedited(true).build());
+        for (int id = 173; id <= 175; id++) eligible.add(h.findJob(id));
+        List<Object> ready = new ArrayList<>();
+        synchronized (h.scheduler) {
+            set(h.scheduler, "mRunning", 2); // Two occupied slots from other jobs.
+            invoke(h.scheduler, "admitReady", new Class<?>[]{List.class, List.class, String.class},
+                    eligible, ready, null);
+        }
+        check(ready.size() == 2, "Admission did not respect its available slots");
+        JobInfo first = (JobInfo) get(get(ready.get(0), "job"), "info");
+        JobInfo second = (JobInfo) get(get(ready.get(1), "job"), "info");
+        check(first.getId() == 175 && second.getId() == 174,
+                "Expedited and priority jobs were not selected ahead of regular jobs");
+        check(h.reason(173) == JobScheduler.PENDING_JOB_REASON_DEVICE_STATE
+                        && h.reason(174) == JobScheduler.PENDING_JOB_REASON_EXECUTING,
+                "Admission capacity and executing reasons were not observable");
+        for (int id = 173; id <= 175; id++) h.cancel(id);
+        set(h.scheduler, "mRunning", 0);
+    }
+
+    private static void testSupersededConstraintObservation(Harness h) throws Exception {
+        int id = 176;
+        h.setNetworkState(2);
+        h.schedule(new JobInfo.Builder(id, serviceComponent())
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build());
+        TestService service = new TestService();
+        TestRunHandle handle = h.start(id, service);
+        Class<?> updateType = type("JobSchedulerService$RunConstraintUpdate");
+        Class<?>[] signature = {h.runType, long.class, long.class, int.class, Network.class};
+        long generation = (Long) get(h.scheduler, "mHostGeneration");
+        long observation = (Long) get(h.scheduler, "mConstraintObservation");
+        Object obsoleteStop = make(updateType, signature, handle.run, generation, observation,
+                JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY, null);
+        Object obsoleteNetwork = make(updateType, signature, handle.run, generation, observation,
+                JobParameters.STOP_REASON_UNDEFINED, new Network(999));
+        h.setNetworkSnapshot(snapshot(59, "wifi", false, false));
+        check(handle.params.getNetwork() != null && handle.params.getNetwork().getNetId() == 159,
+                "New network assignment did not reach the job");
+        invoke(h.scheduler, "applyConstraintUpdate", new Class<?>[]{updateType}, obsoleteStop);
+        invoke(h.scheduler, "applyConstraintUpdate", new Class<?>[]{updateType}, obsoleteNetwork);
+        long currentGeneration = (Long) get(h.scheduler, "mHostGeneration");
+        long currentObservation = (Long) get(h.scheduler, "mConstraintObservation");
+        Object stalePoll = make(updateType, signature, handle.run, currentGeneration,
+                currentObservation - 1, JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY, null);
+        invoke(h.scheduler, "applyConstraintUpdate", new Class<?>[]{updateType}, stalePoll);
+        check(service.stops == 0 && service.networkChanges == 1
+                        && handle.params.getNetwork().getNetId() == 159,
+                "A superseded host or same-revision polling snapshot stopped or rebound an active job");
+        handle.params.getCallback().jobFinished(id, false);
+    }
+
+    private static void awaitBlocked(Thread thread, String message) throws InterruptedException {
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (thread.isAlive() && thread.getState() != Thread.State.BLOCKED && System.nanoTime() < until) {
+            Thread.sleep(1);
+        }
+        check(thread.getState() == Thread.State.BLOCKED, message);
+    }
+
+    private static void testPolledStorageBeforeNewerAdmission(Harness h) throws Exception {
+        int id = 180;
+        long gib = 1024L * 1024 * 1024;
+        h.setStorageSpace(20 * gib, gib);
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresStorageNotLow(true).build());
+        Object run = h.begin(id);
+        TestService service = new TestService();
+        service.acknowledgeImmediately = false;
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread poller = new Thread(() -> {
+            try {
+                invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+            } catch (Throwable unexpected) {
+                failure.set(unexpected);
+            }
+        }, "job-stale-storage-poll-test");
+        poller.setDaemon(true);
+        long generation = (Long) get(h.scheduler, "mHostGeneration");
+        synchronized (get(run, "dispatch")) {
+            // Exercise a real scheduler proposal waiting behind admission, with
+            // neither disk-space observation accompanied by a host notification.
+            set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, 0});
+            poller.start();
+            awaitBlocked(poller, "Storage poll did not reach the run dispatch gate");
+            set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, gib});
+            invoke(run, "started", new Class<?>[]{IBinder.class}, service.asBinder());
+        }
+        poller.join(5_000);
+        check(!poller.isAlive() && failure.get() == null, "Storage poll failed: " + failure.get());
+        check((Long) get(h.scheduler, "mHostGeneration") == generation,
+                "Fixture unexpectedly notified a host storage change");
+        check(service.starts == 1 && service.stops == 0 && h.runningCount() == 1,
+                "An older same-revision storage poll stopped a newly admitted run");
+        List<PendingJobReasonsInfo> recovered = h.history(id);
+        check(Arrays.equals(recovered.get(recovered.size() - 1).getPendingJobReasons(),
+                        new int[]{JobScheduler.PENDING_JOB_REASON_UNDEFINED}),
+                "Accepted start-time recovery left the old low-storage history current");
+
+        set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, 0});
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        check(service.stops == 1
+                        && service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW,
+                "A genuinely newer storage loss was suppressed");
+        List<PendingJobReasonsInfo> stopping = h.history(id);
+        check(Arrays.equals(stopping.get(stopping.size() - 1).getPendingJobReasons(),
+                        new int[]{JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW}),
+                "Active constraint history waited for the stop acknowledgement");
+        service.lastStopParams.getCallback().acknowledgeStopMessage(id, false);
+        check(h.runningCount() == 0, "Storage stop acknowledgement did not retire the run");
+    }
+
+    private static void testCancelDuringStartObservation(Harness h) throws Exception {
+        int id = 178;
+        h.setPowerStatus(new int[]{1, 8, 70});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true).build());
+        Object run = h.begin(id);
+        TestService service = new TestService();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread starter = new Thread(() -> {
+            try {
+                invoke(run, "started", new Class<?>[]{IBinder.class}, service.asBinder());
+            } catch (Throwable unexpected) {
+                failure.compareAndSet(null, unexpected);
+            }
+        }, "job-start-observation-test");
+        Thread canceller = new Thread(() -> {
+            try {
+                h.cancel(id);
+            } catch (Throwable unexpected) {
+                failure.compareAndSet(null, unexpected);
+            }
+        }, "job-cancel-observation-test");
+        starter.setDaemon(true);
+        canceller.setDaemon(true);
+        synchronized (h.atm) {
+            starter.start();
+            awaitBlocked(starter, "Job did not wait for the top activity observation");
+            canceller.start();
+            awaitBlocked(canceller, "Cancellation did not wait for the run dispatch gate");
+            check(h.getPendingJob(id) == null, "Cancellation did not retire the schedule");
+        }
+        starter.join(5_000);
+        canceller.join(5_000);
+        check(!starter.isAlive() && !canceller.isAlive() && failure.get() == null,
+                "Start or cancellation did not finish: " + failure.get());
+        check(service.starts == 0 && service.stops == 0 && h.runningCount() == 0,
+                "Canceled binding still called the job service");
+    }
+
+    private static void testPendingReasonRefreshesObservation(Harness h) throws Exception {
+        int id = 179;
+        h.setNetworkState(0);
+        h.setPowerStatus(new int[]{1, 8, 70});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true)
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build());
+        AtomicReference<int[]> reasons = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread reader = new Thread(() -> {
+            try {
+                reasons.set(h.reasons(id));
+            } catch (Throwable unexpected) {
+                failure.set(unexpected);
+            }
+        }, "job-pending-observation-test");
+        reader.setDaemon(true);
+        synchronized (h.atm) {
+            reader.start();
+            awaitBlocked(reader, "Pending query did not wait for the top activity observation");
+            // Publish the native network event without performing a synchronous test pass.
+            set(h.scheduler, "mNetworkSnapshotOverride", snapshot(60, "wifi", false, false));
+            int network = field(h.schedulerType, "OBSERVE_NETWORK").getInt(null);
+            invoke(h.scheduler, "constraintsChanged", new Class<?>[]{int.class}, network);
+        }
+        reader.join(5_000);
+        check(!reader.isAlive() && failure.get() == null, "Pending query failed: " + failure.get());
+        check(Arrays.equals(reasons.get(), new int[]{JobScheduler.PENDING_JOB_REASON_UNDEFINED}),
+                "Pending query returned a superseded network observation");
+        h.cancel(id);
+    }
+
+    private static void testWindowsPowerEventWakesWorker(Harness h) throws Exception {
+        int id = 177;
+        h.setPowerStatus(new int[]{1, 8, 70});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true).build());
+        CountDownLatch stopped = new CountDownLatch(1);
+        AtomicReference<Thread> stopThread = new AtomicReference<>();
+        TestService service = new TestService() {
+            @Override public void stopJob(JobParameters params) {
+                super.stopJob(params);
+                stopThread.set(Thread.currentThread());
+                stopped.countDown();
+            }
+        };
+        h.start(id, service);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                invoke(h.scheduler, "run", new Class<?>[0]);
+            } catch (Throwable unexpected) {
+                failure.set(unexpected);
+                stopped.countDown();
+            }
+        }, "job-event-test");
+        worker.setDaemon(true);
+        worker.start();
+        try {
+            long waitUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (worker.getState() != Thread.State.TIMED_WAITING && System.nanoTime() < waitUntil) {
+                Thread.sleep(1);
+            }
+            check(worker.getState() == Thread.State.TIMED_WAITING,
+                    "Scheduler did not enter its constraint wait");
+            // Isolate the native power source but deliver the real Windows event entry point.
+            set(h.scheduler, "mPowerStatusOverride", new int[]{0, 0, 70});
+            int event = field(type("WindowsHost"), "EVENT_POWER_STATUS").getInt(null);
+            invoke(h.scheduler, "onWindowsEvents", new Class<?>[]{int.class}, event);
+            check(stopped.await(5, TimeUnit.SECONDS), "Windows event did not wake the scheduler worker");
+            check(failure.get() == null, "Scheduler worker failed: " + failure.get());
+            check(stopThread.get() == worker, "Windows event thread delivered an app callback");
+            check(service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_CHARGING,
+                    "Windows event omitted the charging stop reason");
+        } finally {
+            worker.interrupt();
+            worker.join(5_000);
+        }
+        check(!worker.isAlive(), "Scheduler did not leave its wait when interrupted");
+    }
+
     private static void testNetworkPermission(Harness ignored) throws Exception {
         try (Harness h = new Harness(false)) {
             h.setNetworkState(2);
@@ -1215,7 +1587,20 @@ public final class JobSchedulerConstraintContractTest {
             testBindingAndCallbackTimeouts(h);
             testWorkCompletionOutcomes(h);
             testStorageAndStablePower(h);
+            testTopPackageChargingExemption(h);
+            testStoragePressureWithoutNotification(h);
+            testPendingReasonsAndHistory(h);
+            testAdmissionOrderAndCapacity(h);
+            testSupersededConstraintObservation(h);
+            testCancelDuringStartObservation(h);
+            testPendingReasonRefreshesObservation(h);
             testNetworkPermission(h);
+        }
+        try (Harness h = new Harness()) {
+            testPolledStorageBeforeNewerAdmission(h);
+        }
+        try (Harness h = new Harness()) {
+            testWindowsPowerEventWakesWorker(h);
         }
     }
 
@@ -1224,6 +1609,8 @@ public final class JobSchedulerConstraintContractTest {
         android.system.Os.unsetenv("GESHER_BINDER_UID");
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true);
         contracts();
+        JobSchedulerAdmissionTest.contracts(true);
+        JobSchedulerContentTriggerTest.contracts(true);
         System.out.println("JobSchedulerConstraintContractTest all passed: " + checks + " checks");
     }
 }

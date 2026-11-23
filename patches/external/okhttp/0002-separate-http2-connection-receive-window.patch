@@ -1,0 +1,63 @@
+diff --git a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java
+index 80c2743..3900765 100644
+--- a/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java
++++ b/repackaged/okhttp/src/main/java/com/android/okhttp/internal/framed/FramedConnection.java
+@@ -116,7 +116,17 @@ public final class FramedConnection implements Closeable {
+   /** Settings we communicate to the peer. */
+   Settings okHttpSettings = new Settings();
+ 
+-  private static final int OKHTTP_CLIENT_WINDOW_SIZE = 16 * 1024 * 1024;
++  private static final int OKHTTP_CLIENT_WINDOW_SIZE = 6 * 1024 * 1024;
++
++  /**
++   * Like Chromium, a client grants the connection more receive credit than one
++   * stream. A stream whose reader paused cannot consume the whole shared window
++   * and stall every other stream on the connection.
++   */
++  private static final int OKHTTP_CLIENT_CONNECTION_WINDOW_SIZE = 16 * 1024 * 1024;
++
++  /** Receive window granted to the peer for the whole connection. */
++  int connectionReceiveWindow = DEFAULT_INITIAL_WINDOW_SIZE;
+ 
+   /** Settings we receive from the peer. */
+   // TODO: MWS will need to guard on this setting before attempting to push.
+@@ -144,11 +154,12 @@ public final class FramedConnection implements Closeable {
+     nextPingId = builder.client ? 1 : 2;
+ 
+     // Flow control was designed more for servers, or proxies than edge clients.
+-    // If we are a client, set the flow control window to 16MiB.  This avoids
+-    // thrashing window updates every 64KiB, yet small enough to avoid blowing
+-    // up the heap.
++    // If we are a client, set the stream flow control window to 6MiB and the
++    // connection window to 16MiB.  This avoids thrashing window updates every
++    // 64KiB, yet small enough to avoid blowing up the heap.
+     if (builder.client) {
+       okHttpSettings.set(Settings.INITIAL_WINDOW_SIZE, 0, OKHTTP_CLIENT_WINDOW_SIZE);
++      connectionReceiveWindow = OKHTTP_CLIENT_CONNECTION_WINDOW_SIZE;
+     }
+ 
+     hostName = builder.hostName;
+@@ -220,8 +231,7 @@ public final class FramedConnection implements Closeable {
+     if (read <= 0) return;
+     synchronized (this) {
+       unacknowledgedBytesRead += read;
+-      if (unacknowledgedBytesRead
+-          >= okHttpSettings.getInitialWindowSize(Settings.DEFAULT_INITIAL_WINDOW_SIZE) / 2) {
++      if (unacknowledgedBytesRead >= connectionReceiveWindow / 2) {
+         writeWindowUpdateLater(0, unacknowledgedBytesRead);
+         unacknowledgedBytesRead = 0;
+       }
+@@ -528,9 +538,10 @@ public final class FramedConnection implements Closeable {
+   public void sendConnectionPreface() throws IOException {
+     frameWriter.connectionPreface();
+     frameWriter.settings(okHttpSettings);
+-    int windowSize = okHttpSettings.getInitialWindowSize(Settings.DEFAULT_INITIAL_WINDOW_SIZE);
+-    if (windowSize != Settings.DEFAULT_INITIAL_WINDOW_SIZE) {
+-      frameWriter.windowUpdate(0, windowSize - Settings.DEFAULT_INITIAL_WINDOW_SIZE);
++    // SETTINGS_INITIAL_WINDOW_SIZE applies only to streams (RFC 9113 6.9.2).
++    // The connection window starts at 65,535 and is raised only by this update.
++    if (connectionReceiveWindow != Settings.DEFAULT_INITIAL_WINDOW_SIZE) {
++      frameWriter.windowUpdate(0, connectionReceiveWindow - Settings.DEFAULT_INITIAL_WINDOW_SIZE);
+     }
+   }
+ 

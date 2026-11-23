@@ -1,9 +1,21 @@
+param([switch] $ForkDiagnostic)
 $ErrorActionPreference = 'Stop'
 $selection = $env:TCP_SUPPLIER_ROLE
 if ($selection -cnotin @('canonical','selected-minimum')) { throw 'Missing exact supplier selection' }
 $expectedSupplierRole = if ($selection -ceq 'canonical') { 'canonical-publisher-unmodified-v1' } else { 'gesher-winpthreads-selected-minimum-v1' }
 $expectedPrefix = if ($selection -ceq 'canonical') { 'tcp-canonical-supplier' } else { 'tcp-selected-supplier' }
 $expectedProducer = "compile-$selection"
+$artifactName = "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+$supplierChecker = 'tools/net-tcp-priority/selected_supplier.py'
+if ($ForkDiagnostic) {
+  python tools/toolchain/fork_tcp_context.py --job windows
+  if ($LASTEXITCODE -ne 0) { throw 'Fork TCP diagnostic context rejected' }
+  if ($selection -cne 'selected-minimum') { throw 'Fork TCP requires the selected minimum recipe' }
+  $expectedSupplierRole = 'gesher-tcp-supplier-fork-diagnostic-v1'
+  $expectedPrefix = 'tcp-fork-diagnostic-supplier'
+  $artifactName = "tcp-fork-diagnostic-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+  $supplierChecker = 'tools/net-tcp-priority/fork_supplier.py'
+}
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Native fixture is CI-only' }
 $trusted = @{
   'tools/windows4/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
@@ -13,6 +25,8 @@ $trusted = @{
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
   'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
   'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
+  'tools/ci/github_read.py'='997d37c8f6677bb8e1bbfb38d5c87f504b3eb0e4'
+  'tools/ci/github_jobs.py'='f4278108b42329950525fb9fa34b78ae75694915'
 }
 foreach ($entry in $trusted.GetEnumerator()) {
   $actualHelperBlob = git hash-object $entry.Key
@@ -25,7 +39,7 @@ $sourceJson = python tools/ci/source_identity.py
 if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
 $ciSource = $sourceJson | ConvertFrom-Json
 . (Join-Path $PSScriptRoot '../ci/receipt-diagnostics.ps1')
-$jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+$jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read producer jobs' }
 $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -CEQ $expectedProducer)
 Write-Host ('TCP_COHERENT_PRODUCER_INVENTORY ' + ([ordered]@{ expected_producer=$expectedProducer; selection=$selection; total_count=($jobsRaw | ConvertFrom-Json).total_count; received_count=@(($jobsRaw | ConvertFrom-Json).jobs).Count; selected_count=$jobs.Count; names=@(($jobsRaw | ConvertFrom-Json).jobs | ForEach-Object name) } | ConvertTo-Json -Depth 8 -Compress))
@@ -33,8 +47,8 @@ Write-CiProducerIdentity -Producer $expectedProducer -Rows $jobs -SourceIdentity
 if ($jobs.Count -ne 1 -or $jobs[0].conclusion -cne 'success' -or "$($jobs[0].run_id)" -cne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $jobs[0].head_sha -cne $ciSource.api_head_sha) { throw 'Producer mismatch' }
 $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact inventory' }
-$rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -CEQ "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT")
-Write-CiArtifactInventory -Name "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT" -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
+$rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -CEQ $artifactName)
+Write-CiArtifactInventory -Name $artifactName -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
 if ($rows.Count -ne 1) { throw 'Artifact not unique' }
 $a = $rows[0]
 if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $ciSource.head_repository_id -or $a.workflow_run.head_sha -cne $ciSource.api_head_sha -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact source/run/attempt provenance mismatch' }
@@ -110,7 +124,7 @@ foreach ($build in 'out','out-arm64') {
 }
 $s = $m.supplier
 if ($selection -ceq 'selected-minimum') {
-  python tools/net-tcp-priority/selected_supplier.py --manifest tcp-fixture/provenance.json
+  python $supplierChecker --manifest tcp-fixture/provenance.json
   if ($LASTEXITCODE -ne 0) { throw 'Selected original-profile minimum supplier authority failed' }
 }
 if ($s.role -cne $expectedSupplierRole -or $s.supplier_selection -cne $selection -or $s.rebuilt_from_reference_source -cne ($selection -ceq 'selected-minimum') -or $s.producer_job -cne 'compile' -or
@@ -354,9 +368,12 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
     }
   }
   if ($Context -eq 'host-posix') {
+    if ($text -notmatch '(?m)^TCP_PRIORITY_OWNER_CLASSIFIER default_pool=1 ordinary_thread_rejected=1 exact_retirement=1\r?$') { throw 'Missing HOST calibrated pool and ordinary-thread negative control' }
     foreach ($mode in 0..3) {
       if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }
-      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=([0-9]+)/\2\r?$") { throw "Missing HOST repeated physical owner census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=[0-9]+/[0-9]+\r?$") { throw "Missing HOST exact process handle census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_IDENTITIES mode=$mode entries=([1-9][0-9]*)/\1 pool=[0-9]+/[0-9]+ matched=1\r?$") { throw "Missing HOST exact non-pool thread identities $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_REFS mode=$mode operation=0 description=0\r?$") { throw "Missing HOST expired product owner references $mode" }
       if ($text -notmatch "(?m)^TCP_PRIORITY_LEGACY_LEASE mode=$mode fd_reused=1 old_call_rc=-1 old_call_errno=9 close_rc=[0-9]+ global_progress=1 replacement_error=0\r?$") { throw "Missing HOST exact legacy lease context $mode" }
     }
   }

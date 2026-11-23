@@ -36,12 +36,14 @@ struct RichClipboardData {
 bool ReadRichClipboard(RichClipboardData* out);
 
 // Writes rich content to the Windows clipboard.
-// Any non-empty component will be placed on the clipboard with the corresponding format:
+// Text presence is explicit: an empty text clip differs from clearing all formats.
+// Each supplied component is published together on the shared owned OLE STA:
 // - text -> CF_UNICODETEXT
 // - html -> RegisterClipboardFormat("HTML Format")
 // - image_bytes -> CF_DIB / CF_DIBV5
 bool WriteRichClipboard(const std::u16string& text, const std::u16string& html,
-                        const uint8_t* image_bytes, size_t image_size);
+                        const uint8_t* image_bytes, size_t image_size, uint32_t* written_sequence = nullptr,
+                        bool has_text = true);
 
 // Checks if the Windows clipboard currently has an image in CF_DIB or CF_DIBV5.
 bool HasClipboardImage();

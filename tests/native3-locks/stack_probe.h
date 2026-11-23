@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include "file_call_pattern.h"
 namespace native3_stack_probe {
 // The export of `module` at or before `rva` (nullptr when none).
 const char* NearestExport(HMODULE module, DWORD rva, DWORD* offset) {
@@ -92,38 +93,40 @@ inline HANDLE OpenOwnedForExit(DWORD tid, uint64_t expected_birth) {
   return thread;
 }
 
-// Match the original observed worker call shape using its actual bytes. An
-// unwind restores nonvolatile RSI at this frame; mov RSI,RCX immediately before
-// call [_lock_file IAT] makes that saved RSI the actual FILE argument. This is
-// a checked call-site witness, never a nearest-export or generic-RSI inference.
-inline bool ExactFileCall(DWORD64 pc, DWORD64 rsi, FILE* stream) {
-  if (pc < 9 || rsi != reinterpret_cast<uintptr_t>(stream)) return false;
+// Match the exact observed argument-copy instructions, then independently
+// require their indirect call to resolve to the worker's _lock_file import.
+// This is never a nearest-export or generic register-value inference.
+inline FileArgumentRegister ExactFileCall(DWORD64 pc, DWORD64 rsi, DWORD64 rdi, FILE* stream) {
+  if (pc < 15) return FileArgumentRegister::None;
   HMODULE worker = GetModuleHandleW(nullptr);
   MEMORY_BASIC_INFORMATION instruction{}, import_region{};
-  if (!VirtualQuery(reinterpret_cast<const void*>(pc - 9), &instruction, sizeof(instruction)) ||
-      instruction.Type != MEM_IMAGE || instruction.AllocationBase != worker) return false;
-  unsigned char code[9]{};
+  if (!VirtualQuery(reinterpret_cast<const void*>(pc - 15), &instruction, sizeof(instruction)) ||
+      instruction.Type != MEM_IMAGE || instruction.AllocationBase != worker) return FileArgumentRegister::None;
+  unsigned char code[15]{};
   SIZE_T copied = 0;
-  if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 9), code, sizeof(code), &copied) ||
-      copied != sizeof(code) || code[0] != 0x48 || code[1] != 0x89 || code[2] != 0xce ||
-      code[3] != 0xff || code[4] != 0x15) return false;
+  if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 15), code, sizeof(code), &copied) ||
+      copied != sizeof(code)) return FileArgumentRegister::None;
+  FileArgumentRegister argument = FileCallPattern(code, sizeof(code), rsi, rdi,
+                                                  reinterpret_cast<uintptr_t>(stream));
+  if (argument == FileArgumentRegister::None) return argument;
   int32_t displacement = 0;
-  std::memcpy(&displacement, code + 5, sizeof(displacement));
+  std::memcpy(&displacement, code + sizeof(code) - sizeof(displacement), sizeof(displacement));
   uintptr_t slot = 0;
   if (displacement < 0) {
     uint64_t subtract = static_cast<uint64_t>(-static_cast<int64_t>(displacement));
-    if (pc < subtract) return false;
+    if (pc < subtract) return FileArgumentRegister::None;
     slot = pc - subtract;
   } else {
-    if (pc > UINTPTR_MAX - static_cast<unsigned>(displacement)) return false;
+    if (pc > UINTPTR_MAX - static_cast<unsigned>(displacement)) return FileArgumentRegister::None;
     slot = pc + static_cast<unsigned>(displacement);
   }
   if (!VirtualQuery(reinterpret_cast<const void*>(slot), &import_region, sizeof(import_region)) ||
-      import_region.Type != MEM_IMAGE || import_region.AllocationBase != worker) return false;
+      import_region.Type != MEM_IMAGE || import_region.AllocationBase != worker) return FileArgumentRegister::None;
   uintptr_t target = 0;
   copied = 0;
   return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(slot), &target, sizeof(target), &copied) &&
-      copied == sizeof(target) && target == reinterpret_cast<uintptr_t>(&_lock_file);
+      copied == sizeof(target) && target == reinterpret_cast<uintptr_t>(&_lock_file) ?
+      argument : FileArgumentRegister::None;
 }
 
 // Reuse the established Rtl unwind pattern on this exact owned thread. Only
@@ -152,6 +155,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   }
   DWORD64 pcs[32]{};
   DWORD64 rsis[32]{};
+  DWORD64 rdis[32]{};
   unsigned count = 0;
   CONTEXT context{};
   context.ContextFlags = CONTEXT_FULL;
@@ -159,7 +163,8 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   DWORD error = captured ? ERROR_SUCCESS : GetLastError();
   while (captured && count < 32 && context.Rip != 0) {
     pcs[count] = context.Rip;
-    rsis[count++] = context.Rsi;
+    rsis[count] = context.Rsi;
+    rdis[count++] = context.Rdi;
     DWORD64 image_base = 0;
     PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
     if (function) {
@@ -207,13 +212,16 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   for (unsigned index = 0; index < count; ++index) {
     std::fprintf(stderr, "ACTUAL_CLOSER_FRAME index=%u pc=0x%llx nearest-export=%s\n", index,
         static_cast<unsigned long long>(pcs[index]), Describe(pcs[index]).c_str());
-    if (ExactFileCall(pcs[index], rsis[index], stream)) {
+    FileArgumentRegister argument = ExactFileCall(pcs[index], rsis[index], rdis[index], stream);
+    if (argument != FileArgumentRegister::None) {
       ++exact_file_calls;
-      std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx unwound-rsi=0x%llx FILE=%p exact-mov-rsi-rcx-and-lock-file-iat=true\n",
-          index, static_cast<unsigned long long>(pcs[index]), static_cast<unsigned long long>(rsis[index]),
+      std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx argument-register=%s unwound-rsi=0x%llx unwound-rdi=0x%llx FILE=%p exact-file-argument-and-lock-file-iat=true\n",
+          index, static_cast<unsigned long long>(pcs[index]), argument == FileArgumentRegister::Rsi ? "rsi" : "rdi",
+          static_cast<unsigned long long>(rsis[index]), static_cast<unsigned long long>(rdis[index]),
           static_cast<void*>(stream));
     }
-    if (other_live_stream && ExactFileCall(pcs[index], rsis[index], other_live_stream)) ++other_file_calls;
+    if (other_live_stream && ExactFileCall(pcs[index], rsis[index], rdis[index], other_live_stream) !=
+        FileArgumentRegister::None) ++other_file_calls;
     if (enter_bounds && pcs[index] >= enter_begin && pcs[index] < enter_end) {
       ++enter_frames;
       std::fprintf(stderr, "ACTUAL_CLOSER_ENTER_FRAME index=%u pc=0x%llx named-entry=%p unwind-begin=0x%llx unwind-end=0x%llx\n",

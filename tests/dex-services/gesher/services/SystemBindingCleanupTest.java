@@ -75,9 +75,12 @@ public final class SystemBindingCleanupTest {
         @SuppressWarnings("unchecked")
         Harness(Object apk) throws Exception {
             owner = (String) apk.getClass().getField("packageName").get(apk);
-            appUid = (Integer) apk.getClass().getMethod("uid").invoke(apk);
             component = new ComponentName(owner, owner + ".TestJobService");
             pm = construct(pmType, new Class<?>[]{Collection.class}, Collections.singletonList(apk));
+            // A parsed APK receives its installed Binder UID from package admission.
+            appUid = (Integer) apk.getClass().getMethod("uid").invoke(apk);
+            require(appUid >= android.os.Process.FIRST_APPLICATION_UID,
+                    "Fixture package did not receive an installed application UID");
             atm = construct(atmType, new Class<?>[]{pmType}, pm);
             Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
             am = (IActivityManager) construct(amType, new Class<?>[]{atmType, pmType, notifications},
@@ -146,8 +149,10 @@ public final class SystemBindingCleanupTest {
                 scheduler, h.owner, null, info);
         Object run = construct(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
         field(jobType, "run").set(job, run);
-        ((List<Object>) field(schedulerType, "mJobs").get(scheduler)).add(job);
-        field(schedulerType, "mRunning").setInt(scheduler, 1);
+        synchronized (scheduler) {
+            method(schedulerType, "addJobLocked", jobType).invoke(scheduler, job);
+            field(schedulerType, "mRunning").setInt(scheduler, 1);
+        }
         IServiceConnection connection = (IServiceConnection) field(runType, "connection").get(run);
         // Use the production job bind path, not a test-specific connection registry.
         method(schedulerType, "bind", runType).invoke(scheduler, run);
