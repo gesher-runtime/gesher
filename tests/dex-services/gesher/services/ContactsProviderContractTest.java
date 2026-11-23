@@ -482,7 +482,7 @@ public final class ContactsProviderContractTest {
             data.put("data1", "fixture@example.invalid");
             Uri sip = provider.insert(ContactsContract.Data.CONTENT_URI, data);
             data.put("mimetype", ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE);
-            provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            Uri email = provider.insert(ContactsContract.Data.CONTENT_URI, data);
             Uri callables = Uri.withAppendedPath(ContactsContract.Data.CONTENT_URI, "callables");
             check(count(provider, callables) == 2
                             && count(provider, ContentUris.withAppendedId(callables, ContentUris.parseId(sip))) == 1,
@@ -497,9 +497,28 @@ public final class ContactsProviderContractTest {
             Uri allFiltered = Uri.withAppendedPath(callables, "filter");
             data.put("mimetype", ContactsContract.CommonDataKinds.SipAddress.CONTENT_ITEM_TYPE);
             Uri duplicate = provider.insert(ContactsContract.Data.CONTENT_URI, data);
-            check(count(provider, allFiltered) == 2 && count(provider, callables) == 3,
-                    "callable filter deduplicates addresses within a contact");
-            check(provider.delete(duplicate, null, null) == 1, "remove duplicate callable fixture");
+            check(count(provider, allFiltered) == 2 && count(provider, callables) == 3
+                    && count(provider, callables.buildUpon()
+                            .appendQueryParameter(ContactsContract.REMOVE_DUPLICATE_ENTRIES, "true").build()) == 2,
+                    "callable filter and opt-in deduplication collapse addresses within a contact");
+            Uri duplicateItem = ContentUris.withAppendedId(callables, ContentUris.parseId(duplicate));
+            ContentValues changedSip = new ContentValues();
+            changedSip.put("data1", "updated@example.invalid");
+            check(provider.update(duplicateItem, changedSip, null, null) == 1
+                    && count(provider, allFiltered) == 3 && provider.delete(duplicateItem, null, null) == 1,
+                    "callable item supports update then delete of the selected SIP row");
+            Uri emailAlias = ContentUris.withAppendedId(callables, ContentUris.parseId(email));
+            check(provider.delete(emailAlias, null, null) == 0 && count(provider, email) == 1,
+                    "callable item mutation excludes non-callable data");
+            data.put("mimetype", ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE);
+            data.put("data1", "Acme Foundation");
+            provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            data.put("mimetype", ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE);
+            data.put("data1", "Bee Contact");
+            provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            Uri organization = Uri.withAppendedPath(allFiltered, "Acme");
+            check(count(provider, organization.buildUpon().appendQueryParameter("search_phone_number", "false")
+                            .build()) == 2, "callable name search includes alternate organization names");
 
             Uri strequent = ContactsContract.Contacts.CONTENT_STREQUENT_URI;
             Uri feedback = Uri.withAppendedPath(ContactsContract.DataUsageFeedback.FEEDBACK_URI,
@@ -521,6 +540,60 @@ public final class ContactsProviderContractTest {
             check(provider.delete(ContactsContract.DataUsageFeedback.DELETE_USAGE_URI, null, null) == 1
                     && sync.equals(List.of(false)) && count(provider, strequent) == 1,
                     "usage cleanup preserves stars and avoids scheduling sync");
+        } finally {
+            provider.shutdown();
+        }
+    }
+
+    private static void testOrdinaryThumbnails(File dbDir) throws Exception {
+        ContentProvider provider = newContactsProvider(
+                null, null, new File(dbDir, "contacts-thumbnails.db"));
+        Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
+        ProviderInfo info = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
+        provider.attachInfo(observerRecordingContext(provider, new ArrayList<>(), new ArrayList<>()), info);
+        try {
+            long[] ids = new long[2];
+            String[] keys = new String[2];
+            byte[][] photos = new byte[2][];
+            for (int i = 0; i < ids.length; i++) {
+                Uri raw = provider.insert(ContactsContract.RawContacts.CONTENT_URI, new ContentValues());
+                try (Cursor c = provider.query(raw, new String[] {"contact_id"}, null, null, null)) {
+                    check(c.moveToFirst(), "thumbnail fixture resolves its contact");
+                    ids[i] = c.getLong(0);
+                }
+                Uri contact = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, ids[i]);
+                try (Cursor c = provider.query(contact, new String[] {"lookup"}, null, null, null)) {
+                    check(c.moveToFirst(), "thumbnail fixture reads its genuine lookup key");
+                    keys[i] = c.getString(0);
+                }
+                Bitmap bitmap = Bitmap.createBitmap(12, 10, Bitmap.Config.ARGB_8888);
+                ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+                try {
+                    bitmap.eraseColor(i == 0 ? 0xff4d7f21 : 0xff941030);
+                    check(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, encoded),
+                            "encode a distinct contact JPEG");
+                } finally {
+                    bitmap.recycle();
+                }
+                photos[i] = encoded.toByteArray();
+                ContentValues photo = new ContentValues();
+                photo.put("raw_contact_id", ContentUris.parseId(raw));
+                photo.put("mimetype", ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE);
+                photo.put("data15", photos[i]);
+                provider.insert(ContactsContract.Data.CONTENT_URI, photo);
+            }
+            Uri key = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, keys[0]);
+            Uri exact = Uri.withAppendedPath(key, "photo");
+            Uri staleId = Uri.withAppendedPath(ContentUris.withAppendedId(key, ids[1]), "photo");
+            Uri missing = Uri.withAppendedPath(
+                    Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, "missing"), "photo");
+            check(count(provider, exact) == 1 && "image/jpeg".equals(provider.getType(exact))
+                            && Arrays.equals(profileAsset(provider, exact), photos[0]),
+                    "thumbnail cursor and asset expose only the contact located by the lookup key");
+            check(count(provider, staleId) == 1 && Arrays.equals(profileAsset(provider, staleId), photos[0]),
+                    "stale numeric lookup ID cannot pick another contact's thumbnail");
+            check(count(provider, missing) == 0, "missing lookup key cannot read unrelated thumbnails");
+            rejects(FileNotFoundException.class, () -> provider.openAssetFile(missing, "r"));
         } finally {
             provider.shutdown();
         }
@@ -1318,6 +1391,7 @@ public final class ContactsProviderContractTest {
         try {
             testContactsSchemaViewsStrictAndFallback(dbDir);
             testOrdinaryDiscoveryRoutes(dbDir);
+            testOrdinaryThumbnails(dbDir);
             testProfileNamespaceAndLifecycle(dbDir);
             testProfileAssetsAndSyncState(dbDir);
             testProfileStatusUpdates(dbDir);

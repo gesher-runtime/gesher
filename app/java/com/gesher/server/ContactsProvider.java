@@ -12,6 +12,7 @@ import android.content.AttributionSource;
 import android.content.ContentProvider;
 import android.content.ContentProviderOperation;
 import android.content.ContentProviderResult;
+import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Context;
@@ -1114,7 +1115,7 @@ final class ContactsProvider extends ContentProvider {
             case POSTALS_ID:
                 return ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE;
             case PHONE_LOOKUP:
-                return ContactsContract.Contacts.CONTENT_TYPE;
+                return ContactsContract.PhoneLookup.CONTENT_TYPE;
             case GROUPS:
             case GROUPS_SUMMARY:
                 return ContactsContract.Groups.CONTENT_TYPE;
@@ -1142,6 +1143,7 @@ final class ContactsProvider extends ContentProvider {
                 if (isProfileRequest(uri, PROFILE_VCARD)) return ContactsContract.Contacts.CONTENT_VCARD_TYPE;
                 throw new IllegalArgumentException("Unknown URL " + uri);
             case CONTACT_THUMBNAIL:
+                return "image/jpeg";
             case CONTACT_DISPLAY_PHOTO:
             case RAW_DISPLAY_PHOTO:
             case DISPLAY_PHOTO_FILE:
@@ -1179,6 +1181,7 @@ final class ContactsProvider extends ContentProvider {
         qb.setStrictGrammar(true);
         String effSelection = selection;
         String[] effArgs = selectionArgs;
+        ArrayList<String> whereArgs = new ArrayList<>();
         String defaultOrder = null;
         String groupBy = null;
         boolean syncAdapter = isCallerSyncAdapter(uri);
@@ -1378,18 +1381,29 @@ final class ContactsProvider extends ContentProvider {
                 if (match == CALLABLES_ID) {
                     effSelection = scopedSelection(effSelection, "_id = ?");
                     effArgs = ContactsProviderSupport.prependArgs(effArgs, id);
+                } else if (match == CALLABLES
+                        && uri.getBooleanQueryParameter(ContactsContract.REMOVE_DUPLICATE_ENTRIES, false)) {
+                    groupBy = "contact_id, data1";
                 } else if (match == CALLABLES_FILTER) {
                     groupBy = "CASE WHEN mimetype = '" + MIME_PHONE + "' AND data4 IS NOT NULL"
                             + " THEN data4 ELSE data1 END, contact_id";
+                    defaultOrder = "starred DESC, is_super_primary DESC, in_visible_group DESC, "
+                            + "display_name COLLATE LOCALIZED ASC, contact_id, is_primary DESC";
                     if (uri.getPathSegments().size() > 3) {
                         String filter = uri.getLastPathSegment();
                         ArrayList<String> matches = new ArrayList<>();
-                        ArrayList<String> bindings = new ArrayList<>();
                         String prefix = callablePrefix(filter);
                         if (uri.getBooleanQueryParameter("search_display_name", true)) {
                             matches.add("(display_name LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')");
-                            bindings.add(prefix);
-                            bindings.add("% " + prefix);
+                            whereArgs.add(prefix);
+                            whereArgs.add("% " + prefix);
+                            matches.add("EXISTS (SELECT 1 FROM view_data AS name_data"
+                                    + " WHERE name_data.contact_id = view_data.contact_id"
+                                    + " AND name_data.mimetype IN (?, ?, ?)"
+                                    + " AND (name_data.data1 LIKE ? ESCAPE '\\'"
+                                    + " OR name_data.data1 LIKE ? ESCAPE '\\'))");
+                            Collections.addAll(whereArgs, MIME_STRUCTURED_NAME, MIME_NICKNAME,
+                                    MIME_ORGANIZATION, prefix, "% " + prefix);
                         }
                         if (uri.getBooleanQueryParameter("search_phone_number", true)) {
                             String number = PhoneNumberUtils.normalizeNumber(filter);
@@ -1398,17 +1412,15 @@ final class ContactsProvider extends ContentProvider {
                                         + "(_PHONE_NUMBER_STRIPPED_REVERSED(data1) LIKE ?"
                                         + " OR _PHONE_NUMBER_STRIPPED_REVERSED(data4) LIKE ?))");
                                 String reversed = "%" + new StringBuilder(number).reverse();
-                                bindings.add(reversed);
-                                bindings.add(reversed);
+                                whereArgs.add(reversed);
+                                whereArgs.add(reversed);
                             }
                             matches.add("(mimetype = '" + MIME_SIP + "' AND "
                                     + "(data1 LIKE ? ESCAPE '\\' OR data1 LIKE ? ESCAPE '\\'))");
-                            bindings.add(prefix);
-                            bindings.add("sip:" + prefix);
+                            whereArgs.add(prefix);
+                            whereArgs.add("sip:" + prefix);
                         }
-                        effSelection = scopedSelection(effSelection,
-                                matches.isEmpty() ? "0" : "(" + String.join(" OR ", matches) + ")");
-                        effArgs = ContactsProviderSupport.prependArgs(effArgs, bindings.toArray(String[]::new));
+                        qb.appendWhereStandalone(matches.isEmpty() ? "0" : String.join(" OR ", matches));
                     }
                 }
                 break;
@@ -1420,7 +1432,7 @@ final class ContactsProvider extends ContentProvider {
                 qb.appendWhereStandalone("PHONE_NUMBERS_EQUAL(number" + arguments
                         + " OR PHONE_NUMBERS_EQUAL(normalized_number" + arguments);
                 String number = uri.getLastPathSegment();
-                effArgs = ContactsProviderSupport.prependArgs(selectionArgs, number, number);
+                Collections.addAll(whereArgs, number, number);
                 break;
             }
             case GROUPS:
@@ -1471,7 +1483,10 @@ final class ContactsProvider extends ContentProvider {
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
                 qb.appendWhereStandalone("_id = photo_id");
-                if (id != null) {
+                if ("lookup".equals(uri.getPathSegments().get(1))) {
+                    effSelection = scopedSelection(selection, "lookup = ?");
+                    effArgs = ContactsProviderSupport.prependArgs(selectionArgs, uri.getPathSegments().get(2));
+                } else if (id != null) {
                     effSelection = scopedSelection(selection, "contact_id = ?");
                     effArgs = ContactsProviderSupport.prependArgs(selectionArgs, id);
                 }
@@ -1515,6 +1530,9 @@ final class ContactsProvider extends ContentProvider {
         Cursor cursor;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
+            if (!whereArgs.isEmpty()) {
+                effArgs = ContactsProviderSupport.prependArgs(effArgs, whereArgs.toArray(String[]::new));
+            }
             cursor = qb.query(db, projection, effSelection, effArgs,
                     groupBy, null, sortOrder == null || sortOrder.isBlank() ? defaultOrder : sortOrder, limit);
         }
@@ -1577,7 +1595,8 @@ final class ContactsProvider extends ContentProvider {
 
     private static boolean hasSyncableContactsAccount() {
         IAccountManager accounts = IAccountManager.Stub.asInterface(ServiceManager.checkService(Context.ACCOUNT_SERVICE));
-        IContentService content = IContentService.Stub.asInterface(ServiceManager.checkService(Context.CONTENT_SERVICE));
+        IContentService content = IContentService.Stub.asInterface(
+                ServiceManager.checkService(ContentResolver.CONTENT_SERVICE_NAME));
         if (accounts == null || content == null) return false;
         long identity = Binder.clearCallingIdentity();
         try {
@@ -2071,6 +2090,7 @@ final class ContactsProvider extends ContentProvider {
             case DATA_ID:
             case PHONES:
             case PHONES_ID:
+            case CALLABLES_ID:
             case EMAILS:
             case EMAILS_ID:
             case POSTALS:
@@ -2198,6 +2218,7 @@ final class ContactsProvider extends ContentProvider {
             case DATA_ID:
             case PHONES:
             case PHONES_ID:
+            case CALLABLES_ID:
             case EMAILS:
             case EMAILS_ID:
             case POSTALS:
@@ -2214,8 +2235,11 @@ final class ContactsProvider extends ContentProvider {
                 if (mime != null) {
                     where = scopedSelection(where, "mimetype = ?");
                     selectionArgs = ContactsProviderSupport.prependArgs(selectionArgs, mime);
+                } else if (match == CALLABLES_ID) {
+                    where = scopedSelection(where, "mimetype IN (?, ?)");
+                    selectionArgs = ContactsProviderSupport.prependArgs(selectionArgs, MIME_PHONE, MIME_SIP);
                 }
-                item = match == DATA_ID || match == PHONES_ID || match == EMAILS_ID
+                item = match == DATA_ID || match == PHONES_ID || match == CALLABLES_ID || match == EMAILS_ID
                         || match == POSTALS_ID;
                 break;
             }
@@ -2382,6 +2406,7 @@ final class ContactsProvider extends ContentProvider {
             case DATA_ID:
             case PHONES:
             case PHONES_ID:
+            case CALLABLES_ID:
             case EMAILS:
             case EMAILS_ID:
             case POSTALS:
@@ -2647,7 +2672,17 @@ final class ContactsProvider extends ContentProvider {
     @Override
     public AssetFileDescriptor openAssetFile(Uri uri, String mode) throws FileNotFoundException {
         int match = sUriMatcher.match(uri);
-        boolean isAsset = match == PROFILE_VCARD || match == CONTACT_THUMBNAIL
+        if (match == CONTACT_THUMBNAIL) {
+            if (!"r".equals(mode)) throw new FileNotFoundException("Contact thumbnail is read-only: " + uri);
+            try (Cursor c = query(uri, new String[] {"data15"}, null, null, null)) {
+                if (c.moveToFirst() && !c.isNull(0)) {
+                    byte[] contents = c.getBlob(0);
+                    if (contents.length > 0) return snapshotAsset(contents);
+                }
+            }
+            throw new FileNotFoundException(uri.toString());
+        }
+        boolean isAsset = match == PROFILE_VCARD
                 || match == CONTACT_DISPLAY_PHOTO || match == RAW_DISPLAY_PHOTO || match == DISPLAY_PHOTO_FILE;
         if (!isAsset || !isProfileRequest(uri, match)) return super.openAssetFile(uri, mode);
         String id = itemId(uri, match);
@@ -2660,7 +2695,6 @@ final class ContactsProvider extends ContentProvider {
             SQLiteDatabase db = openDatabase();
             contents = switch (match) {
                 case PROFILE_VCARD -> profileVCard(db, uri);
-                case CONTACT_THUMBNAIL -> profileThumbnail(db, id);
                 default -> profileDisplayPhoto(db, match, id);
             };
         }
@@ -2764,14 +2798,6 @@ final class ContactsProvider extends ContentProvider {
             db.replaceOrThrow("profile_display_photos", null, display);
         }
         refreshRawAndParentContacts(db, Collections.singleton(rawId), System.currentTimeMillis(), markDirty);
-    }
-
-    private static byte[] profileThumbnail(SQLiteDatabase db, String contactId) {
-        String scope = contactId == null ? "is_user_profile = 1" : "is_user_profile = 1 AND contact_id = ?";
-        String[] args = contactId == null ? null : new String[] {contactId};
-        try (Cursor c = db.rawQuery("SELECT data15 FROM view_data WHERE _id = photo_id AND " + scope, args)) {
-            return c.moveToFirst() ? c.getBlob(0) : null;
-        }
     }
 
     private static byte[] profileVCard(SQLiteDatabase db, Uri uri) {
