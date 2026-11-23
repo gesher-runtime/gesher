@@ -3,15 +3,14 @@
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
+$here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
 
 # Set explicit AppUserModelID so Windows taskbar groups under Gesher instead of PowerShell host
 try {
-    $code = '[DllImport("shell32.dll", CharSet=CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string appID);'
-    $type = Add-Type -MemberDefinition $code -Name "Win32ShellGroup" -Namespace "Gesher" -PassThru
-    $type::SetCurrentProcessExplicitAppUserModelID("Gesher.ControlPanel")
+    . (Join-Path $here 'gesher-panel-native.ps1')
+    [Gesher.Win32ShellGroup]::SetCurrentProcessExplicitAppUserModelID("Gesher.ControlPanel")
 } catch { }
 
-$here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
@@ -45,7 +44,8 @@ $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
 $script:IsBusy = $false
 $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
 $script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
-$script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; Tick = 0 }
+$script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; PendingFirst = $null; Tick = 0; WasVisible = $false; RecoveryAt = $null }
+$script:MetadataMonitor = $null
 
 # Packages whose tasks are windows of their own (AppWindows.java's file).
 function Get-SeparateWindowApps {
@@ -88,15 +88,21 @@ function Get-DeviceStatus {
         $serverId = 0
         if ([int]::TryParse($text.Trim(), [ref] $serverId)) {
             $p = Get-Process -Id $serverId -ErrorAction SilentlyContinue
-            if ($p) { return $true }
+            if ($p) {
+                try {
+                    if ($script:MetadataMonitor) { $script:MetadataMonitor.SetProcess($serverId) }
+                } catch { } finally { $p.Dispose() }
+                return $true
+            }
         }
     }
+    try { if ($script:MetadataMonitor) { $script:MetadataMonitor.SetProcess(0) } } catch { }
     return $false
 }
 
 # Cheap change detection: length and write time of the files the dashboard derives its state from.
-# Polled on the UI thread instead of FileSystemWatcher, so no event crosses threads or runspaces and
-# no directory handle is held open inside the device's data directory.
+# Notifications normally trigger refresh. These UI-thread stamps recover missed events only
+# while the panel is visible; native/.NET callbacks never execute PowerShell off the dispatcher.
 function Get-FileStamp([string] $path) {
     try {
         $info = [System.IO.FileInfo]::new($path)
@@ -111,12 +117,76 @@ function Get-StateStamp {
         Get-FileStamp (Join-Path $root 'data/system/packages.list')
         Get-FileStamp (Join-Path $root 'microg.enabled')
         Get-FileStamp (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
+        Get-FileStamp $script:AppWindowsFile
     ) -join '|')
 }
 
 # Shortcut labels and icons are written after packages.list, so they are tracked separately.
 function Get-AppFilesStamp {
     return (@($script:ViewState.AppFiles | ForEach-Object { Get-FileStamp $_ }) -join '|')
+}
+
+function Test-PanelMetadataVisible {
+    return $window.IsVisible -and $window.WindowState -ne 'Minimized'
+}
+
+function Request-PanelMetadataRefresh {
+    # Called on the WPF dispatcher, including notifications marshalled by the monitor.
+    $now = [DateTime]::UtcNow
+    if (-not $script:LiveState.PendingFirst) { $script:LiveState.PendingFirst = $now }
+    $script:LiveState.PendingSince = $now
+}
+
+function Update-PanelMetadataWatch {
+    if (-not $script:MetadataMonitor) { return }
+    $paths = @(
+        (Join-Path $root 'data/system/gesher-device.ready')
+        (Join-Path $root 'data/system/packages.list')
+        (Join-Path $root 'microg.enabled')
+        (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
+        $script:AppWindowsFile
+    ) + @($script:ViewState.AppFiles)
+    $script:MetadataMonitor.SetFiles($root, [string[]]$paths)
+}
+
+function Invoke-PanelMetadataVisibilityChanged {
+    if (-not (Test-PanelMetadataVisible)) {
+        $script:LiveState.WasVisible = $false
+        return
+    }
+    # Restore resynchronizes even if the watcher overflowed or a directory was replaced.
+    $script:LiveState.WasVisible = $false
+    Request-PanelMetadataRefresh
+}
+
+function Invoke-PanelMetadataActivated {
+    try {
+        Invoke-PanelMetadataVisibilityChanged
+        if (-not $script:IsBusy -and (Test-PanelMetadataVisible)) {
+            $script:LiveState.WasVisible = $true
+            Refresh-Dashboard
+        }
+    } catch { }
+}
+
+function Initialize-PanelMetadata {
+    try {
+        $context = [System.Windows.Threading.DispatcherSynchronizationContext]::new($window.Dispatcher,
+            [System.Windows.Threading.DispatcherPriority]::Background)
+        $script:MetadataMonitor = [Gesher.PanelChangeMonitor]::new($context)
+        $script:MetadataMonitor.add_Changed({ try { Request-PanelMetadataRefresh } catch { } })
+    } catch { $script:MetadataMonitor = $null }
+    $window.Add_StateChanged({ Invoke-PanelMetadataVisibilityChanged })
+    $window.Add_IsVisibleChanged({ Invoke-PanelMetadataVisibilityChanged })
+    $window.Add_Activated({ Invoke-PanelMetadataActivated })
+    $window.Add_Closed({ Close-PanelMetadata })
+}
+
+function Close-PanelMetadata {
+    if ($script:MetadataMonitor) {
+        $script:MetadataMonitor.Dispose()
+        $script:MetadataMonitor = $null
+    }
 }
 
 # Helper to query microG enabled state
@@ -142,6 +212,9 @@ function Get-InstalledApps {
 
         $label = $pkg
         $iconPath = $null
+        # Keep declarations even when unavailable: a later icon creation must
+        # trigger observation/recovery without another shortcut rewrite.
+        $iconCandidates = [System.Collections.Generic.List[string]]::new()
         $propFile = Join-Path $root "data/data/$pkg/gesher-shell/shortcut.properties"
         if (Test-Path -LiteralPath $propFile) {
             foreach ($propLine in Get-Content -LiteralPath $propFile) {
@@ -151,7 +224,10 @@ function Get-InstalledApps {
                 }
                 if ($propLine -match '^\s*icon\s*=\s*(.*)$') {
                     $iconCandidate = $Matches[1].Trim() -replace '\\\\', '\' -replace '\\:', ':'
-                    if (Test-Path -LiteralPath $iconCandidate) { $iconPath = $iconCandidate }
+                    if (-not [string]::IsNullOrWhiteSpace($iconCandidate)) {
+                        $iconCandidates.Add($iconCandidate)
+                        if (Test-Path -LiteralPath $iconCandidate) { $iconPath = $iconCandidate }
+                    }
                 }
             }
         }
@@ -164,6 +240,7 @@ function Get-InstalledApps {
             Package = $pkg
             Label = $label
             IconPath = $iconPath
+            IconCandidates = $iconCandidates.ToArray()
         })
     }
     return $apps
@@ -592,7 +669,9 @@ function Update-AppsView($installed) {
     [void]$watched.Add($icoFile)
     $signature = @(foreach ($app in $installed) {
         $shell = Join-Path $root "data/data/$($app.Package)/gesher-shell"
-        foreach ($path in @((Join-Path $shell 'shortcut.properties'), (Join-Path $shell 'icon.ico'), $app.IconPath)) {
+        $paths = @((Join-Path $shell 'shortcut.properties'), (Join-Path $shell 'icon.ico'), $app.IconPath)
+        if ($app.PSObject.Properties['IconCandidates']) { $paths += @($app.IconCandidates) }
+        foreach ($path in $paths) {
             if ($path -and $watched.Add([string]$path)) { $appFiles.Add([string]$path) }
         }
         if ($app.IconPath -and -not $iconStamps.ContainsKey($app.IconPath)) {
@@ -631,20 +710,26 @@ function Update-AppsView($installed) {
 
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
 function Refresh-Dashboard {
-    # Stamps are taken before reading so a change made during the read is still noticed next tick.
+    $generation = if ($script:MetadataMonitor) { $script:MetadataMonitor.Generation } else { 0 }
+    # Stamps precede reads so notifications or visible recovery notice a change during the read.
     $stateStamp = Get-StateStamp
     $appsStamp = Get-AppFilesStamp
     # A transient read/render failure must leave a retry pending even when the files have
     # stopped changing. Commit the observed stamps only after the whole refresh succeeds.
-    if (-not $script:LiveState.PendingSince) { $script:LiveState.PendingSince = [DateTime]::UtcNow }
+    if (-not $script:LiveState.PendingSince) { Request-PanelMetadataRefresh }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
+    Update-PanelMetadataWatch
     $script:LiveState.Stamp = $stateStamp
     $script:LiveState.AppsStamp = $appsStamp
-    $script:LiveState.PendingSince = $null
+    $script:LiveState.RecoveryAt = [DateTime]::UtcNow.AddMilliseconds($script:LiveRefreshRecoveryMs)
+    # Do not acknowledge an event arriving during the read or a watch replacement gap.
+    if ($script:MetadataMonitor -and $script:MetadataMonitor.Generation -ne $generation) {
+        Request-PanelMetadataRefresh
+    } else { $script:LiveState.PendingSince = $null; $script:LiveState.PendingFirst = $null }
 }
 
 # Always release the action guard: a transient refresh failure is retried by the timer.
@@ -652,39 +737,50 @@ function Complete-DashboardAction {
     try { Refresh-Dashboard } finally { Set-Busy $false }
 }
 
-# Live refresh, driven by one DispatcherTimer on the UI thread (500 ms):
-# - every tick: compare the state-file stamp; a change is applied once it has been stable for one
-#   tick (>= 400 ms debounce), so a burst of writes from install/start/stop causes one refresh;
-# - every 4th tick (2 s): re-check the system_server PID (a crash leaves the ready file behind)
-#   and the per-app shortcut/icon files, which are written after packages.list;
-# - nothing happens while an action is busy; the action's own final refresh covers that period.
+# The shared UI heartbeat still services activation, actions and update progress.
+# Metadata uses debounced notifications plus visible-only missed-event recovery.
+# A hidden/minimized view does no periodic file/PID/icon scans, even when marked dirty.
 $script:LiveRefreshIntervalMs = 500
 $script:LiveRefreshDebounceMs = 400
-$script:LiveRefreshSlowEvery = 4
+$script:LiveRefreshMaximumDelayMs = 2000
+$script:LiveRefreshRecoveryMs = 5000
 
 function Invoke-LiveRefreshTick {
     $live = $script:LiveState
     $live.Tick++
+    if (-not (Test-PanelMetadataVisible)) { $live.WasVisible = $false; return }
     if ($script:IsBusy) { return }
-    $now = [DateTime]::UtcNow
-    $stamp = Get-StateStamp
-    if ($stamp -ne $live.Stamp) {
-        $live.Stamp = $stamp
-        $live.PendingSince = $now
+    if (-not $live.WasVisible) {
+        $live.WasVisible = $true
+        Refresh-Dashboard
         return
     }
-    if (($live.Tick % $script:LiveRefreshSlowEvery) -eq 0) {
-        Update-DeviceView (Get-DeviceStatus)
+    $now = [DateTime]::UtcNow
+    if (-not $live.RecoveryAt -or $now -ge $live.RecoveryAt) {
+        $live.RecoveryAt = $now.AddMilliseconds($script:LiveRefreshRecoveryMs)
+        $stamp = Get-StateStamp
         $appsStamp = Get-AppFilesStamp
-        if ($appsStamp -ne $live.AppsStamp) {
-            $live.AppsStamp = $appsStamp
-            if (-not $live.PendingSince) { $live.PendingSince = $now }
-            return
+        Update-DeviceView (Get-DeviceStatus)
+        if (($stamp -ne $live.Stamp -or $appsStamp -ne $live.AppsStamp) -and -not $live.PendingSince) {
+            Request-PanelMetadataRefresh
         }
+        if ($script:MetadataMonitor -and -not $script:MetadataMonitor.Healthy) { Update-PanelMetadataWatch }
     }
-    if ($live.PendingSince -and ($now - $live.PendingSince).TotalMilliseconds -ge $script:LiveRefreshDebounceMs) {
+    if ($live.PendingSince -and (($now - $live.PendingSince).TotalMilliseconds -ge $script:LiveRefreshDebounceMs -or
+            ($live.PendingFirst -and ($now - $live.PendingFirst).TotalMilliseconds -ge $script:LiveRefreshMaximumDelayMs))) {
         Refresh-Dashboard
     }
+}
+
+function Invoke-PanelHeartbeat {
+    if ($script:ActionState.Closed) { return }
+    try { Complete-PanelAction } catch { }
+    try { Invoke-PanelRequest } catch { }
+    try { Invoke-PanelUpdateTick } catch {
+        Set-PanelUpdateStatus 'cp_update_check_failed' @() $_.Exception.Message
+        Update-PanelUpdateView
+    }
+    try { Invoke-LiveRefreshTick } catch { }
 }
 
 # Takes the system server's request (one line: a package, or empty for the panel itself).
@@ -1865,18 +1961,8 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
 # Handler failures (e.g. a file mid-rewrite) are dropped; the next tick or activation retries.
 $script:LiveTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $script:LiveTimer.Interval = [TimeSpan]::FromMilliseconds($script:LiveRefreshIntervalMs)
-$script:LiveTimer.Add_Tick({
-    try { Complete-PanelAction } catch { }
-    try { Invoke-LiveRefreshTick } catch { }
-    try { Invoke-PanelRequest } catch { }
-    try { Invoke-PanelUpdateTick } catch {
-        Set-PanelUpdateStatus 'cp_update_check_failed' @() $_.Exception.Message
-        Update-PanelUpdateView
-    }
-})
-$window.Add_Activated({
-    try { if (-not $script:IsBusy) { Refresh-Dashboard } } catch { }
-})
+$script:LiveTimer.Add_Tick({ Invoke-PanelHeartbeat })
+Initialize-PanelMetadata
 $window.Add_Closing({
     param($sender, $event)
     if (-not (Test-PanelActionClose)) { $event.Cancel = $true; return }
@@ -1906,6 +1992,7 @@ $script:LiveTimer.Start()
 try { $window.ShowDialog() | Out-Null }
 finally {
     $script:LiveTimer.Stop()
+    Close-PanelMetadata
     Close-PanelUpdates
     # The window is already closed. Drain the cooperatively cancelled, bounded
     # request here so the worker can delete partial files before its runspace ends.

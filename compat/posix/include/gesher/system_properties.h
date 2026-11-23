@@ -20,8 +20,19 @@ struct WaitTimeout { int64_t seconds; int64_t nanoseconds; };
 // session. Calling this before spawning a child publishes the session name.
 bool Initialize();
 bool Get(const std::string& name, std::string* value, uint32_t* serial = nullptr);
+// A process-local area identity plus its published generation. Area identities
+// remain valid for the process lifetime. An empty identity must not be cached.
+struct Revision {
+  const void* area = nullptr;
+  uint32_t generation = 0;
+  bool operator==(const Revision&) const = default;
+};
+// Observes only the aligned published generation, without the area mutex or
+// decoding its payload. Detects a change of GESHER_BINDER/session as well.
+Revision CurrentRevision();
 // Get for |count| names with one area lookup (an unset name gives "").
-void GetAll(const std::string* names, std::string* values, size_t count);
+// An optional revision describes exactly the snapshot used for these values.
+void GetAll(const std::string* names, std::string* values, size_t count, Revision* revision = nullptr);
 bool Set(const std::string& name, const std::string& value);
 Snapshot List();
 uint32_t AreaSerial();
