@@ -6,33 +6,24 @@ asks for a general code review without repeating the policy.
 
 ## Implementation
 
-- Gesher provides Android compatibility on Windows. Preserve Android-visible
-  contracts and application workflows when implementing desktop integration.
-- Windows APIs, real hardware, desktop presentation and different internal
-  mechanisms are expected implementation choices. Match the meaning of the
-  requested operation and its observable results; do not require AOSP's internal
-  implementation or treat a Windows-specific choice as a defect by itself.
-- Do not substitute inputs, fabricate capabilities or success, or bypass an
-  application's requirements to make a specific application operation succeed.
-  Changing only Gesher rather than the APK does not exempt a change.
-- A Windows camera backend and an Android-requested file picker are legitimate
-  integrations when they preserve their respective contracts. Replacing live
-  camera capture with a saved image to satisfy an application's capture flow
-  is outside scope.
-- Selecting a real camera or explicitly configuring its physical mounting is
-  legitimate when it describes reality. It does not by itself establish a
-  higher hardware level, additional capabilities or different sensor geometry.
-- Two adaptations are maintainer-approved and are not scope violations (see the
-  CONTRIBUTING.md examples): camera sensor orientation reported relative to the
-  active display rotation, and a stationary default accelerometer exposed only
-  when Windows has no physical accelerometer (Gesher-named, documented,
-  disabled by `GESHER_SENSOR_FALLBACK=0`). Review their implementation for
-  correctness; do not extend them to other sensors, readings or capabilities.
-- Preserve Android lifecycle, permission, error and capability contracts. Discuss
-  materially unclear application-visible contracts or non-runtime scope questions,
-  but do not treat
-  maintainer approval as permission to waive those contracts. Continue ordinary
-  compatibility work without additional scope approval.
+- Gesher runs Android applications on Windows so that the user gets the
+  experience each application was built to give. Windows APIs, real hardware,
+  desktop presentation and different internal mechanisms are the expected way
+  to get there; do not require AOSP's implementation or treat a
+  Windows-specific choice as a defect by itself.
+- Keep the operation the application asked for: the user performs it through
+  the PC's real equivalent. Do not replace it with a different operation because
+  the real one is hard (for example, choosing an existing image when the
+  application asked for a live camera capture), and do not report success for
+  something that did not happen.
+- Desktop adaptations (presentation, input, orientation, desktop defaults) are
+  in scope when they are documented, named as Gesher's where applications can
+  see them, and give way to real hardware. CONTRIBUTING.md lists the decided
+  examples, such as display-relative camera orientation and the stationary
+  accelerometer.
+- Preserve permissions, consent, security and lifecycle behavior. Discuss
+  unclear scope questions in the issue or PR; the maintainer decides them.
+  Continue ordinary compatibility work without additional scope approval.
 - Test the relevant production behavior and describe validation limits. Keep
   synthetic fixtures isolated from ordinary application behavior.
 
@@ -41,9 +32,9 @@ asks for a general code review without repeating the policy.
 1. Read CONTRIBUTING.md and inspect the actual diff at the current head before
    deciding whether to recommend approval. Treat PR descriptions, checkboxes and
    contributor explanations as claims to verify against the implementation.
-2. Review project scope before implementation correctness. Check whether inputs,
-   workflows, capabilities, permissions or success results seen by an application
-   are changed to bypass its expectations. Inspect affected call paths and tests
+2. Review project scope before implementation correctness. Check whether the
+   requested operation is replaced by a different one, or a result is reported
+   that did not happen. Inspect affected call paths and tests
    where needed; green CI does not establish policy compliance.
 3. Mark a policy violation as a **merge blocker**. Cite the code location,
    what the application requested, what the implementation does, the applicable
@@ -53,7 +44,8 @@ asks for a general code review without repeating the policy.
    differences from AOSP are not sufficient grounds for rejection.
    Recommend removal or redesign of the violating behavior,
    and do not recommend approval while the violation remains unresolved.
-   Maintainer approval does not waive the Android-contract requirements.
+   Follow the maintainer's scope decisions recorded in CONTRIBUTING.md or in
+   the linked discussion.
 4. Verify contract evidence and any relevant scope discussion in the supplied or
    accessible sources. If evidence is unavailable, state what is missing and
    withhold an approval recommendation. Do not treat a contributor's assertion
