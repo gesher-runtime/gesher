@@ -147,6 +147,19 @@ recording seams. Constructing an isolated worker fixture does not activate a
 worker in ordinary application use. The checks are not Windows browser
 integration evidence.
 
+The final unavailable-boundary checks pass: 206 feature-query assertions and
+310 fresh public-controller/storage assertions in Java, plus 101 native
+activation/storage assertions with zero filters installed. Both Java mutations
+(a feature-query lookup and native activation before throwing) are rejected.
+Restoring the exact published `fed039fc` native activation/helper bodies is also
+rejected, with three filter installations recorded. Separate prepared-component
+fixtures retain 63 Java and 314 native checks; the missing-denial control remains
+effective. The Java suite also passes with actual Android JSON classes, and the
+existing storage-forwarding suite retains all 16 checks. Native runs use ASan
+and UBSan; LeakSanitizer is disabled only for this traced local environment.
+Independent review approved the final tests at local `a44350ef` (published as
+`d5e4ae9f`); no production switch was introduced to activate the prepared bridge.
+
 - `tools/test_service_worker_contracts.py`: provider availability boundaries,
   prepared settings/adapters/converters, response ownership and query callbacks;
   supports `--core-classes` to run against actual Android `org.json` classes.

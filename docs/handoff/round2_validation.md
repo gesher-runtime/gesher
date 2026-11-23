@@ -5,6 +5,12 @@ PR: [#391](https://github.com/gesher-runtime/gesher/pull/391).
 Round 1: [#388](https://github.com/gesher-runtime/gesher/pull/388).
 Base: `bcfb5044029d486e17138dc417f3ced81524cf3f`.
 
+The final continuation also merges main `3b2eaca95b5ddd9cee3c3db4e430460e512eb355`.
+The earlier CI checkout combined the PR with that newer shortcut-accounting
+change, exposing missing process/activity state in the usage-hook fixture.
+Validation of the correction uses the actual combined source, not a shortened
+copy of the production hook.
+
 ## Scope status
 
 | Handoff item | Status |
@@ -49,21 +55,51 @@ The following integration commit adds test-entry wiring and validation evidence.
 | --- | --- |
 | API 37 report suite on combined source | 37 selected/executed; 0 failures, errors or skips |
 | Complete unchanged app build with actual framework/core classes | All Java and AIDL delegates compile; BootLinkCheck 292 references / 0 unresolved; D8 passes |
-| Actual-framework activity usage / usage-query | 41 / 901,153 checks pass |
-| Query model | 12,655 checks pass |
+| Complete activity-finish CI entry on the final main merge | 901,542 checks pass with fresh app classes and actual framework/core inputs |
+| Query model in that combined run | 12,661 checks pass |
 | Usage observer helper | 1,117 checks pass; full service boundary and actual ATM callsite tests pass |
 | Surface geometry / release / damage | 158 / 38 / 75 checks pass |
 | Layered / presentation allocations | 1,441 / 38,028 checks pass |
 | Frame recycling / video scaling | 331,204 / 32,165 checks pass |
 | Readback / display refresh / mouse | 12,000 / 44 / 25 checks pass |
-| Prepared worker, storage-query and AndroidX Java | Earlier component run: 64 checks pass, including actual Android JSON; this did not establish worker availability |
-| Prepared native worker ownership / timeout / completion | Earlier component run: 314 checks pass with ASan/UBSan; missing-denial negative control rejected; this did not establish faithful network errors |
+| Java worker availability and independent storage | 206 feature-query checks and 310 fresh public-entry/storage checks pass; two activation mutations rejected |
+| Prepared worker/settings/query Java components | 63 isolated component checks pass; the fixture alone publishes its prepared controller and does not establish production availability |
+| Native worker availability and independent storage | 101 checks pass with ASan/UBSan, zero worker filters installed; exact historical activation control rejected after three recorded filter installations |
+| Prepared native worker ownership / timeout / completion | 314 isolated checks pass with ASan/UBSan; missing-denial negative control rejected; this does not establish faithful network errors |
 | Existing WebStorage deletion / boundary / owned streams | 16 / 32 / 17,352,558 checks pass |
 | Production native compilation | Relevant graphics/window and complete WebView host units compile for Windows x64 and ARM64; complete patched-JNI builtin/shared units pass on x64. ARM64 patched JNI has the pre-existing `sysv_abi` limitation detailed below |
 
 Existing CI entry points now invoke the new observer, refresh and worker suites;
 no workflow files are modified. Compiler/sanitizer settings propagate to the
 native worker suite, including its negative control.
+
+The final gate tests were independently reviewed at local `a44350ef` (published
+as `d5e4ae9f`), above production repair `69ef51d4` (published as `392eb50f`).
+Fresh JVMs exercise the real provider methods and
+whole controller/storage-query classes before any prepared component fixture
+is constructed. A separate capability-query fixture makes its recording worker
+callee usable, so a downstream exception cannot conceal an initialization
+attempt. The native control restores the exact published `fed039fc` activation
+and service-controller functions, including scheduling, COM capability query,
+filter installation and completion. The rejected control installs three worker
+filters; the current entry installs none. Storage and cookie helper bodies are
+unchanged. These results demonstrate unavailability without claiming W07 support.
+
+The main-merge usage fixture repair reproduced all 15 original compilation
+errors, then retained the complete production `recordUsage` body and extracted
+`activityCodeCurrent` predicate. Recording process/activity/package boundaries
+cover valid, retired, replaced and removal-pending lifecycle state without
+suppressing the usage transition. The exact CI activity-finish command and all
+its groups pass against freshly built combined app classes. The unchanged app
+build also passes again: BootLinkCheck remains 292 references / zero unresolved,
+and D8 completes.
+
+Independent review of the fixture also caught reused recording state that could
+hide a skipped transition in a later case. Each case now uses a fresh sink; all
+five targeted transition-suppression mutations fail their corresponding delivery
+assertion. The final focused observer/service/hook suite passes. Both reviewed
+fixture corrections are published together as `7e8d3014`; production behavior
+and the complete extracted methods are unchanged.
 
 Graphics ABBA measured CPU copying over 400 1080p frames. The 64x64 dirty path
 took 2.408 / 2.368 ms in the two candidate passes versus 980.107 / 886.432 ms for
