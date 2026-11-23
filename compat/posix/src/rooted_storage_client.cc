@@ -87,8 +87,11 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
   if (!state.VerifyPeer(pipe)) return EACCES;
   if (reply->handle != 0) {
     wire::OpenAck ack, committed;
-    if (!binder_bootstrap::Transfer(pipe, &ack, sizeof(ack), true, deadline) ||
-        !binder_bootstrap::Transfer(pipe, &committed, sizeof(committed), false, deadline)) return EIO;
+    // The host starts its five-second delivery window before writing the
+    // offer. Keep reading for that whole window once we accept an offer.
+    const ULONGLONG handoff_deadline = GetTickCount64() + 5000;
+    if (!binder_bootstrap::Transfer(pipe, &ack, sizeof(ack), true, handoff_deadline) ||
+        !binder_bootstrap::Transfer(pipe, &committed, sizeof(committed), false, handoff_deadline)) return EIO;
     if (committed.magic != wire::kOpenCommitMagic || committed.version != wire::kVersion) return EPROTO;
     if (!state.VerifyPeer(pipe)) {
       CloseHandle(binder_bootstrap::DecodeHandle(reply->handle));
