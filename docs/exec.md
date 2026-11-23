@@ -99,10 +99,13 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   protocol. Closed standard descriptors are not replaced with NUL for it.
 - **`exec*()` outside a fork** spawns the program with this process's fds,
   environment and working directory, waits and exits with its status (the pid
-  changes). The list forms `execl`, `execlp` and `execle` take their argv (and
-  `execle` its envp after the null) as bionic's `execl.cpp` does, from x86-64
-  code and from translated arm64 code alike; a null `execle` envp is an empty
-  environment.
+  changes). The list forms take their argv as bionic's `execl.cpp` does, from
+  x86-64 code and from translated arm64 code alike, including list items past
+  the argument registers that the caller passes on the stack: `execl` runs the
+  path as `execv` does; `execlp` looks a bare name up in `PATH` as `execvp`
+  does; `execle` takes the envp that follows the list's null and runs the path
+  with it as `execve` does, not with `environ`, and a null envp there is an
+  empty environment.
 - **`waitpid`/`wait`/`wait4`** return Linux's status word
   (`WIFEXITED`/`WIFSIGNALED`); a child's exit raises `SIGCHLD`.
 - **`kill(pid, sig)` to another process** (any Gesher process, children
@@ -143,6 +146,24 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   are not supported (`ENOEXEC`).
 - Windows programs get the command line quoted for the CRT's rules; a
   Windows program's exit code is passed through unchanged (it may exceed 255).
+- Known differences of the `exec*` path from bionic, unchanged for now:
+  - `ENOEXEC` does not fall back to `/system/bin/sh`. bionic's
+    `execvp`/`execvpe` retry a file the kernel rejects with the shell; here a
+    file whose first bytes contain a NUL and that is not a supported ELF or PE
+    image fails with `ENOEXEC`. A text file without `#!` instead runs in the
+    launcher's shell for every form, `execv`/`execve` included, where bionic
+    would return `ENOEXEC`.
+  - With `PATH` unset, `execvp`/`execlp`/`execvpe` do not use bionic's
+    `_PATH_DEFPATH`: an unset or empty `PATH` is read as a single empty entry,
+    so a bare name is looked up only in the current directory (apart from the
+    `/system/bin` tools above).
+  - A `#!` script with an interpreter other than `sh` gets the caller's
+    `argv[0]` after the interpreter and its option, where Linux passes the
+    script's path; `#!...sh` scripts are run by path.
+  - An ELF program run without a device session (standalone `gesher-exec`)
+    sets its own `GESHER_PROPERTY_SESSION` for the property backend, so even an
+    empty environment (`execle`/`execve` with a null or empty envp) shows that
+    one variable to the program.
 
 ## Status and next steps
 
