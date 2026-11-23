@@ -27,6 +27,8 @@ struct LocalState {
   ProcessIdentity process{};
   std::array<Anchor, kRecordCapacity> anchors{};
   std::array<Probe, kReferenceCapacity> probes{};
+  PTP_TIMER broker_sweep = nullptr;
+  bool sweep_pending = false;
 };
 // Checked, process-owned allocation: no static destructor races other fd
 // users or runs registry/anchor cleanup during CRT/VM destruction.
@@ -173,6 +175,69 @@ bool Collect(RegistryState* state, const File& file) {
   }
   return changed;
 }
+
+bool MarkIdleBrokerAnchors() {
+  bool removable = false;
+  for (Anchor& anchor : local->anchors) {
+    uint32_t access = 0, handles = 0;
+    if (!anchor.used || anchor.close_after_commit ||
+        HandleAccess(anchor.handle, &access, &handles) || handles != 1) continue;
+    // This inaccessible private anchor is the FILE_OBJECT's sole handle.
+    // Even an inherited or transferred descriptor would raise this count.
+    anchor.close_after_commit = true;
+    removable = true;
+  }
+  return removable;
+}
+
+void RemoveMarkedAnchors(RegistryState* state) {
+  for (const Anchor& anchor : local->anchors) if (anchor.used && anchor.close_after_commit) {
+    RemoveOwner(&state->locks, anchor.description, &anchor.file);
+    RemoveAnchorReference(state, anchor);
+  }
+}
+
+int PublishSweep(RegistryState* state) {
+  RemoveMarkedAnchors(state);
+  const int error = local->registry.Commit();
+  if (error) CancelPending();
+  return error ? error : CloseCommitted();
+}
+
+void ScheduleBrokerSweep();
+void CALLBACK SweepBrokerAnchors(PTP_CALLBACK_INSTANCE, void*, PTP_TIMER) {
+  DescriptorGuard guard;
+  local->sweep_pending = false;
+  RegistryState* state = nullptr;
+  if (!CloseCommitted() && MarkIdleBrokerAnchors()) {
+    if (!local->registry.Begin(&state, 100)) {
+      PublishSweep(state);
+      local->registry.Unlock();
+    } else {
+      CancelPending();
+    }
+  }
+  ScheduleBrokerSweep();
+}
+
+void ScheduleBrokerSweep() {
+  if (local->sweep_pending) return;
+  bool has_anchors = false;
+  for (const Anchor& anchor : local->anchors) has_anchors |= anchor.used;
+  if (!has_anchors) return;
+  if (!local->broker_sweep) {
+    local->broker_sweep = CreateThreadpoolTimer(SweepBrokerAnchors, nullptr, nullptr);
+    if (!local->broker_sweep) return;
+  }
+  // Run only while the broker owns OFD anchors. Guest termination can bypass
+  // close notifications, including a descendant holding the last alias.
+  constexpr LONGLONG kOneSecond = -10'000'000;
+  const auto ticks = static_cast<ULONGLONG>(kOneSecond);
+  FILETIME due{static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
+  SetThreadpoolTimer(local->broker_sweep, &due, 0, 100);
+  local->sweep_pending = true;
+}
+
 int FreshOwner(const RegistryState& state, Owner* owner) {
   owner->kind = Ownership::kDescription;
   for (unsigned attempt = 0; attempt < 8; ++attempt) {
@@ -231,8 +296,17 @@ int RunOperation(HANDLE file, const ProcessIdentity& caller, const PreparedOpera
   Owner owner{Ownership::kProcess, caller.pid, caller.created};
   Anchor* allocated = nullptr;
   if (prepared.ofd) {
-    error = Description(state, file, prepared.file, !prepared.query && prepared.input.type != 2,
-                        &owner, &allocated);
+    const bool create = !prepared.query && prepared.input.type != 2;
+    if (broker_output && create && MarkIdleBrokerAnchors()) {
+      error = PublishSweep(state);
+      if (error) {
+        local->registry.Unlock();
+        ScheduleBrokerSweep();
+        return error;
+      }
+      changed = false;  // Pruning and collection were published together.
+    }
+    if (!error) error = Description(state, file, prepared.file, create, &owner, &allocated);
   }
   LinuxFlock output{};
   bool mutated = false;
@@ -250,6 +324,7 @@ int RunOperation(HANDLE file, const ProcessIdentity& caller, const PreparedOpera
     error = CloseCommitted();
   }
   local->registry.Unlock();
+  if (!error && broker_output && allocated) ScheduleBrokerSweep();
   if (!error && prepared.query && broker_output) *broker_output = output;
   return error;
 }

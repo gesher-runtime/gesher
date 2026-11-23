@@ -107,7 +107,12 @@ int Hold(const fs::path& dir) {
   Mark("OFD held");
   if (!WaitPhase(dir, '3') || !Check(close(alias) == 0, "last alias closes")) return 1;
   Mark("OFD released");
-  return WaitPhase(dir, '4') ? 0 : 1;
+  if (!WaitPhase(dir, '4')) return 1;
+  const int exiting = OpenData(dir);
+  if (!Check(exiting >= 0 && fcntl(exiting, F_OFD_SETLK, &lock) == 0, "exiting holder leaves a live OFD")) return 1;
+  Mark("exiting OFD held");
+  if (!WaitPhase(dir, '5')) return 1;
+  ExitProcess(0);  // Exit without calling any descriptor close wrapper.
 }
 
 int Observe(const fs::path& dir, int pid) {
@@ -164,11 +169,27 @@ int Server(const fs::path& dir) {
     const int process = start(u" --observe " + U16(std::to_wstring(expected)), log, observer, 11002, observer_id);
     return process > 0 && WaitExit(process);
   };
+  const auto shared = dir / L"shared";
+  const auto release_after_exit = [&] {
+    if (DeleteFileW(shared.c_str()) || GetLastError() != ERROR_SHARING_VIOLATION) return false;
+    if (!SendPhase(dir, '5') || !WaitExit(holder)) return false;
+    const auto end = GetTickCount64() + 5000;
+    do {
+      // Do not call fcntl to induce opportunistic cleanup. Verify the actual
+      // Windows share reservation leaves with the last guest handle.
+      if (DeleteFileW(shared.c_str())) return true;
+      if (GetLastError() != ERROR_SHARING_VIOLATION) return false;
+      Sleep(20);
+    } while (GetTickCount64() < end);
+    return false;
+  };
   return Check(holder > 0 && WaitMarker(holder, owner_log, "POSIX held") && observe(holder) &&
                SendPhase(dir, '1') && WaitMarker(holder, owner_log, "POSIX released") && observe(0) &&
                SendPhase(dir, '2') && WaitMarker(holder, owner_log, "OFD held") && observe(-1) &&
                SendPhase(dir, '3') && WaitMarker(holder, owner_log, "OFD released") && observe(0) &&
-               SendPhase(dir, '4') && WaitExit(holder), "protected cross-process record locks") ? 0 : 1;
+               SendPhase(dir, '4') && WaitMarker(holder, owner_log, "exiting OFD held") &&
+               Check(release_after_exit(), "broker reclaims the last OFD anchor after unclean guest exit"),
+               "protected cross-process record locks") ? 0 : 1;
 }
 }  // namespace
 
