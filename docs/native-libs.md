@@ -182,20 +182,30 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     0 and keeps it loaded, as it does every library in gesher (bionic would
     unload it at its last reference). The caller may still unmap its
     reservation after `dlclose`, or map over it, as the contract allows: once
-    such a `munmap` or `MAP_FIXED` `mmap` through the shim is certain to take
-    place (valid arguments, and for `MAP_FIXED` a range of one of
-    gesher-base's mappings) - or, failing that, once it succeeded - the
-    library leaves `dlsym`, `dl_iterate_phdr`, `dladdr`, symbol binding of
-    later loads and the arm64 translator's code ranges without running any of
-    its code (`ForgetReservedMappings`). A `munmap` or `mmap` that fails its
-    validation leaves it listed; one that fails natively after that (out of
-    resources) leaves it unlisted but mapped. A `dl_iterate_phdr` in progress
-    skips a library unmapped since its snapshot, and the unmap waits for
-    callbacks already running for that library (they may read its program
-    headers) before the pages go, as bionic's `dl_iterate_phdr` holds the
-    loader lock while `dlclose` unmaps: no timeout, and not for the unmapping
-    thread's own callback; a callback that waits for that very unmap
-    deadlocks, as `dlclose` would on Android. Its `PT_TLS` initialization image is copied into
+    such a `munmap` or anonymous `MAP_FIXED` `mmap` through the shim is
+    certain to take place (valid arguments, and for `MAP_FIXED` a range of one
+    of gesher-base's mappings) - or, for a `MAP_FIXED` file mapping, which can
+    also fail on the file (`EACCES`, an executable view, seals), once it
+    succeeded - the library leaves `dlsym`, `dl_iterate_phdr`, `dladdr`,
+    symbol binding of later loads and the arm64 translator's code ranges
+    without running any of its code (`ForgetReservedMappings`). A call that
+    fails leaves it listed; one that fails natively after the check (out of
+    resources) leaves it unlisted but mapped; between a successful file
+    `MAP_FIXED` and the retirement, a lookup on another thread can still read
+    the replaced pages. A `dl_iterate_phdr` in progress skips a library
+    unmapped since its snapshot, and the unmap waits (a condition variable,
+    no timeout) for callbacks already running for that library on other
+    threads before the pages go, as bionic's `dl_iterate_phdr` holds the
+    loader lock while `dlclose` unmaps. It does not wait when the unmapping
+    thread is itself inside a `dl_iterate_phdr` callback or holds the
+    loader's lock (a constructor or IFUNC resolver), where waiting could
+    deadlock with a callback that unmaps in turn or looks symbols up; then a
+    callback still running on another thread for that library may read its
+    unmapped program headers. The in-callback count is undone when a
+    callback returns or is unwound; a `longjmp` out of a callback (gesher's
+    `longjmp` skips host frames without running their cleanups) leaves it
+    counted, and a later unmap of that library's reservation from another
+    thread then waits for good. Its `PT_TLS` initialization image is copied into
     loader memory at load time, so threads created after the unmap still
     initialize its (still registered) TLS. Its unresolved-import stubs and
     data placeholders stay allocated (a few pages). Code another library

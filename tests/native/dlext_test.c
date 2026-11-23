@@ -675,6 +675,21 @@ static int run(void) {
     void* m = mmap(r, g_page, PROT_READ, MAP_PRIVATE | MAP_FIXED, 12345, 0);
     check("MAP_FIXED of a file with a bad descriptor fails (EBADF)",
           m == MAP_FAILED && errno == EBADF);
+    {
+      char path[600];
+      path_of(path, sizeof(path), "libdlext_unmap.so");
+      int ro = open(path, O_RDONLY);
+      errno = 0;
+      void* w = ro >= 0 ? mmap(r, g_page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, ro, 0)
+                        : MAP_FAILED;
+      const int e = errno;
+      if (ro >= 0) close(ro);
+      check("MAP_FIXED shared writable of a file opened read-only fails (EACCES)",
+            ro >= 0 && w == MAP_FAILED && e == EACCES);
+      check("  and the library is still listed and works",
+            query("libdlext_unmap.so").found && answer_of(hm) == 42 &&
+                dlsym(RTLD_DEFAULT, "gesher_dlext_unmap_marker") != NULL);
+    }
     check("  and the library is still listed and works",
           query("libdlext_unmap.so").found && answer_of(hm) == 42 &&
               dlsym(RTLD_DEFAULT, "gesher_dlext_unmap_marker") != NULL);

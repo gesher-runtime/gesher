@@ -19,6 +19,7 @@
 #include <cstring>
 #include <memory>
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <set>
 #include <string>
@@ -263,7 +264,26 @@ namespace {
 
 // Like bionic's recursive dlopen lock: serialize complete load operations,
 // while constructors and IFUNC callbacks may re-enter on the same thread.
-std::recursive_mutex g_mutex;
+// A recursive mutex that knows whether the calling thread holds it
+// (ForgetReservedMappings must not wait for other threads while it does).
+class LoaderMutex {
+ public:
+  void lock() {
+    mutex_.lock();
+    ++held_;
+  }
+  void unlock() {
+    --held_;
+    mutex_.unlock();
+  }
+  static bool HeldByThisThread() { return held_ > 0; }
+
+ private:
+  std::recursive_mutex mutex_;
+  static thread_local int held_;
+};
+thread_local int LoaderMutex::held_ = 0;
+LoaderMutex g_mutex;
 std::vector<Library*>& Loaded() {
   static std::vector<Library*> v;
   return v;
@@ -271,9 +291,12 @@ std::vector<Library*>& Loaded() {
 SymbolResolver g_resolver;
 uint64_t g_load_count = 0;  // under g_mutex
 UnresolvedHandler g_unresolved_handler = nullptr;
-// The reserved objects this thread's dl_iterate_phdr callbacks are running
-// for (innermost last): an unmap from inside one does not wait for itself.
-thread_local std::vector<Library*> t_callbacks;
+// dl_iterate_phdr callbacks running on this thread (ForEachLoaded): an unmap
+// from inside one does not wait for other callbacks.
+thread_local int t_callback_depth = 0;
+// Callbacks running for reserved objects end here (Library::in_callback).
+std::mutex g_callbacks_mutex;
+std::condition_variable g_callbacks_cv;
 
 // Objects loaded into a caller's reservation and still listed: [base, base +
 // map_size). munmap and MAP_FIXED of the app look here (ForgetReservedMappings)
@@ -2010,7 +2033,7 @@ void SetUnresolvedHandler(UnresolvedHandler handler) { g_unresolved_handler = ha
 int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
   std::vector<std::pair<PhdrInfo, const Library*>> infos;
   {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    std::lock_guard<LoaderMutex> lock(g_mutex);
     for (Library* lib : Loaded()) {
       if (lib->is_closed || lib->phdr == nullptr) continue;
       PhdrInfo info;
@@ -2030,31 +2053,46 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
   // is skipped; Library objects are never freed once listed, so the check
   // itself is safe. One unmapped while a callback is reading it is the app's
   // own race, as with bionic.
+  // Undone however the callback leaves (a return, or a longjmp/unwind out
+  // of dl_iterate_phdr through this frame's destructors).
+  struct CallbackScope {
+    Library* lib;
+    explicit CallbackScope(Library* l) : lib(l) { ++t_callback_depth; }
+    ~CallbackScope() {
+      --t_callback_depth;
+      if (lib == nullptr) return;
+      {
+        std::lock_guard<std::mutex> lock(g_callbacks_mutex);
+        lib->in_callback.fetch_sub(1);
+      }
+      g_callbacks_cv.notify_all();
+    }
+  };
   for (const auto& entry : infos) {
     Library* lib = const_cast<Library*>(entry.second);
-    if (lib == nullptr) {
-      if (int r = fn(entry.first)) return r;
-      continue;
+    if (lib != nullptr) {
+      // Counted before the check, so ForgetReservedMappings either sees this
+      // callback (and may wait for it before the pages go) or this sees
+      // retired.
+      lib->in_callback.fetch_add(1);
+      if (lib->retired.load()) {
+        {
+          std::lock_guard<std::mutex> lock(g_callbacks_mutex);
+          lib->in_callback.fetch_sub(1);
+        }
+        g_callbacks_cv.notify_all();
+        continue;
+      }
     }
-    // Counted before the check, so ForgetReservedMappings either sees this
-    // callback (and waits for it before the pages go) or this sees retired.
-    lib->in_callback.fetch_add(1);
-    if (lib->retired.load()) {
-      lib->in_callback.fetch_sub(1);
-      continue;
-    }
-    t_callbacks.push_back(lib);
-    const int r = fn(entry.first);
-    t_callbacks.pop_back();
-    lib->in_callback.fetch_sub(1);
-    if (r != 0) return r;
+    CallbackScope scope(lib);
+    if (int r = fn(entry.first)) return r;
   }
   return 0;
 }
 
 bool FindAddress(const void* addr, AddressInfo* info) {
   auto a = reinterpret_cast<const uint8_t*>(addr);
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
   for (Library* lib : Loaded()) {
     if (a < lib->base || a >= lib->base + lib->map_size) continue;
     info->soname = lib->soname.c_str();
@@ -2092,19 +2130,19 @@ bool FindAddress(const void* addr, AddressInfo* info) {
 }
 
 void SetBionicResolver(SymbolResolver resolver) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
   g_resolver = std::move(resolver);
 }
 
 Library* Load(const char* path, std::string* error, const LoadOptions& options) {
-  std::lock_guard<std::recursive_mutex> operation(g_mutex);
+  std::lock_guard<LoaderMutex> operation(g_mutex);
   // Name the object by its file base name.
   const char* slash = std::strrchr(path, '/');
   const char* bslash = std::strrchr(path, '\\');
   const char* base = slash > bslash ? slash : bslash;
   std::string name = base ? base + 1 : path;
   {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    std::lock_guard<LoaderMutex> lock(g_mutex);
     if (Library* existing = FindLocked(name)) return existing;
   }
   FileImage image;
@@ -2114,16 +2152,16 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
                         const LoadOptions& options) {
-  std::lock_guard<std::recursive_mutex> operation(g_mutex);
+  std::lock_guard<LoaderMutex> operation(g_mutex);
   {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    std::lock_guard<LoaderMutex> lock(g_mutex);
     if (Library* existing = FindLocked(name)) return existing;
   }
   return LoadCommon(name, nullptr, static_cast<const uint8_t*>(data), size, -1, error, options);
 }
 
 void* Lookup(Library* library, const char* name) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
   if (library == nullptr || name == nullptr || library->retired) return nullptr;
   uint32_t gh = GnuHash(name), sh = SysvHash(name);
   const Elf64_Sym* sym = FindDefinedSymbol(library, name, gh, sh);
@@ -2166,29 +2204,29 @@ void* Lookup(Library* library, const char* name) {
 }
 
 void* LookupGlobal(const char* name) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
   return LookupGlobalLocked(name, nullptr, nullptr);
 }
 
 bool IsAarch64(Library* library) { return library != nullptr && library->is_aarch64; }
 
 void* ResolveBionic(const char* name) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
   return g_resolver ? g_resolver(name) : nullptr;
 }
 
 Library* Find(const char* name) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
   return FindLocked(name);
 }
 
 const char* Soname(Library* library) { return library ? library->soname.c_str() : ""; }
 
 void Close(Library* library) {
-  std::lock_guard<std::recursive_mutex> operation(g_mutex);
+  std::lock_guard<LoaderMutex> operation(g_mutex);
   if (library == nullptr) return;
   {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    std::lock_guard<LoaderMutex> lock(g_mutex);
     if (library->is_closed || library->is_closing) return;
     // Finalizers may re-enter dlclose. Claim this object before calling them,
     // keeping its symbols visible until they finish. The recursive operation
@@ -2208,7 +2246,7 @@ void Close(Library* library) {
   }
   finish(library->fini_func);
   {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    std::lock_guard<LoaderMutex> lock(g_mutex);
     library->is_closed = true;
     library->is_closing = false;
   }
@@ -2255,7 +2293,7 @@ void ForgetReservedMappings(const void* addr, size_t length) {
   }
   if (hit.empty()) return;
   {
-    std::lock_guard<std::recursive_mutex> operation(g_mutex);
+    std::lock_guard<LoaderMutex> operation(g_mutex);
     for (Library* lib : hit) {
       if (lib->retired) continue;
       if (std::getenv("GESHER_TRACE_DL") != nullptr) {
@@ -2269,15 +2307,19 @@ void ForgetReservedMappings(const void* addr, size_t length) {
     }
   }
   // No dl_iterate_phdr callback starts for these objects now; one already
-  // running for one may still read its program headers. As bionic's
-  // dl_iterate_phdr holds the loader lock while dlclose unmaps, the pages go
-  // only once those are done - waited for without g_mutex, since a callback
-  // may look symbols up - except this thread's own callbacks (an unmap from
-  // inside one). No timeout: a callback that waits for this very unmap would
-  // deadlock bionic's dlclose too.
+  // running on another thread may still read their program headers. As
+  // bionic's dl_iterate_phdr holds the loader lock while dlclose unmaps, the
+  // pages go only once those callbacks are done - waited for without
+  // g_mutex, since a callback may look symbols up. Not when this thread is
+  // itself inside a dl_iterate_phdr callback or holds g_mutex (a constructor,
+  // an IFUNC resolver): waiting there could deadlock with a callback that
+  // unmaps in turn or needs g_mutex, where bionic's single lock serializes
+  // them. Then the pages go at once, and a callback still running on another
+  // thread for that object may read them afterwards (a fault in it).
+  if (t_callback_depth > 0 || LoaderMutex::HeldByThisThread()) return;
+  std::unique_lock<std::mutex> lock(g_callbacks_mutex);
   for (Library* lib : hit) {
-    const int own = static_cast<int>(std::count(t_callbacks.begin(), t_callbacks.end(), lib));
-    while (lib->in_callback.load() > own) SwitchToThread();
+    g_callbacks_cv.wait(lock, [lib] { return lib->in_callback.load() == 0; });
   }
 }
 
@@ -2295,7 +2337,7 @@ bool GetExecutableInfo(Library* library, ExecutableInfo* info) {
 }
 
 void SetInitArguments(int argc, char** argv, char** envp) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
   g_init_argc = argc;
   g_init_argv = argv;
   g_init_envp = envp;

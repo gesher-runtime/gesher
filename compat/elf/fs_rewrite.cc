@@ -1888,16 +1888,19 @@ void* MapLoadedMemoryImpl(void* addr, size_t len, int prot, int flags, int fd, i
 
 // MAP_FIXED over an object loaded into a caller's reservation (android_dlopen_ext)
 // takes the object out of every list (ForgetReservedMappings). Before the
-// mapping when it is sure to replace the pages there - a valid request whose
-// range is one of gesher-base's mappings (gesher_mmap_fixed_replaces), which
-// then fails only for want of resources - so no lookup reads the replaced
-// pages in between; otherwise only once the mapping succeeded. A request
-// that fails early leaves the object listed.
+// mapping when it is sure to replace the pages there - a valid anonymous
+// request whose range is one of gesher-base's mappings
+// (gesher_mmap_fixed_replaces), which then fails only for want of resources
+// - so no lookup reads the replaced pages in between. A file mapping can
+// also fail on the file (its access mode, an executable view, seals,
+// revocation), so then only once it succeeded: between the replacement and
+// that, a lookup on another thread can still read the replaced pages. A
+// request that fails leaves the object listed.
 void* MapLoadedMemory(void* addr, size_t len, int prot, int flags, int fd, int64_t offset,
                       bool raw_syscall) {
   const bool replace = (flags & MAP_FIXED) != 0 && (flags & MAP_FIXED_NOREPLACE) == 0;
   bool forgotten = false;
-  if (replace && !BasicInvalidMapping(addr, len, flags, fd, offset) &&
+  if (replace && (flags & MAP_ANONYMOUS) != 0 && !BasicInvalidMapping(addr, len, flags, fd, offset) &&
       gesher_mmap_fixed_replaces(addr, (len + kPage - 1) & ~(kPage - 1)) != 0) {
     ForgetReservedMappings(addr, len);
     forgotten = true;
