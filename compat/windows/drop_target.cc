@@ -30,17 +30,18 @@ constexpr int kActionDragEnded = 4;
 constexpr int kActionDragEntered = 5;
 constexpr int kActionDragExited = 6;
 
-static JavaVM* g_vm = nullptr;
+static std::atomic<JavaVM*> g_vm{nullptr};
 
 JavaVM* ResolveJavaVM() {
-  if (g_vm != nullptr) return g_vm;
+  if (JavaVM* vm = g_vm.load(std::memory_order_acquire)) return vm;
   HMODULE mod = GetModuleHandleW(nullptr);
   if (mod != nullptr) {
     auto fn = reinterpret_cast<JavaVM* (*)()>(
         GetProcAddress(mod, "_ZN7android14AndroidRuntime9getJavaVMEv"));
     if (fn != nullptr) {
-      g_vm = fn();
-      return g_vm;
+      JavaVM* vm = fn();
+      g_vm.store(vm, std::memory_order_release);
+      return vm;
     }
   }
   return nullptr;
@@ -49,12 +50,12 @@ JavaVM* ResolveJavaVM() {
 }  // namespace
 
 void SetDropTargetJavaVM(JavaVM* vm) {
-  g_vm = vm;
+  g_vm.store(vm, std::memory_order_release);
 }
 
 void DispatchDragToSession(HWND hwnd, int action, float x, float y,
                            const std::vector<std::wstring>* files,
-                           const std::wstring& text) {
+                           const std::wstring& text, bool file_drag, bool hosted) {
   JavaVM* vm = ResolveJavaVM();
   if (vm == nullptr) return;
 
@@ -73,7 +74,7 @@ void DispatchDragToSession(HWND hwnd, int action, float x, float y,
   if (sessionClass != nullptr) {
     jmethodID method = env->GetStaticMethodID(
         sessionClass, "onNativeDragEvent",
-        "(JIFF[Ljava/lang/String;Ljava/lang/String;)V");
+        "(JIFF[Ljava/lang/String;Ljava/lang/String;ZZ)V");
     if (method != nullptr) {
       jobjectArray fileArray = nullptr;
       if (files != nullptr && !files->empty()) {
@@ -99,7 +100,7 @@ void DispatchDragToSession(HWND hwnd, int action, float x, float y,
                                static_cast<jint>(action),
                                static_cast<jfloat>(x),
                                static_cast<jfloat>(y),
-                               fileArray, textStr);
+                               fileArray, textStr, static_cast<jboolean>(file_drag), static_cast<jboolean>(hosted));
 
       if (fileArray != nullptr) env->DeleteLocalRef(fileArray);
       if (textStr != nullptr) env->DeleteLocalRef(textStr);

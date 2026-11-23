@@ -2779,15 +2779,15 @@ public final class WindowSession extends IWindowSession.Stub {
      * into android.view.DragEvent dispatched to the focused Android window session.
      */
     public static void onNativeDragEvent(long hwnd, int action, float x, float y,
-            String[] files, String text) {
+            String[] files, String text, boolean fileDrag, boolean hosted) {
         WindowSession session = get();
         if (session != null) {
-            session.handleNativeDrag(hwnd, action, x, y, files, text);
+            session.handleNativeDrag(hwnd, action, x, y, files, text, fileDrag, hosted);
         }
     }
 
     private void handleNativeDrag(long hwnd, int action, float x, float y,
-            String[] files, String text) {
+            String[] files, String text, boolean fileDrag, boolean hosted) {
         AppWindow target = null;
         synchronized (mWindows) {
             for (int i = 0; i < mWindows.size(); i++) {
@@ -2797,7 +2797,7 @@ public final class WindowSession extends IWindowSession.Stub {
                     break;
                 }
             }
-            if (target == null) target = activeRoot();
+            if (target == null && !hosted) target = activeRoot();
         }
         if (target == null) return;
 
@@ -2809,16 +2809,17 @@ public final class WindowSession extends IWindowSession.Stub {
                 "application/octet-stream"
             };
             desc = new ClipDescription("Files", mimeTypes);
-            android.net.Uri firstUri = android.net.Uri.fromFile(new java.io.File(
-                    com.gesher.server.Zygote.fromWindowsPath(files[0])));
+            android.net.Uri firstUri = dragFileUri(files[0]);
             data = new ClipData(desc, new ClipData.Item(firstUri));
             for (int i = 1; i < files.length; i++) {
-                data.addItem(new ClipData.Item(android.net.Uri.fromFile(new java.io.File(
-                        com.gesher.server.Zygote.fromWindowsPath(files[i])))));
+                data.addItem(new ClipData.Item(dragFileUri(files[i])));
             }
         } else if (text != null && !text.isEmpty()) {
             data = ClipData.newPlainText("text/plain", text);
             desc = data.getDescription();
+        } else if (fileDrag) {
+            desc = new ClipDescription("Files", new String[] {
+                    ClipDescription.MIMETYPE_TEXT_URILIST, "application/octet-stream"});
         } else {
             desc = new ClipDescription("text/plain", new String[] {"text/plain"});
         }
@@ -2850,6 +2851,13 @@ public final class WindowSession extends IWindowSession.Stub {
         } else {
             dispatch.run();
         }
+    }
+
+    private static android.net.Uri dragFileUri(String path) {
+        if (!path.startsWith("/mnt/gesher/drop/")) {
+            path = com.gesher.server.Zygote.fromWindowsPath(path);
+        }
+        return android.net.Uri.fromFile(new java.io.File(path));
     }
 
     private static android.view.DragEvent createDragEvent(int action, float x, float y,

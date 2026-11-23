@@ -10,6 +10,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -66,6 +67,43 @@ inline std::optional<std::vector<std::wstring>> ReadDropPaths(IDataObject* sourc
   }
   ReleaseStgMedium(&medium);
   return paths;
+}
+
+
+inline std::wstring ReadDropText(IDataObject* source, size_t maximum) {
+  for (const auto format : {CF_UNICODETEXT, CF_TEXT}) {
+    FORMATETC request{static_cast<CLIPFORMAT>(format), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (source->QueryGetData(&request) != S_OK || FAILED(source->GetData(&request, &medium))) continue;
+    std::wstring result;
+    if (medium.tymed == TYMED_HGLOBAL) {
+      const auto* data = static_cast<const char*>(GlobalLock(medium.hGlobal));
+      const auto size = GlobalSize(medium.hGlobal);
+      if (data != nullptr) {
+        if (format == CF_UNICODETEXT) {
+          auto first = reinterpret_cast<const wchar_t*>(data);
+          auto count = std::min(size / sizeof(wchar_t), maximum + 1);
+          const auto* end = std::find(first, first + count, L'\0');
+          if (end != first + count) result.assign(first, end);
+        } else {
+          const auto count = std::min(size, maximum + 1);
+          const auto* end = std::find(data, data + count, '\0');
+          if (end != data + count && end != data) {
+            const int length = static_cast<int>(end - data);
+            const auto wide = MultiByteToWideChar(CP_ACP, 0, data, length, nullptr, 0);
+            if (wide > 0 && static_cast<size_t>(wide) <= maximum) {
+              result.resize(wide);
+              if (!MultiByteToWideChar(CP_ACP, 0, data, length, result.data(), wide)) result.clear();
+            }
+          }
+        }
+        GlobalUnlock(medium.hGlobal);
+      }
+    }
+    ReleaseStgMedium(&medium);
+    if (!result.empty()) return result;
+  }
+  return {};
 }
 
 }  // namespace gesher::windows

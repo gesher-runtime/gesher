@@ -13,8 +13,10 @@ constexpr uint32_t kMagic = 0x47534452;  // GSDR
 constexpr uint32_t kVersion = 1;
 constexpr uint32_t kMaxRelativeUnits = 4096;
 constexpr uint32_t kMaxRoots = 128;
+constexpr uint32_t kMaxTextUnits = 65536;
 constexpr uint32_t kOpenDirectory = 1;
 constexpr uint32_t kOpenMetadata = 2;
+constexpr uint32_t kFileDrag = 1;
 
 enum class Op : uint32_t { kAttach = 1, kPoll, kOpen, kRelease };
 enum class Action : uint32_t { kStart = 1, kLocation, kDrop, kEnd, kEnter, kExit };
@@ -43,8 +45,10 @@ struct Event {
   float y = 0;
   uint32_t items = 0;
   uint64_t lease = 0;
+  uint32_t text_units = 0;
+  uint32_t flags = 0;
 };
-static_assert(sizeof(Event) == 24);
+static_assert(sizeof(Event) == 32);
 
 struct Item {
   uint32_t name_units;

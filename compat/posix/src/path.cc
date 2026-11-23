@@ -29,6 +29,7 @@
 #include "startup_null.h"
 #include "standalone_input.h"
 #include "rooted_storage_client.h"
+#include <gesher/drop_mount.h>
 
 #include <string>
 #include <limits>
@@ -428,6 +429,12 @@ static int SystemFontPath(const char* path, std::wstring* windows) {
 }
 
 PathKind MapPath(const char* path, std::wstring* windows) {
+
+  if (std::string_view(path).starts_with(drop_mount::kAndroidPrefix)) {
+    *windows = Widen(path);
+    std::replace(windows->begin(), windows->end(), L'/', L'\\');
+    return PathKind::kFile;
+  }
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning. A name with a character Windows
   // reserves (':' and the like) is stored encoded (gesher/reserved_names.h).

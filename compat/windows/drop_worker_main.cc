@@ -56,13 +56,17 @@ class DropTarget final : public IDropTarget {
 
   HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL at, DWORD* effect) override {
     if (!effect) return E_POINTER;
-    FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    const auto supports = [data](CLIPFORMAT type) {
+      FORMATETC format{type, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+      return data->QueryGetData(&format) == S_OK;
+    };
     OleDropSource authority;
     active_ = (*effect & DROPEFFECT_COPY) != 0 && window_->Live() && data &&
         events_.size() <= kMaxEvents - 6 && authority.Capture() &&
-        data->QueryGetData(&format) == S_OK;
+        (supports(CF_HDROP) || supports(CF_UNICODETEXT) || supports(CF_TEXT));
     *effect = active_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
     if (active_) {
+      file_drag_ = supports(CF_HDROP);
       Push(wire::Action::kStart, at);
       Push(wire::Action::kEnter, at);
       Push(wire::Action::kLocation, at);
@@ -103,6 +107,12 @@ class DropTarget final : public IDropTarget {
       if (paths && leases_.Retain(authority, *paths, &offer) == 0 && window_->Live()) {
         Push(wire::Action::kDrop, at, std::move(offer));
         *effect = DROPEFFECT_COPY;
+      } else if (!paths && window_->Live()) {
+        auto text = ReadDropText(data, wire::kMaxTextUnits);
+        if (!text.empty()) {
+          Push(wire::Action::kDrop, at, {}, std::move(text));
+          *effect = DROPEFFECT_COPY;
+        }
       }
     }
     Push(wire::Action::kEnd, at);
@@ -117,6 +127,8 @@ class DropTarget final : public IDropTarget {
     Pending pending = std::move(events_.front());
     events_.pop_front();
     if (!Send(pipe, &pending.event, sizeof(pending.event), deadline)) return false;
+    if (!pending.text.empty() && !Send(pipe, pending.text.data(),
+        pending.event.text_units * sizeof(wchar_t), deadline)) return false;
     for (auto& item : pending.offer.items) {
       const auto size = static_cast<uint32_t>(item.name.size());
       wire::Item header{size, item.directory ? 1u : 0u};
@@ -137,20 +149,23 @@ class DropTarget final : public IDropTarget {
   struct Pending {
     wire::Event event;
     DropLeases::Offer offer;
+    std::wstring text;
   };
 
-  void Push(wire::Action action, POINTL at, DropLeases::Offer offer = {}) {
+  void Push(wire::Action action, POINTL at, DropLeases::Offer offer = {}, std::wstring text = {}) {
     POINT client{at.x, at.y};
     ScreenToClient(hwnd_, &client);
     wire::Event event{action, static_cast<float>(client.x), static_cast<float>(client.y),
-                      static_cast<uint32_t>(offer.items.size()), offer.lease};
-    events_.push_back(Pending{event, std::move(offer)});
+                      static_cast<uint32_t>(offer.items.size()), offer.lease,
+                      static_cast<uint32_t>(text.size()), file_drag_ ? wire::kFileDrag : 0};
+    events_.push_back(Pending{event, std::move(offer), std::move(text)});
   }
 
   ULONG refs_ = 1;
   std::shared_ptr<HostedDropWindow> window_;
   const HWND hwnd_;
   bool active_ = false;
+  bool file_drag_ = false;
   std::deque<Pending> events_;
   DropLeases leases_;
 };

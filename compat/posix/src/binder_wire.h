@@ -136,6 +136,7 @@ enum Op : uint32_t {
   kAudioRender = 21,
   // Starts a host capture lane or asks for real input endpoint availability.
   kAudioCapture = 22,
+  kDropWorker = 24,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
