@@ -127,3 +127,11 @@ python3 tools/summarize_bionic_key_assignment.py /tmp/set-abba.json \
 ```
 
 Run timing with unrelated builds/measurements idle. The helper rejects changed binaries, failed checked values/destructors, wrong counts or process CPU below the thread subtotal. The summarizer can also recompute both archived final blocks together without executing a benchmark. Release acceptance still requires the actual platform/runtime results and an explicit decision about the retained first-use costs.
+
+## Incoming main after the measured feature
+
+Before publication the frozen local feature `f2e88930cf1095c89af23185851ccad0cc64fa75` was composed with public main `b2e1d97813e65e58d7e6dbd10ea21d1f821e405d`. Local merge `0451b631087106122cf1f2965f1a3fcdc0835893` has the exact canonical tree `a08dc86d029b40bae0bedf0296ce6de30ba3a2c6` and those ordered parents; no manual source resolution was needed. All 18 feature-only paths and 15 incoming-only paths match their respective parents. The sole overlapping file, `ci.yml`, is the automatic merge and retains both the original key gate and incoming control-panel proxy gate.
+
+Every measured/replayed production, fixture, ABI header and measurement input remains byte-identical, as do the original report fields, all pilot/final samples and the 562-member evidence archive. Incoming main supplies its control-panel and artifact-receipt changes. The integrated selected-source gate passes 26 original controls, 4 property controls and 23 shared-stdio controls; supplier checks pass 36+1; the current artifact suite passes 34 cases; and the fork diagnostic suite passes 22 cases plus 564 baseline-parity mutations. An initial invocation of a nonexistent diagnostic path is retained separately; it executed no diagnostic check.
+
+The JSON appends the canonical full-tree/source proof and complete integration logs separately. No additional timing, Windows execution or application-performance result is inferred from this composition, and the public measurement baseline remains 8b3f0bc2.

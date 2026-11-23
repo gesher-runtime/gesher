@@ -5041,5 +5041,75 @@
     "sha256": "91cd197cb54fd822949976caeca0d34e5e1aa37e5d70e3b8f5d520ca3ed21ade",
     "members": 562,
     "manifest_sha256": "3f8d7f967907dc03aa98f609fc59160e0af21c6e1dafaa05c3a16492b932d3ba"
+  },
+  "current_main_integration": {
+    "ordered_parents": [
+      "f2e88930cf1095c89af23185851ccad0cc64fa75",
+      "b2e1d97813e65e58d7e6dbd10ea21d1f821e405d"
+    ],
+    "common_base": "e505ad227523aaca566d05b8af6e466495c819cc",
+    "canonical_tree": "a08dc86d029b40bae0bedf0296ce6de30ba3a2c6",
+    "staged_tree": "a08dc86d029b40bae0bedf0296ce6de30ba3a2c6",
+    "manual_resolutions": [],
+    "all_paths_equal_automatic_merge": true,
+    "feature_only_paths_preserved": 18,
+    "incoming_only_paths_preserved": 15,
+    "only_shared_path": [
+      ".github/workflows/ci.yml"
+    ],
+    "all_measured_and_replayed_input_sha256": {
+      "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+      "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb",
+      "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+      "compat/bionic/pthread_bionic.cc": "f40ce16ef94a1315093fc2285bb6f4e1ac82eb969a10733797436ce36668dd3d",
+      "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+      "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+      "tests/native/bionic_key_exit_test.cc": "e9a8dce6de326a7868e078ddb7f416e4da2222b594af42a85d814c4c41529f00",
+      "tests/native/pthread_key_contract_host_test.cc.in": "34fc08518bc15468683be9d51100512059d7a7211376ee0155b5e5e9469d136c",
+      "tests/native/pthread_key_contract_test.inc": "8f41486c47ff744b04914c7477e367927bf8166b0de5fc5ed5e0389dc36db613",
+      "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+      "tests/native/pthread_set_measurement.cc": "2e9ce3de986df30efc81e59a1a650da526b678a18aed4dcf6275dea913ec51bc",
+      "tests/windows/tracks/40-native-libs.ps1": "e7e1f212076ae3faa556e4c7d49efeedcf90011bba30b9d99479f35dd647f56a",
+      "tools/measure_bionic_key_assignment.py": "b6f2894d16d4024358e330aa374eed3c6ba4e71582c8822e7e1087a956648fa0",
+      "tools/measure_bionic_key_lookup.py": "cb54540bdb80835ae7d0e52c2ebe02b1d169ceba588d34c742c0e3281394bbe0",
+      "tools/summarize_bionic_key_assignment.py": "af5a6b77b144c3c29fade3f27ee14fc33d10cc72a975a87cffc98d1f23d776a5",
+      "tools/test_bionic_key_contracts.py": "d3c88c29c5ed34b3141aa3aa7f6a47cff5f3e860f370bfcc99f95b9e2ac6eaff"
+    },
+    "historical_archive_sha256": "91cd197cb54fd822949976caeca0d34e5e1aa37e5d70e3b8f5d520ca3ed21ade",
+    "historical_report_and_samples_unchanged": true,
+    "local_merge_commit": "0451b631087106122cf1f2965f1a3fcdc0835893",
+    "policy_controls": "26 original +4 repinned property +23 shared-stdio",
+    "supplier_controls": "36 semantic +1 authority",
+    "artifact_batch_cases": 34,
+    "diagnostic_cases": 22,
+    "diagnostic_baseline_parity_mutants": 564,
+    "logs": {
+      "pthread-set-main-policy.log": {
+        "command": "python3 tools/net-tcp-priority/test-selected-policy.py --selftest",
+        "sha256": "34c22ac45564b380f28360fc26640ea1db5d8112ea66d94095fb194aad165a5e",
+        "log": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\nTCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases=26 repinned_property_controls=4\nPASS shared-stdio source policy rejects unqualified bytes in compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/src/stdio_output.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects an undeclared transition file\nPASS shared-stdio source policy rejects an undeclared endpoint\nPASS shared-stdio source policy rejects an invented approval field\nPASS shared-stdio source policy rejects an undeclared patch path even with repinned patch and manifest\nPASS shared-stdio source policy rejects a modified before-hunk even with repinned patch and manifest\nPASS shared-stdio source policy rejects a repinned baseline identity\nPASS shared-stdio source policy rejects a repinned feature identity\nPASS shared-stdio source policy rejects a repinned baseline source digest\nPASS shared-stdio source policy rejects a repinned baseline policy\nPASS shared-stdio source policy rejects changed transition metadata without its independent pin\nPASS shared-stdio source policy rejects changed transition patch without its independent pin\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/ofd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/fd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/bionic/stdio_windows_lock.h\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/stdio_stream_buffer.h\nPASS shared-stdio source policy rejects a modified original OFD receipt\nPASS shared-stdio source policy rejects a modified original OFD patch\nSHARED_STDIO_SOURCE_POLICY_PASS exact_main_round_trip=4 original_protected_digests=71 negative_controls=23\n",
+        "exit": 0
+      },
+      "pthread-set-main-supplier.log": {
+        "command": "python3 tools/net-tcp-priority/test-selected-supplier.py",
+        "sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120",
+        "log": "TCP_SELECTED_SUPPLIER_METADATA_PASS projection=SYNTHETIC_LOG_METADATA_ONLY semantic_mutants=36 authority_hash_negative=1 actual_selected_runtime_claim=false native_processes_started=0\n",
+        "exit": 0
+      },
+      "pthread-set-main-artifact.log": {
+        "command": "python3 tools/ci/test_artifact_batch.py",
+        "sha256": "15593ba2487e26ef35b99ff5cc2a0ca205804bf69121c88d5c2ec12c898bc957",
+        "log": "..................................\n----------------------------------------------------------------------\nRan 34 tests in 0.597s\n\nOK\n",
+        "exit": 0
+      },
+      "pthread-set-main-diagnostic-current.log": {
+        "command": "python3 tools/net-tcp-priority/test_fork_diagnostic.py",
+        "sha256": "ab1a90e625a137f5c6419c1058c5aa1115834c5c038959ec09ed5d52ed36b792",
+        "log": ".................CANONICAL_SUPPLIER_BASELINE_PARITY leaf_mutants=564\n.....\n----------------------------------------------------------------------\nRan 22 tests in 1.633s\n\nOK\n",
+        "exit": 0
+      }
+    },
+    "unexecuted_initial_diagnostic_path_error": "python3: can't open file '/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tools/ci/test_fork_diagnostic.py': [Errno 2] No such file or directory\n",
+    "runtime_and_timing_claim": "No new runtime or timing claim from this composition; measured input identities and all old evidence remain exact."
   }
 }
