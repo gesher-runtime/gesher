@@ -180,6 +180,17 @@ final class ContentProviders {
     }
 
     UriGrants uriGrants() { return mUriGrants; }
+
+    /** The system server's {@code downloads} provider, once it is registered. */
+    private volatile DownloadProvider mDownloads;
+
+    void setDownloads(DownloadProvider downloads) {
+        RegisteredProvider registration = registeredProvider(DownloadProvider.AUTHORITY);
+        if (downloads == null || registration != downloads.registration) {
+            throw new IllegalArgumentException("Downloads provider is not registered");
+        }
+        mDownloads = downloads;
+    }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
     CallerIdentity callers() { return mCallers; }
 
@@ -332,6 +343,15 @@ final class ContentProviders {
             }
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
+        }
+        DownloadProvider downloads = mDownloads;
+        if (downloads != null && DownloadProvider.AUTHORITY.equals(name)) {
+            // As Android's DownloadProvider, the system's provider owns the authority;
+            // ContentProvider.Transport enforces its path permissions and URI grants.
+            if (registeredProvider(name) != downloads.registration || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Downloads authority is not uniquely registered");
+            }
+            return downloads.holder();
         }
         final ProviderInfo declared;
         final ApkPackage declaredCode;
@@ -529,6 +549,7 @@ final class ContentProviders {
             }
             for (String authority : declared.authority.split(";")) {
                 if (authority.isEmpty() || SettingsProvider.AUTHORITY.equals(authority)
+                        || (mDownloads != null && DownloadProvider.AUTHORITY.equals(authority))
                         || !batch.add(authority)) throw new SecurityException("Invalid published authority");
                 ProviderInfo canonical = declaredProvider(mPm, authority);
                 if (canonical == null || !pkg.packageName.equals(canonical.packageName)

@@ -484,6 +484,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     UriGrants uriGrants() { return mProviders.uriGrants(); }
+    ContentProviders providers() { return mProviders; }
     DocumentsStorageProvider documents() { return mProviders.documents(); }
 
     @Override
