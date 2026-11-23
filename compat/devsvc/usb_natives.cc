@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "core_jni_helpers.h"
 #include "usb_winusb.h"
 
 namespace android {
@@ -526,7 +527,7 @@ jstring DeviceName(JNIEnv* env, jclass, jint id) {
   return String(env, name);
 }
 
-#define USB_METHOD(name, signature, fn) {name, signature, reinterpret_cast<void*>(fn)}
+#define USB_METHOD(name, signature, fn) {name, signature, GESHER_JNI(fn)}
 const JNINativeMethod host_methods[] = {
     USB_METHOD("nativeAvailable", "()Z", Available),
     USB_METHOD("nativePaths", "()[Ljava/lang/String;", Paths),
