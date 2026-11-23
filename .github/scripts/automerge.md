@@ -282,14 +282,14 @@ GitHub's built-in `GITHUB_TOKEN` cannot enable auto-merge for a PR changing
 to the workflow's `permissions` block.
 
 Use `gesher-runtime-automation`, the dedicated GitHub App installed on the
-Gesher organization. It has Contents, Pull requests and Workflows write
+Gesher organization. It has Contents, Issues, Pull requests and Workflows write
 permissions (Metadata read is implicit). If the organization adds repositories,
 select only `gesher-runtime/gesher` for this installation. No webhook subscription or
 branch-protection bypass is required. Set the repository Actions variable
 `GESHER_BOT_APP_ID` to its App ID and the Actions secret
 `GESHER_BOT_PRIVATE_KEY` to its generated PEM private key. The
 pinned official `actions/create-github-app-token` action creates a short-lived
-token scoped to `gesher-runtime/gesher` and those three permissions, and revokes it at
+token scoped to `gesher-runtime/gesher` and those permissions, and revokes it at
 job completion. Set the App ID only after installing the App and saving its key;
 incomplete App configuration fails visibly.
 
@@ -315,7 +315,7 @@ workflow-permission change is part of this implementation.
 
 When explicitly enabled, the controller also writes
 `qa/gesher-label-approval` with the App token. The workflow then requests
-Statuses write permission, in addition to its existing three permissions. The
+Statuses write permission, in addition to its existing permissions. The
 pinned token action omits an empty permission input, so installations without
 Statuses access continue to work while this feature is off. Verify the actual
 installation grant before enabling it; a missing grant fails the run, without
