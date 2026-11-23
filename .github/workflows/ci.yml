@@ -552,6 +552,9 @@ jobs:
           python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
+      - name: Real software AVC ownership and reusable storage
+        run: python3 tools/test_soft_avc_reuse.py --libavc-root third_party/aosp/external/libavc --sanitize
+
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
 

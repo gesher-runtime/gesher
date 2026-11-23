@@ -285,3 +285,13 @@ target_compile_options(media_retriever_pixels_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_retriever_pixels_test PRIVATE skia)
 gesher_graphics_cxx(media_retriever_pixels_test)
+
+# The complete software encoder and the product's actual pinned AVC library.
+add_executable(media_soft_avc_reuse_test
+  "${CMAKE_SOURCE_DIR}/tests/media/soft_avc_reuse_test.cc")
+target_include_directories(media_soft_avc_reuse_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_include_directories(media_soft_avc_reuse_test SYSTEM PRIVATE ${GESHER_SOFT_AVCENC_INCLUDES})
+target_compile_definitions(media_soft_avc_reuse_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_soft_avc_reuse_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter)
+target_link_libraries(media_soft_avc_reuse_test PRIVATE avc pthread)

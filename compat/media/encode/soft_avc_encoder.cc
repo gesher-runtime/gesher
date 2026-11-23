@@ -158,7 +158,12 @@ class SoftAvcEncoder : public VideoEncoder {
     if (!header_ && !Header(out)) return false;
     if (key) SetFrameType(IV_IDR_FRAME);
     const int w = p_.width, h = p_.height, cw = w / 2, ch = h / 2;
-    std::vector<uint8_t> buf(static_cast<size_t>(w) * h * 3 / 2);
+    // Only storage explicitly returned by libavc may be reused. An input can
+    // outlive this call, so keep all outstanding buffers in inputs_ and retain
+    // at most one returned buffer for the next frame.
+    std::vector<uint8_t> buf;
+    buf.swap(spare_input_);
+    buf.resize(static_cast<size_t>(w) * h * 3 / 2);
     for (int y = 0; y < h; y++) {
       memcpy(buf.data() + static_cast<size_t>(y) * w,
              frame.y() + static_cast<size_t>(frame.crop_top + y) * frame.stride_y + frame.crop_left,
@@ -184,6 +189,10 @@ class SoftAvcEncoder : public VideoEncoder {
       if (!Call(nullptr, 0, true, out, &last)) return false;
       if (last) break;
     }
+    // An ended stream need not retain the large reusable scratch allocations.
+    // Inputs not yet returned by the provider keep their original ownership.
+    std::vector<uint8_t>().swap(spare_input_);
+    std::vector<uint8_t>().swap(output_);
     return true;
   }
 
@@ -329,8 +338,11 @@ class SoftAvcEncoder : public VideoEncoder {
 
   bool Call(uint8_t* in, uint32_t index, bool last, std::vector<EncodedPacket>* out, bool* is_last = nullptr) {
     const int w = p_.width, h = p_.height;
-    for (size_t size = std::max<size_t>(static_cast<size_t>(w) * h * 3 / 2, 1 << 16);; size *= 2) {
-      std::vector<uint8_t> buf(size);
+    const size_t initial = std::max<size_t>(static_cast<size_t>(w) * h * 3 / 2, 1 << 16);
+    for (size_t size = std::max(initial, output_.size());; size *= 2) {
+      // libavc finishes writing before returning. Packets below own their
+      // bytes, so reuse this bounded scratch without zero-filling every frame.
+      output_.resize(size);
       ih264e_video_encode_ip_t eip = {};
       ih264e_video_encode_op_t eop = {};
       ive_video_encode_ip_t& e = eip.s_ive_ip;
@@ -338,8 +350,8 @@ class SoftAvcEncoder : public VideoEncoder {
       e.e_cmd = IVE_CMD_VIDEO_ENCODE;
       e.u4_timestamp_low = index;
       e.u4_is_last = last ? 1 : 0;
-      e.s_out_buf.pv_buf = buf.data();
-      e.s_out_buf.u4_bufsize = static_cast<UWORD32>(buf.size());
+      e.s_out_buf.pv_buf = output_.data();
+      e.s_out_buf.u4_bufsize = static_cast<UWORD32>(output_.size());
       iv_raw_buf_t& r = e.s_inp_buf;
       r.u4_size = sizeof(iv_raw_buf_t);
       r.e_color_fmt = IV_YUV_420P;
@@ -363,10 +375,14 @@ class SoftAvcEncoder : public VideoEncoder {
         return false;
       }
       // The input the encoder is done with.
-      if (o.s_inp_buf.apv_bufs[0] != nullptr) inputs_.erase(o.s_inp_buf.apv_bufs[0]);
+      auto consumed = inputs_.find(o.s_inp_buf.apv_bufs[0]);
+      if (consumed != inputs_.end()) {
+        spare_input_.swap(consumed->second);
+        inputs_.erase(consumed);
+      }
       if (o.output_present && o.s_out_buf.u4_bytes > 0) {
         EncodedPacket pkt;
-        pkt.data.assign(buf.begin(), buf.begin() + o.s_out_buf.u4_bytes);
+        pkt.data.assign(output_.begin(), output_.begin() + o.s_out_buf.u4_bytes);
         auto it = times_.find(o.u4_timestamp_low);
         if (it != times_.end()) {
           pkt.time_us = it->second;
@@ -387,6 +403,8 @@ class SoftAvcEncoder : public VideoEncoder {
   uint32_t next_index_ = 0;
   std::map<uint32_t, int64_t> times_;
   std::map<void*, std::vector<uint8_t>> inputs_;
+  std::vector<uint8_t> spare_input_;
+  std::vector<uint8_t> output_;
 };
 
 }  // namespace
