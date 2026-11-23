@@ -110,6 +110,10 @@ public final class SearchableHost {
             installed.put(A, caller); installed.put(B, target);
             packages = (PackageManagerService)unsafe.allocateInstance(PackageManagerService.class);
             set(packages, "mPackages", installed); set(packages, "mRemoving", Map.of());
+            var permissionPolicy = Class.forName("com.gesher.server.PermissionPolicy")
+                    .getDeclaredConstructor(PackageManagerService.class);
+            permissionPolicy.setAccessible(true);
+            set(packages, "mPermissions", permissionPolicy.newInstance(packages));
             ActivityTaskManagerService activities = (ActivityTaskManagerService)unsafe.allocateInstance(ActivityTaskManagerService.class);
             Class<?> processClass = Class.forName("com.gesher.server.ActivityTaskManagerService$ProcessRecord");
             Object process = unsafe.allocateInstance(processClass);
