@@ -257,6 +257,11 @@ public final class PackageVisibilityContractTest {
         check(!query(service(record(source), record(target)), A, B), "Framework protected broadcast granted receiver visibility");
         target = parsed(B); target.addActivity(activity("BootActivity", true, filter(Intent.ACTION_BOOT_COMPLETED)));
         check(query(service(record(source), record(target)), A, B), "Receiver-only protected action exclusion blocked an activity");
+        // AppsFilterImpl uses declared protected broadcasts only, not PackageManagerService's prefixes.
+        String prefixed = "android.net.netmon.lingerExpired.fixture";
+        source = parsed(A); source.addQueriesIntent(new Intent(prefixed));
+        target = parsed(B); target.addReceiver(activity("PrefixReceiver", true, filter(prefixed)));
+        check(query(service(record(source), record(target)), A, B), "Protected prefix removed receiver visibility");
         source = parsed(A); source.addQueriesIntent(new Intent(ACTION));
         target = parsed(B); ParsedProviderImpl intentProvider = provider("fixture.authority", true);
         intentProvider.addIntent(filter(ACTION)); target.addProvider(intentProvider);

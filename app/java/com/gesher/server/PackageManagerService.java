@@ -641,7 +641,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage caller = packages.get(source);
         if (caller == null) return false;
         PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
         // Package admission assigns isolated or authenticated shared identities
         // in both signature-spoofing modes.
         return visibility.canSee(caller.uid(), target);
@@ -1306,7 +1306,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                     && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
         }
         return new PackageVisibility(packages, browser, gms, vending,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
     }
 
     @Override

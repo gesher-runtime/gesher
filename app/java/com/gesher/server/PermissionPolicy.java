@@ -675,6 +675,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     boolean isKnownProtectedBroadcast(String action) { return mCatalog.isKnownProtectedBroadcast(action); }
 
+    boolean isDeclaredProtectedBroadcast(String action) { return mCatalog.isDeclaredProtectedBroadcast(action); }
+
     public int checkPermission(String pkg, String permission) {
         return checkPermission(pkg, permission, "default:0", 0);
     }

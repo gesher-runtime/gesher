@@ -86,10 +86,17 @@ final class PermissionCatalog {
     }
 
     boolean isProtectedBroadcast(String name) {
+        return name != null && (isPlatformPrefix(name) || isDeclaredProtectedBroadcast(name));
+    }
+
+    /**
+     * Manifest declarations only, without PackageManagerService's prefixes: Android's
+     * AppsFilterImpl reads the declared set for package visibility.
+     */
+    boolean isDeclaredProtectedBroadcast(String name) {
         load();
         // A failed framework catalog must not authorize an unknown sender.
-        return name != null && (isPlatformPrefix(name) || !mFrameworkRead
-                || mProtectedBroadcasts.contains(name));
+        return name != null && (!mFrameworkRead || mProtectedBroadcasts.contains(name));
     }
 
     /** Positive catalog evidence, for exemptions that must not be granted on load failure. */
