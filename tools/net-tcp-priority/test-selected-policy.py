@@ -304,6 +304,65 @@ def preceding_child_wait_sources():
   subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
   assert all((work/path).read_bytes()==actual for path,actual in current.items()),'child wait forward reconstruction changed'
  return previous
+
+
+# PR73 unifies Bionic conversion metadata with the existing shared stream
+# owner. Keep the original OFD receipt and all of its 71 source digests intact.
+# Only this separately pinned four-file transition may be reversed to main's
+# exact bytes before the unchanged OFD and supplier checks run. It neither
+# qualifies Windows execution nor replaces review of the production delta.
+SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
+SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
+SHARED_STDIO_TRANSITION_SHA256 = '6de1e4d1363de0477e9c89aec4ae4b9b16cd1ee5b2bd1c002d626e5e129dd443'
+SHARED_STDIO_PATHS = (
+ 'compat/bionic/stdio_bionic.cc',
+ 'compat/posix/include/gesher/stdio.h',
+ 'compat/posix/include/stdio.h',
+ 'compat/posix/src/stdio_output.cc',
+)
+
+def preceding_shared_stdio_sources(qualification):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'shared-stdio-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==SHARED_STDIO_TRANSITION_SHA256,'shared-stdio source transition changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'baseline','feature_head','baseline_policy_sha256','paths',
+                         'before_sha256','after_sha256','patch_sha256'},'shared-stdio transition schema changed'
+ assert transition['baseline']==SHARED_STDIO_BASE,'shared-stdio baseline changed'
+ assert transition['feature_head']==SHARED_STDIO_FEATURE_HEAD,'shared-stdio feature checkpoint changed'
+ paths=list(SHARED_STDIO_PATHS)
+ assert transition['paths']==paths,'shared-stdio transition paths changed'
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==paths,'shared-stdio endpoint paths changed'
+ baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
+ assert hashlib.sha256(baseline_policy).hexdigest()==transition['baseline_policy_sha256'],'shared-stdio baseline policy changed'
+ patch=(folder/'shared-stdio-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'shared-stdio transition patch changed'
+ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+     ('diff --git a/'+path+' b/'+path).encode() for path in paths],'shared-stdio patch paths changed'
+ current={};baseline={}
+ for path in paths:
+  current[path]=(ROOT/path).read_bytes()
+  assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
+  baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':'+path])
+  assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
+  assert transition['before_sha256'][path]==qualification['source_sha256'][path],path
+  assert current[path]!=baseline[path],('empty shared-stdio transition',path)
+ with tempfile.TemporaryDirectory(prefix='gesher-shared-stdio-qualification-') as temporary:
+  work=Path(temporary)
+  for path in paths:
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(current[path])
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   assert (work/path).read_bytes()==baseline[path],('shared-stdio reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   assert (work/path).read_bytes()==current[path],('shared-stdio forward endpoint',path)
+ return baseline
+
+
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -387,8 +446,10 @@ def preceding_ofd_sources():
         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
+ shared_stdio=preceding_shared_stdio_sources(qualification)
  for path,digest in qualification['source_sha256'].items():
-  actual=child_previous[path] if path in child_previous else (ROOT/path).read_bytes()
+  actual=(child_previous[path] if path in child_previous else
+          shared_stdio[path] if path in shared_stdio else (ROOT/path).read_bytes())
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
@@ -640,4 +701,7 @@ def transition_negative_controls():
 if __name__=='__main__':
  import sys
  check()
- if '--selftest' in sys.argv:transition_negative_controls()
+ if '--selftest' in sys.argv:
+  transition_negative_controls()
+  import runpy
+  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')

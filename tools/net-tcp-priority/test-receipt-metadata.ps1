@@ -14,10 +14,56 @@ function Parse($Text){
 $ast=Parse $source
 $old=Parse $baseline
 function Condition($Tree,$Message){
- $matches=@($Tree.FindAll({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains("throw '$Message'")},$true))
- if($matches.Count -ne 1){throw "Missing/ambiguous original predicate $Message"}
- $matches[0].Clauses[0].Item1.Extent.Text
+ # A containing workflow branch also includes every nested throw in its extent.
+ # Only the clause that directly owns the sole throw supplies its predicate.
+ $conditions=@(foreach($statement in $Tree.FindAll({param($n) $n -is [Management.Automation.Language.IfStatementAst]},$true)){
+  foreach($clause in $statement.Clauses){
+   $body=@($clause.Item2.Statements)
+   if($body.Count -eq 1 -and $body[0] -is [Management.Automation.Language.ThrowStatementAst] -and
+      $body[0].Extent.Text -ceq "throw '$Message'"){$clause.Item1}
+  }
+ })
+ if($conditions.Count -ne 1){throw "Missing/ambiguous original predicate $Message"}
+ $conditions[0].Extent.Text
 }
+function AssertCondition($Tree,$Expected,$Message){
+ if((Condition $Tree $Message) -cne $Expected){throw "Acceptance predicate changed: $Message"}
+}
+# Exercise the real selector/comparison before extracting any consumer gates.
+# These script fragments contain metadata only and are never executed.
+$selectorMessage='Predicate selector control'
+foreach($sample in @(
+ @{Source='if ($direct) { throw ''Predicate selector control'' }';Expected='$direct'},
+ @{Source='if ($outer) { if ($inner) { throw ''Predicate selector control'' } }';Expected='$inner'},
+ @{Source='if ($first) { throw ''other'' } elseif ($second) { throw ''Predicate selector control'' }';Expected='$second'}
+)){
+ AssertCondition (Parse $sample.Source) $sample.Expected $selectorMessage
+}
+$selectorNegatives=0
+foreach($sample in @(
+ 'if ($missing) { throw ''other'' }',
+ 'if ($changed) { throw ''Changed predicate selector control'' }',
+ 'if ($text) { "throw ''Predicate selector control''" }',
+ 'if ($delegated) { & { throw ''Predicate selector control'' } }',
+ 'if ($first) { ''other'' } else { throw ''Predicate selector control'' }',
+ 'if ($extra) { ''additional statement''; throw ''Predicate selector control'' }',
+ 'if ($one) { throw ''Predicate selector control'' }; if ($two) { throw ''Predicate selector control'' }'
+)){
+ $rejected=$false
+ try{$null=Condition (Parse $sample) $selectorMessage}catch{
+  if($_.Exception.Message -cne "Missing/ambiguous original predicate $selectorMessage"){throw}
+  $rejected=$true
+ }
+ if(-not $rejected){throw 'Missing/ambiguous/nonthrow selector owner accepted'}
+ $selectorNegatives++
+}
+$rejected=$false
+try{AssertCondition (Parse 'if ($outer) { if ($mutated) { throw ''Predicate selector control'' } }') '$inner' $selectorMessage}catch{
+ if($_.Exception.Message -cne "Acceptance predicate changed: $selectorMessage"){throw}
+ $rejected=$true
+}
+if(-not $rejected){throw 'Mutated predicate accepted by immutable comparison'}
+Write-Host "TCP_RECEIPT_SELECTOR_METADATA_PASS direct_nested_elseif=PASS ownership_negatives=$selectorNegatives changed_predicate=rejected native_processes_started=0"
 $producer=Condition $ast 'Producer mismatch'
 foreach($message in @('Producer mismatch','Artifact not unique','Artifact source/run/attempt provenance mismatch')){
  # API head/source repository differ from the target's PR merge checkout.
@@ -25,7 +71,7 @@ foreach($message in @('Producer mismatch','Artifact not unique','Artifact source
  $expected=(Condition $old $message).Replace('$env:GITHUB_SHA','$ciSource.api_head_sha')
  $expected=$expected.Replace('"$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID',
                              '"$($a.workflow_run.head_repository_id)" -cne $ciSource.head_repository_id')
- if((Condition $ast $message) -cne $expected){throw "Acceptance predicate changed: $message"}
+ AssertCondition $ast $expected $message
 }
 . (Join-Path $root 'tools/ci/receipt-diagnostics.ps1')
 $env:GITHUB_REPOSITORY='gesher-runtime/gesher';$env:GITHUB_REPOSITORY_ID='1'
@@ -60,12 +106,77 @@ foreach($count in 0,1,2){
  $record=($observations[0].ToString() -replace '^CI_RECEIPT_IDENTITY ','') | ConvertFrom-Json
  if($record.stage -cne 'artifact_inventory' -or $record.received.selected_count -ne $count -or $record.expected.head_repository_id -cne '2' -or $record.expected.source -cne $ciSource.api_head_sha){throw 'Artifact count/source observation missing'}
 }
-# Execute the actual acceptance expressions from all three current-PR consumers.
+# Execute the actual PowerShell acceptance expressions still used by TCP/native.
 # The fork's API head and repository must match; the merge checkout remains the
 # source of the built artifact and must never substitute for its API metadata.
 $predicates=@(Condition $ast 'Artifact source/run/attempt provenance mismatch')
+# TSF now delegates all archive admission to the shared Python stage. Its actual
+# same-repository/fork metadata negatives run in test_component_producer.py,
+# unconditionally included in the required Strict archive preflight step.
+# Verify and execute the current PowerShell handoff without reading a payload.
 $tsf=[IO.File]::ReadAllText((Join-Path $root 'tools/windows4/run-tsf-union.ps1'))
-$predicates+=Condition (Parse $tsf) 'Artifact provenance mismatch'
+function TsfAdmission($Text){
+ $tree=Parse $Text
+ $traps=@($tree.FindAll({param($n) $n -is [Management.Automation.Language.TrapStatementAst]},$true))
+ if($traps.Count){throw 'TSF admission failures must not be intercepted by a trap'}
+ $top=@($tree.EndBlock.Statements)
+ $assignments=@($tree.FindAll({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -ceq '$proofJson'},$true))
+ if($assignments.Count -ne 1 -or $assignments[0].Extent.Text -cne '$proofJson = python tools/ci/component_producer.py stage tsf-format'){throw 'Invalid TSF shared-admission delegation'}
+ $index=[Array]::IndexOf($top,$assignments[0])
+ if($index -lt 0 -or $index+2 -ge $top.Count){throw 'TSF admission must be unconditional top-level statements'}
+ $guard=$top[$index+1]
+ if($guard -isnot [Management.Automation.Language.IfStatementAst] -or $guard.Clauses.Count -ne 1 -or $null -ne $guard.ElseClause){throw 'Missing immediate TSF denial guard'}
+ AssertCondition $guard '$LASTEXITCODE -ne 0' 'TSF supplier archive or producer authentication failed'
+ if($top[$index+2].Extent.Text -cne '$proof = $proofJson | ConvertFrom-Json'){throw 'TSF proof processing must follow admission'}
+ $reads=@($tree.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Get-Content'},$true))
+ $compiles=@($tree.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Add-Type'},$true))
+ $runs=@($tree.FindAll({param($n) $n -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Static -and $n.Member.Extent.Text -ceq 'Run'},$true))
+ if($reads.Count -ne 1 -or $compiles.Count -ne 1 -or $runs.Count -ne 1 -or
+    $reads[0].Extent.Text -cne 'Get-Content -LiteralPath tsf-fixture/provenance.json -Raw' -or
+    $reads[0].Extent.StartOffset -le $guard.Extent.EndOffset -or
+    $compiles[0].Extent.StartOffset -le $reads[0].Extent.EndOffset -or
+    $runs[0].Extent.StartOffset -le $compiles[0].Extent.EndOffset){throw 'TSF payload/runtime access precedes admission or changed role'}
+ $assignments[0].Extent.Text+"`n"+$guard.Extent.Text
+}
+$tsfFragment=TsfAdmission $tsf
+$tsfStage='$proofJson = python tools/ci/component_producer.py stage tsf-format'
+$tsfGuard="if (`$LASTEXITCODE -ne 0) { throw 'TSF supplier archive or producer authentication failed' }"
+$tsfRead='$m = Get-Content -LiteralPath tsf-fixture/provenance.json -Raw | ConvertFrom-Json'
+$tsfNegatives=0
+foreach($changed in @(
+ $tsf.Replace($tsfStage,$tsfStage.Replace('tsf-format','tcp-selected-minimum')),
+ $tsf.Replace($tsfStage,$tsfStage.Replace('tools/ci/component_producer.py','other.py')),
+ $tsf.Replace($tsfStage,''),
+ $tsf.Replace($tsfStage,"$tsfStage`n$tsfStage"),
+ $tsf.Replace($tsfStage,"if (`$false) { $tsfStage }"),
+ $tsf.Replace($tsfGuard,''),
+ $tsf.Replace($tsfGuard,$tsfGuard.Replace('-ne 0','-eq 0')),
+ $tsf.Replace($tsfGuard,"if (`$LASTEXITCODE -ne 0) { if (`$false) { throw 'TSF supplier archive or producer authentication failed' } }"),
+ $tsf.Replace($tsfGuard,"try { $tsfGuard } catch { }"),
+ $tsf.Replace($tsfRead,'').Replace($tsfStage,"$tsfRead`n$tsfStage"),
+ $tsf.Replace($tsfGuard,"$tsfGuard`n$tsfGuard"),
+ ("trap { continue }`n"+$tsf)
+)){
+ $rejected=$false
+ try{$null=TsfAdmission $changed}catch{$rejected=$true}
+ if(-not $rejected){throw 'Changed TSF shared-admission contract accepted'}
+ $tsfNegatives++
+}
+function CheckTsfHandoff($Fragment,$Mode){
+ $savedExitCode=$global:LASTEXITCODE
+ function python {
+  if(($args -join ' ') -cne 'tools/ci/component_producer.py stage tsf-format'){throw 'Synthetic TSF helper called with wrong role'}
+  if($Mode -ceq 'missing'){throw [Management.Automation.CommandNotFoundException]::new('Synthetic TSF helper unavailable')}
+  $global:LASTEXITCODE=if($Mode -ceq 'denied'){23}else{0}
+  '{}'
+ }
+ $observed=''
+ try{& ([scriptblock]::Create($Fragment+"`nthrow 'TSF metadata payload sentinel'"))}catch{$observed=$_.Exception.Message}finally{$global:LASTEXITCODE=$savedExitCode}
+ $expected=switch($Mode){'denied'{'TSF supplier archive or producer authentication failed'};'missing'{'Synthetic TSF helper unavailable'};'accepted'{'TSF metadata payload sentinel'}}
+ if($observed -cne $expected){throw "TSF handoff failed to stop at its expected boundary: $Mode/$observed"}
+}
+foreach($mode in 'denied','missing','accepted'){CheckTsfHandoff $tsfFragment $mode}
+Write-Host "TCP_TSF_SHARED_ADMISSION_METADATA_PASS exact_stage_and_immediate_guard=PASS source_negatives=$tsfNegatives denied_missing_helpers=STOP accepted_helper=metadata_sentinel native_processes_started=0"
 $native=[IO.File]::ReadAllText((Join-Path $root '.github/workflows/native3-locks-blocking.yml'))
 $nativeIf=[regex]::Match($native,"(?s)if \(\`$artifact\.id.*?\{ throw 'Artifact source/repository mismatch' \}")
 if(-not $nativeIf.Success){throw 'Missing native artifact predicate'}
@@ -98,7 +209,7 @@ foreach($predicate in $predicates){
  }
 }
 $ciSource.head_repository_id='2'
-Write-Host "TCP_FORK_ARTIFACT_METADATA_PASS consumers=3 same_repository_and_fork=PASS identity_digest_size_expiry_negatives=$forkNegatives native_processes_started=0"
+Write-Host "TCP_FORK_ARTIFACT_METADATA_PASS powershell_consumers=2 tsf_shared_admission=required_preflight same_repository_and_fork=PASS identity_digest_size_expiry_negatives=$forkNegatives native_processes_started=0"
 if($JobsSnapshot){
  $saved=Get-Content -LiteralPath $JobsSnapshot -Raw | ConvertFrom-Json
  foreach($role in @('canonical','retirement')){
