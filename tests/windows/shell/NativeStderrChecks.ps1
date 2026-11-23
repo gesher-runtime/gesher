@@ -83,8 +83,9 @@ Assert-Stderr ((@($probeOutput) -join "`n").Contains('could not start')) "A miss
 
 # gesher.ps1 runs its VM the same way.
 $dex = [IO.File]::ReadAllText((Resolve-Path $DexScriptPath))
-$run = $dex.IndexOf("& (Join-Path `$here 'dalvikvm.exe')")
-Assert-Stderr ($run -gt 0) 'gesher.ps1 runs dalvikvm.exe'
+$vmPath = $dex.IndexOf("`$vm = Join-Path `$here 'dalvikvm.exe'")
+$run = $dex.IndexOf('& $vm @supervisor @ProgramArgs')
+Assert-Stderr ($vmPath -ge 0 -and $run -gt $vmPath) 'gesher.ps1 runs dalvikvm.exe'
 $prefix = $dex.Substring(0, $run)
 Assert-Stderr ($prefix.LastIndexOf("`$ErrorActionPreference = 'Continue'") -gt $prefix.LastIndexOf("`$ErrorActionPreference = 'Stop'")) 'gesher.ps1 runs the VM under Continue'
 Assert-Stderr ($dex.Substring($run).Contains('if ($null -eq $global:LASTEXITCODE)')) 'gesher.ps1 fails when the VM cannot start'
