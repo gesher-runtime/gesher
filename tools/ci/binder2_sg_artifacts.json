@@ -1,0 +1,32 @@
+[
+  {
+    "name": "windows-x64",
+    "producer": "build",
+    "destination": "windows_x64"
+  },
+  {
+    "name": "framework",
+    "producer": "framework / framework",
+    "destination": "framework"
+  },
+  {
+    "name": "arm64",
+    "producer": "arm64 / build",
+    "destination": "arm64"
+  },
+  {
+    "name": "binder2-sg-host",
+    "producer": "build",
+    "destination": "binder2_sg_host"
+  },
+  {
+    "name": "binder2-sg-modes",
+    "producer": "binder2-sg-fixtures / modes-build",
+    "destination": "binder2_sg_modes"
+  },
+  {
+    "name": "boot-image",
+    "producer": "boot-image / compile",
+    "destination": "boot_image"
+  }
+]

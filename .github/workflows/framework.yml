@@ -55,7 +55,7 @@ jobs:
     outputs:
       runner: ${{ steps.route.outputs.runner }}
     steps:
-      - uses: gesher-runtime/gesher/.github/actions/runner-route@b9510513a538d80669895521d1061b54fbe11aff
+      - uses: gesher-runtime/gesher/.github/actions/runner-route@5d76cae649c2257c376aaf87a5283099c99f111c
         id: route
         with:
           requested: ${{ inputs.local-runner }}
@@ -76,7 +76,7 @@ jobs:
           persist-credentials: false
       - name: Initialize local build inputs
         if: runner.environment == 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: initialize
 
@@ -108,7 +108,7 @@ jobs:
 
       - name: Cache AOSP sources
         if: steps.reuse.outputs.build == 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: third_party/aosp
@@ -121,7 +121,7 @@ jobs:
 
       - name: Save fetched AOSP inputs
         if: steps.reuse.outputs.build == 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: third_party/aosp
@@ -137,7 +137,7 @@ jobs:
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
         if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: ~/.cache/ccache
@@ -170,7 +170,7 @@ jobs:
 
       - name: Save compiler output
         if: always() && steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: ~/.cache/ccache
@@ -201,12 +201,14 @@ jobs:
           persist-credentials: false
       - name: Initialize local build inputs
         if: runner.environment == 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: initialize
 
-      - name: Verify XSD compiler dependency acquisition
-        run: python3 -m unittest discover -s tools/tests -p test_framework_xsdc.py -v
+      - name: Verify framework compiler dependency acquisition
+        run: |
+          python3 -m unittest discover -s tools/tests -p test_framework_xsdc.py -v
+          python3 -m unittest discover -s tools/tests -p test_framework_jvm_tools.py -v
 
       - name: Cache keys
         run: echo "AOSP_KEY=aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}" >> "$GITHUB_ENV"
@@ -239,7 +241,7 @@ jobs:
 
       - name: Restore AOSP sources
         id: aosp
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: third_party/aosp
@@ -268,7 +270,7 @@ jobs:
       # after it is built.
       - name: Restore the framework's JVM tools (kotlinc, JavaPoet, Guava)
         id: jvm
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: out/framework/jvm-tools
@@ -276,7 +278,7 @@ jobs:
 
       - name: Restore the coremod
         id: coremod
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: out/coremod
@@ -290,7 +292,7 @@ jobs:
 
       - name: Save the coremod
         if: steps.coremod.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: out/coremod
@@ -298,7 +300,7 @@ jobs:
 
       - name: Restore framework-res
         id: res
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: out/framework-res
@@ -309,7 +311,7 @@ jobs:
       # with retries, as dl.google.com fails now and then.
       - name: Restore build-tools
         id: bt
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: work/build-tools-36.1
@@ -330,7 +332,7 @@ jobs:
 
       - name: Save build-tools
         if: steps.bt.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: work/build-tools-36.1
@@ -342,7 +344,7 @@ jobs:
 
       - name: Save framework-res
         if: steps.res.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: out/framework-res
@@ -412,12 +414,17 @@ jobs:
           printf '%s  %s\n' 3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad "$R8_JAR.download" | sha256sum --check --strict
           mv "$R8_JAR.download" "$R8_JAR"
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          python3 tools/test_uia_cache.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_apk_signing.py --apksig-jar "$APKSIG_JAR"
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
-          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          python3 tools/test_role_manager_contracts.py --framework-classes out/framework/classes --app-classes out/app/gesher-app-classes.jar
+          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           tests/web3-query/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/exitstatusapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/crashnotice" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/sharedlibraryapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
@@ -502,6 +509,20 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
+      - name: Package UID admission, permission and interruption contracts
+        run: |
+          python3 tools/test_package_uid_isolation.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Package visibility and authenticated shared-UID queries in both GMS modes
+        run: |
+          python3 tools/test_package_visibility.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Unsupported connectionless handwriting callback contracts
         run: |
           python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \
@@ -519,6 +540,62 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Durable installer attribution and reassignment contracts
+        run: |
+          python3 tools/test_install_source.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: PackageInstaller attached identity contracts
+        run: |
+          python3 tools/test_package_installer_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: AppOps and permission data delivery contracts
+        run: |
+          python3 tools/test_appops.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Permission policy work counts and publication contracts
+        run: |
+          python3 tools/test_permission_performance.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Verified microG identity reuse and tampered replacement contracts
+        run: |
+          microg_identity="$RUNNER_TEMP/gesher-microg-identity"
+          mkdir -p "$microg_identity"
+          curl --fail --location --retry 3 \
+            https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk \
+            --output "$microg_identity/Companion.apk"
+          curl --fail --location --retry 3 \
+            https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk \
+            --output "$microg_identity/GsfProxy.apk"
+          printf '%s  %s\n' 9b8616011cc8f026bcbbe094df850794abb9d6d9f23214d7a8f8c4d1033ea012 "$microg_identity/Companion.apk" \
+            | sha256sum --check --status
+          printf '%s  %s\n' 86891b174301f06a1c84187b545a0a2a57044c6b768f3e84e865908743349692 "$microg_identity/GsfProxy.apk" \
+            | sha256sum --check --status
+          python3 tools/test_microg_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar" \
+            --companion-apk "$microg_identity/Companion.apk" --gsf-apk "$microg_identity/GsfProxy.apk"
+
+      - name: Android UI mode policy, persistence and activity configuration contracts
+        run: |
+          python3 tools/test_ui_mode_native.py
+          python3 tools/test_ui_mode.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Dynamic receiver export contracts against the built framework
         run: |
           python3 tools/test_receiver_exports.py --java-home "$JAVA_HOME" \
@@ -528,7 +605,7 @@ jobs:
 
       - name: Cache public SDK 36 API reference
         id: sdk-contract-reference
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: work/sdk-36/android.jar
@@ -547,11 +624,23 @@ jobs:
 
       - name: Save public SDK 36 API reference
         if: steps.sdk-contract-reference.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: work/sdk-36/android.jar
           key: sdk-public-api-36-r02-d9eb9da824d9
+
+      - name: Floating activity roots and task window placement
+        run: |
+          python3 tools/test_window_parent_placement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
+      - name: Speech recognition dispatch and client lifecycle contracts
+        run: |
+          python3 tools/test_speech_recognition.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
 
       - name: Durable Settings provider contracts
         run: |
@@ -560,6 +649,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: SAF provider, picker lifecycle and grant restart contracts
+        run: |
+          python3 tools/test_saf_documents.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Application storage public API and system-package policy contracts
         run: |
           python3 tools/test_app_storage_public.py --java-home "$JAVA_HOME" \
@@ -567,12 +663,33 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
-      - name: Activity finish, null binding and public media receiver contracts
+      - name: Persisted activity usage history contracts
+        run: |
+          "$JAVA_HOME/bin/javac" -encoding UTF-8 -d "$RUNNER_TEMP/activity-usage-classes" \
+            app/java/com/gesher/server/ActivityUsageHistory.java \
+            tests/activity-usage/ActivityUsageHistoryTest.java
+          "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/activity-usage-classes" \
+            com.gesher.server.ActivityUsageHistoryTest
+
+      - name: Notification delegation ownership and durable policy contracts
+        run: |
+          python3 tools/test_notification_delegation.py --with-storage --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_notification_channel_groups.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+          "$JAVA_HOME/bin/javac" --release 11 -cp work/sdk-36/android.jar \
+            -d "$RUNNER_TEMP/notification-delegation-sdk" \
+            tests/notification-delegation/sdk/java/gesher/notificationdelegation/ControlReceiver.java
+
+      - name: Activity finish, Bluetooth requests, null binding and public media receiver contracts
         run: |
           args=(--java-home "$JAVA_HOME" --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar")
           python3 tools/test_activity_finish.py "${args[@]}"
+          python3 tools/test_bluetooth_requests.py "${args[@]}"
           python3 tools/test_null_bindings.py "${args[@]}"
           python3 tools/test_service_rebinding.py "${args[@]}"
           "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
@@ -592,6 +709,18 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: Notification storage identity and legacy migration contracts
+        run: |
+          python3 tools/test_notification_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
+      - name: Geolocation request and timeout lifetime contracts
+        run: |
+          python3 tools/test_geolocation_retention.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Audio effect capability and constructor contracts
         run: |
           python3 tools/test_audio_effect_contracts.py --java-home "$JAVA_HOME" \
@@ -601,6 +730,12 @@ jobs:
         run: |
           python3 tools/test_media_routing_contracts.py \
             --framework-classes out/framework/classes --core-classes out/coremod
+
+      - name: Account authentication session lifetimes and deadlines
+        run: |
+          python3 tools/test_account_session_lifetime.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
 
       - name: Sync admission, results and adapter lifecycle contracts
         run: |
@@ -671,9 +806,45 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: Windows Wi-Fi data, permissions and native scan contracts
+        run: |
+          set -euo pipefail
+          args=(--java-home "$JAVA_HOME" --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar)
+          python3 tools/test_windows_wifi.py "${args[@]}"
+          python3 tools/test_wifi_access.py "${args[@]}"
+          python3 tools/test_wifi_service.py "${args[@]}" --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME"
+          python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control premature-notification
+          python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control skip-eligibility
+
       - name: SDK36 WifiInfo Builder, copy and redaction contracts
         run: |
           python3 tools/test_wifi_info_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 SoftAP and WPS value, copy and compatibility contracts
+        run: |
+          python3 tools/test_softap_values_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 Wi-Fi Direct values, provider and copy contracts
+        run: |
+          python3 tools/test_wifi_p2p_values.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 suggestion and Passpoint value contracts
+        run: |
+          python3 tools/test_wifi_suggestion_values.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 Wi-Fi network specifier and matcher contracts
+        run: |
+          python3 tools/test_wifi_network_specifier_contracts.py --java-home "$JAVA_HOME" \
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
@@ -709,6 +880,7 @@ jobs:
             out/app/packageevents-observer.apk out/app/packageevents-control.dex dist-framework/
           cp out/app/icon-base.apk out/app/icon-density.apk out/app/icon-bundle.apks out/app/icon-bundle.xapk dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
+          cp out/app/crashnotice.apk dist-framework/
           cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibraryafter.apk out/app/sharedlibraryafterdlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/
           ls -la dist-framework
@@ -736,7 +908,7 @@ jobs:
 
       - name: Save the framework's JVM tools
         if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: out/framework/jvm-tools
@@ -751,7 +923,7 @@ jobs:
 
       - name: Save AOSP sources
         if: always() && !cancelled() && steps.after.outputs.sparse != '' && (steps.aosp.outputs.cache-matched-key != format('{0}-{1}', env.AOSP_KEY, steps.after.outputs.sparse))
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: third_party/aosp

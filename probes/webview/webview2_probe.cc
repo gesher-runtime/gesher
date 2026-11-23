@@ -89,7 +89,7 @@ class ProbeListener final : public gesher::webview::Listener {
         break;
     }
   }
-  bool OnNavigationStarting(const std::wstring& url, bool, bool) override {
+  bool OnNavigationStarting(const std::wstring& url, bool, bool, int64_t) override {
     Log(L"navigation starting (page): " + url);
     return false;
   }

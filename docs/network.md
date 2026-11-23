@@ -49,10 +49,30 @@ Bidirectional reads may be queued from `onStreamReady`, and direct read-only
 buffers are accepted for writes. Gzip headers are decoded after dispatching the
 response-header callback so a duplex peer can wait for that callback's upload.
 
-Each bidirectional stream currently opens a separate HTTP/2 connection; connection
-pooling across streams is not implemented. The adapter copies bounded 32 KiB
-chunks, while AOSP OkHttp also retains its own flow-control buffers and reader
-threads. The current implementation has no high-concurrency throughput benchmark.
+Bidirectional streams reuse eligible HTTP/2 sessions owned by their `HttpEngine`.
+The route includes the exact origin, selected proxy, supplied Network object and
+TLS socket-factory identity. A warm session can multiplex streams; one stream's
+cancellation or peer reset does not close its healthy peers. GOAWAY stops new
+admission while accepted streams drain; a stream that selected a session but had
+not yet sent HEADERS when GOAWAY arrived is admitted once on a fresh session.
+Completed streams, including those with a request body, end without RST_STREAM.
+Actual peer stream limits, including zero, are respected. Concurrent cold
+connections can still open separately.
+
+Completed transports release their leases only after admitted I/O retires.
+Terminal callbacks, including `onCanceled`, are delivered only after the
+stream's I/O workers finish.
+Engine shutdown rejects active requests, then closes all owned connections.
+The pool retains at most five idle sessions, expires them after 60 seconds, and
+uses a single process-wide parked expiry worker. Stream I/O and physical socket
+writes have separate 30-second deadlines; a broken physical connection still
+fails its dependent streams. Each stream keeps its existing bounded 32 KiB
+copies, while AOSP OkHttp owns framing and flow-control storage. As in Cronet,
+a stream's receive window (6 MiB) is smaller than the connection's (16 MiB), so
+one stream whose application stopped reading cannot stall its siblings. The qualified
+loopback corpus covers 16 concurrent warm streams and measured connection/TLS
+handshake reduction, not general high-concurrency throughput. See the
+[session ownership and measurement report](research/http2-sessions-2026-11-22.md).
 
 The transport does not implement QUIC, Brotli or engine-private disk caches.
 Protocol/DNS/cache tuning is advisory and does not install process-global settings;
@@ -66,7 +86,12 @@ Cronet module is not shipped.
 `tools/test_http_engine.py --java-home <JDK>` tests the production adapter over
 real local HTTP sockets in CI. Adding `--okhttp-source <AOSP external/okhttp>`
 compiles the pinned Android 16 framing and Okio sources for host HTTP/2 wire
-tests, including gzip-header ordering and direct-buffer callback contracts.
+tests, including gzip-header ordering, direct-buffer callback contracts, shared
+session cancellation, GOAWAY, TLS/proxy/Network route isolation and real idle
+descriptor retirement. The helper applies this revision's receive-credit and
+window patches to the pinned provider; bounded in-memory contracts verify discard,
+reset and padding accounting and the advertised window geometry, and are also
+mandatory on Windows. The complete framework CI requires that pinned checkout.
 `tests/net/HttpEngineDeviceSmoke.java` and
 `Http2DeviceSmoke.java` also run on Gesher ART in Windows track 94, with an
 independent local HTTP/2 wire peer. `GESHER_HTTP_ENGINE_TRACE=1` logs numeric
@@ -309,7 +334,7 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
   uses `DnsQueryEx.InterfaceIndex` without falling back to another adapter.
   `Network`'s socket factory and HTTP connection factory use these bindings.
 - VPNs are recognized by adapter type and name, a heuristic.
-- No Wi-Fi details (`TransportInfo`, SSID, signal strength).
+- Wi-Fi observations and asynchronous scans use [Native Wi-Fi](windows-wifi.md); radio configuration and hotspot control remain unsupported.
 - BoringSSL without assembly (slower AES-GCM and bignum than a phone's).
 - Pending CI (web3 continuation): the Network List Manager's
   `NA_InternetConnectivityV4/V6` `WEBHIJACK` flags map to
@@ -397,7 +422,10 @@ awaits combined CI.
 
 The raw DNS worker uses the chosen adapter's configured servers and bound
 UDP, up to three servers (one with NO_RETRY), cache bypass and TCP fallback
-for truncated answers. Only a completion byte uses its pollable socketpair;
+for truncated answers. Like Android's DnsResolver it makes two rounds over the
+servers, waiting 5 seconds on the first and its scaled timeout (at least one
+second) on the others, so one lost or slow answer from a runner's single
+server is retried instead of failing with ETIMEDOUT. Only a completion byte uses its pollable socketpair;
 the full answer remains available until nresult consumes/closes the fd.
 Cancellation shuts down the active query. Forced truncation/TCP fallback,
 cache transitions (including mixed Java/NDK binding) and IPv6-only default

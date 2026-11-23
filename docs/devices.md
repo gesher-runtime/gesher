@@ -106,8 +106,15 @@ Windows without them (no location service, no Media Foundation) gets clean
   `submitRequestList` (bursts get their frame numbers at submission; the
   repeating request one per frame), `cancelRequest`, `flush`, `waitUntilIdle`,
   default request templates (preview, still, record, video snapshot), and a
-  capture thread: one frame per request, opened at the largest configured
-  size, then for each target: an ImageReader gets YUV_420_888 (I420 planes),
+  capture thread that owns the Windows device. `endConfigure` has it open the
+  device at the largest configured size (reopened when a later configuration
+  needs another size) and waits for that, up to 10 s, as cameraserver
+  configures the streams before the session's `onConfigured`: the open (a
+  cold Media Foundation source reader with its video processing has taken
+  over 2 s on CI runners) does not delay the first frame of a request made
+  after `onConfigured`. An open that fails there is retried by the first
+  request, which reports the failure. Then one frame per request, for each
+  target: an ImageReader gets YUV_420_888 (I420 planes),
   RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
   reader's size; another surface with a native window gets RGBA through
   `ANativeWindow_lock`. Then `onCaptureStarted` and the result
@@ -146,6 +153,34 @@ Windows without them (no location service, no Media Foundation) gets clean
   producers than the camera (MediaCodec...), preview into SurfaceView or
   TextureView (they get no native window on Gesher today; frames go to any
   surface that has one).
+
+## Speech recognition
+
+`SpeechRecognizer` delegates to an installed, enabled, exported Android
+`RecognitionService`. The provider declares the `android.speech.RecognitionService`
+action. Apps that discover providers should declare the corresponding package
+visibility query, as on Android. An app can select an explicit component with
+`SpeechRecognizer.createSpeechRecognizer(context, component)`.
+
+The default recognizer reads `Settings.Secure.VOICE_RECOGNITION_SERVICE`. To seed
+an unset default, install the provider APK and start the Gesher device with
+`GESHER_SPEECH_RECOGNIZER=package.name/.ProviderClass` in the host environment.
+This setting requires secure-settings write permission when changed by an Android
+caller. The selected provider must still be installed and enabled when bound.
+The on-device factory requires an on-device provider configured in the platform
+resources. An installed recognizer alone does not establish offline capability.
+
+The installed provider supplies audio handling, recognition, languages and model
+download behavior. Gesher forwards requests and preserves the calling app's audio
+attribution. A missing provider or timed-out bind produces an API error. If an
+active provider disconnects, the current operations fail and a new operation may
+reconnect. Destroying the recognizer or losing its app process releases the
+provider binding and cancels active listening.
+
+`tools/test_speech_recognition.py --help` describes the host fixtures. The Windows
+framework-fixes track also runs them under ART. The fixtures exercise the broker and
+public client with controlled providers. A packaged provider and physical audio
+workflow require separate qualification.
 
 ## Status and next steps
 

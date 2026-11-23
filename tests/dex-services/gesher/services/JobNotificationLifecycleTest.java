@@ -36,6 +36,7 @@ import java.util.function.ToIntBiFunction;
 
 /** Actual job callbacks, notification publication, shared ownership and retained policy. */
 public final class JobNotificationLifecycleTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     private static final int DETACH = JobService.JOB_END_NOTIFICATION_POLICY_DETACH;
     private static final int REMOVE = JobService.JOB_END_NOTIFICATION_POLICY_REMOVE;
     private static int checks;
@@ -114,9 +115,8 @@ public final class JobNotificationLifecycleTest {
             notifications = (NotificationManagerService) make(NotificationManagerService.class,
                     new Class<?>[]{pmType, amType, ToIntBiFunction.class}, pm, null, sink);
             Object am = make(amType, new Class<?>[]{atmType, pmType, NotificationManagerService.class}, atm, pm, notifications);
-            Class<?> created = Class.forName("com.gesher.server.Services$Created");
             field(Class.forName("com.gesher.server.Services"), "sLast").set(null,
-                    make(created, new Class<?>[]{pmType, atmType, amType}, pm, atm, am));
+                    serviceContexts.runtime(pm, atm, am));
             Object permissions = pmType.getMethod("permissions").invoke(pm);
             permissions.getClass().getMethod("grantRuntimePermission", String.class, String.class, String.class, int.class)
                     .invoke(permissions, pkg, "android.permission.POST_NOTIFICATIONS", "default:0", 0);
@@ -143,7 +143,7 @@ public final class JobNotificationLifecycleTest {
             Object run = make(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
             synchronized (scheduler) {
                 field(jobType, "run").set(job, run);
-                ((List<Object>) field(schedulerType, "mJobs").get(scheduler)).add(job);
+                method(schedulerType, "addJobLocked", jobType).invoke(scheduler, job);
                 Field running = field(schedulerType, "mRunning"); running.setInt(scheduler, running.getInt(scheduler) + 1);
             }
             DelayedStop service = new DelayedStop();
@@ -281,6 +281,14 @@ public final class JobNotificationLifecycleTest {
     }
 
     public static void main(String[] args) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            runWithServiceContext(args);
+        } finally { serviceContexts = previous; }
+    }
+
+    private static void runWithServiceContext(String[] args) throws Exception {
         require(args.length == 1, "Pass the source-built devsvc APK");
         require("1000".equals(System.getenv("GESHER_BINDER_UID")), "System-UID fixture required for retained notifications");
         System.loadLibrary("android_runtime");

@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "scope": "Ordinary complete value readers on real Android boot Parcel; no radio/backend or Windows execution claim",
+  "wire_reference": {
+    "profile": "android16-r4",
+    "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+    "aosp_modules_utils_commit": "e945bbce0ccb83e1111b6031a3bba89e6b5cac6f",
+    "sdk_artifact_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "sdk_declarations": 41,
+    "capsule_manifest_sha256": "c350caaa5f6dfd8b3906682b63cee1225c659d1341a30ba31b05a21b0e2dcacd",
+    "reference_payload_sha256": "e83b412aa86b0c26219f0cefe723e6d50e8212ab8650a374542c958a1792e066",
+    "candidate_payload_sha256": "785309abb8f6742c4b04bf4ea5f899573e3143357fb43736b1115511ef86bc17",
+    "full_original_readers": true,
+    "full_reader_cases": 17,
+    "writer_only_cases": 0,
+    "final_check_count": 330,
+    "checks_definition": "Single shared fixture counter printed after both suites; launcher/provider checks are separate"
+  },
+  "wire_cases": [
+    {
+      "case": "discovery_full",
+      "bytes": 12,
+      "sha256": "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+      "rewrite_sha256": "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+      "reader": "android.net.wifi.p2p.WifiP2pDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "discovery_social",
+      "bytes": 12,
+      "sha256": "ca888f40c3caca805b37a5434c75de5550616e0795e7602fb91156f22dd90851",
+      "rewrite_sha256": "ca888f40c3caca805b37a5434c75de5550616e0795e7602fb91156f22dd90851",
+      "reader": "android.net.wifi.p2p.WifiP2pDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "discovery_single",
+      "bytes": 12,
+      "sha256": "2bc10870154cd3d1039466d0adc0b1d2535c40af7a3b44efd354f1cc653e38c0",
+      "rewrite_sha256": "2bc10870154cd3d1039466d0adc0b1d2535c40af7a3b44efd354f1cc653e38c0",
+      "reader": "android.net.wifi.p2p.WifiP2pDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "discovery_full_frequency",
+      "bytes": 12,
+      "sha256": "df524e1bea2c35bf2b4ea6963e546af9db6f4c4ac9004a8a5fbcc4dbf9cdb6cd",
+      "rewrite_sha256": "df524e1bea2c35bf2b4ea6963e546af9db6f4c4ac9004a8a5fbcc4dbf9cdb6cd",
+      "reader": "android.net.wifi.p2p.WifiP2pDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "advertisement_default",
+      "bytes": 4,
+      "sha256": "24063be96a4c6605fdde513b7888bee258c1d13839445db508d482308e52bf81",
+      "rewrite_sha256": "24063be96a4c6605fdde513b7888bee258c1d13839445db508d482308e52bf81",
+      "reader": "android.net.wifi.p2p.WifiP2pUsdBasedLocalServiceAdvertisementConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "advertisement_explicit",
+      "bytes": 4,
+      "sha256": "6b3b53d845483278ddb0becefa5191fdb022c93ff37c09ecabd74e8bc4c2524e",
+      "rewrite_sha256": "6b3b53d845483278ddb0becefa5191fdb022c93ff37c09ecabd74e8bc4c2524e",
+      "reader": "android.net.wifi.p2p.WifiP2pUsdBasedLocalServiceAdvertisementConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "usd_discovery_default",
+      "bytes": 12,
+      "sha256": "27677f1ce93a037473f0fb339478aae9efed71e6f75c4b00aa6dc9922bce1e7e",
+      "rewrite_sha256": "27677f1ce93a037473f0fb339478aae9efed71e6f75c4b00aa6dc9922bce1e7e",
+      "reader": "android.net.wifi.p2p.WifiP2pUsdBasedServiceDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "usd_discovery_multiple",
+      "bytes": 24,
+      "sha256": "4923a3fd5946e38ee89f3c85922227a23005daeb2d58d8430ca41eee1091e7c9",
+      "rewrite_sha256": "4923a3fd5946e38ee89f3c85922227a23005daeb2d58d8430ca41eee1091e7c9",
+      "reader": "android.net.wifi.p2p.WifiP2pUsdBasedServiceDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "usd_discovery_maximum",
+      "bytes": 200,
+      "sha256": "ca4cb01e459c2ecfe918034729d941e44cde6c9589dd21e41596d8c7e54d44d1",
+      "rewrite_sha256": "ca4cb01e459c2ecfe918034729d941e44cde6c9589dd21e41596d8c7e54d44d1",
+      "reader": "android.net.wifi.p2p.WifiP2pUsdBasedServiceDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "dir_zero",
+      "bytes": 32,
+      "sha256": "e7d6f2f1aa4f125c9a7c547836e561d5a79c16c6dfb8fd47053294256fea2721",
+      "rewrite_sha256": "e7d6f2f1aa4f125c9a7c547836e561d5a79c16c6dfb8fd47053294256fea2721",
+      "reader": "android.net.wifi.p2p.WifiP2pDirInfo",
+      "roundtrip": true
+    },
+    {
+      "case": "dir_bytes",
+      "bytes": 32,
+      "sha256": "e476dbf083fcfebd2dc700ee55f2888276ae3c5bdb6af2006ac7a663cee69f9b",
+      "rewrite_sha256": "e476dbf083fcfebd2dc700ee55f2888276ae3c5bdb6af2006ac7a663cee69f9b",
+      "reader": "android.net.wifi.p2p.WifiP2pDirInfo",
+      "roundtrip": true
+    },
+    {
+      "case": "dir_aliased",
+      "bytes": 32,
+      "sha256": "3f2fc598fc02fe211d7e4a8517795762d6240c17af50ec5f0e0592862c9fb285",
+      "rewrite_sha256": "3f2fc598fc02fe211d7e4a8517795762d6240c17af50ec5f0e0592862c9fb285",
+      "reader": "android.net.wifi.p2p.WifiP2pDirInfo",
+      "roundtrip": true
+    },
+    {
+      "case": "discovery_vendor_one",
+      "bytes": 204,
+      "sha256": "6d27f6e8d573b22da2304cf28a21fb5ff83000fc96d2c7cc89e7daaff0d9c9ca",
+      "rewrite_sha256": "6d27f6e8d573b22da2304cf28a21fb5ff83000fc96d2c7cc89e7daaff0d9c9ca",
+      "reader": "android.net.wifi.p2p.WifiP2pDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "discovery_vendor_duplicate_oui",
+      "bytes": 396,
+      "sha256": "2f171bd644cd73d45e487d6c0ac731cfd7609838d9d2ac62d05c6a5b1a8a779b",
+      "rewrite_sha256": "2f171bd644cd73d45e487d6c0ac731cfd7609838d9d2ac62d05c6a5b1a8a779b",
+      "reader": "android.net.wifi.p2p.WifiP2pDiscoveryConfig",
+      "roundtrip": true
+    },
+    {
+      "case": "response_null",
+      "bytes": 8,
+      "sha256": "5981693c8df83eea16da42a0f748facb299546688544a0c2887ed5ffbf086e86",
+      "rewrite_sha256": "5981693c8df83eea16da42a0f748facb299546688544a0c2887ed5ffbf086e86",
+      "reader": "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceResponse",
+      "roundtrip": true
+    },
+    {
+      "case": "response_empty",
+      "bytes": 8,
+      "sha256": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "rewrite_sha256": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "reader": "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceResponse",
+      "roundtrip": true
+    },
+    {
+      "case": "response_bytes",
+      "bytes": 16,
+      "sha256": "07204e64ae6cba2d587565ee46eb64c745ebbabb67a9e1561a03619ddbdc400a",
+      "rewrite_sha256": "07204e64ae6cba2d587565ee46eb64c745ebbabb67a9e1561a03619ddbdc400a",
+      "reader": "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceResponse",
+      "roundtrip": true
+    }
+  ],
+  "android_execution": {
+    "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+    "sdk": 36,
+    "uid": 2000,
+    "profiles": {
+      "stock": {
+        "request": "validation/android-oracle/commands/080-p2p-discovery-v5-stock.result.json",
+        "receipt_sha256": "d9a031dda324beba3a6aca97f9fb513432d23a423b88a59ece470d035c7df50a",
+        "exit_code": 0,
+        "seconds": 6.48,
+        "checks": 330,
+        "complete_readers": 17,
+        "modern": true,
+        "stock_presence": [
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.WifiP2pDiscoveryConfig=java.lang.BootClassLoader@43c409a",
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.WifiP2pDiscoveryConfig$Builder=java.lang.BootClassLoader@43c409a",
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.WifiP2pUsdBasedLocalServiceAdvertisementConfig=java.lang.BootClassLoader@43c409a",
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.WifiP2pUsdBasedLocalServiceAdvertisementConfig$Builder=java.lang.BootClassLoader@43c409a",
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.WifiP2pUsdBasedServiceDiscoveryConfig=java.lang.BootClassLoader@43c409a",
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.WifiP2pUsdBasedServiceDiscoveryConfig$Builder=java.lang.BootClassLoader@43c409a",
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.WifiP2pDirInfo=java.lang.BootClassLoader@43c409a",
+          "P2P_DISCOVERY_STOCK_PRESENCE android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceResponse=java.lang.BootClassLoader@43c409a"
+        ],
+        "payload_sha256": "a8efe1dd74de11d39397deec743e7766eaf4fbffd1d0b2bf799ebea02c3088f8"
+      },
+      "pinned-r4": {
+        "request": "validation/android-oracle/commands/081-p2p-discovery-v5-pinned-r4.result.json",
+        "receipt_sha256": "f1bb031681b10a9921895c4a391d0e4cc517de79270396d128466cc396518a08",
+        "exit_code": 0,
+        "seconds": 7.599,
+        "checks": 330,
+        "complete_readers": 17,
+        "modern": true,
+        "stock_presence": [],
+        "payload_sha256": "e83b412aa86b0c26219f0cefe723e6d50e8212ab8650a374542c958a1792e066"
+      },
+      "candidate": {
+        "request": "validation/android-oracle/commands/082-p2p-discovery-v5-candidate.result.json",
+        "receipt_sha256": "01fe8f5fcd717cbe6441cd728d607a9fb53544c47b5e62ae47c3ab081e850a14",
+        "exit_code": 0,
+        "seconds": 6.408,
+        "checks": 330,
+        "complete_readers": 17,
+        "modern": true,
+        "stock_presence": [],
+        "payload_sha256": "785309abb8f6742c4b04bf4ea5f899573e3143357fb43736b1115511ef86bc17"
+      }
+    },
+    "operations": {
+      "setup": {
+        "receipt": "validation/android-oracle/commands/079-p2p-discovery-v5-setup.result.json",
+        "receipt_sha256": "8007911cef12f7b819008721d31500cf0cdc54e0ef7dc312bafe096d44d6cdd4",
+        "steps": 7,
+        "all_passed": true
+      },
+      "cleanup": {
+        "receipt": "validation/android-oracle/commands/083-p2p-discovery-v5-cleanup.result.json",
+        "receipt_sha256": "eb5046031e92bd92b166afdf5bb7241b6f9be9e4f73d86ee61a3fc79d0ba7d7d",
+        "steps": 2,
+        "all_passed": true
+      }
+    },
+    "stock_types_present": 8,
+    "stock_legacy_fallback_exercised": false,
+    "candidate_pinned_full_reader_matches": 17,
+    "shared_stock_full_reader_matches": 17,
+    "observations_sha256": "97c598852563e353252d0071e0e1cc74bed272c3127e7a785304cc474380ce46",
+    "preflight_sha256": "f0dc3a5e5c99ecf9b66ce069e415f0a246e7d63d52b1b96e8f3795a12a626987"
+  },
+  "native_graph": "Genuine Android boot Parcel/PersistableBundle/MacAddress; complete original creators and owned source dependencies.",
+  "windows_execution": false,
+  "ordinary_APK_permissions": "Not measured by UID2000 app_process value fixtures.",
+  "limits": [
+    "Native profiles use boot MacAddress, not candidate app MacAddress",
+    "SDK36r02, stock Android36.0 and Android16-r4 source remain distinct profiles",
+    "Actual Windows full-reader gate remains required",
+    "v1-v4 capsules were unexecuted preparation artifacts"
+  ]
+}

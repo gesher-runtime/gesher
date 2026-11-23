@@ -29,10 +29,4 @@ void EnterLoadedCode();
 // the rest are ART's). InstallBionicShim installs it non-authoritative.
 void InstallSignalHook(bool authoritative);
 
-// exit()/_exit() on a thread that is a vfork-style child (fork() returned 0
-// and exec*() has not run yet; docs/exec.md): fork() returns again in the
-// parent, the child reported as exited with `status`. Returns only when the
-// calling thread is not such a child.
-void ExitIfVforkChild(int status);
-
 }  // namespace gesher::bionic

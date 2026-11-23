@@ -170,12 +170,14 @@ $recordChecks = @(
      P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true") },
   @{ Name = 'Camera2 close delivers onClosed exactly once before its callback thread quits'
      P = @("${t}recorder camera close: onClosed exactly once before callback thread quit true, callback thread stopped true") },
-  @{ Name = 'MediaCodec''s output into an ImageReader''s Surface (YUV_420_888 Images): every color in order'
-     P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]") }
+  @{ Name = 'MediaCodec output into an ImageReader''s Surface: YUV pixels and default or explicit timestamps'
+     P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]",
+           "${t}imagereader timestamps: pass",
+           "${t}imagereader retained image: pass") }
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
-      $_ -match 'AudioRecord (read|stop) trace:|AAudio input (open|read|stop) trace:|RecordTest ndk aaudio input read:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|camera native trace:|camera JNI array trace:|camera suspend trace:|\bGC\b|Suspending all threads took|SuspendAll|ResumeAll|ThreadFlip|WaitForGcToComplete'
+      $_ -match 'AudioRecord (read|stop) trace:|AAudio input (open|read|stop) trace:|RecordTest ndk aaudio input read:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|capturing at \d+x\d+ \(opened in|camera native trace:|camera JNI array trace:|camera suspend trace:|\bGC\b|Suspending all threads took|SuspendAll|ResumeAll|ThreadFlip|WaitForGcToComplete'
     } | Select-Object -Unique)) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }
@@ -235,6 +237,18 @@ if (Test-Path "$Dir/recordapp.apk") {
   Write-Host "INFO  media3: $((($recOut -split "`n") | Where-Object { $_ -match 'GesherMedia.*(encoders:|capture:)|RecordTest codec list encoders' } | Select-Object -First 4 | ForEach-Object { $_.Trim() }) -join '; ')"
   RecordChecks 'single process' $recOut $recCode
 
+  $savedVideoEncoders = [Environment]::GetEnvironmentVariable('GESHER_VIDEO_ENCODERS')
+  try {
+    $env:GESHER_VIDEO_ENCODERS = 'soft'
+    $env:GESHER_TEST_CODEC_CONTROLS = '1'
+    CheckTimed 'media3: a live AVC encoder changes output rate and requests sync frames while preserving metrics and stream continuity' `
+      "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) `
+      @('RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed') 120
+  } finally {
+    [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedVideoEncoders)
+    Remove-Item Env:GESHER_TEST_CODEC_CONTROLS -ErrorAction SilentlyContinue
+  }
+
   # The Gesher device: the app in a process of its own (logs/com.gesher.recordapp.log), its
   # environment the device's (GESHER_AUDIO_SOURCE, GESHER_CAMERA_TEST).
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-device'
@@ -249,8 +263,49 @@ if (Test-Path "$Dir/recordapp.apk") {
   RecordChecks 'Gesher device' $devOut $devCode
   $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
   Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_RECORD -ErrorAction SilentlyContinue
+
+  # Ordinary runtime, real EGL input and real software AVC. Verify every
+  # decoded frame's submitted identifier across all three actual MP4 files.
+  $savedRolloverEncoder = [Environment]::GetEnvironmentVariable('GESHER_VIDEO_ENCODERS')
+  $savedRolloverAudio = [Environment]::GetEnvironmentVariable('GESHER_AUDIO_SOURCE')
+  $rolloverPass = 'recorder rollover: PASS same EGL producer and recorder across 3 decoded MP4 files; ordered 802/803/801, caller fd closure and lifecycle verified'
+  $rolloverFiles = @(0..2 | ForEach-Object {
+    "recorder rollover: rollover-$_\.mp4: decoded \d+ actual EGL frame identifiers; key, CSD, orientation and timestamps verified"
+  })
+  try {
+    $env:GESHER_VIDEO_ENCODERS = 'soft'
+    Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
+    $rolloverOut = RunTimed "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main',
+      '--activity', 'com.gesher.recordapp.RecorderRolloverActivity', (NoDrive "$Dir/recordapp.apk"))) 150
+    $rolloverCode = $LASTEXITCODE
+    LineCheck 'media3: recorder MP4 rollover preserves one live EGL producer and real decoded input identifiers' `
+      $rolloverOut ($rolloverFiles + @($rolloverPass)) $rolloverCode 'rollover-local' @('recorder rollover: FAILED')
+
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    $rolloverLog = Join-Path $root 'logs/com.gesher.recordapp.log'
+    $rolloverOffset = if (Test-Path -LiteralPath $rolloverLog) { (Get-Item -LiteralPath $rolloverLog).Length } else { 0 }
+    $rolloverOut = RunTimed "$Dir/dalvikvm.exe" @($launcherRec + @('launch', (NoDrive "$Dir/recordapp.apk"),
+      '--activity', 'com.gesher.recordapp.RecorderRolloverActivity', '--headless', '--keep-task')) 180
+    $rolloverCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $rolloverLog) {
+      $rolloverBytes = [IO.File]::ReadAllBytes($rolloverLog)
+      if ($rolloverBytes.Length -ge $rolloverOffset) {
+        $rolloverOut += "`n" + [Text.Encoding]::UTF8.GetString($rolloverBytes, [int]$rolloverOffset,
+          [int]($rolloverBytes.Length - $rolloverOffset))
+      } else {
+        $rolloverOut += "`nrecorder rollover: FAILED app log was truncated across launch"
+      }
+    }
+    LineCheck 'media3: the device app independently decodes its three selected MP4 files after rollover' `
+      $rolloverOut ($rolloverFiles + @($rolloverPass)) $rolloverCode 'rollover-device' @('recorder rollover: FAILED')
+  } finally {
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedRolloverEncoder)
+    [Environment]::SetEnvironmentVariable('GESHER_AUDIO_SOURCE', $savedRolloverAudio)
+  }
 } else {
-  Write-Host 'INFO  media3: recordapp.apk not in the build output; its checks skipped'
+  Write-Host 'FAIL  media3: recordapp.apk missing; recorder rollover public API acceptance is required'
+  $failed++
 }
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
 

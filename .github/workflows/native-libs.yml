@@ -60,6 +60,9 @@ jobs:
           cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${ANDROID_API}-clang"
           mkdir -p dist-native
           bash tests/native/build-lookup-graph.sh "$cc" dist-native
+          bash tests/native/build-load-transaction-graph.sh \
+            "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
+            dist-native/elf-load-transaction
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
             -std=c11 -O2 -Wall -Wextra -Werror tests/native/aaudio_builder_contract_test.c \
             -laaudio -ldl -o dist-native/aaudio_builder_x64
@@ -104,6 +107,26 @@ jobs:
           # Raw Linux system calls (`syscall` instructions) and code written
           # into the library's own pages at run time (ADR 0084).
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror -Wl,-soname,libraw_syscall_test.so -o dist-native/raw_syscall_test.so tests/native/raw_syscall_test.c
+          # AF_UNIX socketpair credentials (ADR 0088).
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libunix_credentials_test.so -o dist-native/unix_credentials_test.so tests/native/unix_credentials_test.c
+          # SCM_RIGHTS through binderd's descriptor broker (ADR 0088 phase 2).
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libunix_rights_test.so -o dist-native/unix_rights_test.so tests/native/unix_rights_test.c
+          # AHardwareBuffer, the EGL native buffer/fence extensions and
+          # ASurfaceControl (ADR 0089), for tests/native/surface_control_host_test.cc.
+          # r27c's surface_control.h declares ASurfaceTransaction_setGeometry's and
+          # setCrop's rectangles as C++ references in C too, which C cannot parse;
+          # r28 declares them as pointers in C (the same ABI). Build against a
+          # copy with r28's C declarations.
+          mkdir -p ndk-c-headers/android
+          sed 's/const ARect& /const ARect* _Nonnull /g' "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/android/surface_control.h" > ndk-c-headers/android/surface_control.h
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android31-clang" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -I ndk-c-headers -Wl,-soname,libsurface_control_test.so -o dist-native/surface_control_test.so tests/native/surface_control_test.c -landroid -lEGL -lGLESv3 -ldl
+
+          # getenv results outlive setenv/putenv/unsetenv, as bionic's do.
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libenvironment_lifetime_test.so -o dist-native/environment_lifetime_test.so tests/native/environment_lifetime_test.c
+          # The NDK's MediaDrm/MediaCrypto without a DRM plugin.
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libmedia_drm_test.so -o dist-native/media_drm_test.so tests/native/media_drm_test.c -lmediandk -ldl
+          # The entry points of every GL extension ANGLE advertises (gl_extension_test.exe).
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libgl_extension_procs_test.so -o dist-native/gl_extension_procs_test.so tests/native/gl_extension_procs_test.c -lEGL -lGLESv3 -ldl
           echo "--- fs_test29.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true

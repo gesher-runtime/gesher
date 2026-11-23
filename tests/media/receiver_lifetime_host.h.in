@@ -154,7 +154,9 @@ struct Recorder {
   void EnterError() {}
   InputSurface* input_surface() { return &surface; }
   bool Prepare(std::string*, bool* = nullptr) { recorder_gate.Pass(); return true; }
-  bool Start(std::string*, bool* = nullptr) {
+  bool SetNextOutputFile(int, std::string*, bool* = nullptr) { return true; }
+  bool Start(std::string*, bool* invalid_state = nullptr) {
+    if (invalid_state != nullptr) *invalid_state = false;
     if (recorder_event_mode.load() != 0) listener(2, recorder_event_mode.load());
     return true;
   }

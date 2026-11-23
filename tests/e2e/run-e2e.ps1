@@ -103,6 +103,18 @@ public static class GesherE2E {
     for (int i = 2; i < a.Length; i++) if (a[i] != b[i] && !Near(a[i], b[i], 24)) n++;
     return n;
   }
+  // A content rectangle excludes the surrounding native toolbar and controls.
+  public static int[] Region(int[] px, int left, int top, int right, int bottom) {
+    if (px == null || px.Length < 2 || px[0] <= 0 || px[1] <= 0 ||
+        (long)px[0] * px[1] + 2 != px.Length || left < 0 || top < 0 ||
+        right <= left || bottom <= top || right > px[0] || bottom > px[1]) return null;
+    int width = right - left, height = bottom - top;
+    var region = new int[2 + width * height];
+    region[0] = width; region[1] = height;
+    for (int y = 0; y < height; y++)
+      Array.Copy(px, 2 + (top + y) * px[0] + left, region, 2 + y * width, width);
+    return region;
+  }
 }
 '@
 }
@@ -113,6 +125,84 @@ function Analyze($px) {
 function PixelDiff($a, $b) {
   if ($null -eq $a -or $null -eq $b) { return [int]::MaxValue }
   return [GesherE2E]::Diff([int[]]$a, [int[]]$b)
+}
+
+# The app's own log (its process writes there and, while the launch runs, to the
+# launch's log too).
+function AppLogPath([string] $pkg) { return "$env:LOCALAPPDATA\Gesher\logs\$pkg.log" }
+
+# How long the launch's and the app's logs are: taken before an action, so that only
+# what the logs gained after it counts as the action's result.
+function LogMark([string] $log, [string] $pkg) {
+  return @((ReadText $log).Length, (ReadText (AppLogPath $pkg)).Length)
+}
+
+# What the launch's and the app's logs gained since LogMark (all of a log that shrank).
+function LogsSince([string] $log, [string] $pkg, $mark) {
+  $files = @($log, (AppLogPath $pkg))
+  $out = ''
+  for ($i = 0; $i -lt $files.Count; $i++) {
+    $text = ReadText $files[$i]
+    $from = if ($null -ne $mark -and $mark.Count -gt $i -and $text.Length -ge $mark[$i]) { $mark[$i] } else { 0 }
+    $out += $text.Substring($from) + "`n"
+  }
+  return $out
+}
+
+# An input action can require evidence of its own result: a log line the action's
+# asynchronous completion writes after it ($since: the logs' mark and the capture before
+# the action), text in a content rectangle, and that rectangle changed from what it
+# showed before the action. A completion before the action, or content that was already
+# there (an editor the action should have replaced), is not the action's result.
+function RenderReadiness($expect, $px, $since) {
+  $problems = @()
+  if ($null -eq $expect) { return @{ Ready = $true; Problems = $problems } }
+  if (-not $expect.log -or -not (LogsSince $since.Log $since.Package $since.Mark).Contains([string]$expect.log)) {
+    $problems += "the logs gained no '$($expect.log)' after the action"
+  }
+  $rect = @($expect.region)
+  if ($null -eq $px) {
+    $problems += 'no capture of the window (PrintWindow failed)'
+  } elseif ($rect.Count -ne 4 -or [int]$expect.minTextPixels -le 0 -or [int]$expect.minChangedPixels -le 0) {
+    $problems += 'invalid rendered-content rectangle or pixel requirements'
+  } else {
+    $region = [GesherE2E]::Region([int[]]$px, [int]$rect[0], [int]$rect[1], [int]$rect[2], [int]$rect[3])
+    if ($null -eq $region) {
+      $problems += "the content rectangle $($rect -join ',') is not within the $($px[0])x$($px[1]) capture"
+    } else {
+      $an = Analyze $region
+      if ($an.Text -lt [int]$expect.minTextPixels) {
+        $problems += "the content region has $($an.Text) text pixels, expected at least $($expect.minTextPixels)"
+      }
+      $earlier = $null
+      if ($null -ne $since.Before) {
+        $earlier = [GesherE2E]::Region([int[]]$since.Before, [int]$rect[0], [int]$rect[1], [int]$rect[2], [int]$rect[3])
+      }
+      # Without the same rectangle from before the action nothing shows a change
+      # (PixelDiff's "incomparable" maximum would pass the requirement vacuously).
+      if ($null -eq $since.Before) {
+        $problems += 'no capture from before the action to compare the content region with (PrintWindow failed)'
+      } elseif ($null -eq $earlier -or $earlier[0] -ne $region[0] -or $earlier[1] -ne $region[1]) {
+        $problems += "the content rectangle $($rect -join ',') is not within the $($since.Before[0])x$($since.Before[1]) capture from before the action"
+      } else {
+        $changed = PixelDiff $earlier $region
+        if ($changed -lt [int]$expect.minChangedPixels) {
+          $problems += "the content region changed in $changed pixels since before the action, expected at least $($expect.minChangedPixels)"
+        }
+      }
+    }
+  }
+  return @{ Ready = ($problems.Count -eq 0); Problems = $problems }
+}
+
+# A capture as a base64 PNG (for the job log); empty when there is none.
+function PngBase64($px) {
+  if ($null -eq $px) { return '' }
+  $file = [IO.Path]::GetTempFileName()
+  try {
+    SavePng $px $file
+    return [Convert]::ToBase64String([IO.File]::ReadAllBytes($file))
+  } finally { Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue }
 }
 
 function SavePng($px, [string] $path) {
@@ -143,8 +233,10 @@ function ReadText([string] $file) { return "$(Get-Content -Raw $file -ErrorActio
 function WaitFirstFrame($p, [string] $log, [int] $seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
-    $m = [regex]::Match((ReadText $log), 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
-    if ($m.Success) { return [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16) }
+    foreach ($m in [regex]::Matches((ReadText $log), 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')) {
+      $window = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16)
+      if ([GesherWin32]::IsWindow($window)) { return $window }
+    }
     Start-Sleep -Milliseconds 500
   }
   return [IntPtr]::Zero
@@ -168,15 +260,19 @@ function FrontWindow([string] $log, [IntPtr] $hwnd) {
 
 # Captures until two reads a second apart agree on non-blank content (the app settled)
 # or $seconds pass.
-function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15) {
+function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15, $render = $null, $since = $null, $renderReady = $null) {
   $deadline = (Get-Date).AddSeconds($seconds)
+  if ($null -ne $renderReady) { $renderReady.Value = $false }
   $last = [GesherWin32]::Capture($hwnd)
   do {
     Start-Sleep 1
     $px = [GesherWin32]::Capture($hwnd)
     if ($null -ne $px -and (PixelDiff $last $px) -eq 0) {
       $an = Analyze $px
-      if ($an.Other -ge ($an.Width * $an.Height * 0.005)) { return $px }
+      if ($an.Other -ge ($an.Width * $an.Height * 0.005) -and (RenderReadiness $render $px $since).Ready) {
+        if ($null -ne $renderReady) { $renderReady.Value = $true }
+        return $px
+      }
     }
     $last = $px
   } while ((Get-Date) -lt $deadline)
@@ -223,6 +319,29 @@ function KillTree($p) {
   if ($null -ne $p -and -not $p.HasExited) { try { $p.Kill($true) } catch {} }
 }
 
+function DismissStartupDialog([string] $log, [string] $pkg, $settings) {
+  $text = ReadText $log
+  $title = $settings.title
+  $m = [regex]::Match($text,
+    ('(?m)^gesher-app: window "{0}" \d+x\d+: first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)' -f
+      [regex]::Escape($title)))
+  if (-not $m.Success) { return $false }
+  $dialog = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16)
+  $ownerId = AppPid $text $pkg
+  if (-not $ownerId -or [GesherWin32]::ProcessId($dialog) -ne $ownerId -or
+      [GesherWin32]::Title($dialog) -cne $title) { throw "Cannot identify '$title' as the launched app's dialog" }
+  SavePng ([GesherWin32]::Capture($dialog)) ([IO.Path]::ChangeExtension($log, '.startup-dialog.png'))
+  $size = [GesherWin32]::ClientSize($dialog)
+  if ($size[0] -ne $settings.size[0] -or $size[1] -ne $settings.size[1]) {
+    throw "Unexpected geometry for '$title': $($size -join 'x')"
+  }
+  [GesherWin32]::Click($dialog, [int]$settings.cancel[0], [int]$settings.cancel[1])
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  while ([GesherWin32]::IsWindow($dialog) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+  if ([GesherWin32]::IsWindow($dialog)) { throw "'$title' did not close" }
+  return $true
+}
+
 # Closes the window, waits for the launcher (and the app's process) to end. Returns problems.
 function CloseAndWait([IntPtr] $hwnd, $p, [string] $log, [string] $pkg) {
   $problems = @()
@@ -266,6 +385,24 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     return $res
   }
   Start-Sleep 3
+  $actions = $a.actions
+  if (-not $NoInput -and $a.startupDialog) {
+    try {
+      if (DismissStartupDialog $log $pkg $a.startupDialog) {
+        $hwnd = WaitFirstFrame $p $log 15
+        if ($hwnd -eq [IntPtr]::Zero) { throw 'No app window remained after closing the startup dialog' }
+        $hwnd = FrontWindow $log $hwnd
+        $focus = $a.startupDialog.focus
+        [GesherWin32]::Click($hwnd, [int]$focus[0], [int]$focus[1])
+        $actions = $a.startupDialog.actions
+        $res.Info += "closed '$($a.startupDialog.title)' and focused the editor"
+      }
+    } catch {
+      $res.Problems += $_.Exception.Message
+      $res.Problems += @(CloseAndWait $hwnd $p $log $pkg)
+      return $res
+    }
+  }
   $hwnd = FrontWindow $log $hwnd
   $px = CaptureSettled $hwnd
   if ($null -eq $px) { $res.Problems += 'PrintWindow failed'; KillTree $p; return $res }
@@ -280,16 +417,31 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
   if ($a.surfaceTrace -and $an.Other -lt $area * 0.005) {
     $res.Info += @(BlankFrameDiagnostics $hwnd $px $pkg $tag)
   }
-  if (-not $NoInput -and $a.actions) {
+  if (-not $NoInput -and $actions) {
     $before = $px
     $i = 0
-    foreach ($act in $a.actions) {
+    foreach ($act in $actions) {
       $i++
+      $since = @{ Log = $log; Package = $pkg; Mark = (LogMark $log $pkg); Before = $before }
       if ($act.click) { [GesherWin32]::Click($hwnd, [int]$act.click[0], [int]$act.click[1]); $what = "click at $($act.click[0]),$($act.click[1])" }
       elseif ($act.keys) { [GesherWin32]::TypeKeys($hwnd, [string]$act.keys); $what = "keys '$($act.keys)'" }
       Start-Sleep 2
       $hwnd = FrontWindow $log $hwnd
-      $after = CaptureSettled $hwnd 20
+      # The existing 20-second capture deadline also owns readiness: no extra
+      # wait after it, and no reset between the completion and pixel predicates.
+      $renderReady = $false
+      $after = CaptureSettled $hwnd 20 $act.render $since ([ref]$renderReady)
+      if ($null -ne $act.render -and -not $renderReady) {
+        $detail = (RenderReadiness $act.render $after $since).Problems -join '; '
+        if (-not $detail) { $detail = 'the completed content did not stabilize' }
+        $res.Problems += "rendered content did not become ready within the existing 20-second capture budget: $detail"
+        # Failure-only diagnostic: the job log carries the captures too, for when
+        # the uploaded results cannot be downloaded.
+        foreach ($shot in @(@('before', $before), @('after', $after))) {
+          $b64 = PngBase64 $shot[1]
+          if ($b64) { $res.Info += "render diagnostic $what, capture $($shot[0]) the action (PNG, base64): $b64" }
+        }
+      }
       $changed = PixelDiff $before $after
       SavePng $after (Join-Path $OutDir "$pkg.$tag.after-$i.png")
       $res.Info += "$what changed $changed pixels"
@@ -300,7 +452,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
   # "waitLog" (apps.json): a line the app's log must show after the actions, e.g. that
   # a background step they started finished; the window is saved again then.
   if ($a.waitLog -and $tag -eq 'launch') {
-    $appLogFile = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
+    $appLogFile = AppLogPath $pkg
     $deadline = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $deadline -and (ReadText $appLogFile) -notmatch $a.waitLog) { Start-Sleep 1 }
     $m = [regex]::Match((ReadText $appLogFile), $a.waitLog)
@@ -439,7 +591,7 @@ foreach ($a in $manifestData.apps) {
   }
   foreach ($l in $info) { Report "INFO  e2e: ${pkg}: $l" }
   $log = ReadText (Join-Path $OutDir "$pkg.launch.log")
-  $appLog = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
+  $appLog = AppLogPath $pkg
   if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $OutDir "$pkg.app.log") -Force }
   # "expectLog": lines the launch's or the app's log must contain (e.g. that its WebView
   # got a WebView2, docs/webview.md).

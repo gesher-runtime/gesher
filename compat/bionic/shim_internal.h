@@ -149,8 +149,7 @@ void RegisterSyscall(SymbolTable& table);  // syscall_bionic.cc
 // handler for `syscall` instructions in loaded code (ADR 0084), and
 // syscall(2)'s for numbers it has no special case for. syscall_bionic.cc.
 int64_t RawSyscallX64(int64_t nr, const int64_t args[6]);
-// Last: fork/exec/spawn/wait, and the vfork-style child's view of fds, the
-// environment and the working directory over the entries already there.
+// Last: exec/spawn/wait and unsupported fork/vfork entry points.
 void RegisterProcess(SymbolTable& table);  // process_bionic.cc
 
 // kill() of another pid: the shim's own children (also those that exited
@@ -165,12 +164,13 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
 
 // Sleeps `ms`, or less if a signal this thread does not block arrives (its
 // handler has run then); returns true if interrupted, with what was left.
-bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms);
+// A nonzero error reports unavailable delivery/registration, never completion.
+bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
 
 // As above, observing an interruption before delivering its handlers. The
 // observer is an internal host callback, never loaded application code; it
 // runs without the signal-state lock and must only record the wake instant.
-bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context);
+bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context, int* error);
 // Absolute Android BOOTTIME deadline. Resume notification wakes the signal
 // transport to recheck it; returns 0, EINTR, or a registration error number.
 int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context);
@@ -183,6 +183,9 @@ void DeliverPendingSignals();
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();
+// Retains a known live kernel thread object for the signal queue. The caller
+// closes the returned handle; an arbitrary or retired pthread id is ESRCH.
+int PthreadSignalTarget(uint64_t thread, void** handle);
 int PthreadSetName(uint64_t thread, const char* name);
 int PthreadGetName(uint64_t thread, char* name, size_t size);
 int PthreadCpuClock(uint64_t thread, int* clock_id);

@@ -47,6 +47,7 @@ final class PermissionCatalog {
                         info.name = name;
                         info.packageName = "android";
                         info.protectionLevel = xml.getAttributeIntValue(ANDROID, "protectionLevel", 0);
+                        info.flags = xml.getAttributeIntValue(ANDROID, "permissionFlags", 0);
                         info.group = xml.getAttributeValue(ANDROID, "permissionGroup");
                         info.labelRes = xml.getAttributeResourceValue(ANDROID, "label", 0);
                         info.descriptionRes = xml.getAttributeResourceValue(ANDROID, "description", 0);
@@ -80,26 +81,8 @@ final class PermissionCatalog {
         if (framework != null) return new PermissionInfo(framework);
         // Framework permission names cannot be replaced by an APK declaration.
         if (name == null || name.startsWith("android.permission.")) return null;
-        PermissionInfo found = null;
-        ApkPackage owner = null;
-        for (ApkPackage pkg : mPm.packages()) {
-            for (ParsedPermission parsed : pkg.parsed.getPermissions()) {
-                if (!name.equals(parsed.getName())) continue;
-                // A package cannot acquire another app's signature permission by
-                // declaring the same permission name first. Conflicts fail closed.
-                if (owner != null && !pkg.signaturesMatch(owner)) return null;
-                PermissionInfo info = new PermissionInfo(parsed.getBackgroundPermission());
-                info.name = parsed.getName();
-                info.packageName = pkg.packageName;
-                info.protectionLevel = parsed.getProtectionLevel();
-                info.group = parsed.getGroup();
-                info.labelRes = parsed.getLabelRes();
-                info.descriptionRes = parsed.getDescriptionRes();
-                found = info;
-                owner = pkg;
-            }
-        }
-        return found;
+        PermissionInfo declared = declarations().permissions.get(name);
+        return declared == null ? null : new PermissionInfo(declared);
     }
 
     boolean isProtectedBroadcast(String name) {
@@ -117,13 +100,65 @@ final class PermissionCatalog {
     Map<String, PermissionInfo> permissions() {
         load();
         Map<String, PermissionInfo> result = new LinkedHashMap<>(mFramework);
-        for (ApkPackage pkg : mPm.packages()) {
-            for (ParsedPermission permission : pkg.parsed.getPermissions()) {
-                PermissionInfo info = get(permission.getName());
-                if (info != null) result.putIfAbsent(info.name, info);
-            }
+        for (PermissionInfo info : declarations().permissions.values()) {
+            result.put(info.name, new PermissionInfo(info));
         }
         return result;
+    }
+
+    /** Application declarations of one immutable published package map. */
+    private record Declarations(Map<String, ApkPackage> packages, Map<String, PermissionInfo> permissions) { }
+    // Keyed by PM's published map object, like PermissionPolicy's UID index: a
+    // replacement, removal or rollback publishes another map. The entries are
+    // private and only copies leave this class.
+    private volatile Declarations mDeclarations;
+
+    /** Do not retain a removed generation's declarations until the next query. */
+    void invalidateDeclarations() { mDeclarations = null; }
+
+    private Declarations declarations() {
+        Map<String, ApkPackage> packages = mPm.packageSnapshot();
+        Declarations current = mDeclarations;
+        if (current != null && current.packages == packages) return current;
+        Map<String, PermissionInfo> result = new LinkedHashMap<>();
+        Map<String, ApkPackage> owners = new java.util.HashMap<>();
+        java.util.Set<String> conflicts = new java.util.HashSet<>();
+        for (ApkPackage pkg : packages.values()) {
+            for (ParsedPermission permission : pkg.parsed.getPermissions()) {
+                String name = permission.getName();
+                // Neither a platform definition nor its reserved namespace may be
+                // replaced by an application's declaration.
+                if (name == null || mFramework.containsKey(name)
+                        || name.startsWith("android.permission.") || conflicts.contains(name)) continue;
+                ApkPackage owner = owners.get(name);
+                // A package cannot acquire another app's signature permission by
+                // declaring the same permission name first. Conflicts fail closed.
+                if (owner != null && !pkg.signaturesMatch(owner)) {
+                    result.remove(name);
+                    conflicts.add(name);
+                    continue;
+                }
+                owners.put(name, pkg);
+                // Same-signer duplicates take the last declaration, with the first
+                // declaration's position in the catalogue unchanged.
+                result.put(name, declaredPermission(pkg, permission));
+            }
+        }
+        current = new Declarations(packages, result);
+        mDeclarations = current;
+        return current;
+    }
+
+    private static PermissionInfo declaredPermission(ApkPackage pkg, ParsedPermission parsed) {
+        PermissionInfo info = new PermissionInfo(parsed.getBackgroundPermission());
+        info.name = parsed.getName();
+        info.packageName = pkg.packageName;
+        info.protectionLevel = parsed.getProtectionLevel();
+        info.flags = parsed.getFlags();
+        info.group = parsed.getGroup();
+        info.labelRes = parsed.getLabelRes();
+        info.descriptionRes = parsed.getDescriptionRes();
+        return info;
     }
 
     Map<String, PermissionGroupInfo> groups() { load(); return new LinkedHashMap<>(mGroups); }

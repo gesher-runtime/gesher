@@ -211,6 +211,7 @@ constexpr size_t kStubChunk = 0x10000;
 struct StubArena {
   uint8_t* base = nullptr;
   size_t used = 0;
+  bool writable_executable = false;
 };
 
 // Allocates kStubChunk bytes as close as possible to [lo, hi), within +-2 GiB
@@ -606,7 +607,7 @@ uintptr_t PageOf(uintptr_t a) { return a & ~(kPage - 1); }
 std::atomic<RawSyscallHandler> g_raw_syscall{nullptr};
 
 struct LazyObject {
-  const char* name = nullptr;  // lives as long as the process
+  const char* name = nullptr;  // owned with this object's registrations
   uintptr_t bias = 0;          // load bias
   uintptr_t lo = 0, hi = 0;    // the reservation
   std::vector<Region> fdes;    // code ranges from .eh_frame_hdr (vaddrs)
@@ -614,7 +615,7 @@ struct LazyObject {
   bool anonymous = false;      // code a raw system call mapped outside every object
   uint64_t eh_frame_hdr = 0;   // vaddr of PT_GNU_EH_FRAME, if any
   bool eh_frame_hdr_read = false;  // read from memory after unpacking
-  std::vector<StubArena> arenas;         // read-write-execute stubs of deferred rewrites
+  std::vector<StubArena> arenas;         // all load-time and deferred rewrite stubs
   std::map<uintptr_t, uint8_t> patched;  // rewritten instruction -> its length
   std::map<uintptr_t, int> done;         // page rewritten on execution -> its protection
 };
@@ -647,6 +648,7 @@ std::map<uintptr_t, uint8_t>& SyscallSites() {
 // bytes around it (as rewritten, within its page); a ud2 elsewhere with the
 // same bytes around it is a copy of that system call. Under g_lock.
 struct SyscallFingerprint {
+  const LazyObject* owner;
   uint8_t length;           // the instruction's
   uint8_t before, after;    // bytes kept on each side of it
   uint8_t bytes[15 + 32];
@@ -734,6 +736,11 @@ class Rewriter {
         executable_tls_size_(executable_tls_size), span_lo_(span_lo), span_hi_(span_hi),
         restore_(restore), first_new_arena_(object->arenas.size()) {}
 
+  // At load time: the object's executable segments ([start, end) addresses),
+  // each made writable as a whole on its first patch (MakeWritable).
+  void SetLoadTimeCode(std::vector<std::pair<uintptr_t, uintptr_t>> code) {
+    load_time_code_ = std::move(code);
+  }
   // Rewrites the instruction `in` at `site` if it needs it. False only on a
   // hard failure (*error set).
   bool Rewrite(uint8_t* site, const X86Insn& in);
@@ -760,11 +767,14 @@ class Rewriter {
   uintptr_t span_lo_, span_hi_;
   std::map<uintptr_t, int>* restore_;  // deferred: pages to re-protect afterwards
   int32_t slot_ = 0;                   // TEB offset of the thread-pointer slot
-  std::vector<StubArena> arenas_;      // load time: made read-execute in Finish
   size_t first_new_arena_;             // deferred: the object's arenas from here are new
   std::vector<TrapSite> traps_;
   std::vector<std::pair<uintptr_t, uint8_t>> syscalls_;
   std::set<uintptr_t> writable_pages_;
+  // Load time: executable segments, page-rounded, and what MakeWritable did.
+  enum SegmentState : uint8_t { kSegmentUntouched, kSegmentWritable, kSegmentByPage };
+  std::vector<std::pair<uintptr_t, uintptr_t>> load_time_code_;
+  std::vector<SegmentState> load_time_state_;
 };
 
 bool Rewriter::NeedSlot() {
@@ -777,17 +787,21 @@ bool Rewriter::NeedSlot() {
 }
 
 uint8_t* Rewriter::AllocStub(size_t n) {
-  std::vector<StubArena>& arenas = deferred_ ? o_->arenas : arenas_;
-  if (arenas.empty() || arenas.back().used + n > kStubChunk) {
+  std::vector<StubArena>& arenas = o_->arenas;
+  if (arenas.empty() || arenas.back().used + n > kStubChunk ||
+      (deferred_ && !arenas.back().writable_executable)) {
     uint8_t* chunk = AllocNear(span_lo_, span_hi_);
     if (chunk == nullptr) return nullptr;
     if (deferred_) {
       // Stubs of deferred rewrites are added while other threads run earlier
       // ones: their memory stays writable and executable.
       DWORD old;
-      if (!VirtualProtect(chunk, kStubChunk, PAGE_EXECUTE_READWRITE, &old)) return nullptr;
+      if (!VirtualProtect(chunk, kStubChunk, PAGE_EXECUTE_READWRITE, &old)) {
+        VirtualFree(chunk, 0, MEM_RELEASE);
+        return nullptr;
+      }
     }
-    arenas.push_back({chunk, 0});
+    arenas.push_back({chunk, 0, deferred_});
   }
   uint8_t* p = arenas.back().base + arenas.back().used;
   arenas.back().used += n;
@@ -809,15 +823,34 @@ void Rewriter::AddTrap(uint8_t* site, const X86Insn& in, uintptr_t stub, const c
 }
 
 // At load time the segments are file-backed views mapped read-execute
-// (elf_loader.cc, MapSegments): only the pages that get patched become
-// writable (copy-on-write, so they alone turn private); the loader's final
-// mprotect makes them read-execute again. Deferred, a page is pending (not
-// executable) or was rewritten before (executable, maybe running on another
-// thread): it is made writable, keeping that, and its protection is restored
-// afterwards (restore_).
+// (elf_loader.cc, MapSegments). The executable segment holding a patch is made
+// writable as a whole, once: copy-on-write, so only the pages actually patched
+// turn private, and the loader's final mprotect (ProtectSegments) makes the
+// segment read-execute again. Not page by page: each mprotect queries the
+// mapping (VirtualQuery), whose cost grows with the unchanged run of pages
+// after the address, so a front-to-back walk was quadratic in the segment's
+// size (libxul.so: 18k patched pages of a 150 MB segment took 4-15 s).
+// Deferred, a page is pending (not executable) or was rewritten before
+// (executable, maybe running on another thread): it is made writable, keeping
+// that, and its protection is restored afterwards (restore_).
 bool Rewriter::MakeWritable(uint8_t* site, size_t n) {
   const uintptr_t first = reinterpret_cast<uintptr_t>(site) & ~(kPage - 1);
   const uintptr_t last = (reinterpret_cast<uintptr_t>(site) + n - 1) & ~(kPage - 1);
+  if (!deferred_) {
+    load_time_state_.resize(load_time_code_.size(), kSegmentUntouched);
+    for (size_t i = 0; i < load_time_code_.size(); ++i) {
+      const auto& [lo, hi] = load_time_code_[i];
+      if (first < lo || last >= hi) continue;
+      if (load_time_state_[i] == kSegmentUntouched) {
+        // Should the segment refuse as a whole, its pages are tried one by one.
+        load_time_state_[i] =
+            mprotect(reinterpret_cast<void*>(lo), hi - lo, PROT_READ | PROT_WRITE | PROT_EXEC) == 0
+                ? kSegmentWritable : kSegmentByPage;
+      }
+      if (load_time_state_[i] == kSegmentWritable) return true;
+      break;
+    }
+  }
   for (uintptr_t page = first; page <= last; page += kPage) {
     if (writable_pages_.count(page) != 0) continue;
     int prot = PROT_READ | PROT_WRITE | PROT_EXEC;
@@ -965,7 +998,7 @@ bool Rewriter::Rewrite(uint8_t* site, const X86Insn& in) {
 bool Rewriter::Finish(const std::vector<CodeRange>& code_ranges) {
   if (!deferred_) {
     // Make the stubs executable.
-    for (const StubArena& a : arenas_) {
+    for (const StubArena& a : o_->arenas) {
       DWORD old;
       if (!VirtualProtect(a.base, kStubChunk, PAGE_EXECUTE_READ, &old)) {
         if (error_) *error_ = std::string(o_->name) + ": cannot make %fs stubs executable";
@@ -995,6 +1028,7 @@ bool Rewriter::Finish(const std::vector<CodeRange>& code_ranges) {
     SyscallSites()[site.first] = site.second;
     // Its bytes as they are now that every rewrite of this pass is done.
     SyscallFingerprint f{};
+    f.owner = o_;
     f.length = site.second;
     const uintptr_t page = PageOf(site.first);
     const uintptr_t end = site.first + site.second;
@@ -1008,8 +1042,8 @@ bool Rewriter::Finish(const std::vector<CodeRange>& code_ranges) {
     }
   }
   for (const CodeRange& r : code_ranges) Ranges().push_back(r);
-  const std::vector<StubArena>& arenas = deferred_ ? o_->arenas : arenas_;
-  for (size_t i = deferred_ ? first_new_arena_ : 0; i < arenas.size(); ++i) {
+  const std::vector<StubArena>& arenas = o_->arenas;
+  for (size_t i = first_new_arena_; i < arenas.size(); ++i) {
     Ranges().push_back({reinterpret_cast<uintptr_t>(arenas[i].base),
                         reinterpret_cast<uintptr_t>(arenas[i].base) + kStubChunk, o_->name,
                         o_->bias, true});
@@ -1205,10 +1239,43 @@ bool HandleSyscallTrap(EXCEPTION_POINTERS* info) {
 
 }  // namespace
 
+FsRewriteRegistration::~FsRewriteRegistration() {
+  auto* object = static_cast<LazyObject*>(object_);
+  // The loader has not exposed this image or run its constructors. Its owner
+  // may have executed an IFUNC, but that call has returned before rollback.
+  // Use the same lock order as deferred rewriting and withdraw every pointer
+  // before releasing names, stubs or the caller's ELF mapping.
+  AcquireSRWLockExclusive(&g_lazy_lock);
+  auto& objects = Objects();
+  objects.erase(std::remove(objects.begin(), objects.end(), object), objects.end());
+  for (auto it = Pending().begin(); it != Pending().end();) {
+    if (it->second.object == object) it = Pending().erase(it);
+    else ++it;
+  }
+  AcquireSRWLockExclusive(&g_lock);
+  auto& traps = Traps();
+  traps.erase(std::remove_if(traps.begin(), traps.end(),
+      [&](const TrapSite& t) { return t.lib == object->name; }), traps.end());
+  auto& ranges = Ranges();
+  ranges.erase(std::remove_if(ranges.begin(), ranges.end(),
+      [&](const CodeRange& r) { return r.lib == object->name; }), ranges.end());
+  auto& sites = SyscallSites();
+  sites.erase(sites.lower_bound(object->lo), sites.lower_bound(object->hi));
+  auto& fingerprints = Fingerprints();
+  fingerprints.erase(std::remove_if(fingerprints.begin(), fingerprints.end(),
+      [&](const SyscallFingerprint& f) { return f.owner == object; }), fingerprints.end());
+  ReleaseSRWLockExclusive(&g_lock);
+  ReleaseSRWLockExclusive(&g_lazy_lock);
+  for (const StubArena& arena : object->arenas) VirtualFree(arena.base, 0, MEM_RELEASE);
+  std::free(const_cast<char*>(object->name));
+  delete object;
+}
+
 bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
                        uint8_t* load_bias, uint8_t* map_base, size_t map_size,
                        FsRewriteStats* stats, std::string* error,
-                       size_t executable_tls_size) {
+                       size_t executable_tls_size,
+                       std::unique_ptr<FsRewriteRegistration>* registration) {
   *stats = FsRewriteStats{};
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(file);
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(file + ehdr->e_phoff);
@@ -1241,7 +1308,12 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   // The object, for code made executable after the load. Registered when the
   // load-time rewrite is done.
   auto* object = new LazyObject();
+  auto owner = std::make_unique<FsRewriteRegistration>(object);
   object->name = _strdup(name);
+  if (object->name == nullptr) {
+    if (error) *error = "cannot allocate rewrite registration name";
+    return false;
+  }
   object->bias = bias;
   object->lo = reinterpret_cast<uintptr_t>(map_base);
   object->hi = object->lo + map_size;
@@ -1250,6 +1322,8 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
     AcquireSRWLockExclusive(&g_lazy_lock);
     Objects().push_back(object);
     ReleaseSRWLockExclusive(&g_lazy_lock);
+    if (registration != nullptr) *registration = std::move(owner);
+    else owner.release();  // callers without an owner retain process lifetime
   };
   if (exec.empty()) {
     register_object();
@@ -1391,6 +1465,11 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   }
 
   Rewriter rewriter(object, false, stats, error, executable_tls_size, span_lo, span_hi, nullptr);
+  std::vector<std::pair<uintptr_t, uintptr_t>> code_segments;
+  for (const Region& e : exec) {
+    code_segments.emplace_back(PageOf(bias + e.start), PageOf(bias + e.end + kPage - 1));
+  }
+  rewriter.SetLoadTimeCode(std::move(code_segments));
   for (const Region& r : merged) {
     uint8_t* p = load_bias + r.start;
     uint8_t* end = load_bias + r.end;

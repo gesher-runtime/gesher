@@ -53,7 +53,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void activityPaused(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityPaused(r);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityPaused(r);
     }
 
     @Override
@@ -66,7 +66,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void activityDestroyed(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityDestroyed(r);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityDestroyed(r);
     }
 
     /** After an ActivityRelaunchItem (locale track): the new instance reports its states. */
@@ -141,14 +141,16 @@ public final class ActivityClientController extends IActivityClientController.De
 
     /**
      * Activity.onBackPressed with no fragment to pop (onBackInvoked; so OnBackPressedDispatcher's
-     * fallback, and a dialog's "discard changes" that goes back): Android finishes the
-     * activity (callback.requestFinish) unless it is the root of a task launched from home,
-     * whose task moves to the back. A root stays here: closing its window finishes it.
+     * fallback, and a dialog's "discard changes" that goes back): as Android, the activity
+     * finishes (callback.requestFinish) unless it is the last activity of a task the home
+     * screen launched with its launcher intent, whose task moves to the back (minimized).
+     * A root started otherwise (a mail compose screen opened from a link or another task)
+     * finishes, and its task ends.
      */
     @Override
     public void onBackPressed(IBinder token, IRequestFinishCallback callback) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null && mAtm.isTaskRoot(r)) return;
+        if (r != null && mAtm.moveTaskToBackOnBack(r)) return;
         try {
             callback.requestFinish();
         } catch (RemoteException e) {

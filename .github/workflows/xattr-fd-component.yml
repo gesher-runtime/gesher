@@ -1,0 +1,97 @@
+name: xattr fd component
+on:
+  workflow_dispatch:
+  push:
+    branches: ['fix/56-xattr-access-bionic-contracts-palmoni5']
+  pull_request:
+    paths:
+      - 'compat/posix/**'
+      - 'compat/bionic/extra_sys_bionic.cc'
+      - 'compat/bionic/syscall_bionic.cc'
+      - 'compat/arm64/dll/guest_libc.cc'
+      - 'tests/native/xattr_fd_*'
+      - 'tests/native/filesystem_contract_guest.c'
+      - 'tests/xattr/**'
+      - 'tests/windows/run-xattr-fd-component.ps1'
+      - '.github/workflows/xattr-fd-component.yml'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: xattr-fd-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify compiler supplier and fetch two pinned AOSP inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .work-xattr/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" -o .work-xattr/compiler.tar.xz
+          printf '%s  .work-xattr/compiler.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
+          tar -xJf .work-xattr/compiler.tar.xz -C .work-xattr/toolchain
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build
+          python3 tests/xattr/component.py fetch .work-xattr/aosp
+      - name: Run Linux raw-provider reference and freshly build both Windows architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/native/xattr_fd_contract_test.c -o .work-xattr/linux-reference
+          .work-xattr/linux-reference | tee .work-xattr/linux-reference.log
+          c++ -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+            tests/xattr/security_policy_test.cc -o .work-xattr/security-policy-test
+          .work-xattr/security-policy-test | tee .work-xattr/security-policy.log
+          compiler="$PWD/.work-xattr/toolchain/$LLVM_MINGW_NAME/bin"
+          for arch in x86_64 aarch64; do
+            cmake -S tests/xattr -B ".work-xattr/build-$arch" -G Ninja \
+              -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DCMAKE_C_COMPILER="$compiler/$arch-w64-mingw32-clang" \
+              -DCMAKE_CXX_COMPILER="$compiler/$arch-w64-mingw32-clang++" \
+              -DAOSP_DIR="$PWD/.work-xattr/aosp"
+            cmake --build ".work-xattr/build-$arch" --parallel 4
+          done
+          python3 tests/xattr/component.py seal .work-xattr \
+            --compiler-archive .work-xattr/compiler.tar.xz --compiler "$compiler/clang"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xattr-fd-component
+          path: .work-xattr/payload/
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact producer, source, attempt, archive and payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/artifact_receipt.py --name xattr-fd-component --producer compile --destination xattr-payload
+          if ($LASTEXITCODE -ne 0) { throw 'Current-run artifact receipt failed' }
+          python tests/xattr/component.py verify xattr-payload
+          if ($LASTEXITCODE -ne 0) { throw 'Xattr source and payload verification failed' }
+      - name: Execute real file DACL, impersonation, delete-pending and provider contracts
+        shell: pwsh
+        run: ./tests/windows/run-xattr-fd-component.ps1 -Directory xattr-payload
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xattr-fd-results-${{ matrix.os }}
+          path: xattr-windows-results.txt
+          if-no-files-found: warn

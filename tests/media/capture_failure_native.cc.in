@@ -24,6 +24,14 @@ std::atomic<int> pulls{0};
 std::atomic<bool> block_pull{false}, pull_entered{false};
 std::mutex mutex;
 std::condition_variable changed;
+// A blocked backend call checks its gate under `mutex` and then sleeps on
+// `changed`. Opening the gate under the same mutex keeps that check and the
+// sleep atomic with respect to the notification: a store and notify made
+// without it can land between them, and the backend then sleeps forever.
+void OpenGate(std::atomic<bool>& gate) {
+  { std::lock_guard<std::mutex> lock(mutex); gate = false; }
+  changed.notify_all();
+}
 }
 namespace gesher::media {
 class ControlledSource : public CaptureSource {
@@ -80,12 +88,15 @@ void Check(bool ok, const char* message) {
   ++checks;
   if (!ok) { std::fprintf(stderr, "FAIL capture failures: %s\n", message); std::exit(1); }
 }
+// A wall-clock bound: a 1 ms sleep lasts a whole timer tick (15.6 ms by
+// default on Windows), so a count of sleeps is no bound on the wait.
 template<class Predicate> bool Await(Predicate test) {
-  for (int n = 0; n < 1000; ++n) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (;;) {
     if (test()) return true;
+    if (std::chrono::steady_clock::now() >= deadline) return false;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  return false;
 }
 std::shared_ptr<CaptureStream> Open() {
   CaptureParams params; params.format = PcmFormat::kFloat; params.capacity_frames = 64;
@@ -123,7 +134,7 @@ void StartRace(bool release) {
     std::lock_guard<std::mutex> lock(stream->mu_);
     return stream->generation_ > 1;
   }), "retirement advances stream generation before backend admission");
-  fixture::block_start = false; fixture::changed.notify_all();
+  fixture::OpenGate(fixture::block_start);
   starter.join(); retirement.join();
   Check(result == kInvalidOperation && !stream->started(), "retired start cannot resurrect stream");
   if (release) Check(stream->Start() == kInvalidOperation, "release remains terminal");
@@ -139,7 +150,7 @@ int main(int argc, char** argv) {
     auto* raw = stream.get();
     std::weak_ptr<CaptureStream> weak = stream;
     std::unique_lock<std::mutex> stream_lock(raw->mu_);
-    fixture::pull_ok = false; fixture::block_pull = false; fixture::changed.notify_all();
+    fixture::pull_ok = false; fixture::OpenGate(fixture::block_pull);
     Check(Await([&] { return stream.use_count() > 1; }), "worker weak-lock snapshot owns stream while waiting on stream mutex");
     stream.reset(); stream_lock.unlock();
     std::atomic<bool> progressed{false};
@@ -165,7 +176,7 @@ int main(int argc, char** argv) {
       Check(second->stats().timestamp_ns >= restart_epoch.load(), "restarted peer cannot receive a pre-restart capture batch");
       delivered = true;
     }});
-    fixture::block_pull = false; fixture::changed.notify_all();
+    fixture::OpenGate(fixture::block_pull);
     Check(Await([&] { return delivered.load(); }), "restarted peer receives a fresh later source batch");
     first->Stop(); second->Stop();
   } else if (!std::strcmp(test, "missing")) {

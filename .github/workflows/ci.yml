@@ -1,8 +1,8 @@
 name: ci
 
 on:
-  # Temporarily pause CI on main pushes; add branches: [main] under push to resume.
   push:
+    branches: [main]
     # Canonical tag pushes build and test a release. The protected default
     # branch publisher is separate from this read-only workflow.
     tags: ['v[0-9]*.[0-9]*.[0-9]*']
@@ -16,9 +16,13 @@ permissions:
 # One current run per PR or branch. The root-specific prefix cannot collide
 # with reusable workflows, which inherit the caller's github.workflow value.
 # A release tag push has a separate group from manual runs on the same ref.
+# Runs on main are queued, not cancelled: only main saves the caches every
+# branch restores, and a cancelled main run leaves them on an older commit.
+# GitHub keeps at most one pending run per group, so a burst of merges still
+# collapses to the newest commit.
 concurrency:
   group: ci-run-${{ github.event_name == 'push' && github.ref_type == 'tag' && 'release-' || '' }}${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
+  cancel-in-progress: ${{ github.event_name != 'push' && github.ref != 'refs/heads/main' }}
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -59,6 +63,8 @@ jobs:
             .github/scripts
             .github/workflows
             .github/actions/runner-route
+            .github/actions/local-build-cache
+            .github/actions/setup-build
             tools/ci
       - uses: actions/setup-node@v4
         with:
@@ -72,19 +78,99 @@ jobs:
           python3 -m pip install PyYAML==6.0.3
           python3 .github/scripts/test_automerge_workflows.py
           python3 tools/ci/test_release_workflows.py
-  api37-report-tests:
+          python3 -m unittest discover -s tools/ci -p test_cache_policy.py
+          python3 -m unittest discover -s tools/ci -p test_prune_caches.py
+  # Short Windows host contracts share one runner per OS: separate jobs each
+  # paid for a runner, checkout and queue slot to run a minute of checks.
+  # Every check step runs even after an earlier one fails, so one failure
+  # does not hide another.
+  windows-host-contracts:
     needs: [source-identity]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            profile: linux
-          - os: windows-2022
-            profile: windows
-          - os: windows-2025
-            profile: windows
+        os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.13'
+      - name: Durable settings journal, replacement and crash recovery contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
+      - name: Build actual app identity restart implementation
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
+      - name: Check UID re-entry, inherited I/O, exact exit and parent-death cleanup
+        shell: pwsh
+        run: |
+          & .\app-identity-restart.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native application identity restart gate failed' }
+      - name: Build actual private clipboard publication and competing-writer regression
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" tests\clipboard\publication_windows_test.cc compat\windows\clipboard_bridge.cc /Fe:clipboard-publication.exe ole32.lib uuid.lib user32.lib gdi32.lib windowscodecs.lib
+      - name: Verify real clipboard identity, complete formats and native retirement
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/clipboard/Publication.ps1
+      - name: Exact native reader ownership and handle reuse controls
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/test-process-reader-handles.ps1
+      - name: Storage scan coalescing, bounded admission and real filesystem contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: Release updater and control panel contracts on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/PreferredLanguagesChecks.ps1
+          tests/windows/shell/MicrogDefaultsChecks.ps1
+          tests/windows/shell/ControlPanelRefreshChecks.ps1
+          tests/windows/shell/ControlPanelIconCacheChecks.ps1
+          tests/windows/shell/ControlPanelVirtualizationChecks.ps1
+          tests/windows/shell/ControlPanelActionChecks.ps1
+          tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/UpdateChecks.ps1
+          tests/windows/shell/UpdateTransportChecks.ps1
+          tests/windows/shell/ControlPanelUpdateChecks.ps1
+          tests/windows/shell/RuntimeFileChecks.ps1
+          tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
+      - name: Production modal dialogs on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        shell: powershell
+        run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: API 37 report gate failure and selection contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # Exercise the host's ordinary file encoding; report writers choose UTF-8.
+          PYTHONUTF8: '0'
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -s tools/ci -p test_run_api37_report_tests.py -v
+      - name: API 37 SDK, NDK, ELF and source report suites
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONUTF8: '0'
+          PYTHONIOENCODING: utf-8
+        run: python tools/ci/run_api37_report_tests.py --profile windows
+  api37-report-tests:
+    needs: [source-identity]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       # Exercise the host's ordinary file encoding; report writers choose UTF-8.
@@ -106,73 +192,39 @@ jobs:
         run: python -m unittest discover -s tools/ci -p test_run_api37_report_tests.py -v
       - name: SDK, NDK, ELF and source report suites
         shell: bash
-        run: python tools/ci/run_api37_report_tests.py --profile ${{ matrix.profile }}
-  update-contracts:
-    needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            tools/package
-            tests/windows/shell
-      - name: Release updater and control panel contracts on Windows PowerShell 5.1
-        shell: powershell
-        run: |
-          tests/windows/shell/UiLocalizationChecks.ps1
-          tests/windows/shell/PreferredLanguagesChecks.ps1
-          tests/windows/shell/MicrogDefaultsChecks.ps1
-          tests/windows/shell/ControlPanelRefreshChecks.ps1
-          tests/windows/shell/ControlPanelIconCacheChecks.ps1
-          tests/windows/shell/ControlPanelVirtualizationChecks.ps1
-          tests/windows/shell/ControlPanelActionChecks.ps1
-          tests/windows/shell/ControlPanelRequestChecks.ps1
-          tests/windows/shell/UpdateChecks.ps1
-          tests/windows/shell/UpdateTransportChecks.ps1
-          tests/windows/shell/ControlPanelUpdateChecks.ps1
-          tests/windows/shell/RuntimeFileChecks.ps1
-          tests/windows/shell/InstallErrorChecks.ps1
-      - name: Production modal dialogs on Windows PowerShell 5.1
-        timeout-minutes: 2
-        shell: powershell
-        run: tests/windows/shell/Issue32And33Contracts.ps1
-  reader-ownership:
-    needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Exact native reader ownership and handle reuse controls
-        shell: pwsh
-        run: tests/windows/test-process-reader-handles.ps1
+        run: python tools/ci/run_api37_report_tests.py --profile linux
   union-tsf:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/tsf-format-component.yml
   union-services:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/services-geocoder-worker-component.yml
   union-native-blocking:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native3-locks-blocking.yml
+  # Host-only contract tests. Builds no longer wait for them: they run
+  # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
-    needs: [source-identity, reader-ownership]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install media contract encoder and decoder tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Windows test shard coverage, dependencies and failure controls
         shell: pwsh
-        run: tests/windows/test-test-shards.ps1
+        run: |
+          tests/windows/test-test-shards.ps1
+          tests/windows/test-bitmap-shared-gate.ps1
+
+      - name: Wi-Fi specifier native evidence checker contracts
+        shell: pwsh
+        run: tests/windows/WifiNetworkSpecifierParcelChecks.ps1
 
       - name: Strict archive adversarial controls
         run: |
@@ -181,10 +233,14 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
           python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
-          python3 -m unittest discover -s tools/ci -p test_github_read.py
+          python3 -m unittest discover -s tools/ci -p 'test_github*.py'
+          python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_producer_context.py
+          python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
+          python3 tools/net-tcp-priority/test_fork_diagnostic.py
           python3 tools/surface/test-verified-artifact.py
 
       - name: Compatibility inventory parser tests
@@ -192,6 +248,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
           python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
           python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
+          python3 -m unittest discover -s tools/tests -p test_sdk_api_history_diff.py
           python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
           python3 -m unittest discover -s tools/tests -p test_host_bp_srcs.py
           python3 -m unittest discover -s tools/tests -p test_framework_tree.py
@@ -204,13 +261,21 @@ jobs:
           python3 tools/test_hwui_renderer_policy.py --sanitize
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
+          python3 tools/test_memmem_performance.py --sanitize
           python3 tools/test_bionic_system_contracts.py --sanitize
+          python3 tools/test_environment_contracts.py --sanitize
+          python3 tools/test_environment_lookup_contracts.py
+          python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
           python3 tools/test_bionic_directory_contracts.py --sanitize
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
+          python3 tools/test_ofd_transfer_contracts.py --sanitize
+          python3 tools/test_file_io_contracts.py --sanitize
+          python3 tools/test_pipe_io_contracts.py --sanitize
+          python3 tools/test_revocable_file_contracts.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
@@ -238,6 +303,10 @@ jobs:
           python3 tools/test_elf_lookup_contracts.py --linux-reference
           python3 tools/test_elf_lookup_performance.py --sanitize
           python3 tools/test_elf_packed_relocations.py --sanitize
+          python3 tools/test_elf_atomic_load.py --sanitize
+          python3 tools/test_elf_tls_rollback.py --sanitize
+          python3 tools/test_arm64_pending_rollback.py --sanitize
+          python3 tools/test_arm64_native_rollback.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
@@ -257,11 +326,27 @@ jobs:
       - name: Bionic stream state across close and reopen failures
         run: python3 tools/test_stdio_lifetime_contracts.py --sanitize
 
+      - name: Native metadata reader contention and retirement contracts
+        run: |
+          python3 tools/test_native_metadata_hot_paths.py --sanitize
+          python3 tools/test_native_metadata_hot_paths.py --thread-sanitize
+
+      - name: EGL fence asynchronous creation and ownership contracts
+        run: python3 tools/test_egl_fence_contracts.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
 
+      - name: Descriptor-backed stdio and stream lifetime contracts
+        run: |
+          python3 tools/test_stdio_contracts.py --sanitize
+          python3 tools/test_socket_registry_lifetime.py --sanitize
+
       - name: MediaPlayer PCM priming and playback lifecycle contracts
         run: python3 tools/test_media_player_priming.py --sanitize
+
+      - name: JNI GetEnv rejects unbridged interfaces before host allocation
+        run: python3 tools/test_jni_getenv_boundary.py --sanitize
 
       - name: JNI and mixer allocation bounds and surface image-cache lifetime
         run: |
@@ -269,19 +354,24 @@ jobs:
           python3 tools/test_fnmatch_performance.py --sanitize
           python3 tools/test_virtual_path_classification.py --sanitize
           python3 tools/test_binder_reply_allocations.py --sanitize
+          python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
+          python3 tools/test_bitmap_shared.py --sanitize
           python3 tools/test_camera_conversion_allocations.py --sanitize
           python3 tools/test_surface_present_allocations.py --sanitize
           python3 tools/test_d3d11_readback.py --sanitize
+          python3 tools/test_surface_frame_recycling.py --sanitize
           python3 tools/test_jni_argument_storage.py --sanitize
           python3 tools/test_art_jni_dispatch.py --sanitize
           python3 tools/test_audio_mixer_allocations.py --sanitize
+          python3 tools/test_audio_unity_rate.py --sanitize
           python3 tools/test_audio_capture_allocations.py --sanitize
           python3 tools/test_capture_stream_selection.py --sanitize
           python3 tools/test_audio_file_source.py --sanitize
           python3 tools/test_audio_rate_history.py --sanitize
           python3 tools/test_surface_image_cache.py --sanitize
+          python3 tools/test_webview_owned_streams.py --sanitize
 
       - name: Host event loop, audio state and surface geometry contracts
         run: |
@@ -292,6 +382,7 @@ jobs:
           "$RUNNER_TEMP/event-loop-reference"
           python3 tools/test_audio_state_contracts.py --sanitize
           python3 tools/test_surface_geometry_contracts.py --sanitize
+          python3 tools/test_video_scaling_contracts.py --sanitize
           python3 tools/test_native_window_dispatch.py --sanitize
 
       - name: Physical keys, sensor flushes, directory walks and futex contracts
@@ -331,7 +422,10 @@ jobs:
           python3 tools/test_media_source_contracts.py --sanitize
           python3 tools/test_media_callback_state.py --sanitize
           python3 tools/test_media_http_contracts.py --sanitize
+          python3 tools/test_mf_encoder_input.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
+          python3 tools/test_codec_output_storage.py --sanitize
+          python3 tools/test_codec_reader_delivery.py --sanitize
           cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
             tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
           "$RUNNER_TEMP/filesystem-metadata-reference"
@@ -362,6 +456,7 @@ jobs:
           python3 tools/test_webstorage_origin_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
+          python3 tools/test_uia_snapshot_contracts.py --sanitize
           python3 tools/test_running_tasks_contracts.py
 
       - name: Bluetooth cancellation, notifications and scan retention contracts
@@ -387,6 +482,7 @@ jobs:
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
           python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
@@ -401,14 +497,27 @@ jobs:
           python3 tools/i18n/check.py --check
           python3 tools/test_preferred_languages.py --sanitize
 
+      - name: App crash diagnosis and best-effort reporting contracts
+        run: python3 tools/test_app_crash_diagnostics.py
+
   build-framework-assets:
-    needs: [artifact-preflight, source-identity]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -422,6 +531,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
           python3 tools/test_media_recorder_lifecycle.py
+          python3 tools/test_media_recorder_rollover.py --sanitize
+          python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
       - name: libcore System.nanoTime shares Android awake-time domain
@@ -463,10 +574,10 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [artifact-preflight, source-identity, build-framework-assets]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     env:
-      GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
+      GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
       GESHER_HOST_PTHREAD_CALLER: ${{ github.ref == 'refs/heads/wip/coherent-selected-tcp' && 'coherent-selected-full/build' || 'ci/build' }}
       GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
       GESHER_COHERENT_FULL_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
@@ -478,7 +589,8 @@ jobs:
         with:
           # The former runtime-port job's cache already holds the runtime.
           ccache-key: runtime
-          # Source-only proposal: no main/default change and no dispatch approval.
+          # Production repair is a separate original-publisher overlay. The
+          # selected-minimum reference remains on its explicit experimental refs.
           pthread-supplier: ${{ env.GESHER_HOST_PTHREAD_SELECTION }}
           pthread-caller: ${{ env.GESHER_HOST_PTHREAD_CALLER }}
 
@@ -487,6 +599,9 @@ jobs:
           SELECTED_LLVM: ${{ steps.host_toolchain.outputs.selected_compiler_root }}
           SELECTED_RECEIPT: ${{ steps.host_toolchain.outputs.selected_receipt }}
           SELECTED_RECEIPT_SHA256: ${{ steps.host_toolchain.outputs.selected_receipt_sha256 }}
+          PRODUCTION_LLVM: ${{ steps.host_toolchain.outputs.production_compiler_root }}
+          PRODUCTION_RECEIPT: ${{ steps.host_toolchain.outputs.production_receipt }}
+          PRODUCTION_RECEIPT_SHA256: ${{ steps.host_toolchain.outputs.production_receipt_sha256 }}
         run: |
           set -euo pipefail
           case "$GESHER_HOST_PTHREAD_SELECTION" in
@@ -494,6 +609,13 @@ jobs:
               test -n "$SELECTED_LLVM" && test -n "$SELECTED_RECEIPT" && test -n "$SELECTED_RECEIPT_SHA256"
               llvm="$SELECTED_LLVM"
               printf 'GESHER_SELECTED_PTHREAD_RECEIPT=%s\nGESHER_SELECTED_PTHREAD_RECEIPT_SHA256=%s\n' "$SELECTED_RECEIPT" "$SELECTED_RECEIPT_SHA256" >> "$GITHUB_ENV"
+              ;;
+            publisher-cancel)
+              test -n "$PRODUCTION_LLVM" && test -n "$PRODUCTION_RECEIPT" && test -n "$PRODUCTION_RECEIPT_SHA256"
+              printf '%s  %s\n' "$PRODUCTION_RECEIPT_SHA256" "$PRODUCTION_RECEIPT" | sha256sum --check --strict
+              python3 tools/toolchain/prepare_pthread_cancel.py verify "$PRODUCTION_RECEIPT"
+              llvm="$PRODUCTION_LLVM"
+              printf 'GESHER_PTHREAD_CANCEL_RECEIPT=%s\nGESHER_PTHREAD_CANCEL_RECEIPT_SHA256=%s\n' "$PRODUCTION_RECEIPT" "$PRODUCTION_RECEIPT_SHA256" >> "$GITHUB_ENV"
               ;;
             publisher) llvm="$HOME/toolchain/$LLVM_MINGW_NAME" ;;
             *) exit 1 ;;
@@ -505,6 +627,9 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_toast_history_identity.py --compile-only \
+            --cc "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang" \
+            --output out/toast_history_identity_test.exe
           python3 tools/test_capture_failures.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/capture_failure_contract_test.exe \
@@ -531,7 +656,7 @@ jobs:
       - name: Build
         run: |
           # Canonical suite/package/e2e always receive the production role.
-          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
@@ -558,6 +683,19 @@ jobs:
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
+          ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
+          ninja -C out font_environment_test
+
+      - name: Verify cancellation repair in actual production links
+        if: env.GESHER_HOST_PTHREAD_SELECTION == 'publisher-cancel'
+        run: python3 tools/toolchain/prepare_pthread_cancel.py links --receipt "$GESHER_PTHREAD_CANCEL_RECEIPT"
+
+      - uses: actions/upload-artifact@v4
+        if: env.GESHER_HOST_PTHREAD_SELECTION == 'publisher-cancel'
+        with:
+          name: pthread-cancel-runtime
+          path: dist-pthread-cancel/
+          if-no-files-found: error
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -582,15 +720,21 @@ jobs:
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework-assets
-          path: dist
+      # The framework assets are needed only from here on. Compiling above
+      # overlaps build-framework-assets instead of waiting for it via needs:;
+      # the receipt still requires that exact producer to have succeeded.
+      - name: Wait for and verify the framework assets producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/wait_for_job.py --job build-framework-assets --timeout 1800
+          python3 tools/ci/artifact_receipt.py --name framework-assets --producer build-framework-assets --destination dist
 
       - name: Collect artifacts
         run: |
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
+          cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
           cp out/libgesher_account_crypto.so dist/
@@ -678,7 +822,7 @@ jobs:
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
         run: |
-          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
@@ -694,7 +838,7 @@ jobs:
           if-no-files-found: error
 
   native3-locks-reference:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -714,7 +858,8 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
+    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
+    timeout-minutes: 23
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -758,65 +903,65 @@ jobs:
   # tools/framework/build.py): .github/workflows/framework.yml, which also
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
-    needs: [artifact-preflight]
-    # This immutable policy, not PR-controlled workflow YAML, may use the runner.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7
+    needs: [source-identity]
+    # Keep the complete reviewed recipe immutable and use hosted build runners.
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@972c2b42b40c4ac799e147f5e352d07ba615d0fb
     with:
-      local-runner: true
+      local-runner: false
 
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
   native-libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native-libs.yml
 
   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
   # runner, run against Windows' real APIs (no radio) and the test radio.
   bluetooth:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/bluetooth.yml
 
   # Android ELF executables run as processes (docs/exec.md): the NDK test
   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
   exec:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/exec.yml
 
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/libs.yml
 
   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
   # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
   arm64:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/arm64.yml
 
   # The native2 track's NDK test programs (shim extras, platform dlopen,
   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
   native2:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native2.yml
 
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
   graphics:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/graphics.yml
 
   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
   angle:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/angle.yml
 
   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
@@ -843,18 +988,28 @@ jobs:
   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
   # .github/workflows/surfaces.yml.
   surfaces:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/surfaces.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -882,6 +1037,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            app/java/com/gesher/app
+            app/java/com/gesher/server
+            tests/app-crash
+            tools
             tools/package
             tools/ci
             tools/surface
@@ -907,68 +1066,27 @@ jobs:
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
 
       - name: Production modal dialogs on Windows PowerShell 5.1
         timeout-minutes: 2
         shell: powershell
         run: tests/windows/shell/Issue32And33Contracts.ps1
 
-      - name: Verify and assemble windows-x64 artifact
+      - name: Verify and stage the complete installer supplier batch
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
+          python tools/ci/artifact_receipt.py --batch tools/ci/package_artifacts.json --destination ci-suppliers/package
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify and assemble framework artifact
+      # media carries Gesher's default sounds (docs/media.md): dist/media/audio.
+      - name: Assemble the verified installer suppliers in their reviewed order
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name framework --producer "framework / framework" --destination ci-suppliers/framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger ci-owners.json --owner framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify and assemble graphics artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name graphics --producer "graphics / build" --destination ci-suppliers/graphics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/graphics --destination dist --ledger ci-owners.json --owner graphics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify and assemble angle artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name angle --producer "angle / probe-build" --destination ci-suppliers/angle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/angle --destination dist --ledger ci-owners.json --owner angle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify and assemble arm64 artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name arm64 --producer "arm64 / build" --destination ci-suppliers/arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/arm64 --destination dist --ledger ci-owners.json --owner arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify and assemble boot-image artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name boot-image --producer "boot-image / compile" --destination ci-suppliers/boot_image
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/boot_image --destination dist --ledger ci-owners.json --owner boot_image
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      # Gesher's default sounds (docs/media.md): dist/media/audio.
-      - name: Verify and assemble media artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name media --producer "media / media" --destination ci-suppliers/media
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/media --destination dist --ledger ci-owners.json --owner media
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($owner in 'windows_x64', 'framework', 'graphics', 'angle', 'arm64', 'boot_image', 'media') {
+            python tools/surface/assemble-artifacts.py --source "ci-suppliers/package/artifacts/$owner" --destination dist --ledger ci-owners.json --owner $owner
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Verify installer input is production-only and excludes the query fixture
         shell: pwsh
@@ -1013,6 +1131,10 @@ jobs:
           $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
           Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+          python tools/test_app_crash_diagnostics.py --launcher "$app\gesher-launch.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
+          python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
+          if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
           foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1') {
             if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "The installer left out $file" }
           }
@@ -1040,7 +1162,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
@@ -1716,6 +1838,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File tests/e2e/test-evidence.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/e2e/render-readiness.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/e2e/test_coverage.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/e2e/test_evidence_process.py
@@ -1749,7 +1873,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
-        shard: [native, desktop, services, compilation]
+        shard: [native, desktop, windowing, services, contracts, media, compilation]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -1780,12 +1904,16 @@ jobs:
             tools/fonts
             tools/binder
 
+      - name: Verify and stage the complete core supplier batch
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Windows thread, Binder, GDI and socket allocation contracts
@@ -1801,6 +1929,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/native_poll_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/toast_history_identity_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Windows SQLite guest paths, URI metadata and journal IO
         if: matrix.shard == 'native'
@@ -1813,25 +1943,19 @@ jobs:
       - name: Verify and assemble framework artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name framework --producer "framework / framework" --destination ci-suppliers/framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger ci-owners.json --owner framework
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/framework --destination dist --ledger ci-owners.json --owner framework
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble native-libs artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name native-libs --producer "native-libs / native-libs" --destination ci-suppliers/native_libs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/native_libs --destination dist --ledger ci-owners.json --owner native_libs
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/native_libs --destination dist --ledger ci-owners.json --owner native_libs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble arm64 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name arm64 --producer "arm64 / build" --destination ci-suppliers/arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/arm64 --destination dist --ledger ci-owners.json --owner arm64
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: ARM64 parked TLS, reuse and actual translator callbacks
@@ -1845,81 +1969,61 @@ jobs:
       - name: Verify and assemble libs-tests artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name libs-tests --producer "libs / build" --destination ci-suppliers/libs_tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/libs_tests --destination dist --ledger ci-owners.json --owner libs_tests --prefix libs-tests
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/libs_tests --destination dist --ledger ci-owners.json --owner libs_tests --prefix libs-tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble art-gtests artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name art-gtests --producer "posix / build" --destination ci-suppliers/art_gtests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/art_gtests --destination dist --ledger ci-owners.json --owner art_gtests --prefix art-gtests
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/art_gtests --destination dist --ledger ci-owners.json --owner art_gtests --prefix art-gtests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble graphics artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name graphics --producer "graphics / build" --destination ci-suppliers/graphics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/graphics --destination dist --ledger ci-owners.json --owner graphics
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/graphics --destination dist --ledger ci-owners.json --owner graphics
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble angle artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name angle --producer "angle / probe-build" --destination ci-suppliers/angle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/angle --destination dist --ledger ci-owners.json --owner angle
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/angle --destination dist --ledger ci-owners.json --owner angle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble boot-image artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name boot-image --producer "boot-image / compile" --destination ci-suppliers/boot_image
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/boot_image --destination dist --ledger ci-owners.json --owner boot_image
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/boot_image --destination dist --ledger ci-owners.json --owner boot_image
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble webview artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name webview --producer "webview / build" --destination ci-suppliers/webview
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/webview --destination dist --ledger ci-owners.json --owner webview
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/webview --destination dist --ledger ci-owners.json --owner webview
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble exec artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name exec --producer "exec / exec" --destination ci-suppliers/exec
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/exec --destination dist --ledger ci-owners.json --owner exec
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/exec --destination dist --ledger ci-owners.json --owner exec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble media artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name media --producer "media / media" --destination ci-suppliers/media
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/media --destination dist --ledger ci-owners.json --owner media
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/media --destination dist --ledger ci-owners.json --owner media
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble surfaces artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name surfaces --producer "surfaces / apps" --destination ci-suppliers/surfaces
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/surfaces --destination dist --ledger ci-owners.json --owner surfaces
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/surfaces --destination dist --ledger ci-owners.json --owner surfaces
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble native2 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name native2 --producer "native2 / native2" --destination ci-suppliers/native2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/native2 --destination dist --ledger ci-owners.json --owner native2 --prefix native2
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/native2 --destination dist --ledger ci-owners.json --owner native2 --prefix native2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify normal suite consumes the default-OFF runtime only
@@ -1929,7 +2033,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Assemble isolated capture hosts for explicit synthetic media fixtures
-        if: matrix.shard == 'services'
+        if: matrix.shard == 'media'
         shell: pwsh
         run: |
           python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
@@ -1940,13 +2044,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run offline identity and retirement regressions
-        if: matrix.shard == 'services'
+        if: matrix.shard == 'contracts'
         shell: pwsh
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
           exit $LASTEXITCODE
 
       - name: Run tests
+        env:
+          GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
+          GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
         shell: pwsh
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Shard ${{ matrix.shard }} -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
@@ -1970,7 +2077,7 @@ jobs:
 
       - name: Upload media output captures
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'services' }}
+        if: ${{ always() && matrix.shard == 'media' }}
         with:
           name: media-output-${{ matrix.os }}
           path: |
@@ -1981,7 +2088,7 @@ jobs:
 
       - name: Upload offline regression evidence
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'services' }}
+        if: ${{ always() && matrix.shard == 'contracts' }}
         with:
           name: microg-security-${{ matrix.os }}
           path: |
@@ -2006,6 +2113,9 @@ jobs:
           path: |
             results.txt
             ci-owners.json
+            dist/realtime-signals-evidence/**/*.json
+            ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
+            ${{ runner.temp }}/gesher-root/logs/system_server.log
           if-no-files-found: error
 
   test:
@@ -2041,83 +2151,18 @@ jobs:
         id: suppliers
         shell: pwsh
         run: tools/web3/verify_full_suppliers.ps1
-      - name: Verify and assemble windows-x64 artifact
+      - name: Verify and stage the complete full-query supplier batch
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
+          python tools/ci/artifact_receipt.py --batch tools/ci/web3_query_artifacts.json --destination ci-suppliers/web3
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble framework artifact
+      - name: Assemble the verified full-query suppliers in their reviewed order
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name framework --producer "framework / framework" --destination ci-suppliers/framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger ci-owners.json --owner framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble native-libs artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name native-libs --producer "native-libs / native-libs" --destination ci-suppliers/native_libs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/native_libs --destination dist --ledger ci-owners.json --owner native_libs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble arm64 artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name arm64 --producer "arm64 / build" --destination ci-suppliers/arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/arm64 --destination dist --ledger ci-owners.json --owner arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble graphics artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name graphics --producer "graphics / build" --destination ci-suppliers/graphics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/graphics --destination dist --ledger ci-owners.json --owner graphics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble angle artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name angle --producer "angle / probe-build" --destination ci-suppliers/angle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/angle --destination dist --ledger ci-owners.json --owner angle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble boot-image artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name boot-image --producer "boot-image / compile" --destination ci-suppliers/boot_image
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/boot_image --destination dist --ledger ci-owners.json --owner boot_image
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble webview artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name webview --producer "webview / build" --destination ci-suppliers/webview
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/webview --destination dist --ledger ci-owners.json --owner webview
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble exec artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name exec --producer "exec / exec" --destination ci-suppliers/exec
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/exec --destination dist --ledger ci-owners.json --owner exec
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble media artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name media --producer "media / media" --destination ci-suppliers/media
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/media --destination dist --ledger ci-owners.json --owner media
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble web3-query-hook artifact
-        shell: pwsh
-        run: |
-          python tools/ci/artifact_receipt.py --name web3-query-hook --producer "build" --destination ci-suppliers/web3_query_hook
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/web3_query_hook --destination dist --ledger ci-owners.json --owner web3_query_hook
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($owner in 'windows_x64', 'framework', 'native_libs', 'arm64', 'graphics', 'angle', 'boot_image', 'webview', 'exec', 'media', 'web3_query_hook') {
+            python tools/surface/assemble-artifacts.py --source "ci-suppliers/web3/artifacts/$owner" --destination dist --ledger ci-owners.json --owner $owner
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Verify exact same-source compiler roles, source boundaries and coherent payload
         shell: pwsh
         run: |
@@ -2152,7 +2197,7 @@ jobs:
   # Ordinary Binder scope is mandatory and separate from production installer
   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
   binder2-sg-fixtures:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
 
   binder2-sg-regression:
@@ -2167,36 +2212,29 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: Verify and assemble windows-x64 for ordinary Binder regression
+      - name: Verify and stage the complete ordinary Binder supplier batch
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
+          python tools/ci/artifact_receipt.py --batch tools/ci/binder2_sg_artifacts.json --destination ci-suppliers/binder2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger binder-full-owners.json --owner windows_x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble framework for ordinary Binder regression
+      - name: Assemble the verified product suppliers for ordinary Binder regression
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name framework --producer "framework / framework" --destination ci-suppliers/framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger binder-full-owners.json --owner framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify and assemble arm64 for ordinary Binder regression
+          foreach ($owner in 'windows_x64', 'framework', 'arm64') {
+            python tools/surface/assemble-artifacts.py --source "ci-suppliers/binder2/artifacts/$owner" --destination dist --ledger binder-full-owners.json --owner $owner
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      # The isolated suppliers stay outside dist at the paths their verifiers
+      # and the runner read. Each is moved whole from the verified batch.
+      - name: Place the verified isolated host, modes and boot-image suppliers
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name arm64 --producer "arm64 / build" --destination ci-suppliers/arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/arm64 --destination dist --ledger binder-full-owners.json --owner arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify isolated binder2-sg-host ordinary supplier
-        shell: pwsh
-        run: python tools/ci/artifact_receipt.py --name binder2-sg-host --producer "build" --destination ci-suppliers/binder2_sg_host
-      - name: Verify isolated binder2-sg-modes ordinary supplier
-        shell: pwsh
-        run: python tools/ci/artifact_receipt.py --name binder2-sg-modes --producer "binder2-sg-fixtures / modes-build" --destination fixtures
-      - name: Verify isolated boot-image ordinary supplier
-        shell: pwsh
-        run: python tools/ci/artifact_receipt.py --name boot-image --producer "boot-image / compile" --destination boot-image
+          $ErrorActionPreference = 'Stop'
+          foreach ($pair in @(@('binder2_sg_host', 'ci-suppliers/binder2_sg_host'), @('binder2_sg_modes', 'fixtures'),
+                              @('boot_image', 'boot-image'))) {
+            if (Test-Path -LiteralPath $pair[1]) { throw "Isolated supplier destination already exists: $($pair[1])" }
+            Move-Item -LiteralPath "ci-suppliers/binder2/artifacts/$($pair[0])" -Destination $pair[1]
+          }
       - name: Verify isolated ordinary actor role and current production binding
         shell: pwsh
         run: |
@@ -2228,6 +2266,8 @@ jobs:
       matrix:
         supplier: [selected-minimum]
     env:
+      GH_TOKEN: ${{ github.token }}
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
       GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
@@ -2243,15 +2283,21 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify coherent selected TCP producer role
-        run: python3 tools/toolchain/coherent_tcp_context.py
+        run: |
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then
+            python3 tools/toolchain/fork_tcp_context.py --job compile
+          else
+            python3 tools/toolchain/coherent_tcp_context.py
+          fi
       - name: Verify exact source and two-supplier preservation before native compilation
         run: |
           python3 tools/net-tcp-priority/test-selected-policy.py
           python3 tools/net-tcp-priority/test-selected-supplier.py
           python3 tools/host-pthread-authority/minimum_receipt.py selftest
+          python3 tools/net-tcp-priority/test_fork_diagnostic.py
       - uses: ./.github/actions/setup-build
         with:
-          ccache-key: runtime
+          ccache-key: selected-minimum
       - name: Cache dynarmic, fmt and Boost headers
         id: deps
         uses: actions/cache@v4
@@ -2304,16 +2350,20 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: tcp-ndk-archive
-          key: tcp-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
+          path: dns-ndk.zip
+          key: combined-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
       - name: Authenticate publisher NDK archive and freshly extract on every use
         run: python3 tools/net-tcp-priority/prepare-ndk.py
       - name: Prepare exact unmodified canonical or intentionally selected two-patch original-profile candidate
-        run: python3 tools/net-tcp-priority/prepare-supplier.py
+        run: |
+          args=()
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+          python3 tools/net-tcp-priority/prepare-supplier.py "${args[@]}"
       - name: Build one fresh coherent host, translator, and both bionic ABI fixtures
         run: |
           set -euo pipefail
-          if [[ "$TCP_SUPPLIER_ROLE" == canonical ]]; then prefix=tcp-canonical-supplier; else prefix=tcp-selected-supplier; fi
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then prefix=tcp-fork-diagnostic-supplier;
+          elif [[ "$TCP_SUPPLIER_ROLE" == canonical ]]; then prefix=tcp-canonical-supplier; else prefix=tcp-selected-supplier; fi
           llvm="$PWD/$prefix/$LLVM_MINGW_NAME"
           cmake --fresh -S . -B out -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" \
@@ -2343,16 +2393,21 @@ jobs:
           test "$negative_rc" = 1
           grep -F 'FAIL UDP: negative missing MSG_TRUNC rejected' /tmp/udp-guarded-negative.txt
       - name: Bind executed compiler and exact Windows-system-only output roles
-        run: python3 tools/net-tcp-priority/manifest.py
+        run: |
+          args=()
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+          python3 tools/net-tcp-priority/manifest.py "${args[@]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: tcp-coherent-${{ matrix.supplier }}-${{ github.sha }}-a${{ github.run_attempt }}
+          name: ${{ github.repository == 'gesher-runtime/gesher' && 'tcp-coherent' || 'tcp-fork-diagnostic' }}-${{ matrix.supplier }}-${{ github.sha }}-a${{ github.run_attempt }}
           path: tcp-fixture/
           if-no-files-found: error
           retention-days: 14
   linux-reference:
     needs: [source-identity]
     env:
+      GH_TOKEN: ${{ github.token }}
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
       GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
     runs-on: ubuntu-24.04
@@ -2362,7 +2417,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify coherent TCP reference role
-        run: python3 tools/toolchain/coherent_tcp_context.py
+        run: |
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then
+            python3 tools/toolchain/fork_tcp_context.py --job linux-reference
+          else
+            python3 tools/toolchain/coherent_tcp_context.py
+          fi
       - name: Retain full independent Linux contract including inline mode
         run: |
           set -euo pipefail
@@ -2371,8 +2431,10 @@ jobs:
   supplier-correlation:
     needs: [source-identity, build, compile]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
+    timeout-minutes: 25
     env:
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: selected-minimum
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
@@ -2382,14 +2444,24 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify coherent selected TCP correlation role
-        run: python3 tools/toolchain/coherent_tcp_context.py
+        run: |
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then
+            python3 tools/toolchain/fork_tcp_context.py --job supplier-correlation
+          else
+            python3 tools/toolchain/coherent_tcp_context.py
+          fi
       - name: Strict current Native host and TCP selected supplier artifacts
         run: |
           set -euo pipefail
           python3 tools/ci/artifact_receipt.py --name native3-locks-host --producer build --destination ci-suppliers/native3_host
-          python3 tools/ci/artifact_receipt.py --name "tcp-coherent-selected-minimum-${{ github.sha }}-a${{ github.run_attempt }}" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
+          prefix=tcp-coherent
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then prefix=tcp-fork-diagnostic; fi
+          python3 tools/ci/artifact_receipt.py --name "$prefix-selected-minimum-${{ github.sha }}-a${{ github.run_attempt }}" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
       - name: Correlate selected host supplier between full build and TCP component
-        run: python3 tools/toolchain/coherent_supplier_correlation.py
+        run: |
+          args=()
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+          python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
   windows:
     needs: [source-identity, compile, linux-reference, supplier-correlation]
     strategy:
@@ -2400,6 +2472,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
+      TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
@@ -2411,7 +2484,11 @@ jobs:
       - name: Verify coherent selected TCP receiver role
         shell: pwsh
         run: |
-          python tools/toolchain/coherent_tcp_context.py
+          if ($env:TCP_EVIDENCE_SCOPE -ceq 'fork-diagnostic') {
+            python tools/toolchain/fork_tcp_context.py --job windows
+          } else {
+            python tools/toolchain/coherent_tcp_context.py
+          }
           if ($LASTEXITCODE -ne 0) { throw 'Coherent TCP receiver role rejected' }
       - name: Check exact qualified controller helper hashes and source-only pin negatives
         shell: pwsh
@@ -2424,12 +2501,12 @@ jobs:
         run: tools/net-tcp-priority/test-receipt-metadata.ps1
       - name: Verify raw archive and exact producer, then run actual host and both ABI paths
         shell: pwsh
-        run: tools/net-tcp-priority/run-component.ps1
+        run: tools/net-tcp-priority/run-component.ps1 -ForkDiagnostic:($env:TCP_EVIDENCE_SCOPE -ceq 'fork-diagnostic')
 
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, api37-report-tests, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job

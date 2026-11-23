@@ -53,11 +53,18 @@ static std::atomic<bool> video_limit_waiting = false;
 static std::vector<std::vector<uint8_t>> access_units;
 static std::vector<uint8_t> avc_access_unit;
 static std::atomic<bool> surface_abandoned = false;
+// Observers used by the rollover gate; absent hooks leave this lifecycle
+// fixture unchanged. They describe fixture resources, not Windows devices.
+static std::atomic<unsigned> capture_creates = 0, audio_encoder_creates = 0;
+static std::atomic<unsigned> video_encoder_creates = 0, surface_creates = 0, video_encodes = 0;
+static std::function<void(const VideoFrame&, bool, std::vector<EncodedPacket>*)> video_packets;
+static std::function<void(size_t, int64_t, std::vector<EncodedPacket>*)> audio_packets;
 
 CaptureStream::CaptureStream(CaptureEngine* engine, const CaptureParams& params)
     : engine_(engine), params_(params), frame_size_(2 * params.channels) {}
 CaptureStream::~CaptureStream() { Release(); }
 std::shared_ptr<CaptureStream> OpenCapture(const CaptureParams& p, std::string*) {
+  ++capture_creates;
   std::shared_ptr<CaptureStream> stream(new CaptureStream(nullptr, p));
   capture_released = false;
   capture_reads = 0;
@@ -116,12 +123,16 @@ ssize_t CaptureStream::Read(void* dst, size_t bytes, bool) {
 }
 void RaiseAudioThreadPriority(bool) {}
 
+static AudioEncoderParams observed_params;
 class HostEncoder : public AudioEncoder {
  public:
+  explicit HostEncoder(int bitrate) : bitrate_(bitrate) {}
   std::string Name() const override { return "fixture-aac"; }
+  int ConfiguredBitrate() const override { return bitrate_; }
   bool Encode(const int16_t*, size_t, int64_t pts, std::vector<EncodedPacket>* out) override {
     if (next_ == 0) out->push_back({{0x11, 0x88}, 0, false, true});  // LC, 48000 Hz, mono
-    out->push_back({access_units[next_++ % access_units.size()], pts, true, false});
+    if (audio_packets) audio_packets(next_++, pts, out);
+    else out->push_back({access_units[next_++ % access_units.size()], pts, true, false});
     ++encoded_batches;
     return true;
   }
@@ -129,17 +140,26 @@ class HostEncoder : public AudioEncoder {
   size_t frame_size() const override { return 1024; }
 
  private:
+  int bitrate_;
   size_t next_ = 0;
 };
 
-std::unique_ptr<AudioEncoder> AudioEncoder::Create(const std::string&, const AudioEncoderParams&,
+std::unique_ptr<AudioEncoder> AudioEncoder::Create(const std::string&, const AudioEncoderParams& p,
                                                     std::string*) {
-  return std::make_unique<HostEncoder>();
+  ++audio_encoder_creates;
+  observed_params = p;
+  return std::make_unique<HostEncoder>(p.bitrate);
 }
 class HostVideoEncoder : public VideoEncoder {
  public:
   std::string Name() const override { return "fixture-avc"; }
-  bool Encode(const VideoFrame& frame, bool, std::vector<EncodedPacket>* out) override {
+  bool SetBitrate(int) override { return false; }
+  bool Encode(const VideoFrame& frame, bool key, std::vector<EncodedPacket>* out) override {
+    ++video_encodes;
+    if (video_packets) {
+      video_packets(frame, key, out);
+      return true;
+    }
     if (frame.time_us >= 120000 && hold_video_limit) {
       video_limit_waiting = true;
       hold_video_limit.wait(true);
@@ -176,9 +196,11 @@ class HostSurface : public InputSurface {
 
 std::unique_ptr<VideoEncoder> VideoEncoder::Create(const std::string&, const VideoEncoderParams&,
                                                     std::string*) {
+  ++video_encoder_creates;
   return std::make_unique<HostVideoEncoder>();
 }
 InputSurface* CreateInputSurface(int, int) {
+  ++surface_creates;
   surface_abandoned = false;
   return new HostSurface;
 }

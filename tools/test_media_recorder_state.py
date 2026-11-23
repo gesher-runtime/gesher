@@ -54,6 +54,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     {"size", "(J)V", GESHER_NATIVE(MR_setMaxFileSize)},
     {"parameter", "(Ljava/lang/String;)V", GESHER_NATIVE(MR_setParameter)},
     {"file", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setOutputFile)},
+    {"nextFile", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setNextOutputFile)},
     {"prepare", "()V", GESHER_NATIVE(MR_prepare)}, {"start", "()V", GESHER_NATIVE(MR_start)},
     {"pause", "()V", GESHER_NATIVE(MR_pause)}, {"resume", "()V", GESHER_NATIVE(MR_resume)},
     {"stop", "()V", GESHER_NATIVE(MR_stop)}, {"amplitude", "()I", GESHER_NATIVE(MR_getMaxAmplitude)},
@@ -105,14 +106,8 @@ def main() -> int:
     host = host.replace('inline bool MayRecordAudio(JNIEnv*) { return true; }', 'bool MayRecordAudio(JNIEnv*);')
     host += '}\n'
     backend = (ROOT / 'tests/media/recorder-host/lifecycle.cc').read_text().split('struct Events {')[0]
-    # Observe the explicit encoder-factory fixture's received configuration;
-    # production Recorder/JNI code is not rewritten for these assertions.
-    backend = backend.replace('class HostEncoder :', 'static AudioEncoderParams observed_params;\nclass HostEncoder :')
-    factory = 'AudioEncoder::Create(const std::string&, const AudioEncoderParams&,'
-    assert backend.count(factory) == 1
-    backend = backend.replace(factory, 'AudioEncoder::Create(const std::string&, const AudioEncoderParams& parameters,')
-    backend = backend.replace('  return std::make_unique<HostEncoder>();',
-                              '  observed_params = parameters;\n  return std::make_unique<HostEncoder>();')
+    # The shared encoder fixture records the received configuration directly;
+    # preserve its actual bitrate getter and avoid rewriting factory signatures.
     source = (ROOT / 'compat/media/jni/media_recorder_jni.cc').read_text()
     print('media_recorder_jni SHA256 ' + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     body = source[source.index('namespace gesher::media {'):]

@@ -13,6 +13,10 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; The microG release Setup downloads (the URLs in NextButtonClick and
+; gesher-app-microg.ps1 -AutoDownload; keep them together). gesher-app-microg.ps1
+; records it in MicrogVersionFile, so a later update offers the newer release.
+#define MicrogRelease "v0.3.17.252432"
 
 [Setup]
 AppId={{6A1F3C2E-5B7D-4E8A-9C0F-1D2E3F4A5B6C}
@@ -137,8 +141,11 @@ Source: "gesher-runtime-files.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-ui.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ui-messages.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "licenses\APKSIG-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme; Languages: en
-Source: "README.he.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion isreadme; Languages: he
+Source: "licenses\BIONIC-GDTOA-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "licenses\ICU-CALENDAR-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; Reached from the Start menu entry; the finish page offers no "show README".
+Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion; Languages: en
+Source: "README.he.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion; Languages: he
 Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [INI]
@@ -151,7 +158,11 @@ Filename: "{app}\gesher-version.ini"; Section: "Gesher"; Key: "Version"; String:
 ; Windows 11 has its runtime; elsewhere Setup offers to install it (Microsoft's
 ; Evergreen bootstrapper, downloaded; a per-user install without elevation).
 Name: "webview2"; Description: "{cm:setup_webview}"; Check: not WebView2Installed
-Name: "microg"; Description: "{cm:setup_microg}"; Flags: unchecked
+; microG: offered unchecked when this profile has none; when it has microG staged
+; (gesher-app-microg.ps1) from another release, or from an unrecorded one, Setup
+; offers the update instead, checked; when it already has this release, neither.
+Name: "microg"; Description: "{cm:setup_microg}"; Flags: unchecked; Check: not MicrogInstalled
+Name: "microgupdate"; Description: "{cm:setup_microg_update}"; Check: MicrogOutdated
 Name: "aurora"; Description: "{cm:setup_aurora}"; Flags: unchecked
 
 [Icons]
@@ -274,6 +285,40 @@ begin
     Result := (Version <> '') and (Version <> '0.0.0.0');
 end;
 
+// microG staged in this user's Gesher profile by gesher-app-microg.ps1: its
+// marker and GmsCore's APK slot (the profile Setup's own uninstall removes).
+function MicrogProfile(): String;
+begin
+  Result := ExpandConstant('{localappdata}\Gesher');
+end;
+
+function MicrogVersionFile(): String;
+begin
+  Result := MicrogProfile() + '\microg.release';
+end;
+
+function MicrogInstalled(): Boolean;
+begin
+  Result := FileExists(MicrogProfile() + '\microg.enabled') and
+            FileExists(MicrogProfile() + '\system\priv-app\com.google.android.gms\base.apk');
+end;
+
+// Installed, but not recorded as the release this Setup downloads (staged by an
+// earlier Setup, or from APKs the user passed to gesher-app-microg.ps1).
+function MicrogOutdated(): Boolean;
+var
+  Release: AnsiString;
+begin
+  Result := MicrogInstalled();
+  if Result and LoadStringFromFile(MicrogVersionFile(), Release) then
+    Result := Trim(String(Release)) <> '{#MicrogRelease}';
+end;
+
+function MicrogSelected(): Boolean;
+begin
+  Result := WizardIsTaskSelected('microg') or WizardIsTaskSelected('microgupdate');
+end;
+
 var
   DownloadPage: TDownloadWizardPage;
 
@@ -287,67 +332,145 @@ begin
   DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
 end;
 
+var
+  MicrogUpdateOffered: Boolean;
+
+// UsePreviousTasks would restore an earlier run's unchecked update: an outdated
+// microG is offered checked each time the tasks page first shows; the user can
+// still clear it.
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  // Silent runs keep /TASKS, /MERGETASKS and the previous choice as given.
+  if (CurPageID = wpSelectTasks) and not MicrogUpdateOffered and not WizardSilent() then
+  begin
+    MicrogUpdateOffered := True;
+    if MicrogOutdated() then
+      WizardSelectTasks('microgupdate');
+  end;
+end;
+
+var
+  // Optional downloads that failed in an interactive run: the user was told, and
+  // the post-install step skips them instead of fetching the same URL again.
+  WebView2Skipped, MicrogSkipped, AuroraSkipped: Boolean;
+
+// Downloads one file into {tmp} unless it is already there; a failure is logged
+// and returns False. DownloadPage.Download stops at the first failed file, so each
+// optional component gets its own call and one blocked URL does not stop the rest.
+function DownloadOptional(const Url, FileName: String; var Cancelled, Failed: Boolean;
+  var Error: String): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{tmp}\' + FileName));
+  if Result or Cancelled then
+    Exit;
+  DownloadPage.Clear;
+  DownloadPage.Add(Url, FileName, '');
+  try
+    DownloadPage.Download;
+    Result := True;
+  except
+    if DownloadPage.AbortedByUser then
+    begin
+      Log('Download cancelled by user.');
+      Cancelled := True;
+    end
+    else
+    begin
+      Log('Optional download of ' + FileName + ' failed: ' + GetExceptionMessage);
+      Failed := True;
+      if Error = '' then
+        Error := GetExceptionMessage;
+    end;
+  end;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  DownloadsNeeded: Integer;
+  Cancelled, Failed: Boolean;
+  Error, Skipped: String;
 begin
   Result := True;
-  if CurPageID = wpReady then
-  begin
-    DownloadPage.Clear;
-    DownloadsNeeded := 0;
-    if WizardIsTaskSelected('webview2') and not FileExists(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe')) then
-    begin
-      DownloadPage.Add('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
-        'MicrosoftEdgeWebview2Setup.exe', '');
-      DownloadsNeeded := DownloadsNeeded + 1;
-    end;
-    if WizardIsTaskSelected('microg') then
-    begin
-      if not FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) then
-      begin
-        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
-          'com.google.android.gms.apk', '');
-        DownloadsNeeded := DownloadsNeeded + 1;
-      end;
-      if not FileExists(ExpandConstant('{tmp}\com.android.vending.apk')) then
-      begin
-        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
-          'com.android.vending.apk', '');
-        DownloadsNeeded := DownloadsNeeded + 1;
-      end;
-      if not FileExists(ExpandConstant('{tmp}\com.google.android.gsf.apk')) then
-      begin
-        DownloadPage.Add('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
-          'com.google.android.gsf.apk', '');
-        DownloadsNeeded := DownloadsNeeded + 1;
-      end;
-    end;
-    if WizardIsTaskSelected('aurora') and not FileExists(ExpandConstant('{tmp}\AuroraStore.apk')) then
-    begin
-      DownloadPage.Add('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
-        'AuroraStore.apk', '');
-      DownloadsNeeded := DownloadsNeeded + 1;
-    end;
+  if CurPageID <> wpReady then
+    Exit;
+  WebView2Skipped := False;
+  MicrogSkipped := False;
+  AuroraSkipped := False;
+  if not ((WizardIsTaskSelected('webview2') and not FileExists(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'))) or
+          (MicrogSelected() and not (FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) and
+                                     FileExists(ExpandConstant('{tmp}\com.android.vending.apk')) and
+                                     FileExists(ExpandConstant('{tmp}\com.google.android.gsf.apk')))) or
+          (WizardIsTaskSelected('aurora') and not FileExists(ExpandConstant('{tmp}\AuroraStore.apk')))) then
+    Exit;
 
-    if DownloadsNeeded > 0 then
+  Cancelled := False;
+  Error := '';
+  Skipped := '';
+  DownloadPage.Show;
+  try
+    if WizardIsTaskSelected('webview2') then
     begin
-      DownloadPage.Show;
-      try
-        try
-          DownloadPage.Download;
-          Result := True;
-        except
-          if DownloadPage.AbortedByUser then
-            Log('Download cancelled by user.')
-          else
-            SuppressibleMsgBox(AddPeriod(GetExceptionMessage), mbCriticalError, MB_OK, IDOK);
-          Result := False;
-        end;
-      finally
-        DownloadPage.Hide;
+      Failed := False;
+      DownloadOptional('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
+        'MicrosoftEdgeWebview2Setup.exe', Cancelled, Failed, Error);
+      if Failed then
+      begin
+        WebView2Skipped := True;
+        Skipped := Skipped + '  - Microsoft Edge WebView2' + #13#10;
       end;
     end;
+    if MicrogSelected() then
+    begin
+      // The three microG APKs are one component: the rest are not fetched once one fails.
+      Failed := False;
+      if DownloadOptional('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
+           'com.google.android.gms.apk', Cancelled, Failed, Error) then
+        if DownloadOptional('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
+             'com.android.vending.apk', Cancelled, Failed, Error) then
+          DownloadOptional('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
+            'com.google.android.gsf.apk', Cancelled, Failed, Error);
+      if Failed then
+      begin
+        MicrogSkipped := True;
+        Skipped := Skipped + '  - microG' + #13#10;
+      end;
+    end;
+    if WizardIsTaskSelected('aurora') then
+    begin
+      Failed := False;
+      DownloadOptional('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
+        'AuroraStore.apk', Cancelled, Failed, Error);
+      if Failed then
+      begin
+        AuroraSkipped := True;
+        Skipped := Skipped + '  - Aurora Store' + #13#10;
+      end;
+    end;
+  finally
+    DownloadPage.Hide;
+  end;
+
+  if Cancelled then
+  begin
+    WebView2Skipped := False;
+    MicrogSkipped := False;
+    AuroraSkipped := False;
+    Result := False;
+  end
+  else if Skipped <> '' then
+  begin
+    if WizardSilent() then
+    begin
+      // A silent update (the microG update is on by default) goes on as before:
+      // each post-install step retries or skips its own download.
+      WebView2Skipped := False;
+      MicrogSkipped := False;
+      AuroraSkipped := False;
+    end
+    else
+      // Setup goes on without the components it could not download (a filtered
+      // or offline network): only those are skipped, and the user is told which.
+      MsgBox(FmtMessage(CustomMessage('setup_download_skipped'), [Skipped, Error]),
+        mbInformation, MB_OK);
   end;
 end;
 
@@ -436,19 +559,23 @@ begin
   TmpDir := ExpandConstant('{tmp}');
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
             ExpandConstant('{app}\gesher-app-microg.ps1') + '"';
-  if WizardIsTaskSelected('microg') then
+  if MicrogSelected() and not MicrogSkipped then
   begin
-    if FileExists(TmpDir + '\com.google.android.gms.apk') then
+    // All three APKs, or none: a silent run goes on after a partial download.
+    if FileExists(TmpDir + '\com.google.android.gms.apk') and
+       FileExists(TmpDir + '\com.android.vending.apk') and
+       FileExists(TmpDir + '\com.google.android.gsf.apk') then
       Params := Params + ' -GmsCoreApk "' + TmpDir + '\com.google.android.gms.apk"' +
                          ' -CompanionApk "' + TmpDir + '\com.android.vending.apk"' +
-                         ' -GsfProxyApk "' + TmpDir + '\com.google.android.gsf.apk"'
+                         ' -GsfProxyApk "' + TmpDir + '\com.google.android.gsf.apk"' +
+                         ' -Release {#MicrogRelease}'
     else
       Params := Params + ' -AutoDownload';
   end
   else
     Params := Params + ' -StoreOnly';
 
-  if WizardIsTaskSelected('aurora') then
+  if WizardIsTaskSelected('aurora') and not AuroraSkipped then
   begin
     if FileExists(TmpDir + '\AuroraStore.apk') then
       Params := Params + ' -InstallStore -StoreApk "' + TmpDir + '\AuroraStore.apk"'
@@ -457,7 +584,9 @@ begin
   end;
 
   WizardForm.StatusLabel.Caption := CustomMessage('setup_configuring_microg');
-  Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
+  // gesher-app-microg.ps1 records the staged release (microg.release) itself.
+  if not Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+    Log('microG setup exited with code ' + IntToStr(Code));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -466,9 +595,10 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    if WizardIsTaskSelected('webview2') then
+    if WizardIsTaskSelected('webview2') and not WebView2Skipped then
       InstallWebView2();
-    if WizardIsTaskSelected('microg') or WizardIsTaskSelected('aurora') then
+    if (MicrogSelected() and not MicrogSkipped) or
+       (WizardIsTaskSelected('aurora') and not AuroraSkipped) then
       InstallMicrogAndStore();
     Path := PathEntries();
     Dir := ExpandConstant('{app}');

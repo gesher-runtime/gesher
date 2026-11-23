@@ -115,7 +115,8 @@ int wmain(int argc, WCHAR** argv) {
   fflush(stdout);
   CHECK(positive || bridge ? search.visible == 1 : search.visible == 0);
   if (bridge) CHECK(search.matching == 2);
-  HANDLE result = CreateFileW(argv[4], GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+  // The worker polls these markers while this controller is their sole writer.
+  HANDLE result = CreateFileW(argv[4], GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
   CHECK(result != INVALID_HANDLE_VALUE);
   const char pass[] = "PASS\n";
   DWORD written = 0;
@@ -145,7 +146,7 @@ int wmain(int argc, WCHAR** argv) {
       Sleep(25);
     } while (GetTickCount64() < deadline);
     CHECK(search.visible == 2 && search.matching == 2);
-    result = CreateFileW(argv[4], FILE_APPEND_DATA, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    result = CreateFileW(argv[4], FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     CHECK(result != INVALID_HANDLE_VALUE);
     const char contentPass[] = "CONTENT_PASS\n";
     wrote = WriteFile(result, contentPass, sizeof(contentPass)-1, &written, NULL);
@@ -176,7 +177,7 @@ int wmain(int argc, WCHAR** argv) {
     } while (GetTickCount64() < deadline);
     printf("window promotion background observed: visible=%d matching=%d targetJob=true\n", search.visible, search.matching);
     fflush(stdout);
-    result = CreateFileW(argv[4], FILE_APPEND_DATA, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    result = CreateFileW(argv[4], FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     CHECK(result != INVALID_HANDLE_VALUE);
     const char backgroundPass[] = "BACKGROUND_PASS\n";
     wrote = WriteFile(result, backgroundPass, sizeof(backgroundPass)-1, &written, NULL);

@@ -37,6 +37,10 @@ def main() -> int:
     host = args.host_source.read_text(encoding="utf-8")
     host_set = section(host, "int setsockopt(", "int getsockopt(")
     host_get = host[host.index("int getsockopt("):]
+    # The descriptor transfer functions (ADR 0088) follow the public API.
+    transfer = "bool gesher::TransferSocket("
+    if transfer in host_get:
+        host_get = host_get[:host_get.index(transfer)]
     timeout_start = "  if (level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO)) {"
     timeout_end = "  if (level == SOL_SOCKET && name == SO_LINGER) {"
     parts = {

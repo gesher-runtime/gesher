@@ -5,12 +5,12 @@ const controller = require('./label-automerge.js');
 const appStatus = require('./app-qa-status.js');
 const {world, authorWorld, HEAD, OTHER, T, APP_BOT} = require('./automerge-fixture.js');
 
-test('label captures approval and arms native waiting even before CI starts', async () => {
+test('label captures approval without native waiting before CI starts', async () => {
   const w = world({approved: false, runs: [], checks: []});
   await w.labeled();
   assert.equal(w.did('approve').length, 1);
-  assert.equal(w.did('nativeWait').length, 1);
-  assert.deepEqual(w.did('nativeWait')[0][1], {id: 'PR_7', head: HEAD});
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.equal(w.did('nativeMerge').length, 0);
   assert.equal(w.did('status').at(-1)[1].state, 'pending');
   for (const action of ['merge', 'dispatch']) assert.equal(w.did(action).length, 0);
 });
@@ -27,7 +27,8 @@ test('the App writes the receipt and GitHub Actions writes the verified status',
   await w.labeled();
   assert.equal(w.did('app-approve').length, 1);
   assert.equal(w.did('approve').length, 0);
-  assert.equal(w.did('nativeWait').length, 1);
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.deepEqual(w.did('nativeMerge')[0][1], {id: 'PR_7', head: HEAD});
   assert.deepEqual(w.reviews[0].user, APP_BOT);
   assert.equal(w.did('status').at(-1)[1].state, 'success');
 });
@@ -82,24 +83,21 @@ for (const [name, change] of Object.entries({
   });
 }
 
-test('author first label retains exact-head QA proof', async () => {
-  const w = authorWorld({approved: false}); w.seedQa();
+test('author first label after opening approves without a QA review', async () => {
+  const w = authorWorld({approved: false});
   await w.labeled();
-  assert.equal(w.did('nativeWait').length, 1);
-  assert.equal(w.did('reviewNode').length > 0, true);
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.deepEqual(w.did('nativeMerge')[0][1], {id: 'PR_7', head: HEAD});
+  assert.equal(w.did('reviewNode').length, 0);
+  assert.equal(w.did('removeLabel').length + w.did('app-removeLabel').length, 0);
 });
 
 for (const [name, change] of Object.entries({
-  absent: w => {w.reviews = w.reviews.filter(r => r.state !== 'COMMENTED');},
-  edited: w => {w.reviewNodeOverride = {lastEditedAt: T(25)};},
-  'wrong head': w => {w.reviews.at(-1).commit_id = OTHER;},
-  'same-second as label': w => {w.reviews.at(-1).submitted_at = T(30);},
-  'wrong actor': w => {w.reviews.at(-1).user.id = 90;},
-  'duplicate proof': w => {w.seedQa();},
-  'extra marker field': w => {w.reviews.at(-1).body = w.reviews.at(-1).body.replace('"base":"main"', '"base":"main","extra":1');},
+  'creation-time': w => {w.events[0].created_at = T(0);},
+  'before the opening boundary': w => {w.events[0].created_at = T(1);},
 })) {
-  test('author QA ' + name + ' fails closed', async () => {
-    const w = authorWorld(); w.seedQa(); change(w);
+  test('author ' + name + ' label cannot authorize the queue', async () => {
+    const w = authorWorld(); change(w);
     assert.equal(await controller.approved(w.github, 'o', 'r', w.pr), false);
   });
 }
@@ -202,7 +200,8 @@ test('a head change during approval reads blocks authorization', async () => {
 test('successful registered PR CI releases the gate without a second CI run', async () => {
   const w = world(); await w.ciDone();
   assert.equal(w.did('status').at(-1)[1].state, 'success');
-  assert.equal(w.did('nativeWait').length, 1);
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.deepEqual(w.did('nativeMerge')[0][1], {id: 'PR_7', head: HEAD});
   assert.equal(w.did('dispatch').length, 0);
   assert.equal(w.did('merge').length, 0);
 });
@@ -246,7 +245,8 @@ for (const index of [0, 1]) {
     assert.equal(w.did('removeLabel').length, 0);
     assert.equal(w.did('comment').length, 0);
     assert.equal(w.did('status').at(-1)[1].state, 'pending');
-    assert.equal(w.nativeAutoMethod, 'SQUASH');
+    assert.equal(w.nativeAutoMethod, null);
+    assert.equal(w.did('nativeMerge').length, 0);
     Object.assign(w.runs[index], {run_attempt: 2, conclusion: 'success'});
     w.checks = world().checks;
     await w.ciDone();
@@ -256,7 +256,7 @@ for (const index of [0, 1]) {
   });
 }
 
-test('workflow-capable credential only enables and disables native waiting', async () => {
+test('workflow-capable credential performs protected release and cancels old waiting', async () => {
   const w = world({approved: false});
   const botGraphql = w.github.graphql;
   const mutations = [];
@@ -266,14 +266,16 @@ test('workflow-capable credential only enables and disables native waiting', asy
   };
   w.mergeGithub = {graphql: async (query, args) => {
     assert.match(query, /mutation/);
-    assert.match(query, /enablePullRequestAutoMerge|disablePullRequestAutoMerge/);
+    assert.match(query, /mergePullRequest|disablePullRequestAutoMerge/);
+    assert.doesNotMatch(query, /enablePullRequestAutoMerge/);
     mutations.push(query);
     return botGraphql(query, args);
   }};
   await w.labeled();
   assert.equal(w.did('approve').length, 1);
   assert.equal(w.did('status').at(-1)[1].state, 'success');
-  assert.deepEqual(w.did('nativeWait')[0][1], {id: 'PR_7', head: HEAD});
+  assert.deepEqual(w.did('nativeMerge')[0][1], {id: 'PR_7', head: HEAD});
+  w.nativeAutoMethod = 'SQUASH';
   w.pr.labels = [];
   await w.fire('pull_request_target', {action: 'unlabeled', label: {name: 'automerge'}, pull_request: w.pr});
   assert.equal(w.did('status').at(-1)[1].state, 'failure');
@@ -285,22 +287,22 @@ test('a rejected workflow-capable credential cannot release the QA gate', async 
   const w = world();
   w.mergeGithub = {graphql: async () => { throw new Error('workflows permission required'); }};
   await assert.rejects(w.ciDone(), /workflows permission required/);
-  assert.equal(w.did('status').at(-1)[1].state, 'pending');
+  assert.equal(w.did('status').at(-1)[1].state, 'failure');
   assert.equal(w.nativeAutoMethod, null);
 });
 
-test('maintainer-enabled squash waiting survives without another privileged mutation', async () => {
+test('maintainer-enabled squash waiting is retired before pending CI and exact release', async () => {
   const w = world({nativeAutoMethod: 'SQUASH'});
-  w.mergeGithub = {graphql: async () => { assert.fail('existing squash waiting needs no mutation'); }};
   w.runs[0].status = 'in_progress'; w.runs[0].conclusion = null;
   await w.ciDone();
   assert.equal(w.did('status').at(-1)[1].state, 'pending');
   Object.assign(w.runs[0], {status: 'completed', conclusion: 'success'});
   await w.ciDone();
   assert.equal(w.did('status').at(-1)[1].state, 'success');
-  assert.equal(w.nativeAutoMethod, 'SQUASH');
+  assert.equal(w.nativeAutoMethod, null);
   assert.equal(w.did('nativeWait').length, 0);
-  assert.equal(w.did('nativeCancel').length, 0);
+  assert.equal(w.did('nativeCancel').length, 1);
+  assert.deepEqual(w.did('nativeMerge')[0][1], {id: 'PR_7', head: HEAD});
 });
 
 test('a workflow-capable credential cannot authorize an unapproved head', async () => {
@@ -416,7 +418,7 @@ test('a collaborator label approves a fork head through the target repository', 
   const w = forkWorld(); w.reviews = [];
   await w.labeled();
   assert.equal(w.did('approve').length, 1);
-  assert.equal(w.did('nativeWait')[0][1].head, HEAD);
+  assert.equal(w.did('nativeMerge')[0][1].head, HEAD);
   assert.equal(w.did('status').at(-1)[1].state, 'success');
 });
 
@@ -439,18 +441,11 @@ test('fork review events need no write token; CI completion rechecks QA', async 
   assert.equal(w.did('status').at(-1)[1].state, 'failure');
 });
 
-test('proof revoked during CI reads cannot release the pending gate', async () => {
-  const w = authorWorld(); w.seedQa();
-  w.hooks.checks = () => {w.reviewNodeOverride = {lastEditedAt: T(40)};};
-  await w.ciDone();
-  assert.equal(w.did('status').at(-1)[1].state, 'failure');
-  assert.equal(w.nativeAutoMethod, null);
-});
-
-test('a preexisting merge-method request is replaced with squash while the gate is pending', async () => {
+test('a preexisting merge-method request is cancelled before protected squash release', async () => {
   const w = world({nativeAutoMethod: 'MERGE'}); await w.ciDone();
   assert.equal(w.did('nativeCancel').length, 1);
-  assert.equal(w.nativeAutoMethod, 'SQUASH');
+  assert.equal(w.nativeAutoMethod, null);
+  assert.deepEqual(w.did('nativeMerge')[0][1], {id: 'PR_7', head: HEAD});
   assert.equal(w.did('status')[0][1].state, 'pending');
 });
 
@@ -470,7 +465,8 @@ test('invalid targeted reconciliation is rejected before any API call', async ()
 
 function appStatusWorld(over = {}) {
   const w = world({repositoryId: 1426153186, appQaStatus: true,
-    appId: appStatus.APP_ID, appInstallationId: appStatus.INSTALLATION_ID, ...over});
+    appId: appStatus.APP_ID, appInstallationId: appStatus.INSTALLATION_ID,
+    nativePolicy: {contexts: [appStatus.APP_STATUS]}, ...over});
   w.useApp();
   return w;
 }
@@ -521,12 +517,13 @@ test('verified App success precedes the unchanged Actions gate and is read back'
   assert.equal(lastStatus(w, appStatus.STATUS).creator.id, 41898282);
   const writes = w.calls.filter(([name]) => ['status', 'app-status'].includes(name));
   assert.deepEqual(writes.map(([name, a]) => [name, a.context, a.state]), [
-    ['status', appStatus.STATUS, 'pending'], ['app-status', appStatus.APP_STATUS, 'pending'],
+    ['app-status', appStatus.APP_STATUS, 'pending'], ['status', appStatus.STATUS, 'pending'],
     ['app-status', appStatus.APP_STATUS, 'success'], ['status', appStatus.STATUS, 'success'],
   ]);
   assert.ok(writes.every(([, a]) => a.sha === HEAD && a.owner === 'o' && a.repo === 'r'));
   assert.ok(w.did('statuses').length >= 3);
-  assert.equal(w.did('nativeWait')[0][1].head, HEAD);
+  assert.equal(w.did('nativeMerge')[0][1].head, HEAD);
+  assert.equal(w.did('nativeWait').length, 0);
   assert.equal(w.did('merge').length, 0);
 });
 
@@ -722,32 +719,12 @@ test('manual App reconciliation requires an existing receipt and cannot manufact
   assert.equal(w.did('nativeWait').length, 0);
 });
 
-test('the App shadow retains exact-head author COMMENT QA before the first label', async () => {
+test('the App shadow accepts an author first label after opening', async () => {
   const w = appStatusWorld({approved: false});
   w.pr.user = {id: 42, login: 'maintainer'};
-  w.seedQa();
   await w.labeled();
   bothStates(w, 'success');
   assert.equal(w.did('app-approve').length, 1);
-});
-
-test('missing author COMMENT QA cannot be replaced by a green App status', async () => {
-  const w = appStatusWorld({approved: false});
-  w.pr.user = {id: 42, login: 'maintainer'};
-  await w.labeled();
-  bothStates(w, 'failure');
-  assert.equal(w.did('app-approve').length, 0);
-  assert.equal(w.did('app-status').some(([, a]) => a.state === 'success'), false);
-});
-
-test('author COMMENT edited during App publication revokes both statuses', async () => {
-  const w = appStatusWorld();
-  w.pr.user = {id: 42, login: 'maintainer'};
-  w.seedQa();
-  w.hooks['app-status'] = a => {if (a.state === 'success') w.reviewNodeOverride = {lastEditedAt: T(40)};};
-  await w.ciDone();
-  bothStates(w, 'failure');
-  assert.equal(w.did('status').some(([, a]) => a.state === 'success'), false);
 });
 
 test('source repository changed during App publication cannot release either gate', async () => {
@@ -844,9 +821,587 @@ test('native waiting is cancelled from REST pull request state without a GraphQL
   assert.equal(w.did('nativeCancel').length, 1);
 });
 
-test('registered workflow identity is read once per controller invocation', async () => {
-  const w = appStatusWorld();
+for (const file of ['ci.yml', 'arm64-windows.yml']) {
+  for (const [name, override] of Object.entries({
+    disabled: {state: 'disabled_manually'},
+    replaced: {id: 999},
+    relocated: {path: '.github/workflows/retired.yml'},
+  })) {
+    test(`${file} workflow registration ${name} during App publication restores both pending gates`, async () => {
+      const w = appStatusWorld();
+      splitReads(w);
+      let changed = false;
+      w.hooks['app-status'] = args => {if (args.state === 'success') changed = true;};
+      const getWorkflow = w.readGithub.rest.actions.getWorkflow;
+      w.readGithub.rest.actions.getWorkflow = async args => {
+        const result = await getWorkflow(args);
+        return changed && args.workflow_id === file ?
+          {...result, data: {...result.data, ...override}} : result;
+      };
+      await w.ciDone();
+      assert.ok(changed, 'the registration changed after the prepared App success');
+      bothStates(w, 'pending');
+      assert.equal(w.did('status').some(([, args]) => args.state === 'success'), false);
+      assert.equal(w.did('app-removeLabel').length, 0);
+    });
+  }
+}
+
+test('workflow registration refresh failure after App publication revokes both gates without a reader fallback', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+  splitReads(w);
+  let changed = false;
+  w.hooks['app-status'] = args => {if (args.state === 'success') changed = true;};
+  const getWorkflow = w.readGithub.rest.actions.getWorkflow;
+  w.readGithub.rest.actions.getWorkflow = async args => {
+    if (changed) throw Object.assign(new Error('workflow read permission revoked'), {status: 403});
+    return getWorkflow(args);
+  };
+  await assert.rejects(w.ciDone(), /workflow read permission revoked/);
+  assert.ok(changed);
+  bothStates(w, 'failure');
+  assert.equal(w.did('status').some(([, args]) => args.state === 'success'), false);
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+const APP_RULE = {type: 'required_status_checks', parameters: {required_status_checks: [
+  {context: 'ci-required', integration_id: 15368},
+  {context: appStatus.APP_STATUS, integration_id: appStatus.APP_ID}]}};
+const quotaError = () => Object.assign(new Error('API rate limit exceeded for installation'), {status: 403});
+
+test('a required App gate makes legacy status writes best-effort', async () => {
+  const w = appStatusWorld({rules: [APP_RULE]});
+  w.statusErrors = {status: quotaError()};
+  await w.ciDone();
+  assert.equal(lastStatus(w, appStatus.APP_STATUS).state, 'success');
+  assert.equal(lastStatus(w, appStatus.STATUS), undefined);
+  assert.ok(w.warnings.some(s => s.includes('rate limit') && s.includes(appStatus.APP_STATUS)));
+  // The ruleset is read once, and only because a legacy write failed.
+  assert.equal(w.did('rules').length, 1);
+});
+
+test('the ruleset is not read while legacy status writes succeed', async () => {
+  const w = appStatusWorld({rules: [APP_RULE]});
   await w.ciDone();
   bothStates(w, 'success');
-  assert.equal(w.did('workflow').length, 2);
+  assert.equal(w.did('rules').length, 0);
 });
+
+for (const [name, rules] of Object.entries({
+  'no App rule': [],
+  'App context from another integration': [{type: 'required_status_checks', parameters: {
+    required_status_checks: [{context: appStatus.APP_STATUS, integration_id: 15368}]}}],
+  'another rule type': [{type: 'pull_request', parameters: {required_status_checks: [
+    {context: appStatus.APP_STATUS, integration_id: appStatus.APP_ID}]}}],
+})) {
+  test(`legacy write failures stay fatal with ${name}`, async () => {
+    const w = appStatusWorld({rules, nativeAutoMethod: 'SQUASH'});
+    w.statusErrors = {status: quotaError()};
+    await assert.rejects(w.ciDone(), /rate limit/);
+    assert.notEqual(lastStatus(w, appStatus.APP_STATUS)?.state, 'success');
+    assert.equal(w.nativeAutoMethod, null);
+  });
+}
+
+test('legacy write failures stay fatal while the App status is off', async () => {
+  const w = world({rules: [APP_RULE]});
+  w.statusErrors = {status: quotaError()};
+  await assert.rejects(w.ciDone(), /rate limit/);
+  assert.equal(w.did('rules').length, 0);
+});
+
+test('an unreadable ruleset keeps a legacy failure fatal', async () => {
+  const w = appStatusWorld({rules: [APP_RULE], nativeAutoMethod: 'SQUASH'});
+  w.statusErrors = {status: quotaError()};
+  w.rulesError = new Error('rules unavailable');
+  await assert.rejects(w.ciDone(), /rules unavailable|rate limit/);
+  assert.notEqual(lastStatus(w, appStatus.APP_STATUS)?.state, 'success');
+});
+
+test('the App status readback uses the read client', async () => {
+  const w = appStatusWorld();
+  const reads = [];
+  const combined = w.github.rest.repos.getCombinedStatusForRef;
+  w.readGithub = {rest: {...w.github.rest, repos: {...w.github.rest.repos,
+    getCombinedStatusForRef: async args => { reads.push(args.ref); return combined(args); }}},
+    graphql: w.github.graphql};
+  w.github.rest.repos.getCombinedStatusForRef = async () => assert.fail('readback used GITHUB_TOKEN');
+  await w.ciDone();
+  bothStates(w, 'success');
+  assert.ok(reads.length > 0);
+});
+
+function pendingGate(w, context = appStatus.STATUS) {
+  w.statuses.unshift({id: w.nextStatusId++, context, state: 'pending',
+    creator: {login: 'github-actions[bot]', id: 41898282, type: 'Bot'}});
+}
+
+test('schedule reconciles a labeled PR whose CI finished while its gate stayed pending', async () => {
+  const w = world(); pendingGate(w);
+  await w.sweep();
+  assert.equal(lastStatus(w, appStatus.STATUS).state, 'success');
+});
+
+test('schedule reconciles a stuck PR after failed CI and removes its label', async () => {
+  const w = world({nativeAutoMethod: 'SQUASH'}); pendingGate(w);
+  w.runs[0].conclusion = 'failure';
+  await w.sweep();
+  assert.equal(w.did('removeLabel').length, 1);
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+test('schedule checks the App context when the App status is enabled', async () => {
+  const w = appStatusWorld(); pendingGate(w, appStatus.APP_STATUS);
+  await w.sweep();
+  bothStates(w, 'success');
+});
+
+for (const [name, setup] of Object.entries({
+  'CI still running': w => { pendingGate(w); w.runs[0].status = 'in_progress'; w.runs[0].conclusion = null; },
+  'no automerge label': w => { pendingGate(w); w.pr.labels = []; },
+  'a draft PR': w => { pendingGate(w); w.pr.draft = true; },
+})) {
+  test(`schedule leaves ${name} alone`, async () => {
+    const w = world(); setup(w);
+    await w.sweep();
+    assert.equal(w.did('getPR').length, 0);
+    assert.equal(w.did('status').length, 0);
+  });
+}
+
+function seedSuccess(w, context = appStatus.APP_STATUS) {
+  const creator = context === appStatus.APP_STATUS ? APP_BOT :
+    {id: 41898282, login: 'github-actions[bot]', type: 'Bot'};
+  const status = {id: w.nextStatusId++, context, state: 'success', creator: {...creator},
+    url: 'https://api.github.com/repos/o/r/statuses/' + HEAD};
+  w.statuses.unshift(status);
+  return status;
+}
+
+for (const enabled of [false, true]) {
+  test(`schedule retires old waiting and releases a valid green exact head (App ${enabled})`, async () => {
+    const w = appStatusWorld({appQaStatus: enabled, nativeAutoMethod: 'SQUASH',
+      nativePolicy: {contexts: [enabled ? appStatus.APP_STATUS : appStatus.STATUS]}});
+    seedSuccess(w, enabled ? appStatus.APP_STATUS : appStatus.STATUS);
+    await w.sweep();
+    assert.ok(w.did('getPR').length > 0, 'current approval was rechecked');
+    assert.ok(w.did('runs').length >= 2, 'current CI is rechecked before release');
+    assert.equal(w.did('workflow').length, 2 * w.did('runs').length);
+    assert.equal(w.did('runDetails').length, 2 * w.did('runs').length);
+    assert.equal(w.did('nativeCancel').length, 1);
+    assert.equal(w.did('nativeWait').length, 0);
+    assert.equal(w.nativeAutoMethod, null);
+    assert.equal(w.nativeMerges.length, 1);
+    assert.equal(w.nativeMerges[0].stage, 'merge');
+  });
+}
+
+for (const existing of [null, 'MERGE']) {
+  test(`schedule recovers a valid green gate without native squash waiting (${existing})`, async () => {
+    const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: existing});
+    seedSuccess(w);
+    await w.sweep();
+    assert.equal(w.nativeMerges.length, 1);
+    assert.equal(w.nativeMerges[0].stage, 'merge');
+    assert.equal(w.did('nativeMerge').length, 1);
+    assert.equal(w.did('nativeWait').length, 0);
+    bothStates(w, 'success');
+  });
+}
+
+for (const [name, alter] of Object.entries({
+  'foreign writer': status => {status.creator = {id: 123, login: 'unrelated-writer', type: 'User'};},
+  'wrong bot login': status => {status.creator.login = 'other-app[bot]';},
+  'wrong account type': status => {status.creator.type = 'User';},
+  'another head URL': status => {status.url = 'https://api.github.com/repos/o/r/statuses/' + OTHER;},
+  'another repository URL': status => {status.url = 'https://api.github.com/repos/elsewhere/r/statuses/' + HEAD;},
+  'invalid status identity': status => {status.id = 0;},
+})) {
+  test(`schedule repairs a green context with ${name}`, async () => {
+    const w = appStatusWorld();
+    alter(seedSuccess(w));
+    await w.sweep();
+    assert.ok(w.did('getPR').length > 0);
+    assert.ok(w.did('app-status').length > 0);
+    bothStates(w, 'success');
+    assert.deepEqual(lastStatus(w, appStatus.APP_STATUS).creator, APP_BOT);
+  });
+}
+
+for (const state of ['failure', 'pending']) {
+  test(`schedule invalidates a trusted green gate after same-head CI becomes ${state}`, async () => {
+    const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+    seedSuccess(w);
+    Object.assign(w.runs[0], {run_attempt: 2,
+      status: state === 'pending' ? 'in_progress' : 'completed',
+      conclusion: state === 'pending' ? null : 'failure'});
+    await w.sweep();
+    bothStates(w, state);
+    assert.equal(w.nativeAutoMethod, null);
+    assert.equal(w.did('app-removeLabel').length, state === 'failure' ? 1 : 0);
+  });
+}
+
+for (const [name, revoke] of Object.entries({
+  review: w => {w.reviews[0].state = 'DISMISSED';},
+  permission: w => {w.permission = 'read';},
+})) {
+  test(`schedule does not keep a green gate after ${name} revocation`, async () => {
+    const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH'});
+    seedSuccess(w); revoke(w);
+    await w.sweep();
+    bothStates(w, 'failure');
+    assert.equal(w.nativeAutoMethod, null);
+    assert.equal(w.nativeMerges.length, 0);
+  });
+}
+
+function nativeAppWorld(contexts, over = {}) {
+  const rules = [{type: 'required_status_checks', parameters: {required_status_checks:
+    contexts.map(context => ({context, integration_id:
+      context === appStatus.APP_STATUS ? appStatus.APP_ID : 15368}))}}];
+  const w = appStatusWorld({nativePolicy: {contexts}, rules, ...over});
+  // An unrelated native approval keeps GitHub's ordinary one-review rule met
+  // when a test dismisses the controller's specific exact-head receipt.
+  w.reviews.push({id: 901, node_id: 'PRR_GENERAL', user: {id: 77, login: 'other-maintainer'},
+    state: 'APPROVED', commit_id: HEAD, submitted_at: T(25), body: 'General review'});
+  return w;
+}
+
+for (const contexts of [[appStatus.STATUS], [appStatus.APP_STATUS], [appStatus.APP_STATUS, appStatus.STATUS]]) {
+  for (const existing of [null, 'SQUASH', 'MERGE']) {
+    test(`native policy consumes success only at final protected release (${contexts.length} gates, existing ${existing})`, async () => {
+      const w = nativeAppWorld(contexts, {nativeAutoMethod: existing});
+      await w.ciDone();
+      assert.equal(w.pr.state, 'closed');
+      assert.equal(w.nativeMerges.length, 1);
+      assert.equal(w.nativeMerges[0].stage, 'merge');
+      assert.equal(w.did('nativeMerge').length, 1);
+      assert.equal(w.did('nativeWait').length, 0);
+      assert.equal(w.did('nativeCancel').length, existing ? 1 : 0);
+      assert.equal(w.calls.at(-1)[0], 'nativeMerge', 'no required evidence is read after release');
+      bothStates(w, 'success');
+    });
+  }
+  for (const [name, revoke] of Object.entries({
+    label: w => {w.pr.labels = [];},
+    receipt: w => {w.reviews[0].state = 'DISMISSED';},
+    permission: w => {w.permission = 'read';},
+    head: w => {w.pr.head.sha = OTHER;},
+    draft: w => {w.pr.draft = true;},
+    'CI failure': w => {w.runs[0].conclusion = 'failure';},
+    'CI rerun': w => {Object.assign(w.runs[0], {run_attempt: 2, status: 'in_progress', conclusion: null});},
+    'workflow disabled': w => {w.workflowOverride = {state: 'disabled_manually'};},
+  })) {
+    for (const publication of [appStatus.APP_STATUS, appStatus.STATUS]) {
+      test(`native policy blocks ${name} at ${publication} publication (${contexts.length} gates)`, async () => {
+        const w = nativeAppWorld(contexts, {nativeAutoMethod: 'SQUASH'});
+        let changed = false;
+        w.nativePolicyHook = (stage, args) => {
+          if (!changed && stage === 'status' && args.context === publication && args.state === 'success') {
+            changed = true; revoke(w);
+          }
+        };
+        await w.ciDone();
+        assert.ok(changed);
+        assert.equal(w.nativeMerges.length, 0);
+        assert.equal(w.pr.state, 'open');
+        assert.equal(w.nativeAutoMethod, null);
+        assert.equal(w.did('nativeWait').length, 0);
+        assert.notEqual(lastStatus(w, appStatus.APP_STATUS)?.state, 'success');
+      });
+    }
+  }
+}
+
+for (const failure of ['rejected', 'unconfirmed']) {
+  test(`App mode publishes no success when native disarming is ${failure}`, async () => {
+    const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH'});
+    if (failure === 'rejected') w.hooks.nativeCancel = () => {throw new Error('cancel denied');};
+    else w.nativeCancelNoop = true;
+    await assert.rejects(w.ciDone(), /cancel denied|remained armed/);
+    assert.equal(w.nativeMerges.length, 0);
+    assert.equal(w.did('app-status').some(([, a]) => a.state === 'success'), false);
+    bothStates(w, 'failure');
+  });
+  test(`App mode revokes an old green gate when native disarming is ${failure}`, async () => {
+    const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH'});
+    seedSuccess(w);
+    if (failure === 'rejected') w.hooks.nativeCancel = () => {throw new Error('cancel denied');};
+    else w.nativeCancelNoop = true;
+    await assert.rejects(w.ciDone(), /cancel denied|remained armed/);
+    assert.equal(w.nativeMerges.length, 0);
+    assert.equal(w.did('app-status').some(([, a]) => a.state === 'success'), false);
+    bothStates(w, 'failure');
+  });
+}
+
+test('App mode disarms an old green request before any publication', async () => {
+  const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH'});
+  seedSuccess(w);
+  await w.ciDone();
+  assert.equal(w.nativeMerges.length, 1);
+  assert.equal(w.nativeMerges[0].stage, 'merge');
+  assert.ok(w.calls.findIndex(([name]) => name === 'nativeCancel') <
+    w.calls.findIndex(([name]) => name === 'app-status'));
+});
+
+test('App label handling disarms before a new approval can consume an old green gate', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH', approved: false});
+  seedSuccess(w);
+  await w.labeled();
+  assert.equal(w.did('app-approve').length, 1);
+  assert.equal(w.nativeMerges.length, 1);
+  assert.equal(w.nativeMerges[0].stage, 'merge');
+  assert.ok(w.calls.findIndex(([name]) => name === 'nativeCancel') <
+    w.calls.findIndex(([name]) => name === 'app-approve'));
+});
+
+test('App label handling cannot create approval after unconfirmed native cancellation', async () => {
+  const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH', nativeCancelNoop: true, approved: false});
+  seedSuccess(w);
+  await assert.rejects(w.labeled(), /remained armed/);
+  assert.equal(w.did('app-approve').length, 0);
+  assert.equal(w.nativeMerges.length, 0);
+  bothStates(w, 'failure');
+});
+
+test('App mode leaves native waiting off while required CI is pending', async () => {
+  const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH'});
+  Object.assign(w.runs[0], {status: 'in_progress', conclusion: null});
+  await w.ciDone();
+  bothStates(w, 'pending');
+  assert.equal(w.nativeAutoMethod, null);
+  assert.equal(w.did('nativeWait').length, 0);
+});
+
+test('App mode revokes both statuses if final native release fails', async () => {
+  const w = nativeAppWorld([appStatus.APP_STATUS]);
+  w.hooks.nativeMerge = () => {throw new Error('native release denied');};
+  await assert.rejects(w.ciDone(), /native release denied/);
+  assert.equal(w.nativeMerges.length, 0);
+  assert.equal(w.nativeAutoMethod, null);
+  bothStates(w, 'failure');
+});
+
+for (const source of ['schedule', 'bulk manual', 'fork CI']) {
+  test(`App ${source} enqueues a per-PR job without publishing or arming`, async () => {
+    const w = nativeAppWorld([appStatus.APP_STATUS]);
+    pendingGate(w, appStatus.APP_STATUS);
+    if (source === 'schedule') await w.fire('schedule', {});
+    else if (source === 'bulk manual') await w.fire('workflow_dispatch', {inputs: {}});
+    else await w.fire('workflow_run', {workflow_run: {
+      event: 'pull_request', head_sha: HEAD, head_repository: {id: w.pr.head.repo.id},
+    }});
+    assert.deepEqual(w.dispatches, [{action: 'gesher-automerge-reconcile',
+      // Only CI completion starts a release retry chain.
+      client_payload: {pull_request_number: 7, head_sha: HEAD,
+        ...(source === 'fork CI' ? {release_retry: 0} : {})}}]);
+    for (const action of ['status', 'app-status', 'nativeWait', 'nativeCancel', 'app-approve'])
+      assert.equal(w.did(action).length, 0);
+    await w.drainDispatches();
+    assert.equal(w.nativeMerges.length, 1);
+    assert.equal(w.nativeMerges[0].stage, 'merge');
+  });
+}
+
+test('named App CI completion reconciles directly in its existing PR queue', async () => {
+  const w = nativeAppWorld([appStatus.APP_STATUS], {repositoryId: 10});
+  await w.fire('workflow_run', {workflow_run: {event: 'pull_request', head_sha: HEAD,
+    head_repository: {id: 10}, pull_requests: [structuredClone(w.pr)]}});
+  assert.equal(w.did('listPRs').length, 0);
+  assert.equal(w.did('app-dispatch').length, 0);
+  assert.equal(w.nativeMerges.length, 1);
+});
+
+test('App CI routes another named PR to its own queue instead of the first PR queue', async () => {
+  const w = nativeAppWorld([appStatus.APP_STATUS], {repositoryId: 10});
+  const other = structuredClone(w.pr); other.number = 8; other.head.sha = OTHER;
+  await w.fire('workflow_run', {workflow_run: {event: 'pull_request', head_sha: HEAD,
+    head_repository: {id: 10}, pull_requests: [other, structuredClone(w.pr)]}});
+  assert.equal(w.did('app-status').length, 0);
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.equal(w.dispatches[0].client_payload.pull_request_number, 7);
+  await w.drainDispatches();
+  assert.equal(w.nativeMerges.length, 1);
+});
+
+for (const payload of [null, {}, {pull_request_number: '7', head_sha: HEAD},
+  {pull_request_number: -1, head_sha: HEAD}, {pull_request_number: 7, head_sha: 'bad'}]) {
+  test(`invalid per-PR dispatch cannot perform writes: ${JSON.stringify(payload)}`, async () => {
+    const w = appStatusWorld();
+    await assert.rejects(w.fire('repository_dispatch', {action: 'gesher-automerge-reconcile',
+      client_payload: payload}), /Invalid queued PR reconciliation/);
+    assert.deepEqual(w.calls, []);
+  });
+}
+
+test('a queued reconciliation is bound to its observed head', async () => {
+  const w = appStatusWorld(); pendingGate(w, appStatus.APP_STATUS);
+  await w.fire('schedule', {});
+  w.pr.head.sha = OTHER;
+  await w.drainDispatches();
+  for (const action of ['status', 'app-status', 'nativeWait', 'nativeCancel', 'app-approve'])
+    assert.equal(w.did(action).length, 0);
+});
+
+test('schedule recovers a dispatch lost to queue overflow without inventing approval', async () => {
+  const w = appStatusWorld({approved: false}); pendingGate(w, appStatus.APP_STATUS);
+  await w.fire('schedule', {});
+  assert.equal(w.dispatches.length, 1);
+  w.dispatches = []; // GitHub may reject an arrival after 100 waiting jobs.
+  await w.fire('schedule', {});
+  assert.equal(w.dispatches.length, 1);
+  await w.drainDispatches();
+  bothStates(w, 'failure');
+  assert.equal(w.nativeMerges.length, 0);
+  assert.equal(w.did('app-approve').length, 0);
+});
+
+test('schedule revokes a green armed PR after a missed unlabel event', async () => {
+  const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH'});
+  seedSuccess(w); w.pr.labels = [];
+  await w.fire('schedule', {});
+  assert.equal(w.dispatches.length, 1);
+  assert.equal(w.did('runs').length, 0, 'unlabeled native waiting needs no CI lookup');
+  assert.equal(w.did('app-status').length, 0);
+  await w.drainDispatches();
+  bothStates(w, 'failure');
+  assert.equal(w.nativeMerges.length, 0);
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+test('schedule revokes an unlabeled leftover App success even without native waiting', async () => {
+  const w = appStatusWorld(); seedSuccess(w); w.pr.labels = [];
+  await w.fire('schedule', {});
+  assert.equal(w.dispatches.length, 1);
+  assert.equal(w.did('statuses').length, 1);
+  assert.equal(w.did('runs').length, 0);
+  await w.drainDispatches();
+  bothStates(w, 'failure');
+  assert.equal(w.nativeMerges.length, 0);
+});
+
+test('schedule only reads the current context for an unlabeled PR with no stale gate', async () => {
+  const w = appStatusWorld(); w.pr.labels = [];
+  await w.sweep();
+  assert.equal(w.did('statuses').length, 1);
+  assert.equal(w.did('runs').length, 0);
+  assert.equal(w.did('getPR').length, 0);
+  assert.equal(w.did('app-dispatch').length, 0);
+  assert.equal(w.did('app-status').length, 0);
+});
+
+test('a queued unlabel hint preserves a newer fully approved label application', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'}); seedSuccess(w); w.pr.labels = [];
+  await w.fire('schedule', {});
+  w.events.push({id: 60, event: 'unlabeled', label: {name: 'automerge'}, created_at: T(39),
+    actor: {id: 42, login: 'maintainer'}},
+    {id: 61, event: 'labeled', label: {name: 'automerge'}, created_at: T(40),
+      actor: {id: 42, login: 'maintainer'}});
+  w.pr.labels = [{name: 'automerge'}]; w.seedApproval();
+  await w.drainDispatches();
+  bothStates(w, 'success');
+  assert.equal(w.did('app-removeLabel').length, 0);
+  assert.equal(w.nativeMerges.length, 1);
+});
+
+test('schedule isolates failed dispatch admission from another PR', async () => {
+  const w = appStatusWorld(); pendingGate(w, appStatus.APP_STATUS);
+  const other = structuredClone(w.pr); other.number = 8; other.node_id = 'PR_8';
+  const list = w.github.rest.pulls.list;
+  w.github.rest.pulls.list = async args => {
+    const res = await list(args); res.data = [other, ...res.data]; return res;
+  };
+  w.hooks['app-dispatch'] = args => {
+    if (args.client_payload.pull_request_number === 8) throw new Error('PR 8 dispatch rejected');
+  };
+  await w.fire('schedule', {});
+  assert.ok(w.warnings.some(s => s.startsWith('#8: PR 8 dispatch rejected')));
+  assert.equal(w.dispatches.length, 1);
+  assert.equal(w.dispatches[0].client_payload.pull_request_number, 7);
+  await w.drainDispatches();
+  assert.equal(w.nativeMerges.length, 1);
+});
+
+test('schedule isolates a failing PR from the rest', async () => {
+  const w = world(); pendingGate(w);
+  const other = structuredClone(w.pr); other.number = 8; other.node_id = 'PR_8';
+  const list = w.github.rest.pulls.list;
+  w.github.rest.pulls.list = async args => {
+    const res = await list(args); res.data = [other, ...res.data]; return res;
+  };
+  const getPR = w.github.rest.pulls.get;
+  w.github.rest.pulls.get = async args => {
+    if (args.pull_number === 8) throw new Error('PR 8 unavailable'); return getPR(args);
+  };
+  await w.sweep();
+  assert.ok(w.warnings.some(s => s.startsWith('#8: PR 8 unavailable')));
+  assert.equal(lastStatus(w, appStatus.STATUS).state, 'success');
+});
+
+test('a schedule payload without a repository still requires the Gesher App', async () => {
+  const w = world({envRepositoryId: 1426153186}); w.noRepositoryPayload = true;
+  await assert.rejects(w.sweep(), /Gesher GitHub App is required/);
+  assert.deepEqual(w.calls, []);
+});
+
+test('schedule rechecks a failure gate after a transient error and releases a valid PR', async () => {
+  const w = appStatusWorld();
+  w.statuses.unshift({id: w.nextStatusId++, context: appStatus.APP_STATUS, state: 'failure'});
+  await w.sweep();
+  bothStates(w, 'success');
+});
+
+test('schedule keeps an invalid label failed', async () => {
+  const w = world({approved: false}); w.permission = 'read';
+  w.statuses.unshift({id: w.nextStatusId++, context: appStatus.STATUS, state: 'failure'});
+  await w.sweep();
+  assert.equal(lastStatus(w, appStatus.STATUS).state, 'failure');
+  assert.equal(w.did('approve').length, 0);
+});
+
+test('with the App status off the schedule reads the legacy gate with the Actions token', async () => {
+  const w = world(); pendingGate(w);
+  const reads = splitReads(w);
+  w.readGithub.rest.repos.getCombinedStatusForRef = async () => assert.fail('read token has no statuses access');
+  await w.sweep();
+  assert.equal(lastStatus(w, appStatus.STATUS).state, 'success');
+  assert.ok(reads.includes('list'));
+});
+
+// Included by the existing CI and runner-probe entrypoint.
+require('./automerge-release-cases.js');
+require('./automerge-exact-release-cases.js');
+
+for (const appQaStatus of [false, true]) {
+  const make = over => appQaStatus ? appStatusWorld(over) : world(over);
+  const writes = w => w.calls.filter(([name]) =>
+    ['status', 'app-status', 'app-dispatch', 'nativeCancel', 'nativeWait', 'nativeMerge'].includes(name));
+  test(`CI completion for an unlabeled PR without a green QA context writes nothing (App status ${appQaStatus})`, async () => {
+    const w = make();
+    w.pr.labels = [];
+    w.statuses.unshift({id: w.nextStatusId++, context: appStatus.STATUS, state: 'failure'});
+    await w.ciDone();
+    assert.deepEqual(writes(w), []);
+    assert.equal(w.did('getPR').length, 1);
+    assert.equal(w.did('statuses').length, 1);
+  });
+  for (const context of [appStatus.STATUS, appStatus.APP_STATUS]) {
+    test(`a leftover green ${context} on an unlabeled PR still takes the revocation path (App status ${appQaStatus})`, async () => {
+      const w = make();
+      w.pr.labels = [];
+      w.statuses.unshift({id: w.nextStatusId++, context, state: 'success'});
+      await w.ciDone();
+      assert.equal(lastStatus(w, appStatus.STATUS)?.state, 'failure');
+      if (appQaStatus) assert.equal(lastStatus(w, appStatus.APP_STATUS)?.state, 'failure');
+    });
+  }
+  test(`armed native waiting on an unlabeled PR is still cancelled after CI (App status ${appQaStatus})`, async () => {
+    const w = make({nativeAutoMethod: 'SQUASH'});
+    w.pr.labels = [];
+    await w.ciDone();
+    assert.equal(w.did('nativeCancel').length, 1);
+    assert.equal(lastStatus(w, appStatus.STATUS)?.state, 'failure');
+  });
+}

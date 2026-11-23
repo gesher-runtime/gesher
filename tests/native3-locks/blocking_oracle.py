@@ -22,6 +22,10 @@ class Worker:
         self.process = subprocess.Popen([str(executable), role, str(path), str(command), mode],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         text=True, bufsize=1)
+        # This protocol is parsed by the same POSIX byte-stream worker on both
+        # hosts. Python's Windows default would send CRLF, which raw stdio must
+        # preserve, and "observe\r\n" is not the worker's "observe\n" command.
+        self.process.stdin.reconfigure(newline='\n')
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
@@ -175,6 +179,7 @@ def run(executable, windows):
                     assert fields == dict(mode=mode, result=str(110 if mode.startswith('timeout') else 125),
                                           begin_failures=str(int(mode.endswith('begin'))),
                                           commit_failures=str(int(mode.endswith('commit'))),
+                                          deadline_barriers=str(int(mode.startswith('timeout'))),
                                           live_identity='1', retained_capacity='256', denied_capacity='256',
                                           unknown_capacity='256', reclaimed_capacity='255', later_timeout='1',
                                           handles_closed='260'), fields

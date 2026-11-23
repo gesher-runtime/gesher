@@ -11,6 +11,9 @@
 #    change) in the same window turned to 800x400, and back;
 #  - moveTaskToBack minimizes the window (IsIconic, still visible: its taskbar
 #    button), the Activity stops; restoring the window resumes it;
+#  - relaunching an existing singleTask Activity through gesher-app restores its
+#    minimized HWND, including its previous maximized state, without a native restore
+#    from the fixture; the task, Activity instance and process remain the same;
 #  - IME insets: the touch keyboard's rows (posted as IFrameworkInputPane reports
 #    them, kMsgInputPane: the runners show no touch keyboard) are the window's
 #    WindowInsets.Type.ime(); adjustResize shrinks MainActivity's content,
@@ -19,7 +22,8 @@
 #    (Get-Clipboard, Set-Clipboard), the app's clip listener hears Windows' changes;
 #  - on the Gesher device also multi-resume: OtherTaskActivity in a task of its
 #    own leaves MainActivity resumed; the top resumed activity follows the focused
-#    window (onTopResumedActivityChanged).
+#    window (onTopResumedActivityChanged). The device runs winapp with separate
+#    windows (ADR 0088), so each task is a window of its own.
 # In a single process (gesher-app --window) and on the Gesher device.
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
 if (-not ('ImeInput' -as [type])) { Add-Type -Path "$PSScriptRoot/../ime/ImeInput.cs" }
@@ -34,7 +38,17 @@ public static class GesherW3Win32 {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out RECT r);
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hwnd, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+  [StructLayout(LayoutKind.Sequential)] struct FILETIME { public uint Low, High; }
+  [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr process, out FILETIME created, out FILETIME exited, out FILETIME kernel, out FILETIME user);
+  public static ulong Generation(System.Diagnostics.Process process) {
+    FILETIME c, e, k, u;
+    if (!GetProcessTimes(process.Handle, out c, out e, out k, out u)) throw new InvalidOperationException("GetProcessTimes failed");
+    return ((ulong)c.High << 32) | c.Low;
+  }
   // The client area on the screen: {left, top, right, bottom}.
   public static int[] ClientOnScreen(IntPtr hwnd) {
     POINT p = new POINT();
@@ -50,6 +64,22 @@ public static class GesherW3Win32 {
 $bcpW3 = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $dvmW3 = @("-Xbootclasspath:$bcpW3", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $w3Input = 0x8043  # kMsgInputPane (compat/hwui/window/gesher_window.h)
+
+# The device checks below need two tasks of one app on the desktop at once (multi-resume,
+# ADR 0061's simultaneous tasks): each task a window of its own, the per-app "separate
+# windows" setting (ADR 0088). Saved with gesher-app windows in the device's data
+# ($env:ANDROID_DATA) before the app's process starts.
+function W3SeparateWindows([string] $Track, [string] $Package, [string] $Data) {
+  $out = & "$Dir/dalvikvm.exe" @dvmW3 com.gesher.app.Launcher windows $Package separate 2>&1
+  $file = Join-Path $Data 'system/app-windows.properties'
+  $saved = (Test-Path $file) -and (Select-String -Path $file -SimpleMatch "separate.$Package=true" -Quiet)
+  if ($LASTEXITCODE -eq 0 -and $saved) {
+    Write-Host "PASS  ${Track}: $Package set to separate windows (gesher-app windows)"
+  } else {
+    Write-Host "FAIL  ${Track}: gesher-app windows $Package separate (exit $LASTEXITCODE, saved $saved): $out"
+    $script:failed++
+  }
+}
 
 function W3After([scriptblock] $ReadLog, [int] $Mark) {
   $t = "$(& $ReadLog)"
@@ -190,7 +220,8 @@ function W3TurnChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
 }
 
 # moveTaskToBack: the window minimized (its taskbar button stays); restoring it resumes the task.
-function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
+function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
+                      [bool] $RequireClipboardDenial = $false) {
   $out = @()
   $at = W3Point $ReadLog 'back'
   $mark = W3Mark $ReadLog
@@ -201,13 +232,136 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
   $iconic = [GesherW3Win32]::IsIconic($app); $visible = [GesherWin32]::IsWindowVisible($app)
   if (-not $iconic) { $out += 'the window is not minimized' }
   if (-not $visible) { $out += 'the window was hidden (no taskbar button)' }
+  if ($RequireClipboardDenial) {
+    $foreign = $null
+    $folder = Join-Path $env:RUNNER_TEMP "clipboard-foreground-$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    $receiptPath = Join-Path $folder 'window.json'; $stopPath = Join-Path $folder 'stop'
+    $foreignWindow = [IntPtr]::Zero
+    try {
+      $foreign = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-File',
+        "`"$PSScriptRoot/../clipboard/ForeignForeground.ps1`"", '-Receipt', "`"$receiptPath`"", '-Stop', "`"$stopPath`"") -PassThru -WindowStyle Hidden
+      $deadline = (Get-Date).AddSeconds(15)
+      while (-not (Test-Path $receiptPath) -and -not $foreign.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
+      if (-not (Test-Path $receiptPath)) { throw 'owned foreground window did not start' }
+      $receipt = Get-Content $receiptPath -Raw | ConvertFrom-Json
+      $foreignWindow = [IntPtr][long]$receipt.hwnd
+      if ($foreign.HasExited -or $receipt.pid -ne $foreign.Id -or $receipt.created -le 0 -or
+          [GesherW3Win32]::Generation($foreign) -ne [ulong]$receipt.created -or
+          [GesherWin32]::ProcessId($foreignWindow) -ne $foreign.Id -or $foreign.Id -eq [GesherWin32]::ProcessId($app)) { throw 'owned foreground process identity differs from its native window' }
+      [void][GesherW3Win32]::ShowWindowAsync($foreignWindow, 5)
+      if (-not [ImeInput]::Foreground($foreignWindow)) { throw 'owned foreign window did not become the actual foreground window' }
+      $token = [Guid]::NewGuid().ToString('N')
+      Set-Clipboard -Value "background-denial-$token"
+      if ((Get-Clipboard -Raw) -cne "background-denial-$token") { throw 'denial probe needs a real nonempty Windows clipboard' }
+      if ([ImeInput]::GetForegroundWindow() -ne $foreignWindow) { throw 'foreground changed before the application probe' }
+      $request = $env:GESHER_WINAPP_CLIPBOARD_PROBE
+      if (-not $request -or (Test-Path $request)) { throw 'background request path is absent or reused' }
+      [IO.File]::WriteAllText($request + '.new', $token, [Text.Encoding]::ASCII)
+      [IO.File]::Move($request + '.new', $request)
+      if (-not (W3Wait $ReadLog $mark "MainActivity stopped clipboard present false probe $token" 15).Success) {
+        $out += 'the background application did not report clipboard read denial'
+      }
+      if ($foreign.HasExited -or [ImeInput]::GetForegroundWindow() -ne $foreignWindow -or
+          [GesherWin32]::ProcessId($foreignWindow) -ne $foreign.Id -or
+          [GesherW3Win32]::Generation($foreign) -ne [ulong]$receipt.created) { throw 'owned native foreground changed during the application getter' }
+      Write-Host "CLIPBOARD_FOREGROUND hwnd=$foreignWindow pid=$($foreign.Id) created=$($receipt.created) appPid=$([GesherWin32]::ProcessId($app)) probe=$token"
+    } catch { $out += "background-denial prerequisite: $_" }
+    finally {
+      [IO.File]::WriteAllText($stopPath, 'stop')
+      if ($foreign) {
+        if (-not $foreign.WaitForExit(10000)) { $foreign.Kill(); $out += 'owned foreground helper did not retire'; [void]$foreign.WaitForExit(5000) }
+        elseif ($foreign.ExitCode -ne 0) { $out += "owned foreground helper exited $($foreign.ExitCode)" }
+        $foreign.Dispose()
+      }
+      if ($foreignWindow -ne [IntPtr]::Zero -and [GesherWin32]::IsWindow($foreignWindow)) { $out += 'owned foreground HWND leaked after helper retirement' }
+    }
+  }
   $out += @(W3Order $ReadLog $mark @('MainActivity onPause', 'MainActivity onStop') 'moved to the back')
   $mark = W3Mark $ReadLog
   [void][GesherW3Win32]::ShowWindowAsync($app, 9)  # SW_RESTORE
   if (-not (W3Wait $ReadLog $mark 'MainActivity onResume' 60).Success) { $out += 'restoring the window did not resume MainActivity' }
   else { $out += @(W3Order $ReadLog $mark @('MainActivity onRestart', 'MainActivity onStart', 'MainActivity onResume') 'restored') }
   if (-not (W3Wait $ReadLog $mark 'MainActivity onTopResumedActivityChanged true' 30).Success) { $out += 'restored MainActivity is not the top resumed activity' }
+  if ($RequireClipboardDenial) {
+    if (-not [ImeInput]::Foreground($app)) { $out += 'restored application did not regain actual native focus' }
+    else {
+      $clipMark = W3Mark $ReadLog
+      Set-Clipboard -Value 'restored standalone clipboard'
+      if (-not (W3Wait $ReadLog $clipMark 'MainActivity clip changed: restored standalone clipboard' 15).Success) {
+        $out += 'listener did not resume after actual native foreground gain'
+      }
+    }
+  }
   W3Check $Mode 'Activity.moveTaskToBack minimizes its window (iconic, still visible: its taskbar button) and stops the Activity; restoring the window restarts and resumes it' $out "iconic $iconic, visible $visible"
+}
+
+# A new launch request, not the test, must restore the existing singleTask HWND.
+# The second cycle also distinguishes SW_RESTORE from SW_SHOWNORMAL: a maximized
+# window must stay maximized. All native writes below prepare the minimized state;
+# after onStop the fixture only launches through the ordinary Android/Launcher path.
+function W3ResumeTaskChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
+  $out = @()
+  $owner = $null
+  try {
+    $created = W3Wait $ReadLog 0 'ResumeTaskActivity created task (\d+) pid (\d+) instance ([a-f0-9-]+)' 30
+    if (-not $created.Success) { throw 'no initial task/process/Activity identity' }
+    $taskId = $created.Groups[1].Value
+    $ownerPid = [int]$created.Groups[2].Value
+    $instance = $created.Groups[3].Value
+    if ([GesherWin32]::ProcessId($app) -ne $ownerPid) { throw 'initial HWND belongs to a different process' }
+    $owner = [Diagnostics.Process]::GetProcessById($ownerPid)
+    $generation = [GesherW3Win32]::Generation($owner)
+    if (-not [ImeInput]::Foreground($app)) { throw 'initial window did not become foreground' }
+    $cycle = 0
+    foreach ($maximized in @($false, $true)) {
+      $cycle++
+      if ($maximized) {
+        [void][GesherW3Win32]::ShowWindowAsync($app, 3)  # SW_MAXIMIZE, preparation only.
+        $deadline = (Get-Date).AddSeconds(15)
+        while (-not [GesherW3Win32]::IsZoomed($app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+        if (-not [GesherW3Win32]::IsZoomed($app)) { throw 'could not prepare a maximized window' }
+      }
+      $mark = W3Mark $ReadLog
+      [void][GesherW3Win32]::ShowWindowAsync($app, 6)  # SW_MINIMIZE, never SW_RESTORE.
+      if (-not (W3Wait $ReadLog $mark 'ResumeTaskActivity onStop' 30).Success) { throw "cycle $cycle did not stop the minimized Activity" }
+      $order = @(W3Order $ReadLog $mark @('ResumeTaskActivity onPause', 'ResumeTaskActivity onStop') 'minimized')
+      if ($order.Count) { throw ($order -join '; ') }
+      if (-not [GesherW3Win32]::IsIconic($app) -or -not [GesherWin32]::IsWindowVisible($app)) {
+        throw "cycle $cycle needs the original HWND minimized with its taskbar button retained"
+      }
+
+      $mark = W3Mark $ReadLog
+      $launch = RunTimed "$Dir/dalvikvm.exe" (@($dvmW3) + @('com.gesher.app.Launcher', 'launch',
+        'com.gesher.winapp', '--window', '--activity', '.ResumeTaskActivity', '--detach')) 60
+      if ($LASTEXITCODE -ne 0) { throw "cycle $cycle launch failed: $launch" }
+      $identity = "task $taskId pid $ownerPid instance $instance"
+      if (-not (W3Wait $ReadLog $mark "ResumeTaskActivity onNewIntent $cycle $identity" 30).Success) {
+        throw "cycle $cycle did not deliver a new Intent to the original task, process and Activity"
+      }
+      if (-not (W3Wait $ReadLog $mark 'ResumeTaskActivity onResume' 30).Success) { throw "cycle $cycle did not resume" }
+      $order = @(W3Order $ReadLog $mark @('ResumeTaskActivity onRestart', 'ResumeTaskActivity onStart', 'ResumeTaskActivity onResume') 'app-driven restore')
+      if ($order.Count) { throw ($order -join '; ') }
+      $deadline = (Get-Date).AddSeconds(15)
+      while (([GesherW3Win32]::IsIconic($app) -or [ImeInput]::GetForegroundWindow() -ne $app) -and
+             (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+      if (-not [GesherWin32]::IsWindow($app) -or -not [GesherWin32]::IsWindowVisible($app) -or
+          [GesherW3Win32]::IsIconic($app) -or [ImeInput]::GetForegroundWindow() -ne $app) {
+        throw "cycle $cycle did not restore and activate the original HWND"
+      }
+      if ([GesherW3Win32]::IsZoomed($app) -ne $maximized) { throw "cycle $cycle lost the previous maximized state ($maximized)" }
+      if ($owner.HasExited -or [GesherWin32]::ProcessId($app) -ne $ownerPid -or
+          [GesherW3Win32]::Generation($owner) -ne $generation) { throw "cycle $cycle replaced the HWND's process generation" }
+      if (-not (W3Wait $ReadLog $mark "ResumeTaskActivity window focus true $identity" 15).Success -or
+          -not (W3Wait $ReadLog $mark 'ResumeTaskActivity onTopResumedActivityChanged true' 15).Success) {
+        throw "cycle $cycle restored native focus without the Activity's focus/top-resumed callbacks"
+      }
+      if ((W3After $ReadLog $mark) -match 'ResumeTaskActivity on(Create|Destroy)') { throw "cycle $cycle recreated the Activity instead of reusing it" }
+      Write-Host "INFO  windows3 app-driven restore: cycle $cycle, $identity, hwnd $app, generation $generation, maximized $maximized"
+    }
+  } catch { $out += "$_" }
+  finally { if ($owner) { $owner.Dispose() } }
+  W3Check $Mode 'relaunching a minimized singleTask restores its original HWND and foreground callbacks, preserving the task, Activity, process generation and maximized state' $out
 }
 
 # The touch keyboard's rows over the bottom 300 pixels (as IFrameworkInputPane reports
@@ -374,8 +528,155 @@ function W3Run([string] $Mode, [string] $Title, [string[]] $Arguments, [scriptbl
   }
 }
 
+# PR #270: full ART lifecycle and real HWND evidence. A floating theme cannot make an
+# activity a popup of a finishing splash or an activity in a different Android task.
+function W3FloatingRootChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
+                              [bool] $SameTask, [bool] $Shared) {
+  $out = @()
+  $mark = W3Mark $ReadLog
+  [GesherWin32]::SetClientSize($app, 420, 620)
+  if (-not (W3WaitSize $app '420x620')) { $out += 'could not resize the floating splash' }
+  if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity onConfigurationChanged: portrait, 420x620 dp' 30).Success) {
+    $out += 'the splash did not observe its real resize'
+  }
+  [void][GesherWin32]::SetWindowPos($app, [IntPtr]::Zero, 137, 113, 0, 0, 0x0015)  # NOSIZE, NOZORDER, NOACTIVATE
+  $place = [GesherW3Win32]::ClientOnScreen($app)
+  $ready = [regex]::Matches("$(& $ReadLog)", 'FloatingSplashActivity ready task (\d+), same at (\d+),(\d+), other at (\d+),(\d+)') | Select-Object -Last 1
+  if ($null -eq $ready) { W3Check $Mode 'floating root fixture is ready' @('no splash layout'); return }
+  $sourceTask = [int]$ready.Groups[1].Value
+  $button = if ($SameTask) { 2 } else { 4 }
+  $mark = W3Mark $ReadLog
+  [GesherWin32]::Click($app, [int]$ready.Groups[$button].Value, [int]$ready.Groups[$button + 1].Value)
+  # Accept a popup log as evidence too, so a bad implementation fails its ownership
+  # assertions instead of waiting for a top-level-only first-frame message.
+  $window = W3Wait $ReadLog $mark 'window "Gesher windows3 floating root" [^\r\n]*hwnd 0x([0-9a-f]+)' 60
+  if (-not $window.Success) { W3Check $Mode 'floating activity obtains a real window' @('no root HWND'); return }
+  $hwnd = [IntPtr][Convert]::ToInt64($window.Groups[1].Value, 16)
+  try {
+    $rootReady = W3Wait $ReadLog $mark 'FloatingRootActivity ready task (\d+), click at (\d+),(\d+)' 30
+    if (-not $rootReady.Success) { $out += 'no successor layout/task report' }
+    elseif ($SameTask -ne ([int]$rootReady.Groups[1].Value -eq $sourceTask)) {
+      $out += "wrong task identity: splash $sourceTask, successor $($rootReady.Groups[1].Value), same-task $SameTask"
+    }
+    if ($SameTask) {
+      if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity replacement requested, finishing true' 30).Success) { $out += 'splash did not request finish in its launch callback' }
+      if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity onDestroy \(finishing\)' 30).Success) { $out += 'finishing splash was not destroyed' }
+      $deadline = (Get-Date).AddSeconds(15)
+      while ([GesherWin32]::IsWindow($app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+      if ([GesherWin32]::IsWindow($app)) { $out += 'finished splash retained its native window' }
+    } else {
+      if (-not [GesherWin32]::IsWindowVisible($app)) { $out += 'floating task hid the source task' }
+      if ((W3After $ReadLog $mark).Contains('FloatingSplashActivity onDestroy')) { $out += 'floating task destroyed the source activity' }
+    }
+    if (-not [GesherWin32]::IsWindow($hwnd) -or -not [GesherWin32]::IsWindowVisible($hwnd)) { $out += 'floating root HWND did not remain alive and visible' }
+    if ($hwnd -eq $app) { $out += 'successor reused the source HWND' }
+    $owner = [GesherW3Win32]::GetWindow($hwnd, 4)  # GW_OWNER
+    $style = [GesherW3Win32]::GetWindowLongPtr($hwnd, -16).ToInt64() -band 0xffffffffL
+    if ($owner -ne [IntPtr]::Zero) { $out += "root acquired an owner HWND: $owner" }
+    if (($style -band 0x80000000L) -ne 0 -or ($style -band 0x00c00000L) -ne 0x00c00000L) { $out += "root is not a decorated top-level window (style $style)" }
+    if ($SameTask -or $Shared) {
+      $deadline = (Get-Date).AddSeconds(15)
+      do {
+        $there = [GesherW3Win32]::ClientOnScreen($hwnd)
+        if (($there -join ',') -eq ($place -join ',')) { break }
+        Start-Sleep -Milliseconds 100
+      } while ((Get-Date) -lt $deadline)
+      if (($there -join ',') -ne ($place -join ',')) { $out += "root bounds $($there -join ',') differ from source $($place -join ',')" }
+    }
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+      $green = W3Share $hwnd 0x00ff00
+      if ($green -ge 0.9) { break }
+      Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    if ($green -lt 0.9) { $out += 'floating root content did not render after the transition' }
+    if ($rootReady.Success) {
+      $clickMark = W3Mark $ReadLog
+      $rootReady = [regex]::Matches("$(& $ReadLog)", 'FloatingRootActivity ready task (\d+), click at (\d+),(\d+)') | Select-Object -Last 1
+      [GesherWin32]::Click($hwnd, [int]$rootReady.Groups[2].Value, [int]$rootReady.Groups[3].Value)
+      if (-not (W3Wait $ReadLog $clickMark 'FloatingRootActivity content clicked' 15).Success) { $out += 'floating root stopped accepting input' }
+    }
+  } finally {
+    [void][GesherWin32]::PostMessageW($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+  }
+  if (-not (W3Wait $ReadLog $mark 'FloatingRootActivity onDestroy \(finishing\)' 30).Success) { $out += 'closing the floating root did not finish it' }
+  if (-not $SameTask -and -not [GesherWin32]::IsWindowVisible($app)) { $out += 'closing the floating task removed the source window' }
+  W3Check $Mode 'floating root keeps task identity, top-level ownership, native placement, pixels and input' $out "same-task $SameTask, shared $Shared"
+}
+
+function W3FloatingRootRuns([string] $Mode, [bool] $Shared) {
+  foreach ($sameTask in @($true, $false)) {
+    $scenario = {
+      param($app, $readLog)
+      W3FloatingRootChecks $Mode $app $readLog $sameTask $Shared
+    }.GetNewClosure()
+    W3Run "$Mode, floating root, same-task $sameTask" 'Gesher windows3 floating splash' @(
+      'com.gesher.app.Launcher', 'launch', $apkW3, '--window', '--activity', '.FloatingSplashActivity'
+    ) $scenario @('FloatingRootActivity onDestroy (finishing)', 'FloatingSplashActivity onDestroy (finishing)',
+                 'gesher-app: the process of com.gesher.winapp ended (exit code 0)', 'gesher-app: done')
+  }
+}
+
 $apkW3 = NoDrive "$Dir/winapp.apk"
 $single = 'single process'
+
+# A fresh standalone profile first admits a different APK, then launches winapp twice.
+# These are ordinary Main -> createInProcess -> GesherAppDriver invocations. Neither
+# Binder identities nor ProcessRecords are supplied by the fixture. The copied/cut/
+# pasted bytes and listener notification come from the real foreground window.
+$standaloneSavedEnvironment = @{}
+foreach ($name in @('ANDROID_DATA', 'GESHER_LOGS', 'GESHER_MICROG_SPOOF', 'GESHER_UID',
+                     'GESHER_BINDER_UID', 'GESHER_BINDER', 'GESHER_STANDALONE_RESTARTED', 'GESHER_WINAPP_CLIPBOARD_PROBE')) {
+  $standaloneSavedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+}
+try {
+  foreach ($name in @('GESHER_UID', 'GESHER_BINDER_UID', 'GESHER_BINDER', 'GESHER_STANDALONE_RESTARTED')) {
+    [Environment]::SetEnvironmentVariable($name, $null)
+  }
+  foreach ($gmsMode in @('0', '1')) {
+    $profile = Join-Path $env:RUNNER_TEMP "standalone-clipboard-$gmsMode-$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $profile -Force | Out-Null
+    $env:ANDROID_DATA = NoDrive $profile
+    $env:GESHER_LOGS = NoDrive (Join-Path $profile 'logs')
+    $env:GESHER_MICROG_SPOOF = $gmsMode
+    $prime = RunTimed "$Dir/dalvikvm.exe" (@($dvmW3) + @('com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk"))) 120
+    if ($LASTEXITCODE -ne 0 -or -not $prime.Contains('gesher-app: done')) {
+      W3Check "standalone identity, GMS $gmsMode" 'first ordinary APK is admitted' @('lifecycle prime failed') $prime
+      continue
+    }
+    $script:standaloneClipboardUid = 0
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+      $env:GESHER_WINAPP_CLIPBOARD_PROBE = NoDrive (Join-Path $profile "background-$attempt.request")
+      $identityMode = "standalone canonical identity, GMS $gmsMode, launch $attempt"
+      W3Run $identityMode 'Gesher windows3 main' @('com.gesher.app.Main', '--window', '--display', '400x800@160', $apkW3) {
+        param($app, $readLog)
+        $identity = W3Wait $readLog 0 'winapp identity uid (\d+) pid (\d+) canonical native Binder PM registered before Application.onCreate' 30
+        $problems = @()
+        if (-not $identity.Success) { $problems += 'no canonical startup identity evidence' }
+        else {
+          $uid = [int]$identity.Groups[1].Value
+          if ($uid -le 10000) { $problems += "test needs a second durable UID, observed $uid" }
+          if ([int]$identity.Groups[2].Value -ne [GesherWin32]::ProcessId($app)) {
+            $problems += 'registered PID does not own the actual application HWND'
+          }
+          if ($script:standaloneClipboardUid -ne 0 -and $uid -ne $script:standaloneClipboardUid) {
+            $problems += "UID changed across standalone launches: $script:standaloneClipboardUid to $uid"
+          }
+          $script:standaloneClipboardUid = $uid
+        }
+        W3Check $identityMode 'non-default canonical UID, actual process registration and durable repeat launch' $problems $identity.Value
+        [void](WaitForLog $readLog 'MainActivity laid out' 60)
+        W3ClipChecks $identityMode $app $readLog
+        W3BackChecks $identityMode $app $readLog $true
+      } @('winapp identity foreign clipboard package rejected',
+          'MainActivity onDestroy (finishing)', 'gesher-app: done')
+    }
+  }
+} finally {
+  foreach ($entry in $standaloneSavedEnvironment.GetEnumerator()) {
+    [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value)
+  }
+}
 
 # 1. A single process (gesher-app --window): MainActivity turns itself, moves its task to
 #    the back, the keyboard's insets, the clipboard.
@@ -425,6 +726,7 @@ New-Item -ItemType Directory -Force "$root/data-windows3" | Out-Null
 $env:GESHER_SHORTCUTS = '0'
 $failedBeforeW3Device = $failed
 $device = 'the Gesher device'
+W3SeparateWindows windows3 com.gesher.winapp "$root/data-windows3"
 try {
   W3Run $device 'Gesher windows3 main' @('com.gesher.app.Launcher', 'launch', $apkW3, '--window') {
     param($app, $readLog)
@@ -437,6 +739,12 @@ try {
     W3ClipChecks $device $app $readLog
     W3BackChecks $device $app $readLog
   } @('MainActivity onTopResumedActivityChanged true', 'MainActivity onDestroy (changing configurations)', 'gesher-app: the process of com.gesher.winapp ended (exit code 0)', 'gesher-app: done')
+  W3Run "$device, app-driven task restore" 'Gesher windows3 resume task' @('com.gesher.app.Launcher', 'launch',
+    $apkW3, '--window', '--activity', '.ResumeTaskActivity') {
+    param($app, $readLog)
+    W3ResumeTaskChecks $device $app $readLog
+  } @('ResumeTaskActivity onDestroy (finishing)', 'gesher-app: the process of com.gesher.winapp ended (exit code 0)', 'gesher-app: done')
+  W3FloatingRootRuns "$device, separate windows" $false
 } finally {
   $shutdownLog = Join-Path $env:RUNNER_TEMP 'windows3-device-shutdown.log'
   $sd = Start-Process "$Dir/dalvikvm.exe" -ArgumentList (@($dvmW3) + 'com.gesher.app.Launcher', 'shutdown') `
@@ -452,3 +760,103 @@ try {
   if ($savedLogs) { $env:GESHER_LOGS = $savedLogs } else { Remove-Item Env:GESHER_LOGS -ErrorAction SilentlyContinue }
   Remove-Item Env:GESHER_SHORTCUTS -ErrorAction SilentlyContinue
 }
+
+# 3. One window per app (ADR 0088), the default, on a Gesher device of its own: OtherTaskActivity
+#    (a task of its own) takes MainActivity's window, whose task stops and whose window goes;
+#    Back on OtherTaskActivity (a root MainActivity started) finishes it and MainActivity's
+#    task comes back in its window; Back on MainActivity (a root home launched with the
+#    launcher intent) moves its task to the back: the window is minimized (its taskbar
+#    button), not hidden, and restoring it resumes MainActivity.
+function W3PressBack([IntPtr] $hwnd) {
+  # VK_BROWSER_BACK (KEYCODE_BACK), extended key, scan code 0x6A.
+  $down = [IntPtr](1 -bor (0x6A -shl 16) -bor (1 -shl 24))
+  $up = [IntPtr]([int64]$down.ToInt64() -bor 0xC0000000L)
+  [void][GesherW3Win32]::PostMessageW($hwnd, 0x0100, [IntPtr]0xA6, $down)  # WM_KEYDOWN
+  Start-Sleep -Milliseconds 100
+  [void][GesherW3Win32]::PostMessageW($hwnd, 0x0101, [IntPtr]0xA6, $up)  # WM_KEYUP
+}
+
+function W3OneWindowChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
+  $out = @()
+  $place = [GesherW3Win32]::ClientOnScreen($app)
+  $at = W3Point $ReadLog 'task'
+  $mark = W3Mark $ReadLog
+  [GesherWin32]::Click($app, $at[0], $at[1])
+  $other = W3Window $ReadLog $mark 'Gesher windows3 other task'
+  if ($other -eq [IntPtr]::Zero) { $out += 'no window for OtherTaskActivity' }
+  elseif ($other -eq $app) { $out += 'OtherTaskActivity took MainActivity''s Win32 window' }
+  if (-not (W3Wait $ReadLog $mark 'MainActivity onStop' 60).Success) { $out += 'MainActivity''s task was not stopped under OtherTaskActivity''s' }
+  else { $out += @(W3Order $ReadLog $mark @('MainActivity onPause', 'MainActivity onStop') 'covered') }
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline -and [GesherWin32]::IsWindowVisible($app)) { Start-Sleep -Milliseconds 250 }
+  if ([GesherWin32]::IsWindowVisible($app)) { $out += 'MainActivity''s window still shows under OtherTaskActivity''s' }
+  if ((W3After $ReadLog $mark).Contains('MainActivity onDestroy')) { $out += 'MainActivity was destroyed by the cover' }
+  if ($other -ne [IntPtr]::Zero) {
+    if (-not [GesherWin32]::IsWindowVisible($other)) { $out += 'OtherTaskActivity''s window is not shown' }
+    $there = [GesherW3Win32]::ClientOnScreen($other)
+    if ($there[0] -ne $place[0] -or $there[1] -ne $place[1]) { $out += "OtherTaskActivity's window is at $($there[0]),$($there[1]), not MainActivity's $($place[0]),$($place[1])" }
+  }
+  W3Check $Mode 'one window per app: an Activity in a task of its own takes the app''s window in its place; the task under it is paused, stopped and its window hidden' $out
+  if ($other -eq [IntPtr]::Zero) { return }
+
+  $out = @()
+  $mark = W3Mark $ReadLog
+  W3PressBack $other
+  if (-not (W3Wait $ReadLog $mark 'OtherTaskActivity onDestroy' 60).Success) { $out += 'Back did not finish OtherTaskActivity (a root MainActivity started)' }
+  if (-not (W3Wait $ReadLog $mark 'MainActivity onResume' 60).Success) { $out += 'MainActivity''s task did not come back after OtherTaskActivity''s ended' }
+  else { $out += @(W3Order $ReadLog $mark @('MainActivity onRestart', 'MainActivity onStart', 'MainActivity onResume') 'back') }
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline -and -not [GesherWin32]::IsWindowVisible($app)) { Start-Sleep -Milliseconds 250 }
+  if (-not [GesherWin32]::IsWindowVisible($app)) { $out += 'MainActivity''s window did not show again' }
+  if ([GesherW3Win32]::IsIconic($app)) { $out += 'MainActivity''s window came back minimized' }
+  W3Check $Mode 'one window per app: Back on the front task''s root (another task started it) finishes it, and the task it covered comes back in the window' $out
+
+  $out = @()
+  Start-Sleep 2
+  $mark = W3Mark $ReadLog
+  W3PressBack $app
+  if (-not (W3Wait $ReadLog $mark 'MainActivity onStop' 60).Success) { $out += 'Back on MainActivity (home launched it) did not stop it' }
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline -and -not [GesherW3Win32]::IsIconic($app)) { Start-Sleep -Milliseconds 250 }
+  $iconic = [GesherW3Win32]::IsIconic($app); $visible = [GesherWin32]::IsWindowVisible($app)
+  if (-not $iconic) { $out += 'the window is not minimized' }
+  if (-not $visible) { $out += 'the window was hidden (no taskbar button)' }
+  if ((W3After $ReadLog $mark) -match 'MainActivity onDestroy') { $out += 'Back finished MainActivity (home launched it with the launcher intent)' }
+  $mark = W3Mark $ReadLog
+  [void][GesherW3Win32]::ShowWindowAsync($app, 9)  # SW_RESTORE
+  if (-not (W3Wait $ReadLog $mark 'MainActivity onResume' 60).Success) { $out += 'restoring the window did not resume MainActivity' }
+  W3Check $Mode 'Back on a task root home launched with the launcher intent moves its task to the back: the window is minimized (its taskbar button), and restoring it resumes the Activity' $out "iconic $iconic, visible $visible"
+}
+
+$env:ANDROID_DATA = NoDrive "$root/data-windows3-shared"
+$env:GESHER_LOGS = NoDrive "$root/logs-windows3-shared"
+New-Item -ItemType Directory -Force "$root/data-windows3-shared" | Out-Null
+$env:GESHER_SHORTCUTS = '0'
+$failedBeforeShared = $failed
+$shared = 'the Gesher device, one window per app'
+try {
+  W3Run $shared 'Gesher windows3 main' @('com.gesher.app.Launcher', 'launch', $apkW3, '--window') {
+    param($app, $readLog)
+    [void](WaitForLog $readLog 'MainActivity laid out' 90)
+    Start-Sleep 2
+    W3OneWindowChecks $shared $app $readLog
+  } @('OtherTaskActivity onDestroy', 'gesher-app: the process of com.gesher.winapp ended (exit code 0)', 'gesher-app: done')
+  W3FloatingRootRuns $shared $true
+} finally {
+  $shutdownLog = Join-Path $env:RUNNER_TEMP 'windows3-shared-shutdown.log'
+  $sd = Start-Process "$Dir/dalvikvm.exe" -ArgumentList (@($dvmW3) + 'com.gesher.app.Launcher', 'shutdown') `
+    -NoNewWindow -PassThru -RedirectStandardOutput $shutdownLog -RedirectStandardError "$shutdownLog.err"
+  if (-not $sd.WaitForExit(120000)) { $sd.Kill($true); Write-Host 'INFO  the device shutdown timed out' }
+  if ($failed -ne $failedBeforeShared) {
+    foreach ($f in Get-ChildItem "$root/logs-windows3-shared" -Filter *.log -ErrorAction SilentlyContinue) {
+      Write-Host "--- $($f.Name)"
+      Get-Content $f.FullName -ErrorAction SilentlyContinue | Select-Object -Last 150 | Out-Host
+    }
+  }
+  $env:ANDROID_DATA = $savedData
+  if ($savedLogs) { $env:GESHER_LOGS = $savedLogs } else { Remove-Item Env:GESHER_LOGS -ErrorAction SilentlyContinue }
+  Remove-Item Env:GESHER_SHORTCUTS -ErrorAction SilentlyContinue
+}
+
+# Required on both desktop Windows versions; all legacy/shared checks above stay unchanged.
+. "$PSScriptRoot/../app-window-lifetime.ps1"

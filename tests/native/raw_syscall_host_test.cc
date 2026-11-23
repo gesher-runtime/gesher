@@ -15,6 +15,9 @@ void Check(const char* name, bool ok) {
   failures += !ok;
 }
 int event_flags = -1, chmod_flags = -1, mask_calls;
+int alt_stack_calls;
+int64_t alt_stack_in, alt_stack_out;
+bool alt_stack_fail;
 int64_t BIONIC_SYSV Eventfd(int64_t initial, int64_t flags, int64_t, int64_t, int64_t, int64_t) {
   event_flags = static_cast<int>(flags);
   return flags < 0 ? (errno = EINVAL, -1) : initial + 100;
@@ -39,6 +42,13 @@ int64_t BIONIC_SYSV Sigprocmask(int64_t, int64_t, int64_t, int64_t, int64_t, int
   ++mask_calls;
   return 0;
 }
+int64_t BIONIC_SYSV Sigaltstack(int64_t ss, int64_t old_ss, int64_t, int64_t, int64_t, int64_t) {
+  ++alt_stack_calls;
+  alt_stack_in = ss;
+  alt_stack_out = old_ss;
+  if (alt_stack_fail) return errno = EINVAL, -1;
+  return 0;
+}
 struct Regex { int32_t magic; size_t count; const char* end; void* guts; };
 struct Match { int64_t begin, end; };
 }
@@ -57,9 +67,18 @@ void* LookupBionicSymbol(const char* name) {
   if (!std::strcmp(name, "sched_getaffinity")) return reinterpret_cast<void*>(&Getaffinity);
   if (!std::strcmp(name, "sysconf")) return reinterpret_cast<void*>(&Sysconf);
   if (!std::strcmp(name, "sigprocmask")) return reinterpret_cast<void*>(&Sigprocmask);
+  if (!std::strcmp(name, "sigaltstack")) return reinterpret_cast<void*>(&Sigaltstack);
   return nullptr;
 }
 }
+
+#define REGEX_SCALING_REGEX Regex
+#define REGEX_SCALING_MATCH Match
+#define REGEX_SCALING_BEGIN begin
+#define REGEX_SCALING_END end
+#define REGEX_SCALING_ABI BIONIC_SYSV
+#define REGEX_SCALING_CHECK Check
+#include "regex_scaling_contract.inc"
 
 int main() {
   using namespace gesher::bionic;
@@ -82,6 +101,16 @@ int main() {
   Check("affinity errors stay negative errno", RawSyscallX64(204, args) == -EINVAL);
   Check("unknown syscall remains ENOSYS", RawSyscallX64(500, args) == -ENOSYS);
   Check("int error result remains EBADF", RawSyscallX64(3, args) == -EBADF);
+  errno = EDOM;
+  args[0] = 0x1111;
+  args[1] = 0x2222;
+  Check("sigaltstack forwards arguments and returns zero",
+        RawSyscallX64(131, args) == 0 && alt_stack_calls == 1 && alt_stack_in == 0x1111 &&
+            alt_stack_out == 0x2222 && errno == EDOM);
+  alt_stack_fail = true;
+  errno = EDOM;
+  Check("sigaltstack errors stay negative errno",
+        RawSyscallX64(131, args) == -EINVAL && alt_stack_calls == 2 && errno == EDOM);
 
   SymbolTable symbols;
   RegisterSyscall(symbols);
@@ -360,6 +389,7 @@ int main() {
     }
   }
   Check("REG_PEND needs an end pointer", compile(&re, "x", 32) == 16);
+  test_regex_scaling_contracts(compile, execute, free_regex);
   std::printf("raw syscall contracts: %d failures\n", failures);
   return failures != 0;
 }

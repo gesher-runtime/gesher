@@ -69,15 +69,34 @@ class QueueWorkflows(unittest.TestCase):
 
     def test_no_controller_polling_or_direct_merging(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        self.assertNotIn('schedule', doc[True])
+        # The only schedule is recovery of labeled PRs stuck after finished CI.
+        self.assertEqual(doc[True]['schedule'], [{'cron': '7,27,47 * * * *'}])
         self.assertIn('workflow_run', doc[True])
         self.assertNotIn('merge_group', doc[True])
         self.assertIn('unlabeled', doc[True]['pull_request_target']['types'])
         script = (ROOT / '.github/scripts/label-automerge.js').read_text()
         self.assertNotIn('pulls.merge(', script)
         self.assertIn('expectedHeadOid: $head', script)
+        self.assertNotIn('enablePullRequestAutoMerge(', script)
+        self.assertIn('mergePullRequest(input:', script)
         rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
         self.assertNotIn('merge_queue', [rule['type'] for rule in rules['rules']])
+
+    def test_base_advance_keeps_review_but_gate_stays_exact_head(self):
+        # GitHub's merge-base dismissal discarded exact-head approvals whenever
+        # main advanced; the exact-head QA gate and controller cover pushes.
+        rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
+        review = next(r['parameters'] for r in rules['rules'] if r['type'] == 'pull_request')
+        self.assertIs(review['dismiss_stale_reviews_on_push'], False)
+        self.assertEqual(review['required_approving_review_count'], 1)
+        checks = next(r['parameters']['required_status_checks'] for r in rules['rules']
+                      if r['type'] == 'required_status_checks')
+        self.assertIn({'context': 'qa/label-approval', 'integration_id': 15368}, checks)
+        script = (ROOT / '.github/scripts/label-automerge.js').read_text()
+        self.assertIn("payload.action === 'synchronize'", script)
+        self.assertIn('p.dismissStaleApprovals(', script)
+        self.assertIn("return {mode: 'blocked', state}", script)
+        self.assertIn('deferRelease(', script)
 
     def test_app_write_events_are_skipped_before_the_shared_job_queue(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
@@ -98,13 +117,55 @@ class QueueWorkflows(unittest.TestCase):
                          "!(github.event_name == 'pull_request_target' && github.event.action == 'edited' && "
                          "github.event.changes.base == null)")
 
+    def test_app_publication_uses_one_queue_per_pr_across_event_identities(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        concurrency = doc['jobs']['automerge']['concurrency']
+        self.assertEqual(concurrency['group'],
+                         "merge-approval-${{ github.event.pull_request.number || "
+                         "github.event.workflow_run.pull_requests[0].number || "
+                         "github.event.client_payload.pull_request_number || inputs.pull_request_number || "
+                         "github.event.workflow_run.head_sha || github.run_id }}")
+        self.assertEqual(doc[True]['repository_dispatch'], {'types': ['gesher-automerge-reconcile']})
+        # No cancellation can interrupt a run after it publishes success but
+        # before the final authorization checks and native release mutation.
+        self.assertEqual(concurrency['queue'], 'max')
+        self.assertFalse(concurrency.get('cancel-in-progress', False))
+        # Evaluate the configured OR expression with the event shapes GitHub
+        # supplies. Read-only bulk/fork jobs may have fallback keys; their
+        # dispatched worker must share the label/review/CI PR-number key.
+        import copy
+        import os
+        base = {'github': {'run_id': 900, 'event': {'pull_request': {},
+                'workflow_run': {'pull_requests': [{}]}, 'client_payload': {}}}, 'inputs': {}}
+        cases = []
+        for kind, number in [('pull', 7), ('ci', 7), ('queued', 7), ('manual', '7'),
+                             ('queued', 8), ('bulk', None), ('fork', None)]:
+            item = copy.deepcopy(base)
+            event = item['github']['event']
+            if kind == 'pull': event['pull_request']['number'] = number
+            if kind == 'ci': event['workflow_run']['pull_requests'][0]['number'] = number
+            if kind == 'queued': event['client_payload']['pull_request_number'] = number
+            if kind == 'manual': item['inputs']['pull_request_number'] = number
+            if kind == 'fork': event['workflow_run']['head_sha'] = 'a' * 40
+            cases.append(item)
+        expression = concurrency['group'].split('${{', 1)[1].rsplit('}}', 1)[0]
+        script = 'const key = ({github, inputs}) => "merge-approval-" + (' + expression + ');\n'
+        script += 'console.log(JSON.stringify(JSON.parse(process.env.QA_QUEUE_CASES).map(key)));'
+        result = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True,
+                                env=dict(os.environ, QA_QUEUE_CASES=json.dumps(cases)))
+        self.assertEqual(json.loads(result.stdout), ['merge-approval-7'] * 4 +
+                         ['merge-approval-8', 'merge-approval-900', 'merge-approval-' + 'a' * 40])
+
     def test_workflow_credential_is_separate_from_required_status_identity(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
         self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
         self.assertFalse(checkout['with']['persist-credentials'])
         self.assertEqual(token['if'], "vars.GESHER_BOT_APP_ID != ''")
-        self.assertEqual(token['with']['repositories'], '${{ github.event.repository.name }}')
+        # Schedule payloads have no repository object; scope tokens via GITHUB_REPOSITORY.
+        self.assertEqual(repo['id'], 'repo')
+        self.assertEqual(repo['run'], 'echo "name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"')
+        self.assertEqual(token['with']['repositories'], '${{ steps.repo.outputs.name }}')
         self.assertEqual(token['with']['owner'], '${{ github.repository_owner }}')
         self.assertEqual({key: value for key, value in token['with'].items()
                           if key.startswith('permission-')},
@@ -130,7 +191,7 @@ class QueueWorkflows(unittest.TestCase):
 
     def test_evidence_reads_use_a_read_only_app_token_with_actions_fallback(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
         self.assertEqual(reader['id'], 'gesher-read')
         self.assertEqual(reader['uses'], token['uses'])
         self.assertEqual(reader['if'], "vars.GESHER_BOT_APP_ID != ''")
@@ -140,18 +201,20 @@ class QueueWorkflows(unittest.TestCase):
                           if key.startswith('permission-')},
                          {'permission-actions': 'read', 'permission-checks': 'read',
                           'permission-metadata': 'read',
-                          'permission-pull-requests': 'read'})
+                          'permission-pull-requests': 'read',
+                          'permission-statuses': "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'read' || '' }}"})
         for key in ['app-id', 'private-key', 'owner', 'repositories']:
             self.assertEqual(reader['with'][key], token['with'][key])
         self.assertEqual(controller['env']['GESHER_READ_TOKEN'], '${{ steps.gesher-read.outputs.token }}')
         script = controller['with']['script']
         self.assertIn('auth: readToken', script)
         self.assertIn('run({github, readGithub,', script)
+        self.assertIn('repositoryId: Number(process.env.GITHUB_REPOSITORY_ID)', script)
 
     def test_exact_flag_controls_both_token_permission_and_status_writer(self):
         import os
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
         self.assertEqual(flag['id'], 'app-qa-flag')
         self.assertEqual(flag['uses'], 'actions/github-script@v7')
         self.assertEqual(flag['env'], {'GESHER_APP_QA_STATUS': '${{ vars.GESHER_APP_QA_STATUS }}'})

@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const run = require('./label-automerge.js');
+// Stale-state re-reads are bounded by count; the fixture needs no wall-clock delay.
+run.RELEASE_STATE.delayMs = 0;
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const BASE = 'c'.repeat(40);
@@ -22,13 +24,49 @@ function world(over = {}) {
       actor: {id: 42, login: 'maintainer'}}],
     runs: [], checks: ['ci-required', 'arm64-required'].map((name, i) => ({id: 10 + i,
       name, status: 'completed', conclusion: 'success', app: {id: 15368}, check_suite: {id: 1000 + i}})),
-    statuses: [], nextStatusId: 10000, comments: [], reviews: [], permission: 'write', nativeAutoMethod: null,
+    statuses: [], nextStatusId: 10000, comments: [], reviews: [], dispatches: [], permission: 'write', nativeAutoMethod: null,
     mergeError: null, mergeResult: {merged: true}, calls: [], hooks: {}, warnings: [],
     mergeProof: {sha: MERGE, parents: [{sha: BASE}, {sha: HEAD}]},
     targetHead: BASE,
     comparison: {status: 'diverged', base_commit: {sha: BASE}, merge_base_commit: {sha: OTHER}},
     ...over,
   };
+  // Opt-in native policy model: status/approval persistence and native merge can
+  // close a PR before the controller's next awaited read or cleanup executes.
+  // The default recording-only fixture remains useful for ordinary unit cases.
+  w.nativeMerges = [];
+  const nativeReady = () => {
+    if (!w.nativePolicy || w.pr.state !== 'open' || w.pr.draft || w.nativePolicy.blocked ||
+        (w.nativeMergeable && w.nativeMergeable !== 'MERGEABLE')) return false;
+    const contexts = w.nativePolicy.contexts;
+    const green = contexts.every(context => {
+      const writer = context === 'qa/gesher-label-approval' ? APP_BOT : ACTIONS_BOT;
+      const latest = w.statuses.filter(s => s.context === context &&
+        s.creator?.id === writer.id && s.creator.type === 'Bot' && s.creator.login === writer.login &&
+        s.url === `https://api.github.com/repos/o/r/statuses/${w.pr.head.sha}`)
+        .sort((a, b) => b.id - a.id)[0];
+      return latest?.state === 'success';
+    });
+    // The deployed rules keep approvals when main advances. Native policy can
+    // therefore count an older-head review; only the controller receipt binds
+    // authorization to this PR's current head. Model both policy settings.
+    const approvals = w.reviews.filter(r => r.state === 'APPROVED' &&
+      (!w.nativePolicy.dismissStaleReviews || r.commit_id === w.pr.head.sha)).length;
+    return green && approvals >= (w.nativePolicy.approvals ?? 1) &&
+      w.checks.length > 0 && w.checks.every(c => c.status === 'completed' && c.conclusion === 'success');
+  };
+  const recordNativeMerge = stage => {
+    w.nativeMerges.push({stage, head: w.pr.head.sha, label: w.pr.labels.length > 0,
+      permission: w.permission, receiptState: w.reviews[0]?.state});
+    w.pr.state = 'closed';
+    w.nativeAutoMethod = null;
+  };
+  const nativeBoundary = async (stage, args) => {
+    if (!w.nativePolicy) return;
+    if (w.nativePolicyHook) await w.nativePolicyHook(stage, args);
+    if (w.nativeAutoMethod === 'SQUASH' && nativeReady()) recordNativeMerge(stage);
+  };
+  w.evaluateNative = () => nativeBoundary('external-native-evaluation', {});
   if (!over.runs) w.runs = ['ci', 'arm64-windows'].map((name, i) => ({
     id: 100 + i, workflow_id: 1 + i, check_suite_id: 1000 + i, name, path: '.github/workflows/' + name + '.yml',
     event: 'pull_request', status: 'completed', conclusion: 'success', run_attempt: 1, created_at: T(10),
@@ -76,22 +114,25 @@ function world(over = {}) {
     const items = all.slice((a.page - 1) * a.per_page, a.page * a.per_page);
     return field ? {[field]: items, total_count: all.length} : items;
   });
-  const statusWrite = (actor, name) => rec(name, (args) => {
+  const statusWrite = (actor, name) => rec(name, async (args) => {
     if (w.statusErrors?.[name]) throw w.statusErrors[name];
     const value = {id: w.nextStatusId++, context: args.context, state: args.state,
       creator: clone(actor), url: `https://api.github.com/repos/${args.owner}/${args.repo}/statuses/${args.sha}`,
       ...w.statusResponseOverride?.[name]};
     w.statuses.unshift(value);
+    await nativeBoundary('status', {...args, writer: clone(actor)});
     return value;
   });
   const writes = (actor, prefix = '') => ({
     pulls: {
-      createReview: rec(prefix + 'approve', (args) => {
+      createReview: rec(prefix + 'approve', async (args) => {
         if (w.approveError) throw w.approveError;
         const r = {id: 400 + w.reviews.length, node_id: 'BOT_' + w.reviews.length,
           user: clone(actor), state: 'APPROVED',
           submitted_at: T(Math.max(31, Number(w.events.at(-1).created_at.slice(17,19)) + 1)), commit_id: args.commit_id, body: args.body};
-        w.reviews.push(r); return r;
+        w.reviews.push(r);
+        await nativeBoundary('review', args);
+        return r;
       }),
       dismissReview: rec(prefix + 'dismiss', (args) => {
         const r = w.reviews.find((r) => r.id === args.review_id);
@@ -113,7 +154,8 @@ function world(over = {}) {
       ...actionsWrites.pulls,
       get: rec('getPR', () => ({...w.pr, auto_merge: w.nativeAutoMethod ?
         {merge_method: w.nativeAutoMethod.toLowerCase()} : null})),
-      list: page('listPRs', () => [w.pr]),
+      list: page('listPRs', () => [{...w.pr, auto_merge: w.nativeAutoMethod ?
+        {merge_method: w.nativeAutoMethod.toLowerCase()} : null}]),
       listReviews: page('reviews', () => {
         if (w.reviewError) throw w.reviewError;
         return w.reviews;
@@ -140,6 +182,10 @@ function world(over = {}) {
     },
     checks: {listForRef: page('checks', () => w.checks, 'check_runs')},
     repos: {createCommitStatus: statusWrite(ACTIONS_BOT, 'status'),
+      getBranchRules: page('rules', () => {
+        if (w.rulesError) throw w.rulesError;
+        return w.rules ?? [];
+      }),
       getCollaboratorPermissionLevel: rec('permission', () => {
         if (w.permissionError) throw w.permissionError;
         return {permission: w.permission, user: {id: w.permissionUserId ?? 42}};
@@ -167,12 +213,41 @@ function world(over = {}) {
     },
   }};
   github.graphql = async (query, args) => {
+    if (query.includes('mergeStateStatus')) {
+      w.calls.push(['nativeState', clone(args)]);
+      if (w.hooks.nativeState) await w.hooks.nativeState(args);
+      return {node: {id: w.pr.node_id, state: w.pr.state.toUpperCase(), isDraft: w.pr.draft,
+        headRefOid: w.pr.head.sha, baseRefName: w.pr.base.ref,
+        mergeable: w.nativeMergeable ?? 'MERGEABLE',
+        mergeStateStatus: !w.nativePolicy || nativeReady() ? 'CLEAN' : 'BLOCKED', ...w.nativeStateOverride}};
+    }
     if (query.includes('autoMergeRequest')) return {node: {autoMergeRequest: w.nativeAutoMethod ? {mergeMethod: w.nativeAutoMethod} : null}};
     if (query.includes('enablePullRequestAutoMerge')) {
-      w.calls.push(['nativeWait', clone(args)]); w.nativeAutoMethod = 'SQUASH'; return {};
+      w.calls.push(['nativeWait', clone(args)]);
+      if (w.hooks.nativeWait) await w.hooks.nativeWait(args);
+      if (args.head !== w.pr.head.sha) throw new Error('native auto-merge head changed');
+      if (nativeReady()) throw new Error('Pull request Pull request is in clean status');
+      w.nativeAutoMethod = 'SQUASH';
+      await nativeBoundary('enable', args);
+      if (w.nativeWaitResponseError) throw w.nativeWaitResponseError;
+      return {};
+    }
+    if (query.includes('mergePullRequest')) {
+      w.calls.push(['nativeMerge', clone(args)]);
+      if (w.hooks.nativeMerge) await w.hooks.nativeMerge(args);
+      assert.match(query, /expectedHeadOid: \$head/);
+      assert.match(query, /mergeMethod: SQUASH/);
+      if (args.head !== w.pr.head.sha) throw new Error('native merge head changed');
+      if (w.nativePolicy && !nativeReady()) throw new Error('Native repository policy blocks this merge');
+      if (w.nativePolicy) recordNativeMerge('merge');
+      if (w.nativeMergeResponseError) throw w.nativeMergeResponseError;
+      return {};
     }
     if (query.includes('dequeuePullRequest') || query.includes('disablePullRequestAutoMerge')) {
-      w.calls.push(['nativeCancel', clone(args)]); w.nativeAutoMethod = null; return {};
+      w.calls.push(['nativeCancel', clone(args)]);
+      if (w.hooks.nativeCancel) await w.hooks.nativeCancel(args);
+      if (!w.nativeCancelNoop) w.nativeAutoMethod = null;
+      return {};
     }
     const bot = args.id.startsWith('BOT_');
     const name = bot ? 'approvalNode' : 'reviewNode';
@@ -188,17 +263,32 @@ function world(over = {}) {
   };
   const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
   w.useApp = () => {w.prGithub = {rest: {...writes(APP_BOT, 'app-'),
-    repos: {createCommitStatus: statusWrite(APP_BOT, 'app-status')}}, graphql: github.graphql};};
+    repos: {createCommitStatus: statusWrite(APP_BOT, 'app-status'),
+      createDispatchEvent: rec('app-dispatch', args => {
+        if (w.dispatchError) throw w.dispatchError;
+        w.dispatches.push({action: args.event_type, client_payload: clone(args.client_payload)});
+        return {};
+      })}}, graphql: github.graphql};};
   const fire = (eventName, payload) => run({github, readGithub: w.readGithub, core, prGithub: w.prGithub, mergeGithub: w.mergeGithub,
     appQaStatus: w.appQaStatus, appId: w.appId, appInstallationId: w.appInstallationId,
+    repositoryId: w.envRepositoryId,
     context: {eventName, repo: {owner: 'o', repo: 'r'},
-      payload: {repository: {default_branch: 'main', id: w.repositoryId}, ...clone(payload)}}});
+      payload: w.noRepositoryPayload ? clone(payload) :
+        {repository: {default_branch: 'main', id: w.repositoryId}, ...clone(payload)}}});
   w.labeled = (snapshot = w.pr) => fire('pull_request_target', {action: 'labeled',
     label: {name: 'automerge'}, sender: {id: 42}, pull_request: snapshot});
   w.pushed = (snapshot = w.pr) => fire('pull_request_target', {action: 'synchronize', pull_request: snapshot});
-  w.ciDone = (sha = HEAD, sourceRepo = w.pr.head.repo.id) => fire('workflow_run', {
-    workflow_run: {event: 'pull_request', head_sha: sha, head_repository: {id: sourceRepo}}});
-  w.sweep = () => fire('schedule', {});
+  w.drainDispatches = async () => {
+    while (w.dispatches.length) await fire('repository_dispatch', w.dispatches.shift());
+  };
+  w.ciDone = async (sha = HEAD, sourceRepo = w.pr.head.repo.id) => {
+    await fire('workflow_run', {
+      workflow_run: {event: 'pull_request', head_sha: sha, head_repository: {id: sourceRepo}}});
+    await w.drainDispatches();
+  };
+  // Convenience helpers drain separate queued jobs. Tests of queue boundaries
+  // use fire() and drainDispatches() explicitly so enqueueing cannot mutate QA.
+  w.sweep = async () => {await fire('schedule', {}); await w.drainDispatches();};
   w.fire = fire;
   w.github = github;
   w.did = (name) => w.calls.filter((c) => c[0] === name);

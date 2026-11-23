@@ -80,7 +80,7 @@ foreach ($a in $abis) {
   $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'dalvikvm'; Exit = $code; Report = $out })
   $n2WideEvidence.Add(@{ Abi = $a.Tag; Mode = 'dalvikvm'; Exit = $code; Report = $out })
   $lines = $out -split "`r?`n"
-  foreach ($part in 'extras', 'unicode', 'dlopen', 'files', 'ifaddrs', 'varargs', 'pthread_cpu_clock') {
+  foreach ($part in 'extras', 'unicode', 'binary128', 'dlopen', 'files', 'ifaddrs', 'varargs', 'pthread_cpu_clock') {
     $line = $lines | Where-Object { $_ -like "native2 $part*" } | Select-Object -First 1
     if ($code -eq 0 -and $line -and $line -like "native2 $($part): ok*") {
       Write-Host "PASS  native2 ($($a.Tag)): $part through dalvikvm ($($line.Substring($line.IndexOf(':') + 2)))"
@@ -199,6 +199,7 @@ $bcpN2 = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | 
 $dvmN2 = @("-Xbootclasspath:$bcpN2", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $apks = @(@{ Apk = 'native2app.apk'; Tag = 'x86_64' }, @{ Apk = 'native2app-arm64.apk'; Tag = 'arm64' })
 $n2Lines = @('Native2Activity: native2 extras: ok', 'Native2Activity: native2 dlopen: ok', 'Native2Activity: native2 files: ok',
+  'Native2Activity: native2 binary128: ok; 86 Android cases; four APIs and modes; binary128 bits/end/errno; sticky flags; imports and dlsym',
   'Native2Activity: native2 pthread_cpu_clock: ok',
   'Native2Activity: native2 varargs: ok; literal/few/many GP/FP; ordered shared overflow; va_copy; nested/thread; wide and binary128 source; gzvprintf retry',
   'Native2Activity: native2 ifaddrs: ok; LP64; IPv4/IPv6 loopback; netmasks/broadcast; packet index/hardware; independent lists',

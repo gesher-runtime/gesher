@@ -163,6 +163,9 @@ public final class RuntimeCommands {
             if (args[0].equals("pm")) result = pm(args);
             else if (args[0].equals("am")) result = am(args);
             else if (args[0].equals("notification")) result = notification(args);
+            else if (args[0].equals("spell-checker")) {
+                result = SpellCheckerCommands.run(java.util.Arrays.asList(args).subList(1, args.length));
+            }
             else if (args[0].equals("wait-binder")) {
                 if (args.length != 4) throw new IllegalArgumentException("wait-binder DEVICE PID TIMEOUT_MS");
                 if (!Zygote.waitForBinder(args[1], Integer.parseInt(args[2]), Integer.parseInt(args[3]))) {

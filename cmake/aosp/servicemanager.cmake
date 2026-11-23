@@ -9,6 +9,8 @@ set(_uapi "${AOSP_DIR}/bionic/libc/kernel/uapi")
 # searched after gesher-base's <linux/*.h>.
 add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc)
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
+# The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom.
+target_link_libraries(binderd PRIVATE bcrypt)
 
 # servicemanager, as vndservicemanager is built (no VINTF, no perfetto), with
 # libcutils' multiuser.cpp (not in libcutils' Windows set) and a main of its

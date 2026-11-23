@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 from pathlib import Path
+import subprocess
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,19 @@ def rejected(label, replacement, repin=False, target=source_path, pin_name='SYST
             try:
                 policy.check()
             except AssertionError as error:
-                assert str(error) == target.relative_to(ROOT).as_posix(), error
+                # The exact OFD transition also checks whole protected function
+                # bodies; its assertion identifies both the path and marker.
+                detail = error.args[0] if error.args else None
+                path = detail[0] if isinstance(detail, tuple) else detail
+                assert path == target.relative_to(ROOT).as_posix(), error
+                print_result = label
+            except subprocess.CalledProcessError as error:
+                # A mutation inside the pinned transition may be rejected by
+                # reverse application before the baseline hash comparison. This
+                # counts only when that exact check rejects the mutated path.
+                assert error.cmd == ['git', 'apply', '--reverse', '--unidiff-zero', '--check', '-'], error
+                assert error.returncode == 1, error
+                assert target.relative_to(ROOT).as_posix().encode() in error.stderr, error.stderr
                 print_result = label
             else:
                 raise RuntimeError('source policy accepted ' + label)
@@ -93,6 +106,28 @@ for label, replacement in fd_controls:
     rejected(label + ' even with a new full-file hash', replacement, True,
              target=fd_path, pin_name='FD_SHA256')
 print('stream-device source policy: positive source and seven negative controls passed')
+
+winsock_path = ROOT / 'compat/posix/src/winsock.cc'
+winsock_source = winsock_path.read_bytes()
+priority_wake = policy.TCP_PRIORITY_WAKE_AFTER
+priority_controls = (
+    ('waited TCP priority wake confirmation removed',
+     winsock_source.replace(priority_wake, policy.TCP_PRIORITY_WAKE_BEFORE, 1)),
+    ('TCP priority confirmation introduces another blocking wait',
+     winsock_source.replace(priority_wake,
+                            priority_wake.replace(b'sample_wait = 0;', b'sample_wait = 10;', 1), 1)),
+    ('TCP priority confirmation bypassed with stale readiness',
+     winsock_source.replace(priority_wake,
+                            priority_wake.replace(b'sample_wait = 0; continue;', b'break;', 1), 1)),
+    ('TCP priority confirmation duplicates its reviewed boundary',
+     winsock_source + priority_wake),
+    ('unrelated Winsock transport bytes',
+     winsock_source.replace(b'ptrdiff_t SendOwnedRaw(',
+                            b'// unrelated transport change\nptrdiff_t SendOwnedRaw(', 1)),
+)
+for label, replacement in priority_controls:
+    rejected(label, replacement, target=winsock_path)
+print('TCP priority wake source policy: positive source and five negative controls passed')
 
 fixture_path = ROOT / 'tests/net-tcp-priority/contract.cc'
 fixture = fixture_path.read_bytes()

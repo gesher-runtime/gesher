@@ -9,12 +9,20 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -108,12 +116,90 @@ public final class NativeLibs {
 
     /**
      * Copies the APK's native libraries for {@code abi} (the package's, {@link #abiFor}
-     * over all its APKs) into {@code dir}; returns how many.
+     * over all its APKs) into {@code dir}; returns how many. A library already on disk
+     * with identical contents is kept as it is, not rewritten.
      */
     public static int extract(String apk, String dir, String abi) throws IOException {
+        return extract(apk, dir, abi, null);
+    }
+
+    /**
+     * The package manager's native-library directory for a system package's code
+     * directory: {@code dir} holds exactly the APK's libraries for {@code abi}, extracted
+     * as {@link #extract} does, with every other file or link removed (directories and
+     * in-progress {@code .part} files aside).
+     * A {@code dir} (or its {@code lib} parent) that is a link or not a directory is
+     * refused, before anything is written. If a stale entry cannot be removed, this
+     * throws: the directory is then not a faithful library path for the APK. Returns
+     * how many libraries the APK has.
+     */
+    public static int syncDirectory(String apk, String dir, String abi) throws IOException {
+        Path target = new File(dir).toPath();
+        Path parent = target.getParent();
+        if (parent != null) requireDirectoryOrAbsent(parent);
+        requireDirectoryOrAbsent(target);
+        HashSet<String> names = new HashSet<>();
+        int count = extract(apk, dir, abi, names);
+        if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(target)) {
+                for (Path entry : stream) {
+                    String name = entry.getFileName().toString();
+                    BasicFileAttributes attributes;
+                    try {
+                        attributes = Files.readAttributes(entry, BasicFileAttributes.class,
+                                LinkOption.NOFOLLOW_LINKS);
+                    } catch (NoSuchFileException gone) {
+                        continue;  // already gone: nothing left to load
+                    }
+                    boolean link = attributes.isSymbolicLink() || attributes.isOther();
+                    // A listed library stays; Windows names are case-insensitive.
+                    if (!link && attributes.isRegularFile()
+                            && names.contains(name.toLowerCase(Locale.ROOT))) {
+                        continue;
+                    }
+                    // A plain directory is never loaded as a library, and a .part file
+                    // is another extraction still writing (it is renamed when done).
+                    if (!link && (attributes.isDirectory()
+                            || (attributes.isRegularFile() && name.endsWith(".part")))) {
+                        continue;
+                    }
+                    // Anything else (a library the APK no longer has, whatever its name's
+                    // case, or a link, removed itself and not its target) must not stay
+                    // loadable from the package's library path: if it cannot be removed,
+                    // the directory is not the APK's and the sync fails.
+                    try {
+                        Files.deleteIfExists(entry);
+                    } catch (IOException e) {
+                        throw new IOException("Cannot remove " + entry
+                                + " from the native library directory", e);
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    private static void requireDirectoryOrAbsent(Path path) throws IOException {
+        BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(path, BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS);
+        } catch (NoSuchFileException absent) {
+            return;
+        }
+        // isOther: a Windows junction or other reparse point, not a plain directory.
+        if (attributes.isSymbolicLink() || attributes.isOther() || !attributes.isDirectory()) {
+            throw new IOException("Refusing native library path that is not a directory: "
+                    + path);
+        }
+    }
+
+    private static int extract(String apk, String dir, String abi, Set<String> names)
+            throws IOException {
         String prefix = "lib/" + abi + "/";
         int count = 0;
         byte[] buffer = new byte[64 * 1024];
+        byte[] existing = new byte[64 * 1024];
         try (ZipFile zip = new ZipFile(apk)) {
             List<ZipEntry> libraries = new ArrayList<>();
             for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
@@ -130,6 +216,12 @@ public final class NativeLibs {
             // ZIP uses '/', but Windows also interprets '\\' and ':' as path syntax.
             for (ZipEntry entry : libraries) {
                 File out = new File(dir, entry.getName().substring(prefix.length()));
+                if (names != null) names.add(out.getName().toLowerCase(Locale.ROOT));
+                // Unchanged: keep the file a running process may have mapped.
+                if (sameContents(zip, entry, out, buffer, existing)) {
+                    count++;
+                    continue;
+                }
                 out.getParentFile().mkdirs();
                 // Write beside it and rename over it: a running process maps its
                 // libraries from these files, and Windows refuses to truncate a
@@ -154,6 +246,24 @@ public final class NativeLibs {
             }
         }
         return count;
+    }
+
+    private static boolean sameContents(ZipFile zip, ZipEntry entry, File file, byte[] a,
+            byte[] b) throws IOException {
+        Path path = file.toPath();
+        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return false;
+        long size = entry.getSize();
+        if (size >= 0 && Files.size(path) != size) return false;
+        try (InputStream expected = zip.getInputStream(entry);
+                InputStream actual = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
+            while (true) {
+                int n = expected.readNBytes(a, 0, a.length);
+                int m = actual.readNBytes(b, 0, n == 0 ? 1 : n);
+                if (n != m) return false;
+                if (n == 0) return true;
+                if (!Arrays.equals(a, 0, n, b, 0, n)) return false;
+            }
+        }
     }
 
     private static void validateWindowsLeaf(String name) throws IOException {

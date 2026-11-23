@@ -2,17 +2,24 @@
 package gesher.services;
 
 import android.app.ActivityThread;
+import android.app.ContentProviderHolder;
+import android.app.GesherSettingsContext;
+import android.app.IActivityManager;
+import android.content.AttributionSource;
 import android.content.Context;
 import android.content.pm.IPackageManager;
 import android.content.pm.SystemFeaturesCache;
 import android.content.res.AssetManager;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Looper;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.Process;
+import android.provider.Settings;
 import android.view.textservice.SentenceSuggestionsInfo;
 import android.view.textservice.SpellCheckerSession;
 import android.view.textservice.SpellCheckerSession.SpellCheckerSessionParams;
@@ -54,6 +61,7 @@ public final class TextServicesContractTest {
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         if (Looper.myLooper() == null) Looper.prepareMainLooper();
+        GesherSettingsContext.prepare();
         Map<String, IBinder> created = Services.createInProcess(Collections.emptyList());
         IBinder target = created.get(Context.TEXT_SERVICES_MANAGER_SERVICE);
         check(target != null, "textservices is registered");
@@ -79,12 +87,24 @@ public final class TextServicesContractTest {
         Constructor<ActivityThread> constructor = ActivityThread.class.getDeclaredConstructor();
         constructor.setAccessible(true);
         Context context = constructor.newInstance().getSystemContext();
+        // Like normal startup, acquire the provider only after its framework
+        // context can resolve the registered display and package services.
+        ContentProviderHolder settingsHolder = IActivityManager.Stub.asInterface(created.get(Context.ACTIVITY_SERVICE))
+                .getContentProviderExternal(Settings.AUTHORITY, 0, null, "text-services-contract");
+        Bundle disabled = new Bundle();
+        disabled.putString("value", "0");
+        rejects(SecurityException.class, () -> settingsHolder.provider.call(
+                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
+                "PUT_secure", Settings.Secure.SPELL_CHECKER_ENABLED, disabled));
+        rejects(SecurityException.class, () -> settingsHolder.provider.call(
+                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
+                "gesher:select-default-spell-checker", null, null));
         TextServicesManager manager = context.getSystemService(TextServicesManager.class);
         check(manager != null && manager.getClass() == TextServicesManager.class,
                 "real public TextServicesManager constructs");
         check(manager == context.getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE),
                 "typed and named lookups share manager");
-        check(!manager.isSpellCheckerEnabled(), "spell checking is disabled");
+        check(manager.isSpellCheckerEnabled(), "default enabled preference is independent of provider availability");
         check(manager.getCurrentSpellCheckerInfo() == null
                         && manager.getCurrentSpellCheckerSubtype(true) == null,
                 "no current checker or subtype is invented");
@@ -139,6 +159,7 @@ public final class TextServicesContractTest {
         check(callbacks.get() == 0, "unknown checker creates no fabricated callback or session");
         check(transactions.get() >= 12, "public and raw calls traversed generated Binder dispatch");
         check(TextServicesManager.getInstance() != null, "legacy static manager also constructs");
+        SpellCheckerBindingContractTest.contracts(true);
         System.out.println("TextServicesContractTest all passed: " + checks);
         System.exit(0);
     }
