@@ -24,12 +24,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <linux/fs.h>
 #include <limits>
 #include <map>
 #include <memory>
 #include <new>
 #include <string>
 #include <string_view>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -213,6 +215,43 @@ int Dd(const std::vector<std::string>& args) {
                static_cast<unsigned long long>(full), static_cast<unsigned long long>(partial),
                static_cast<unsigned long long>(full), static_cast<unsigned long long>(partial));
   return 0;
+}
+
+int Blockdev(const std::vector<std::string>& args) {
+  if (args.size() < 2 || args[0] != "--getro") {
+    std::fprintf(stderr, "usage: blockdev --getro [--] DEVICE...\n");
+    return 1;
+  }
+  const bool end_options = args[1] == "--";
+  const size_t first_device = end_options ? 2 : 1;
+  if (first_device == args.size()) {
+    std::fprintf(stderr, "blockdev: missing device\n");
+    return 1;
+  }
+  if (!end_options && std::any_of(args.begin() + first_device, args.end(),
+      [](const std::string& arg) { return arg.size() > 1 && arg.front() == '-'; })) {
+    std::fprintf(stderr, "blockdev: unsupported option\n");
+    return 1;
+  }
+
+  for (size_t i = first_device; i < args.size(); ++i) {
+    const char* path = args[i].c_str();
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int readonly = 0;
+    if (fd < 0) {
+      std::fprintf(stderr, "blockdev: %s: %s\n", path, std::strerror(errno));
+      return 1;
+    }
+    const int result = ioctl(fd, BLKROGET, &readonly);
+    const int saved = errno;
+    close(fd);
+    if (result < 0) {
+      std::fprintf(stderr, "blockdev: %s: %s\n", path, std::strerror(saved));
+      return 1;
+    }
+    if (std::printf("%d\n", readonly) < 0) return 1;
+  }
+  return std::fflush(stdout) != 0;
 }
 
 int Basename(const std::vector<std::string>& args) {
@@ -634,7 +673,7 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
 int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "toybox") {
     if (args.empty()) {
-      std::fprintf(stdout, "toybox (gesher)\nls cat dd basename tr id ps getprop setprop logcat kill sleep pm am\n");
+      std::fprintf(stdout, "toybox (gesher)\nls cat dd blockdev basename tr id ps getprop setprop logcat kill sleep pm am\n");
       std::fflush(stdout);
       return 0;
     }
@@ -643,6 +682,7 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "ls") return Ls(args);
   if (name == "cat") return Cat(args);
   if (name == "dd") return Dd(args);
+  if (name == "blockdev") return Blockdev(args);
   if (name == "basename") return Basename(args);
   if (name == "tr") return Tr(args);
   if (name == "id") return Id(args);

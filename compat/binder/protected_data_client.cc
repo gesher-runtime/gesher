@@ -24,7 +24,8 @@ using Handle = std::unique_ptr<void, CloseHandleOwner>;
 
 bool ExactPackageSid(PSID sid) {
   constexpr SID_IDENTIFIER_AUTHORITY authority{SECURITY_APP_PACKAGE_AUTHORITY};
-  return *GetSidSubAuthorityCount(sid) == 8 &&
+  const UCHAR count = *GetSidSubAuthorityCount(sid);
+  return (count == SECURITY_PARENT_PACKAGE_RID_COUNT || count == SECURITY_CHILD_PACKAGE_RID_COUNT) &&
       std::memcmp(GetSidIdentifierAuthority(sid), &authority, sizeof(authority)) == 0 &&
       *GetSidSubAuthority(sid, 0) == SECURITY_APP_PACKAGE_BASE_RID;
 }

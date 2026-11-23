@@ -188,7 +188,7 @@ index ee26bfc04..2d97eaa95 100644
 +#endif
 +  }
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index d693bd9fe..b51c450db 100644
+index d693bd9fe..0d89f5356 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
 @@ -92,2 +92,3 @@ std::string ToolName(const std::string& name) {
@@ -196,7 +196,7 @@ index d693bd9fe..b51c450db 100644
 -                                       "ps",      "pm", "am", "kill",   "sleep", "toybox"};
 +  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
 +                                       "dd", "basename", "tr", "ps", "pm", "am", "kill",
-+                                       "sleep", "toybox"};
++                                       "sleep", "toybox", "blockdev"};
 diff --git a/compat/elf/exec/gesher_shell.cc b/compat/elf/exec/gesher_shell.cc
 index 383bc7e3b..507e14054 100644
 --- a/compat/elf/exec/gesher_shell.cc

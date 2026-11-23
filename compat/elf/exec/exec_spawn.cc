@@ -91,7 +91,7 @@ bool IsShName(const std::string& name) {
 std::string ToolName(const std::string& name) {
   static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
                                        "dd", "basename", "tr", "ps", "pm", "am", "kill",
-                                       "sleep", "toybox"};
+                                       "sleep", "toybox", "blockdev"};
   std::string base = name;
   for (const char* dir : {"/system/bin/", "/system/xbin/", "/bin/"}) {
     if (name.rfind(dir, 0) == 0) {

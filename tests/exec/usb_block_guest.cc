@@ -3,6 +3,7 @@
 
 #include <gesher/usb_block.h>
 #include <fcntl.h>
+#include <linux/fs.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -104,6 +105,12 @@ int main() {
     if (fields < 0 || read(fields, data, sizeof(data)) != 3 ||
         std::memcmp(data, "16\n", 3) != 0) return 7;
     close(fields);
+    const int read_only_fd = open("/dev/block/sdb", O_RDONLY);
+    int device_read_only = -1;
+    if (read_only_fd < 0 ||
+        ioctl(read_only_fd, BLKROGET, &device_read_only) != 0 ||
+        device_read_only != 0) return 14;
+    close(read_only_fd);
     const int disk = open("/dev/block/sdb", O_RDWR);
     if (disk < 0 || fstat(disk, &info) != 0 || !S_ISBLK(info.st_mode)) return 8;
     uint64_t bytes = 0;

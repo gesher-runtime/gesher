@@ -87,7 +87,9 @@ DWORD NewName(std::wstring* name) {
 
 bool ExactPackageSid(PSID sid) {
   constexpr SID_IDENTIFIER_AUTHORITY package_authority{SECURITY_APP_PACKAGE_AUTHORITY};
-  return sid && IsValidSid(sid) && *GetSidSubAuthorityCount(sid) == 8 &&
+  if (!sid || !IsValidSid(sid)) return false;
+  const UCHAR count = *GetSidSubAuthorityCount(sid);
+  return (count == SECURITY_PARENT_PACKAGE_RID_COUNT || count == SECURITY_CHILD_PACKAGE_RID_COUNT) &&
       std::memcmp(GetSidIdentifierAuthority(sid), &package_authority, sizeof(package_authority)) == 0 &&
       *GetSidSubAuthority(sid, 0) == SECURITY_APP_PACKAGE_BASE_RID;
 }

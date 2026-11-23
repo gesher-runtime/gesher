@@ -16,6 +16,7 @@ import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.os.Process;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -342,6 +343,25 @@ final class UsbHost {
         if (device == null) return false;
         ApkPackage installation = callers.requireCurrentPackage(packageName);
         return installed(installation) && device.hasGrant(installation);
+    }
+
+    synchronized boolean hasWithIdentity(String name, String packageName, int uid) {
+        Attachment device = valid(name);
+        if (device != null && !device.supportsTransfers()) return false;
+        if (uid == Process.SYSTEM_UID) return true;
+        if (device == null || packageName == null) return false;
+        ApkPackage installation = packages.get(packageName);
+        return installed(installation) && installation.uid() == uid && device.hasGrant(installation);
+    }
+
+    synchronized void grant(String name, int uid) {
+        Attachment device = valid(name);
+        if (device == null || !device.supportsTransfers()) return;
+        for (ApkPackage installation : packages.packages()) {
+            if (installation.uid() == uid && installed(installation)) {
+                device.grants.add(installation);
+            }
+        }
     }
 
     synchronized ParcelFileDescriptor open(String name, String packageName) {

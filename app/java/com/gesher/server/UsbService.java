@@ -100,7 +100,7 @@ final class UsbService extends IUsbManager.Default {
     public boolean hasDevicePermissionWithIdentity(UsbDevice device, String packageName,
             int pid, int uid) {
         requireManageUsb();
-        return uid == android.os.Process.SYSTEM_UID && mHost.has(device.getDeviceName(), packageName);
+        return mHost.hasWithIdentity(device.getDeviceName(), packageName, uid);
     }
 
     @Override
@@ -312,6 +312,7 @@ final class UsbService extends IUsbManager.Default {
     @Override
     public void grantDevicePermission(UsbDevice device, int uid) {
         requireManageUsb();
+        mHost.grant(device.getDeviceName(), uid);
     }
 
     @Override

@@ -2,7 +2,7 @@
   "after_sha256": {
     "compat/art/dalvikvm_main.cc": "dc3c80c29194418ab59fc73edcbdce5550f724d6bbd74e39f62ee1b154192bf3",
     "compat/binder/binderd.cc": "8f0f5be8d9a56457360389a3e8dee2ed39c575f1e4f5b755406dae29098c9188",
-    "compat/elf/exec/exec_spawn.cc": "9c1102d318957c41d5895b9d30f8f8b7a9584ce8ce449ba19cffb33a7dfa39ef",
+    "compat/elf/exec/exec_spawn.cc": "f0a259e25c7f5af89d903a5d6d2feaaed6096976601404aa285942b9f7df153e",
     "compat/elf/exec/gesher_shell.cc": "369ce381b1d72c3c88cc6058aff91aef273c7d36bf32fbf7b35238f2da284cb5",
     "compat/elf/exec/shell_execute.inc": "c8dd42b203d84f4278ae8e6253d4d3944b5ca73b9369480c22fd9dc17d52d81b",
     "compat/posix/posix.cmake": "0bb09ecc8edac329aa577dabba0f5b288289ca227a32ec17675cec8df534511d",
@@ -35,5 +35,5 @@
     "compat/usb_storage/block_broker_client.cc": "60e61a05023f458e3bf9acaec814f6798fa1f8500d806fbd644c62e9b87d6fb5",
     "compat/usb_storage/block_broker_client.h": "be97fa633582846452caf40e752a4932e88ea7747d407ed43bfa6163b2c9bc89"
   },
-  "patch_sha256": "433835465c1d2855eb2d9a0c3b41509647c41fc963aa9f606308fa4e53258ce4"
+  "patch_sha256": "52704df8e02e3309ae2db2068588160035b566f0d3e72fc04088170cf75a5c18"
 }
