@@ -108,7 +108,7 @@ sources+=[root/'tests/net/HttpEngineReadBufferTest.java']
 if args.brotli_native or args.brotli_wire_only:
  sources += [root/'tests/net'/name for name in ['HttpBrotliFixtures.java','HttpEngineBrotliWireTest.java']]
 if args.brotli_native and not args.brotli_wire_only:
- sources += [root/'tests/net'/name for name in ['HttpEngineBrotliTest.java',
+ sources += [root/'tests/net'/name for name in ['HttpEngineBrotliTest.java','HttpEngineBrotliLoaderHost.java',
               'Http2DeviceSmoke.java','Http2SessionContracts.java']]
 command=[str(jdk/'javac'),'--release','17','-encoding','UTF-8','-d',str(classes),*map(str,sources)]
 subprocess.run(command,check=True,timeout=60)
@@ -125,6 +125,9 @@ if args.brotli_native:
  brotli_java=[str(jdk/'java'),'-Xcheck:jni',f'-Djava.library.path={args.brotli_native.resolve()}',
               '-cp',str(classes)]
  subprocess.run([*brotli_java,'android.net.http.HttpEngineBrotliTest','--host'],check=True,timeout=120)
+ # Equal Java package names do not grant access across ART's boot/application
+ # loaders. Run every assertion again with the fixture defined by a child.
+ subprocess.run([*brotli_java,'HttpEngineBrotliLoaderHost'],check=True,timeout=120)
  for mode in ['brotli','brotli-headers','brotli-cancel']:
   subprocess.run([*brotli_java,'Http2DeviceSmoke',mode],check=True,timeout=40)
 if args.brotli_only:

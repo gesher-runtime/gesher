@@ -2,6 +2,7 @@
 package android.net.http;
 
 import java.io.*;
+import java.lang.reflect.*;
 import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -52,8 +53,49 @@ public final class HttpEngineBrotliTest {
         }
         @Override public void close() { closes++; }
     }
-    private static long nativeHandle(BrotliInputStream stream) throws Exception {
-        java.lang.reflect.Field owner=BrotliInputStream.class.getDeclaredField("owner");
+    // ART loads Gesher in the boot loader and this fixture in the application
+    // loader. Equal package names do not grant package-private access across
+    // loaders. Keep production visibility intact and inspect internals through
+    // the same explicit reflection boundary used by the other host/ART tests.
+    private static Object invoke(Method method,Object target,Object... args) throws Exception {
+        method.setAccessible(true);
+        try { return method.invoke(target,args); }
+        catch (InvocationTargetException failure) { throw cause(failure); }
+    }
+    private static Exception cause(InvocationTargetException failure) throws Exception {
+        Throwable cause=failure.getCause();
+        if(cause instanceof Error) throw (Error)cause;
+        if(cause instanceof Exception) return (Exception)cause;
+        throw new AssertionError(cause);
+    }
+    private static InputStream brotli(InputStream source) throws Exception {
+        Constructor<?> constructor=Class.forName("android.net.http.BrotliInputStream")
+                .getDeclaredConstructor(InputStream.class);
+        constructor.setAccessible(true);
+        try { return (InputStream)constructor.newInstance(source); }
+        catch(InvocationTargetException failure) { throw cause(failure); }
+    }
+    private static Object decoding(String method,Class<?>[] signature,Object... args) throws Exception {
+        return invoke(Class.forName("android.net.http.ContentDecoding").getDeclaredMethod(method,signature),null,args);
+    }
+    private static InputStream decode(InputStream source,String encoding,boolean enabled) throws Exception {
+        return (InputStream)decoding("wrap",new Class<?>[]{InputStream.class,String.class,boolean.class},source,encoding,enabled);
+    }
+    private static String acceptEncoding(URL url,boolean range) throws Exception {
+        return (String)decoding("acceptEncoding",new Class<?>[]{URL.class,boolean.class},url,range);
+    }
+    private static boolean enabled(HttpEngine engine) throws Exception {
+        Field field=engine.getClass().getDeclaredField("brotliEnabled");
+        field.setAccessible(true); return field.getBoolean(engine);
+    }
+    @SuppressWarnings("unchecked")
+    private static List<Map.Entry<String,String>> contentHeaders(HttpEngine engine,URL url,
+            List<Map.Entry<String,String>> headers) throws Exception {
+        return (List<Map.Entry<String,String>>)invoke(engine.getClass()
+                .getDeclaredMethod("contentHeaders",URL.class,List.class),engine,url,headers);
+    }
+    private static long nativeHandle(InputStream stream) throws Exception {
+        java.lang.reflect.Field owner=stream.getClass().getDeclaredField("owner");
         owner.setAccessible(true); Object state=owner.get(stream);
         java.lang.reflect.Field handle=state.getClass().getDeclaredField("handle");
         handle.setAccessible(true); return handle.getLong(state);
@@ -85,7 +127,7 @@ public final class HttpEngineBrotliTest {
                 .equals(HttpBrotliFixtures.PAYLOAD_SHA256),"Fixture payload identity");
         for(int input:new int[]{1,2,7,32768}) for(int output:new int[]{1,3,32,65536}) {
             Source raw=new Source(HttpBrotliFixtures.PING,input);
-            BrotliInputStream stream=new BrotliInputStream(raw);
+            InputStream stream=brotli(raw);
             check(raw.reads==0,"Decoder constructor read a duplex body");
             check(Arrays.equals(read(stream,output),new byte[]{'p','i','n','g'}),"Split native decoding");
             check(nativeHandle(stream)==0,"EOF retained native decoder");
@@ -93,24 +135,24 @@ public final class HttpEngineBrotliTest {
         }
         for(int chunk:new int[]{127,32768}) {
             Source raw=new Source(HttpBrotliFixtures.RECORDS,chunk);
-            try(BrotliInputStream stream=new BrotliInputStream(raw)) {
+            try(InputStream stream=brotli(raw)) {
                 check(Arrays.equals(read(stream,chunk),PAYLOAD),"Large compressed response mismatch");
             }
         }
-        try(BrotliInputStream empty=new BrotliInputStream(new ByteArrayInputStream(HttpBrotliFixtures.EMPTY))) {
+        try(InputStream empty=brotli(new ByteArrayInputStream(HttpBrotliFixtures.EMPTY))) {
             check(empty.read()==-1 && empty.read()==-1,"Encoded empty body EOF");
         }
         for(int length=0;length<HttpBrotliFixtures.PING.length;length++) {
             Source raw=new Source(Arrays.copyOf(HttpBrotliFixtures.PING,length),1);
-            BrotliInputStream stream=new BrotliInputStream(raw);
+            InputStream stream=brotli(raw);
             rejects(IOException.class,()->read(stream,3));
             check(nativeHandle(stream)==0 && raw.closes==1,"Truncation leaked native/source ownership");
         }
         Source invalid=new Source(new byte[]{-1,-1,-1,-1,-1,-1,-1,-1},3);
-        BrotliInputStream bad=new BrotliInputStream(invalid);
+        InputStream bad=brotli(invalid);
         rejects(IOException.class,()->read(bad,32));
         check(nativeHandle(bad)==0 && invalid.closes==1,"Malformed body leaked native ownership");
-        BrotliInputStream closed=new BrotliInputStream(new ByteArrayInputStream(HttpBrotliFixtures.PING));
+        InputStream closed=brotli(new ByteArrayInputStream(HttpBrotliFixtures.PING));
         rejects(IndexOutOfBoundsException.class,()->closed.read(new byte[8],7,2));
         check(closed.read(new byte[0])==0,"Empty read consumed native input");
         closed.close(); check(nativeHandle(closed)==0,"Early close retained decoder");
@@ -118,7 +160,7 @@ public final class HttpEngineBrotliTest {
         ExecutorService executor=Executors.newSingleThreadExecutor();
         try {
             DuplexSource source=new DuplexSource();
-            try(BrotliInputStream stream=new BrotliInputStream(source)) {
+            try(InputStream stream=brotli(source)) {
                 byte[] prefix=new byte[32];
                 int n=executor.submit(()->stream.read(prefix)).get(3,TimeUnit.SECONDS);
                 check(n==4 && new String(prefix,0,n,StandardCharsets.UTF_8).equals("ping"),"Prefix was buffered until EOF");
@@ -127,7 +169,7 @@ public final class HttpEngineBrotliTest {
                 check(new String(read(stream,32),StandardCharsets.UTF_8).equals("pong"),"Flush/finish continuity");
             }
             DuplexSource source2=new DuplexSource();
-            BrotliInputStream stream2=new BrotliInputStream(source2);
+            InputStream stream2=brotli(source2);
             check(stream2.read(new byte[32])==4,"Cancellation prefix");
             Future<?> waiting=executor.submit(()->{try {stream2.read(new byte[32]); throw new AssertionError("Canceled read succeeded");}
                 catch(IOException expected) {}});
@@ -137,41 +179,41 @@ public final class HttpEngineBrotliTest {
         } finally { executor.shutdownNow(); check(executor.awaitTermination(3,TimeUnit.SECONDS),"Native test reader leaked"); }
         byte[] trailing=Arrays.copyOf(HttpBrotliFixtures.PING,HttpBrotliFixtures.PING.length+100000);
         Source source=new Source(trailing,97);
-        InputStream decoded=ContentDecoding.wrap(source,"br",true);
+        InputStream decoded=decode(source,"br",true);
         check(Arrays.equals(read(decoded,3),new byte[]{'p','i','n','g'}),"Trailing encoded data behavior");
-        check(source.available()==0 && ContentDecoding.encodedBytes(decoded)==trailing.length,"Trailing bytes did not reach framing EOF/accounting");
+        check(source.available()==0 && (Long)decoding("encodedBytes",new Class<?>[]{InputStream.class},decoded)==trailing.length,"Trailing bytes did not reach framing EOF/accounting");
         decoded.close();
         for(String encoding:new String[]{"br,unknown","identity,br","br,identity","br,"}) {
             Source raw=new Source(HttpBrotliFixtures.PING,32768);
-            check(ContentDecoding.wrap(raw,encoding,true)==raw,"Partially decoded unknown coding chain");
+            check(decode(raw,encoding,true)==raw,"Partially decoded unknown coding chain");
         }
         Source chain=new Source(gzip(HttpBrotliFixtures.RECORDS),32768);
-        try(InputStream stream=ContentDecoding.wrap(chain,"br, gzip",true)) {
+        try(InputStream stream=decode(chain,"br, gzip",true)) {
             check(Arrays.equals(read(stream,8192),PAYLOAD),"Content coding order");
         }
         check(chain.closes==1,"Layered decoder retired raw source more than once");
-        rejects(IOException.class,()->ContentDecoding.wrap(new ByteArrayInputStream(new byte[0]),String.join(",",Collections.nCopies(11,"br")),true));
+        rejects(IOException.class,()->decode(new ByteArrayInputStream(new byte[0]),String.join(",",Collections.nCopies(11,"br")),true));
     }
     private static void policyContracts() throws Exception {
         for(String url:new String[]{"https://example.com/","http://localhost/","http://child.localhost/",
                 "http://127.0.0.1/","http://127.4.3.2/","http://[::1]/"}) {
-            check(ContentDecoding.acceptEncoding(new URL(url),false).equals("gzip, deflate, br"),"Secure/local negotiation: "+url);
-            check(ContentDecoding.acceptEncoding(new URL(url),true).equals("identity"),"Range negotiation");
+            check(acceptEncoding(new URL(url),false).equals("gzip, deflate, br"),"Secure/local negotiation: "+url);
+            check(acceptEncoding(new URL(url),true).equals("identity"),"Range negotiation");
         }
         for(String url:new String[]{"http://example.com/","http://notlocalhost/","http://localhost.example/",
                 "http://127.999.0.1/","http://128.0.0.1/"})
-            check(ContentDecoding.acceptEncoding(new URL(url),false).equals("gzip, deflate"),"Insecure negotiation: "+url);
+            check(acceptEncoding(new URL(url),false).equals("gzip, deflate"),"Insecure negotiation: "+url);
         HttpEngine.Builder builder=new HttpEngine.Builder(new android.content.ContextWrapper(null));
-        JavaHttpEngine disabled=(JavaHttpEngine)builder.build();
-        JavaHttpEngine enabled=(JavaHttpEngine)builder.setEnableBrotli(true).build();
+        HttpEngine disabled=builder.build();
+        HttpEngine enabled=builder.setEnableBrotli(true).build();
         builder.setEnableBrotli(false);
         try {
-            check(!disabled.brotliEnabled && enabled.brotliEnabled,"Engine policy was not snapshotted/default disabled");
+            check(!enabled(disabled) && enabled(enabled),"Engine policy was not snapshotted/default disabled");
             List<Map.Entry<String,String>> explicit=Collections.singletonList(new AbstractMap.SimpleImmutableEntry<>("aCcEpT-EnCoDiNg","identity"));
-            check(enabled.contentHeaders(new URL("http://localhost/"),explicit)==explicit,"Explicit coding was replaced");
+            check(contentHeaders(enabled,new URL("http://localhost/"),explicit)==explicit,"Explicit coding was replaced");
             List<Map.Entry<String,String>> empty=Collections.emptyList();
-            check(disabled.contentHeaders(new URL("http://localhost/"),empty)==empty,"Disabled engine advertised Brotli");
-            check(enabled.contentHeaders(new URL("http://localhost/"),empty).size()==1 && empty.isEmpty(),"Added policy mutated public request headers");
+            check(contentHeaders(disabled,new URL("http://localhost/"),empty)==empty,"Disabled engine advertised Brotli");
+            check(contentHeaders(enabled,new URL("http://localhost/"),empty).size()==1 && empty.isEmpty(),"Added policy mutated public request headers");
         } finally { disabled.shutdown(); enabled.shutdown(); }
     }
     private static final class Peer implements AutoCloseable {
