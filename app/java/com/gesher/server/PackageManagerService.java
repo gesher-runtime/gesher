@@ -209,6 +209,8 @@ public final class PackageManagerService extends IPackageManager.Default {
             enabledStore();
             identity.accept();
         }
+        // Reserve the hosted identity outside the ordinary package admission lock.
+        UserDictionaryProvider.uid();
         mPermissions.initializePackages();
     }
 
@@ -500,7 +502,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public boolean isPackageAvailable(String packageName, int userId) {
         if (userId != 0) return false;
-        if ("android".equals(packageName) || UserDictionaryProvider.PACKAGE.equals(packageName)) return true;
+        if ("android".equals(packageName)) return true;
+        if (UserDictionaryProvider.PACKAGE.equals(packageName)) return userDictionaryVisible();
         return get(packageName) != null || synthetic(packageName)
                 || BrowserPackageSupport.isBrowserPackage(packageName);
     }
@@ -515,7 +518,9 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
             return info;
         }
-        if (UserDictionaryProvider.PACKAGE.equals(packageName)) return UserDictionaryProvider.packageInfo(flags);
+        if (UserDictionaryProvider.PACKAGE.equals(packageName)) {
+            return userDictionaryVisible() ? UserDictionaryProvider.packageInfo(flags) : null;
+        }
         ApkPackage p = get(packageName);
         if (p != null) {
             return installedInfo(p, flags);
@@ -557,7 +562,9 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ApplicationInfo getApplicationInfo(String packageName, long flags, int userId) {
         if (userId != 0) return null;
         if ("android".equals(packageName)) return platformApplication();
-        if (UserDictionaryProvider.PACKAGE.equals(packageName)) return UserDictionaryProvider.applicationInfo();
+        if (UserDictionaryProvider.PACKAGE.equals(packageName)) {
+            return userDictionaryVisible() ? UserDictionaryProvider.applicationInfo() : null;
+        }
         ApkPackage p = get(packageName);
         if (p != null) {
             return p.applicationInfo(flags);
@@ -586,7 +593,9 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getTargetSdkVersion(String packageName) {
-        if (UserDictionaryProvider.PACKAGE.equals(packageName)) return android.os.Build.VERSION.SDK_INT;
+        if (UserDictionaryProvider.PACKAGE.equals(packageName)) {
+            return userDictionaryVisible() ? android.os.Build.VERSION.SDK_INT : -1;
+        }
         ApkPackage p = get(packageName);
         return p == null ? -1 : p.parsed.getTargetSdkVersion();
     }
@@ -768,6 +777,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
         if (userId != 0) return null;
+        if (UserDictionaryProvider.AUTHORITY.equals(name) && !userDictionaryVisible()) return null;
         ProviderInfo hosted = hostedProvider(name);
         if (hosted != null) return hosted;
         return provider(name, flags);
@@ -844,7 +854,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
         if (UserDictionaryProvider.PACKAGE.equals(className.getPackageName())) {
             return userId == 0 && UserDictionaryProvider.matchesProviderFlags(flags)
-                    && UserDictionaryProvider.CLASS.equals(className.getClassName())
+                    && UserDictionaryProvider.CLASS.equals(className.getClassName()) && userDictionaryVisible()
                     ? UserDictionaryProvider.providerInfo() : null;
         }
         if (isRemovalPending(className.getPackageName())) return null;
@@ -859,7 +869,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public synchronized ParceledListSlice getInstalledPackages(long flags, int userId) {
         List<PackageInfo> result = new ArrayList<>();
-        if (userId == 0) result.add(UserDictionaryProvider.packageInfo(flags));
+        if (userId == 0 && userDictionaryVisible()) result.add(UserDictionaryProvider.packageInfo(flags));
         for (ApkPackage p : mPackages.values()) {
             result.add(installedInfo(p, flags));
         }
@@ -902,7 +912,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public synchronized ParceledListSlice getInstalledApplications(long flags, int userId) {
         List<ApplicationInfo> result = new ArrayList<>();
-        if (userId == 0) result.add(UserDictionaryProvider.applicationInfo());
+        if (userId == 0 && userDictionaryVisible()) result.add(UserDictionaryProvider.applicationInfo());
         for (ApkPackage p : mPackages.values()) {
             result.add(p.applicationInfo(flags));
         }
@@ -1287,6 +1297,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (uid == android.os.Process.SHELL_UID) {
             return sharedUidName("android.uid.shell", uid, bulk);
         }
+        if (uid >= android.os.Process.FIRST_APPLICATION_UID && uid == UserDictionaryProvider.uid()) {
+            return userDictionaryVisible() ? sharedUidName(UserDictionaryProvider.SHARED_USER, uid, bulk) : null;
+        }
         for (ApkPackage pkg : mPackages.values()) {
             if (pkg.uid() != uid) continue;
             String shared = pkg.sharedUserId();
@@ -1303,8 +1316,11 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String[] getPackagesForUid(int uid) {
-        if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android", UserDictionaryProvider.PACKAGE};
+        if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
         if (uid == android.os.Process.SHELL_UID) return new String[] {"com.android.shell"};
+        if (uid >= android.os.Process.FIRST_APPLICATION_UID && uid == UserDictionaryProvider.uid()) {
+            return userDictionaryVisible() ? new String[] {UserDictionaryProvider.PACKAGE} : null;
+        }
         List<String> result = new ArrayList<>();
         for (ApkPackage pkg : mPackages.values()) if (pkg.uid() == uid) result.add(pkg.packageName);
         return result.isEmpty() ? null : result.toArray(new String[0]);
@@ -1369,6 +1385,10 @@ public final class PackageManagerService extends IPackageManager.Default {
         return visible ? visibility.apk(packageName) : null;
     }
 
+    private boolean userDictionaryVisible() {
+        return packageVisibility().canSee(Binder.getCallingUid(), UserDictionaryProvider.PACKAGE);
+    }
+
     /** Shared installed visibility snapshot for provider enumeration and package queries. */
     private PackageVisibility packageVisibility() {
         Map<String, ApkPackage> packages;
@@ -1394,7 +1414,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         // means an unknown package to ApplicationPackageManager, not "no groups",
         // and makes even a query about the caller's own installed app throw.
         if (userId != 0 || isRemovalPending(packageName)) return null;
-        if ("android".equals(packageName) || UserDictionaryProvider.PACKAGE.equals(packageName)) return new int[0];
+        if ("android".equals(packageName)) return new int[0];
+        if (UserDictionaryProvider.PACKAGE.equals(packageName)) return userDictionaryVisible() ? new int[0] : null;
         ApkPackage pkg = get(packageName);
         if (pkg == null || ((flags & PackageManager.MATCH_SYSTEM_ONLY) != 0 && !pkg.isSystemAddon())) {
             return null;

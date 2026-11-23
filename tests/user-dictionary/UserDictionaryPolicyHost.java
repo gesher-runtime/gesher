@@ -161,16 +161,30 @@ public final class UserDictionaryPolicyHost {
         check(new File(app.dataDir).equals(UserDictionaryProvider.dataDirectory())
                 && new File(app.dataDir).getParentFile().getName().equals("system"),
                 "Runtime-owned storage is separate from ordinary APK installation/removal paths");
-        check(app.uid == android.os.Process.SYSTEM_UID && pm.getPackageUid(UserDictionaryProvider.PACKAGE, 0, 0) == app.uid,
-                "Package UID matches actual system-server ownership");
-        check(Arrays.asList(pm.getPackagesForUid(app.uid)).contains(UserDictionaryProvider.PACKAGE), "UID package reverse lookup");
+        check(app.uid >= android.os.Process.FIRST_APPLICATION_UID
+                && pm.getPackageUid(UserDictionaryProvider.PACKAGE, 0, 0) == app.uid
+                && full.providers[0].applicationInfo.uid == app.uid, "Public metadata shares the allocated app UID");
+        check(Arrays.equals(pm.getPackagesForUid(app.uid), new String[]{UserDictionaryProvider.PACKAGE}),
+                "Dictionary is the sole current package of its logical identity");
+        check(Arrays.equals(pm.getPackagesForUid(android.os.Process.SYSTEM_UID), new String[]{"android"}),
+                "System UID does not claim the dictionary");
+        check("android.uid.shared".equals(full.sharedUserId)
+                && ("android.uid.shared:" + app.uid).equals(pm.getNameForUid(app.uid))
+                && "shared:android.uid.shared".equals(pm.getNamesForUids(new int[]{app.uid})[0]),
+                "Forward metadata and UID names agree on the manifest identity");
+        check(pm.checkUidPermission(android.Manifest.permission.INTERACT_ACROSS_USERS_FULL, app.uid)
+                == PackageManager.PERMISSION_DENIED, "Hosted UID inherits no system UID grants");
         check(pm.getPackageGids(UserDictionaryProvider.PACKAGE, 0, 0).length == 0, "Built-in supplementary GID inventory");
         check(pm.getInstalledPackages(0, 0).getList().stream().anyMatch(
                 p -> UserDictionaryProvider.PACKAGE.equals(((PackageInfo)p).packageName)), "Installed package enumeration");
         check(pm.getInstalledApplications(0, 0).getList().stream().anyMatch(
                 p -> UserDictionaryProvider.PACKAGE.equals(((ApplicationInfo)p).packageName)), "Installed application enumeration");
-        check(pm.queryContentProviders("system", app.uid, 0, null).getList().size() == 1, "Provider process/UID enumeration");
-        check(pm.queryContentProviders("system", 10042, 0, null).getList().isEmpty(), "Other UID does not own built-in provider");
+        check("android.process.acore".equals(app.processName)
+                && app.processName.equals(full.providers[0].processName)
+                && pm.queryContentProviders(app.processName, app.uid, 0, null).getList().size() == 1,
+                "Provider enumeration uses the manifest process and distinct UID");
+        check(pm.queryContentProviders(app.processName, android.os.Process.SYSTEM_UID, 0, null).getList().isEmpty(),
+                "System UID does not own the dictionary provider");
         check(pm.queryContentProviders(null, 0, PackageManager.MATCH_DIRECT_BOOT_AWARE, null).getList().isEmpty(),
                 "Provider enumeration respects direct-boot flags");
         check(pm.queryContentProviders(null, 0, 0, "absent-metadata").getList().isEmpty(), "Provider metadata-key filter");
@@ -180,7 +194,9 @@ public final class UserDictionaryPolicyHost {
                 "Ordinary registry removal cannot retire built-in provider");
         PackageVisibility visibility = new PackageVisibility(Collections.emptyMap(), false, false, false, action -> false);
         check(visibility.contains(UserDictionaryProvider.PACKAGE)
-                && visibility.canSee(10042, UserDictionaryProvider.PACKAGE), "Built-in provider package visibility");
+                && visibility.canSee(app.uid, UserDictionaryProvider.PACKAGE)
+                && !visibility.canSee(10042, UserDictionaryProvider.PACKAGE),
+                "Ordinary provider visibility follows the actual logical app identity");
         // Constructed package metadata is isolated to this fixture. No APK runs.
         ApkPackage reserved = (ApkPackage)unsafe.allocateInstance(ApkPackage.class);
         Field name = ApkPackage.class.getDeclaredField("packageName"); name.setAccessible(true);
@@ -205,7 +221,8 @@ public final class UserDictionaryPolicyHost {
     private static void authenticatedCallers(File directory) throws Exception {
         String name = "fixture.dictionary.enabled";
         ApkPackage pkg = record(directory, name, 10042, name + ".provider", true);
-        PackageManagerService pm = new PackageManagerService(List.of(pkg), false);
+        ApkPackage peer = record(directory, "fixture.dictionary.other", 10042, null, true);
+        PackageManagerService pm = new PackageManagerService(List.of(pkg, peer), false);
         check(pm.queryContentProviders(null, 0, PackageManager.MATCH_SYSTEM_ONLY, null)
                 .getList().stream().noneMatch(p -> name.equals(p.packageName)),
                 "System-only provider enumeration excludes ordinary installed packages");
@@ -226,7 +243,7 @@ public final class UserDictionaryPolicyHost {
         UserDictionaryProvider provider = new UserDictionaryProvider(pm, tasks, new File(directory, "auth-not-opened.db"));
         ThreadLocal<AttributionSource> source = attribution(provider);
         AppOpsManager appOps = (AppOpsManager)unsafe.allocateInstance(AppOpsManager.class);
-        DeviceServices.AppOpsService appOpsService = new DeviceServices.AppOpsService();
+        AppOpsService appOpsService = new AppOpsService(pm, new File(directory, "appops"));
         set(appOps, "mService", appOpsService);
         field(AppOpsManager.class, "sService").set(null, appOpsService);
         AppOpsManager.disableCheckPackageCache();
@@ -253,8 +270,10 @@ public final class UserDictionaryPolicyHost {
             enabled.set(new SpellCheckerInfo[]{spell});
             check(allowed(provider), "Authenticated enabled spell checker admitted");
             check(Binder.getCallingPid() == 827331 && Binder.getCallingUid() == 10042, "Permission check restores incoming identity");
-            source.set(new AttributionSource(10042, "fixture.dictionary.other", null));
-            check(!allowed(provider), "Claimed package cannot replace authenticated process package");
+            source.set(new AttributionSource(10042, "fixture.dictionary.unknown", null));
+            rejects(SecurityException.class, () -> allowed(provider));
+            source.set(new AttributionSource(10042, peer.packageName, null));
+            check(!allowed(provider), "A UID-matched package cannot replace authenticated process attribution");
             source.set(new AttributionSource(10042, name, null));
             service.serviceInfo.applicationInfo.uid = 10043;
             check(!allowed(provider), "Enabled service UID must match caller");
@@ -436,7 +455,15 @@ public final class UserDictionaryPolicyHost {
             as(834121, android.os.Process.ROOT_UID,
                     () -> check((Boolean)allowed.invoke(provider), "Actual root UID admitted"));
             check((Boolean)allowed.invoke(provider), "Server-local provider call admitted");
-            metadata(new PackageManagerService(Collections.emptyList(), false));
+            int legacyUid = PackageUids.uidFor(UserDictionaryProvider.PACKAGE);
+            PackageManagerService packages = new PackageManagerService(Collections.emptyList(), false);
+            metadata(packages);
+            int dictionaryUid = packages.getPackageUid(UserDictionaryProvider.PACKAGE, 0, 0);
+            check(legacyUid != dictionaryUid && packages.getPackagesForUid(legacyUid) == null,
+                    "Built-in provider does not adopt a legacy APK identity");
+            check(new PackageManagerService(Collections.emptyList(), false)
+                    .getPackageUid(UserDictionaryProvider.PACKAGE, 0, 0) == dictionaryUid,
+                    "Recreated package manager retains the dictionary UID");
             authenticatedCallers(directory);
             manifestAdmission(directory);
             initializationFailure(directory);

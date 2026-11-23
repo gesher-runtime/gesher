@@ -154,6 +154,9 @@ final class PackageVisibility {
         ParsedPackage querying = source.apk.parsed;
         if (querying.getQueriesPackages().contains(target.name)) return true;
         if (target.apk == null) {
+            if (UserDictionaryProvider.PACKAGE.equals(target.name)) {
+                return querying.getQueriesProviders().contains(UserDictionaryProvider.AUTHORITY);
+            }
             if (BrowserPackageSupport.PACKAGE.equals(target.name)) {
                 for (Intent query : querying.getQueriesIntents()) {
                     if (matches(query, BrowserPackageSupport.filter(), false)) return true;

@@ -60,6 +60,8 @@ import com.android.internal.pm.pkg.component.ParsedProvider;
  */
 final class UserDictionaryProvider extends ContentProvider {
     static final String PACKAGE = "com.android.providers.userdictionary";
+    static final String SHARED_USER = "android.uid.shared";
+    static final String PROCESS = "android.process.acore";
     static final String CLASS = "com.gesher.server.UserDictionaryProvider";
     private final CallerIdentity mCallers;
     private final PackageManagerService mPm;
@@ -83,12 +85,20 @@ final class UserDictionaryProvider extends ContentProvider {
         return new File(Device.dataDir(), "system/user-dictionary");
     }
 
+    private static final class Identity {
+        // This key cannot be an APK package name. A legacy installed dictionary
+        // may have left its original identity or shared-group membership on disk.
+        private static final int UID = PackageUids.uidFor(PACKAGE + "/hosted-provider");
+    }
+
+    static int uid() { return Identity.UID; }
+
     static ApplicationInfo applicationInfo() {
         ApplicationInfo info = new ApplicationInfo();
         info.packageName = PACKAGE;
         info.className = null;
-        info.processName = "system";
-        info.uid = Process.SYSTEM_UID;
+        info.processName = PROCESS;
+        info.uid = uid();
         info.flags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_INSTALLED
                 | ApplicationInfo.FLAG_HAS_CODE;
         info.enabled = true;
@@ -119,6 +129,7 @@ final class UserDictionaryProvider extends ContentProvider {
     static PackageInfo packageInfo(long flags) {
         PackageInfo info = new PackageInfo();
         info.packageName = PACKAGE;
+        info.sharedUserId = SHARED_USER;
         info.applicationInfo = applicationInfo();
         if ((flags & PackageManager.GET_PROVIDERS) != 0 && matchesProviderFlags(flags)) {
             info.providers = new ProviderInfo[]{providerInfo()};

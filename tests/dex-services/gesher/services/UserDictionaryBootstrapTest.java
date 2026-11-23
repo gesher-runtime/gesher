@@ -64,6 +64,14 @@ public final class UserDictionaryBootstrapTest {
         check(info != null && "com.android.providers.userdictionary".equals(info.packageName), "Builtin metadata is discoverable");
         PackageInfo owner = packages.getPackageInfo(info.packageName, PackageManager.GET_PROVIDERS, 0);
         check(owner != null && owner.providers.length == 1 && info.name.equals(owner.providers[0].name), "Installed owner describes actual provider");
+        int ownerUid = packages.getPackageUid(info.packageName, 0, 0);
+        check(ownerUid >= Process.FIRST_APPLICATION_UID && ownerUid == info.applicationInfo.uid
+                && "android.uid.shared".equals(owner.sharedUserId)
+                && "android.process.acore".equals(info.processName),
+                "Provider metadata uses the manifest identity with a distinct app UID");
+        check(Arrays.equals(packages.getPackagesForUid(ownerUid), new String[]{info.packageName})
+                && Arrays.equals(packages.getPackagesForUid(Process.SYSTEM_UID), new String[]{"android"}),
+                "Dictionary and system UID reverse lookups remain distinct");
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread worker = new Thread(() -> {
             ContentProviderHolder holder = null;
@@ -82,6 +90,7 @@ public final class UserDictionaryBootstrapTest {
             try {
                 holder = activity.getContentProviderExternal("user_dictionary", 0, null, "dictionary-bootstrap-contract");
                 check(holder != null && holder.provider != null && holder.noReleaseNeeded, "Builtin provider transport is available");
+                check(holder.info.applicationInfo.uid == ownerUid, "Actual holder matches package manager identity");
                 SystemFeaturesCache features = SystemFeaturesCache.getInstance();
                 check(previousFeatures == null || features == previousFeatures,
                         "Provider acquisition replaced an already initialized feature cache");

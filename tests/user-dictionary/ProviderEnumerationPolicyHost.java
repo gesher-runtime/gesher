@@ -3,7 +3,9 @@ package com.gesher.server;
 
 import android.Manifest;
 import android.app.ActivityThread;
+import android.content.ComponentName;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ProviderInfo;
@@ -86,18 +88,32 @@ public final class ProviderEnumerationPolicyHost {
 
     private static void visibility(File directory) throws Exception {
         ApkPackage source = record(directory, "fixture.enumeration.source", 10042, true, false,
-                parsed -> parsed.addQueriesPackage("fixture.enumeration.visible"));
+                parsed -> {
+                    parsed.addQueriesPackage("fixture.enumeration.visible");
+                    parsed.addQueriesProvider(UserDictionaryProvider.AUTHORITY);
+                });
         ApkPackage hidden = record(directory, "fixture.enumeration.hidden", 10043, true, false);
         ApkPackage visible = record(directory, "fixture.enumeration.visible", 10044, true, false);
         ApkPackage exported = record(directory, "fixture.enumeration.exported", 10045, true, true);
         PackageManagerService pm = new PackageManagerService(List.of(source, hidden, visible, exported), false);
+        int dictionaryUid = pm.getPackageUid(UserDictionaryProvider.PACKAGE, 0, 0);
+        ComponentName dictionary = new ComponentName(UserDictionaryProvider.PACKAGE, UserDictionaryProvider.CLASS);
         as(812341, source.uid(), () -> {
             Set<String> result = packages(pm.queryContentProviders(null, 0, 0, null).getList());
             check(result.contains(source.packageName), "Caller retains its own private provider");
             check(result.contains(visible.packageName), "A declared package query exposes its provider metadata");
-            check(result.contains(UserDictionaryProvider.PACKAGE), "The actual builtin system owner stays visible");
             check(!result.contains(hidden.packageName), "Visibility regression: hidden provider metadata exposed");
             check(!result.contains(exported.packageName), "An exported component alone does not expose its package");
+            check(result.contains(UserDictionaryProvider.PACKAGE), "A declared authority query exposes dictionary metadata");
+            check(pm.isPackageAvailable(dictionary.getPackageName(), 0)
+                    && pm.getPackageInfo(dictionary.getPackageName(), 0, 0) != null
+                    && pm.getApplicationInfo(dictionary.getPackageName(), 0, 0) != null
+                    && pm.getPackageUid(dictionary.getPackageName(), 0, 0) == dictionaryUid
+                    && pm.getNameForUid(dictionaryUid) != null,
+                    "Authority query grants visibility throughout dictionary package metadata");
+            check(pm.resolveContentProvider(UserDictionaryProvider.AUTHORITY, 0, 0) != null
+                    && pm.getProviderInfo(dictionary, 0, 0) != null,
+                    "Authority query grants direct provider metadata visibility");
             check(pm.queryContentProviders(hidden.packageName, hidden.uid(), 0, null).getList().isEmpty(),
                     "Explicit process/UID does not bypass package visibility");
             check(packages(pm.queryContentProviders(null, 0, PackageManager.GET_META_DATA,
@@ -113,7 +129,23 @@ public final class ProviderEnumerationPolicyHost {
         as(812341, source.uid(), () -> check(packages(pm.queryContentProviders(null, 0, 0, null)
                 .getList()).contains(visible.packageName), "Aborted removal restores the existing visibility relationship"));
         as(812399, 10099, () -> check(packages(pm.queryContentProviders(null, 0, 0, null).getList())
-                .equals(Set.of(UserDictionaryProvider.PACKAGE)), "Unknown ordinary UID sees no installed application providers"));
+                .isEmpty(), "Unknown ordinary UID sees no installed application providers"));
+        as(812345, hidden.uid(), () -> {
+            check(!pm.isPackageAvailable(dictionary.getPackageName(), 0)
+                    && pm.getPackageInfo(dictionary.getPackageName(), 0, 0) == null
+                    && pm.getApplicationInfo(dictionary.getPackageName(), 0, 0) == null
+                    && pm.getPackageUid(dictionary.getPackageName(), 0, 0) == -1
+                    && pm.getPackagesForUid(dictionaryUid) == null
+                    && pm.getNamesForUids(new int[]{dictionaryUid})[0] == null,
+                    "An unrelated app cannot discover dictionary package metadata by name or UID");
+            check(pm.resolveContentProvider(UserDictionaryProvider.AUTHORITY, 0, 0) == null
+                    && pm.getProviderInfo(dictionary, 0, 0) == null
+                    && pm.getInstalledPackages(0, 0).getList().stream().noneMatch(
+                            p -> dictionary.getPackageName().equals(((PackageInfo)p).packageName))
+                    && pm.getInstalledApplications(0, 0).getList().stream().noneMatch(
+                            p -> dictionary.getPackageName().equals(((ApplicationInfo)p).packageName)),
+                    "Resolved, named and enumerated metadata share the visibility check");
+        });
         as(812300, Process.SYSTEM_UID, () -> check(packages(pm.queryContentProviders(null, 0, 0, null)
                 .getList()).contains(hidden.packageName), "Actual system caller retains its inventory"));
     }
@@ -139,7 +171,8 @@ public final class ProviderEnumerationPolicyHost {
             as(812300, uid, () -> {
                 check(pm.queryContentProviders(source.packageName, 1010042, 0, null).getList().isEmpty(),
                         "Authorized root/system caller receives the unavailable-user empty result");
-                check(packages(pm.queryContentProviders("system", Process.SYSTEM_UID, 0, null).getList())
+                check(packages(pm.queryContentProviders(UserDictionaryProvider.PROCESS,
+                        pm.getPackageUid(UserDictionaryProvider.PACKAGE, 0, 0), 0, null).getList())
                         .contains(UserDictionaryProvider.PACKAGE), "Authorized root/system caller sees the actual builtin");
             });
         }
@@ -197,20 +230,21 @@ public final class ProviderEnumerationPolicyHost {
                 Manifest.permission.INTERACT_ACROSS_USERS_FULL);
         ApkPackage unsigned = permissionRecord(directory, "fixture.enumeration.unsigned", 10045,
                 Manifest.permission.INTERACT_ACROSS_USERS);
-        ApkPackage sibling = record(directory, "fixture.enumeration.sibling", basic.uid(), false, false);
+        ApkPackage unrelated = record(directory, "fixture.enumeration.unrelated", 10046, false, false);
         for (ApkPackage pkg : List.of(platform, basic, full)) {
             set(pkg, "apkPath", new File(fixtures, "v2only.apk").getPath());
             check(pkg.hasVerifiedSigningIdentity(), "Real APK signature verification for permission-bearing fixture");
         }
         set(unsigned, "apkPath", new File(fixtures, "unsigned.apk").getPath());
         check(!unsigned.hasVerifiedSigningIdentity(), "Unsigned request has no verified signing identity");
-        PackageManagerService pm = new PackageManagerService(List.of(platform, basic, full, unsigned, sibling), false);
+        PackageManagerService pm = new PackageManagerService(List.of(platform, basic, full, unsigned, unrelated), false);
+        int dictionaryUid = pm.getPackageUid(UserDictionaryProvider.PACKAGE, 0, 0);
         frameworkPermissions(pm.permissions());
         ActivityTaskManagerService tasks = (ActivityTaskManagerService)unsafe.allocateInstance(ActivityTaskManagerService.class);
         set(tasks, "mPm", pm);
         ArrayList<Object> enrolled = new ArrayList<>();
         Class<?> processType = Class.forName(ActivityTaskManagerService.class.getName() + "$ProcessRecord");
-        ApkPackage[] callers = {basic, full, unsigned, sibling};
+        ApkPackage[] callers = {basic, full, unsigned, unrelated};
         for (int i = 0; i < callers.length; i++) {
             Object process = unsafe.allocateInstance(processType);
             set(process, "pid", 812350 + i); set(process, "uid", callers[i].uid());
@@ -229,15 +263,18 @@ public final class ProviderEnumerationPolicyHost {
             check(pm.permissions().checkProcessPermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL,
                     Binder.getCallingPid(), Binder.getCallingUid()) == PackageManager.PERMISSION_GRANTED,
                     "Production permission policy grants the fuller verified signature permission");
-            check(packages(pm.queryContentProviders("system", Process.SYSTEM_UID, 0, null).getList())
-                    .contains(UserDictionaryProvider.PACKAGE), "Genuine full permission authorizes the user 0 builtin");
+            check(pm.queryContentProviders(UserDictionaryProvider.PROCESS, dictionaryUid, 0, null).getList().isEmpty(),
+                    "Cross-user permission does not grant package visibility without a manifest query");
         });
         as(812352, unsigned.uid(), () -> rejects(SecurityException.class,
                 () -> pm.queryContentProviders("missing.process", 1010042, 0, null),
                 "A permission request without verified signing does not authorize cross-user access"));
-        as(812353, sibling.uid(), () -> rejects(SecurityException.class,
+        as(812353, unrelated.uid(), () -> rejects(SecurityException.class,
                 () -> pm.queryContentProviders("missing.process", 1010042, 0, null),
-                "Shared runtime UID alone does not inherit an enrolled package's grant"));
+                "Unrelated enrolled package has no cross-user grant"));
+        as(812353, basic.uid(), () -> rejects(SecurityException.class,
+                () -> pm.queryContentProviders("missing.process", 1010042, 0, null),
+                "Unrelated enrolled package cannot claim the UID with the grant"));
         as(812350, 10099, () -> rejects(SecurityException.class,
                 () -> pm.queryContentProviders("missing.process", 1010042, 0, null),
                 "Granted package still requires its authenticated UID"));
@@ -285,7 +322,8 @@ public final class ProviderEnumerationPolicyHost {
         }
         set(unsigned, "apkPath", new File(fixtures, "unsigned.apk").getPath());
         check(!unsigned.hasVerifiedSigningIdentity(), "Local unsigned fixture is actually unverified");
-        PackageManagerService pm = new PackageManagerService(List.of(platform, ordinary, basic, full, unsigned), false);
+        // This process has exactly one admitted standalone app identity at a time.
+        PackageManagerService pm = new PackageManagerService(List.of(platform, ordinary), false);
         frameworkPermissions(pm.permissions());
         ActivityTaskManagerService tasks = (ActivityTaskManagerService)unsafe.allocateInstance(ActivityTaskManagerService.class);
         set(tasks, "mPm", pm);
@@ -318,13 +356,17 @@ public final class ProviderEnumerationPolicyHost {
                 check(policy.checkProcessPermission(Manifest.permission.INTERACT_ACROSS_USERS, pid, Process.SYSTEM_UID)
                         == PackageManager.PERMISSION_DENIED, "A bound app cannot claim the service's UID");
             });
+            pm.remove(ordinary.packageName);
+            pm.add(unsigned);
             boundApplication(unsigned, () -> rejects(SecurityException.class,
                     () -> pm.queryContentProviders("missing.process", 1010042, 0, null),
-                    "Local unsigned permission request cannot borrow a sibling's shared-UID grant"));
+                    "Local unsigned permission request cannot obtain a signature grant"));
+            pm.remove(unsigned.packageName);
             boundApplication(absent, () -> rejects(SecurityException.class,
                     () -> pm.queryContentProviders("missing.process", 1010042, 0, null),
                     "Bound package missing from the real registry cannot become a service caller"));
-            for (ApkPackage pkg : List.of(basic, full)) {
+            for (ApkPackage pkg : List.of(full, basic)) {
+                pm.add(pkg);
                 String permission = pkg == basic ? Manifest.permission.INTERACT_ACROSS_USERS
                         : Manifest.permission.INTERACT_ACROSS_USERS_FULL;
                 boundApplication(pkg, () -> {
@@ -339,6 +381,7 @@ public final class ProviderEnumerationPolicyHost {
                     check(policy.checkProcessPermission(permission, pid + 1, uid) == PackageManager.PERMISSION_DENIED,
                             "An unknown remote PID cannot use the local bound application's grant");
                 });
+                if (pkg == full) pm.remove(full.packageName);
             }
             boundApplication(basic, () -> {
                 pm.beginPackageRemoval(basic);
@@ -365,13 +408,16 @@ public final class ProviderEnumerationPolicyHost {
                 check(policy.checkProcessPermission(Manifest.permission.INTERACT_ACROSS_USERS, pid, uid)
                         == PackageManager.PERMISSION_DENIED, "A replacement cannot retain the old signing grant");
             });
+            pm.remove(basic.packageName);
+            pm.add(ordinary);
             boundApplication(ordinary, () -> {
                 Object process = unsafe.allocateInstance(Class.forName(ActivityTaskManagerService.class.getName() + "$ProcessRecord"));
                 set(process, "pid", pid); set(process, "uid", uid); set(process, "packageName", full.packageName);
                 enrolled.add(process);
                 try {
-                    check(policy.checkProcessPermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL, pid, uid)
-                            == PackageManager.PERMISSION_DENIED, "Contradictory local and attached identities fail closed");
+                    check(full.packageName.equals(identity.packageForPid(pid)), "Fixture attached the contradictory package");
+                    check(policy.checkProcessPermission(Manifest.permission.INTERNET, pid, uid)
+                            == PackageManager.PERMISSION_DENIED, "Contradictory attachment revokes even a real local grant");
                 } finally { enrolled.clear(); }
             });
             check(ActivityThread.currentPackageName() == null, "No app is bound in the service-only control");

@@ -86,10 +86,13 @@ The installed provider owner is `com.android.providers.userdictionary`.
 Package/application/provider lookup, enumeration, UID reverse lookup and
 package visibility describe the built-in code. The reported class is the
 actual port class, `com.gesher.server.UserDictionaryProvider`, and its code path
-is the actual runtime `framework/gesher-app.jar`. Its process and UID describe
-the system server, rather than inventing the original AOSP APK, signing
-certificate or separate `android.process.acore` process. User 0 is the supported
-owner; unavailable users receive no dictionary package/provider metadata.
+is the actual runtime `framework/gesher-app.jar`. The package metadata reports the
+manifest's `android.uid.shared` identity and logical `android.process.acore` name.
+Gesher reserves a distinct app-range UID for the built-in package in its normal
+persistent allocator. The provider runs in the existing service process, and its
+logical UID confers no system permissions or APK signing identity. Ordinary APKs
+cannot join the built-in identity. User 0 is the supported owner. Unavailable
+users receive no dictionary package/provider metadata.
 Direct-boot component filters reflect the source manifest's unaware provider.
 
 Provider enumeration also follows
@@ -100,7 +103,10 @@ The existing process-authenticated permission policy accepts the actual root or
 system UID or a genuine `INTERACT_ACROSS_USERS_FULL`/`INTERACT_ACROSS_USERS`
 grant. Knowing a process name or UID does not bypass these checks. The shared
 PackageVisibility snapshot retains ordinary own-package and manifest query
-relationships and the actual built-in system owner's visibility.
+relationships, including declarations for the dictionary package or its exported
+`user_dictionary` authority. Android's package visibility applies to dictionary
+metadata lookup and enumeration. Provider transport acquisition still uses the
+ContentProviders authorization and the provider's own access checks.
 
 In Main's standalone launch, GesherAppDriver enrolls the installed process
 with ATM before binding its ActivityThread application. The shared
@@ -163,8 +169,8 @@ revision's PMS and PermissionPolicy against the current tests. Select `--case vi
 earlier enumeration failure independently, or `--case local-permissions` for
 the standalone application permission path. Local controls cover ordinary
 normal-permission access, real signed cross-user grants, unsigned requests,
-shared-UID siblings, stale/removing owners, conflicting identities and service
-calls with no bound app. Real ActivityThread binding fields test both matching
+unrelated packages claiming another UID, stale/removing owners, conflicting
+identities and service calls with no bound app. Real ActivityThread binding fields test both matching
 and absent ATM attribution. Permission results are not replaced.
 The default `--case all` additionally checks permission-bearing remote callers
 and the original dictionary policy.
