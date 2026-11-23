@@ -268,7 +268,11 @@ an x86-64 `libnesec.so` get nothing.
 each a general Linux or Android contract, not specific to this app):
 `execl`/`execlp`/`execle`; the translator honouring the guest's `IC IVAU`,
 `IC IALLU` and an executable-range `mprotect` (the shell's inline hooks
-rewrite code that already ran); `fsync` on a read-only descriptor; `IP_PKTINFO`
+rewrite code that already ran); `fsync` on a read-only descriptor (through a
+writable handle or descriptor of the same file when Windows allows one;
+without any write access, a read-only file or an ACL that denies writing,
+only the cached data is written back, without committing metadata or
+flushing the device's cache: [posix.md](../posix.md#known-gaps)); `IP_PKTINFO`
 on IPv4 UDP; a content provider authority given to the first provider in a
 package that declares it (AOSP's `ComponentResolver`); and bionic's
 `libstdc++.so` exports, which the shell `dlopen`s.
