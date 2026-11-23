@@ -247,6 +247,10 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   a `Surface` over `NativeWindow`: lockCanvas/unlockCanvasAndPost, the
   window's back buffer and PrintWindow show the frame, a dirty-rectangle
   redraw keeps the rest.
+  CPU damage now limits retained-buffer conversion and Win32 invalidation;
+  layered popups also retain their DIB and coalesce pending damage. See the
+  [Round 2 validation and contract notes](audits/round2-graphics-validation.md)
+  for fallback cases, pinned AOSP evidence and host-only measurements.
 - **hwui's renderer into the window** (step 3, `HardwareRendererTest`,
   `PASS  dalvikvm: HardwareRenderer: a RenderNode tree into the Win32 window
   (CPU pipeline)`, ci run 39997138911 and later): a RenderNode tree (with a
@@ -532,7 +536,11 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 - **EGL/GLES into it** (SDL, games, Firefox's compositor in its GPU process): an
   ANativeWindow without an HWND gets a hidden helper window for ANGLE's window surface;
   at each eglSwapBuffers the frame is read back and posted to the ANativeWindow, paced
-  at 60 Hz on a high-resolution waitable timer (`compat/bionic/egl_child_surface.cc`).
+  at the queried host monitor frequency on a high-resolution waitable timer,
+  with a 60 Hz fallback (`compat/bionic/egl_child_surface.cc`). Child queue
+  surfaces do not identify their consumer's display: the query uses this
+  process's foreground window when available, otherwise the helper/default
+  monitor. It refreshes on monitor changes and at most once per second.
   The helper is never shown, so its swap chain is not presented: ANGLE's swap is made
   only when the window's size changed (where ANGLE resizes the surface), with swap
   interval 0 (eglSwapInterval with such a surface current keeps 0). Presenting it with
