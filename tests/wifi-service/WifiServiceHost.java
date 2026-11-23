@@ -168,7 +168,7 @@ public final class WifiServiceHost {
         @Override public void listen(com.gesher.net.WindowsWifi.Events listener) { events = listener; }
         // Synthetic WLAN connection boundary: records what the production policy asked
         // Windows to do; the outcomes are scripted per test.
-        int iface = 12, outcome = com.gesher.net.WindowsWifi.CONNECTED;
+        volatile int iface = 12; int outcome = com.gesher.net.WindowsWifi.CONNECTED;
         boolean ipv4 = true;
         String current = "Home";
         final List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -197,11 +197,24 @@ public final class WifiServiceHost {
                 return false;
             }
             calls.add((xml != null ? "store " : "delete ") + profile.substring(0, 9));
+            ifOps.add((xml != null ? "store " : "delete ") + ifIndex + " " + profile);
             if (xml != null) { stored.add(profile); lastXml = xml; } else stored.remove(profile);
             return true;
         }
+        // Profile stores and deletes with the interface they were made on.
+        final List<String> ifOps = new java.util.concurrent.CopyOnWriteArrayList<>();
         final java.util.concurrent.atomic.AtomicInteger profileReads = new java.util.concurrent.atomic.AtomicInteger();
-        @Override public String currentProfile(int ifIndex) { profileReads.incrementAndGet(); return current; }
+        // Scripted stall of a connection-event pass at its WLAN read (synthetic boundary).
+        volatile java.util.concurrent.CountDownLatch readGate;
+        @Override public String currentProfile(int ifIndex) {
+            profileReads.incrementAndGet();
+            java.util.concurrent.CountDownLatch gate = readGate;
+            if (gate != null) {
+                try { gate.await(10, java.util.concurrent.TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            return current;
+        }
         @Override public List<String> profiles(int ifIndex, String prefix) {
             List<String> result = new ArrayList<>();
             for (String name : stored) if (name.startsWith(prefix)) result.add(name);
@@ -958,7 +971,7 @@ public final class WifiServiceHost {
             // disallowCurrentSuggestedNetwork disconnects and blocks the network.
             h.owner.call(() -> h.wifi.disallowCurrentSuggestedNetwork(h.owner.name(),
                     new android.net.wifi.BlockingOption.Builder(3600).build()));
-            check(h.radio.calls.contains("disconnect true null") && !h.radio.stored.contains(profile),
+            await(() -> h.radio.calls.contains("disconnect true null") && !h.radio.stored.contains(profile),
                     "The suggesting app can disallow its current network");
             h.owner.call(() -> {
                 check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(new android.net.wifi.WifiNetworkSuggestion
@@ -987,12 +1000,21 @@ public final class WifiServiceHost {
             });
             check(h.radio.stored.stream().noneMatch(name -> name.startsWith("Gesher-s-")),
                     "No Windows profile exists for removed or rejected suggestions");
-            // WLAN event bursts are coalesced: at most one queued pass at a time.
+            // WLAN event bursts are coalesced: at most one queued pass at a time. One pass is
+            // held at its WLAN read while the burst arrives; the whole burst then runs one
+            // more pass (each pass reads the current profile once).
             Thread.sleep(200);
             int reads = h.radio.profileReads.get();
+            java.util.concurrent.CountDownLatch gate = new java.util.concurrent.CountDownLatch(1);
+            h.radio.readGate = gate;
+            h.radio.events.onConnectionChanged();
+            await(() -> h.radio.profileReads.get() - reads >= 1, "A connection pass is running");
             for (int i = 0; i < 500; i++) h.radio.events.onConnectionChanged();
-            Thread.sleep(500);
-            check(h.radio.profileReads.get() - reads < 50, "A burst of WLAN events runs a bounded number of passes");
+            Thread.sleep(200);
+            h.radio.readGate = null; gate.countDown();
+            await(() -> h.radio.profileReads.get() - reads >= 2, "The burst runs a pass after the running one");
+            Thread.sleep(300);
+            check(h.radio.profileReads.get() - reads == 2, "A burst of WLAN events runs a bounded number of passes");
             // Uninstall drops the app's suggestions and Windows profiles at once. (The
             // disallowed network stays blocked for its hour even when suggested again.)
             h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(wpa2,
@@ -1100,24 +1122,123 @@ public final class WifiServiceHost {
             h.radio.current = homeProfile;
             h.owner.call(() -> h.wifi.disallowCurrentSuggestedNetwork(h.owner.name(),
                     new android.net.wifi.BlockingOption.Builder(1).build()));
-            check(!h.radio.stored.contains(homeProfile) && h.radio.calls.contains("disconnect true null"),
+            await(() -> !h.radio.stored.contains(homeProfile) && h.radio.calls.contains("disconnect true null"),
                     "The disallowed network is disconnected and its profile removed");
             await(() -> h.radio.stored.contains(homeProfile), "The profile returns when the block expires");
             h.radio.current = homeProfile;
             h.owner.call(() -> h.wifi.disallowCurrentSuggestedNetwork(h.owner.name(),
                     new android.net.wifi.BlockingOption.Builder(3600).build()));
-            check(!h.radio.stored.contains(homeProfile), "Blocked again");
+            await(() -> !h.radio.stored.contains(homeProfile), "Blocked again");
             h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(psk("Third").build()))
                     == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Another suggestion accepted"));
             await(() -> suggestionProfileCount(h.radio) == 2, "A later pass runs");
             h.radio.events.onConnectionChanged();
             Thread.sleep(200);
             check(!h.radio.stored.contains(homeProfile), "Later passes honour the block");
-            // Removing everything removes every profile before the call returns.
+            // Removing everything removes every profile before the call returns (the
+            // profile thread is idle, well within the removal's bounded wait).
             h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
                     WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
                     "Remove all"));
             check(suggestionProfileCount(h.radio) == 0, "No suggestion profile is left");
+        }
+    }
+    /** A removed suggestion's profile is deleted even while the Wi-Fi radio is off. */
+    private static void radioOffProfiles() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            android.net.wifi.WifiNetworkSuggestion home = psk("Fixture AP").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 1, "Approved suggestion becomes a Windows profile");
+            String homeProfile = h.radio.stored.iterator().next();
+            // Radio off: no primary interface, but the profile is still on interface 12.
+            h.radio.iface = 0;
+            h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
+                    WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                    "Remove all with the radio off"));
+            check(suggestionProfileCount(h.radio) == 0 && h.radio.ifOps.contains("delete 12 " + homeProfile),
+                    "The removed suggestion's profile is deleted on its interface while the radio is off");
+            // A suggestion added while the radio is off waits for it.
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion added with the radio off"));
+            Thread.sleep(300);
+            check(suggestionProfileCount(h.radio) == 0, "Nothing is stored while the radio is off");
+            h.radio.iface = 12; h.radio.events.onConnectionChanged();
+            await(() -> h.radio.ifOps.contains("store 12 " + homeProfile) && suggestionProfileCount(h.radio) == 1,
+                    "The radio's return stores the waiting suggestion");
+            // Radio off again, then the app is uninstalled: its profile still goes.
+            h.radio.iface = 0;
+            h.pm.packageRemoved(h.owner.code, new Object());
+            await(() -> suggestionProfileCount(h.radio) == 0,
+                    "An uninstalled app's profile is deleted while the radio is off");
+        }
+    }
+    /** Profiles stay attached to their interface: a new primary adapter does not orphan them. */
+    private static void interfaceChangeProfiles() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            android.net.wifi.WifiNetworkSuggestion home = psk("Fixture AP").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> h.radio.ifOps.stream().anyMatch(op -> op.startsWith("store 12 Gesher-s-")), "Stored on interface 12");
+            String homeProfile = h.radio.stored.iterator().next();
+            h.radio.ifOps.clear();
+            // Another adapter becomes the primary one; a model change runs a pass there.
+            h.radio.iface = 13; h.radio.events.onConnectionChanged();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(psk("Second").build()))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Second suggestion accepted"));
+            await(() -> h.radio.ifOps.contains("delete 12 " + homeProfile) && h.radio.ifOps.contains("store 13 " + homeProfile)
+                    && h.radio.ifOps.stream().filter(op -> op.startsWith("store 13 Gesher-s-")).count() == 2,
+                    "The old interface's profiles are deleted there and the suggestions move to the new one");
+            check(h.radio.ifOps.stream().noneMatch(op -> op.startsWith("store 12 ")), "Nothing more is stored on the old interface");
+            h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
+                    WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                    "Remove all"));
+            check(suggestionProfileCount(h.radio) == 0
+                    && h.radio.ifOps.stream().filter(op -> op.startsWith("delete 13 Gesher-s-")).count() == 2,
+                    "The new interface's profiles are deleted there");
+        }
+    }
+    /** Binder calls are not held by a stalled profile thread. */
+    private static void profileThreadStall() throws Exception {
+        Field wait = null;
+        try { wait = field(WifiConnections.class, "removeWaitMs"); } catch (NoSuchFieldException absent) { }
+        if (wait != null) wait.set(null, 300L);
+        try (Harness h = new Harness(36, false)) {
+            android.net.wifi.WifiNetworkSuggestion home = psk("Fixture AP").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 1, "Approved suggestion becomes a Windows profile");
+            String homeProfile = h.radio.stored.iterator().next();
+            // Windows stalls in a store of the next suggestion's profile.
+            java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+            h.radio.duringStore = () -> {
+                entered.countDown();
+                try { release.await(20, java.util.concurrent.TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            };
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(psk("Second").build()))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Second suggestion accepted"));
+            check(entered.await(10, java.util.concurrent.TimeUnit.SECONDS), "The profile thread is stalled in Windows");
+            try {
+                long[] started = {System.nanoTime()};
+                h.owner.call(() -> h.wifi.disallowCurrentSuggestedNetwork(h.owner.name(),
+                        new android.net.wifi.BlockingOption.Builder(3600).build()));
+                check(System.nanoTime() - started[0] < 1_000_000_000L,
+                        "disallowCurrentSuggestedNetwork does not wait for the profile thread");
+                started[0] = System.nanoTime();
+                h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(home),
+                        WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL,
+                        "A removal the profile thread cannot answer in time is ERROR_INTERNAL"));
+                check(System.nanoTime() - started[0] < 3_000_000_000L, "The removal's wait is bounded");
+                check(h.radio.stored.contains(homeProfile), "Windows has not been reached yet");
+            } finally {
+                release.countDown();
+            }
+            await(() -> !h.radio.stored.contains(homeProfile),
+                    "The timed-out removal's profile is still deleted once the profile thread is free");
+        } finally {
+            if (wait != null) wait.set(null, 4_000L);
         }
     }
     public static void main(String[] args) throws Exception {
@@ -1127,6 +1248,7 @@ public final class WifiServiceHost {
         field(Class.forName("com.gesher.app.locale.SystemLocale"), "sIs24Hour").set(null, Boolean.TRUE);
         identityAndData(); scanPolicy(); queuedAuthority(); rejectedAdmission(); standalone(); privilegedPolicies(); networkObservations();
         capabilitiesAndEvents(); specifierRequests(); suggestions(); suggestionProfiles();
+        radioOffProfiles(); interfaceChangeProfiles(); profileThreadStall();
         System.out.println("WifiServiceHost passed: " + checks + " checks; real permission/AppOps/broadcast Java, radio=fixture");
     }
 }

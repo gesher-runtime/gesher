@@ -80,6 +80,9 @@ final class WifiConnections {
     static final long LINGER_MS = 30_000; // DEFAULT_LINGER_DELAY_MS
     static final int APPROVED_PER_APP = 50; // NUM_OF_ACCESS_POINT_LIMIT_PER_APP
     static final long PROFILE_WAIT_MS = 30_000;
+    // How long removeNetworkSuggestions waits for its profile pass, as WifiServiceImpl
+    // waits for the Wi-Fi thread (WifiThreadRunner.call); test boundary only.
+    static volatile long removeWaitMs = 4_000;
     static final long RETRY_MIN_MS = 5_000, RETRY_MAX_MS = 300_000;
     private static final String REQUEST_PREFIX = WlanProfiles.PREFIX + "r-";
     private static final String SUGGESTION_PREFIX = WlanProfiles.PREFIX + "s-";
@@ -96,6 +99,12 @@ final class WifiConnections {
     // worker finishes (it is inactive) before the next one touches Windows.
     private final ExecutorService mRequests = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "gesher-wifi-request");
+        thread.setDaemon(true);
+        return thread;
+    });
+    // WLAN connection-event passes run one at a time, in order.
+    private final ExecutorService mEvents = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "gesher-wifi-events");
         thread.setDaemon(true);
         return thread;
     });
@@ -123,10 +132,14 @@ final class WifiConnections {
     // only on the profile thread; guarded by mLock.
     private final Map<String, String> mInstalled = new HashMap<>();
     private int mInstalledOn; // the interface mInstalled describes
+    // Suggestion profiles left on an interface that is no longer the primary one
+    // (interface -> names), deleted there by the next passes; guarded by mLock.
+    private final Map<Integer, LinkedHashSet<String>> mStale = new LinkedHashMap<>();
     private final Map<String, Long> mBlocked = new HashMap<>(); // profile -> nanoTime the block ends
     private final Map<String, Long> mLingering = new HashMap<>(); // removed profile -> nanoTime it goes
-    private boolean mCleaned, mRetryPending, mRetryScheduled;
+    private boolean mCleaned, mRetryPending;
     private long mRetryMs;
+    private java.util.concurrent.ScheduledFuture<?> mRetryTimer; // guarded by mLock
     // At most one queued pass each: a burst of WLAN events or adds does not pile up tasks.
     private final java.util.concurrent.atomic.AtomicBoolean mConnectionPassQueued =
             new java.util.concurrent.atomic.AtomicBoolean();
@@ -144,7 +157,7 @@ final class WifiConnections {
                 if (!Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
                         || intent.getBooleanExtra(Intent.EXTRA_REPLACING, false) || intent.getData() == null) return;
                 String name = intent.getData().getSchemeSpecificPart();
-                if (name != null) mWorker.execute(() -> removeApp(name, true));
+                if (name != null) removeApp(name);
             });
         } catch (RuntimeException unavailable) {
             // No package events (a host fixture without them): pruning on use still applies.
@@ -483,10 +496,11 @@ final class WifiConnections {
     /** WLAN association changed: a request whose profile is gone has lost its network. */
     void connectionChanged() {
         if (!mConnectionPassQueued.compareAndSet(false, true)) return;
-        mWorker.execute(() -> {
+        mEvents.execute(() -> {
             // Cleared first: an event during this pass queues exactly one more.
             mConnectionPassQueued.set(false);
-            cleanup(mBackend.primaryInterface());
+            int ifIndex = mBackend.primaryInterface();
+            cleanup(ifIndex);
             Request request;
             synchronized (mLock) { request = mActive; }
             if (request != null) {
@@ -497,8 +511,10 @@ final class WifiConnections {
                 }
             }
             suggestionConnectionChanged();
+            // Work left from a failed pass, or profiles stored on an adapter that is no
+            // longer the primary one, are reconciled now.
             boolean retry;
-            synchronized (mLock) { retry = mRetryPending; }
+            synchronized (mLock) { retry = mRetryPending || ifIndex > 0 && mInstalledOn > 0 && ifIndex != mInstalledOn; }
             if (retry) queueReconcile();
         });
     }
@@ -617,7 +633,7 @@ final class WifiConnections {
     // Windows profiles follow it only on the single profile thread: each pass computes the
     // profiles the model wants and stores, updates or deletes the difference. A model
     // change made while a pass talks to Windows queues another pass behind it, and a
-    // removal waits for that pass, so a profile never outlives its suggestion.
+    // removal waits (bounded) for that pass, so a profile never outlives its suggestion.
 
     private static final class Apps {
         final List<WifiNetworkSuggestion> suggestions = new ArrayList<>();
@@ -755,7 +771,7 @@ final class WifiConnections {
                 mService.pm().appOps().setMode(AppOpsManager.OP_CHANGE_WIFI_STATE, code.uid(), packageName,
                         AppOpsManager.MODE_IGNORED);
             }
-            removeApp(packageName, true);
+            removeApp(packageName);
         }
         if (decision != PermissionRequests.DISMISSED) approvalChanged(packageName);
         queueReconcile();
@@ -774,26 +790,26 @@ final class WifiConnections {
         }
     }
 
-    /** Runs a profile pass and waits for it: Windows follows the model when this returns. */
-    private void reconcileNow() {
-        onProfiles(this::reconcile);
-    }
-
-    /** Runs a task on the profile thread (inline when already on it) and waits for it. */
-    private void onProfiles(Runnable task) {
+    /**
+     * Runs a task on the profile thread (inline when already on it) and waits for it at
+     * most {@code waitMs}; false when it did not finish in time. A task that timed out
+     * still runs (or keeps running) on the profile thread.
+     */
+    private boolean onProfiles(Runnable task, long waitMs) {
         if (Thread.currentThread() == mProfilesThread) {
             task.run();
-            return;
+            return true;
         }
         try {
-            mProfiles.submit(task).get(PROFILE_WAIT_MS, TimeUnit.MILLISECONDS);
+            mProfiles.submit(task).get(waitMs, TimeUnit.MILLISECONDS);
+            return true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException
                 | java.util.concurrent.RejectedExecutionException e) {
-            // The pass still runs (or ran) on the profile thread; nothing here depends on it.
             SystemServer.log("Wi-Fi profile update did not finish: " + e);
         }
+        return false;
     }
 
     private void reconcile() {
@@ -805,22 +821,40 @@ final class WifiConnections {
         }
     }
 
-    /** One pass on the profile thread: stores, updates and deletes until Windows matches the model. */
+    /**
+     * One pass on the profile thread: stores, updates and deletes until Windows matches
+     * the model. Deletions never wait for a radio: a profile is deleted on the interface
+     * it was stored on, even while that radio is off (WLAN profiles belong to the
+     * interface, not to its radio state) or after another adapter became the primary
+     * one, since Windows would otherwise still auto-join it later.
+     */
     private void reconcileChecked() {
         int ifIndex = mBackend.primaryInterface();
-        if (ifIndex <= 0) {
-            boolean waiting;
-            synchronized (mLock) { waiting = !desiredLocked(System.nanoTime()).isEmpty(); }
-            if (waiting) scheduleRetry();
-            return;
-        }
-        cleanupNow(ifIndex);
+        if (ifIndex > 0) cleanupNow(ifIndex);
         Map<String, String> store = new LinkedHashMap<>();
         List<String> delete = new ArrayList<>();
+        Map<Integer, List<String>> stale = new LinkedHashMap<>();
+        boolean waiting = false;
+        int on;
         long generation;
         synchronized (mLock) {
-            // Profiles are per interface: records of another adapter's profiles do not apply.
-            if (mInstalledOn != ifIndex) { mInstalled.clear(); mInstalledOn = ifIndex; }
+            if (ifIndex > 0 && mInstalledOn != ifIndex) {
+                // Profiles are per interface: the previous interface's are deleted there,
+                // and any still recorded for this one apply again (content unknown).
+                if (mInstalledOn > 0 && !mInstalled.isEmpty()) {
+                    mStale.computeIfAbsent(mInstalledOn, index -> new LinkedHashSet<>()).addAll(mInstalled.keySet());
+                }
+                mInstalled.clear();
+                LinkedHashSet<String> back = mStale.remove(ifIndex);
+                if (back != null) for (String name : back) mInstalled.put(name, "");
+                mInstalledOn = ifIndex;
+            }
+            // With the radio off (no primary interface) only deletions run, on the
+            // interface the profiles were stored on.
+            on = mInstalledOn;
+            for (Map.Entry<Integer, LinkedHashSet<String>> entry : mStale.entrySet()) {
+                stale.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+            }
             long now = System.nanoTime();
             Map<String, String> desired = desiredLocked(now);
             mLingering.entrySet().removeIf(entry -> desired.containsKey(entry.getKey())
@@ -829,17 +863,30 @@ final class WifiConnections {
                 if (!desired.containsKey(name) && !mLingering.containsKey(name)) delete.add(name);
             }
             for (Map.Entry<String, String> entry : desired.entrySet()) {
-                if (!entry.getValue().equals(mInstalled.get(entry.getKey()))) store.put(entry.getKey(), entry.getValue());
+                if (entry.getValue().equals(mInstalled.get(entry.getKey()))) continue;
+                if (ifIndex > 0) store.put(entry.getKey(), entry.getValue()); else waiting = true;
             }
             generation = mGeneration;
         }
-        boolean failed = false, changed = false;
+        // Stores waiting for a radio count as work left: retried with backoff and on
+        // the WLAN event that reports the radio back.
+        boolean failed = waiting, changed = false;
+        for (Map.Entry<Integer, List<String>> entry : stale.entrySet()) {
+            int index = entry.getKey();
+            for (String name : entry.getValue()) {
+                if (deleted(index, name)) {
+                    synchronized (mLock) {
+                        LinkedHashSet<String> names = mStale.get(index);
+                        if (names != null && names.remove(name) && names.isEmpty()) mStale.remove(index);
+                    }
+                } else {
+                    failed = true;
+                }
+            }
+        }
         for (String name : delete) {
-            // A profile already gone from Windows (e.g. the user deleted it) is removed too.
-            boolean gone = mBackend.storeProfile(ifIndex, null, name)
-                    || !mBackend.profiles(ifIndex, name).contains(name);
-            if (gone) {
-                synchronized (mLock) { mInstalled.remove(name); }
+            if (deleted(on, name)) {
+                synchronized (mLock) { if (mInstalledOn == on) mInstalled.remove(name); }
             } else {
                 failed = true;
             }
@@ -859,11 +906,13 @@ final class WifiConnections {
             }
         }
         if (changed) queueReconcile();
-        if (failed) {
-            scheduleRetry();
-        } else {
-            synchronized (mLock) { mRetryPending = false; mRetryMs = 0; }
-        }
+        if (failed) scheduleRetry(); else retryDone();
+    }
+
+    /** Deletes a suggestion profile; one already gone from Windows (e.g. the user deleted it) counts too. */
+    private boolean deleted(int ifIndex, String name) {
+        return ifIndex > 0 && (mBackend.storeProfile(ifIndex, null, name)
+                || !mBackend.profiles(ifIndex, name).contains(name));
     }
 
     /** Profile name to XML for every approved, unblocked suggestion. */
@@ -886,21 +935,33 @@ final class WifiConnections {
 
     /** A failed pass is retried with backoff, and on the next WLAN connection event. */
     private void scheduleRetry() {
-        long delay;
         synchronized (mLock) {
             mRetryPending = true;
-            if (mRetryScheduled) return;
-            mRetryScheduled = true;
+            if (mRetryTimer != null) return;
             mRetryMs = mRetryMs == 0 ? RETRY_MIN_MS : Math.min(RETRY_MAX_MS, mRetryMs * 2);
-            delay = mRetryMs;
+            java.util.concurrent.ScheduledFuture<?>[] timer = new java.util.concurrent.ScheduledFuture<?>[1];
+            try {
+                // The timer cannot fire before mRetryTimer is set: it needs mLock first.
+                timer[0] = mTimers.schedule(() -> {
+                    synchronized (mLock) { if (mRetryTimer == timer[0]) mRetryTimer = null; }
+                    queueReconcile();
+                }, mRetryMs, TimeUnit.MILLISECONDS);
+                mRetryTimer = timer[0];
+            } catch (java.util.concurrent.RejectedExecutionException stopped) {
+                // Shut down: no more retries.
+            }
         }
-        try {
-            mTimers.schedule(() -> {
-                synchronized (mLock) { mRetryScheduled = false; }
-                queueReconcile();
-            }, delay, TimeUnit.MILLISECONDS);
-        } catch (java.util.concurrent.RejectedExecutionException stopped) {
-            synchronized (mLock) { mRetryScheduled = false; }
+    }
+
+    /** A complete pass: no retry is pending, its timer is cancelled and the backoff starts over. */
+    private void retryDone() {
+        synchronized (mLock) {
+            mRetryPending = false;
+            mRetryMs = 0;
+            if (mRetryTimer != null) {
+                mRetryTimer.cancel(false);
+                mRetryTimer = null;
+            }
         }
     }
 
@@ -918,7 +979,7 @@ final class WifiConnections {
     void cleanup(int ifIndex) {
         if (ifIndex <= 0) return;
         synchronized (mLock) { if (mCleaned) return; }
-        onProfiles(() -> cleanupNow(ifIndex));
+        onProfiles(() -> cleanupNow(ifIndex), PROFILE_WAIT_MS);
     }
 
     private void cleanupNow(int ifIndex) {
@@ -926,7 +987,8 @@ final class WifiConnections {
         for (String stale : mBackend.profiles(ifIndex, WlanProfiles.PREFIX)) {
             if (!OWN_PROFILE.matcher(stale).matches()) continue;
             synchronized (mLock) {
-                if (mActive != null && stale.equals(mActive.profile) || mInstalled.containsKey(stale)) continue;
+                if (mActive != null && stale.equals(mActive.profile)
+                        || mInstalledOn == ifIndex && mInstalled.containsKey(stale)) continue;
             }
             mBackend.storeProfile(ifIndex, null, stale);
         }
@@ -995,7 +1057,12 @@ final class WifiConnections {
             try { mTimers.schedule(this::queueReconcile, LINGER_MS, TimeUnit.MILLISECONDS); }
             catch (java.util.concurrent.RejectedExecutionException stopped) { }
         }
-        reconcileNow();
+        // WifiServiceImpl waits a bounded time for the Wi-Fi thread and reports
+        // ERROR_INTERNAL when it does not answer in time. The model has already dropped
+        // the suggestions, so the pass behind the busy one still deletes their profiles.
+        if (!onProfiles(this::reconcile, removeWaitMs)) {
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL;
+        }
         return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
     }
 
@@ -1006,13 +1073,14 @@ final class WifiConnections {
         }
     }
 
-    private void removeApp(String packageName, boolean deleteProfiles) {
+    /** Drops an app's suggestions and approvals; the queued pass deletes its profiles. */
+    private void removeApp(String packageName) {
         synchronized (mLock) {
             mSuggestions.remove(packageName);
             mApproved.remove(packageName);
             mGeneration++;
         }
-        if (deleteProfiles) reconcileNow();
+        queueReconcile();
     }
 
     /** An uninstalled package's suggestions and approvals do not outlive it. */
@@ -1020,29 +1088,43 @@ final class WifiConnections {
         List<String> gone = new ArrayList<>();
         for (String name : mSuggestions.keySet()) if (mService.pm().get(name) == null) gone.add(name);
         for (String name : mApproved.keySet()) if (mService.pm().get(name) == null && !gone.contains(name)) gone.add(name);
-        for (String name : gone) mWorker.execute(() -> removeApp(name, true));
+        for (String name : gone) mWorker.execute(() -> removeApp(name));
     }
 
+    /** Posted to the profile thread without waiting, as WifiServiceImpl posts it to the Wi-Fi thread. */
     void disallowCurrent(WifiService.Owner owner, BlockingOption option) {
+        String packageName = owner.name();
+        long seconds = Math.max(1, option.getBlockingTimeSeconds());
+        try {
+            mProfiles.execute(() -> {
+                try {
+                    disallowNow(packageName, seconds);
+                } catch (RuntimeException failed) {
+                    SystemServer.log("Wi-Fi network not disallowed: " + failed);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            // Shut down: nothing more is changed on Windows.
+        }
+    }
+
+    private void disallowNow(String packageName, long seconds) {
         if (mBackend.wifiState() != WifiManager.WIFI_STATE_ENABLED) return;
         int ifIndex = mBackend.primaryInterface();
         String current = ifIndex <= 0 ? null : mBackend.currentProfile(ifIndex);
-        long seconds = Math.max(1, option.getBlockingTimeSeconds());
         synchronized (mLock) {
-            Apps app = mSuggestions.get(owner.name());
-            if (app == null || ownerLocked(owner.name(), app, current) == null) return;
+            Apps app = mSuggestions.get(packageName);
+            if (app == null || mInstalledOn != ifIndex || ownerLocked(packageName, app, current) == null) return;
             // Every pass leaves a blocked profile off Windows until the block expires.
             mBlocked.put(current, System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds));
             mGeneration++;
         }
         // Windows has no per-BSSID block list: removing the profile for the blocking
         // period disconnects and prevents auto-join for the whole network, then it returns.
-        onProfiles(() -> {
-            if (current.equals(mBackend.currentProfile(ifIndex)) && mBackend.disconnect(ifIndex, current, null)) {
-                synchronized (mLock) { mInstalled.remove(current); }
-            }
-            reconcile();
-        });
+        if (current.equals(mBackend.currentProfile(ifIndex)) && mBackend.disconnect(ifIndex, current, null)) {
+            synchronized (mLock) { if (mInstalledOn == ifIndex) mInstalled.remove(current); }
+        }
+        reconcile();
         try { mTimers.schedule(this::queueReconcile, seconds, TimeUnit.SECONDS); }
         catch (java.util.concurrent.RejectedExecutionException stopped) { }
     }

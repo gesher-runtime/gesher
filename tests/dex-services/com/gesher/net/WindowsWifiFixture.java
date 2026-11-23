@@ -257,6 +257,10 @@ public final class WindowsWifiFixture {
         long started = System.nanoTime();
         check(census.get(100) == WindowsWifi.NO_HARDWARE && System.nanoTime() - started < TimeUnit.SECONDS.toNanos(2),
                 "A census past its bound is no hardware, without waiting for Windows");
+        // Only the first (boot) caller waits: later callers are not held by the hung probe.
+        started = System.nanoTime();
+        check(census.get(5_000) == WindowsWifi.NO_HARDWARE && System.nanoTime() - started < TimeUnit.SECONDS.toNanos(1),
+                "A later caller does not wait for a hung census again");
         check(census.get(50) == WindowsWifi.NO_HARDWARE && reads.get() == 1, "A hung census is not started twice");
         hung.countDown();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);

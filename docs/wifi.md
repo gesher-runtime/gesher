@@ -16,8 +16,9 @@ when the package manager starts, finds at least one WLAN interface. A missing
 interfaces leave it out. The census runs on its own thread and boot waits for it at
 most 5 s: a WLAN service that hangs or is still starting leaves `FEATURE_WIFI` out for
 that boot (logged as `WindowsWifi: WLAN census did not finish ...`) instead of
-stalling the system server. Its late result is still used for the capability answers
-below, but system features stay fixed until the next start, as on Android. Wi-Fi
+stalling the system server. Only that first caller waits: while the census is still
+running, later capability queries are answered at once with no hardware. Its late
+result is still used for the capability answers below, but system features stay fixed until the next start, as on Android. Wi-Fi
 Direct, Aware, RTT and Passpoint features are never declared.
 
 Capability answers come from the same census, refreshed on WLAN interface
@@ -166,24 +167,34 @@ IPv4 address).
 - `removeNetworkSuggestions` returns `ERROR_REMOVE_INVALID` for null or unknown
   entries, unknown actions, or an app that never added suggestions (even with an
   empty list), and removes nothing then; otherwise an empty list removes all. The
-  profile is deleted before the call returns (`ACTION_REMOVE_SUGGESTION_DISCONNECT`)
-  or after 30 s while it is the current connection (`ACTION_REMOVE_SUGGESTION_LINGER`).
+  call waits for the profile pass that deletes the profile
+  (`ACTION_REMOVE_SUGGESTION_DISCONNECT`; with `ACTION_REMOVE_SUGGESTION_LINGER` the
+  current connection's profile goes after 30 s) at most 4 s, as `WifiServiceImpl`
+  waits for the Wi-Fi thread. If Windows has not answered by then the call returns
+  `ERROR_INTERNAL`, as Android does on that timeout; the suggestions are already
+  dropped and the queued pass still deletes their profiles.
 - Windows profiles follow the suggestion store through one profile thread: each pass
   stores, rewrites or deletes the difference between the profiles the store wants and
   those on Windows. A removal, uninstall or block made while a pass is talking to
-  Windows waits for the pass after it, so no profile outlives its suggestion. A
-  profile Windows refused to store is not counted as installed: it is retried on the
-  next WLAN connection event and with backoff (5 s doubling to 5 min).
+  Windows is handled by the pass after it, so no profile outlives its suggestion.
+  Deletions do not wait for a radio: a profile is deleted on the interface it was
+  stored on while that adapter's radio is off, and when another adapter becomes the
+  primary one the previous adapter's profiles are deleted there and the suggestions
+  stored on the new one. Stores wait for a radio. A profile Windows refused to store
+  or delete, or a store waiting for the radio, is retried on the next WLAN event and
+  with backoff (5 s doubling to 5 min, reset by the next complete pass).
 - When Windows joins an app-interaction suggestion, the app receives the explicit
   `ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION` broadcast with
   `EXTRA_NETWORK_SUGGESTION`, if location is on, it holds fine location and its
   fine-location app op is allowed (`enforceCanAccessScanResults`).
-- `disallowCurrentSuggestedNetwork` disconnects the app's current suggested network
+- `disallowCurrentSuggestedNetwork` returns at once, as Android posts it to the Wi-Fi
+  thread; the profile thread then disconnects the app's current suggested network
   and removes its profile for the blocking period; every profile pass honours the
   block until it expires, then the profile returns. Windows has no BSSID block list,
   so the whole network is blocked even when `BlockingOption` asks for the BSSID only.
-- An uninstalled app's suggestions and approvals are dropped and its profiles
-  deleted as soon as the package-removal event arrives. WLAN events and profile
+- An uninstalled app's suggestions and approvals are dropped as soon as the
+  package-removal event arrives, and the next profile pass deletes its profiles,
+  without holding the event's sender. WLAN events and profile
   installations are coalesced: at most one pass of each is queued at a time. The store lives for the system server's lifetime (Android persists it).
   Once the WLAN interface is known after a start (the first WLAN event,
   request or suggestion), per-user profiles with exactly Gesher's generated names

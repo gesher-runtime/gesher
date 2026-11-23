@@ -480,8 +480,9 @@ public final class WindowsWifi {
      * The cached adapter census. The first read runs on its own thread and its caller
      * waits at most a bound: a WLAN service that hangs (or is slow to start) in
      * WlanOpenHandle/WlanEnumInterfaces must not stall system-server boot. A census not
-     * finished in time reports no hardware to that caller; the late result is still
-     * cached for later callers, and WLAN interface arrival/removal refreshes it.
+     * finished in time reports no hardware to that caller, and to every later caller
+     * without waiting again while it still runs; the late result is cached for later
+     * callers, and WLAN interface arrival/removal refreshes it.
      */
     static final class Census {
         private final java.util.function.Supplier<Hardware> mSource;
@@ -494,22 +495,23 @@ public final class WindowsWifi {
             Thread probe;
             synchronized (this) {
                 if (mValue != null) return mValue;
-                if (mProbe == null) {
-                    mProbe = new Thread(() -> {
-                        Hardware fresh = null;
-                        try {
-                            fresh = mSource.get();
-                        } finally {
-                            synchronized (this) {
-                                // A refresh that finished meanwhile is newer than this read.
-                                if (mValue == null) mValue = fresh != null ? fresh : NO_HARDWARE;
-                                mProbe = null;
-                            }
+                // Only the caller that starts the census waits for it. While it is still
+                // running (hung), later callers are answered at once with no hardware.
+                if (mProbe != null) return NO_HARDWARE;
+                mProbe = new Thread(() -> {
+                    Hardware fresh = null;
+                    try {
+                        fresh = mSource.get();
+                    } finally {
+                        synchronized (this) {
+                            // A refresh that finished meanwhile is newer than this read.
+                            if (mValue == null) mValue = fresh != null ? fresh : NO_HARDWARE;
+                            mProbe = null;
                         }
-                    }, "gesher-wlan-census");
-                    mProbe.setDaemon(true);
-                    mProbe.start();
-                }
+                    }
+                }, "gesher-wlan-census");
+                mProbe.setDaemon(true);
+                mProbe.start();
                 probe = mProbe;
             }
             try {
