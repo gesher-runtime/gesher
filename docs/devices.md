@@ -66,7 +66,15 @@ Windows without them (no location service, no Media Foundation) gets clean
   magnetometer) and `.light` when SensorManager lists that type, so
   `hasSystemFeature` and Google Play's filtering agree with `getDefaultSensor`.
   The rotation vector has no feature of its own. Without a sensor no feature
-  is claimed.
+  is claimed. The feature says the sensor exists, as on Android; how closely
+  a real PC sensor meets the CDD (section 7.3: rates, ranges, magnetometer
+  calibration) is not established, as no real sensor has been checked (below).
+  Checked by `PackageServiceQueriesTest` in the framework-fixes track: through
+  `ServiceFixtureRunner` (which registers the runtime natives) with
+  `GESHER_SENSOR_TEST=1`, the test accelerometer and light sensor are
+  `hasSystemFeature` and `getSystemAvailableFeatures` answers; its plain run
+  has no natives, so it checks only the mapping and that nothing is claimed
+  without a sensor.
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.

@@ -661,6 +661,26 @@ foreach ($fixture in @(
   } @("$($fixture[0]) all passed:")
 }
 
+# FEATURE_SENSOR_* through the production path: the runner registers the runtime natives
+# (the plain run above has none, so its sensor comparison is empty on both sides), and
+# GESHER_SENSOR_TEST's sensors, the runners having none, must become system features.
+$sensorTestPresent = Test-Path Env:GESHER_SENSOR_TEST
+$sensorTestValue = [Environment]::GetEnvironmentVariable('GESHER_SENSOR_TEST', 'Process')
+try {
+  $env:GESHER_SENSOR_TEST = '1'
+  $sensorFeaturesOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+    'PackageServiceQueriesTest' + 'sensor-test') 90
+  $sensorFeaturesCode = $LASTEXITCODE
+} finally {
+  if ($sensorTestPresent) { Set-Item Env:GESHER_SENSOR_TEST $sensorTestValue }
+  else { Remove-Item Env:GESHER_SENSOR_TEST -ErrorAction SilentlyContinue }
+}
+Check 'services: GESHER_SENSOR_TEST''s accelerometer and light sensor are FEATURE_SENSOR_* through the sensor natives' {
+  $global:LASTEXITCODE = $sensorFeaturesCode
+  $sensorFeaturesOut
+} @('PackageServiceQueriesTest: GESHER_SENSOR_TEST''s accelerometer and light sensor are system features',
+  'PackageServiceQueriesTest all passed:')
+
 # org.apache.http.legacy (external/apache-http), a shared library apps name in
 # <uses-library>, not on the boot class path: laid out as gesher-app.ps1 installs it
 # ($ANDROID_ROOT/framework and etc/permissions, the declaration Gesher ships), in a
