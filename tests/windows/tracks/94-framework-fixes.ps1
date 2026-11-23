@@ -426,6 +426,21 @@ Check 'services: AppOps defaults, authority, attributed delivery, foreground lif
   $appOpsOut
 } @('AppOpsContractTest all passed: 489 checks; binder=true')
 
+# Real UID grant decisions and the production AudioRecord/MediaRecorder JNI errors.
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
+$audioAdmissionData = Join-Path $root 'audio-recording-admission'
+New-Item -ItemType Directory -Force $audioAdmissionData | Out-Null
+$audioAdmissionOut = Invoke-FixtureProcess "$Dir/dalvikvm.exe" ($dvmFixes +
+  'gesher.services.ServiceFixtureRunner' + 'AudioRecordingPermissionTest') 90 @{
+    ANDROID_DATA = (NoDrive $audioAdmissionData)
+    GESHER_UID = '12772'; GESHER_BINDER_UID = '12772'; GESHER_MICROG_SPOOF = '1'
+  }
+$audioAdmissionCode = $LASTEXITCODE
+Check 'services: live UID microphone grants, revocation and native public admission errors' {
+  $global:LASTEXITCODE = $audioAdmissionCode
+  $audioAdmissionOut
+} @('AudioRecordingPermissionTest all passed:', 'checks; binder=true; production-jni=false')
+
 $uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'PackageUidIsolationContractTest' +
   (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/v2only.apk'))) 90

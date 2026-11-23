@@ -7,6 +7,7 @@
 # and measured (media_probe analyze, or the test app's own zero crossings). The real
 # WASAPI capture path must either open real hardware or report unavailable.
 # Synthetic recordings below use separately named, default-OFF fixture builds.
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
 
 $m3Tmp = Join-Path $env:RUNNER_TEMP 'gesher-media3'
 New-Item -ItemType Directory -Force $m3Tmp | Out-Null
@@ -221,6 +222,11 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
 if (Test-Path "$Dir/recordapp.apk") {
   $bcpRec = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
   $dvmRec = @("-Xbootclasspath:$bcpRec", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+  # Grant the camera and microphone permissions used by this fixture only as
+  # explicit isolated operator decisions. The APK retains its ordinary UID.
+  $recordUid = Grant-FixturePermissions $captureRuntime $dvmRec (NoDrive "$Dir/services-tests.dex") `
+    (NoDrive "$Dir/recordapp.apk") 'com.gesher.recordapp' @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO')
+  $recordIdentity = @{ GESHER_UID = [string]$recordUid; GESHER_BINDER_UID = [string]$recordUid }
   CheckTimed 'media3: Camera2 request selection is atomic against 1000 contended cancel/flush calls, with ordered frame numbers and queued-capture priority' "$Dir/dalvikvm.exe" `
     @($dvmRec + @('-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.CameraRequestRaceTest')) `
     @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed') 120
@@ -232,7 +238,7 @@ if (Test-Path "$Dir/recordapp.apk") {
   # standalone request-race regression above keeps its original VM options.
   $dvmRecTrace = $dvmRec + '-verbose:heap'
   # Single process.
-  $recOut = & $captureRuntime @dvmRecTrace com.gesher.app.Main (NoDrive "$Dir/recordapp.apk") 2>&1 | Out-String
+  $recOut = Invoke-FixtureProcess $captureRuntime ($dvmRecTrace + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) 600 $recordIdentity
   $recCode = $LASTEXITCODE
   Write-Host "INFO  media3: $((($recOut -split "`n") | Where-Object { $_ -match 'GesherMedia.*(encoders:|capture:)|RecordTest codec list encoders' } | Select-Object -First 4 | ForEach-Object { $_.Trim() }) -join '; ')"
   RecordChecks 'single process' $recOut $recCode
@@ -241,9 +247,12 @@ if (Test-Path "$Dir/recordapp.apk") {
   try {
     $env:GESHER_VIDEO_ENCODERS = 'soft'
     $env:GESHER_TEST_CODEC_CONTROLS = '1'
-    CheckTimed 'media3: a live AVC encoder changes output rate and requests sync frames while preserving metrics and stream continuity' `
-      "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) `
-      @('RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed') 120
+    $codecOut = Invoke-FixtureProcess "$Dir/dalvikvm.exe" ($dvmRec + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) 120 $recordIdentity
+    $codecCode = $LASTEXITCODE
+    Check 'media3: a live AVC encoder changes output rate and requests sync frames while preserving metrics and stream continuity' {
+      $global:LASTEXITCODE = $codecCode
+      $codecOut
+    } @('RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed')
   } finally {
     [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedVideoEncoders)
     Remove-Item Env:GESHER_TEST_CODEC_CONTROLS -ErrorAction SilentlyContinue
@@ -255,6 +264,11 @@ if (Test-Path "$Dir/recordapp.apk") {
   New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
   $launcherRec = $dvmRecTrace + 'com.gesher.app.Launcher'
   $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
+  $recordInstall = RunTimed $captureRuntime ($launcherRec + @('install', (NoDrive "$Dir/recordapp.apk"))) 180
+  if ($LASTEXITCODE -ne 0) { throw "Record fixture installation prerequisite failed: $recordInstall" }
+  $null = Grant-FixturePermissions $captureRuntime $dvmRec (NoDrive "$Dir/services-tests.dex") `
+    (NoDrive "$Dir/recordapp.apk") 'com.gesher.recordapp' @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO') `
+    -Installed -ExpectedUid $recordUid
   $recordDeviceLog = Join-Path $root 'logs/com.gesher.recordapp.log'
   if (Test-Path -LiteralPath $recordDeviceLog) { Remove-Item -LiteralPath $recordDeviceLog -Force }
   $devOut = & $captureRuntime @($launcherRec + 'launch', (NoDrive "$Dir/recordapp.apk"), '--headless', '--keep-task') 2>&1 | Out-String

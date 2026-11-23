@@ -726,6 +726,13 @@ jobs:
           python3 tools/test_audio_effect_contracts.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes
 
+      - name: Live microphone grant and native admission contracts
+        run: |
+          python3 tools/test_audio_recording_admission.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Media routing ownership and framework value contracts
         run: |
           python3 tools/test_media_routing_contracts.py \

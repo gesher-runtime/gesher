@@ -36,4 +36,16 @@ cif="color=c=red:s=352x288:r=30000/1001:d=0.5[a];color=c=lime:s=352x288:r=30000/
 cif+="color=c=blue:s=352x288:r=30000/1001:d=0.5[c];color=c=white:s=352x288:r=30000/1001:d=0.5[d];"
 cif+="[a][b][c][d]concat=n=4:v=1:a=0,format=yuv420p[v]"
 ff -filter_complex "$cif" -map "[v]" -c:v h263 -q:v 3 -g 15 "$assets/video_h263.3gp"
+
+# A nonuniform first frame for the retriever's filtered-pixel oracle. Remuxes
+# share exactly the same encoded picture; only rotation or display aspect changes.
+ff -f lavfi -i 'testsrc2=size=320x192:rate=1:duration=1' -an \
+  -c:v libx264 -preset veryfast -profile:v main -pix_fmt yuv420p -g 1 \
+  -movflags +faststart "$assets/retriever_pattern.mp4"
+for rotation in 90 180 270; do
+  ff -display_rotation:v:0 "-$rotation" -i "$assets/retriever_pattern.mp4" -c copy \
+    -movflags +faststart "$assets/retriever_pattern_$rotation.mp4"
+done
+ff -i "$assets/retriever_pattern.mp4" -c copy -aspect 5:2 \
+  -movflags +faststart "$assets/retriever_pattern_sar.mp4"
 ls -l "$assets"

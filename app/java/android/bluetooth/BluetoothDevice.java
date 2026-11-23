@@ -150,6 +150,15 @@ public final class BluetoothDevice implements Parcelable, Attributable {
         mAttributionSource = source;
     }
 
+    /**
+     * @hide As AOSP's (android-16.0.0_r4): framework.jar's {@code Intent.prepareToEnterProcess}
+     * calls it on a Bluetooth broadcast's {@link #EXTRA_DEVICE} before the receiver runs, to
+     * attribute the unparceled device to the receiving app (issue #303).
+     */
+    public void prepareToEnterProcess(AttributionSource attributionSource) {
+        setAttributionSource(attributionSource);
+    }
+
     @Override
     public int describeContents() {
         return 0;
