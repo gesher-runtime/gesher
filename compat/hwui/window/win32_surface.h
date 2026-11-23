@@ -67,6 +67,9 @@ class Win32Surface : public android::Surface {
   void ConsumerSize(int* width, int* height) const;
   // With mutex_ held: a buffer of the current size and format.
   void EnsureBuffer();
+  // With mutex_ held: copies `dirty` (top-left buffer coordinates, or null for
+  // the full buffer) into the window's back buffer and posts it.
+  void PresentLocked(const ARect* dirty);
   // With mutex_ held: the dequeued buffer `buffer`, no longer dequeued, or null.
   android::sp<Buffer> TakeDequeued(ANativeWindowBuffer* buffer);
 
@@ -84,6 +87,17 @@ class Win32Surface : public android::Surface {
   int inset_left_ = 0, inset_top_ = 0, inset_right_ = 0, inset_bottom_ = 0;
   bool locked_ = false;
   bool buffer_contents_valid_ = false;
+  bool locked_dirty_valid_ = false;
+  ARect locked_dirty_ = {0, 0, 0, 0};
+  bool queued_damage_valid_ = false;
+  ARect queued_damage_ = {0, 0, 0, 0};
+  const Buffer* presented_buffer_ = nullptr;
+  int presented_buffer_width_ = 0, presented_buffer_height_ = 0;
+  int presented_format_ = 0;
+  int presented_window_width_ = 0, presented_window_height_ = 0;
+  int presented_inset_left_ = 0, presented_inset_top_ = 0;
+  int presented_inset_right_ = 0, presented_inset_bottom_ = 0;
+  uint64_t presented_window_frames_ = 0;
   uint64_t frames_ = 0;
   // Debugging (GESHER_WINDOW_DEBUG): frames left to report after a size change.
   int report_frames_ = 0;

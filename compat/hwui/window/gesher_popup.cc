@@ -151,6 +151,7 @@ void Window::SetInputRoute(Window* pointer, Window* keys, const std::vector<Wind
 }
 
 void Window::Unregister() {
+  EraseLayeredDirty(this);
   std::lock_guard<std::mutex> lock(RegistryMutex());
   auto& registered = Registered();
   if (registered.erase(this) == 0) return;
@@ -241,6 +242,7 @@ void Window::Raise() {
 
 void Window::SetTranslucent(bool translucent) {
   if (translucent_.exchange(translucent) == translucent) return;
+  RecordLayeredFull(this);
   // The window's thread makes it layered (or not) and presents the buffer.
   PostMessageW(static_cast<HWND>(hwnd_), kMsgPresentLayered, 0, 0);
 }
@@ -267,6 +269,7 @@ void Window::SetDim(float amount) {
   int d = static_cast<int>(amount * 255.0f + 0.5f);
   d = d < 0 ? 0 : (d > 255 ? 255 : d);
   if (dim_.exchange(d) == d) return;
+  SetLayeredDimmed(this, d != 0);
   if (layered_) {
     PostMessageW(static_cast<HWND>(hwnd_), kMsgPresentLayered, 0, 0);
   } else {
@@ -311,6 +314,9 @@ void Window::SetScreenPosition(int x, int y) {
 
 void Window::PresentPixels(const uint32_t* argb, int width, int height, int sourceStride) {
   if (sourceStride == 0) sourceStride = width;
+#if (defined(_WIN32) && defined(ULW_ALPHA)) || defined(GESHER_TEST_WINDOW_DIRTY)
+  if (translucent_) RecordLayeredFull(this);
+#endif
   int w = 0, h = 0, stride = 0;
   // BGRA bytes are 0xAARRGGBB little-endian words: the rows copy as they are.
   auto* dst = reinterpret_cast<uint32_t*>(Lock(&w, &h, &stride));
@@ -326,6 +332,7 @@ void Window::PresentPixels(const uint32_t* argb, int width, int height, int sour
 void Window::PresentLayered() {
   HWND hwnd = static_cast<HWND>(hwnd_);
   if (!translucent_) {
+    ResetLayeredTranslucencyDirty(this);
     layered_bitmap_.reset();
     if (layered_) {
       layered_ = false;
@@ -343,7 +350,13 @@ void Window::PresentLayered() {
   if (w < 1 || h < 1) return;
   if (layered_bitmap_ == nullptr) layered_bitmap_ = std::make_unique<LayeredBitmap>();
   // The buffer is premultiplied BGRA, what UpdateLayeredWindow takes.
-  if (!layered_bitmap_->Copy(DimmedPixels(), w, h)) return;
+  const uint8_t* src_pixels = DimmedPixels();
+  int dirty[4];
+  const bool copied =
+      TakeLayeredDirty(this, w, h, dirty)
+          ? layered_bitmap_->CopyRect(src_pixels, w, h, dirty[0], dirty[1], dirty[2], dirty[3])
+          : layered_bitmap_->Copy(src_pixels, w, h);
+  if (!copied) return;
   HDC screen = GetDC(nullptr);
   SIZE size = {w, h};
   POINT src = {0, 0};
@@ -357,6 +370,7 @@ bool Window::HandlePopupMessage(unsigned msg, uintptr_t wparam, intptr_t lparam,
   (void)wparam;
   switch (msg) {
     case WM_DISPLAYCHANGE:
+      RecordLayeredFull(this);
       layered_bitmap_.reset();
       return false;
     case kMsgPresentLayered: {
@@ -391,6 +405,29 @@ bool Window::HandlePopupMessage(unsigned msg, uintptr_t wparam, intptr_t lparam,
     default:
       return false;
   }
+}
+
+void PostWindowDirty(Window* window, int window_width, int window_height, const int dirty[4]) {
+  if (dirty == nullptr || dirty[0] < 0 || dirty[1] < 0 ||
+      dirty[2] > window_width || dirty[3] > window_height ||
+      dirty[0] >= dirty[2] || dirty[1] >= dirty[3] ||
+      (dirty[0] == 0 && dirty[1] == 0 &&
+       dirty[2] == window_width && dirty[3] == window_height)) {
+    RecordLayeredFull(window);
+    window->UnlockAndPost();
+    return;
+  }
+  HWND hwnd = static_cast<HWND>(window->hwnd());
+  if (window->translucent()) {
+    RecordLayeredPartial(window, window_width, window_height,
+                         dirty[0], dirty[1], dirty[2], dirty[3]);
+    window->Unlock();
+    PostMessageW(hwnd, kMsgPresentLayered, 0, 0);
+    return;
+  }
+  window->Unlock();
+  RECT rc = {dirty[0], dirty[1], dirty[2], dirty[3]};
+  InvalidateRect(hwnd, &rc, FALSE);
 }
 
 }  // namespace gesher

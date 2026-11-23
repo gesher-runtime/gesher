@@ -1,0 +1,212 @@
+// Production QueryRefreshIntervalUs and ChildSurfaceBeforeSwap pacing block from
+// compat/bionic/egl_child_surface.cc on declared Win32 display-configuration seams.
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cwchar>
+
+using HWND = void*;
+using HMONITOR = void*;
+using DWORD = uint32_t;
+using BOOL = int;
+
+constexpr DWORD MONITOR_DEFAULTTOPRIMARY = 1;
+constexpr DWORD MONITOR_DEFAULTTONEAREST = 2;
+constexpr DWORD ENUM_CURRENT_SETTINGS = static_cast<DWORD>(-1);
+constexpr int FALSE = 0;
+constexpr int TRUE = 1;
+
+struct RECT { int left, top, right, bottom; };
+struct MONITORINFO {
+  DWORD cbSize;
+  RECT rcMonitor;
+  RECT rcWork;
+  DWORD dwFlags;
+};
+struct MONITORINFOEXW : MONITORINFO {
+  wchar_t szDevice[32];
+};
+struct DEVMODEW {
+  wchar_t dmDeviceName[32];
+  uint16_t dmSpecVersion;
+  uint16_t dmDriverVersion;
+  uint16_t dmSize;
+  uint16_t dmDriverExtra;
+  DWORD dmFields;
+  DWORD dmDisplayFrequency;
+};
+
+namespace gesher::perf {
+inline int64_t Now() { return 1000; }
+struct Site {
+  constexpr explicit Site(const char*, int64_t = 0) {}
+  void Add(int64_t, int64_t = 0) {}
+};
+}  // namespace gesher::perf
+
+struct MockDisplayState {
+  HMONITOR monitor = reinterpret_cast<HMONITOR>(0x9001);
+  bool monitor_info_ok = true;
+  bool enum_settings_ok = true;
+  const wchar_t* device_name = L"\\\\.\\DISPLAY1";
+  DWORD frequency_hz = 60;
+
+  DWORD last_monitor_flags = 0;
+  HWND last_hwnd = nullptr;
+  DWORD last_mi_cb_size = 0;
+  DWORD last_dm_size = 0;
+  DWORD last_enum_mode = 0;
+  wchar_t last_queried_device[32] = {};
+} g_display;
+
+HMONITOR MonitorFromWindow(HWND hwnd, DWORD dwFlags) {
+  g_display.last_hwnd = hwnd;
+  g_display.last_monitor_flags = dwFlags;
+  return g_display.monitor;
+}
+
+BOOL GetMonitorInfoW(HMONITOR monitor, MONITORINFO* lpmi) {
+  if (monitor == nullptr || lpmi == nullptr) return FALSE;
+  g_display.last_mi_cb_size = lpmi->cbSize;
+  if (!g_display.monitor_info_ok || lpmi->cbSize != sizeof(MONITORINFOEXW)) return FALSE;
+  auto* ex = reinterpret_cast<MONITORINFOEXW*>(lpmi);
+  std::wcsncpy(ex->szDevice, g_display.device_name, 31);
+  ex->szDevice[31] = L'\0';
+  return TRUE;
+}
+
+BOOL EnumDisplaySettingsW(const wchar_t* lpszDeviceName, DWORD iModeNum, DEVMODEW* lpDevMode) {
+  if (lpszDeviceName == nullptr || lpDevMode == nullptr) return FALSE;
+  std::wcsncpy(g_display.last_queried_device, lpszDeviceName, 31);
+  g_display.last_queried_device[31] = L'\0';
+  g_display.last_enum_mode = iModeNum;
+  g_display.last_dm_size = lpDevMode->dmSize;
+  if (!g_display.enum_settings_ok || iModeNum != ENUM_CURRENT_SETTINGS ||
+      lpDevMode->dmSize != sizeof(DEVMODEW) ||
+      std::wcscmp(lpszDeviceName, g_display.device_name) != 0) {
+    return FALSE;
+  }
+  lpDevMode->dmDisplayFrequency = g_display.frequency_hz;
+  return TRUE;
+}
+
+namespace {
+
+size_t g_checks = 0, g_failures = 0;
+void Check(bool ok, const char* reason) {
+  ++g_checks;
+  if (!ok) {
+    ++g_failures;
+    std::fprintf(stderr, "FAIL egl-child-refresh: %s\n", reason);
+  }
+}
+
+@QUERY_REFRESH@
+
+struct FakeClockChild {
+  HWND helper = reinterpret_cast<HWND>(0x4444);
+  std::chrono::steady_clock::time_point last_post{};
+};
+
+std::chrono::steady_clock::time_point g_waited_until{};
+size_t g_wait_calls = 0;
+
+void WaitUntil(std::chrono::steady_clock::time_point t) {
+  ++g_wait_calls;
+  g_waited_until = t;
+}
+
+void RunPacingStep(FakeClockChild* c) {
+@PACING_BODY@
+}
+
+}  // namespace
+
+int main() {
+  HWND helper = reinterpret_cast<HWND>(0x1234);
+
+  // 1. Standard display refresh rates: 60 / 90 / 120 / 144 Hz + additional high-refresh rates.
+  struct RateExpectation {
+    DWORD hz;
+    int64_t expected_us;
+  };
+  const RateExpectation rates[] = {
+      {60, 16667},
+      {75, 13333},
+      {90, 11111},
+      {120, 8333},
+      {144, 6944},
+      {165, 6061},
+      {240, 4167},
+      {2, 500000},           // smallest valid > 1 Hz frequency
+      {2'000'000, 1},        // sub-microsecond refresh clamps cleanly to 1 us
+      {0xffffffffu, 1},      // UINT32_MAX Hz has no signed overflow and clamps to 1 us
+  };
+
+  for (const auto& r : rates) {
+    g_display = {};
+    g_display.frequency_hz = r.hz;
+    const int64_t got = QueryRefreshIntervalUs(helper);
+    Check(got == r.expected_us, "QueryRefreshIntervalUs matches rounded frame interval");
+    Check(g_display.last_hwnd == helper &&
+              g_display.last_monitor_flags == MONITOR_DEFAULTTONEAREST &&
+              g_display.last_mi_cb_size == sizeof(MONITORINFOEXW) &&
+              g_display.last_dm_size == sizeof(DEVMODEW) &&
+              g_display.last_enum_mode == ENUM_CURRENT_SETTINGS &&
+              std::wcscmp(g_display.last_queried_device, L"\\\\.\\DISPLAY1") == 0,
+          "Win32 monitor/device/struct-size contracts preserved");
+  }
+
+  // Null HWND uses MONITOR_DEFAULTTOPRIMARY.
+  g_display = {};
+  g_display.frequency_hz = 120;
+  Check(QueryRefreshIntervalUs(nullptr) == 8333 &&
+            g_display.last_monitor_flags == MONITOR_DEFAULTTOPRIMARY,
+        "null HWND queries primary monitor with MONITOR_DEFAULTTOPRIMARY");
+
+  // 2. Fallbacks to 60 Hz (16667 us): headless monitor, GetMonitorInfoW failure,
+  // EnumDisplaySettingsW failure, and Win32 hardware-default sentinels (0 and 1).
+  g_display = {};
+  g_display.monitor = nullptr;
+  g_display.frequency_hz = 144;
+  Check(QueryRefreshIntervalUs(helper) == 16667, "headless null HMONITOR falls back to 60 Hz");
+
+  g_display = {};
+  g_display.monitor_info_ok = false;
+  g_display.frequency_hz = 144;
+  Check(QueryRefreshIntervalUs(helper) == 16667, "GetMonitorInfoW failure falls back to 60 Hz");
+
+  g_display = {};
+  g_display.enum_settings_ok = false;
+  g_display.frequency_hz = 144;
+  Check(QueryRefreshIntervalUs(helper) == 16667, "EnumDisplaySettingsW failure falls back to 60 Hz");
+
+  for (DWORD sentinel : {DWORD{0}, DWORD{1}}) {
+    g_display = {};
+    g_display.frequency_hz = sentinel;
+    Check(QueryRefreshIntervalUs(helper) == 16667,
+          "dmDisplayFrequency <= 1 hardware-default sentinel falls back to 60 Hz");
+  }
+
+  // 3. End-to-end ChildSurfaceBeforeSwap pacing transitions across live monitor rate changes.
+  FakeClockChild child;
+  const DWORD sequence[] = {60, 90, 120, 144, 0};
+  const int64_t expected_intervals[] = {16667, 11111, 8333, 6944, 16667};
+  for (size_t i = 0; i < 5; ++i) {
+    g_display = {};
+    g_display.device_name = L"\\\\.\\DISPLAY2";
+    g_display.frequency_hz = sequence[i];
+    g_wait_calls = 0;
+    const auto anchor = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    child.last_post = anchor;
+    RunPacingStep(&child);
+    Check(g_wait_calls == 1 &&
+              g_waited_until == anchor + std::chrono::microseconds(expected_intervals[i]),
+          "ChildSurfaceBeforeSwap schedules WaitUntil at dynamic monitor refresh deadline");
+  }
+
+  std::printf("EGL child refresh contracts: %zu checks, %zu failures\n", g_checks, g_failures);
+  return g_failures != 0;
+}

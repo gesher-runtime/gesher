@@ -15,6 +15,10 @@
 
 namespace gesher {
 
+#if defined(_WIN32) || defined(GESHER_TEST_WINDOW_DIRTY)
+void PostWindowDirty(Window* window, int window_width, int window_height, const int dirty[4]);
+#endif
+
 // The surface's one buffer: pixels in system memory, `stride` pixels a row.
 class Win32Surface::Buffer
     : public android::ANativeObjectBase<ANativeWindowBuffer, Win32Surface::Buffer,
@@ -132,6 +136,8 @@ void Win32Surface::EnsureBuffer() {
     }
     buffer_ = fresh;
     buffer_contents_valid_ = false;
+    presented_buffer_ = nullptr;
+    queued_damage_valid_ = false;
   }
 }
 
@@ -140,6 +146,7 @@ int Win32Surface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   if (locked_) return -EINVAL;
   EnsureBuffer();
   locked_ = true;
+  locked_dirty_valid_ = false;
   out->width = buffer_->width;
   out->height = buffer_->height;
   out->stride = buffer_->stride;
@@ -155,26 +162,35 @@ int Win32Surface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
       dirty->top = std::max(0, dirty->top);
       dirty->right = std::min(buffer_->width, dirty->right);
       dirty->bottom = std::min(buffer_->height, dirty->bottom);
-      if (dirty->left >= dirty->right || dirty->top >= dirty->bottom) *dirty = {0, 0, 0, 0};
+      if (dirty->left >= dirty->right || dirty->top >= dirty->bottom) {
+        *dirty = {0, 0, 0, 0};
+      } else {
+        locked_dirty_valid_ = true;
+        locked_dirty_ = *dirty;
+      }
     }
   }
   return 0;
 }
 
 int Win32Surface::unlockAndPost() {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!locked_) return -EINVAL;
-    locked_ = false;
-  }
-  Present();
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!locked_) return -EINVAL;
+  locked_ = false;
+  const bool has_dirty = locked_dirty_valid_;
+  const ARect dirty = locked_dirty_;
+  locked_dirty_valid_ = false;
+  PresentLocked(has_dirty ? &dirty : nullptr);
   return 0;
 }
 
 void Win32Surface::Present() {
   std::lock_guard<std::mutex> lock(mutex_);
+  PresentLocked(nullptr);
+}
+
+void Win32Surface::PresentLocked(const ARect* dirty) {
   if (buffer_ == nullptr) return;
-  buffer_contents_valid_ = true;
   int w, h, stride;
   uint8_t* dst = window_->Lock(&w, &h, &stride);
   const bool swap = buffer_->format != HAL_PIXEL_FORMAT_BGRA_8888;
@@ -183,21 +199,86 @@ void Win32Surface::Present() {
       int64_t{buffer_->height} - inset_top_ - inset_bottom_)));
   int cols = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(w,
       int64_t{buffer_->width} - inset_left_ - inset_right_)));
-  for (int y = 0; y < rows && cols > 0; y++) {
-    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y + inset_top_) * buffer_->stride + inset_left_];
-    uint32_t* d = reinterpret_cast<uint32_t*>(dst) + static_cast<size_t>(y) * stride;
+
+  bool same_window_frames = true;
+#if defined(_WIN32) || defined(GESHER_TEST_WINDOW_DIRTY)
+  same_window_frames = (presented_window_frames_ == window_->frames());
+#endif
+  const bool same_presented_state =
+      buffer_contents_valid_ &&
+      same_window_frames &&
+      presented_buffer_ == buffer_.get() &&
+      presented_buffer_width_ == buffer_->width &&
+      presented_buffer_height_ == buffer_->height &&
+      presented_format_ == buffer_->format &&
+      presented_window_width_ == w &&
+      presented_window_height_ == h &&
+      presented_inset_left_ == inset_left_ &&
+      presented_inset_top_ == inset_top_ &&
+      presented_inset_right_ == inset_right_ &&
+      presented_inset_bottom_ == inset_bottom_;
+
+  int x0 = 0, y0 = 0, x1 = cols, y1 = rows;
+  bool partial = false;
+  if (same_presented_state && dirty != nullptr &&
+      dirty->left < dirty->right && dirty->top < dirty->bottom) {
+    const int64_t dl = std::max<int64_t>(0, dirty->left);
+    const int64_t dt = std::max<int64_t>(0, dirty->top);
+    const int64_t dr = std::min<int64_t>(buffer_->width, dirty->right);
+    const int64_t db = std::min<int64_t>(buffer_->height, dirty->bottom);
+    if (dl < dr && dt < db) {
+      const int cx0 = static_cast<int>(std::max<int64_t>(0, dl - inset_left_));
+      const int cy0 = static_cast<int>(std::max<int64_t>(0, dt - inset_top_));
+      const int cx1 = static_cast<int>(std::min<int64_t>(cols, dr - inset_left_));
+      const int cy1 = static_cast<int>(std::min<int64_t>(rows, db - inset_top_));
+      if (cx0 < cx1 && cy0 < cy1) {
+        x0 = cx0;
+        y0 = cy0;
+        x1 = cx1;
+        y1 = cy1;
+        partial = !(x0 == 0 && y0 == 0 && x1 == w && y1 == h);
+      }
+    }
+  }
+
+  const int copy_cols = x1 - x0;
+  for (int y = y0; y < y1 && copy_cols > 0; y++) {
+    const uint32_t* s =
+        &buffer_->pixels[static_cast<size_t>(y + inset_top_) * buffer_->stride + inset_left_ + x0];
+    uint32_t* d = reinterpret_cast<uint32_t*>(dst) + static_cast<size_t>(y) * stride + x0;
     if (!swap) {
-      memcpy(d, s, static_cast<size_t>(cols) * 4);
+      memcpy(d, s, static_cast<size_t>(copy_cols) * 4);
       continue;
     }
     // RGBA bytes (R in the low byte) to GDI's BGRA (B in the low byte).
-    for (int x = 0; x < cols; x++) {
+    for (int x = 0; x < copy_cols; x++) {
       uint32_t p = s[x];
       uint32_t q = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
       d[x] = opaque ? (q | 0xff000000u) : q;
     }
   }
+
+  buffer_contents_valid_ = true;
+  presented_buffer_ = buffer_.get();
+  presented_buffer_width_ = buffer_->width;
+  presented_buffer_height_ = buffer_->height;
+  presented_format_ = buffer_->format;
+  presented_window_width_ = w;
+  presented_window_height_ = h;
+  presented_inset_left_ = inset_left_;
+  presented_inset_top_ = inset_top_;
+  presented_inset_right_ = inset_right_;
+  presented_inset_bottom_ = inset_bottom_;
+
+#if defined(_WIN32) || defined(GESHER_TEST_WINDOW_DIRTY)
+  const int win_dirty[4] = {x0, y0, x1, y1};
+  PostWindowDirty(window_, w, h, partial ? win_dirty : nullptr);
+  presented_window_frames_ = window_->frames();
+#else
+  (void)partial;
+  (void)presented_window_frames_;
   window_->UnlockAndPost();
+#endif
   frames_++;
 }
 
@@ -243,23 +324,34 @@ android::sp<Win32Surface::Buffer> Win32Surface::TakeDequeued(ANativeWindowBuffer
 
 int Win32Surface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
   std::lock_guard<std::mutex> lock(mutex_);
-  TakeDequeued(buffer);
+  queued_damage_valid_ = false;
+  android::sp<Buffer> cancelled = TakeDequeued(buffer);
+  if (cancelled != nullptr && cancelled.get() == buffer_.get()) {
+    buffer_contents_valid_ = false;
+    presented_buffer_ = nullptr;
+  }
   return 0;
 }
 
 int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    const bool had_damage = queued_damage_valid_;
+    const ARect bl_damage = queued_damage_;
+    queued_damage_valid_ = false;
     android::sp<Buffer> queued = TakeDequeued(buffer);
+    const bool buffer_replaced = (queued != nullptr && queued != buffer_);
     // The frame is in the buffer that was queued: it becomes the surface's
     // buffer (the next dequeue resizes it if the size changed meanwhile).
-    if (queued != nullptr && queued != buffer_) {
+    if (buffer_replaced) {
       if (getenv("GESHER_WINDOW_DEBUG") != nullptr) {
         fprintf(stderr, "Win32Surface: frame %llu queued in a buffer of %dx%d, the surface's is %dx%d\n",
                 static_cast<unsigned long long>(frames_ + 1), queued->width, queued->height,
                 buffer_ != nullptr ? buffer_->width : 0, buffer_ != nullptr ? buffer_->height : 0);
       }
       buffer_ = queued;
+      buffer_contents_valid_ = false;
+      presented_buffer_ = nullptr;
     }
     if (getenv("GESHER_WINDOW_DEBUG") != nullptr && buffer_ != nullptr) {
       // Each frame for a while after the queued size changes: its size, the
@@ -300,8 +392,21 @@ int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
                 buffer_->pixels[static_cast<size_t>(y) * buffer_->stride + x]);
       }
     }
+    ARect tl_dirty = {0, 0, 0, 0};
+    bool has_dirty = false;
+    if (!buffer_replaced && had_damage && buffer_ != nullptr && buffer_contents_valid_) {
+      const int64_t dl = std::max<int64_t>(0, bl_damage.left);
+      const int64_t dr = std::min<int64_t>(buffer_->width, bl_damage.right);
+      const int64_t dt = std::max<int64_t>(0, int64_t{buffer_->height} - bl_damage.top);
+      const int64_t db = std::min<int64_t>(buffer_->height, int64_t{buffer_->height} - bl_damage.bottom);
+      if (dl < dr && dt < db) {
+        tl_dirty = {static_cast<int>(dl), static_cast<int>(dt),
+                    static_cast<int>(dr), static_cast<int>(db)};
+        has_dirty = true;
+      }
+    }
+    PresentLocked(has_dirty ? &tl_dirty : nullptr);
   }
-  Present();
   if (getenv("GESHER_WINDOW_DEBUG") != nullptr && frames_ <= 4) {
     std::vector<uint32_t> shown;
     int w = 0, h = 0;
@@ -373,6 +478,39 @@ int Win32Surface::perform(int operation, va_list args) {
     }
     case NATIVE_WINDOW_UNLOCK_AND_POST:
       return unlockAndPost();
+    case NATIVE_WINDOW_SET_SURFACE_DAMAGE: {
+      const auto* rects = va_arg(args, const ARect*);
+      const size_t count = va_arg(args, size_t);
+      std::lock_guard<std::mutex> lock(mutex_);
+      queued_damage_valid_ = false;
+      if (rects == nullptr || count == 0) return 0;
+      int64_t left = std::numeric_limits<int64_t>::max();
+      int64_t bottom = std::numeric_limits<int64_t>::max();
+      int64_t right = std::numeric_limits<int64_t>::min();
+      int64_t top = std::numeric_limits<int64_t>::min();
+      bool any = false;
+      for (size_t i = 0; i < count; ++i) {
+        const ARect& r = rects[i];
+        // Bottom-left origin (system/window.h): valid rects satisfy left <= right and bottom <= top.
+        if (r.right < r.left || r.top < r.bottom) return 0;
+        if (r.left == r.right || r.bottom == r.top) continue;
+        left = std::min<int64_t>(left, r.left);
+        bottom = std::min<int64_t>(bottom, r.bottom);
+        right = std::max<int64_t>(right, r.right);
+        top = std::max<int64_t>(top, r.top);
+        any = true;
+      }
+      if (any) {
+        auto clamp_i32 = [](int64_t v) -> int {
+          return static_cast<int>(std::clamp<int64_t>(
+              v, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()));
+        };
+        queued_damage_ = {clamp_i32(left), clamp_i32(top),
+                          clamp_i32(right), clamp_i32(bottom)};
+        queued_damage_valid_ = true;
+      }
+      return 0;
+    }
     case NATIVE_WINDOW_SET_BUFFERS_FORMAT: {
       int format = va_arg(args, int);
       if (format == 0) format = HAL_PIXEL_FORMAT_RGBA_8888;  // the default
