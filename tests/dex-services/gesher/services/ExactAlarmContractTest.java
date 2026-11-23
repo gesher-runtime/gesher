@@ -300,6 +300,8 @@ public final class ExactAlarmContractTest {
             set(am, "mPm", pm);
             set(am, "mAtm", atm);
             set(am, "mCallers", callers);
+            // Unsafe skips AMS's ordinary field initializer for lifecycle observers.
+            set(am, "mProcessDeathObservers", new java.util.ArrayList<>());
 
             // Result/task retirement uses the actual URI ownership service too.
             Object providers = make(type("ContentProviders"), new Class<?>[]{pmType, atmType}, pm, atm);
