@@ -38,8 +38,8 @@ struct GuestFd {
   ~GuestFd() { if (value >= 0) close(value); }
 };
 
-int VerifyGuestDisk(const BlockChannel& channel, HostDisk& disk) {
-  if (gesher::usb_block::AttachBroker(channel.client, channel.gate, channel.shutdown) != 0) {
+int VerifyGuestDisk(BlockChannel& channel, const BlockGuestHandles& handles, HostDisk& disk) {
+  if (gesher::usb_block::AttachBroker(handles.pipe, handles.gate, handles.revoked) != 0) {
     return GuestError("Attach physical USB disk");
   }
   struct stat info{};
@@ -81,7 +81,8 @@ int VerifyGuestDisk(const BlockChannel& channel, HostDisk& disk) {
     }
   }
 
-  if (!SetEvent(channel.shutdown)) return WindowsError("Revoke disk session", GetLastError());
+  const DWORD revoke = channel.Revoke();
+  if (revoke != ERROR_SUCCESS) return WindowsError("Revoke disk session", revoke);
   if (stat(kGuestDisk, &info) == 0 || errno != ENOENT) return GuestError("Hide revoked guest disk");
   if (pread(fd.value, guest.data(), guest.size(), 0) >= 0 || errno != ENODEV) {
     return GuestError("Reject reads on retained descriptor after revocation");
@@ -106,14 +107,22 @@ int wmain(int argc, wchar_t** argv) {
   std::unique_ptr<BlockChannel> channel;
   error = BlockChannel::Create(&channel);
   if (error != ERROR_SUCCESS) return WindowsError("Create private block channel", error);
+  const HANDLE self = OpenProcess(PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, GetCurrentProcessId());
+  if (!self) return WindowsError("Open fixture process", GetLastError());
+  BlockGuestHandles handles;
+  error = channel->Handoff(self, &handles);
+  CloseHandle(self);
+  if (error != ERROR_SUCCESS) return WindowsError("Transfer guest handles", error);
   DWORD server_status = ERROR_SUCCESS;
   std::thread server([&] {
-    server_status = ServeBlockRequests(channel->server, channel->shutdown, *disk);
-    SetEvent(channel->shutdown);
+    server_status = ServeBlockRequests(*channel, *disk);
   });
-  const int result = VerifyGuestDisk(*channel, *disk);
-  SetEvent(channel->shutdown);
+  const int result = VerifyGuestDisk(*channel, handles, *disk);
+  channel->Revoke();
   server.join();
+  CloseHandle(handles.revoked);
+  CloseHandle(handles.gate);
+  CloseHandle(handles.pipe);
   if (result != 0) return result;
   if (server_status != ERROR_OPERATION_ABORTED) {
     return WindowsError("Stop physical USB disk broker", server_status);

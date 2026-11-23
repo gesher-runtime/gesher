@@ -7,11 +7,12 @@
 namespace gesher::usb_storage {
 
 class HostDisk;
+class BlockChannel;
 
-// Serve one authenticated stream session. The trusted caller holds the
-// selected disk, an already-connected overlapped byte-mode pipe, and a
-// shutdown event. The caller owns all three and waits for this function to
-// return before releasing them or allowing another session to use the disk.
-DWORD ServeBlockRequests(HANDLE pipe, HANDLE shutdown, HostDisk& disk);
+// Serve one authorized channel until terminal error or revocation.
+// The caller retains the channel and disk until this function returns.
+// Revocation cancels pipe I/O. The caller joins this worker before freeing
+// the disk, since a physical drive operation already in progress may finish.
+DWORD ServeBlockRequests(BlockChannel& channel, HostDisk& disk);
 
 }  // namespace gesher::usb_storage

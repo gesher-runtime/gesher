@@ -116,17 +116,59 @@ index 3492add71..6bfbf7afc 100644
 +target_link_options(gesher_usb_block_physical_test PRIVATE -municode)
 +target_link_libraries(gesher_usb_block_physical_test PRIVATE gesher_posix cfgmgr32)
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index c001fa738..0b3eb8749 100644
+index c001fa738..ebc3e7dcd 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
 @@ -32,0 +33 @@
 +#include "usb_block_internal.h"
-@@ -408,0 +410,2 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
+@@ -128 +129,2 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
+-int ReserveFd() {
++HANDLE OpenFdPlaceholder(bool* pipe) {
++  if (pipe) *pipe = false;
+@@ -130,0 +133,21 @@ int ReserveFd() {
++  if (h != INVALID_HANDLE_VALUE) return h;
++  const DWORD nul_error = GetLastError();
++  DWORD in_container = 0, size = 0;
++  if (nul_error != ERROR_ACCESS_DENIED ||
++      !GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
++                           &in_container, sizeof(in_container), &size) || !in_container) {
++    SetLastError(nul_error);
++    return INVALID_HANDLE_VALUE;
++  }
++  // An AppContainer can reserve a CRT slot with a private kernel file object.
++  // The unused writer closes immediately. Runtime I/O uses the logical fd.
++  HANDLE writer = nullptr;
++  if (!CreatePipe(&h, &writer, nullptr, 1)) return INVALID_HANDLE_VALUE;
++  CloseHandle(writer);
++  if (pipe) *pipe = true;
++  return h;
++}
++
++int ReserveFd() {
++  bool use_pipe = false;
++  HANDLE h = OpenFdPlaceholder(&use_pipe);
+@@ -135 +158,2 @@ int ReserveFd() {
+-  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
++  else if ((use_pipe && RegisterOfd(fd, O_RDWR) < 0) ||
++           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
+@@ -137,0 +162 @@ int ReserveFd() {
++    if (use_pipe) ForgetOfd(fd);
+@@ -224,0 +250 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
++  if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
+@@ -408,0 +435,2 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
 +  int block_result;
 +  if (usb_block::Io(snapshot, bytes, count, false, -1, &block_result)) return block_result;
-@@ -424,0 +428,2 @@ int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* byte
+@@ -424,0 +453,2 @@ int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* byte
 +  int block_result;
 +  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, -1, &block_result)) return block_result;
+@@ -676 +706 @@ int PollFile(pollfd* p) {
+-  // The NUL fd reserves a number, but an epoll is readable only when its
++  // The underlying handle reserves a number, but an epoll is readable only when its
+@@ -693,0 +724,4 @@ int PollFile(pollfd* p) {
++  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
++    p->revents = p->events & (kIn | kOut);
++    return true;
++  }
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
 index a0a55f2a4..a6127946b 100644
 --- a/compat/posix/src/fsops.cc
@@ -138,6 +180,24 @@ index a0a55f2a4..a6127946b 100644
 +        return (mode & X_OK) != 0 || ((mode & W_OK) != 0 && !gesher::usb_block::Writable())
 +            ? (errno = EACCES, -1) : 0;
 +      }
+diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
+index 8ce837212..71487505e 100644
+--- a/compat/posix/src/internal.h
++++ b/compat/posix/src/internal.h
+@@ -142,0 +143,3 @@ std::string WindowsZoneId();
++// A non-inheritable native file object for reserving a CRT descriptor slot.
++// A contained process can receive a private anonymous pipe's read end.
++HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
+diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
+index 09fd4596c..90f62555b 100644
+--- a/compat/posix/src/ofd.cc
++++ b/compat/posix/src/ofd.cc
+@@ -607,0 +608 @@ int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
++  if (snapshot->kind == DescriptorKind::kUnshareable) return snapshot->description->Flags();
+@@ -658 +659,2 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
+-    const DWORD type = GetFileType(file);
++    const DWORD type = snapshot->kind == DescriptorKind::kUnshareable
++        ? FILE_TYPE_CHAR : GetFileType(file);
 diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
 index 60751adee..9354aa285 100644
 --- a/compat/posix/src/ofd_internal.h
@@ -200,7 +260,7 @@ index ee975dc86..2b1e76f4d 100644
 @@ -1037,0 +1081 @@ int Open(const std::wstring& name, int flags) {
 +  if (n.type == S_IFBLK) return usb_block::Open(flags);
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index a3bc4dfdd..4d2555d00 100644
+index a3bc4dfdd..ad04b5572 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -40,0 +41 @@
@@ -208,6 +268,173 @@ index a3bc4dfdd..4d2555d00 100644
 @@ -367,0 +369,2 @@ int ioctl(int fd, unsigned long request, ...) {
 +  int block_result;
 +  if (gesher::usb_block::Ioctl(snapshot, request, argp, &block_result)) return block_result;
+@@ -369,0 +373,5 @@ int ioctl(int fd, unsigned long request, ...) {
++  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
++    if (request != FIONREAD) return errno = ENOTTY, -1;
++    *argp = 0;
++    return 0;
++  }
+diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
+index 8e960fbb5..f81c448cb 100644
+--- a/compat/posix/src/system_properties.cc
++++ b/compat/posix/src/system_properties.cc
+@@ -26,0 +27,2 @@ constexpr DWORD kCapacity = 4 * 1024 * 1024;
++// Match the previous format's maximum payload. Each area now has two banks.
++constexpr DWORD kPayloadCapacity = kCapacity - 4 * sizeof(uint32_t);
+@@ -28 +30 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
+-constexpr uint32_t kVersion = 2;
++constexpr uint32_t kVersion = 3;
+@@ -41 +43 @@ struct Header {
+-  uint32_t used;
++  uint32_t used[2];
+@@ -42,0 +45 @@ struct Header {
++constexpr DWORD kAreaSize = sizeof(Header) + 2 * kPayloadCapacity;
+@@ -61,0 +65 @@ struct Area {
++  bool read_only = false;
+@@ -68,0 +73,6 @@ bool Valid(const std::string& name, const std::string& value);
++bool InAppContainer() {
++  DWORD contained = 0, size = 0;
++  return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
++                             &contained, sizeof(contained), &size) && contained != 0;
++}
++
+@@ -264,8 +274,22 @@ bool Refresh(Area* area) {
+-  const auto* header = static_cast<Header*>(area->view);
+-  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
+-  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
+-  if (generation == area->cached_generation) return true;
+-  std::string data(static_cast<const char*>(area->view) + sizeof(Header), header->used);
+-  if (!Decode(data, &area->values)) return false;
+-  area->cached_generation = generation;
+-  return true;
++  const auto* header = static_cast<const Header*>(area->view);
++  const char* banks = static_cast<const char*>(area->view) + sizeof(Header);
++  // Writers serialize in the existing mutex. A read-only process reads the
++  // published bank without being able to block a writer. A second publication
++  // can reuse our bank, so verify the generation after copying it.
++  for (int attempt = 0; attempt < 16; ++attempt) {
++    const uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
++    if (generation == 0 || header->magic != kMagic || header->version != kVersion) return false;
++    if (generation == area->cached_generation) return true;
++    const unsigned bank = generation & 1u;
++    const uint32_t used = __atomic_load_n(&header->used[bank], __ATOMIC_RELAXED);
++    if (used > kPayloadCapacity) return false;
++    std::string data(banks + bank * kPayloadCapacity, used);
++    __atomic_thread_fence(__ATOMIC_ACQ_REL);
++    if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
++    if (!Decode(data, &area->values)) return false;
++    area->cached_generation = generation;
++    return true;
++  }
++  // A writer can publish repeatedly while the reader is copying a snapshot.
++  // Keep the last coherent values, and retry the new generation on next use.
++  return area->cached_generation != 0;
+@@ -275 +299 @@ bool Publish(Area* area, Snapshot values) {
+-  if (data.size() > kCapacity - sizeof(Header)) return false;
++  if (data.size() > kPayloadCapacity) return false;
+@@ -277,8 +301,15 @@ bool Publish(Area* area, Snapshot values) {
+-  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
+-  if (!generation) generation = 1;
+-  std::memcpy(static_cast<char*>(area->view) + sizeof(Header), data.data(), data.size());
+-  header->magic = kMagic;
+-  header->version = kVersion;
+-  header->used = static_cast<uint32_t>(data.size());
+-  // The unlocked fast path reads this field atomically. Publish it last,
+-  // without a whole-header store overlapping the independently read word.
++  const uint32_t previous = __atomic_load_n(&header->generation, __ATOMIC_RELAXED);
++  uint32_t generation = previous + 1;
++  if (!generation) generation = 2;  // leave zero unused, and still switch banks
++  const unsigned bank = generation & 1u;
++  // Publish the previous generation before reusing its inactive bank.
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  std::memcpy(static_cast<char*>(area->view) + sizeof(Header) + bank * kPayloadCapacity,
++              data.data(), data.size());
++  __atomic_store_n(&header->used[bank], static_cast<uint32_t>(data.size()), __ATOMIC_RELAXED);
++  // The first publication also commits the initialized header. A terminated
++  // writer leaves the currently published bank intact.
++  if (previous == 0) {
++    header->magic = kMagic;
++    header->version = kVersion;
++  }
+@@ -353,2 +384,3 @@ Area* Current() { // LocalMutex is held by every caller.
+-  std::wstring path = dir + L"\\" + Key(session) + L".area";
+-  if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
++  // The previous format has a single bank. Keep an older live process from
++  // attaching to the new layout during a runtime upgrade.
++  std::wstring path = dir + L"\\" + Key(session + L"/3") + L".area";
+@@ -356,0 +389 @@ Area* Current() { // LocalMutex is held by every caller.
++  area->read_only = InAppContainer();
+@@ -358 +391,5 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
++  if (!area->read_only) {
++    if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
++    area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
++    if (!area->mutex.value) return nullptr;
++  }
+@@ -360,3 +397,4 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!lock.held) return nullptr;
+-  area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+-                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
++  if (!area->read_only && !lock.held) return nullptr;
++  area->file.value = CreateFileW(path.c_str(), area->read_only ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
++                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
++                                 area->read_only ? OPEN_EXISTING : OPEN_ALWAYS,
+@@ -365 +403,2 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
++  area->mapping.value = CreateFileMappingW(area->file.value, nullptr,
++      area->read_only ? PAGE_READONLY : PAGE_READWRITE, 0, area->read_only ? 0 : kAreaSize, nullptr);
+@@ -367 +406,2 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
++  area->view = MapViewOfFile(area->mapping.value, area->read_only ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS,
++                            0, 0, kAreaSize);
+@@ -370 +410 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!header->magic) {
++  if (!area->read_only && !__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) {
+@@ -381 +421 @@ Area* Current() { // LocalMutex is held by every caller.
+-  RemoveOldAreas(dir, path);
++  if (!result->read_only) RemoveOldAreas(dir, path);
+@@ -422,6 +462,2 @@ namespace {
+-// few properties (log.tag.*). Without the cross-process mutex, this reads only
+-// the header's 32-bit generation (one aligned load) and never the shared
+-// values: when it equals the generation this process last decoded under the
+-// mutex, the process's own decoded copy (area->values) is returned, which is
+-// what a locked read would have seen before any Set still in progress. A
+-// different generation takes the mutex and decodes again.
++// few properties (log.tag.*). Refresh uses the unlocked generation fast path
++// and decodes a bank only when another process has published new values.
+@@ -432,3 +468,2 @@ Area* Refreshed() {
+-  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
+-    MutexLock lock(area->mutex.value);
+-    if (!lock.held || !Refresh(area)) return nullptr;
++  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) == area->cached_generation) {
++    return area;
+@@ -436 +471,2 @@ Area* Refreshed() {
+-  return area;
++  MutexLock lock(area->mutex.value);
++  return (area->read_only || lock.held) && Refresh(area) ? area : nullptr;
+@@ -470 +506 @@ bool Set(const std::string& name, const std::string& value) {
+-  if (!area) return false;
++  if (!area || area->read_only) return false;
+@@ -479 +515 @@ bool Set(const std::string& name, const std::string& value) {
+-  if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
++  if (Encode(values).size() > kPayloadCapacity) return false;
+@@ -485,4 +521,2 @@ Snapshot List() {
+-  Area* area = Current();
+-  if (!area) return {};
+-  MutexLock lock(area->mutex.value);
+-  return lock.held && Refresh(area) ? area->values : Snapshot{};
++  Area* area = Refreshed();
++  return area ? area->values : Snapshot{};
+@@ -492,4 +526,2 @@ uint32_t AreaSerial() {
+-  Area* area = Current();
+-  if (!area) return 0;
+-  MutexLock lock(area->mutex.value);
+-  return lock.held && Refresh(area) ? area->cached_generation : 0;
++  Area* area = Refreshed();
++  return area ? area->cached_generation : 0;
+@@ -523 +555 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+-      if (!lock.held || !Refresh(area)) return false;
++      if ((!area->read_only && !lock.held) || !Refresh(area)) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
 index 1f7b51ecc..843a19a89 100644
 --- a/compat/posix/src/unistd.cc

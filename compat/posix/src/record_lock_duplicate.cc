@@ -22,7 +22,7 @@ struct PrivateDescriptor {
   HANDLE native_handle = nullptr;
 };
 std::array<PrivateDescriptor, kDescriptorCapacity> private_descriptors{};
-// Process-owned, protected and noninherited. A shared private NUL object
+// Process-owned, protected and noninherited. A shared private file object
 // identifies reservations across fd/HANDLE reuse; pathname/FileId is useless.
 // No static destructor closes it during other threads' CRT/VM destruction.
 HANDLE nul_identity = nullptr;
@@ -31,8 +31,7 @@ thread_local int publishing_target = -1;
 int WinError() { return gesher::ErrnoFromWin32(GetLastError()); }
 int EnsureNulIdentity() {
   if (!nul_identity) {
-    HANDLE candidate = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    HANDLE candidate = OpenFdPlaceholder();
     if (candidate == INVALID_HANDLE_VALUE) return WinError();
     // Retain ownership even if flag setup fails; do not forget a live handle.
     nul_identity = candidate;
@@ -57,7 +56,7 @@ int DisposeNul(PrivateDescriptor* owned, const DuplicateOperations* operations =
   int error = SameDescription(nul_identity, current, &same);
   if (error) return error;  // Unknown identity is retained, never closed.
   if (!same) { *owned = {}; return 0; }  // Already closed/reused: leave foreign fd untouched.
-  // Only a private NUL FILE_OBJECT is disposed here. This is neither an
+  // Only a private placeholder FILE_OBJECT is disposed here. This is neither an
   // application any-close nor a source-file/OFD alias, and has no virtual fd
   // bookkeeping. A failure is retained for identity checking on the next call.
   if (native) {
@@ -126,7 +125,7 @@ int Reserve(int minimum, PrivateDescriptor** target, const DuplicateOperations* 
 int DrainPrivateReservations() {
   for (const auto& owned : private_descriptors) if (owned.kind == PrivateKind::kUnknownSource) return EIO;
   // Actual public dup2 enters ClosingDescriptor recursively under this same
-  // descriptor guard. Its still-occupied NUL target must not be drained.
+  // descriptor guard. Its still-occupied placeholder target must not be drained.
   return DisposeAllNuls(publishing_target);
 }
 
@@ -151,7 +150,7 @@ int DuplicateAtLeast(int descriptor, int minimum, bool close_on_exec, const Dupl
   int error = Reserve(minimum, &target, operations);
   if (error) return errno = error, -1;
   const int fd = target->descriptor;
-  // The target is an actual occupied, noninherited NUL reservation. Every
+  // The target is an actual occupied, noninherited reservation. Every
   // lower private fd was successfully disposed BEFORE source duplication.
   // Concurrent raw CRT allocation therefore cannot steal this target slot.
   publishing_target = fd;

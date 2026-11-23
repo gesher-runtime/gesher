@@ -370,6 +370,11 @@ int ioctl(int fd, unsigned long request, ...) {
   if (gesher::usb_block::Ioctl(snapshot, request, argp, &block_result)) return block_result;
   HANDLE h = snapshot->handle;
   if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
+  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
+    if (request != FIONREAD) return errno = ENOTTY, -1;
+    *argp = 0;
+    return 0;
+  }
   if (request == FIONBIO && GetFileType(h) == FILE_TYPE_PIPE) {
     int flags = gesher::FileDescriptionFlags(snapshot);
     if (flags < 0) return -1;

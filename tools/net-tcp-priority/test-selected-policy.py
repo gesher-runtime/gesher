@@ -331,9 +331,8 @@ def preceding_shared_stdio_sources(qualification):
 PROPERTY_REVISION_SHA256 = 'fc2e4d97ee02d1f32e49aeccd648ee386cd44debf9092b4eef48b0c7e2f1499a'
 PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
 PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
-def preceding_logging_property_source():
+def preceding_logging_property_source(source):
  path='compat/posix/src/system_properties.cc'
- source=(ROOT/path).read_bytes()
  assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
  header='compat/posix/include/gesher/system_properties.h'
  assert hashlib.sha256((ROOT/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
@@ -396,10 +395,11 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 )
 
 # Preserve the original OFD evidence while reviewing the USB block device
-# dispatch separately. The reverse patch is checked against the historical
-# main bytes; the socket ownership and poll checks still compare live code.
+# dispatch and contained runtime changes separately. The reverse patch
+# is checked against historical main bytes; the socket ownership and poll
+# checks still compare live code.
 USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
-USB_BLOCK_TRANSITION_SHA256 = '872e9f839fe8d61b5a1442de7e235621cbf4486db474c6fdf5af69fbab9f4f32'
+USB_BLOCK_TRANSITION_SHA256 = '57405da0f6f263a1bbc51c687073ea09f3430d5ddbf1f4b28bab2dd1ff9033cf'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/elf/exec/exec_spawn.cc',
  'compat/elf/exec/gesher_shell.cc',
@@ -407,9 +407,12 @@ USB_BLOCK_TRANSITION_PATHS = (
  'compat/posix/posix.cmake',
  'compat/posix/src/fd.cc',
  'compat/posix/src/fsops.cc',
+ 'compat/posix/src/internal.h',
+ 'compat/posix/src/ofd.cc',
  'compat/posix/src/ofd_internal.h',
  'compat/posix/src/procfs.cc',
  'compat/posix/src/system.cc',
+ 'compat/posix/src/system_properties.cc',
  'compat/posix/src/unistd.cc',
 )
 
@@ -465,7 +468,7 @@ def preceding_ofd_sources():
   if path in shared_stdio: actual=shared_stdio[path]
   elif path in usb_block: actual=usb_block[path]
   else: actual=(ROOT/path).read_bytes()
-  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
+  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source(actual)
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:

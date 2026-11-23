@@ -140,6 +140,9 @@ std::string WindowsZoneId();
 
 // A new CRT fd open on NUL (fd.cc), which reserves a number for an fd that
 // gesher-base serves itself: a socket, eventfd or epoll.
+// A non-inheritable native file object for reserving a CRT descriptor slot.
+// A contained process can receive a private anonymous pipe's read end.
+HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
 int ReserveFd();
 
 // Roll back a private, unpublished duplication while another guarded user

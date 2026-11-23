@@ -37,7 +37,8 @@ final class AppSandbox {
     static final String INTERNET_CLIENT = "internetClient";
     static final String PRIVATE_NETWORK = "privateNetworkClientServer";
 
-    // FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, and Windows' "Modify" (no WRITE_DAC/OWNER).
+    // Windows file ACL masks. Modify excludes WRITE_DAC and WRITE_OWNER.
+    static final int READ = 0x00120089;
     static final int READ_EXECUTE = 0x001200A9;
     static final int MODIFY = 0x001301BF;
 
@@ -118,6 +119,10 @@ final class AppSandbox {
         for (String dir : runtimeDirectories()) {
             grantCapability(dir, RUNTIME_FILES, READ_EXECUTE, true);
         }
+        // The shared boot property snapshots are read-only to apps. Persistent
+        // properties and the rest of the system data remain outside the grant.
+        grantCapability(new File(Device.dataDir(), "system/gesher-properties").getPath(),
+                RUNTIME_FILES, READ, true);
         // The APK itself; its directory (and the oat files in it) only when it is the
         // package's own code directory under data/app. An APK run from where the user
         // keeps it (Downloads) must not open that directory to the container.

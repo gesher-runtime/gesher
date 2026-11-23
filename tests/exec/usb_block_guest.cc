@@ -27,16 +27,16 @@ bool Transfer(const BlockChannel& channel, void* bytes, DWORD size, bool write) 
   io.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!io.hEvent) return false;
   DWORD n = 0;
-  BOOL ok = write ? WriteFile(channel.server, bytes, size, &n, &io)
-                  : ReadFile(channel.server, bytes, size, &n, &io);
+  BOOL ok = write ? WriteFile(channel.server(), bytes, size, &n, &io)
+                  : ReadFile(channel.server(), bytes, size, &n, &io);
   if (!ok && GetLastError() == ERROR_IO_PENDING) {
-    HANDLE wait[] = {channel.shutdown, io.hEvent};
+    HANDLE wait[] = {channel.revocation(), io.hEvent};
     const DWORD result = WaitForMultipleObjects(2, wait, FALSE, 5000);
     if (result != WAIT_OBJECT_0 + 1) {
-      CancelIoEx(channel.server, &io);
-      GetOverlappedResult(channel.server, &io, &n, TRUE);
+      CancelIoEx(channel.server(), &io);
+      GetOverlappedResult(channel.server(), &io, &n, TRUE);
     } else {
-      ok = GetOverlappedResult(channel.server, &io, &n, FALSE);
+      ok = GetOverlappedResult(channel.server(), &io, &n, FALSE);
     }
   }
   CloseHandle(io.hEvent);
@@ -76,14 +76,20 @@ int main() {
   if (stat("/dev/block/sdb", &info) == 0) return 1;
   std::unique_ptr<BlockChannel> channel;
   if (BlockChannel::Create(&channel) != ERROR_SUCCESS) return 2;
+  const HANDLE self = OpenProcess(PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, GetCurrentProcessId());
+  if (!self) return 2;
+  BlockGuestHandles handles;
+  const DWORD handoff = channel->Handoff(self, &handles);
+  CloseHandle(self);
+  if (handoff != ERROR_SUCCESS) return 2;
   bool served = false;
   std::thread server([&] {
     served = Serve(*channel);
-    if (!served) SetEvent(channel->shutdown);
+    if (!served) channel->Revoke();
   });
   int result = 0;
   auto test = [&]() {
-    if (gesher::usb_block::AttachBroker(channel->client, channel->gate, channel->shutdown) != 0) return 3;
+    if (gesher::usb_block::AttachBroker(handles.pipe, handles.gate, handles.revoked) != 0) return 3;
     if (stat("/dev/block/sdb", &info) != 0 || !S_ISBLK(info.st_mode)) return 4;
     DIR* entries = opendir("/sys/block");
     if (entries == nullptr) return 5;
@@ -110,14 +116,17 @@ int main() {
     if (alias < 0 || lseek(alias, 0, SEEK_CUR) != 516 ||
         write(alias, "io", 2) != 2 || lseek(disk, 0, SEEK_CUR) != 518) return 10;
     close(alias);
-    SetEvent(channel->shutdown);
+    if (channel->Revoke() != ERROR_SUCCESS) return 11;
     if (stat("/dev/block/sdb", &info) == 0 || read(disk, data, 1) >= 0) return 11;
     close(disk);
     return 0;
   };
   result = test();
-  if (result != 0) SetEvent(channel->shutdown);
+  if (result != 0) channel->Revoke();
   server.join();
+  CloseHandle(handles.revoked);
+  CloseHandle(handles.gate);
+  CloseHandle(handles.pipe);
   if (result != 0) return result;
   if (!served) return 12;
   std::puts("USB guest block fixture passed");

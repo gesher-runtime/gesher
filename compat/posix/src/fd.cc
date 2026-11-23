@@ -126,16 +126,40 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
 
 }  // namespace
 
-int ReserveFd() {
+HANDLE OpenFdPlaceholder(bool* pipe) {
+  if (pipe) *pipe = false;
   HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                          nullptr, OPEN_EXISTING, 0, nullptr);
+  if (h != INVALID_HANDLE_VALUE) return h;
+  const DWORD nul_error = GetLastError();
+  DWORD in_container = 0, size = 0;
+  if (nul_error != ERROR_ACCESS_DENIED ||
+      !GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
+                           &in_container, sizeof(in_container), &size) || !in_container) {
+    SetLastError(nul_error);
+    return INVALID_HANDLE_VALUE;
+  }
+  // An AppContainer can reserve a CRT slot with a private kernel file object.
+  // The unused writer closes immediately. Runtime I/O uses the logical fd.
+  HANDLE writer = nullptr;
+  if (!CreatePipe(&h, &writer, nullptr, 1)) return INVALID_HANDLE_VALUE;
+  CloseHandle(writer);
+  if (pipe) *pipe = true;
+  return h;
+}
+
+int ReserveFd() {
+  bool use_pipe = false;
+  HANDLE h = OpenFdPlaceholder(&use_pipe);
   if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
   record_locks::DescriptorGuard descriptor_guard;
   int fd = CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_NOINHERIT));
   if (fd < 0) CloseHandle(h);
-  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
+  else if ((use_pipe && RegisterOfd(fd, O_RDWR) < 0) ||
+           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
     int error = errno;
     _close(fd);
+    if (use_pipe) ForgetOfd(fd);
     return errno = error, -1;
   }
   return fd;
@@ -223,6 +247,7 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
     if (GetFileType(file) != FILE_TYPE_PIPE) return false;
     snapshot = gesher::CaptureDescriptor(fd);
   }
+  if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
   // Validate status and transfer through one capture. Looking the fd up again
   // could select a replacement, and would duplicate every pipe query/pin.
   *result = NativeDescriptorIo(std::move(snapshot), buffer, count, writing);
@@ -678,7 +703,7 @@ struct FdPollScratch {
 // the writer is gone; files and other devices are always ready. Returns false
 // for a pipe that has nothing yet.
 int PollFile(pollfd* p) {
-  // The NUL fd reserves a number, but an epoll is readable only when its
+  // The underlying handle reserves a number, but an epoll is readable only when its
   // interest list has a reportable event. It is never a writable file.
   if (gesher::PollEpoll(p->fd, p->events, &p->revents)) return p->revents != 0;
   gesher::DescriptorSnapshotPtr snapshot;
@@ -696,6 +721,10 @@ int PollFile(pollfd* p) {
     snapshot = gesher::CaptureDescriptor(p->fd);
   }
   if (!snapshot) return -1;
+  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
+    p->revents = p->events & (kIn | kOut);
+    return true;
+  }
   if (gesher::PollPipeHandle(snapshot, p->events, &p->revents) < 0) return -1;
   return p->revents != 0;
 }

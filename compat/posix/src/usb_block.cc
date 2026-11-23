@@ -30,17 +30,16 @@ Handle Duplicate(HANDLE handle) {
 }
 
 struct Session {
-  Handle pipe;
   Handle mutex;
   Handle shutdown;
   usb_storage::BlockClient client;
   usb_storage::ClientDiskInfo info;
 
   Session(Handle pipe_handle, Handle mutex_handle, Handle shutdown_handle)
-      : pipe(std::move(pipe_handle)), mutex(std::move(mutex_handle)),
-        shutdown(std::move(shutdown_handle)), client(pipe.get(), mutex.get(), shutdown.get()) {}
+      : mutex(std::move(mutex_handle)), shutdown(std::move(shutdown_handle)),
+        client(pipe_handle.release(), mutex.get(), shutdown.get()) {}
 
-  bool Live() const { return WaitForSingleObject(shutdown.get(), 0) == WAIT_TIMEOUT; }
+  bool Live() const { return client.Live(); }
   bool Writable() const { return (info.disk.flags & usb_storage::kBlockWritable) != 0; }
 };
 

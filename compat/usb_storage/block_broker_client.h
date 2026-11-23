@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -19,24 +20,27 @@ struct ClientDiskInfo {
   std::string serial;
 };
 
-// The trusted launcher supplies retained handles for an authorized endpoint,
-// its shared mutex and the broker's manual-reset shutdown event. The caller
-// owns the handles and keeps them live. Every process sharing the endpoint
-// must use the same mutex and shutdown event throughout the session.
+// One client owns the stream state in the process selected by the launcher.
+// The client takes ownership of the private data endpoint. The caller retains
+// the mutex and wait-only host revocation handle.
 class BlockClient {
  public:
   BlockClient(HANDLE pipe, HANDLE gate, HANDLE shutdown)
       : pipe_(pipe), gate_(gate), shutdown_(shutdown) {}
+  ~BlockClient();
   DWORD Describe(ClientDiskInfo* info);
   DWORD Read(uint64_t offset, std::span<std::byte> output);
   DWORD Write(uint64_t offset, std::span<const std::byte> input);
+  bool Live() const;
 
  private:
   DWORD Exchange(BlockRequest request, std::span<const std::byte> input,
-                 std::span<std::byte> output, DWORD* size);
+                 std::span<std::byte> output, BlockDescription* description);
+  DWORD Poison(DWORD error);
   HANDLE pipe_;
   HANDLE gate_;
   HANDLE shutdown_;
+  std::atomic<bool> poisoned_{false};
 };
 
 }  // namespace gesher::usb_storage

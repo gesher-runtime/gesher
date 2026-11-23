@@ -391,6 +391,9 @@ public final class SystemServer {
             String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk)));
+            // There is no DisplayEventReceiver vsync source. Publish the
+            // device-wide setting before the app initializes Choreographer.
+            android.os.SystemProperties.set("debug.choreographer.vsync", "false");
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pkg, packageName,

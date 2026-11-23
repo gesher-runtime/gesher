@@ -163,7 +163,7 @@ int fstat(int fd, struct stat* buf) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE h = snapshot->handle;
-  switch (GetFileType(h)) {
+  switch (snapshot->kind == gesher::DescriptorKind::kUnshareable ? FILE_TYPE_CHAR : GetFileType(h)) {
     case FILE_TYPE_DISK:
       return FromHandle(h, buf);
     case FILE_TYPE_PIPE:

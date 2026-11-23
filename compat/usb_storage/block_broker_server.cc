@@ -4,6 +4,7 @@
 #include "block_broker_server.h"
 
 #include "block_broker.h"
+#include "block_channel.h"
 #include "host_disk.h"
 
 #include <cstddef>
@@ -21,6 +22,14 @@ struct CloseEvent {
 };
 
 enum class PipeDirection { kRead, kWrite };
+
+struct StopSession {
+  BlockChannel& channel;
+  ~StopSession() {
+    channel.Revoke();
+    DisconnectNamedPipe(channel.server());
+  }
+};
 
 DWORD PipeTransfer(HANDLE pipe, HANDLE event, HANDLE shutdown, PipeDirection direction,
                    void* bytes, DWORD size) {
@@ -70,7 +79,10 @@ bool ValidRequest(const BlockRequest& request) {
 
 }  // namespace
 
-DWORD ServeBlockRequests(HANDLE pipe, HANDLE shutdown, HostDisk& disk) {
+DWORD ServeBlockRequests(BlockChannel& channel, HostDisk& disk) {
+  const StopSession stop{channel};
+  const HANDLE pipe = channel.server();
+  const HANDLE shutdown = channel.revocation();
   const std::unique_ptr<void, CloseEvent> event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
   if (!event) return GetLastError();
   auto receive = [&](void* buffer, DWORD size) {
@@ -121,6 +133,10 @@ DWORD ServeBlockRequests(HANDLE pipe, HANDLE shutdown, HostDisk& disk) {
     const DWORD io_error = request.operation == BlockOperation::kRead
         ? disk.Read(request.offset, bytes)
         : disk.Write(request.offset, bytes);
+    if (io_error == ERROR_MEDIA_CHANGED || io_error == ERROR_DEVICE_NOT_CONNECTED ||
+        io_error == ERROR_NO_MEDIA_IN_DRIVE || io_error == ERROR_OPERATION_ABORTED) {
+      return io_error;
+    }
     const uint32_t reply_length =
         io_error == ERROR_SUCCESS && request.operation == BlockOperation::kRead ? request.length : 0;
     const BlockReply reply{io_error, reply_length};

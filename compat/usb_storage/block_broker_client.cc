@@ -25,6 +25,7 @@ DWORD Transfer(HANDLE pipe, HANDLE shutdown, HANDLE done,
                void* bytes, DWORD size, bool writing) {
   auto* cursor = static_cast<std::byte*>(bytes);
   while (size != 0) {
+    if (WaitForSingleObject(shutdown, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
     OVERLAPPED pending{};
     pending.hEvent = done;
     if (!ResetEvent(done)) return GetLastError();
@@ -52,10 +53,40 @@ DWORD Transfer(HANDLE pipe, HANDLE shutdown, HANDLE done,
   return ERROR_SUCCESS;
 }
 
+bool DecodeDescription(std::span<const std::byte> frame, BlockDescription* info) {
+  if (frame.size() < sizeof(*info)) return false;
+  std::memcpy(info, frame.data(), sizeof(*info));
+  return info->model_bytes <= kMaxBlockDescriptionString &&
+      info->serial_bytes <= kMaxBlockDescriptionString &&
+      info->model_bytes + info->serial_bytes == frame.size() - sizeof(*info) &&
+      (info->flags & ~(kBlockWritable | kBlockRemovable)) == 0 &&
+      info->sector_bytes >= 512 && info->sector_bytes <= 65536 &&
+      (info->sector_bytes & (info->sector_bytes - 1)) == 0 &&
+      info->bytes != 0 && info->bytes % info->sector_bytes == 0;
+}
+
 }  // namespace
 
+BlockClient::~BlockClient() {
+  if (pipe_) CloseHandle(pipe_);
+}
+
+bool BlockClient::Live() const {
+  return !poisoned_.load() && WaitForSingleObject(shutdown_, 0) == WAIT_TIMEOUT;
+}
+
+DWORD BlockClient::Poison(DWORD error) {
+  poisoned_.store(true);
+  // The gate is held. No later transaction can start on a desynchronized
+  // stream, and closing its private endpoint wakes the authority's reader.
+  if (pipe_) CloseHandle(pipe_);
+  pipe_ = nullptr;
+  return error;
+}
+
 DWORD BlockClient::Exchange(BlockRequest request, std::span<const std::byte> input,
-                            std::span<std::byte> output, DWORD* size) {
+                            std::span<std::byte> output, BlockDescription* description) {
+  if (!Live()) return ERROR_OPERATION_ABORTED;
   HANDLE handles[] = {shutdown_, gate_};
   const DWORD result = WaitForMultipleObjects(2, handles, FALSE, kTimeoutMs);
   if (result == WAIT_OBJECT_0) return ERROR_OPERATION_ABORTED;
@@ -64,55 +95,44 @@ DWORD BlockClient::Exchange(BlockRequest request, std::span<const std::byte> inp
   if (result != WAIT_OBJECT_0 + 1 && result != WAIT_ABANDONED_0 + 1) return ERROR_INVALID_HANDLE;
   Gate gate{gate_};
 
-  auto poison = [this](DWORD error) {
-    SetEvent(shutdown_);
-    return error;
-  };
-  if (result == WAIT_ABANDONED_0 + 1) return poison(ERROR_OPERATION_ABORTED);
-  if (WaitForSingleObject(shutdown_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
+  if (result == WAIT_ABANDONED_0 + 1) return Poison(ERROR_OPERATION_ABORTED);
+  if (!Live()) return ERROR_OPERATION_ABORTED;
 
   std::unique_ptr<void, CloseEvent> done(CreateEventW(nullptr, TRUE, FALSE, nullptr));
   if (!done) return GetLastError();
   DWORD error = Transfer(pipe_, shutdown_, done.get(), &request, sizeof(request), true);
-  if (error != ERROR_SUCCESS) return poison(error);
+  if (error != ERROR_SUCCESS) return Poison(error);
   // WriteFile doesn't change the caller's bytes.
   error = Transfer(pipe_, shutdown_, done.get(), const_cast<std::byte*>(input.data()),
                    static_cast<DWORD>(input.size()), true);
-  if (error != ERROR_SUCCESS) return poison(error);
+  if (error != ERROR_SUCCESS) return Poison(error);
   BlockReply reply{};
   error = Transfer(pipe_, shutdown_, done.get(), &reply, sizeof(reply), false);
-  if (error != ERROR_SUCCESS) return poison(error);
+  if (error != ERROR_SUCCESS) return Poison(error);
+  if (!Live()) return ERROR_OPERATION_ABORTED;
   if (reply.error != ERROR_SUCCESS) {
-    return reply.length == 0 ? reply.error : poison(ERROR_INVALID_DATA);
+    return reply.length == 0 ? reply.error : Poison(ERROR_INVALID_DATA);
   }
   if (reply.length > output.size() ||
       (request.operation == BlockOperation::kRead && reply.length != output.size())) {
-    return poison(ERROR_INVALID_DATA);
+    return Poison(ERROR_INVALID_DATA);
   }
   error = Transfer(pipe_, shutdown_, done.get(), output.data(), reply.length, false);
-  if (error != ERROR_SUCCESS) return poison(error);
-  if (size) *size = reply.length;
+  if (error != ERROR_SUCCESS) return Poison(error);
+  if (description && !DecodeDescription(output.first(reply.length), description)) {
+    return Poison(ERROR_INVALID_DATA);
+  }
+  if (!Live()) return ERROR_OPERATION_ABORTED;
   return ERROR_SUCCESS;
 }
 
 DWORD BlockClient::Describe(ClientDiskInfo* info) {
+  if (!info) return ERROR_INVALID_PARAMETER;
   std::array<std::byte, sizeof(BlockDescription) + 2 * kMaxBlockDescriptionString> buffer;
-  DWORD length = 0;
-  DWORD error = Exchange({kBlockProtocolVersion, BlockOperation::kDescribe, 0, 0, 0},
-                         {}, buffer, &length);
-  if (error != ERROR_SUCCESS) return error;
-  if (length < sizeof(BlockDescription)) return ERROR_INVALID_DATA;
   BlockDescription record{};
-  std::memcpy(&record, buffer.data(), sizeof(record));
-  if (record.model_bytes > kMaxBlockDescriptionString ||
-      record.serial_bytes > kMaxBlockDescriptionString ||
-      record.model_bytes + record.serial_bytes != length - sizeof(record) ||
-      (record.flags & ~(kBlockWritable | kBlockRemovable)) != 0 ||
-      record.sector_bytes < 512 || record.sector_bytes > 65536 ||
-      (record.sector_bytes & (record.sector_bytes - 1)) != 0 ||
-      record.bytes == 0 || record.bytes % record.sector_bytes != 0) {
-    return ERROR_INVALID_DATA;
-  }
+  DWORD error = Exchange({kBlockProtocolVersion, BlockOperation::kDescribe, 0, 0, 0},
+                         {}, buffer, &record);
+  if (error != ERROR_SUCCESS) return error;
   const char* text = reinterpret_cast<const char*>(buffer.data() + sizeof(record));
   info->disk = record;
   info->model.assign(text, record.model_bytes);
