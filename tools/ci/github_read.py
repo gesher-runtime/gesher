@@ -12,9 +12,10 @@ import time
 _BACKOFF_SECONDS = (1, 2, 4)
 _MAX_ELAPSED_SECONDS = 4 * 60 + sum(_BACKOFF_SECONDS)
 # The repository's GITHUB_TOKEN quota is shared by every concurrent job and
-# resets hourly. Waiting up to 15 minutes for a published reset is cheaper
-# than failing the job and rerunning the whole ci run (about 500 more calls).
-_MAX_RATE_WAIT_SECONDS = 15 * 60
+# resets hourly, so a published primary reset is at most an hour (plus clock
+# skew) away. Waiting for it is cheaper than failing the job and rerunning the
+# ci run, which spends hundreds more calls from the same exhausted quota.
+_MAX_RATE_WAIT_SECONDS = 61 * 60
 _RATE_HEADERS = ('date', 'retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset',
                  'x-ratelimit-limit', 'x-ratelimit-used', 'x-ratelimit-resource')
 _HTTP_STATUS = re.compile(r'\(HTTP ([1-5][0-9]{2})\)')
@@ -140,7 +141,8 @@ def get_json(endpoint, *, retry_transient=True):
     """GET endpoint verbatim, retrying only the observed transient failures.
 
     There are at most four requests. Quota waits require GitHub's message and
-    valid headers and fit a 15-minute cumulative wait budget; time spent in
+    valid headers and fit a 61-minute cumulative wait budget, enough for any
+    published hourly primary reset; time spent in
     those waits does not consume the 247-second transport envelope. JSON parsing and all caller
     identity/digest predicates are outside the retry decision. With
     retry_transient=False an observed transient failure raises
