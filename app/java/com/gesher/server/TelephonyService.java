@@ -706,16 +706,208 @@ public final class TelephonyService {
     }
 
     // ---------------------------------------------------------------------------------
+    // Android's mobile data switches (DataSettingsManager), over Settings.Global.
+    // ---------------------------------------------------------------------------------
+
+    /** Settings.Global as the phone process reads and writes it. */
+    interface GlobalSettings {
+        /** The value, or null when the setting is absent. */
+        String get(String name);
+        void put(String name, String value);
+    }
+
+    /** The system server's settings provider: durable rows, and observers hear changes. */
+    static final GlobalSettings SETTINGS_PROVIDER = new GlobalSettings() {
+        @Override
+        public String get(String name) {
+            return SettingsProvider.globalString(name);
+        }
+
+        @Override
+        public void put(String name, String value) {
+            if (!SettingsProvider.putGlobal(name, value)) {
+                throw new IllegalStateException("Settings provider unavailable");
+            }
+        }
+    };
+
+    /**
+     * A store of its own, for endpoints created without one (host scenarios), holding the
+     * rows SettingsProvider starts a device with for these switches.
+     */
+    static GlobalSettings memorySettings() {
+        Map<String, String> values = new java.util.concurrent.ConcurrentHashMap<>();
+        values.put(android.provider.Settings.Global.DEVICE_PROVISIONED, "1");
+        values.put(android.provider.Settings.Global.MOBILE_DATA, "1");
+        values.put(android.provider.Settings.Global.DATA_ROAMING, "0");
+        return new GlobalSettings() {
+            @Override public String get(String name) { return values.get(name); }
+            @Override public void put(String name, String value) { values.put(name, value); }
+        };
+    }
+
+    /**
+     * Phone 0's data switches, as AOSP's DataSettingsManager keeps them (android-16.0.0_r4).
+     * The user switch and data roaming are Settings.Global.MOBILE_DATA and DATA_ROAMING,
+     * unsuffixed as GlobalSettingsHelper names them on a single-SIM device; they are read
+     * on every query (a value written to Settings.Global directly is the answer too) and
+     * persist as every Gesher setting does. Their defaults are AOSP's: mobile data on
+     * (ro.com.android.mobiledata unset), roaming off (ro.com.android.dataroaming unset, no
+     * carrier configuration). Before the device is provisioned,
+     * DEVICE_PROVISIONING_MOBILE_DATA_ENABLED decides. The policy, carrier and thermal
+     * switches are kept in memory from true, as DataSettingsManager keeps them.
+     *
+     * <p>These are Android's switches. Windows decides whether its own cellular connection
+     * is up and carries traffic (Gesher never connects or disconnects it), so turning them
+     * off does not stop Android traffic over the modem; getDataState and ConnectivityManager
+     * keep reporting the connection Windows has (docs/telephony.md).
+     */
+    static final class DataSettings {
+        /** Hears a change of the user or overall switch, with the reason of the change. */
+        interface Listener {
+            void onChanged(int reason);
+        }
+
+        private final GlobalSettings mSettings;
+        private final Object mLock = new Object();
+        // DataSettingsManager.mDataEnabledSettings: policy, carrier and thermal.
+        private final Map<Integer, Boolean> mReasons = new HashMap<>();
+        private final List<Listener> mListeners = new CopyOnWriteArrayList<>();
+
+        DataSettings(GlobalSettings settings) {
+            mSettings = Objects.requireNonNull(settings);
+            mReasons.put(TelephonyManager.DATA_ENABLED_REASON_POLICY, true);
+            mReasons.put(TelephonyManager.DATA_ENABLED_REASON_CARRIER, true);
+            mReasons.put(TelephonyManager.DATA_ENABLED_REASON_THERMAL, true);
+        }
+
+        void addListener(Listener listener) { mListeners.add(listener); }
+
+        /** Settings.Global.getInt(resolver, name, default): an unparsable value is the default. */
+        private int getInt(String name, int defaultValue) {
+            String value = mSettings.get(name);
+            if (value == null) return defaultValue;
+            try {
+                return Integer.parseInt(value);
+            } catch (NumberFormatException e) {
+                return defaultValue;
+            }
+        }
+
+        /** GlobalSettingsHelper.setInt: writes, and answers true, unless the value is already set. */
+        private boolean setInt(String name, int value) {
+            String current = mSettings.get(name);
+            try {
+                if (current != null && Integer.parseInt(current) == value) return false;
+            } catch (NumberFormatException e) {
+                // Settings.Global.getInt throws SettingNotFoundException: written anew.
+            }
+            mSettings.put(name, Integer.toString(value));
+            return true;
+        }
+
+        private boolean provisioned() {
+            return getInt(android.provider.Settings.Global.DEVICE_PROVISIONED, 0) != 0;
+        }
+
+        /** isProvisioningDataEnabled. */
+        private boolean provisioningDataEnabled() {
+            boolean property = "true".equalsIgnoreCase(
+                    android.os.SystemProperties.get("ro.com.android.prov_mobiledata", "false"));
+            return getInt(android.provider.Settings.Global.DEVICE_PROVISIONING_MOBILE_DATA_ENABLED,
+                    property ? 1 : 0) != 0;
+        }
+
+        /** isUserDataEnabled: Settings.Global.MOBILE_DATA, default ro.com.android.mobiledata (on). */
+        boolean userEnabled() {
+            if (!provisioned()) return provisioningDataEnabled();
+            boolean defaultValue = TelephonyProperties.mobile_data().orElse(true);
+            return getInt(android.provider.Settings.Global.MOBILE_DATA, defaultValue ? 1 : 0) == 1;
+        }
+
+        /**
+         * isDataEnabledForReason: the user switch, or the policy, carrier or thermal one.
+         * Another reason has no entry, and DataSettingsManager's unboxing of the missing entry
+         * throws NullPointerException, which Binder carries to the caller.
+         */
+        boolean enabledForReason(int reason) {
+            if (reason == TelephonyManager.DATA_ENABLED_REASON_USER) return userEnabled();
+            Boolean enabled;
+            synchronized (mLock) {
+                enabled = mReasons.get(reason);
+            }
+            if (enabled == null) throw new NullPointerException("No data enabled reason " + reason);
+            return enabled;
+        }
+
+        /** isDataEnabled(TYPE_ALL): every switch on (no mobile data policy overrides exist). */
+        boolean enabled() {
+            if (!provisioned()) return provisioningDataEnabled();
+            synchronized (mLock) {
+                if (!mReasons.get(TelephonyManager.DATA_ENABLED_REASON_POLICY)
+                        || !mReasons.get(TelephonyManager.DATA_ENABLED_REASON_CARRIER)
+                        || !mReasons.get(TelephonyManager.DATA_ENABLED_REASON_THERMAL)) {
+                    return false;
+                }
+            }
+            return userEnabled();
+        }
+
+        /** isDataRoamingEnabled: Settings.Global.DATA_ROAMING, default ro.com.android.dataroaming (off). */
+        boolean roamingEnabled() {
+            boolean defaultValue = "true".equalsIgnoreCase(
+                    android.os.SystemProperties.get("ro.com.android.dataroaming", "false"));
+            return getInt(android.provider.Settings.Global.DATA_ROAMING, defaultValue ? 1 : 0) == 1;
+        }
+
+        /**
+         * DataSettingsManager.setDataEnabled for the user, policy or thermal reason (the
+         * carrier reason is a carrier action, see Phone.setDataEnabledForReason); another
+         * reason is ignored, as it is logged and ignored there. Listeners hear a change.
+         */
+        void setEnabled(int reason, boolean enabled) {
+            boolean changed;
+            synchronized (mLock) {
+                if (reason == TelephonyManager.DATA_ENABLED_REASON_USER) {
+                    changed = setInt(android.provider.Settings.Global.MOBILE_DATA, enabled ? 1 : 0);
+                } else if (reason == TelephonyManager.DATA_ENABLED_REASON_POLICY
+                        || reason == TelephonyManager.DATA_ENABLED_REASON_THERMAL) {
+                    changed = mReasons.put(reason, enabled) != enabled;
+                } else {
+                    return;
+                }
+            }
+            if (!changed) return;
+            for (Listener listener : mListeners) {
+                try {
+                    listener.onChanged(reason);
+                } catch (RuntimeException e) {
+                    // One observer's failure does not stop others.
+                }
+            }
+        }
+
+        /** setDataRoamingEnabledInternal: Settings.Global.DATA_ROAMING (no registry event exists). */
+        void setRoamingEnabled(boolean enabled) {
+            synchronized (mLock) {
+                setInt(android.provider.Settings.Global.DATA_ROAMING, enabled ? 1 : 0);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------
     // phone: ITelephony.
     // ---------------------------------------------------------------------------------
 
     static final class Phone extends ITelephony.Default {
         private final Cellular mCellular;
         private final Rules mRules;
+        private final DataSettings mData;
 
-        Phone(Cellular cellular, Rules rules) {
+        Phone(Cellular cellular, Rules rules, DataSettings data) {
             mCellular = Objects.requireNonNull(cellular);
             mRules = Objects.requireNonNull(rules);
+            mData = Objects.requireNonNull(data);
         }
 
         private WindowsCellular.Modem modemForSub(int subId) {
@@ -1021,27 +1213,13 @@ public final class TelephonyService {
         // ---- Data switches (docs/telephony.md, "Mobile data switches"). ----
 
         /**
-         * Windows' Mobile Broadband API exposes no equivalent of Android's data switches
-         * (user, policy, carrier, thermal): a profile's auto-connect mode only decides
-         * whether Windows connects by itself. With an active subscription Gesher answers
-         * enabled, AOSP's default for every reason (Settings.Global.MOBILE_DATA defaults
-         * to on), which never contradicts getDataState: a connection is possible and is
-         * reported as it is. Without an active subscription there is no phone for it:
-         * false, as PhoneInterfaceManager answers for a subscription without a phone.
+         * PhoneInterfaceManager's phone for a subscription (getPhone / getPhoneId): phone 0
+         * for the active subscription or a valid ID without a slot, none for an invalid ID
+         * (DEFAULT_SUBSCRIPTION_ID without a SIM). Without a phone the switches read false
+         * and setters change nothing, as there.
          */
-        boolean dataEnabled(int subId) {
-            return modemForSub(subId) != null;
-        }
-
-        /**
-         * Data roaming: AOSP's default (ro.com.android.dataroaming) is off, and Windows does
-         * not expose its roaming preference; a packet connection observed while roaming
-         * proves it allowed, so only that reading answers true.
-         */
-        boolean dataRoamingEnabled(int subId) {
-            WindowsCellular.Modem modem = modemForSub(subId);
-            return modem != null && modem.roaming()
-                    && WindowsCellular.dataState(modem) == TelephonyManager.DATA_CONNECTED;
+        private boolean dataPhone(int subId) {
+            return mCellular.phone(mCellular.phoneId(subId));
         }
 
         private void requireAny(Caller c, String method, String... permissions) {
@@ -1051,13 +1229,22 @@ public final class TelephonyService {
             }
         }
 
+        /** PhoneInterfaceManager.enforceModifyPermission (Context.enforceCallingOrSelfPermission). */
+        private void enforceModify(Caller c) {
+            if (!mRules.granted(c, MODIFY_PHONE_STATE)) {
+                throw new SecurityException("Neither user " + c.uid() + " nor current process has "
+                        + MODIFY_PHONE_STATE + ".");
+            }
+        }
+
+        /** DataSettingsManager.isDataEnabled: every switch (user, policy, carrier, thermal). */
         @Override
         public boolean isDataEnabled(int subId) {
             if (!mCellular.present()) return false;
             Caller c = mRules.caller(null, null);
             requireAny(c, "isDataEnabled", ACCESS_NETWORK_STATE, READ_PHONE_STATE,
                     READ_BASIC_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE);
-            return dataEnabled(subId);
+            return dataPhone(subId) && mData.enabled();
         }
 
         @Override
@@ -1067,7 +1254,7 @@ public final class TelephonyService {
             Caller c = mRules.caller(null, null);
             requireAny(c, "isDataEnabledForReason", ACCESS_NETWORK_STATE, READ_BASIC_PHONE_STATE,
                     READ_PHONE_STATE, MODIFY_PHONE_STATE);
-            return dataEnabled(subId);
+            return dataPhone(subId) && mData.enabledForReason(reason);
         }
 
         @Override
@@ -1076,7 +1263,13 @@ public final class TelephonyService {
             Caller c = mRules.caller(null, null);
             requireAny(c, "isUserDataEnabled", READ_BASIC_PHONE_STATE, ACCESS_NETWORK_STATE,
                     MODIFY_PHONE_STATE);
-            return dataEnabled(subId);
+            return dataPhone(subId) && mData.userEnabled();
+        }
+
+        /** PhoneInterfaceManager.getDataEnabled: isUserDataEnabled. */
+        @Override
+        public boolean getDataEnabled(int subId) {
+            return isUserDataEnabled(subId);
         }
 
         @Override
@@ -1085,7 +1278,39 @@ public final class TelephonyService {
             Caller c = mRules.caller(null, null);
             requireAny(c, "isDataRoamingEnabled", ACCESS_NETWORK_STATE, READ_BASIC_PHONE_STATE,
                     READ_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE);
-            return dataRoamingEnabled(subId);
+            return dataPhone(subId) && mData.roamingEnabled();
+        }
+
+        /**
+         * PhoneInterfaceManager.setDataEnabledForReason: the user and carrier reasons accept
+         * carrier privileges (no carrier apps exist) or MODIFY_PHONE_STATE, the others
+         * MODIFY_PHONE_STATE. The user, policy and thermal switches go to DataSettingsManager
+         * (the user switch is Settings.Global.MOBILE_DATA); the carrier reason is a carrier
+         * action on metered APNs (CarrierActionAgent), which has no APNs to act on here and
+         * leaves isDataEnabledForReason(CARRIER) as it is, as on AOSP. Without a phone for
+         * the subscription nothing changes. Without the service, the manager's
+         * IllegalStateException.
+         */
+        @Override
+        public void setDataEnabledForReason(int subId, int reason, boolean enabled, String callingPackage) {
+            if (!mCellular.present()) throw new IllegalStateException(TELEPHONY_SERVICE_NULL);
+            enforceModify(mRules.caller(null, null));
+            if (!dataPhone(subId) || reason == TelephonyManager.DATA_ENABLED_REASON_CARRIER) return;
+            mData.setEnabled(reason, enabled);
+        }
+
+        /**
+         * PhoneInterfaceManager.setDataRoamingEnabled: MODIFY_PHONE_STATE or carrier
+         * privileges (SecurityException with the method name), then the phone's
+         * Settings.Global.DATA_ROAMING. Without the service the manager does nothing.
+         */
+        @Override
+        public void setDataRoamingEnabled(int subId, boolean isEnabled) {
+            if (!mCellular.present()) return;
+            Caller c = mRules.caller(null, null);
+            if (!mRules.granted(c, MODIFY_PHONE_STATE)) throw new SecurityException("setDataRoamingEnabled");
+            if (!dataPhone(subId)) return;
+            mData.setRoamingEnabled(isEnabled);
         }
 
         /** The logical modem of slot 0 is enabled (Windows has no per-modem disable). */
@@ -1561,10 +1786,44 @@ public final class TelephonyService {
     static final class Subscriptions extends ISub.Default {
         private final Cellular mCellular;
         private final Rules mRules;
+        // The subscription database's data roaming column (ISub.setDataRoaming), per
+        // subscription ID; like the IDs themselves it lasts for the boot session.
+        private final Map<Integer, Integer> mDataRoaming = new java.util.concurrent.ConcurrentHashMap<>();
+        // TelephonyRegistry.notifySubscriptionInfoChanged, when a record changes.
+        private volatile Runnable mRecordChanged = () -> { };
 
         Subscriptions(Cellular cellular, Rules rules) {
             mCellular = Objects.requireNonNull(cellular);
             mRules = Objects.requireNonNull(rules);
+        }
+
+        void onRecordChanged(Runnable listener) { mRecordChanged = Objects.requireNonNull(listener); }
+
+        /**
+         * SubscriptionManagerService.setDataRoaming: MODIFY_PHONE_STATE, a non-negative
+         * mode, a subscription that exists (SubscriptionDatabaseManager throws
+         * IllegalArgumentException otherwise); a changed column notifies subscription
+         * listeners. This is the record's SubscriptionInfo.getDataRoaming(), which is not the
+         * DATA_ROAMING switch (TelephonyManager.setDataRoamingEnabled), as on AOSP. Without
+         * the service, SubscriptionManager's answer: 0 records.
+         */
+        @Override
+        public int setDataRoaming(int roaming, int subId) {
+            if (!mCellular.present()) return 0;
+            Caller c = mRules.caller(null, null);
+            if (!mRules.granted(c, MODIFY_PHONE_STATE)) {
+                throw new SecurityException("setDataRoaming. Does not have any of the following permissions. ["
+                        + MODIFY_PHONE_STATE + "]");
+            }
+            if (roaming < 0) throw new IllegalArgumentException("Invalid roaming value " + roaming);
+            int active = mCellular.subId();
+            if (!SubscriptionManager.isValidSubscriptionId(subId) || subId != active) {
+                throw new IllegalArgumentException("Subscription doesn't exist. subId=" + subId
+                        + ", columnName=data_roaming");
+            }
+            Integer old = mDataRoaming.put(subId, roaming);
+            if ((old == null ? SubscriptionManager.DATA_ROAMING_DISABLE : old) != roaming) mRecordChanged.run();
+            return 1;
         }
 
         /** The active subscription's full record, or null. */
@@ -1592,7 +1851,8 @@ public final class TelephonyService {
                     .setEmbedded(false)
                     .setType(SubscriptionManager.SUBSCRIPTION_TYPE_LOCAL_SIM)
                     .setPortIndex(0)
-                    .setUiccApplicationsEnabled(true);
+                    .setUiccApplicationsEnabled(true)
+                    .setDataRoaming(mDataRoaming.getOrDefault(subId, SubscriptionManager.DATA_ROAMING_DISABLE));
             if (home != null) builder.setMcc(home.substring(0, 3)).setMnc(home.substring(3));
             return builder.build();
         }
@@ -1860,6 +2120,7 @@ public final class TelephonyService {
 
         private final Cellular mCellular;
         private final Rules mRules;
+        private final DataSettings mData;
         private final Object mLock = new Object();
         private final Map<IBinder, Record> mRecords = new HashMap<>();
         private final List<IOnSubscriptionsChangedListener> mSubscriptionListeners = new ArrayList<>();
@@ -1872,7 +2133,10 @@ public final class TelephonyService {
         private SignalStrength mSignal;
         private int mDataState = -1, mDataType = -1, mSubId;
         private TelephonyDisplayInfo mDisplayInfo;
-        private boolean mDataEnabled;
+        // The user switch and every switch (TelephonyRegistry's mUserMobileDataState and
+        // mIsDataEnabled), with the reason of the last change, for the active subscription.
+        private boolean mUserDataEnabled, mDataEnabled;
+        private int mDataEnabledReason = TelephonyManager.DATA_ENABLED_REASON_USER;
 
         private static final class Record {
             IPhoneStateListener callback;
@@ -1882,9 +2146,10 @@ public final class TelephonyService {
             boolean renounceFine, renounceCoarse;
         }
 
-        Registry(Cellular cellular, Rules rules) {
+        Registry(Cellular cellular, Rules rules, DataSettings data) {
             mCellular = Objects.requireNonNull(cellular);
             mRules = Objects.requireNonNull(rules);
+            mData = Objects.requireNonNull(data);
             mSubId = cellular.readingSubId();
             mModem = cellular.reading();
             mServiceState = cellular.present() ? WindowsCellular.serviceState(mModem) : null;
@@ -1892,8 +2157,68 @@ public final class TelephonyService {
             mDataState = WindowsCellular.dataState(mModem);
             mDataType = WindowsCellular.dataNetworkType(mModem);
             mDisplayInfo = WindowsCellular.displayInfo(mModem);
-            mDataEnabled = cellular.present() && SubscriptionManager.isValidSubscriptionId(mSubId);
+            mUserDataEnabled = userDataEnabled(mSubId);
+            mDataEnabled = dataEnabled(mSubId);
             cellular.addListener(this::onModemChanged);
+            data.addListener(this::onDataSettingsChanged);
+        }
+
+        /** The user switch as the phone of an active subscription reports it; false without one. */
+        private boolean userDataEnabled(int subId) {
+            return mCellular.present() && SubscriptionManager.isValidSubscriptionId(subId) && mData.userEnabled();
+        }
+
+        private boolean dataEnabled(int subId) {
+            return mCellular.present() && SubscriptionManager.isValidSubscriptionId(subId) && mData.enabled();
+        }
+
+        /**
+         * DataSettingsManager's notifications of a switch change: the user switch
+         * (notifyUserMobileDataStateChanged) when it changed, and every switch
+         * (notifyDataEnabled, with the change's reason) when the overall answer changed.
+         */
+        private void onDataSettingsChanged(int reason) {
+            synchronized (mLock) {
+                boolean user = userDataEnabled(mSubId);
+                boolean enabled = dataEnabled(mSubId);
+                boolean userChanged = user != mUserDataEnabled;
+                boolean enabledChanged = enabled != mDataEnabled;
+                mUserDataEnabled = user;
+                mDataEnabled = enabled;
+                if (enabledChanged) mDataEnabledReason = reason;
+                for (Record r : new ArrayList<>(mRecords.values())) {
+                    if (r.subId != SubscriptionManager.DEFAULT_SUBSCRIPTION_ID && r.subId != mSubId) continue;
+                    try {
+                        if (userChanged && r.events.contains(TelephonyCallback.EVENT_USER_MOBILE_DATA_STATE_CHANGED)) {
+                            r.callback.onUserMobileDataStateChanged(user);
+                        }
+                        if (enabledChanged && r.events.contains(TelephonyCallback.EVENT_DATA_ENABLED_CHANGED)) {
+                            r.callback.onDataEnabledChanged(enabled, reason);
+                        }
+                    } catch (RemoteException | RuntimeException e) {
+                        mRecords.remove(r.callback.asBinder());
+                        watchLocked();
+                    }
+                }
+            }
+        }
+
+        /**
+         * TelephonyRegistry.notifySubscriptionInfoChanged: a subscription record changed
+         * (ISub.setDataRoaming), so subscription listeners are called.
+         */
+        void subscriptionRecordChanged() {
+            List<IOnSubscriptionsChangedListener> listeners;
+            synchronized (mLock) {
+                listeners = new ArrayList<>(mSubscriptionListeners);
+            }
+            for (IOnSubscriptionsChangedListener listener : listeners) {
+                try {
+                    listener.onSubscriptionsChanged();
+                } catch (RemoteException | RuntimeException e) {
+                    removeSubscriptionListener(listener);
+                }
+            }
         }
 
         private SignalStrength signal() {
@@ -2140,10 +2465,10 @@ public final class TelephonyService {
                     r.callback.onActiveDataSubIdChanged(mSubId);
                 }
                 if (r.events.contains(TelephonyCallback.EVENT_USER_MOBILE_DATA_STATE_CHANGED)) {
-                    r.callback.onUserMobileDataStateChanged(mDataEnabled);
+                    r.callback.onUserMobileDataStateChanged(mUserDataEnabled);
                 }
                 if (r.events.contains(TelephonyCallback.EVENT_DATA_ENABLED_CHANGED)) {
-                    r.callback.onDataEnabledChanged(mDataEnabled, TelephonyManager.DATA_ENABLED_REASON_USER);
+                    r.callback.onDataEnabledChanged(mDataEnabled, mDataEnabledReason);
                 }
             } catch (RemoteException | RuntimeException e) {
                 mRecords.remove(r.callback.asBinder());
@@ -2183,10 +2508,16 @@ public final class TelephonyService {
                 boolean subscriptionsChanged = subId != mSubId;
                 TelephonyDisplayInfo displayInfo = WindowsCellular.displayInfo(modem);
                 boolean displayChanged = !displayInfo.equals(mDisplayInfo);
-                boolean dataEnabled = SubscriptionManager.isValidSubscriptionId(subId);
+                // A subscription change re-reads the switches (DataSettingsManager's
+                // EVENT_SUBSCRIPTIONS_CHANGED, reason USER).
+                boolean userDataEnabled = userDataEnabled(subId);
+                boolean userDataChanged = userDataEnabled != mUserDataEnabled;
+                boolean dataEnabled = dataEnabled(subId);
                 boolean dataEnabledChanged = dataEnabled != mDataEnabled;
                 mDisplayInfo = displayInfo;
+                mUserDataEnabled = userDataEnabled;
                 mDataEnabled = dataEnabled;
+                if (dataEnabledChanged) mDataEnabledReason = TelephonyManager.DATA_ENABLED_REASON_USER;
                 mServiceState = state;
                 mModem = modem;
                 mSignal = signal;
@@ -2219,9 +2550,9 @@ public final class TelephonyService {
                                 && r.events.contains(TelephonyCallback.EVENT_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGED)) {
                             r.callback.onActiveDataSubIdChanged(subId);
                         }
-                        if (dataEnabledChanged
+                        if (userDataChanged
                                 && r.events.contains(TelephonyCallback.EVENT_USER_MOBILE_DATA_STATE_CHANGED)) {
-                            r.callback.onUserMobileDataStateChanged(dataEnabled);
+                            r.callback.onUserMobileDataStateChanged(userDataEnabled);
                         }
                         if (dataEnabledChanged && r.events.contains(TelephonyCallback.EVENT_DATA_ENABLED_CHANGED)) {
                             r.callback.onDataEnabledChanged(dataEnabled, TelephonyManager.DATA_ENABLED_REASON_USER);
@@ -2257,12 +2588,18 @@ public final class TelephonyService {
         final Registry registry;
 
         Endpoints(Cellular cellular, Callers callers) {
+            this(cellular, callers, memorySettings());
+        }
+
+        Endpoints(Cellular cellular, Callers callers, GlobalSettings settings) {
             Rules rules = new Rules(callers);
+            DataSettings data = new DataSettings(settings);
             this.cellular = cellular;
-            phone = new Phone(cellular, rules);
+            phone = new Phone(cellular, rules, data);
             phoneSubInfo = new PhoneSubInfo(cellular, rules);
             subscriptions = new Subscriptions(cellular, rules);
-            registry = new Registry(cellular, rules);
+            registry = new Registry(cellular, rules, data);
+            subscriptions.onRecordChanged(registry::subscriptionRecordChanged);
         }
     }
 
@@ -2271,7 +2608,7 @@ public final class TelephonyService {
             BooleanSupplier locationEnabled) {
         Cellular cellular = new Cellular(WindowsCellular.WINDOWS, bootSnapshot(), SYSTEM_PROPERTIES);
         // Polling starts with the first query or listener (Cellular).
-        return new Endpoints(cellular, callers(pm, am, locationEnabled));
+        return new Endpoints(cellular, callers(pm, am, locationEnabled), SETTINGS_PROVIDER);
     }
 
     /**

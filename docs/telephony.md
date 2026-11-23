@@ -156,14 +156,7 @@ leaves a callback unanswered. The answers, with AOSP's permission checks:
   `getCardIdForDefaultEuicc()` is `UNSUPPORTED_CARD_ID` (no eUICC);
   `getUiccCardsInfo()` lists the one removable card (sanitized for
   `READ_BASIC_PHONE_STATE`).
-- Mobile data switches: Windows' Mobile Broadband API has no equivalent of Android's user,
-  policy, carrier or thermal data switches (a connection profile's auto-connect mode only
-  decides whether Windows connects by itself). `isDataEnabled()`,
-  `isDataEnabledForReason()` and `isUserDataEnabled()` answer AOSP's default, enabled,
-  while a subscription is active (false without one: no phone for it). This never
-  contradicts `getDataState()`: a connected modem is enabled, and a disconnected one may
-  be. `isDataRoamingEnabled()` answers AOSP's default, off, unless the modem is connected
-  while roaming, which proves roaming allowed.
+- Mobile data switches: see "Mobile data switches" below.
 - Cell information: Windows reports no cells. `getAllCellInfo()` is an empty list,
   `getCellLocation()` an empty identity (null `CellLocation`),
   `requestCellInfoUpdate()` answers `CellInfoCallback.ERROR_MODEM_ERROR` with
@@ -202,6 +195,66 @@ then never delivered.
 Mobile data is the WWAN IP interface, which `ConnectivityService` already reports as a
 `TRANSPORT_CELLULAR` network.
 
+### Mobile data switches
+
+Android's data switches are settings of Android's, kept as AOSP's `DataSettingsManager`
+keeps them (android-16.0.0_r4); Windows' Mobile Broadband API has no equivalent (a
+connection profile's auto-connect mode only decides whether Windows connects by itself).
+With a modem:
+
+- The user switch is `Settings.Global.MOBILE_DATA` and data roaming
+  `Settings.Global.DATA_ROAMING`, unsuffixed as `GlobalSettingsHelper` names them on a
+  single-SIM device. They start at AOSP's defaults (SettingsProvider writes
+  `mobile_data=1`, also into existing settings stores, and `data_roaming=0`), are read on
+  every query, so a value written to `Settings.Global` directly is the answer as well, and
+  persist in the settings store like every Gesher setting. Before the device is
+  provisioned `DEVICE_PROVISIONING_MOBILE_DATA_ENABLED` decides, as on AOSP.
+- `isUserDataEnabled()`, `getDataEnabled()` and `isDataEnabledForReason(USER)` answer the
+  user switch; `isDataEnabled()` answers all switches (user, policy, carrier, thermal);
+  `isDataRoamingEnabled()` answers `DATA_ROAMING`. The policy, carrier and thermal
+  switches are in memory and start on. An unknown reason throws `NullPointerException`,
+  as `DataSettingsManager`'s unboxing does. Without a phone for the subscription (an
+  invalid ID, no SIM for the default subscription) the answers are false.
+- `setDataEnabledForReason()` needs `MODIFY_PHONE_STATE` (carrier privileges would also
+  do for the user and carrier reasons; no carrier apps exist) and otherwise throws
+  `SecurityException`. The user reason writes `MOBILE_DATA`; policy and thermal change
+  their switch; the carrier reason is a carrier action on metered APNs, which leaves
+  `isDataEnabledForReason(CARRIER)` unchanged, as on AOSP. `setDataRoamingEnabled()` needs
+  `MODIFY_PHONE_STATE` (`SecurityException("setDataRoamingEnabled")`) and writes
+  `DATA_ROAMING`. A change of the user switch reaches
+  `UserMobileDataStateListener`/`onUserMobileDataStateChanged`, and a change of the
+  overall answer `DataEnabledListener`/`onDataEnabledChanged` with the reason of the
+  change; data roaming has no listener on AOSP either.
+- `ISub.setDataRoaming()` (`SubscriptionManager.setDataRoaming`, hidden) needs
+  `MODIFY_PHONE_STATE`, rejects a negative mode or an unknown subscription with
+  `IllegalArgumentException`, and sets the subscription record's
+  `SubscriptionInfo.getDataRoaming()` for the boot session (subscription records are not
+  persisted, see above); a change notifies subscription listeners. It is not the
+  `DATA_ROAMING` switch, as on AOSP.
+- Users change the switches with `gesher-app mobile-data [on|off]` and
+  `gesher-app mobile-data roaming on|off` (no argument shows both). The command calls the
+  `phone` service's setters as the shell, as Settings' mobile network screen does, and
+  refuses without a modem or without an active SIM subscription.
+
+What the switches do not do: Gesher never connects or disconnects Windows' cellular
+connection, and it cannot keep Android traffic off it. Android apps' sockets are Windows
+sockets routed by Windows (WebView2's traffic runs in Edge processes outside Gesher
+altogether), and steering them away from the WWAN interface would need a Windows Filtering
+Platform filter (administrator rights) or a change to Windows' own connection. So with mobile
+data off, or roaming off while roaming, Windows still carries traffic over cellular when its
+own cellular settings let it, and Gesher keeps reporting that connection as it is:
+`getDataState()`, data connection listeners, `ServiceState`'s data registration and roaming,
+and ConnectivityManager's `TRANSPORT_CELLULAR` network describe Windows' connection, not the
+switch. An app that consults the switches before using mobile data (`isDataEnabled()`,
+`Settings.Global.MOBILE_DATA`, the listeners) sees the user's choice; an app that just opens
+connections uses whatever network Windows routes it to. Turning off data on Windows itself is
+done in Windows' cellular settings (`ms-settings:network-cellular`).
+
+Without a modem nothing changes: the setters give the managers' null-service answers
+(`setDataEnabledForReason` throws `IllegalStateException("telephony service is null.")`,
+`setDataRoamingEnabled` does nothing, `SubscriptionManager.setDataRoaming` updates no
+record) without permission checks, and the getters answer false.
+
 ## Unsupported (Android's own answers)
 
 - Voice calls: no `FEATURE_TELEPHONY_CALLING`, `isVoiceCapable()` false, call state idle,
@@ -225,7 +278,9 @@ Mobile data is the WWAN IP interface, which `ConnectivityService` already report
   every BSTR, SAFEARRAY and COM reference is released. Three negative controls (leaked
   capability strings, uninitializing a foreign apartment, swapped radio states) must fail.
 - `tools/test_telephony.py` runs the production Java services on a host JVM with synthetic
-  modems and callers: features, translations, permission rules (including
+  modems and callers: features, translations, the data switches (defaults, setters and their
+  permissions, `Settings.Global` agreement, persistence in a real settings store file,
+  listeners, and the data state still following Windows' connection), permission rules (including
   `LocationAccessPolicy` for listeners and `ServiceState`), redaction, listeners, SIM
   removal/insertion, a modem without a SIM (default slot and invalid phone IDs), radio
   switches, read failures, hung reads, demand-driven polling under a controlled clock and

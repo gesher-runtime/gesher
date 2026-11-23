@@ -39,8 +39,15 @@ machines have a WWAN modem that Windows exposes through the Mobile Broadband API
   carrier configuration and cell info remain unsupported. Every ITelephony/ISub method a
   public manager API reaches answers consistently with the modem or with AOSP's unsupported
   answer (no Default answer contradicts the modem or leaves a callback unanswered); the
-  data switches, which Windows does not expose, take AOSP's defaults consistent with the
-  observed connection (docs/telephony.md).
+  data switches, which Windows does not expose, are Android's settings: they start at
+  AOSP's defaults (mobile data on, roaming off), are `Settings.Global.MOBILE_DATA` and
+  `DATA_ROAMING`, persist, and change through AOSP's setters with their permission checks
+  and listener notifications; users change them with `gesher-app mobile-data`.
+- The data switches cannot be enforced: Gesher does not change Windows' cellular connection
+  and cannot keep Android traffic off it (that would need administrator-level filtering), so
+  with mobile data or roaming off Windows may still carry Android traffic over cellular per
+  its own settings, and the data state, `ServiceState` and ConnectivityManager keep reporting
+  Windows' connection as it is (docs/telephony.md, "Mobile data switches").
 - Reading the modem costs an out-of-process WwanSvc session, so it is demand-driven:
   polled every five seconds only while telephony.registry has listeners or for 30 seconds
   after a query, with a bounded read before answering from an old reading, and every read
