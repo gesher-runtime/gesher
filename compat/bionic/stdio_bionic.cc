@@ -104,6 +104,56 @@ void AppendF(std::string* out, const char* spec, ...) {
   out->append(big.data(), static_cast<size_t>(n));
 }
 
+// snprintf still counts the complete result, but only its retained prefix can
+// reach the caller. Keep that prefix private until parsing succeeds, just as
+// the ordinary string result does. This is not a streaming FILE formatter.
+struct BoundedFormatText {
+  std::string bytes;
+  size_t limit = 0;
+  size_t omitted = 0;
+
+  size_t Remaining() const { return limit - bytes.size(); }
+  size_t Count() const { return bytes.size() + omitted; }
+  void Append(const char* text, size_t count) {
+    size_t kept = count < Remaining() ? count : Remaining();
+    bytes.append(text, kept);
+    omitted += count - kept;
+  }
+  void push_back(char value) { Append(&value, 1); }
+};
+
+void AppendF(BoundedFormatText* out, const char* spec, ...) {
+  char small[128];
+  va_list ap;
+  va_start(ap, spec);
+  int n = std::vsnprintf(small, sizeof(small), spec, ap);
+  va_end(ap);
+  if (n < 0) return;
+  size_t count = static_cast<size_t>(n);
+  size_t kept = count < out->Remaining() ? count : out->Remaining();
+  if (kept < sizeof(small)) {
+    // The probe already contains every byte that will be retained. A large
+    // discarded suffix needs neither another formatting pass nor storage.
+    out->Append(small, count);
+    return;
+  }
+  size_t offset = out->bytes.size();
+  out->bytes.append(kept + 1, '\0');
+  va_start(ap, spec);
+  std::vsnprintf(out->bytes.data() + offset, kept + 1, spec, ap);
+  va_end(ap);
+  out->bytes.resize(offset + kept);
+  out->omitted += count - kept;
+}
+
+template <class Text, class Iterator>
+void AppendRange(Text* out, Iterator first, Iterator last) {
+  out->insert(out->end(), first, last);
+}
+void AppendRange(BoundedFormatText* out, const char* first, const char* last) {
+  out->Append(first, static_cast<size_t>(last - first));
+}
+
 // A UTF-32 (bionic wchar_t) string as UTF-8.
 std::string Utf32ToUtf8(const uint32_t* s, int max_units) {
   std::string out;
@@ -215,11 +265,12 @@ bool SkipArgumentNumber(const Char*& cursor) {
   return true;
 }
 
-template <class Char>
-FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr,
-                        WideSink* sink = nullptr) {
+template <class Char, class Text = FormatText<Char>>
+Text Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr,
+            WideSink* sink = nullptr, size_t prefix_limit = 0) {
   constexpr bool wide = !std::is_same_v<Char, char>;
-  FormatText<Char> out;
+  Text out;
+  if constexpr (std::is_same_v<Text, BoundedFormatText>) out.limit = prefix_limit;
   bool local_valid;
   if (!valid) valid = &local_valid;
   *valid = true;
@@ -245,7 +296,7 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr,
         const char* next = std::strchr(p, '%');
         p = next ? next : p + std::strlen(p);
       }
-      out.insert(out.end(), begin, p);
+      AppendRange(&out, begin, p);
       continue;
     }
     const Char* start = p++;
@@ -340,17 +391,17 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr,
       default: break;
     }
     if (*p == 0) {
-      if constexpr (!wide) out.insert(out.end(), start, p);
+      if constexpr (!wide) AppendRange(&out, start, p);
       break;
     }
     Char conversion = *p++;
     if (positional && conversion != 'n') {
-      out.insert(out.end(), start, p);
+      AppendRange(&out, start, p);
       continue;
     }
     if (conversion < 0 || conversion > 0x7f) {
       if constexpr (wide) out.push_back(conversion);
-      else out.insert(out.end(), start, p);
+      else AppendRange(&out, start, p);
       continue;
     }
     char conv = static_cast<char>(conversion);
@@ -478,7 +529,7 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr,
         break;
       default:
         if constexpr (wide) out.push_back(conversion);
-        else out.insert(out.end(), start, p);
+        else AppendRange(&out, start, p);
         break;
     }
   }
@@ -1053,14 +1104,14 @@ extern "C" {
 
 int BIONIC_SYSV gesher_bionic_vsnprintf(char* buf, size_t n, const char* fmt, SysvVaList* ap) {
   bool valid;
-  std::string s = Format(fmt, ap, &valid);
+  auto s = Format<char, BoundedFormatText>(fmt, ap, &valid, nullptr,
+                                          n == 0 ? 0 : n - 1);
   if (!valid) return -1;
   if (n != 0) {
-    size_t c = s.size() < n - 1 ? s.size() : n - 1;
-    std::memcpy(buf, s.data(), c);
-    buf[c] = 0;
+    std::memcpy(buf, s.bytes.data(), s.bytes.size());
+    buf[s.bytes.size()] = 0;
   }
-  return static_cast<int>(s.size());
+  return static_cast<int>(s.Count());
 }
 int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* ap) {
   bool valid;

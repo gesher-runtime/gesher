@@ -34,7 +34,7 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def rejected(label, changes, expected, repinned_manifest=None):
+def rejected(label, changes, expected, repinned_manifest=None, normalized_boundary=False):
     """Require the intended guard, rather than an unrelated check, to fail."""
     global checks
     overrides = {ROOT / name: data for name, data in changes.items()}
@@ -53,7 +53,15 @@ def rejected(label, changes, expected, repinned_manifest=None):
             patch.object(policy, "SHARED_STDIO_TRANSITION_SHA256", pin), \
             contextlib.redirect_stdout(io.StringIO()):
         try:
-            policy.check()
+            if normalized_boundary:
+                # Preserve the original PR73 endpoint guard below the newer,
+                # independently pinned snprintf transition. The full composed
+                # path is also tested; this call isolates that existing guard.
+                qualification = json.loads(read_bytes(ROOT / (FOLDER + "ofd-stream-source.json")))
+                policy.preceding_shared_stdio_sources(qualification,
+                    {name: mutated(ROOT / name) for name in manifest["paths"]})
+            else:
+                policy.check()
         except AssertionError as error:
             assert expected in str(error), (label, expected, error)
         except subprocess.CalledProcessError as error:
@@ -80,8 +88,17 @@ for name in ("compat/bionic/stdio_bionic.cc", "compat/posix/include/gesher/stdio
     mutated = (ROOT / name).read_bytes() + b'\n#include "unqualified_stream_owner.h"\n'
     changed = copy.deepcopy(manifest)
     changed["after_sha256"][name] = sha(mutated)
+    if name == policy.SNPRINTF_BOUNDS_SOURCE:
+        rejected("an undeclared include through the full composed formatter transition",
+                 {name: mutated}, name, changed)
+        # A caller cannot refresh PR73's endpoint to bypass the earlier
+        # formatter transition. Also retain PR73's own reverse-endpoint test
+        # using its exact normalized input, without changing the tracked manifest.
+        mutated = policy.preceding_snprintf_bounds_source() + b'\n#include "unqualified_stream_owner.h"\n'
+        changed["after_sha256"][name] = sha(mutated)
     rejected("an undeclared include even with a repinned endpoint: " + name,
-             {name: mutated}, "shared-stdio reverse endpoint", changed)
+             {name: mutated}, "shared-stdio reverse endpoint", changed,
+             normalized_boundary=name == policy.SNPRINTF_BOUNDS_SOURCE)
 
 extra_path = "compat/posix/src/ofd.cc"
 changed = copy.deepcopy(manifest)
