@@ -266,6 +266,37 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
 OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
+# Reverse only the pinned scanner adapter transition before all original OFD
+# checks. This source proof grants no supplier, controller or runtime approval.
+STDIO_SCAN_QUALIFICATION_SHA256='3c08f7f0ea996532377f7d4930ce2d0e84320f3339bd26eed8f7a4b89aad36d0'
+def preceding_stdio_scan_source():
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'stdio-scan-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==STDIO_SCAN_QUALIFICATION_SHA256,'stdio scan source qualification changed'
+ qualification=json.loads(raw)
+ path='compat/posix/src/stdio_output.cc'
+ assert qualification['baseline']=='d38b5549dc3963f8d491e9205f9b2743bb6d3745'
+ assert qualification['native_runtime_approval'] is False
+ assert qualification['paths']==[path]
+ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==[path]
+ patch=(folder/'stdio-scan-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'stdio scan transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+ current=(ROOT/path).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-stdio-scan-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
+  assert previous==expected and hashlib.sha256(previous).hexdigest()==qualification['previous_sha256'][path],path
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'stdio scan forward reconstruction changed'
+ return previous
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -350,6 +381,7 @@ def preceding_ofd_sources():
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  for path,digest in qualification['source_sha256'].items():
   actual=(ROOT/path).read_bytes()
+  if path=='compat/posix/src/stdio_output.cc':actual=preceding_stdio_scan_source()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
@@ -557,6 +589,12 @@ def transition_negative_controls():
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
   (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
+  ('compat/posix/src/stdio_output.cc',b'thread_local State* scanning_stream = nullptr;',b'State* scanning_stream = nullptr;'),
+  ('compat/posix/src/stdio_output.cc',b'scanning_stream->stream == stream && scanning_stream->live',b'true'),
+  ('compat/posix/src/stdio_output.cc',b'scanning_stream = static_cast<ScanScope*>(raw)->previous_;',b'scanning_stream = nullptr;'),
+  ('compat/posix/src/stdio_output.cc',b'  int fd = -1;',b'  int fd = 0;'),
+  ('tools/net-tcp-priority/qualified/stdio-scan-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
+  ('tools/net-tcp-priority/qualified/stdio-scan-source.patch',b'@@',b'@x'),
  ]
  for name,before,after in cases:
   target=ROOT/name
@@ -573,7 +611,33 @@ def transition_negative_controls():
     try:check()
     except (AssertionError,subprocess.CalledProcessError):rejected=True
    assert rejected,'unqualified mutation accepted: '+name+' repin='+str(repin)
- print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4')
+ # A refreshed new-file hash cannot authorize different scanner behavior:
+ # the exact reverse patch and immutable main bytes must also agree.
+ target=ROOT/'compat/posix/src/stdio_output.cc'
+ manifest=ROOT/'tools/net-tcp-priority/qualified/stdio-scan-source.json'
+ for name,before,after in cases[-6:-2]:
+  assert ROOT/name==target and original(target).count(before)==1
+  changed_source=original(target).replace(before,after,1)
+  qualification=json.loads(original(manifest))
+  qualification['source_sha256'][name]=hashlib.sha256(changed_source).hexdigest()
+  changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
+  def repinned(path):
+   return changed_source if path==target else changed_manifest if path==manifest else original(path)
+  rejected=False
+  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),STDIO_SCAN_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'repinned scanner mutation accepted: '+before.decode()
+ qualification=json.loads(original(manifest))
+ qualification['native_runtime_approval']=True
+ changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
+ def elevated(path):return changed_manifest if path==manifest else original(path)
+ rejected=False
+ with patch.object(Path,'read_bytes',elevated), patch.dict(globals(),STDIO_SCAN_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
+  try:check()
+  except (AssertionError,subprocess.CalledProcessError):rejected=True
+ assert rejected,'repinned scanner runtime approval accepted'
+ print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4 repinned_scan_controls=5')
 if __name__=='__main__':
  import sys
  check()
