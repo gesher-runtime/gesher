@@ -70,7 +70,28 @@ public final class AccountSecurityTest {
 
     private static void policy() throws Exception {
         File temporary = Files.createTempDirectory("gesher-account-policy-").toFile();
-        android.system.Os.setenv("ANDROID_DATA", temporary.getAbsolutePath(), true);
+        String previous = System.getenv("ANDROID_DATA");
+        try (AutoCloseable cleanup = () -> {
+            if (previous == null) android.system.Os.unsetenv("ANDROID_DATA");
+            else android.system.Os.setenv("ANDROID_DATA", previous, true);
+            deletePolicyDirectory(temporary);
+        }) {
+            android.system.Os.setenv("ANDROID_DATA", temporary.getAbsolutePath(), true);
+            policy(temporary);
+        }
+    }
+
+    private static void deletePolicyDirectory(File temporary) throws Exception {
+        // Enumerating the real hosted provider admits its durable UID. Admission
+        // closes its file lock before returning; these are this fixture's files.
+        java.nio.file.Path system = temporary.toPath().resolve("system");
+        Files.deleteIfExists(system.resolve("package-uids"));
+        Files.deleteIfExists(system.resolve("package-uids.lock"));
+        Files.deleteIfExists(system);
+        Files.delete(temporary.toPath()); // Unexpected artifacts still fail cleanup.
+    }
+
+    private static void policy(File temporary) throws Exception {
         Class<?> service = Class.forName("com.gesher.server.AccountManagerService");
         Class<?> pm = Class.forName("com.gesher.server.PackageManagerService");
         Class<?> am = Class.forName("com.gesher.server.ActivityManagerService");
@@ -235,7 +256,6 @@ public final class AccountSecurityTest {
                 && ((Map<?, ?>) field(syncManager, "mActive")).isEmpty(),
                 "An unauthorized adapter received an account sync");
         System.out.println("AccountSecurityTest: unauthorized sync adapter cannot queue or receive an account");
-        Files.delete(temporary.toPath());
     }
 
     private static void remoteDenied(String[] args) throws Exception {
@@ -422,7 +442,7 @@ public final class AccountSecurityTest {
             if (previous == null) android.system.Os.unsetenv("ANDROID_DATA");
             else android.system.Os.setenv("ANDROID_DATA", previous, true);
             Files.delete(sealed.toPath()); Files.delete(legacy.toPath());
-            Files.delete(system.toPath()); Files.delete(temporary.toPath());
+            deletePolicyDirectory(temporary);
         }
         System.out.println("AccountSecurityTest: stand-in accounts ignore and preserve device records; persistent service remains fail-closed");
     }
