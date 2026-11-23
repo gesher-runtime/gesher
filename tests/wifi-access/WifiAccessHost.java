@@ -14,6 +14,7 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkRequest;
+import android.net.LinkProperties;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
@@ -321,6 +322,36 @@ public final class WifiAccessHost {
         @Override public List<android.os.Bundle> getChannelData(String name, String tag) throws RemoteException {
             record(name, tag); return List.of();
         }
+        android.net.wifi.WifiNetworkSpecifier requested;
+        IBinder request;
+        int releases;
+        List<android.net.wifi.WifiNetworkSuggestion> suggested = new ArrayList<>();
+        @Override public void requestLocalNetwork(String name, String tag, android.net.wifi.WifiNetworkSpecifier spec,
+                IBinder callback) throws RemoteException {
+            record(name, tag); requested = spec; request = callback;
+        }
+        @Override public void releaseLocalNetwork(String name, IBinder callback) throws RemoteException {
+            record(name, null); if (callback == request) releases++;
+        }
+        @Override public int addNetworkSuggestions(String name, String tag,
+                List<android.net.wifi.WifiNetworkSuggestion> list) throws RemoteException {
+            record(name, tag); suggested = list; return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
+        }
+        @Override public int removeNetworkSuggestions(String name, String tag,
+                List<android.net.wifi.WifiNetworkSuggestion> list, int action) throws RemoteException {
+            record(name, tag); return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
+        }
+        @Override public List<android.net.wifi.WifiNetworkSuggestion> getNetworkSuggestions(String name)
+                throws RemoteException {
+            record(name, null); return suggested;
+        }
+        @Override public void disallowCurrentSuggestedNetwork(String name, android.net.wifi.BlockingOption option)
+                throws RemoteException {
+            record(name, null);
+        }
+        void event(int value, android.os.Bundle extras) {
+            ((IWindowsWifi.Callback) request).onEvent(IWindowsWifi.CALLBACK_NETWORK_REQUEST, value, extras);
+        }
         void fire(int kind) {
             for (Map.Entry<IBinder, Integer> entry : new ArrayList<>(callbacks.entrySet())) {
                 if (entry.getValue() == kind) ((IWindowsWifi.Callback) entry.getKey()).onEvent(kind, 0, null);
@@ -471,9 +502,10 @@ public final class WifiAccessHost {
             rejects(SecurityException.class, () -> manager.getAllowedChannels(1, 1),
                     "before API 34 the channel query needs LOCATION_HARDWARE");
             caller.info.targetSdkVersion = 36;
-            check(manager.addNetworkSuggestions(List.of()) == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL
-                    && manager.removeNetworkSuggestions(List.of(), 7) == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID
-                    && manager.getNetworkSuggestions().isEmpty(), "no suggestion store reports no success");
+            android.net.wifi.WifiNetworkSuggestion suggestion = new android.net.wifi.WifiNetworkSuggestion.Builder()
+                    .setSsid("Fixture").setWpa2Passphrase("fixture-passphrase").build();
+            check(manager.addNetworkSuggestions(List.of(suggestion)) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS
+                    && manager.getNetworkSuggestions().equals(List.of(suggestion)), "suggestions go to the service store");
             check(new WifiManager.InterfaceCreationImpact(1, Set.of("a")).equals(new WifiManager.InterfaceCreationImpact(1, Set.of("a")))
                     && !new WifiManager.InterfaceCreationImpact(1, Set.of("a")).equals(new WifiManager.InterfaceCreationImpact(2, Set.of("a"))),
                     "InterfaceCreationImpact value equality");
@@ -604,6 +636,86 @@ public final class WifiAccessHost {
         @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
             latest.put(network.netId, (WifiInfo) capabilities.getTransportInfo());
             changes++;
+        }
+    }
+
+    private static final class LocalCallback extends ConnectivityManager.NetworkCallback {
+        final List<String> events = new ArrayList<>();
+        NetworkCapabilities capabilities;
+        LinkProperties link;
+        @Override public void onAvailable(Network network, NetworkCapabilities nc, LinkProperties lp, boolean blocked) {
+            events.add("available " + network.netId); capabilities = nc; link = lp;
+        }
+        @Override public void onUnavailable() { events.add("unavailable"); }
+        @Override public void onLost(Network network) { events.add("lost " + network.netId); }
+    }
+
+    /** ConnectivityManager's WifiNetworkSpecifier path over the service's request events. */
+    private static void localWifi() throws Exception {
+        Service service = new Service();
+        field(ConnectivityManager.class, "sService").set(null, service);
+        WifiServiceBoundary wifi = new WifiServiceBoundary();
+        Map<String, IBinder> cache = serviceCache();
+        IBinder previousWifi = cache.put(IWindowsWifi.NAME, wifi);
+        try {
+            Caller caller = allowed();
+            ConnectivityManager manager = new ConnectivityManager(caller);
+            Queue queue = Queue.create();
+            android.net.wifi.WifiNetworkSpecifier specifier = new android.net.wifi.WifiNetworkSpecifier.Builder()
+                    .setSsid("Device").setWpa2Passphrase("fixture-passphrase").build();
+            NetworkRequest withInternet = new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).setNetworkSpecifier(specifier).build();
+            LocalCallback rejected = new LocalCallback();
+            manager.requestNetwork(withInternet, rejected, queue);
+            queue.drain();
+            check(rejected.events.equals(List.of("unavailable")) && wifi.request == null,
+                    "a specifier request with INTERNET is unfulfillable and never reaches the radio");
+            NetworkRequest request = new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).setNetworkSpecifier(specifier).build();
+            LocalCallback callback = new LocalCallback();
+            manager.requestNetwork(request, callback, queue);
+            check(specifier.equals(wifi.requested) && "wifi-host".equals(wifi.tag), "request forwarded with specifier");
+            rejects(IllegalArgumentException.class, () -> manager.requestNetwork(request, callback, queue),
+                    "the same callback cannot be registered twice");
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putInt(IWindowsWifi.EXTRA_INTERFACE, 12);
+            extras.putByteArray(IWindowsWifi.EXTRA_SSID, "Device".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            extras.putString(IWindowsWifi.EXTRA_BSSID, "10:20:30:40:50:60");
+            extras.putInt(IWindowsWifi.EXTRA_SECURITY, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK);
+            extras.putInt(IWindowsWifi.EXTRA_FREQUENCY, 2437);
+            wifi.event(IWindowsWifi.NETWORK_AVAILABLE, extras);
+            check(callback.events.isEmpty(), "events are delivered on the request's handler");
+            queue.drain();
+            check(callback.events.equals(List.of("available 112")), "the joined interface's Network is available");
+            check(callback.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    && !callback.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                    "the specifier network is Wi-Fi and local-only");
+            // ConnectivityService gives apps the agent's specifier redacted, and
+            // WifiNetworkAgentSpecifier.redact() is null: the joined SSID/BSSID are not
+            // disclosed outside the location-checked transport info.
+            check(callback.capabilities.getNetworkSpecifier() == null,
+                    "the network agent specifier is redacted for the app");
+            check(callback.link != null && callback.link.getInterfaceName() != null, "link properties of that interface");
+            manager.unregisterNetworkCallback(callback);
+            check(wifi.releases == 1, "unregistering releases the service connection");
+            wifi.event(IWindowsWifi.NETWORK_LOST, null);
+            queue.drain();
+            check(callback.events.size() == 1, "a released request receives nothing more");
+            LocalCallback lost = new LocalCallback();
+            manager.requestNetwork(request, lost, queue);
+            wifi.event(IWindowsWifi.NETWORK_AVAILABLE, extras);
+            wifi.event(IWindowsWifi.NETWORK_LOST, null);
+            queue.drain();
+            check(lost.events.equals(List.of("available 112", "lost 112")), "a dropped connection is onLost");
+            LocalCallback refused = new LocalCallback();
+            manager.requestNetwork(request, refused, queue);
+            wifi.event(IWindowsWifi.NETWORK_UNAVAILABLE, null);
+            queue.drain();
+            check(refused.events.equals(List.of("unavailable")), "user rejection or failure is onUnavailable");
+        } finally {
+            field(ConnectivityManager.class, "sService").set(null, null);
+            if (previousWifi == null) cache.remove(IWindowsWifi.NAME); else cache.put(IWindowsWifi.NAME, previousWifi);
         }
     }
 
@@ -738,6 +850,7 @@ public final class WifiAccessHost {
         if (selected.equals("wifi-no-access")) wifiNoAccess();
         if (selected.equals("all") || selected.equals("connectivity")) connectivity();
         if (selected.equals("all") || selected.equals("api")) wifiApi();
+        if (selected.equals("all") || selected.equals("local")) localWifi();
         System.out.println("WifiAccessHost passed: case=" + selected + " checks=" + checks
                 + "; production caller permissions/facade/callbacks; controlled Context, local Binder replies and Handler boundaries");
     }

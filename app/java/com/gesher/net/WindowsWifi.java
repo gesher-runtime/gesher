@@ -62,6 +62,13 @@ public final class WindowsWifi {
     private static native String nativeHardware();
     // Blocks while WLAN notifications are watched; sink receives event-class bits.
     private static native int nativeWatch(IntPredicate sink, int pollMs);
+    // User-approved connections through per-user Windows profiles (WlanSetProfile/WlanConnect).
+    private static native int nativeConnect(int ifIndex, String xml, String profile, byte[] bssid,
+            BooleanSupplier active, int timeoutMs);
+    private static native boolean nativeDisconnect(int ifIndex, String removeProfile, String restoreProfile);
+    private static native boolean nativeStoreProfile(int ifIndex, String xml, String profile);
+    private static native String nativeCurrentProfile(int ifIndex);
+    private static native String nativeProfiles(int ifIndex, String prefix);
 
     private static final class Operation {
         final boolean scan;
@@ -343,6 +350,103 @@ public final class WindowsWifi {
     /** Test boundary: the watcher loop stops at its next delivery. */
     static void stopWatching() {
         synchronized (LOCK) { sWatching = false; sWatcher = null; }
+    }
+
+    // ---- Connections ---------------------------------------------------------------
+
+    /** {@link #connect} outcome for a completed association; failures use Android's codes. */
+    public static final int CONNECTED = -1;
+    /** {@link #connect} outcome when the requester went away before Windows completed. */
+    public static final int CANCELLED = 100;
+
+    /**
+     * Stores a per-user, manual-mode profile and connects the interface with it, waiting
+     * (bounded) for Windows' completion notification of this attempt. Returns
+     * {@link #CONNECTED}, {@link #CANCELLED} or a STATUS_LOCAL_ONLY_CONNECTION_FAILURE_* code.
+     */
+    public static int connect(int ifIndex, String xml, String profile, byte[] bssid,
+            BooleanSupplier active, int timeoutMs) {
+        try {
+            load();
+            return nativeConnect(ifIndex, xml, profile, bssid, active, timeoutMs);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_UNKNOWN;
+        } finally {
+            synchronized (LOCK) { sReadNanos = 0; }
+        }
+    }
+
+    /** Disconnects, deletes {@code removeProfile} and reconnects {@code restoreProfile}. */
+    public static boolean disconnect(int ifIndex, String removeProfile, String restoreProfile) {
+        try {
+            load();
+            return nativeDisconnect(ifIndex, removeProfile, restoreProfile);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return false;
+        } finally {
+            synchronized (LOCK) { sReadNanos = 0; }
+        }
+    }
+
+    /** Stores ({@code xml} non-null) or deletes a per-user profile without connecting. */
+    public static boolean storeProfile(int ifIndex, String xml, String profile) {
+        try {
+            load();
+            return nativeStoreProfile(ifIndex, xml, profile);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return false;
+        }
+    }
+
+    /** The Windows profile name of the interface's current connection, or null. */
+    public static String currentProfile(int ifIndex) {
+        try {
+            load();
+            return nativeCurrentProfile(ifIndex);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return null;
+        }
+    }
+
+    /** This user's per-user profiles on the interface whose names start with prefix. */
+    public static List<String> profiles(int ifIndex, String prefix) {
+        List<String> names = new ArrayList<>();
+        try {
+            load();
+            String raw = nativeProfiles(ifIndex, prefix);
+            if (raw != null) for (String name : raw.split("\n")) if (name.startsWith(prefix)) names.add(name);
+        } catch (RuntimeException | LinkageError unavailable) {
+            // No listing: nothing is known to be Gesher's.
+        }
+        return names;
+    }
+
+    /** The IP interface index of an adapter with an enabled radio, or 0. */
+    public static int primaryInterface() {
+        Data data = current();
+        if (data == null) return 0;
+        for (State state : data.states.values()) if (state.radio == 1) return state.index;
+        return 0;
+    }
+
+    /**
+     * Whether Windows has a provisioned IPv4 address on this interface. A 169.254/16
+     * automatic (APIPA) address is not provisioning: Android's IpClient acquires IPv4 by
+     * DHCP and never counts a link-local address.
+     */
+    public static boolean hasIpv4(int ifIndex) {
+        try {
+            WindowsNetworks.Net network = WindowsNetworks.parse(WindowsNetworks.snapshot()).byNetId(100 + ifIndex);
+            if (network == null) return false;
+            for (InetAddress address : network.addresses) if (provisioned(address)) return true;
+        } catch (RuntimeException | LinkageError unavailable) {
+            // Unknown addressing is not provisioning.
+        }
+        return false;
+    }
+
+    static boolean provisioned(InetAddress address) {
+        return address instanceof Inet4Address && !address.isLinkLocalAddress() && !address.isAnyLocalAddress();
     }
 
     // ---- Adapter census --------------------------------------------------------

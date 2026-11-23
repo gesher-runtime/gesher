@@ -6,7 +6,16 @@
 #define WINAPI
 using DWORD=uint32_t; using ULONG=uint32_t; using LONG=int32_t;
 using ULONGLONG=uint64_t; using BOOL=int; using HANDLE=void*; using HMODULE=void*;
-using PVOID=void*; using BYTE=unsigned char;
+using PVOID=void*; using BYTE=unsigned char; using WCHAR=wchar_t; using LPCWSTR=const wchar_t*;
+constexpr DWORD WLAN_MAX_NAME_LENGTH=256, WLAN_PROFILE_USER=2;
+constexpr DWORD WLAN_REASON_CODE_SUCCESS=0, WLAN_REASON_CODE_AC_CONNECT_BASE=0x28000, WLAN_REASON_CODE_MSM_CONNECT_BASE=0x38000;
+constexpr DWORD WLAN_REASON_CODE_MSMSEC_BASE=0x40000, WLAN_REASON_CODE_MSMSEC_END=0x4ffff;
+constexpr DWORD WLAN_REASON_CODE_NOT_VISIBLE=WLAN_REASON_CODE_AC_CONNECT_BASE+2, WLAN_REASON_CODE_NETWORK_NOT_AVAILABLE=WLAN_REASON_CODE_AC_CONNECT_BASE+11;
+constexpr DWORD WLAN_REASON_CODE_ASSOCIATION_FAILURE=WLAN_REASON_CODE_MSM_CONNECT_BASE+2, WLAN_REASON_CODE_ASSOCIATION_TIMEOUT=WLAN_REASON_CODE_MSM_CONNECT_BASE+3;
+constexpr DWORD WLAN_REASON_CODE_START_SECURITY_FAILURE=WLAN_REASON_CODE_MSM_CONNECT_BASE+5, WLAN_REASON_CODE_SECURITY_FAILURE=WLAN_REASON_CODE_MSM_CONNECT_BASE+6;
+constexpr DWORD WLAN_REASON_CODE_SECURITY_TIMEOUT=WLAN_REASON_CODE_MSM_CONNECT_BASE+7;
+constexpr unsigned char NDIS_OBJECT_TYPE_DEFAULT=0x80, DOT11_BSSID_LIST_REVISION_1=1;
+inline void SecureZeroMemory(void* p, size_t n) { volatile unsigned char* b=static_cast<volatile unsigned char*>(p); while(n--) *b++=0; }
 struct GUID { uint32_t Data1; uint16_t Data2,Data3; unsigned char Data4[8]; };
 struct FILETIME { DWORD dwLowDateTime,dwHighDateTime; };
 struct NET_LUID { uint64_t Value; }; using NET_IFINDEX=ULONG;
@@ -35,7 +44,14 @@ struct WLAN_PHY_RADIO_STATE { DWORD dwPhyIndex; DOT11_RADIO_STATE dot11SoftwareR
 struct WLAN_RADIO_STATE { DWORD dwNumberOfPhys; WLAN_PHY_RADIO_STATE PhyRadioState[64]; };
 struct WLAN_ASSOCIATION_ATTRIBUTES { DOT11_SSID dot11Ssid; unsigned char dot11Bssid[6]; ULONG dot11PhyType,ulRxRate,ulTxRate; };
 struct WLAN_SECURITY_ATTRIBUTES { BOOL bSecurityEnabled; ULONG dot11AuthAlgorithm; };
-struct WLAN_CONNECTION_ATTRIBUTES { WLAN_INTERFACE_STATE isState; WLAN_ASSOCIATION_ATTRIBUTES wlanAssociationAttributes; WLAN_SECURITY_ATTRIBUTES wlanSecurityAttributes; };
+struct WLAN_CONNECTION_ATTRIBUTES { WLAN_INTERFACE_STATE isState; int wlanConnectionMode; WCHAR strProfileName[256]; WLAN_ASSOCIATION_ATTRIBUTES wlanAssociationAttributes; WLAN_SECURITY_ATTRIBUTES wlanSecurityAttributes; };
+enum WLAN_CONNECTION_MODE { wlan_connection_mode_profile=0 };
+struct WLAN_CONNECTION_NOTIFICATION_DATA { WLAN_CONNECTION_MODE wlanConnectionMode; WCHAR strProfileName[256]; DOT11_SSID dot11Ssid; int dot11BssType; BOOL bSecurityEnabled; DWORD wlanReasonCode; DWORD dwFlags; WCHAR strProfileXml[1]; };
+struct NDIS_OBJECT_HEADER { unsigned char Type, Revision; uint16_t Size; };
+struct DOT11_BSSID_LIST { NDIS_OBJECT_HEADER Header; ULONG uNumOfEntries,uTotalNumOfEntries; unsigned char BSSIDs[1][6]; };
+struct WLAN_CONNECTION_PARAMETERS { WLAN_CONNECTION_MODE wlanConnectionMode; LPCWSTR strProfile; DOT11_SSID* pDot11Ssid; DOT11_BSSID_LIST* pDesiredBssidList; DOT11_BSS_TYPE dot11BssType; DWORD dwFlags; };
+struct WLAN_PROFILE_INFO { WCHAR strProfileName[256]; DWORD dwFlags; };
+struct WLAN_PROFILE_INFO_LIST { DWORD dwNumberOfItems,dwIndex; WLAN_PROFILE_INFO ProfileInfo[1]; };
 struct WLAN_BSS_ENTRY {
     DOT11_SSID dot11Ssid;
     unsigned char dot11Bssid[6];
@@ -62,6 +78,12 @@ DWORD WlanRegisterNotification(HANDLE,DWORD,BOOL,WLAN_NOTIFICATION_CALLBACK,PVOI
 DWORD WlanScan(HANDLE,const GUID*,const DOT11_SSID*,const WLAN_RAW_DATA*,PVOID);
 void WlanFreeMemory(PVOID);
 DWORD WlanGetInterfaceCapability(HANDLE,const GUID*,PVOID,WLAN_INTERFACE_CAPABILITY**);
+DWORD WlanSetProfile(HANDLE,const GUID*,DWORD,LPCWSTR,LPCWSTR,BOOL,PVOID,DWORD*);
+DWORD WlanDeleteProfile(HANDLE,const GUID*,LPCWSTR,PVOID);
+DWORD WlanConnect(HANDLE,const GUID*,const WLAN_CONNECTION_PARAMETERS*,PVOID);
+DWORD WlanDisconnect(HANDLE,const GUID*,PVOID);
+DWORD WlanGetProfileList(HANDLE,const GUID*,PVOID,WLAN_PROFILE_INFO_LIST**);
+DWORD WlanSetProfilePosition(HANDLE,const GUID*,LPCWSTR,DWORD,PVOID);
 HMODULE LoadLibraryExW(const wchar_t*,HANDLE,DWORD);
 void* GetProcAddress(HMODULE,const char*);
 HANDLE CreateEventW(PVOID,BOOL,BOOL,const wchar_t*);

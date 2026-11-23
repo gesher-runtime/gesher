@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <memory>
 #include <new>
@@ -31,6 +32,13 @@ struct Api {
   decltype(&WlanFreeMemory) free = nullptr;
   // Optional: absent capability data means "not reported", never "supported".
   decltype(&WlanGetInterfaceCapability) capability = nullptr;
+  // Connection management for user-approved requests; absent means "cannot connect".
+  decltype(&WlanSetProfile) set_profile = nullptr;
+  decltype(&WlanDeleteProfile) delete_profile = nullptr;
+  decltype(&WlanConnect) connect = nullptr;
+  decltype(&WlanDisconnect) disconnect = nullptr;
+  decltype(&WlanGetProfileList) profiles = nullptr;
+  decltype(&WlanSetProfilePosition) position = nullptr;
   Api() {
     // Optional on Windows Server: never turn missing WLAN support into a loader failure.
     HMODULE module = LoadLibraryExW(L"wlanapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -41,10 +49,14 @@ struct Api {
     LOAD(bss, "WlanGetNetworkBssList"); LOAD(notify, "WlanRegisterNotification");
     LOAD(scan, "WlanScan"); LOAD(free, "WlanFreeMemory");
     LOAD(capability, "WlanGetInterfaceCapability");
+    LOAD(set_profile, "WlanSetProfile"); LOAD(delete_profile, "WlanDeleteProfile");
+    LOAD(connect, "WlanConnect"); LOAD(disconnect, "WlanDisconnect");
+    LOAD(profiles, "WlanGetProfileList"); LOAD(position, "WlanSetProfilePosition");
 #undef LOAD
     // The system DLL is retained for process lifetime; all function pointers remain valid.
   }
   bool ready() const { return open && close && interfaces && query && bss && notify && scan && free; }
+  bool connectable() const { return ready() && set_profile && delete_profile && connect && disconnect; }
 };
 Api& Wlan() { static Api api; return api; }
 
@@ -430,6 +442,203 @@ int Watch(Api& api, bool (*sink)(void*, uint32_t), void* context, DWORD poll_ms)
   return result;
 }
 
+// ---- User-approved connections ---------------------------------------------------
+// Outcomes use WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_* values; the extra
+// values are internal. A connection is reported only after Windows' own completion
+// notification for this attempt's profile on this interface.
+constexpr int kConnected = -1, kFailUnknown = 0, kFailAssociation = 1, kFailAuthentication = 2,
+    kFailNotFound = 4, kFailNoResponse = 5, kCancelled = 100;
+
+int ConnectFailure(DWORD reason) {
+  if (reason == WLAN_REASON_CODE_NOT_VISIBLE || reason == WLAN_REASON_CODE_NETWORK_NOT_AVAILABLE) return kFailNotFound;
+  if (reason == WLAN_REASON_CODE_ASSOCIATION_FAILURE || reason == WLAN_REASON_CODE_ASSOCIATION_TIMEOUT) return kFailAssociation;
+  if (reason == WLAN_REASON_CODE_START_SECURITY_FAILURE || reason == WLAN_REASON_CODE_SECURITY_FAILURE
+      || reason == WLAN_REASON_CODE_SECURITY_TIMEOUT
+      || (reason >= WLAN_REASON_CODE_MSMSEC_BASE && reason <= WLAN_REASON_CODE_MSMSEC_END)) return kFailAuthentication;
+  return kFailUnknown;
+}
+
+struct ConnectWait {
+  GUID guid{};
+  WCHAR profile[WLAN_MAX_NAME_LENGTH] = {};
+  std::atomic<int> outcome{-2}; // -2 pending, else a value above
+  HANDLE event = nullptr;
+  ConnectWait() : event(CreateEventW(nullptr, FALSE, FALSE, nullptr)) { }
+  ~ConnectWait() { if (event) CloseHandle(event); }
+};
+
+void WINAPI OnConnect(WLAN_NOTIFICATION_DATA* notification, void* context) {
+  if (!notification || !context || notification->NotificationSource != WLAN_NOTIFICATION_SOURCE_ACM) return;
+  DWORD code = notification->NotificationCode;
+  if (code != wlan_notification_acm_connection_complete && code != wlan_notification_acm_connection_attempt_fail) return;
+  auto* wait = static_cast<ConnectWait*>(context);
+  if (memcmp(&wait->guid, &notification->InterfaceGuid, sizeof(GUID)) != 0) return;
+  if (!notification->pData || notification->dwDataSize < offsetof(WLAN_CONNECTION_NOTIFICATION_DATA, strProfileXml)) return;
+  const auto* data = static_cast<const WLAN_CONNECTION_NOTIFICATION_DATA*>(notification->pData);
+  // Another profile's completion (an earlier connection) is not this attempt's outcome.
+  if (wcsncmp(data->strProfileName, wait->profile, WLAN_MAX_NAME_LENGTH) != 0) return;
+  int outcome = data->wlanReasonCode == WLAN_REASON_CODE_SUCCESS && code == wlan_notification_acm_connection_complete
+      ? kConnected : ConnectFailure(data->wlanReasonCode);
+  int pending = -2;
+  if (wait->outcome.compare_exchange_strong(pending, outcome)) SetEvent(wait->event);
+}
+
+bool InterfaceGuid(Api& api, HANDLE handle, ULONG if_index, GUID* guid) {
+  Memory interfaces(api);
+  if (api.interfaces(handle, nullptr, reinterpret_cast<WLAN_INTERFACE_INFO_LIST**>(&interfaces.value)) != ERROR_SUCCESS || !interfaces.value) return false;
+  const auto* list = static_cast<WLAN_INTERFACE_INFO_LIST*>(interfaces.value);
+  if (list->dwNumberOfItems > 64) return false;
+  for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
+    if (Index(list->InterfaceInfo[i].InterfaceGuid) == if_index) { *guid = list->InterfaceInfo[i].InterfaceGuid; return true; }
+  }
+  return false;
+}
+
+// Stores the per-user, manual-connection profile and waits (bounded) for its outcome.
+int Connect(Api& api, ULONG if_index, const WCHAR* xml, const WCHAR* profile, const unsigned char* bssid,
+            bool (*active)(void*), void* context, DWORD timeout_ms) {
+  if (!api.connectable() || wlan_broken.load() || wcslen(profile) >= WLAN_MAX_NAME_LENGTH) return kFailUnknown;
+  HANDLE handle = nullptr;
+  DWORD version = 0;
+  if (api.open(2, nullptr, &version, &handle) != ERROR_SUCCESS) return kFailUnknown;
+  std::unique_ptr<ConnectWait> wait(new (std::nothrow) ConnectWait());
+  int result = kFailUnknown;
+  bool registered = false;
+  if (wait && wait->event && InterfaceGuid(api, handle, if_index, &wait->guid)) {
+    wcsncpy(wait->profile, profile, WLAN_MAX_NAME_LENGTH - 1);
+    registered = api.notify(handle, WLAN_NOTIFICATION_SOURCE_ACM, FALSE, OnConnect, wait.get(), nullptr, nullptr) == ERROR_SUCCESS;
+    DWORD reason = 0;
+    if (registered && active(context)
+        && api.set_profile(handle, &wait->guid, WLAN_PROFILE_USER, xml, nullptr, TRUE, nullptr, &reason) == ERROR_SUCCESS) {
+      DOT11_BSSID_LIST desired{};
+      WLAN_CONNECTION_PARAMETERS parameters{};
+      parameters.wlanConnectionMode = wlan_connection_mode_profile;
+      parameters.strProfile = profile;
+      parameters.dot11BssType = dot11_BSS_type_infrastructure;
+      if (bssid) {
+        // Pin the user-selected access point, as Android pins the request's BSSID.
+        desired.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+        desired.Header.Revision = DOT11_BSSID_LIST_REVISION_1;
+        desired.Header.Size = sizeof(DOT11_BSSID_LIST);
+        desired.uNumOfEntries = desired.uTotalNumOfEntries = 1;
+        memcpy(desired.BSSIDs[0], bssid, 6);
+        parameters.pDesiredBssidList = &desired;
+      }
+      if (api.connect(handle, &wait->guid, &parameters, nullptr) == ERROR_SUCCESS) {
+        ULONGLONG deadline = GetTickCount64() + timeout_ms;
+        result = kFailNoResponse;
+        for (;;) {
+          int outcome = wait->outcome.load();
+          if (outcome != -2) { result = outcome; break; }
+          if (!active(context)) { result = kCancelled; break; }
+          ULONGLONG now = GetTickCount64();
+          if (now >= deadline) break;
+          WaitForSingleObject(wait->event, static_cast<DWORD>(deadline - now < 250 ? deadline - now : 250));
+        }
+      }
+    }
+  }
+  if (registered) api.notify(handle, WLAN_NOTIFICATION_SOURCE_NONE, FALSE, nullptr, nullptr, nullptr, nullptr);
+  if (api.close(handle, nullptr) != ERROR_SUCCESS) {
+    wlan_broken = true;
+    wait.release();
+  }
+  return result;
+}
+
+// Ends a Gesher connection: disconnect, delete the temporary profile and, when the
+// interface had a previous connection, ask Windows to return to that profile.
+bool Disconnect(Api& api, ULONG if_index, const WCHAR* remove, const WCHAR* restore) {
+  if (!api.connectable() || wlan_broken.load()) return false;
+  Client client(api);
+  DWORD version = 0;
+  GUID guid{};
+  if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
+      || !InterfaceGuid(api, client.handle, if_index, &guid)) return false;
+  bool ok = api.disconnect(client.handle, &guid, nullptr) == ERROR_SUCCESS;
+  if (remove && *remove) ok = api.delete_profile(client.handle, &guid, remove, nullptr) == ERROR_SUCCESS && ok;
+  if (restore && *restore) {
+    WLAN_CONNECTION_PARAMETERS parameters{};
+    parameters.wlanConnectionMode = wlan_connection_mode_profile;
+    parameters.strProfile = restore;
+    parameters.dot11BssType = dot11_BSS_type_infrastructure;
+    ok = api.connect(client.handle, &guid, &parameters, nullptr) == ERROR_SUCCESS && ok;
+  }
+  return ok;
+}
+
+// Moves a stored profile to the end of the interface's preference list. Windows adds a
+// new profile at the top, above every network the user saved; an app's suggestion must
+// not outrank them (Android scores user-saved networks above suggestions).
+bool LowestPriority(Api& api, HANDLE handle, const GUID& guid, const WCHAR* profile) {
+  if (!api.profiles || !api.position) return false;
+  Memory memory(api);
+  if (api.profiles(handle, &guid, nullptr, reinterpret_cast<WLAN_PROFILE_INFO_LIST**>(&memory.value)) != ERROR_SUCCESS
+      || !memory.value) return false;
+  DWORD count = static_cast<const WLAN_PROFILE_INFO_LIST*>(memory.value)->dwNumberOfItems;
+  return count > 0 && api.position(handle, &guid, profile, count - 1, nullptr) == ERROR_SUCCESS;
+}
+
+// Stores (or removes, with xml == nullptr) a per-user profile without connecting. A stored
+// profile ranks below the user's own; if Windows cannot place it there it is removed.
+bool StoreProfile(Api& api, ULONG if_index, const WCHAR* xml, const WCHAR* profile) {
+  if (!api.connectable() || wlan_broken.load()) return false;
+  Client client(api);
+  DWORD version = 0, reason = 0;
+  GUID guid{};
+  if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
+      || !InterfaceGuid(api, client.handle, if_index, &guid)) return false;
+  if (!xml) return api.delete_profile(client.handle, &guid, profile, nullptr) == ERROR_SUCCESS;
+  if (api.set_profile(client.handle, &guid, WLAN_PROFILE_USER, xml, nullptr, TRUE, nullptr, &reason) != ERROR_SUCCESS) {
+    return false;
+  }
+  if (LowestPriority(api, client.handle, guid, profile)) return true;
+  api.delete_profile(client.handle, &guid, profile, nullptr);
+  return false;
+}
+
+// Names of this user's profiles on the interface that start with prefix, '\n'-separated.
+std::wstring Profiles(Api& api, ULONG if_index, const WCHAR* prefix) {
+  if (!api.ready() || !api.profiles || wlan_broken.load()) return {};
+  Client client(api);
+  DWORD version = 0;
+  GUID guid{};
+  if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
+      || !InterfaceGuid(api, client.handle, if_index, &guid)) return {};
+  Memory memory(api);
+  if (api.profiles(client.handle, &guid, nullptr, reinterpret_cast<WLAN_PROFILE_INFO_LIST**>(&memory.value)) != ERROR_SUCCESS
+      || !memory.value) return {};
+  const auto* list = static_cast<const WLAN_PROFILE_INFO_LIST*>(memory.value);
+  std::wstring names;
+  size_t prefix_length = wcslen(prefix);
+  for (DWORD i = 0; i < list->dwNumberOfItems && i < 4096; i++) {
+    WCHAR name[WLAN_MAX_NAME_LENGTH];
+    memcpy(name, list->ProfileInfo[i].strProfileName, sizeof(name));
+    name[WLAN_MAX_NAME_LENGTH - 1] = 0;
+    // Only per-user profiles: Gesher never stores all-user ones, and never removes them.
+    if ((list->ProfileInfo[i].dwFlags & WLAN_PROFILE_USER) && wcsncmp(name, prefix, prefix_length) == 0) {
+      names += name;
+      names += L'\n';
+    }
+  }
+  return names;
+}
+
+// The connected profile's name on this interface, or empty when not connected.
+std::wstring CurrentProfile(Api& api, ULONG if_index) {
+  if (!api.ready() || wlan_broken.load()) return {};
+  Client client(api);
+  DWORD version = 0;
+  GUID guid{};
+  if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
+      || !InterfaceGuid(api, client.handle, if_index, &guid)) return {};
+  WLAN_CONNECTION_ATTRIBUTES connection = {};
+  if (!Query(api, client.handle, guid, wlan_intf_opcode_current_connection, &connection)
+      || connection.isState != wlan_interface_state_connected) return {};
+  connection.strProfileName[WLAN_MAX_NAME_LENGTH - 1] = 0;
+  return connection.strProfileName;
+}
+
 struct Eligibility {
   JNIEnv* env;
   jobject supplier;
@@ -452,6 +661,69 @@ jstring WindowsWifi_nativeQuery(JNIEnv* env, jclass, jboolean scan, jobject elig
   std::string text = Snapshot(Wlan(), scan == JNI_TRUE, Eligible, &gate);
   if (env->ExceptionCheck()) return nullptr;
   return text.empty() ? nullptr : env->NewStringUTF(text.c_str());
+}
+// Copies a Java string to a NUL-terminated wide string; false for embedded NULs.
+bool Wide(JNIEnv* env, jstring text, std::wstring* out, jsize maximum) {
+  if (!text) return false;
+  jsize length = env->GetStringLength(text);
+  if (length <= 0 || length > maximum) return false;
+  std::wstring value(static_cast<size_t>(length), L'\0');
+  env->GetStringRegion(text, 0, length, reinterpret_cast<jchar*>(&value[0]));
+  if (env->ExceptionCheck() || value.find(L'\0') != std::wstring::npos) return false;
+  *out = std::move(value);
+  return true;
+}
+jint WindowsWifi_nativeConnect(JNIEnv* env, jclass, jint if_index, jstring xml, jstring profile,
+                               jbyteArray bssid, jobject active, jint timeout_ms) {
+  std::wstring wide_xml, wide_profile;
+  if (if_index <= 0 || timeout_ms <= 0 || !active || !Wide(env, xml, &wide_xml, 64 * 1024)
+      || !Wide(env, profile, &wide_profile, WLAN_MAX_NAME_LENGTH - 1)) return kFailUnknown;
+  unsigned char mac[6];
+  bool pinned = bssid != nullptr;
+  if (pinned) {
+    if (env->GetArrayLength(bssid) != 6) return kFailUnknown;
+    env->GetByteArrayRegion(bssid, 0, 6, reinterpret_cast<jbyte*>(mac));
+  }
+  jclass type = env->GetObjectClass(active);
+  if (!type) return kFailUnknown;
+  jmethodID method = env->GetMethodID(type, "getAsBoolean", "()Z");
+  env->DeleteLocalRef(type);
+  if (!method) return kFailUnknown;
+  Eligibility gate{env, active, method};
+  int result = Connect(Wlan(), static_cast<ULONG>(if_index), wide_xml.c_str(), wide_profile.c_str(),
+                       pinned ? mac : nullptr, Eligible, &gate, static_cast<DWORD>(timeout_ms));
+  // The profile text may carry a passphrase: clear the native copy.
+  SecureZeroMemory(&wide_xml[0], wide_xml.size() * sizeof(WCHAR));
+  if (env->ExceptionCheck()) return kFailUnknown;
+  return result;
+}
+jboolean WindowsWifi_nativeDisconnect(JNIEnv* env, jclass, jint if_index, jstring remove, jstring restore) {
+  std::wstring wide_remove, wide_restore;
+  if (if_index <= 0) return JNI_FALSE;
+  if (remove && !Wide(env, remove, &wide_remove, WLAN_MAX_NAME_LENGTH - 1)) return JNI_FALSE;
+  if (restore && !Wide(env, restore, &wide_restore, WLAN_MAX_NAME_LENGTH - 1)) return JNI_FALSE;
+  return Disconnect(Wlan(), static_cast<ULONG>(if_index), wide_remove.c_str(), wide_restore.c_str())
+      ? JNI_TRUE : JNI_FALSE;
+}
+jboolean WindowsWifi_nativeStoreProfile(JNIEnv* env, jclass, jint if_index, jstring xml, jstring profile) {
+  std::wstring wide_xml, wide_profile;
+  if (if_index <= 0 || !Wide(env, profile, &wide_profile, WLAN_MAX_NAME_LENGTH - 1)) return JNI_FALSE;
+  if (xml && !Wide(env, xml, &wide_xml, 64 * 1024)) return JNI_FALSE;
+  bool ok = StoreProfile(Wlan(), static_cast<ULONG>(if_index), xml ? wide_xml.c_str() : nullptr, wide_profile.c_str());
+  if (!wide_xml.empty()) SecureZeroMemory(&wide_xml[0], wide_xml.size() * sizeof(WCHAR));
+  return ok ? JNI_TRUE : JNI_FALSE;
+}
+jstring WindowsWifi_nativeCurrentProfile(JNIEnv* env, jclass, jint if_index) {
+  if (if_index <= 0) return nullptr;
+  std::wstring name = CurrentProfile(Wlan(), static_cast<ULONG>(if_index));
+  if (name.empty()) return nullptr;
+  return env->NewString(reinterpret_cast<const jchar*>(name.c_str()), static_cast<jsize>(name.size()));
+}
+jstring WindowsWifi_nativeProfiles(JNIEnv* env, jclass, jint if_index, jstring prefix) {
+  std::wstring wide_prefix;
+  if (if_index <= 0 || !Wide(env, prefix, &wide_prefix, 64)) return nullptr;
+  std::wstring names = Profiles(Wlan(), static_cast<ULONG>(if_index), wide_prefix.c_str());
+  return env->NewString(reinterpret_cast<const jchar*>(names.c_str()), static_cast<jsize>(names.size()));
 }
 jstring WindowsWifi_nativeHardware(JNIEnv* env, jclass) {
   std::string text = Hardware(Wlan());
@@ -483,6 +755,11 @@ const JNINativeMethod methods[] = {
     {"nativeQuery", "(ZLjava/util/function/BooleanSupplier;)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeQuery)},
     {"nativeHardware", "()Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeHardware)},
     {"nativeWatch", "(Ljava/util/function/IntPredicate;I)I", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeWatch)},
+    {"nativeConnect", "(ILjava/lang/String;Ljava/lang/String;[BLjava/util/function/BooleanSupplier;I)I", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeConnect)},
+    {"nativeDisconnect", "(ILjava/lang/String;Ljava/lang/String;)Z", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeDisconnect)},
+    {"nativeStoreProfile", "(ILjava/lang/String;Ljava/lang/String;)Z", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeStoreProfile)},
+    {"nativeCurrentProfile", "(I)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeCurrentProfile)},
+    {"nativeProfiles", "(ILjava/lang/String;)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsWifi_nativeProfiles)},
 };
 jint OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;

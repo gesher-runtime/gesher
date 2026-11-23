@@ -4,7 +4,9 @@ Gesher exposes real Windows WLAN observations through Android's `WifiManager`
 and the Wi-Fi transport information in `ConnectivityManager`. Every public SDK 36
 `WifiManager` member and nested type exists (`tools/check_wifi_manager_api.py`
 compares the built classes with the platform `android.jar`). It does not create
-Android saved network configurations or change radio power.
+Android saved network configurations or change radio power. Apps join networks
+through Android 10's contracts, network specifiers and suggestions, and only after
+the user approves (see [Connecting](#connecting)).
 
 ## System feature and capabilities
 
@@ -60,6 +62,116 @@ thread drains them, re-reads WLAN state and publishes:
 Callback registrations are Binder objects held by the service, checked against the
 caller's live admission and `ACCESS_WIFI_STATE` at each delivery, dropped when the
 process retires or the binder dies, and bounded per UID.
+
+## Connecting
+
+`WifiConnections` (system server) implements the two Android 10+ ways an app joins a
+network. Windows networks change only after the user approves in a Gesher host
+dialog, and success is reported only after Windows' own connection-complete
+notification for that attempt's profile on that interface (plus, for specifiers, an
+IPv4 address).
+
+### `WifiNetworkSpecifier` requests
+
+`ConnectivityManager.requestNetwork` with a `WifiNetworkSpecifier` follows
+`WifiNetworkFactory`:
+
+- The caller needs `CHANGE_NETWORK_STATE` (`SecurityException`). A request that keeps
+  `NET_CAPABILITY_INTERNET`, has an invalid specifier, sets a band, comes from an app
+  that is neither a foreground app (a resumed activity) nor running a foreground
+  service, arrives with Wi-Fi off, or uses security a Windows profile cannot express
+  (enterprise) is unfulfillable: `onUnavailable`, and Windows is not touched.
+- One request is served at a time, on one worker; a new accepted request ends the
+  previous one (`onUnavailable`, or `onLost` if it was connected). As in
+  `WifiNetworkFactory`, a foreground app's request overrides any other, a foreground
+  service's request does not override a foreground app's, and a rejected request
+  leaves the current one alone. An ended request never acts on Windows again; if it
+  ends while Windows is connecting, that attempt is undone when Windows returns.
+- Matching uses the real scan cache and real scans: SSID pattern, BSSID/mask and
+  security type. As `WifiNetworkFactory`, the search scans every 10 s until a match
+  appears or the request ends (released, its `requestNetwork` timeout, its app gone,
+  or replaced); nothing is reported meanwhile. The difference from Android: Gesher's
+  host list cannot update live, so it is shown once matches exist rather than while
+  searching; the app's release or timeout ends the search. A request that would skip
+  the dialog (approved before) gives up after three scans as unfulfillable
+  (`onUnavailable`, no failure code), as Android's `USER_APPROVED_SCAN_RETRY_MAX`.
+- The user picks one of the matching networks in the host list dialog (the same
+  surface as the intent chooser), showing SSID, band and signal; cancel is
+  `USER_REJECT`. As on Android, a network the user approved before for the app is
+  joined without asking again only for a single-network request (literal SSID or
+  exact BSSID), looked up with the request's own SSID and BSSID: open and OWE
+  networks only when the request names the approved BSSID, other security types by
+  SSID and type. Approvals are kept for the system server's lifetime (Android
+  persists them), at most 50 per app.
+- The join uses a per-user, manual-mode Windows profile named `Gesher-r-<random>`,
+  pinned to the chosen access point's BSSID, so Windows never joins it on its own.
+  Failures map to Android's codes: association rejection/timeout `ASSOCIATION`,
+  security failures `AUTHENTICATION` (not retried), not visible `NOT_FOUND`, no
+  completion within 30 s `NO_RESPONSE`, no provisioned IPv4 address within 20 s
+  `IP_PROVISIONING` (an automatic 169.254/16 address does not count: Android's IpClient
+  acquires IPv4 by DHCP and never uses one); other attempts are retried up to three
+  times.
+- Success: `onAvailable` with `Network(100 + ifIndex)`, the real interface's link
+  properties, and capabilities with `TRANSPORT_WIFI` and no `INTERNET`. The network
+  specifier is absent, as Android redacts the agent's `WifiNetworkAgentSpecifier` to
+  null for apps; SSID and BSSID are only in the location-checked transport info.
+  Releasing the request, unregistering the callback or the app's death deletes the
+  profile and, while the interface is still on it (or on none), disconnects and
+  reconnects the interface's previous profile (Android's single-STA behaviour).
+  Windows dropping the connection is `onLost`; a network the user or Windows chose
+  meanwhile is kept, and only Gesher's profile is deleted.
+- `requestNetwork` timeouts deliver `onUnavailable` and release the request.
+
+### Network suggestions
+
+- `addNetworkSuggestions` checks `CHANGE_WIFI_STATE` (exception) and its app op
+  (`ERROR_APP_DISALLOWED`), validates every entry (`ERROR_ADD_INVALID`; carrier or
+  subscription entries `ERROR_ADD_NOT_ALLOWED`) and the per-app limit (1024, 256 on
+  low-RAM devices: `ERROR_ADD_EXCEEDS_MAX_PER_APP`). An equal suggestion replaces
+  the stored one, as on Android 11+. Suggestions Windows profiles cannot express
+  faithfully (enterprise, WEP, WAPI, Passpoint) return `ERROR_ADD_NOT_ALLOWED` rather
+  than being stored and never joined.
+- SSIDs may be UTF-8 text or, as `WifiSsid` allows, arbitrary bytes (Android's
+  unquoted hex form); both reach Windows as hex bytes.
+- The first add of an app asks the user (host consent dialog, off the Binder
+  thread). Until answered the status is `PENDING`. Allow: `APPROVED_BY_USER`, and
+  each suggestion becomes a per-user Windows profile `Gesher-s-<hash>` whose
+  connection mode follows `isInitialAutojoinEnabled`; Windows then joins it by its
+  own network selection when it sees it. Windows adds a new profile at the top of the
+  preference list; the suggestion is moved to the bottom, below every network the
+  user saved, as Android scores user-saved networks above suggestions. If Windows
+  cannot place it there, the profile is removed rather than outranking the user's. Don't allow: the app's
+  `CHANGE_WIFI_STATE` app op becomes `MODE_IGNORED`, its suggestions are removed and
+  the status is `REJECTED_BY_USER`, as Android does. Dismiss: still pending, asked
+  again on the next add. Listeners get the current status on registration and on
+  each change.
+- `removeNetworkSuggestions` returns `ERROR_REMOVE_INVALID` for unknown entries or
+  actions and removes nothing then; an empty list removes all. The profile is
+  deleted at once (`ACTION_REMOVE_SUGGESTION_DISCONNECT`) or after 30 s while it is
+  the current connection (`ACTION_REMOVE_SUGGESTION_LINGER`).
+- When Windows joins an app-interaction suggestion, the app receives the explicit
+  `ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION` broadcast with
+  `EXTRA_NETWORK_SUGGESTION`, if location is on, it holds fine location and its
+  fine-location app op is allowed (`enforceCanAccessScanResults`).
+- `disallowCurrentSuggestedNetwork` disconnects the app's current suggested network
+  and removes its profile for the blocking period (Windows has no BSSID block list,
+  so the whole network is blocked).
+- An uninstalled app's suggestions and approvals are dropped and its profiles
+  deleted as soon as the package-removal event arrives. WLAN events and profile
+  installations are coalesced: at most one pass of each is queued at a time. The store lives for the system server's lifetime (Android persists it).
+  Once the WLAN interface is known after a start (the first WLAN event,
+  request or suggestion), per-user profiles with exactly Gesher's generated names
+  (`Gesher-r-` plus 16 hex digits, `Gesher-s-` plus 24) left by an earlier run are
+  deleted, including one a crashed system server left connected, so no ownerless
+  profile keeps joining. Profiles of the current run and any other profile are kept.
+- `SuggestionConnectionStatusListener` registrations are accepted but no failures are
+  reported: Windows' own auto-connect attempts do not identify their failure to
+  Gesher.
+
+The legacy saved-network API (`addNetwork`, `enableNetwork` and so on) keeps
+returning Android's failure values for every target SDK: implementing it faithfully
+for apps targeting API 28 or lower would need Android-owned saved networks with
+their identifiers and visibility rules, which Gesher does not keep.
 
 ## Data and execution
 

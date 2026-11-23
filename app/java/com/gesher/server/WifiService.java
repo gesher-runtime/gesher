@@ -45,6 +45,14 @@ public final class WifiService extends IWindowsWifi.Stub {
         WindowsWifi.Hardware hardware();
         boolean bandObserved(int lowMhz, int highMhz);
         void listen(WindowsWifi.Events events);
+        // Connections for user-approved requests and suggestions (WifiConnections).
+        int primaryInterface();
+        int connect(int ifIndex, String xml, String profile, byte[] bssid, BooleanSupplier active, int timeoutMs);
+        boolean disconnect(int ifIndex, String removeProfile, String restoreProfile);
+        boolean storeProfile(int ifIndex, String xml, String profile);
+        String currentProfile(int ifIndex);
+        List<String> profiles(int ifIndex, String prefix);
+        boolean hasIpv4(int ifIndex);
     }
 
     private static final Backend WINDOWS = new Backend() {
@@ -59,6 +67,20 @@ public final class WifiService extends IWindowsWifi.Stub {
         @Override public WindowsWifi.Hardware hardware() { return WindowsWifi.hardware(); }
         @Override public boolean bandObserved(int low, int high) { return WindowsWifi.bandObserved(low, high); }
         @Override public void listen(WindowsWifi.Events events) { WindowsWifi.addListener(events); }
+        @Override public int primaryInterface() { return WindowsWifi.primaryInterface(); }
+        @Override public int connect(int ifIndex, String xml, String profile, byte[] bssid,
+                BooleanSupplier active, int timeoutMs) {
+            return WindowsWifi.connect(ifIndex, xml, profile, bssid, active, timeoutMs);
+        }
+        @Override public boolean disconnect(int ifIndex, String remove, String restore) {
+            return WindowsWifi.disconnect(ifIndex, remove, restore);
+        }
+        @Override public boolean storeProfile(int ifIndex, String xml, String profile) {
+            return WindowsWifi.storeProfile(ifIndex, xml, profile);
+        }
+        @Override public String currentProfile(int ifIndex) { return WindowsWifi.currentProfile(ifIndex); }
+        @Override public List<String> profiles(int ifIndex, String prefix) { return WindowsWifi.profiles(ifIndex, prefix); }
+        @Override public boolean hasIpv4(int ifIndex) { return WindowsWifi.hasIpv4(ifIndex); }
     };
 
     private final ActivityManagerService mAm;
@@ -69,20 +91,29 @@ public final class WifiService extends IWindowsWifi.Stub {
     private final Object mScanLock = new Object();
     private ScanGroup mScan;
 
+    private final WifiConnections mConnections;
+
     WifiService(ActivityManagerService am, ActivityTaskManagerService atm,
             PackageManagerService pm, BooleanSupplier locationEnabled) {
-        this(am, atm, pm, locationEnabled, WINDOWS);
+        this(am, atm, pm, locationEnabled, WINDOWS, WifiConnections.HOST_UI);
     }
 
     WifiService(ActivityManagerService am, ActivityTaskManagerService atm,
             PackageManagerService pm, BooleanSupplier locationEnabled, Backend backend) {
+        this(am, atm, pm, locationEnabled, backend, WifiConnections.NO_UI);
+    }
+
+    WifiService(ActivityManagerService am, ActivityTaskManagerService atm,
+            PackageManagerService pm, BooleanSupplier locationEnabled, Backend backend, WifiConnections.Ui ui) {
         mAm = Objects.requireNonNull(am); mAtm = Objects.requireNonNull(atm);
         mPm = Objects.requireNonNull(pm); mLocationEnabled = Objects.requireNonNull(locationEnabled);
         mBackend = Objects.requireNonNull(backend);
+        mConnections = new WifiConnections(this, backend, ui);
         mBackend.listen(new WindowsWifi.Events() {
             @Override public void onWifiStateChanged(int previous, int current) {
                 wifiStateChanged(previous, current);
             }
+            @Override public void onConnectionChanged() { mConnections.connectionChanged(); }
             @Override public void onScanResultsAvailable() {
                 // Windows' own (background or other-client) scan completed: Android
                 // publishes every completed device scan, whoever started it.
@@ -92,13 +123,13 @@ public final class WifiService extends IWindowsWifi.Stub {
         });
     }
 
-    private record Owner(ApkPackage code, ActivityTaskManagerService.ProcessRecord process,
+    record Owner(ApkPackage code, ActivityTaskManagerService.ProcessRecord process,
             int uid, int pid, String attributionTag) {
         boolean system() { return code == null; }
         String name() { return system() ? "android" : code.packageName; }
     }
 
-    private Owner caller(String claimed, String tag) {
+    Owner caller(String claimed, String tag) {
         int uid = Binder.getCallingUid(), pid = Binder.getCallingPid();
         ActivityTaskManagerService.ProcessRecord process = mAtm.callerProcess(pid);
         if (process != null) {
@@ -124,7 +155,7 @@ public final class WifiService extends IWindowsWifi.Stub {
         return new Owner(null, null, uid, pid, tag);
     }
 
-    private boolean current(Owner owner) {
+    boolean current(Owner owner) {
         if (owner.system()) return true;
         ActivityTaskManagerService.ProcessRecord process = owner.process();
         return process != null && mAtm.callerProcess(owner.pid()) == process
@@ -136,16 +167,16 @@ public final class WifiService extends IWindowsWifi.Stub {
                 && (process.enabledProcessLifetime == null || process.enabledProcessLifetime.getAsBoolean());
     }
 
-    private boolean granted(Owner owner, String permission) {
+    boolean granted(Owner owner, String permission) {
         return current(owner) && (owner.system() || mPm.permissions().checkPermission(owner.name(), permission)
                 == PackageManager.PERMISSION_GRANTED);
     }
 
-    private void enforce(Owner owner, String permission) {
+    void enforce(Owner owner, String permission) {
         if (!granted(owner, permission)) throw new SecurityException("Wi-Fi requires " + permission);
     }
 
-    private boolean note(Owner owner, int operation) {
+    boolean note(Owner owner, int operation) {
         if (!current(owner)) return false;
         if (owner.system()) return true;
         long identity = Binder.clearCallingIdentity();
@@ -164,7 +195,7 @@ public final class WifiService extends IWindowsWifi.Stub {
                 || granted(owner, "android.permission.RADIO_SCAN_WITHOUT_LOCATION");
     }
 
-    private boolean mayScan(Owner owner) {
+    boolean mayScan(Owner owner) {
         if (!current(owner)) return false;
         if (privilegedScan(owner)) return true;
         if (!mLocationEnabled.getAsBoolean()) return false;
@@ -529,8 +560,103 @@ public final class WifiService extends IWindowsWifi.Stub {
         }
     }
 
-    /** Without suggestions the per-app status is unknown (WifiNetworkSuggestionsManager). */
-    int suggestionApproval(Owner owner) { return WifiManager.STATUS_SUGGESTION_APPROVAL_UNKNOWN; }
+    /** Sends each matching registration of kind its own value. */
+    void dispatchEach(int kind, java.util.function.Predicate<Owner> eligible,
+            java.util.function.ToIntFunction<Owner> value) {
+        List<Registration> targets = new ArrayList<>();
+        synchronized (mCallbacks) {
+            for (Registration registration : mCallbacks.values()) {
+                if (registration.kind == kind) targets.add(registration);
+            }
+        }
+        for (Registration registration : targets) {
+            if (!current(registration.owner)) { drop(registration); continue; }
+            int result;
+            try {
+                if (!granted(registration.owner, ACCESS) || !eligible.test(registration.owner)) continue;
+                result = value.applyAsInt(registration.owner);
+            } catch (RuntimeException denied) { continue; }
+            if (!IWindowsWifi.Callback.send(registration.binder, kind, result, null)) drop(registration);
+        }
+    }
+
+    int suggestionApproval(Owner owner) { return mConnections.approvalStatus(owner); }
+
+    ActivityManagerService am() { return mAm; }
+    PackageManagerService pm() { return mPm; }
+    boolean locationEnabled() { return mLocationEnabled.getAsBoolean(); }
+    Backend backend() { return mBackend; }
+
+    static final int NOT_FOREGROUND = 0, FOREGROUND_SERVICE = 1, FOREGROUND_APP = 2;
+
+    /**
+     * WifiNetworkFactory's gates: a foreground app (a resumed activity, importance
+     * FOREGROUND) or NETWORK_SETTINGS, else a foreground service. A process that merely
+     * keeps stopped or paused activities is neither.
+     */
+    int foregroundLevel(Owner owner) {
+        if (owner.system() || granted(owner, "android.permission.NETWORK_SETTINGS")) return FOREGROUND_APP;
+        if (!current(owner)) return NOT_FOREGROUND;
+        AppOpsService.UidState state = mAtm.appOpsUidStates().get(owner.uid());
+        if (state != null && state.state() <= AppOpsManager.UID_STATE_TOP) return FOREGROUND_APP;
+        return mAm.keepsDeviceBusy(owner.process()) ? FOREGROUND_SERVICE : NOT_FOREGROUND;
+    }
+
+    private static final String CHANGE_NETWORK = "android.permission.CHANGE_NETWORK_STATE";
+
+    @Override public void requestLocalNetwork(String name, String tag, android.net.wifi.WifiNetworkSpecifier specifier,
+            IBinder callback) {
+        Owner owner = caller(name, tag);
+        // ConnectivityService.requestNetwork: CHANGE_NETWORK_STATE for a request.
+        if (!granted(owner, CHANGE_NETWORK) && !granted(owner, "android.permission.WRITE_SETTINGS")) {
+            throw new SecurityException(owner.name() + " was not granted " + CHANGE_NETWORK);
+        }
+        mConnections.request(owner, specifier, callback);
+    }
+
+    @Override public void releaseLocalNetwork(String name, IBinder callback) {
+        Owner owner = caller(name, null);
+        mConnections.release(owner, callback);
+    }
+
+    @Override public int addNetworkSuggestions(String name, String tag,
+            List<android.net.wifi.WifiNetworkSuggestion> suggestions) {
+        Owner owner = caller(name, tag);
+        enforce(owner, CHANGE);
+        if (!note(owner, AppOpsManager.OP_CHANGE_WIFI_STATE)) {
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_APP_DISALLOWED;
+        }
+        return mConnections.addSuggestions(owner, suggestions);
+    }
+
+    @Override public int removeNetworkSuggestions(String name, String tag,
+            List<android.net.wifi.WifiNetworkSuggestion> suggestions, int action) {
+        Owner owner = caller(name, tag);
+        enforce(owner, CHANGE);
+        if (!note(owner, AppOpsManager.OP_CHANGE_WIFI_STATE)) {
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_APP_DISALLOWED;
+        }
+        if (action != WifiManager.ACTION_REMOVE_SUGGESTION_LINGER
+                && action != WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) {
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
+        }
+        return mConnections.removeSuggestions(owner, suggestions, action);
+    }
+
+    @Override public List<android.net.wifi.WifiNetworkSuggestion> getNetworkSuggestions(String name) {
+        Owner owner = caller(name, null);
+        enforce(owner, ACCESS);
+        return mConnections.suggestions(owner);
+    }
+
+    @Override public void disallowCurrentSuggestedNetwork(String name, android.net.wifi.BlockingOption option) {
+        Owner owner = caller(name, null);
+        if (!granted(owner, CHANGE) || !(granted(owner, "android.permission.NETWORK_SETTINGS")
+                || note(owner, AppOpsManager.OP_CHANGE_WIFI_STATE))) {
+            throw new SecurityException("Caller does not hold CHANGE_WIFI_STATE permission");
+        }
+        mConnections.disallowCurrent(owner, option);
+    }
 
     private void wifiStateChanged(int previous, int current) {
         // ConcreteClientModeManager: sticky, registered-only-before-boot, new and previous

@@ -282,8 +282,45 @@ public final class WindowsWifiFixture {
         check(!WindowsWifi.onEvents(WindowsWifi.EVENT_STATE), "Stopped watcher declines further deliveries");
         ((List<WindowsWifi.Events>) get("EVENTS")).remove(recorder);
     }
+    public static void profiles() {
+        byte[] ssid = "<Net>&\u05e9".getBytes(StandardCharsets.UTF_8);
+        String psk = WlanProfiles.xml("Gesher-r-1", ssid, false,
+                android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK, "\"pa<ss>&'\"word\"", false);
+        check(psk != null && psk.contains("<hex>3C4E65743E26D7A9</hex>") && psk.contains("<authentication>WPA2PSK</authentication>")
+                && psk.contains("<keyMaterial>pa&lt;ss&gt;&amp;&apos;&quot;word</keyMaterial>")
+                && psk.contains("<connectionMode>manual</connectionMode>") && !psk.contains("<Net>"),
+                "SSID bytes as hex, escaped passphrase, manual mode");
+        String sae = WlanProfiles.xml("Gesher-s-1", ssid, true, android.net.wifi.WifiConfiguration.SECURITY_TYPE_SAE,
+                "\"long-sae-password\"", true);
+        check(sae != null && sae.contains("WPA3SAE") && sae.contains("<nonBroadcast>true</nonBroadcast>")
+                && sae.contains("<connectionMode>auto</connectionMode>"), "SAE, hidden and auto-connect");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OWE, null, false)
+                .contains("<authentication>OWE</authentication>"), "OWE profile");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_EAP, null, false) == null
+                && WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_WEP, "\"k\"", false) == null,
+                "Enterprise and WEP are not expressed");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK, "\"short\"", false) == null
+                && WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK, "\"ok\u0001password\"", false) == null
+                && WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OPEN, "\"secret\"", false) == null,
+                "Invalid passphrases and open networks with keys are refused");
+        check(WlanProfiles.xml("Other", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OPEN, null, false) == null
+                && WlanProfiles.xml("Gesher-r-1", new byte[33], false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OPEN, null, false) == null,
+                "Only Gesher profile names and valid SSID lengths");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false).contains("networkKey"),
+                "A 64-hex PSK is a raw network key");
+    }
     public static void run(boolean nativeBoundary) throws Exception {
-        parser(); if (nativeBoundary) { host(); events(); }
+        parser(); profiles(); if (nativeBoundary) { host(); events(); }
+        // IP provisioning for a specifier connection: a DHCP-style IPv4 address, never an
+        // automatic 169.254/16 address or IPv6 alone.
+        try {
+            check(WindowsWifi.provisioned(java.net.InetAddress.getByName("192.168.4.20")), "A DHCP IPv4 address is provisioning");
+            check(!WindowsWifi.provisioned(java.net.InetAddress.getByName("169.254.10.20")), "An APIPA address is not provisioning");
+            check(!WindowsWifi.provisioned(java.net.InetAddress.getByName("fe80::1")), "IPv6 link-local is not IPv4 provisioning");
+        } catch (java.net.UnknownHostException impossible) {
+            throw new AssertionError(impossible);
+        }
         System.out.println("WindowsWifiFixture all passed: " + checks + "; nativeBoundary=" + nativeBoundary);
     }
 }

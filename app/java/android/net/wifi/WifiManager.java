@@ -495,13 +495,21 @@ public class WifiManager {
 
     // ---- Network suggestions -------------------------------------------------
 
-    /** No suggestion store: Android's internal-error status, never a false success. */
+    /**
+     * Stored by the system Wi-Fi service; Windows may join a suggested network only
+     * after the user allows the app (docs/wifi.md).
+     */
     public int addNetworkSuggestions(List<WifiNetworkSuggestion> networkSuggestions) {
         // Android marshals the list in a ParceledListSlice first: null is a NullPointerException.
         if (networkSuggestions == null) throw new NullPointerException("networkSuggestions");
         WifiAccess.enforceChange(mContext);
-        if (networkSuggestions == null) return STATUS_NETWORK_SUGGESTIONS_SUCCESS;
-        return STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL;
+        IWindowsWifi service = service();
+        try {
+            return service != null ? service.addNetworkSuggestions(packageName(), attributionTag(), networkSuggestions)
+                    : STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL;
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
     public int removeNetworkSuggestions(List<WifiNetworkSuggestion> networkSuggestions) {
         return removeNetworkSuggestions(networkSuggestions, ACTION_REMOVE_SUGGESTION_DISCONNECT);
@@ -509,16 +517,23 @@ public class WifiManager {
     public int removeNetworkSuggestions(List<WifiNetworkSuggestion> networkSuggestions, int action) {
         if (networkSuggestions == null) throw new NullPointerException("networkSuggestions");
         WifiAccess.enforceChange(mContext);
-        if (action != ACTION_REMOVE_SUGGESTION_LINGER && action != ACTION_REMOVE_SUGGESTION_DISCONNECT) {
-            return STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
+        IWindowsWifi service = service();
+        try {
+            return service != null ? service.removeNetworkSuggestions(packageName(), attributionTag(),
+                    networkSuggestions, action) : STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL;
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
         }
-        // An empty list removes all of the app's (none); unknown entries are invalid.
-        if (networkSuggestions == null || networkSuggestions.isEmpty()) return STATUS_NETWORK_SUGGESTIONS_SUCCESS;
-        return STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
     }
     public List<WifiNetworkSuggestion> getNetworkSuggestions() {
         WifiAccess.enforceAccess(mContext);
-        return new ArrayList<>();
+        IWindowsWifi service = service();
+        try {
+            List<WifiNetworkSuggestion> result = service != null ? service.getNetworkSuggestions(packageName()) : null;
+            return result != null ? result : new ArrayList<>();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
     public int getMaxNumberOfNetworkSuggestionsPerApp() {
         boolean lowRam = false;
@@ -531,11 +546,18 @@ public class WifiManager {
     public int getMaxNumberOfChannelsPerNetworkSpecifierRequest() {
         return MAX_CHANNELS_PER_NETWORK_SPECIFIER_REQUEST;
     }
-    /** Affects only a current network this app suggested; there is none to block. */
+    /** Affects only a current network this app suggested. */
     public void disallowCurrentSuggestedNetwork(BlockingOption blockingOption) {
         Objects.requireNonNull(blockingOption, "blockingOption cannot be null");
         if (!granted("android.permission.CHANGE_WIFI_STATE")) {
             throw new SecurityException("Caller does not hold CHANGE_WIFI_STATE permission");
+        }
+        IWindowsWifi service = service();
+        if (service == null) return;
+        try {
+            service.disallowCurrentSuggestedNetwork(packageName(), blockingOption);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
         }
     }
 
@@ -544,12 +566,14 @@ public class WifiManager {
     /** A registration delivered by the service to an app executor. */
     private static final class Remote extends IWindowsWifi.Callback {
         volatile Executor executor; // a re-registered scan callback takes the new executor
-        final IntConsumer target;
+        final java.util.function.ObjIntConsumer<Bundle> target;
         volatile boolean active = true;
-        Remote(Executor executor, IntConsumer target) { this.executor = executor; this.target = target; }
+        Remote(Executor executor, java.util.function.ObjIntConsumer<Bundle> target) {
+            this.executor = executor; this.target = target;
+        }
         @Override protected void onEvent(int kind, int value, Bundle extras) {
             if (!active) return;
-            post(executor, () -> { if (active) target.accept(value); });
+            post(executor, () -> { if (active) target.accept(extras, value); });
         }
     }
 
@@ -561,6 +585,10 @@ public class WifiManager {
     }
 
     private void register(int kind, Object key, Executor executor, IntConsumer target) {
+        register(kind, key, executor, (extras, value) -> target.accept(value));
+    }
+
+    private void register(int kind, Object key, Executor executor, java.util.function.ObjIntConsumer<Bundle> target) {
         // As WifiManager's per-type proxies: a scan callback is registered again with the
         // new executor; a state or local-only listener that is already registered is
         // ignored (no service call, so no permission check); a suggestion listener is
@@ -666,8 +694,12 @@ public class WifiManager {
     public void addLocalOnlyConnectionFailureListener(Executor executor, LocalOnlyConnectionFailureListener listener) {
         if (listener == null) throw new IllegalArgumentException("Listener cannot be null");
         if (executor == null) throw new IllegalArgumentException("Executor cannot be null");
-        // Failures are reported only for this app's network-specifier requests.
-        register(IWindowsWifi.CALLBACK_LOCAL_ONLY_FAILURE, listener, executor, value -> { });
+        // Failures of this app's network-specifier requests, with the request's specifier.
+        register(IWindowsWifi.CALLBACK_LOCAL_ONLY_FAILURE, listener, executor, (extras, value) -> {
+            WifiNetworkSpecifier specifier = extras == null ? null
+                    : extras.getParcelable(IWindowsWifi.EXTRA_SPECIFIER, WifiNetworkSpecifier.class);
+            if (specifier != null) listener.onConnectionFailed(specifier, value);
+        });
     }
     public void removeLocalOnlyConnectionFailureListener(LocalOnlyConnectionFailureListener listener) {
         if (listener == null) throw new IllegalArgumentException("Listener cannot be null");

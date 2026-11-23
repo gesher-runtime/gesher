@@ -3,9 +3,12 @@ package com.gesher.net;
 
 import android.content.pm.ParceledListSlice;
 import android.net.DhcpInfo;
+import android.net.wifi.BlockingOption;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiNetworkSpecifier;
+import android.net.wifi.WifiNetworkSuggestion;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -36,6 +39,12 @@ public interface IWindowsWifi extends IInterface {
     int CALLBACK_SUGGESTION_APPROVAL = 3;
     int CALLBACK_SUGGESTION_CONNECTION = 4;
     int CALLBACK_LOCAL_ONLY_FAILURE = 5;
+    /** Events of one {@link #requestLocalNetwork} request (the value is NETWORK_*). */
+    int CALLBACK_NETWORK_REQUEST = 6;
+    int NETWORK_AVAILABLE = 1, NETWORK_UNAVAILABLE = 2, NETWORK_LOST = 3;
+    /** NETWORK_AVAILABLE extras: the joined interface and access point. */
+    String EXTRA_INTERFACE = "interface", EXTRA_SSID = "ssid", EXTRA_BSSID = "bssid",
+            EXTRA_SECURITY = "security", EXTRA_FREQUENCY = "frequency", EXTRA_SPECIFIER = "specifier";
 
     int getWifiState(String packageName) throws RemoteException;
     WifiInfo getConnectionInfo(String packageName, String attributionTag) throws RemoteException;
@@ -54,6 +63,16 @@ public interface IWindowsWifi extends IInterface {
     void unregisterCallback(String packageName, int kind, IBinder callback) throws RemoteException;
     /** Per-frequency AP counts of the cached scan, as WifiManager.getChannelData. */
     List<Bundle> getChannelData(String packageName, String attributionTag) throws RemoteException;
+    /** A ConnectivityManager request with a WifiNetworkSpecifier; events go to callback. */
+    void requestLocalNetwork(String packageName, String attributionTag, WifiNetworkSpecifier specifier,
+            IBinder callback) throws RemoteException;
+    void releaseLocalNetwork(String packageName, IBinder callback) throws RemoteException;
+    int addNetworkSuggestions(String packageName, String attributionTag, List<WifiNetworkSuggestion> suggestions)
+            throws RemoteException;
+    int removeNetworkSuggestions(String packageName, String attributionTag, List<WifiNetworkSuggestion> suggestions,
+            int action) throws RemoteException;
+    List<WifiNetworkSuggestion> getNetworkSuggestions(String packageName) throws RemoteException;
+    void disallowCurrentSuggestedNetwork(String packageName, BlockingOption option) throws RemoteException;
 
     /** Client end of service events; the service only sends one-way transactions to it. */
     abstract class Callback extends Binder {
@@ -109,6 +128,12 @@ public interface IWindowsWifi extends IInterface {
         private static final int REGISTER = STATE + 8;
         private static final int UNREGISTER = STATE + 9;
         private static final int CHANNELS = STATE + 10;
+        private static final int REQUEST = STATE + 11;
+        private static final int RELEASE = STATE + 12;
+        private static final int SUGGEST = STATE + 13;
+        private static final int UNSUGGEST = STATE + 14;
+        private static final int SUGGESTIONS = STATE + 15;
+        private static final int DISALLOW = STATE + 16;
 
         protected Stub() { attachInterface(this, DESCRIPTOR); }
 
@@ -122,14 +147,23 @@ public interface IWindowsWifi extends IInterface {
 
         @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
                 throws RemoteException {
-            if (code < STATE || code > CHANNELS) return super.onTransact(code, data, reply, flags);
+            if (code < STATE || code > DISALLOW) return super.onTransact(code, data, reply, flags);
             data.enforceInterface(DESCRIPTOR);
             String packageName = data.readString();
             String attributionTag = data.readString();
             int interfaceIndex = code == NETWORK ? data.readInt() : 0;
             boolean includeLocation = code == NETWORK && data.readBoolean();
             int argument = code == CAPABILITIES || code == REGISTER || code == UNREGISTER ? data.readInt() : 0;
-            IBinder callback = code == REGISTER || code == UNREGISTER ? data.readStrongBinder() : null;
+            WifiNetworkSpecifier specifier = code == REQUEST ? data.readTypedObject(WifiNetworkSpecifier.CREATOR) : null;
+            List<WifiNetworkSuggestion> suggestions = null;
+            if (code == SUGGEST || code == UNSUGGEST) {
+                ParceledListSlice<WifiNetworkSuggestion> slice = data.readTypedObject(ParceledListSlice.CREATOR);
+                suggestions = slice == null ? null : slice.getList();
+                if (code == UNSUGGEST) argument = data.readInt();
+            }
+            BlockingOption option = code == DISALLOW ? data.readTypedObject(BlockingOption.CREATOR) : null;
+            IBinder callback = code == REGISTER || code == UNREGISTER || code == REQUEST || code == RELEASE
+                    ? data.readStrongBinder() : null;
             data.enforceNoDataAvail();
             switch (code) {
                 case STATE: {
@@ -181,6 +215,33 @@ public interface IWindowsWifi extends IInterface {
                 case CHANNELS: {
                     List<Bundle> result = getChannelData(packageName, attributionTag);
                     reply.writeNoException(); writeList(reply, result); break;
+                }
+                case REQUEST: {
+                    if (callback == null || specifier == null) throw new IllegalArgumentException("Invalid request");
+                    requestLocalNetwork(packageName, attributionTag, specifier, callback);
+                    reply.writeNoException(); break;
+                }
+                case RELEASE: {
+                    if (callback == null) throw new IllegalArgumentException("callback cannot be null");
+                    releaseLocalNetwork(packageName, callback);
+                    reply.writeNoException(); break;
+                }
+                case SUGGEST: {
+                    int result = addNetworkSuggestions(packageName, attributionTag, suggestions);
+                    reply.writeNoException(); reply.writeInt(result); break;
+                }
+                case UNSUGGEST: {
+                    int result = removeNetworkSuggestions(packageName, attributionTag, suggestions, argument);
+                    reply.writeNoException(); reply.writeInt(result); break;
+                }
+                case SUGGESTIONS: {
+                    List<WifiNetworkSuggestion> result = getNetworkSuggestions(packageName);
+                    reply.writeNoException(); writeList(reply, result); break;
+                }
+                case DISALLOW: {
+                    if (option == null) throw new IllegalArgumentException("blockingOption cannot be null");
+                    disallowCurrentSuggestedNetwork(packageName, option);
+                    reply.writeNoException(); break;
                 }
                 default: throw new AssertionError(code);
             }
@@ -260,6 +321,33 @@ public interface IWindowsWifi extends IInterface {
             }
             @Override public List<Bundle> getChannelData(String name, String tag) throws RemoteException {
                 return call(CHANNELS, name, tag, Proxy::readList);
+            }
+            @Override public void requestLocalNetwork(String name, String tag, WifiNetworkSpecifier specifier,
+                    IBinder callback) throws RemoteException {
+                call(REQUEST, name, tag, data -> { data.writeTypedObject(specifier, 0); data.writeStrongBinder(callback); },
+                        reply -> null);
+            }
+            @Override public void releaseLocalNetwork(String name, IBinder callback) throws RemoteException {
+                call(RELEASE, name, null, data -> data.writeStrongBinder(callback), reply -> null);
+            }
+            @Override public int addNetworkSuggestions(String name, String tag, List<WifiNetworkSuggestion> list)
+                    throws RemoteException {
+                return call(SUGGEST, name, tag, data -> data.writeTypedObject(
+                        list == null ? null : new ParceledListSlice<>(list), 0), Parcel::readInt);
+            }
+            @Override public int removeNetworkSuggestions(String name, String tag, List<WifiNetworkSuggestion> list,
+                    int action) throws RemoteException {
+                return call(UNSUGGEST, name, tag, data -> {
+                    data.writeTypedObject(list == null ? null : new ParceledListSlice<>(list), 0);
+                    data.writeInt(action);
+                }, Parcel::readInt);
+            }
+            @Override public List<WifiNetworkSuggestion> getNetworkSuggestions(String name) throws RemoteException {
+                return call(SUGGESTIONS, name, null, Proxy::readList);
+            }
+            @Override public void disallowCurrentSuggestedNetwork(String name, BlockingOption option)
+                    throws RemoteException {
+                call(DISALLOW, name, null, data -> data.writeTypedObject(option, 0), reply -> null);
             }
             @SuppressWarnings("unchecked") private static <T extends Parcelable> List<T> readList(Parcel reply) {
                 ParceledListSlice<T> result = reply.readTypedObject(ParceledListSlice.CREATOR);

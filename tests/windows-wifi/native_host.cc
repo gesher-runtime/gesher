@@ -17,6 +17,11 @@ bool scan_failure=false, completion=true, precompletion=false, close_failure=fal
 bool eligible=true, revoke_on_open=false, notify_in_guard=false;
 bool capability_failure=false, pairs_overflow=false, ihv_phy=false;
 bool enum_failure=false; // the WLAN service behind an open handle went away
+// Connection boundary: what Windows was asked, and the scripted notification it sends.
+std::vector<std::wstring> stored_profiles, deleted_profiles, connected_profiles;
+int disconnects=0; bool pinned=false, set_profile_failure=false, cancel_on_wait=false;
+std::wstring positioned; DWORD position=0; bool position_failure=false;
+DWORD connect_reason=0; int connect_notifications=1; std::wstring notify_profile; bool foreign_first=false;
 bool index_failure=false, delay_after_bss=false, delay_close=false;
 int adapters=1; size_t ie_size=2;
 uint64_t clock=0, filetime=1'000'000'000'000ULL;
@@ -32,6 +37,8 @@ void reset() {
     index_failure=delay_after_bss=delay_close=false;
     capability_failure=pairs_overflow=ihv_phy=false;
     enum_failure=false;
+    stored_profiles.clear();deleted_profiles.clear();connected_profiles.clear();disconnects=0;pinned=false;
+    set_profile_failure=cancel_on_wait=false;positioned.clear();position=0;position_failure=false;connect_reason=0;connect_notifications=1;notify_profile.clear();foreign_first=false;
     adapters=1;ie_size=2;clock=0;filetime=1'000'000'000'000ULL;callback=nullptr;context=nullptr;last_context=nullptr;armed.clear();wlan_broken=false;
 }
 void notify(int index,DWORD code=wlan_notification_acm_scan_complete,DWORD source=WLAN_NOTIFICATION_SOURCE_ACM) {
@@ -46,6 +53,8 @@ Api api() {
     api.open=WlanOpenHandle;api.close=WlanCloseHandle;api.interfaces=WlanEnumInterfaces;
     api.query=WlanQueryInterface;api.bss=WlanGetNetworkBssList;api.notify=WlanRegisterNotification;
     api.scan=WlanScan;api.free=WlanFreeMemory;api.capability=WlanGetInterfaceCapability;
+    api.set_profile=WlanSetProfile;api.delete_profile=WlanDeleteProfile;api.connect=WlanConnect;
+    api.disconnect=WlanDisconnect;api.profiles=WlanGetProfileList;api.position=WlanSetProfilePosition;
     return api;
 }
 }
@@ -149,7 +158,46 @@ DWORD WlanGetInterfaceCapability(HANDLE,const GUID*,PVOID,WLAN_INTERFACE_CAPABIL
     if(fixture::ihv_phy) {capability->dot11PhyTypes[6]=0x80000001u;capability->dwNumberOfSupportedPhys=7;}
     *output=capability;return ERROR_SUCCESS;
 }
+DWORD WlanSetProfile(HANDLE,const GUID*,DWORD flags,LPCWSTR xml,LPCWSTR,BOOL overwrite,PVOID,DWORD* reason) {
+    *reason=0;
+    if(fixture::set_profile_failure || flags!=WLAN_PROFILE_USER || !overwrite)return ERROR_ACCESS_DENIED;
+    std::wstring text(xml);size_t a=text.find(L"<name>"),b=text.find(L"</name>");
+    fixture::stored_profiles.push_back(text.substr(a+6,b-a-6));return ERROR_SUCCESS;
+}
+DWORD WlanSetProfilePosition(HANDLE,const GUID*,LPCWSTR name,DWORD position,PVOID) {
+    if(fixture::position_failure)return ERROR_ACCESS_DENIED;
+    fixture::positioned=name;fixture::position=position;return ERROR_SUCCESS;
+}
+DWORD WlanDeleteProfile(HANDLE,const GUID*,LPCWSTR name,PVOID) {fixture::deleted_profiles.push_back(name);return ERROR_SUCCESS;}
+void connect_notify(const std::wstring& profile,DWORD code,DWORD reason) {
+    if(!fixture::callback)return;
+    WLAN_CONNECTION_NOTIFICATION_DATA data{};wcsncpy(data.strProfileName,profile.c_str(),255);data.wlanReasonCode=reason;
+    WLAN_NOTIFICATION_DATA notification{};notification.NotificationSource=WLAN_NOTIFICATION_SOURCE_ACM;
+    notification.NotificationCode=code;notification.InterfaceGuid.Data1=6;notification.dwDataSize=sizeof(data);notification.pData=&data;
+    fixture::callback(&notification,fixture::context);
+}
+DWORD WlanConnect(HANDLE,const GUID* guid,const WLAN_CONNECTION_PARAMETERS* parameters,PVOID) {
+    if(guid->Data1!=6)return ERROR_ACCESS_DENIED;
+    fixture::connected_profiles.push_back(parameters->strProfile);
+    fixture::pinned=parameters->pDesiredBssidList!=nullptr && parameters->pDesiredBssidList->uNumOfEntries==1
+        && parameters->pDesiredBssidList->BSSIDs[0][0]==0xaa;
+    std::wstring target=fixture::notify_profile.empty()?parameters->strProfile:fixture::notify_profile;
+    if(fixture::foreign_first)connect_notify(L"Home",wlan_notification_acm_connection_complete,0);
+    for(int i=0;i<fixture::connect_notifications;i++)
+        connect_notify(target,fixture::connect_reason?wlan_notification_acm_connection_attempt_fail:wlan_notification_acm_connection_complete,fixture::connect_reason);
+    return ERROR_SUCCESS;
+}
+DWORD WlanDisconnect(HANDLE,const GUID*,PVOID) {++fixture::disconnects;return ERROR_SUCCESS;}
+DWORD WlanGetProfileList(HANDLE,const GUID*,PVOID,WLAN_PROFILE_INFO_LIST** output) {
+    size_t size=offsetof(WLAN_PROFILE_INFO_LIST,ProfileInfo)+3*sizeof(WLAN_PROFILE_INFO);
+    auto* list=static_cast<WLAN_PROFILE_INFO_LIST*>(calloc(1,size));list->dwNumberOfItems=3;
+    wcscpy(list->ProfileInfo[0].strProfileName,L"Gesher-r-1");list->ProfileInfo[0].dwFlags=WLAN_PROFILE_USER;
+    wcscpy(list->ProfileInfo[1].strProfileName,L"Gesher-s-2");list->ProfileInfo[1].dwFlags=0; // all-user: never ours
+    wcscpy(list->ProfileInfo[2].strProfileName,L"Home");list->ProfileInfo[2].dwFlags=WLAN_PROFILE_USER;
+    *output=list;return ERROR_SUCCESS;
+}
 namespace fixture {
+bool connect_active(void*) {return !cancel_on_wait;}
 std::vector<uint32_t> deliveries;
 int stop_after=3;
 void (*between)(int)=nullptr;
@@ -262,5 +310,58 @@ int main() {
     check(Watch(backend,sink,nullptr,1000)==-1 && deliveries.size()==2 && callback==nullptr && closes==1 && events==0
             && !wlan_broken,"A handle whose WLAN service went away ends the watch for a reopen, releasing everything");
     between=nullptr;
+    // User-approved connections: only this attempt's completion is an outcome.
+    const unsigned char ap[6]={0xaa,0xbb,0xcc,0x11,0x22,0x33};
+    reset();
+    check(Connect(backend,6,L"<WLANProfile><name>Gesher-r-a</name></WLANProfile>",L"Gesher-r-a",ap,connect_active,nullptr,30000)==kConnected
+            && stored_profiles.size()==1 && stored_profiles[0]==L"Gesher-r-a" && pinned && callback==nullptr && closes==1 && events==0,
+            "Per-user profile, pinned BSSID, completion of this profile, notifications released");
+    reset();foreign_first=true;connect_notifications=0;
+    check(Connect(backend,6,L"<name>Gesher-r-b</name>",L"Gesher-r-b",nullptr,connect_active,nullptr,3000)==kFailNoResponse
+            && fixture::clock>=3000 && !pinned,"Another profile's completion is not this attempt's success");
+    reset();connect_reason=WLAN_REASON_CODE_SECURITY_FAILURE;
+    check(Connect(backend,6,L"<name>Gesher-r-c</name>",L"Gesher-r-c",nullptr,connect_active,nullptr,3000)==kFailAuthentication,
+            "Security failure is AUTHENTICATION");
+    reset();connect_reason=WLAN_REASON_CODE_MSMSEC_BASE+5;
+    check(Connect(backend,6,L"<name>Gesher-r-d</name>",L"Gesher-r-d",nullptr,connect_active,nullptr,3000)==kFailAuthentication,
+            "MSM security reason range is AUTHENTICATION");
+    reset();connect_reason=WLAN_REASON_CODE_ASSOCIATION_TIMEOUT;
+    check(Connect(backend,6,L"<name>Gesher-r-e</name>",L"Gesher-r-e",nullptr,connect_active,nullptr,3000)==kFailAssociation,
+            "Association timeout is ASSOCIATION");
+    reset();connect_reason=WLAN_REASON_CODE_NETWORK_NOT_AVAILABLE;
+    check(Connect(backend,6,L"<name>Gesher-r-f</name>",L"Gesher-r-f",nullptr,connect_active,nullptr,3000)==kFailNotFound,
+            "Network not available is NOT_FOUND");
+    reset();connect_reason=0x12345;
+    check(Connect(backend,6,L"<name>Gesher-r-g</name>",L"Gesher-r-g",nullptr,connect_active,nullptr,3000)==kFailUnknown,
+            "Other reasons are UNKNOWN");
+    reset();connect_notifications=0;cancel_on_wait=true;
+    check(Connect(backend,6,L"<name>Gesher-r-h</name>",L"Gesher-r-h",nullptr,connect_active,nullptr,3000)==kFailUnknown
+            && connected_profiles.empty() && stored_profiles.empty(),"A requester gone before setup never changes Windows");
+    reset();set_profile_failure=true;
+    check(Connect(backend,6,L"<name>Gesher-r-i</name>",L"Gesher-r-i",nullptr,connect_active,nullptr,3000)==kFailUnknown
+            && connected_profiles.empty(),"A rejected profile is never connected");
+    reset();
+    check(Connect(backend,99,L"<name>Gesher-r-j</name>",L"Gesher-r-j",nullptr,connect_active,nullptr,3000)==kFailUnknown
+            && stored_profiles.empty(),"An unknown interface is not substituted");
+    check(Connect(unavailable,6,L"<name>Gesher-r-k</name>",L"Gesher-r-k",nullptr,connect_active,nullptr,3000)==kFailUnknown,
+            "No WLAN API cannot connect");
+    reset();
+    check(Disconnect(backend,6,L"Gesher-r-a",L"Home") && disconnects==1 && deleted_profiles.size()==1
+            && deleted_profiles[0]==L"Gesher-r-a" && connected_profiles.size()==1 && connected_profiles[0]==L"Home",
+            "Teardown disconnects, deletes the temporary profile and restores the previous one");
+    reset();
+    check(Disconnect(backend,6,L"",L"") && deleted_profiles.empty() && connected_profiles.empty(),"Plain disconnect");
+    reset();
+    check(StoreProfile(backend,6,L"<name>Gesher-s-1</name>",L"Gesher-s-1") && stored_profiles.size()==1
+            && positioned==L"Gesher-s-1" && position==2
+            && StoreProfile(backend,6,nullptr,L"Gesher-s-1") && deleted_profiles.size()==1,
+            "Suggestion profile is stored below the user's profiles, and deleted");
+    reset();position_failure=true;
+    check(!StoreProfile(backend,6,L"<name>Gesher-s-1</name>",L"Gesher-s-1") && deleted_profiles.size()==1
+            && deleted_profiles[0]==L"Gesher-s-1","A suggestion Windows cannot rank below the user's networks is removed");
+    reset();
+    check(Profiles(backend,6,L"Gesher-")==L"Gesher-r-1\n","Only per-user Gesher profiles are listed for cleanup");
+    reset();
+    check(CurrentProfile(backend,6).empty() || CurrentProfile(backend,6)==L"","Connected fixture interface without a profile name");
     std::cout<<"WindowsWifi native boundary all passed: "<<checks<<"\n";
 }

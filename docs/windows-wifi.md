@@ -31,6 +31,27 @@ link state. SSIDs cross the native boundary as their original bytes, so they do
 not depend on a shell's code page or translated command labels. The backend does
 not run `netsh` or PowerShell.
 
+User-approved connections (`WifiConnections`, [Wi-Fi contracts](wifi.md#connecting))
+use four more calls. `nativeConnect` stores a per-user profile with
+`WlanSetProfile(WLAN_PROFILE_USER)`, registers ACM notifications on its own handle
+before `WlanConnect`, and returns only the outcome Windows reports for that profile
+on that interface (`connection_complete` or `connection_attempt_fail`); another
+profile's completion is ignored, and no notification within the deadline is
+`NO_RESPONSE`. The requester's liveness is checked before any Windows change and
+while waiting. Reason codes map to Android's local-only failure codes (security
+reasons and the MSM security range to `AUTHENTICATION`, association
+rejection/timeout to `ASSOCIATION`, not visible/not available to `NOT_FOUND`).
+`nativeDisconnect` disconnects, deletes the temporary profile and reconnects the
+previous profile (used only while the interface is still on Gesher's profile or on
+none); `nativeStoreProfile` stores or deletes suggestion profiles and moves a stored
+one to the end of the preference list with `WlanSetProfilePosition` (deleting it if
+that fails);
+`nativeProfiles` lists only per-user profiles with Gesher's prefix (all-user
+profiles are never listed or removed); `nativeCurrentProfile` reads the connected
+profile name. Profile XML (`WlanProfiles`) carries the SSID as hex bytes and
+escapes every text value; the native copy of the XML, which may hold a passphrase,
+is zeroed after use.
+
 ## Observable behavior
 
 - Reads use a cache refreshed by one daemon worker. The first read or an expired
