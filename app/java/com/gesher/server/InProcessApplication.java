@@ -74,6 +74,19 @@ public final class InProcessApplication implements AutoCloseable {
         Services.installInProcess(mServices.services);
     }
 
+    public synchronized void prepareStorage() throws java.io.IOException {
+        requireCurrent();
+        if (!mPm.isCohost()) {
+            mOwner.prepareDataDirectories();
+            return;
+        }
+        if (!Zygote.nativeCohostOwnsData(
+                Zygote.windowsPath(mOwner.credentialProtectedDataDir()),
+                Zygote.windowsPath(mOwner.deviceProtectedDataDir()))) {
+            throw new SecurityException("The standalone data paths do not match their host admission");
+        }
+    }
+
     /** Called by the framework driver, before LoadedApk can load any application classes. */
     public synchronized void bind(IApplicationThread thread) {
         requireCurrent();

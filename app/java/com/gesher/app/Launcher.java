@@ -223,6 +223,10 @@ public final class Launcher {
                 ensureCohostOwner();
                 return 0;
             }
+            case "launch-cohost": {
+                if (!protectedRequested() || rest.isEmpty()) return usage();
+                return launchCohost(rest);
+            }
             case "install": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
@@ -277,6 +281,39 @@ public final class Launcher {
             }
             default: return usage();
         }
+    }
+
+    private static int launchCohost(List<String> arguments) throws Exception {
+        File apk = new File(arguments.get(0)).getAbsoluteFile();
+        if (!apk.isFile()) throw new IllegalArgumentException(text("no_file", apk));
+        String data = null;
+        List<String> options = new ArrayList<>();
+        for (int i = 1; i < arguments.size(); ++i) {
+            String option = arguments.get(i);
+            if ("--system-server".equals(option)) return usage();
+            if ("--data-dir".equals(option)) {
+                if (++i >= arguments.size()) return usage();
+                String path = arguments.get(i);
+                if (path.startsWith("\\\\") || path.startsWith("//")
+                        || path.length() > 2 && path.charAt(1) == ':') {
+                    path = Zygote.fromWindowsPath(path);
+                }
+                data = new File(path).getAbsolutePath();
+            } else {
+                options.add(option);
+                int values = switch (option) {
+                    case "--activity", "--build-prop", "--framework-res", "--display" -> 1;
+                    case "--ez" -> 2;
+                    default -> 0;
+                };
+                while (values-- > 0) {
+                    if (++i >= arguments.size()) return usage();
+                    options.add(arguments.get(i));
+                }
+            }
+        }
+        ensureCohostOwner();
+        return com.gesher.server.CohostOwnerService.launch(apk.getPath(), data, options);
     }
 
     /**

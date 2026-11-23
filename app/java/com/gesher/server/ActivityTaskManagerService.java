@@ -527,11 +527,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     ActivityTaskManagerService(PackageManagerService pm) {
+        this(pm, new PermissionRequests(pm));
+    }
+
+    ActivityTaskManagerService(PackageManagerService pm, PermissionRequests permissionRequests) {
         mPm = pm;
-        mPermissionRequests = new PermissionRequests(pm);
+        mPermissionRequests = permissionRequests;
         mExactAlarmRequests = pm.exactAlarmAccessRequests();
         mBluetoothRequests = new BluetoothRequests(pm);
     }
+
+    PermissionRequests permissionRequests() { return mPermissionRequests; }
 
     void setActivityManager(ActivityManagerService am) {
         mAm = am;

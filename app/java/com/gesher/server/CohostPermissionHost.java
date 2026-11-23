@@ -6,6 +6,9 @@ package com.gesher.server;
 
 import android.content.pm.PackageManager;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -21,6 +24,7 @@ final class CohostPermissionHost implements AutoCloseable {
     private final PermissionPolicy.ScopedOwner mOwner;
     private final PermissionRequests mRequests;
     private volatile long mLease;
+    private boolean mCancelled;
 
     CohostPermissionHost(PackageManagerService pm, PermissionRequests requests, String apk)
             throws Exception {
@@ -31,11 +35,58 @@ final class CohostPermissionHost implements AutoCloseable {
     ApkPackage code() { return mOwner.code(); }
     Zygote.StandaloneInput input() { return mOwner.input(); }
 
+    int runApplication(String runtimeOptions, String dataDir, List<String> options)
+            throws Exception {
+        return runApplication(runtimeOptions, dataDir, options, null);
+    }
+
+    int runApplication(String runtimeOptions, String dataDir, List<String> options, int[] streams)
+            throws Exception {
+        ApkPackage code = code();
+        if (dataDir != null) code.setDataDir(dataDir);
+        // The layout journal belongs to the host. Only the two actual data
+        // trees take part in the private storage broker.
+        code.prepareDataDirectories();
+        AppSandbox.prepareStandaloneRuntime();
+        String profile = "Gesher.Cohost." + UUID.randomUUID();
+        if (Zygote.nativeEnsureAppContainer(profile, code.packageName) != 0) {
+            throw new IllegalStateException("Cannot create the standalone AppContainer");
+        }
+        try {
+            if (Zygote.nativeGrantPropertyAreaRead(profile) != 0) {
+                throw new IllegalStateException("Cannot read the host system properties");
+            }
+            List<String> capabilities = new ArrayList<>(List.of(AppSandbox.RUNTIME_FILES));
+            if (ConnectivityService.requests(code, ConnectivityService.INTERNET)) {
+                capabilities.add(AppSandbox.INTERNET_CLIENT);
+                capabilities.add(AppSandbox.PRIVATE_NETWORK);
+            }
+            List<String> arguments = new ArrayList<>(options);
+            if (dataDir != null) {
+                arguments.add("--data-dir");
+                arguments.add(code.credentialProtectedDataDir());
+            }
+            arguments.add(code.apkPath);
+            String command = Zygote.commandLine(runtimeOptions,
+                    com.gesher.app.Main.class.getName(), arguments);
+            return input().runCohost(command, profile, code.packageName,
+                    capabilities.toArray(String[]::new), code.uid(), this,
+                    Zygote.windowsPath(code.credentialProtectedDataDir()),
+                    Zygote.windowsPath(code.deviceProtectedDataDir()), streams);
+        } finally {
+            Zygote.nativeDeleteAppContainer(profile);
+        }
+    }
+
     // The native launcher binds only the kernel process it actually created,
     // after admission and before ResumeThread. No guest supplies this value.
     private synchronized void bindNativeLease(long lease) {
         if (lease <= 0 || mLease != 0) throw new IllegalStateException("Already bound");
         mLease = lease;
+        if (mCancelled) {
+            Zygote.nativeCancelCohost(lease);
+            throw new SecurityException("The standalone launcher already disconnected");
+        }
     }
 
     private boolean isLive() {
@@ -71,5 +122,11 @@ final class CohostPermissionHost implements AutoCloseable {
 
     @Override public void close() {
         mOwner.close();
+    }
+
+    synchronized void cancel() {
+        mCancelled = true;
+        long lease = mLease;
+        if (lease > 0) Zygote.nativeCancelCohost(lease);
     }
 }

@@ -355,17 +355,31 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = '0aff6c92264c42580f834b5ad221e5d7d7aaaf9a0bcf0aa0eb79ad23a983ef15'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = 'c761a4c5e3f4994b134eab95a4620f84ebb8d99e107ab87564fbaeea7415d43b'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/binder/binderd.cc': '3011ce2db55d2e129b7cf693064d1f89fbe8398089b7420a7fa88c47559cf8fb',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
+ 'compat/posix/posix.cmake': 'aafaa8d7fe47db48a52890f70d05495e88726ead08becc8297a08fba09423083',
  'compat/posix/src/binder.cc': 'c949a02add8fdb4102c0248fc796d6a0b39ac20a9ff2a2070455e1b9cd3845d0',
  'compat/posix/src/binder_wire.h': '72aaf4a8dbb26ab151cde349136b8f0f9976819609a0f101df96a2c4cdfe0d69',
+ 'compat/posix/src/dirent.cc': 'db31cc15b7cc8d8b2ac881a9e4ceee12ba903a9798ce59eaf150e61cc7dcc921',
+ 'compat/posix/src/errno.cc': 'f2d2e94807fec9abd2e3785994f388538b1dee9abc49a4b2e574cdd594f89238',
  'compat/posix/src/fd.cc': '4f7ab619d769b885e6f54be626567d4df8ec5a2739901b6beba8a2a5548305dc',
- 'compat/posix/src/fsops.cc': '289d46740f0b4d45ae8c00117ee4c9ea0a24f6994b1f7ef070db1420da0dc51a',
+ 'compat/posix/src/fsops.cc': '92ccadfd0f52d00e6805db64998792173a9abb997ee60aa023086a2581f95660',
+ 'compat/posix/src/internal.h': '63d4a1383062aee4d6b96bbbbc0ec1c8858ae2af49d4ebabcaaee9b53d32033f',
  'compat/posix/src/ofd.cc': 'b1d9b541efbd27332d2ea1047f7a98b91101e586b5d04830cf17bfd1ebf4e079',
+ 'compat/posix/src/path.cc': 'a3b3a3715887397a08525712bd2bcbbbe61d8b059b1f7fe4311042bad9b3e620',
  'compat/posix/src/pipe_io.cc': '6df3e0ab8cae3afc9cf6cebc902c5950a7d612bea2745460cdd1447538e6e23b',
- 'compat/posix/src/unistd.cc': '7529dd36a73bfe008fb027541bae21e19dd92ff7d78265aa1dbc45a2008e6e19',
+ 'compat/posix/src/record_lock_descriptors.cc': '3289895673c4f63c98ae1c7434c89cce5700197c5b1401a4cc7f12cb79dcc819',
+ 'compat/posix/src/record_lock_descriptors.h': '915a45d8232f44ae07d1cfefe9d0b9c128253e6b16cc6f9fef1e185fd52d6e63',
+ 'compat/posix/src/record_lock_duplicate.cc': '563bc13b88b61ce80de4c3370849c843c316087039e98f12ec278ac0b49cfe4f',
+ 'compat/posix/src/record_lock_operation.cc': '5a61fd0f2c6dcd3204205cbbc35fb125efea21b155530816d9a0204e974d079f',
+ 'compat/posix/src/record_lock_operation.h': '90634149c714c0c0f8ac0e7e2af46a91f750981456ff90ac473243e8c661020a',
+ 'compat/posix/src/sqlite_path.cc': '793968fbd0e9d3002568a6da6f2ae2ec082bdb048d1d32ca3aa3f9496dab87fe',
+ 'compat/posix/src/stat.cc': '0e5b94db2096d19d36f334646b62c154d2b403fb4ea7fc2ac7a98a4378855da6',
+ 'compat/posix/src/system.cc': 'e9a53915f7b79faecf03eb1d5a90ac93baccd6ae2c7101e64fae4613a09e40c3',
+ 'compat/posix/src/system_properties.cc': '561b60eb0bf874438ba65fa8e3b9d5a8bcf3af67589c5a46105c0375fb1bb42b',
+ 'compat/posix/src/unistd.cc': 'e32b80cc0902e75dd0a9d6ed6b9a90c48b0dd18269697f739b87d0b41c4d6e61',
  'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
 }
 

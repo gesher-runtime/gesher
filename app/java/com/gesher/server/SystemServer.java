@@ -281,23 +281,32 @@ public final class SystemServer {
         // process starts without publishing an Android device. On request it
         // publishes the usual services on these same live objects.
         PackageManagerService ownerPm = cohostOwner ? new PackageManagerService(packages) : null;
+        PermissionRequests ownerPermissions = cohostOwner ? new PermissionRequests(ownerPm) : null;
+        CohostOwnerService cohostControl = null;
         if (cohostOwner) {
-            CohostOwnerService control = new CohostOwnerService();
-            control.publish();
+            cohostControl = new CohostOwnerService(ownerPm, ownerPermissions,
+                    Zygote.vmCommandLine(SystemServer.class.getName()));
+            cohostControl.publish();
             startBinderThreads(TAG, 31);
             DeviceControl.writeReady(Device.cohostOwnerReadyFile());
-            long end = idleTimeoutS <= 0 ? Long.MAX_VALUE
-                    : SystemClock.uptimeMillis() + idleTimeoutS * 1000;
-            while (!control.awaitPromotion()) {
-                if (SystemClock.uptimeMillis() >= end) return;
+            while (!cohostControl.awaitPromotion()) {
+                if (idleTimeoutS > 0 && !cohostControl.hasActiveLaunch()
+                        && SystemClock.uptimeMillis() - cohostControl.lastUse() >= idleTimeoutS * 1000) {
+                    return;
+                }
             }
             preparePackageStorage(committed, packages);
         }
 
         // The services, published with servicemanager.
-        Map<String, IBinder> services = cohostOwner ? Services.create(ownerPm, true).services
+        Map<String, IBinder> services = cohostOwner ? Services.create(ownerPm, true, ownerPermissions).services
                 : Services.create(packages);
         Services.Created created = Services.sLast;
+        if (persistent && protectedDevice && cohostControl == null) {
+            cohostControl = new CohostOwnerService(created.pm, created.atm.permissionRequests(),
+                    Zygote.vmCommandLine(SystemServer.class.getName()));
+            cohostControl.publish();
+        }
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
@@ -307,7 +316,7 @@ public final class SystemServer {
             Installer.attachMetadata(created.pm, created.atm);
         }
         DeviceControl device = persistent || protectedDevice
-                ? new DeviceControl(created, installer, idleTimeoutS) : null;
+                ? new DeviceControl(created, installer, cohostControl, idleTimeoutS) : null;
         if (device != null) services.put(GesherService.NAME, new GesherService(device));
         for (Map.Entry<String, IBinder> e : services.entrySet()) {
             ServiceManager.addService(e.getKey(), e.getValue());
@@ -460,14 +469,17 @@ public final class SystemServer {
     private static final class DeviceControl implements GesherService.Device {
         private final Services.Created mServices;
         private final Installer mInstaller;
+        private final CohostOwnerService mCohostControl;
         private final long mIdleTimeoutMs;
         private final long mStarted = System.currentTimeMillis();
         private volatile long mLastCall = SystemClock.uptimeMillis();
         private boolean mShuttingDown;
 
-        DeviceControl(Services.Created services, Installer installer, long idleTimeoutS) {
+        DeviceControl(Services.Created services, Installer installer,
+                      CohostOwnerService cohostControl, long idleTimeoutS) {
             mServices = services;
             mInstaller = installer;
+            mCohostControl = cohostControl;
             mIdleTimeoutMs = idleTimeoutS * 1000;
         }
 
@@ -534,7 +546,8 @@ public final class SystemServer {
                         long now = SystemClock.uptimeMillis();
                         // Scheduled alarms and jobs due within the timeout keep the
                         // device for at most one more timeout (devsvc, DeviceWork).
-                        if (since != 0 && now - since >= mIdleTimeoutMs
+                        if ((mCohostControl == null || !mCohostControl.hasActiveLaunch())
+                                && since != 0 && now - since >= mIdleTimeoutMs
                                 && now - mLastCall >= mIdleTimeoutMs
                                 && !DeviceWork.keepsIdleDevice(now - since, mIdleTimeoutMs)) {
                             shutdown("idle: no app in use for " + (mIdleTimeoutMs / 1000)

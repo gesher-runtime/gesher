@@ -115,8 +115,13 @@ public final class Services {
     }
 
     static Created create(PackageManagerService pm, boolean persistentAccounts) {
+        return create(pm, persistentAccounts, new PermissionRequests(pm));
+    }
+
+    static Created create(PackageManagerService pm, boolean persistentAccounts,
+            PermissionRequests permissionRequests) {
         Map<String, IBinder> services = new LinkedHashMap<>();
-        ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        ActivityTaskManagerService atm = new ActivityTaskManagerService(pm, permissionRequests);
         pm.attachInstallSourceCallers(atm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);

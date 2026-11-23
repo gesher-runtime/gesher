@@ -48,6 +48,7 @@ std::vector<int> StartProtectedDevice(const std::u16string& device,
     const std::vector<std::u16string>& environment, bool scoped = false);
 // After a scoped device ends, drain any launcher-side console byte relays.
 void FinishScopedStandardStreams();
+uint32_t CaptureCohostStandardStreams(std::array<void*, 3>* handles);
 
 // A protected SystemServer must enroll the actual contained child before it
 // runs. The install UUID and UID come from the server's durable package data.
@@ -74,6 +75,11 @@ struct CohostSpec {
   // Called before resuming the actual AppContainer process. Borrowed native
   // handles are valid only during the callback unless explicitly duplicated.
   std::function<uint32_t(void* process, void* job)> start_services;
+  std::u16string credential_canonical{};
+  std::u16string device_canonical{};
+  std::u16string credential_nt{};
+  std::u16string device_nt{};
+  std::array<void*, 3> standard_handles{};
 };
 uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& spec,
                         uint64_t pin, uint32_t uid, const CohostSpec& services, uint32_t* exit_code);

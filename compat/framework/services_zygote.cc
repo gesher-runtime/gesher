@@ -132,6 +132,7 @@ struct StandaloneInput {
 };
 
 DWORD PreparePinnedSource(uint64_t pin, StandaloneInput* source);
+bool StandaloneSupervisor();
 void WaitWithStandaloneInput(HANDLE process, StandaloneInput& code);
 
 struct PinnedChildInput {
@@ -682,6 +683,20 @@ void FinishScopedStandardStreams() {
   }
 }
 
+uint32_t CaptureCohostStandardStreams(std::array<void*, 3>* handles) {
+  if (handles == nullptr || !StandaloneSupervisor()) return ERROR_ACCESS_DENIED;
+  StandardHandles captured;
+  {
+    std::lock_guard<std::mutex> lock(g_bootstrap_lock);
+    if (!OpenScopedStandardHandles(&captured, &g_scoped_relays)) {
+      const DWORD failure = GetLastError();
+      return failure == ERROR_SUCCESS ? ERROR_ACCESS_DENIED : failure;
+    }
+  }
+  for (size_t i = 0; i < captured.size(); ++i) (*handles)[i] = captured[i].release();
+  return ERROR_SUCCESS;
+}
+
 namespace {
 
 struct Writer {
@@ -1136,12 +1151,19 @@ uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t*
   }
   if (cohost != nullptr) {
     failure = cohost->services->start_services(process.value, job.value);
-    if (failure != ERROR_SUCCESS) return failure;
+    if (failure != ERROR_SUCCESS) {
+      TerminateJobObject(job.value, failure);
+      return failure;
+    }
   }
   // Transfer only the foreground permission Windows actually gives this launcher.
   // Failure leaves the normal OS focus rules in force; it never fabricates focus.
   AllowSetForegroundWindow(child.dwProcessId);
-  if (ResumeThread(thread.value) == static_cast<DWORD>(-1)) return GetLastError();
+  if (ResumeThread(thread.value) == static_cast<DWORD>(-1)) {
+    failure = GetLastError();
+    if (cohost != nullptr) TerminateJobObject(job.value, failure);
+    return failure;
+  }
   if (code != nullptr) WaitWithStandaloneInput(process.value, *code);
   if (WaitForSingleObject(process.value, INFINITE) != WAIT_OBJECT_0) return GetLastError();
   DWORD result = 0;
@@ -1257,6 +1279,10 @@ DWORD PrepareCohost(const CohostSpec& services, CohostHandles* handles) {
   auto* record = new (bytes) Record;
   const bool stored = cohost_bootstrap::Store(&record->credential, Wide(services.credential)) &&
       cohost_bootstrap::Store(&record->device, Wide(services.device)) &&
+      cohost_bootstrap::Store(&record->credential_canonical, Wide(services.credential_canonical)) &&
+      cohost_bootstrap::Store(&record->device_canonical, Wide(services.device_canonical)) &&
+      cohost_bootstrap::Store(&record->credential_nt, Wide(services.credential_nt)) &&
+      cohost_bootstrap::Store(&record->device_nt, Wide(services.device_nt)) &&
       cohost_bootstrap::Store(&record->storage_pipe, Wide(services.storage_pipe)) &&
       cohost_bootstrap::Store(&record->permission_pipe, Wide(services.permission_pipe));
   UnmapViewOfFile(bytes);
@@ -1288,7 +1314,15 @@ uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& 
   failure = PrepareCohost(services, &bootstrap);
   if (failure != ERROR_SUCCESS) return failure;
   StandardHandles streams;
-  {
+  if (services.standard_handles[0] != nullptr) {
+    for (size_t i = 0; i < streams.size(); ++i) {
+      const HANDLE original = services.standard_handles[i];
+      HANDLE copy = nullptr;
+      if (original == nullptr || !DuplicateHandle(GetCurrentProcess(), original,
+              GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS)) return ERROR_INVALID_HANDLE;
+      streams[i].reset(copy);
+    }
+  } else {
     std::lock_guard<std::mutex> lock(g_bootstrap_lock);
     streams = std::move(Authority().stdio);
   }

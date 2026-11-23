@@ -63,10 +63,13 @@ public final class Zygote {
             String display, String[] capabilities, long pin, int uid);
     private static native int nativeRunPinnedCohost(String command, String container,
             String display, String[] capabilities, long pin, int uid,
-            CohostPermissionHost permissions, String credential, String device, String storagePipe);
+            CohostPermissionHost permissions, String credential, String device, int[] streams);
     static native boolean nativeCohostPermissionLive(long lease);
+    static native void nativeCancelCohost(long lease);
+    public static native int[] captureCohostStreams() throws IOException;
     static native boolean nativeHasCohostPermissionScope();
     static native boolean nativeCohostOwnsApk(String windowsPath);
+    static native boolean nativeCohostOwnsData(String credential, String device);
     static native int[] nativeCohostPermissionExchange(int operation, String[] names);
     static native long nativeStartTime(int pid);
     static native long nativeChildStartTime(int pid);
@@ -121,10 +124,10 @@ public final class Zygote {
 
         int runCohost(String command, String container, String display, String[] capabilities,
                 int uid, CohostPermissionHost permissions, String credential, String device,
-                String storagePipe) {
+                int[] streams) {
             if (!isOpen()) throw new IllegalStateException("Standalone code lease is closed");
             return nativeRunPinnedCohost(command, container, display, capabilities, pin, uid,
-                    permissions, credential, device, storagePipe);
+                    permissions, credential, device, streams);
         }
 
         @Override public void close() {

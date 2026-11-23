@@ -314,6 +314,11 @@ try {
   # Single process: the app alone, with stand-in services in its own process.
   $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
   if ($DriverArgs -notcontains '--system-server') {
+    if ($protectedScopedRun) {
+      $env:GESHER_SANDBOX = 'appcontainer-trusted'
+      Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-cohost (UserPath $apkFull) @DriverArgs
+      exit $LASTEXITCODE
+    }
     Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     exit $LASTEXITCODE
   }

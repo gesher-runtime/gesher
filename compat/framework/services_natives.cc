@@ -27,6 +27,8 @@
 #include <jni.h>
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
+#include <fcntl.h>
+#include <io.h>
 #include <unistd.h>
 #include <cstdio>
 #include <map>
@@ -36,6 +38,9 @@
 #include "core_jni_helpers.h"
 #include "cohost_permission_server.h"
 #include "../posix/src/standalone_input.h"
+#include "../posix/src/internal.h"
+#include "../posix/src/ofd_internal.h"
+#include "rooted_storage_server.h"
 #include "services_zygote.h"
 
 // Its layout checks use offsetof on a class with atomics, which Soong's flags
@@ -349,8 +354,12 @@ static jint Zygote_runContainedStandalone(JNIEnv* env, jclass, jstring command, 
 namespace {
 namespace cohost = gesher::cohost_permissions;
 using gesher::binder_peer::OwnedHandle;
+struct CohostNativePeer {
+    OwnedHandle process;
+    OwnedHandle job;
+};
 std::mutex gCohostLeasesLock;
-std::map<jlong, OwnedHandle> gCohostLeases;
+std::map<jlong, CohostNativePeer> gCohostLeases;
 uint64_t gNextCohostLease = 1;
 
 class CohostLease {
@@ -360,15 +369,19 @@ public:
         gCohostLeases.erase(id_);
     }
 
-    jlong attach(HANDLE process) {
+    jlong attach(HANDLE process, HANDLE job) {
         HANDLE retained = nullptr;
         if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &retained,
                              SYNCHRONIZE, FALSE, 0)) return 0;
         OwnedHandle owner(retained);
+        HANDLE retainedJob = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), job, GetCurrentProcess(), &retainedJob,
+                             JOB_OBJECT_TERMINATE, FALSE, 0)) return 0;
+        OwnedHandle jobOwner(retainedJob);
         std::lock_guard<std::mutex> lock(gCohostLeasesLock);
         if (id_ != 0 || gNextCohostLease > INT64_MAX) return 0;
         id_ = static_cast<jlong>(gNextCohostLease++);
-        gCohostLeases.emplace(id_, std::move(owner));
+        gCohostLeases.emplace(id_, CohostNativePeer{std::move(owner), std::move(jobOwner)});
         return id_;
     }
 
@@ -421,7 +434,42 @@ static jboolean Zygote_cohostPermissionLive(JNIEnv*, jclass, jlong lease) {
     std::lock_guard<std::mutex> lock(gCohostLeasesLock);
     auto entry = gCohostLeases.find(lease);
     return entry != gCohostLeases.end() &&
-        WaitForSingleObject(entry->second.get(), 0) == WAIT_TIMEOUT ? JNI_TRUE : JNI_FALSE;
+        WaitForSingleObject(entry->second.process.get(), 0) == WAIT_TIMEOUT ? JNI_TRUE : JNI_FALSE;
+}
+
+static void Zygote_cancelCohost(JNIEnv*, jclass, jlong lease) {
+    std::lock_guard<std::mutex> lock(gCohostLeasesLock);
+    const auto entry = gCohostLeases.find(lease);
+    if (entry != gCohostLeases.end()) TerminateJobObject(entry->second.job.get(), ERROR_CANCELLED);
+}
+
+static jintArray Zygote_captureCohostStreams(JNIEnv* env, jclass) {
+    jintArray result = env->NewIntArray(3);
+    if (result == nullptr) return nullptr;
+    std::array<void*, 3> handles;
+    if (gesher::zygote::CaptureCohostStandardStreams(&handles) != ERROR_SUCCESS) {
+        jniThrowException(env, "java/io/IOException", "Cannot retain the launcher streams");
+        return nullptr;
+    }
+    std::array<int, 3> descriptors{-1, -1, -1};
+    for (size_t i = 0; i < descriptors.size(); ++i) {
+        const int crt = _O_BINARY | _O_NOINHERIT | (i == 0 ? _O_RDONLY : _O_WRONLY);
+        const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(handles[i]), crt);
+        if (fd < 0) break;
+        descriptors[i] = fd;
+        handles[i] = nullptr;
+        if (gesher::RegisterOfd(fd, O_CLOEXEC | (i == 0 ? O_RDONLY : O_WRONLY)) < 0) break;
+        if (i == descriptors.size() - 1) {
+            env->SetIntArrayRegion(result, 0, 3, descriptors.data());
+            if (!env->ExceptionCheck()) return result;
+        }
+    }
+    for (int fd : descriptors) if (fd >= 0) close(fd);
+    for (HANDLE handle : handles) if (handle != nullptr) CloseHandle(handle);
+    if (!env->ExceptionCheck()) {
+        jniThrowException(env, "java/io/IOException", "Cannot bind the launcher descriptors");
+    }
+    return nullptr;
 }
 
 static jboolean Zygote_hasCohostPermissionScope(JNIEnv*, jclass) {
@@ -435,6 +483,67 @@ static jboolean Zygote_cohostOwnsApk(JNIEnv* env, jclass type, jstring path) {
     const auto value = ZygoteString(env, path);
     const std::wstring native(value.begin(), value.end());
     return gesher::standalone_input::Current().Matches(native) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jboolean Zygote_cohostOwnsData(JNIEnv* env, jclass type, jstring credential,
+                                     jstring device) {
+    if (Zygote_hasCohostPermissionScope(env, type) != JNI_TRUE) return JNI_FALSE;
+    const auto& boot = gesher::cohost_bootstrap::Current();
+    const auto equal = [](const std::wstring& expected, const std::u16string& input) {
+        std::wstring name(input.begin(), input.end());
+        return CompareStringOrdinal(expected.c_str(), -1, name.c_str(), -1, TRUE) == CSTR_EQUAL;
+    };
+    return !boot.storage_pipe.empty() && equal(boot.credential, ZygoteString(env, credential)) &&
+        equal(boot.device, ZygoteString(env, device)) ? JNI_TRUE : JNI_FALSE;
+}
+
+static std::wstring CohostDosName(std::wstring name) {
+    if (name.starts_with(L"\\\\?\\UNC\\")) name = L"\\\\" + name.substr(8);
+    else if (name.starts_with(L"\\\\?\\")) name.erase(0, 4);
+    std::replace(name.begin(), name.end(), L'/', L'\\');
+    while (name.size() > 3 && name.back() == L'\\') name.pop_back();
+    return name;
+}
+
+struct CohostDirectory {
+    OwnedHandle directory;
+    std::u16string canonical;
+    std::u16string nt;
+};
+
+static DWORD PinCohostDirectory(const std::u16string& chosen, CohostDirectory* result) {
+    const std::wstring path(chosen.begin(), chosen.end());
+    if (CohostDosName(path).size() <= 3) return ERROR_ACCESS_DENIED;
+    auto& directory = result->directory;
+    directory.reset(CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE |
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!directory) return GetLastError();
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    if (!GetFileInformationByHandleEx(directory.get(), FileAttributeTagInfo,
+                                     &attributes, sizeof(attributes))) return GetLastError();
+    if ((attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+        (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) return ERROR_ACCESS_DENIED;
+    std::wstring selected(32768, L'\0'), opened(32768, L'\0');
+    DWORD size = GetLongPathNameW(path.c_str(), selected.data(), static_cast<DWORD>(selected.size()));
+    if (size == 0 || size >= selected.size()) return ERROR_ACCESS_DENIED;
+    selected.resize(size);
+    size = GetFinalPathNameByHandleW(directory.get(), opened.data(),
+        static_cast<DWORD>(opened.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (size == 0 || size >= opened.size()) return ERROR_ACCESS_DENIED;
+    opened.resize(size);
+    const std::wstring canonical = CohostDosName(std::move(opened));
+    if (CompareStringOrdinal(CohostDosName(std::move(selected)).c_str(), -1,
+                             canonical.c_str(), -1, TRUE) != CSTR_EQUAL) {
+        return ERROR_ACCESS_DENIED;
+    }
+    std::wstring ntName(32768, L'\0');
+    size = GetFinalPathNameByHandleW(directory.get(), ntName.data(),
+        static_cast<DWORD>(ntName.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+    if (size == 0 || size >= ntName.size()) return ERROR_ACCESS_DENIED;
+    result->canonical.assign(canonical.begin(), canonical.end());
+    result->nt.assign(ntName.begin(), ntName.begin() + size);
+    return ERROR_SUCCESS;
 }
 
 static jintArray Zygote_cohostPermissionExchange(JNIEnv* env, jclass, jint operation,
@@ -452,7 +561,7 @@ static jintArray Zygote_cohostPermissionExchange(JNIEnv* env, jclass, jint opera
 
 static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring name,
         jstring display, jobjectArray capabilities, jlong pin, jint uid, jobject permissions,
-        jstring credential, jstring device, jstring storagePipe) {
+        jstring credential, jstring device, jintArray standardDescriptors) {
     if (pin <= 0 || permissions == nullptr || !gesher::zygote::HasProtectedLaunchAuthority()) {
         jniThrowException(env, "java/lang/SecurityException", "Protected cohost cannot launch");
         return 0;
@@ -470,23 +579,74 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
     }
     jobject host = env->NewGlobalRef(permissions);
     if (host == nullptr) return 0;
+    std::array<void*, 3> streams{};
+    if (standardDescriptors != nullptr) {
+        if (env->GetArrayLength(standardDescriptors) != 3) {
+            env->DeleteGlobalRef(host);
+            jniThrowException(env, "java/lang/IllegalArgumentException", "Invalid launcher streams");
+            return 0;
+        }
+        std::array<jint, 3> descriptors;
+        env->GetIntArrayRegion(standardDescriptors, 0, 3, descriptors.data());
+        if (env->ExceptionCheck()) {
+            env->DeleteGlobalRef(host);
+            return 0;
+        }
+        for (size_t i = 0; i < streams.size(); ++i) {
+            const HANDLE handle = gesher::HandleFromFd(descriptors[i]);
+            if (handle == INVALID_HANDLE_VALUE) {
+                env->DeleteGlobalRef(host);
+                jniThrowException(env, "java/lang/IllegalArgumentException", "Invalid launcher stream");
+                return 0;
+            }
+            streams[i] = handle;
+        }
+    }
     uint32_t exit = 0;
     uint32_t failure = ERROR_GEN_FAILURE;
     {
+        const auto credentialPath = ZygoteString(env, credential);
+        const auto devicePath = ZygoteString(env, device);
+        CohostDirectory credentialRoot, deviceRoot;
+        std::unique_ptr<gesher::rooted_storage::Server> storage;
+        if (!credentialPath.empty() || !devicePath.empty()) {
+            failure = PinCohostDirectory(credentialPath, &credentialRoot);
+            if (failure == ERROR_SUCCESS) failure = PinCohostDirectory(devicePath, &deviceRoot);
+            if (failure != ERROR_SUCCESS) {
+                env->DeleteGlobalRef(host);
+                jniThrowException(env, "java/lang/SecurityException",
+                                  "Cannot admit the exact standalone storage directories");
+                return 0;
+            }
+            storage = std::make_unique<gesher::rooted_storage::Server>(
+                gesher::rooted_storage::Roots{credentialRoot.directory.get(), deviceRoot.directory.get()});
+            if (storage->name().empty()) {
+                env->DeleteGlobalRef(host);
+                jniThrowException(env, "java/lang/SecurityException", "Cannot create rooted storage");
+                return 0;
+            }
+        }
         CohostLease lease;
         cohost::Server authority([&](cohost::Operation operation,
                 const std::vector<std::u16string>& names, std::vector<int32_t>* values) {
             return DispatchCohostPermission(vm, host, dispatch, operation, names, values);
         });
-        gesher::zygote::CohostSpec services{ZygoteString(env, credential), ZygoteString(env, device),
-            ZygoteString(env, storagePipe), std::u16string(authority.name().begin(), authority.name().end()),
+        const std::wstring storageName = storage ? storage->name() : std::wstring{};
+        gesher::zygote::CohostSpec services{credentialPath, devicePath,
+            std::u16string(storageName.begin(), storageName.end()),
+            std::u16string(authority.name().begin(), authority.name().end()),
             [&](void* process, void* job) -> uint32_t {
-                const jlong leaseId = lease.attach(static_cast<HANDLE>(process));
+                if (storage) {
+                    const DWORD started = storage->Start(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
+                    if (started != ERROR_SUCCESS) return started;
+                }
+                const jlong leaseId = lease.attach(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
                 if (leaseId == 0) return ERROR_ACCESS_DENIED;
                 env->CallVoidMethod(host, bind, leaseId);
                 if (env->ExceptionCheck()) return ERROR_ACCESS_DENIED;
                 return authority.Start(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
-            }};
+            }, std::move(credentialRoot.canonical), std::move(deviceRoot.canonical),
+            std::move(credentialRoot.nt), std::move(deviceRoot.nt), streams};
         gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
                                              ZygoteStrings(env, capabilities)};
         failure = gesher::zygote::RunPinnedCohost(ZygoteString(env, command), spec,
@@ -595,11 +755,14 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_runContainedStandalone)},
     {"nativeRunPinnedCohost",
      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;JI"
-     "Lcom/gesher/server/CohostPermissionHost;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+     "Lcom/gesher/server/CohostPermissionHost;Ljava/lang/String;Ljava/lang/String;[I)I",
      GESHER_JNI(Zygote_runPinnedCohost)},
     {"nativeCohostPermissionLive", "(J)Z", GESHER_JNI(Zygote_cohostPermissionLive)},
+    {"nativeCancelCohost", "(J)V", GESHER_JNI(Zygote_cancelCohost)},
+    {"captureCohostStreams", "()[I", GESHER_JNI(Zygote_captureCohostStreams)},
     {"nativeHasCohostPermissionScope", "()Z", GESHER_JNI(Zygote_hasCohostPermissionScope)},
     {"nativeCohostOwnsApk", "(Ljava/lang/String;)Z", GESHER_JNI(Zygote_cohostOwnsApk)},
+    {"nativeCohostOwnsData", "(Ljava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_cohostOwnsData)},
     {"nativeCohostPermissionExchange", "(I[Ljava/lang/String;)[I", GESHER_JNI(Zygote_cohostPermissionExchange)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeChildStartTime", "(I)J", GESHER_JNI(Zygote_childStartTime)},
