@@ -102,9 +102,10 @@ grant. Knowing a process name or UID does not bypass these checks. The shared
 PackageVisibility snapshot retains ordinary own-package and manifest query
 relationships and the actual built-in system owner's visibility.
 
-In Main's standalone launch, GesherAppDriver binds an ActivityThread application
-without an ATM process enrollment. The shared PermissionPolicy helper resolves
-that bound package before considering a service-local exception. It requires
+In Main's standalone launch, GesherAppDriver enrolls the installed process
+with ATM before binding its ActivityThread application. The shared
+PermissionPolicy cross-checks the locally bound package against any
+authenticated ATM attachment before considering a service-local exception. It requires
 the actual local UID and current installed owner, rejects pending removal or
 contradictory attachment, and evaluates the existing package grant policy.
 Missing, removed, unsigned or mismatched identities cannot inherit service
@@ -163,8 +164,8 @@ earlier enumeration failure independently, or `--case local-permissions` for
 the standalone application permission path. Local controls cover ordinary
 normal-permission access, real signed cross-user grants, unsigned requests,
 shared-UID siblings, stale/removing owners, conflicting identities and service
-calls with no bound app. The real ActivityThread binding fields and empty ATM
-enrollment mirror Main's launch boundary; permission results are not replaced.
+calls with no bound app. Real ActivityThread binding fields test both matching
+and absent ATM attribution. Permission results are not replaced.
 The default `--case all` additionally checks permission-bearing remote callers
 and the original dictionary policy.
 

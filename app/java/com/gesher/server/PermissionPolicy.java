@@ -647,7 +647,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         // A package's effective UID comes from its authenticated registered PID.
         String pkg = callers.packageForPid(pid);
         if (pid == Process.myPid()) {
-            // Standalone Main binds ActivityThread without an ATM attachment.
+            // Verify the standalone ActivityThread binding against any ATM attachment.
             // Its app must not inherit the services that share this process.
             String bound = android.app.ActivityThread.currentPackageName();
             if (bound != null) {
