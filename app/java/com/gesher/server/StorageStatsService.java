@@ -39,10 +39,9 @@ import java.util.List;
  * are not supported, as on a device without ext4 quotas.
  *
  * <p>As on Android, an app may ask about itself; anything else (other apps, the user's
- * totals, the volume's cache) needs PACKAGE_USAGE_STATS. That is an app-op permission the
- * user grants in Settings' "Usage access"; Gesher has no such screen and its usage stats
- * are open, so an app that declares the permission in its manifest has it. An app that
- * does not cannot list or size other apps.
+ * totals, the volume's cache) needs usage access: OP_GET_USAGE_STATS, which the user allows
+ * with the Control Center's "Usage access" switch, as in Settings (MODE_DEFAULT falls back
+ * to holding PACKAGE_USAGE_STATS). Declaring the permission alone does not give access.
  */
 final class StorageStatsService extends IStorageStatsManager.Default {
     static final int MAX_ENTRIES = 200_000;
@@ -103,36 +102,49 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         if (userId != 0) throw new IllegalArgumentException("Unknown user " + userId);
     }
 
-    /** The caller is the system, or an app that declares PACKAGE_USAGE_STATS. */
-    private boolean callerHasUsageAccess() {
+    /**
+     * The caller is the system, or has usage access as AOSP's StorageStatsService
+     * (checkStatsPermission) decides it: the calling package must be the caller's, then
+     * OP_GET_USAGE_STATS MODE_ALLOWED allows, MODE_DEFAULT falls back to PACKAGE_USAGE_STATS
+     * and any other mode denies. The user decides the op with the Control Center's Usage
+     * access switch (SpecialAccess); declaring the permission alone is not access.
+     *
+     * @param note whether this check records the access (the first check of a call does; the
+     *     re-check after a scan only reads the current mode)
+     */
+    private boolean callerHasUsageAccess(String callingPackage, boolean note) {
         int uid = android.os.Binder.getCallingUid();
         // The shell holds PACKAGE_USAGE_STATS on Android (host commands run as it here).
         if (uid == android.os.Process.SYSTEM_UID || uid == android.os.Process.ROOT_UID
                 || uid == android.os.Process.SHELL_UID || uid == android.os.Process.myUid()) {
             return true;
         }
-        String[] packages = mPm.getPackagesForUid(uid);
-        if (packages == null) return false;
-        for (String name : packages) {
-            ApkPackage p = mPm.get(name);
-            if (p != null && p.parsed.getRequestedPermissions()
-                    .contains(android.Manifest.permission.PACKAGE_USAGE_STATS)) {
-                return true;
-            }
+        ApkPackage caller = callingPackage == null ? null : mPm.get(callingPackage);
+        if (caller == null || caller.uid() != uid || mPm.isRemovalPending(callingPackage)) {
+            throw new SecurityException("Package " + callingPackage + " does not belong to " + uid);
         }
-        return false;
+        int mode = note
+                ? mPm.appOps().noteOperation(android.app.AppOpsManager.OP_GET_USAGE_STATS, uid,
+                        callingPackage, null, false, null, false).getOpMode()
+                : mPm.appOps().checkRawMode(android.app.AppOpsManager.OP_GET_USAGE_STATS, uid,
+                        callingPackage);
+        if (mode == android.app.AppOpsManager.MODE_ALLOWED) return true;
+        return mode == android.app.AppOpsManager.MODE_DEFAULT
+                && mPm.permissions().checkUidPermission(uid,
+                        android.Manifest.permission.PACKAGE_USAGE_STATS, 0)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
     }
 
-    private void enforceUsageAccess() {
-        if (!callerHasUsageAccess()) {
+    private void enforceUsageAccess(String callingPackage, boolean note) {
+        if (!callerHasUsageAccess(callingPackage, note)) {
             throw new SecurityException("uid " + android.os.Binder.getCallingUid()
                     + " does not have " + android.Manifest.permission.PACKAGE_USAGE_STATS);
         }
     }
 
     /** Its own uid, or usage access (as StorageStatsService.enforceStatsPermission). */
-    private void enforceUidOrUsageAccess(int uid) {
-        if (android.os.Binder.getCallingUid() != uid) enforceUsageAccess();
+    private void enforceUidOrUsageAccess(int uid, String callingPackage, boolean note) {
+        if (android.os.Binder.getCallingUid() != uid) enforceUsageAccess(callingPackage, note);
     }
 
     @Override
@@ -160,7 +172,7 @@ final class StorageStatsService extends IStorageStatsManager.Default {
     @Override
     public long getCacheBytes(String volumeUuid, String callingPackage) {
         volume(volumeUuid);
-        enforceUsageAccess();
+        enforceUsageAccess(callingPackage, true);
         List<PackageScan> packages = packages(null);
         long[] result = scan(0, packages, () -> {
             int[] budget = {MAX_ENTRIES};
@@ -168,14 +180,14 @@ final class StorageStatsService extends IStorageStatsManager.Default {
             for (PackageScan p : packages) total += cacheBytes(p, budget);
             return new long[] {total};
         });
-        enforceUsageAccess();
+        enforceUsageAccess(callingPackage, false);
         return result[0];
     }
 
     @Override
     public long getCacheQuotaBytes(String volumeUuid, int uid, String callingPackage) {
         volume(volumeUuid);
-        enforceUidOrUsageAccess(uid);
+        enforceUidOrUsageAccess(uid, callingPackage, true);
         // No quota daemon: the share of free space Android's default policy allows one app.
         return Math.max(0, mData.getUsableSpace() / 10);
     }
@@ -187,7 +199,9 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         user(userId);
         ApkPackage p = packageName == null ? null : mPm.get(packageName);
         // Checked before the lookup answers, so an app without usage access cannot probe names.
-        if (p == null || p.uid() != android.os.Binder.getCallingUid()) enforceUsageAccess();
+        if (p == null || p.uid() != android.os.Binder.getCallingUid()) {
+            enforceUsageAccess(callingPackage, true);
+        }
         if (p == null || mPm.isRemovalPending(packageName)) {
             throw new android.os.ParcelableException(
                     new android.content.pm.PackageManager.NameNotFoundException(packageName));
@@ -195,17 +209,17 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         List<PackageScan> packages = Collections.singletonList(new PackageScan(p));
         long[] result = scan(1, packages, () -> totals(packages));
         // Permission decisions belong to each caller, never to the shared result.
-        enforceUidOrUsageAccess(packages.get(0).uid);
+        enforceUidOrUsageAccess(packages.get(0).uid, callingPackage, false);
         return stats(result);
     }
 
     @Override
     public StorageStats queryStatsForUid(String volumeUuid, int uid, String callingPackage) {
         volume(volumeUuid);
-        enforceUidOrUsageAccess(uid);
+        enforceUidOrUsageAccess(uid, callingPackage, true);
         List<PackageScan> packages = packages(uid);
         long[] result = scan(2, packages, () -> totals(packages));
-        enforceUidOrUsageAccess(uid);
+        enforceUidOrUsageAccess(uid, callingPackage, false);
         return stats(result);
     }
 
@@ -213,10 +227,10 @@ final class StorageStatsService extends IStorageStatsManager.Default {
     public StorageStats queryStatsForUser(String volumeUuid, int userId, String callingPackage) {
         volume(volumeUuid);
         user(userId);
-        enforceUsageAccess();
+        enforceUsageAccess(callingPackage, true);
         List<PackageScan> packages = packages(null);
         long[] result = scan(3, packages, () -> totals(packages));
-        enforceUsageAccess();
+        enforceUsageAccess(callingPackage, false);
         return stats(result);
     }
 
@@ -225,9 +239,9 @@ final class StorageStatsService extends IStorageStatsManager.Default {
             String callingPackage) {
         volume(volumeUuid);
         user(userId);
-        enforceUsageAccess();
+        enforceUsageAccess(callingPackage, true);
         long[] result = scan(4, Collections.emptyList(), () -> externalTotals());
-        enforceUsageAccess();
+        enforceUsageAccess(callingPackage, false);
         ExternalStorageStats stats = new ExternalStorageStats();
         stats.totalBytes = result[0];
         stats.audioBytes = result[1];

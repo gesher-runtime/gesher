@@ -417,6 +417,12 @@ Check 'services: special app access switches write, persist and notify real AppO
   $global:LASTEXITCODE = $specialAccessCode
   $specialAccessOut
 } @('SpecialAccessTest all passed:')
+$settingsResultsOut = FixesRun ($dvmFixes + 'gesher.services.SettingsResultsTest') 60
+$settingsResultsCode = $LASTEXITCODE
+Check 'services: per-app Settings screen results wait for the Control Center, once, bounded and timed out' {
+  $global:LASTEXITCODE = $settingsResultsCode
+  $settingsResultsOut
+} @('SettingsResultsTest all passed:')
 
 $uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'PackageUidIsolationContractTest' +

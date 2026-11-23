@@ -18,7 +18,8 @@ import java.nio.file.StandardCopyOption;
  * ({@link SettingsIntents}).
  *
  * <p>The app goes in {@code system/control-panel-request} (one package name, validated by
- * the caller); the Control Center reads and deletes it as it starts and on its live-refresh
+ * the caller, and for a startActivityForResult a tab and the {@link SettingsResults} token
+ * the Control Center reports when the app's details close); the Control Center reads and deletes it as it starts and on its live-refresh
  * timer, so a Control Center already open shows the app too. ShellExecute takes no
  * arguments here ({@link WindowsHost#openUrl}), so the Control Center is opened through a
  * shortcut to {@code gesher-launch.exe control-panel} that this class keeps next to the
@@ -32,18 +33,29 @@ final class ControlCenter {
     static final String SHORTCUT = "system/gesher-control-panel.lnk";
 
     /** Replaced by tests: opens the Control Center on a package (null: its main view). */
-    static volatile java.util.function.Predicate<String> sOpen = ControlCenter::openOnHost;
+    static volatile java.util.function.Predicate<String> sOpen = pkg -> openOnHost(pkg, null);
+    /** Replaced by tests: opens it on a package for a request awaiting its result token. */
+    static volatile java.util.function.BiPredicate<String, String> sOpenForResult =
+            ControlCenter::openOnHost;
 
     static boolean open(String packageName) {
+        return open(packageName, null);
+    }
+
+    /** With a token (SettingsResults), the Control Center reports when the details close. */
+    static boolean open(String packageName, String token) {
         try {
-            return sOpen.test(packageName);
+            if (token == null) return sOpen.test(packageName);
+            // SettingsResults.validToken, kept here: the host request test builds this class alone.
+            if (packageName == null || !token.matches("[0-9a-f]{32}")) return false;
+            return sOpenForResult.test(packageName, token);
         } catch (RuntimeException | LinkageError e) {
             SystemServer.log("Control Center: " + e);
             return false;
         }
     }
 
-    private static synchronized boolean openOnHost(String packageName) {
+    private static synchronized boolean openOnHost(String packageName, String token) {
         File request = new File(Device.dataDir(), REQUEST);
         String exe = Zygote.exePath();
         if (exe == null || exe.lastIndexOf('\\') < 0) return false;
@@ -63,7 +75,7 @@ final class ControlCenter {
             return false;
         }
         try {
-            writeRequest(request, packageName);
+            writeRequest(request, packageName, token);
         } catch (IOException e) {
             SystemServer.log("Control Center: no request file: " + e);
             return false;
@@ -80,6 +92,12 @@ final class ControlCenter {
 
     /** The request: one line, the package (empty for the main view); replaced atomically. */
     static synchronized void writeRequest(File request, String packageName) throws IOException {
+        writeRequest(request, packageName, null);
+    }
+
+    /** One line: the package, then a tab and the result token when there is one. */
+    static synchronized void writeRequest(File request, String packageName, String token)
+            throws IOException {
         File dir = request.getParentFile();
         if (dir != null && !dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
             throw new IOException("cannot create " + dir);
@@ -88,6 +106,10 @@ final class ControlCenter {
         try {
             try (FileOutputStream out = new FileOutputStream(temp)) {
                 out.write((packageName == null ? "" : packageName).getBytes(StandardCharsets.UTF_8));
+                if (token != null && packageName != null) {
+                    out.write('\t');
+                    out.write(token.getBytes(StandardCharsets.UTF_8));
+                }
                 out.write('\n');
             }
             try {

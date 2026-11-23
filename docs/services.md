@@ -424,7 +424,8 @@ intents nothing resolves (`SettingsIntents`):
   Bluetooth, location, date, language, display, sound, storage, battery...); the app and
   channel notification screens open `ms-settings:notifications` as before.
 - Anything else, an app that is not installed, and explicit components stay unresolved
-  (`ActivityNotFoundException`). A `startActivityForResult` gets RESULT_CANCELED at once.
+  (`ActivityNotFoundException`). A `startActivityForResult` gets RESULT_CANCELED at once,
+  except on an app's details (below).
 
 **Special app access.** The app's details in the Control Center show Android Settings'
 special access switches for the ones the app's manifest requests (`SpecialAccess`): All
@@ -441,9 +442,13 @@ package's signing identity, app-op watchers notified, and read by the app's own 
 permissions themselves are never granted). The Control Center reads and writes them with
 `gesher-app special-access PACKAGE [OP allow|deny]`, a `gesher` service transaction that
 only the host shell may call (an attached app is refused), and the device checks the
-package, the op and the manifest request again. An app re-checks when it resumes; the
-`startActivityForResult` above has already been answered. Exact alarms (always allowed
+package, the op and the manifest request again; the dialog reads and changes them in the
+background. A `startActivityForResult` on an app's details is answered when the details close
+(`SettingsResults`: the request file's token, `gesher-app settings-closed`; RESULT_OK for
+Install unknown apps once allowed, RESULT_CANCELED otherwise; after 15 minutes at the
+latest), so the app re-checks after the user decided. Exact alarms (always allowed
 here) and full-screen intents (`canUseFullScreenIntent` is not implemented) have no switch.
+StorageStatsService honours the Usage access op as usage stats do.
 Gesher does not otherwise confine files or overlay windows by these ops: the switch
 records the user's decision, and the app's checks report it.
 

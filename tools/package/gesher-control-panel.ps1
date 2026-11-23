@@ -734,15 +734,18 @@ $script:SpecialAccessLabels = [ordered]@{
     'android:manage_media' = 'cp_access_media'
 }
 $script:SpecialAccessTimeoutMs = 120000
+# Background queries whose dialog closed before they answered; the live timer disposes them.
+$script:OrphanSpecialAccessWorkers = [Collections.Generic.List[object]]::new()
 
 # The device's answer (gesher-app special-access): "special-access<TAB>op<TAB>allowed|denied"
-# lines among the launcher's other output. Unknown switches are left out.
+# lines, with "<TAB>fixed" when the switch cannot change it, among the launcher's other
+# output. Unknown switches are left out.
 function ConvertFrom-SpecialAccessOutput([string[]] $lines) {
     $switches = [Collections.Generic.List[object]]::new()
     foreach ($line in $lines) {
-        if ($line -cmatch '^special-access\t(android:[a-z_]+)\t(allowed|denied)\s*$' -and
+        if ($line -cmatch '^special-access\t(android:[a-z_]+)\t(allowed|denied)(\tfixed)?\s*$' -and
                 @($script:SpecialAccessLabels.Keys) -ccontains $Matches[1]) {
-            $switches.Add([PSCustomObject]@{ Op = $Matches[1]; Allowed = ($Matches[2] -eq 'allowed') })
+            $switches.Add([PSCustomObject]@{ Op = $Matches[1]; Allowed = ($Matches[2] -eq 'allowed'); Fixed = [bool]$Matches[3] })
         }
     }
     return $switches.ToArray()
@@ -750,10 +753,11 @@ function ConvertFrom-SpecialAccessOutput([string[]] $lines) {
 
 # Runs gesher-app special-access in its own process (the script ends with exit), hidden;
 # the device authenticates it as the host shell. Returns its exit code and output lines.
+# Runs in a background runspace for the dialog (Start-PanelSpecialAccess): never on the UI thread.
 function Invoke-PanelSpecialAccess([string[]] $arguments) {
     $appScript = Join-Path $here 'gesher-app.ps1'
-    $info = [System.Diagnostics.ProcessStartInfo]::new(
-        (Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'))
+    $system = [Environment]::GetFolderPath('System')
+    $info = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'))
     # Every argument was checked against a fixed pattern: no quoting is needed.
     $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $appScript + '" special-access ' + ($arguments -join ' ')
     $info.UseShellExecute = $false
@@ -765,7 +769,14 @@ function Invoke-PanelSpecialAccess([string[]] $arguments) {
         $output = $process.StandardOutput.ReadToEndAsync()
         $errors = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($script:SpecialAccessTimeoutMs)) {
-            try { $process.Kill() } catch { }
+            # The launcher's dalvikvm is a child of this PowerShell: end the whole tree.
+            try {
+                $kill = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'taskkill.exe'), "/PID $($process.Id) /T /F")
+                $kill.UseShellExecute = $false; $kill.CreateNoWindow = $true
+                $killer = [System.Diagnostics.Process]::Start($kill)
+                $null = $killer.WaitForExit(10000); $killer.Dispose()
+            } catch { }
+            try { if (-not $process.HasExited) { $process.Kill() } } catch { }
             return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
         }
         $process.WaitForExit()
@@ -774,28 +785,102 @@ function Invoke-PanelSpecialAccess([string[]] $arguments) {
     } finally { $process.Dispose() }
 }
 
+# Starts Invoke-PanelSpecialAccess in a background runspace; poll it with
+# Test-PanelSpecialAccessDone and take its answer with Receive-PanelSpecialAccess.
+function Start-PanelSpecialAccess([string[]] $arguments) {
+    $powerShell = [PowerShell]::Create()
+    try {
+        $body = "param(`$here, `$timeout, `$arguments)`n`$script:SpecialAccessTimeoutMs = `$timeout`n" +
+            "function Invoke-PanelSpecialAccess {`n$((Get-Command Invoke-PanelSpecialAccess).Definition)`n}`n" +
+            "Invoke-PanelSpecialAccess `$arguments"
+        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument($script:SpecialAccessTimeoutMs).AddArgument([string[]]$arguments)
+        return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $powerShell.BeginInvoke() }
+    } catch {
+        $powerShell.Dispose()
+        throw
+    }
+}
+
+function Test-PanelSpecialAccessDone($worker) {
+    return [bool]$worker.Handle.IsCompleted
+}
+
+function Receive-PanelSpecialAccess($worker) {
+    try {
+        $results = @($worker.PowerShell.EndInvoke($worker.Handle))
+        $last = if ($results.Count) { $results[-1] } else { $null }
+        if ($last -and $last.PSObject.Properties['ExitCode']) { return $last }
+    } catch { }
+    finally { try { $worker.PowerShell.Dispose() } catch { } }
+    return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
+}
+
+# Disposes background queries of closed dialogs once they have finished.
+function Clear-PanelSpecialAccessWorkers {
+    foreach ($worker in @($script:OrphanSpecialAccessWorkers)) {
+        if (Test-PanelSpecialAccessDone $worker) {
+            $null = Receive-PanelSpecialAccess $worker
+            [void]$script:OrphanSpecialAccessWorkers.Remove($worker)
+        }
+    }
+}
+
 function Test-PanelPackageName([string] $pkg) {
     return $pkg -cmatch '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$' -and $pkg.Length -le 255
 }
 
-# The app's special access switches, or $null when the device could not answer.
-function Get-AppSpecialAccess([string] $pkg) {
-    if (-not (Test-PanelPackageName $pkg)) { return $null }
-    $result = Invoke-PanelSpecialAccess @($pkg)
-    if ($result.ExitCode -ne 0) { return $null }
-    # One array, possibly empty (an app requesting none), never $null.
+function Test-PanelSpecialAccessOp([string] $op) {
+    # The ordered table's lookup ignores case; the device's op names do not.
+    return @($script:SpecialAccessLabels.Keys) -ccontains $op
+}
+
+# A query's answer: the switches (one array, possibly empty: an app requesting none), or
+# $null when the device could not answer.
+function Read-AppSpecialAccessResult($result) {
+    if ($null -eq $result -or $result.ExitCode -ne 0) { return $null }
     return ,@(ConvertFrom-SpecialAccessOutput $result.Lines)
 }
 
-# The user turned a switch on or off: the switch's state afterwards, or $null on failure.
+# A change's answer: the switch's state afterwards, or $null on failure.
+function Read-SetSpecialAccessResult($result, [string] $op) {
+    if ($null -eq $result -or $result.ExitCode -ne 0) { return $null }
+    $answer = @(ConvertFrom-SpecialAccessOutput $result.Lines) | Where-Object { $_.Op -ceq $op } | Select-Object -First 1
+    if (-not $answer) { return $null }
+    return [bool]$answer.Allowed
+}
+
+# Synchronous forms (diagnostics and tests; the dialog uses the background worker).
+function Get-AppSpecialAccess([string] $pkg) {
+    if (-not (Test-PanelPackageName $pkg)) { return $null }
+    return Read-AppSpecialAccessResult (Invoke-PanelSpecialAccess @($pkg))
+}
+
 function Set-AppSpecialAccess([string] $pkg, [string] $op, [bool] $allow) {
-    # The ordered table's lookup ignores case; the device's op names do not.
-    if (-not (Test-PanelPackageName $pkg) -or @($script:SpecialAccessLabels.Keys) -cnotcontains $op) { return $null }
-    $result = Invoke-PanelSpecialAccess @($pkg, $op, $(if ($allow) { 'allow' } else { 'deny' }))
-    if ($result.ExitCode -ne 0) { return $null }
-    $switch = @(ConvertFrom-SpecialAccessOutput $result.Lines) | Where-Object { $_.Op -eq $op } | Select-Object -First 1
-    if (-not $switch) { return $null }
-    return [bool]$switch.Allowed
+    if (-not (Test-PanelPackageName $pkg) -or -not (Test-PanelSpecialAccessOp $op)) { return $null }
+    return Read-SetSpecialAccessResult (Invoke-PanelSpecialAccess @($pkg, $op, $(if ($allow) { 'allow' } else { 'deny' }))) $op
+}
+
+# The app details shown for Settings requests closed: the apps that asked get their results
+# (SettingsResults.java). Fire and forget: nothing waits on the UI thread.
+function Send-PanelSettingsClosed([string[]] $tokens) {
+    $tokens = @($tokens | Where-Object { $_ -cmatch '^[0-9a-f]{32}$' } | Select-Object -Unique)
+    if ($tokens.Count -eq 0) { return }
+    $info = [System.Diagnostics.ProcessStartInfo]::new(
+        (Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'))
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $here 'gesher-app.ps1') + '" settings-closed ' + ($tokens -join ' ')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    try { ([System.Diagnostics.Process]::Start($info)).Dispose() } catch { }
+}
+
+# A request from the system server: the package, and the result token of an app waiting
+# for the screen's result. $null for anything else.
+function ConvertFrom-PanelRequest([string] $text) {
+    if ($null -eq $text) { return $null }
+    if ($text -cmatch '^([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)(?:\t([0-9a-f]{32}))?$' -and $Matches[1].Length -le 255) {
+        return [PSCustomObject]@{ Package = $Matches[1]; Token = $(if ($Matches[2]) { $Matches[2] } else { $null }) }
+    }
+    return $null
 }
 
 # FromList: the user opened it from the app list, rather than an app from Settings' screens.
@@ -814,12 +899,8 @@ function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
         if ($times[1] -and $times[1] -ne $times[0]) { $lines += Get-GesherText 'cp_app_info_updated' @($times[1]) }
     }
     $message = if ($lines.Count -gt 0) { $lines -join "`n" } else { $label }
-    # The switches come from the device, which an app's request means is running; from the
+    # The dialog opens at once; the device's switches load in the background. From the
     # app list, a stopped device is not started for them (the dialog says so).
-    [System.Windows.Input.Mouse]::OverrideCursor = [System.Windows.Input.Cursors]::Wait
-    try { $switches = Get-AppSpecialAccess $pkg }
-    catch { $switches = $null }
-    finally { [System.Windows.Input.Mouse]::OverrideCursor = $null }
     $uninstall = Show-ModernConfirmDialog `
         -Title $label `
         -SubTitle $pkg `
@@ -829,14 +910,16 @@ function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
         -CancelText (Get-GesherText 'cp_app_info_close') `
         -IconImage $item.IconImage `
         -CancelIsDefault `
-        -Switches $switches `
-        -SwitchesUnavailable:($null -eq $switches) `
-        -OnSwitch { param($op, $allow) Set-AppSpecialAccess $pkg $op $allow }
+        -SpecialAccessPackage $pkg
     if ($uninstall) { & $script:OnAppUninstall $pkg }
 }
 
 # Shows a pending request: brings the panel to the front and, for a package, its details.
+# The details shown and the result tokens of the requests they answer: a request for the
+# app already shown joins it instead of opening the details again after they close.
 $script:ShowingAppInfo = $false
+$script:ShowingPackage = $null
+$script:ShowingTokens = [Collections.Generic.List[string]]::new()
 function Invoke-PanelRequest {
     # Another start signalled: come to the front even while busy or showing a dialog.
     $raise = $false
@@ -844,7 +927,21 @@ function Invoke-PanelRequest {
     # The dialog runs a nested message loop in which this timer keeps ticking; an action
     # in progress keeps the request until it ends.
     $request = $null
-    if (-not $script:IsBusy -and -not $script:ShowingAppInfo) { $request = Read-PanelRequest }
+    if ($script:ShowingAppInfo -and $script:ShowingPackage -and -not $script:IsBusy) {
+        # Only a request for the app shown is taken now; another one waits for the dialog.
+        $pending = $null
+        try { $pending = ConvertFrom-PanelRequest ([IO.File]::ReadAllText($script:PanelRequestFile).Trim()) } catch { }
+        if ($pending -and $pending.Package -ceq $script:ShowingPackage) {
+            $taken = ConvertFrom-PanelRequest (Read-PanelRequest)
+            if ($taken -and $taken.Package -ceq $script:ShowingPackage) {
+                if ($taken.Token) { $script:ShowingTokens.Add($taken.Token) }
+                $raise = $true
+            } elseif ($taken -and $taken.Token) {
+                # Replaced meanwhile by a request for another app: answer it rather than lose it.
+                Send-PanelSettingsClosed @($taken.Token)
+            }
+        }
+    } elseif (-not $script:IsBusy -and -not $script:ShowingAppInfo) { $request = Read-PanelRequest }
     if ($null -ne $request) { $raise = $true }
     if (-not $raise) { return }
     if ($window.WindowState -eq [System.Windows.WindowState]::Minimized) {
@@ -854,9 +951,20 @@ function Invoke-PanelRequest {
     $window.Topmost = $true
     $window.Topmost = $false
     $null = $window.Activate()
-    if ($request -match '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$') {
+    $parsed = ConvertFrom-PanelRequest $request
+    if ($parsed) {
         $script:ShowingAppInfo = $true
-        try { Show-AppInfoDialog $request } finally { $script:ShowingAppInfo = $false }
+        $script:ShowingPackage = $parsed.Package
+        $script:ShowingTokens.Clear()
+        if ($parsed.Token) { $script:ShowingTokens.Add($parsed.Token) }
+        try { Show-AppInfoDialog $parsed.Package }
+        finally {
+            $tokens = $script:ShowingTokens.ToArray()
+            $script:ShowingTokens.Clear()
+            $script:ShowingPackage = $null
+            $script:ShowingAppInfo = $false
+            if ($tokens.Count) { try { Send-PanelSettingsClosed $tokens } catch { } }
+        }
     }
 }
 
@@ -1115,11 +1223,8 @@ function Show-ModernConfirmDialog {
         # Enter closes instead of confirming: for a dialog another app raised (App info),
         # where the user may be typing elsewhere when it takes the focus.
         [switch] $CancelIsDefault,
-        # App info's special access switches (Op, Allowed) and what turning one runs:
-        # it answers the switch's state afterwards, or $null when it failed.
-        $Switches = $null,
-        [switch] $SwitchesUnavailable,
-        [scriptblock] $OnSwitch = $null
+        # App info: the package whose special access switches load in the background.
+        [string] $SpecialAccessPackage = $null
     )
 
     $badgeBg = if ($IsDanger) { '#FEE4E2' } elseif ($IsWarning) { '#FEF0C7' } else { '#F2F4F7' }
@@ -1217,6 +1322,7 @@ function Show-ModernConfirmDialog {
                 <TextBlock Name="DialogDetail" FontSize="12" Foreground="#667085" TextWrapping="Wrap" Visibility="Collapsed"/>
                 <StackPanel Name="SwitchPanel" Margin="0,12,0,0" Visibility="Collapsed">
                     <TextBlock Name="SwitchTitle" FontSize="12" FontWeight="SemiBold" Foreground="#344054" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                    <TextBlock Name="SwitchStatus" FontSize="12" Foreground="#667085" TextWrapping="Wrap" Visibility="Collapsed"/>
                     <StackPanel Name="SwitchList"/>
                     <TextBlock Name="SwitchError" FontSize="12" Foreground="#D92D20" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed"/>
                 </StackPanel>
@@ -1251,44 +1357,98 @@ function Show-ModernConfirmDialog {
     $dialog.Owner = $window
     if ($window.Icon) { $dialog.Icon = $window.Icon }
 
-    $switchItems = @($Switches | Where-Object { $_ })
-    if ($switchItems.Count -gt 0 -or $SwitchesUnavailable) {
-        $dialog.FindName('SwitchPanel').Visibility = 'Visible'
+    if ($SpecialAccessPackage) {
+        # The switches load and change in background runspaces; a timer of the dialog takes
+        # their answers on the UI thread. A switch is disabled while its change is pending.
+        $accessState = @{ Query = $null; Pending = @{}; Closed = $false }
+        $switchPanel = $dialog.FindName('SwitchPanel')
+        $switchStatus = $dialog.FindName('SwitchStatus')
         $switchError = $dialog.FindName('SwitchError')
-        if ($SwitchesUnavailable) {
+        $switchList = $dialog.FindName('SwitchList')
+        $switchPanel.Visibility = 'Visible'
+        $dialog.FindName('SwitchTitle').Text = Get-GesherText 'cp_access_title'
+        $switchStatus.Text = Get-GesherText 'cp_access_loading'
+        $switchStatus.Visibility = 'Visible'
+        try { $accessState.Query = Start-PanelSpecialAccess @($SpecialAccessPackage) }
+        catch {
+            $switchStatus.Visibility = 'Collapsed'
             $switchError.Text = Get-GesherText 'cp_access_unavailable'
             $switchError.Visibility = 'Visible'
-        } else {
-            $dialog.FindName('SwitchTitle').Text = Get-GesherText 'cp_access_title'
-            $switchList = $dialog.FindName('SwitchList')
-            foreach ($item in $switchItems) {
-                $box = [System.Windows.Controls.CheckBox]::new()
-                $box.Content = Get-GesherText $script:SpecialAccessLabels[[string]$item.Op]
-                $box.Tag = [string]$item.Op
-                $box.IsChecked = [bool]$item.Allowed
-                $box.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
-                $box.FontSize = 13
-                $box.Add_Click({
-                    param($sender, $e)
-                    $wanted = [bool]$sender.IsChecked
-                    $switchError.Visibility = 'Collapsed'
-                    $state = $null
-                    [System.Windows.Input.Mouse]::OverrideCursor = [System.Windows.Input.Cursors]::Wait
-                    try { if ($OnSwitch) { $state = & $OnSwitch ([string]$sender.Tag) $wanted } }
-                    catch { $state = $null }
-                    finally { [System.Windows.Input.Mouse]::OverrideCursor = $null }
-                    if ($null -eq $state) {
-                        $sender.IsChecked = -not $wanted
-                        $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$sender.Content)
-                        $switchError.Visibility = 'Visible'
-                    } else {
-                        # What the device answers: an app holding the permission stays on.
-                        $sender.IsChecked = [bool]$state
-                    }
-                })
-                [void]$switchList.Children.Add($box)
-            }
         }
+        $accessTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $accessTimer.Interval = [TimeSpan]::FromMilliseconds(100)
+        $accessTimer.Add_Tick({
+            if ($accessState.Closed) { return }
+            if ($accessState.Query -and (Test-PanelSpecialAccessDone $accessState.Query)) {
+                $switches = Read-AppSpecialAccessResult (Receive-PanelSpecialAccess $accessState.Query)
+                $accessState.Query = $null
+                $switchStatus.Visibility = 'Collapsed'
+                if ($null -eq $switches) {
+                    $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                    $switchError.Visibility = 'Visible'
+                } elseif (@($switches).Count -eq 0) {
+                    $switchPanel.Visibility = 'Collapsed'
+                } else {
+                    foreach ($item in @($switches)) {
+                        $box = [System.Windows.Controls.CheckBox]::new()
+                        $labelText = Get-GesherText $script:SpecialAccessLabels[[string]$item.Op]
+                        $box.Tag = [string]$item.Op
+                        $box.IsChecked = [bool]$item.Allowed
+                        $box.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+                        $box.FontSize = 13
+                        if ($item.Fixed) {
+                            # The device would answer allowed whatever the switch says.
+                            $box.Content = Get-GesherText 'cp_access_fixed' @($labelText)
+                            $box.IsEnabled = $false
+                        } else {
+                            $box.Content = $labelText
+                            $box.Add_Click({
+                                param($sender, $e)
+                                $op = [string]$sender.Tag
+                                $wanted = [bool]$sender.IsChecked
+                                $switchError.Visibility = 'Collapsed'
+                                if ($accessState.Pending.ContainsKey($op)) { $sender.IsChecked = -not $wanted; return }
+                                $sender.IsEnabled = $false
+                                try {
+                                    $worker = Start-PanelSpecialAccess @($SpecialAccessPackage, $op, $(if ($wanted) { 'allow' } else { 'deny' }))
+                                    $accessState.Pending[$op] = @{ Worker = $worker; Box = $sender; Wanted = $wanted }
+                                } catch {
+                                    $sender.IsEnabled = $true
+                                    $sender.IsChecked = -not $wanted
+                                    $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$sender.Content)
+                                    $switchError.Visibility = 'Visible'
+                                }
+                            })
+                        }
+                        [void]$switchList.Children.Add($box)
+                    }
+                }
+            }
+            foreach ($op in @($accessState.Pending.Keys)) {
+                $change = $accessState.Pending[$op]
+                if (-not (Test-PanelSpecialAccessDone $change.Worker)) { continue }
+                $accessState.Pending.Remove($op)
+                $state = Read-SetSpecialAccessResult (Receive-PanelSpecialAccess $change.Worker) $op
+                $change.Box.IsEnabled = $true
+                if ($null -eq $state) {
+                    $change.Box.IsChecked = -not $change.Wanted
+                    $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$change.Box.Content)
+                    $switchError.Visibility = 'Visible'
+                } else {
+                    # What the device answers, not what was asked.
+                    $change.Box.IsChecked = [bool]$state
+                }
+            }
+        })
+        $dialog.Add_Closed({
+            $accessTimer.Stop()
+            $accessState.Closed = $true
+            # Answers still running are disposed by the live timer once they finish.
+            if ($accessState.Query) { $script:OrphanSpecialAccessWorkers.Add($accessState.Query); $accessState.Query = $null }
+            foreach ($change in @($accessState.Pending.Values)) { $script:OrphanSpecialAccessWorkers.Add($change.Worker) }
+            $accessState.Pending.Clear()
+        })
+        $accessTimer.Start()
     }
 
     $btnConfirm = $dialog.FindName('BtnConfirm')
@@ -2013,6 +2173,7 @@ $script:LiveTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $script:LiveTimer.Interval = [TimeSpan]::FromMilliseconds($script:LiveRefreshIntervalMs)
 $script:LiveTimer.Add_Tick({
     try { Complete-PanelAction } catch { }
+    try { Clear-PanelSpecialAccessWorkers } catch { }
     try { Invoke-LiveRefreshTick } catch { }
     try { Invoke-PanelRequest } catch { }
     try { Invoke-PanelUpdateTick } catch {

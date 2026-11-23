@@ -9,7 +9,7 @@ $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     [IO.Path]::GetFullPath($PanelPath), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Read-PanelRequest', 'Get-AppInstallTimes', 'Invoke-PanelRequest') {
+foreach ($name in 'Read-PanelRequest', 'Get-AppInstallTimes', 'Invoke-PanelRequest', 'ConvertFrom-PanelRequest') {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -18,6 +18,14 @@ foreach ($name in 'Read-PanelRequest', 'Get-AppInstallTimes', 'Invoke-PanelReque
     . ([scriptblock]::Create($functions[0].Extent.Text))
 }
 
+foreach ($variable in '$script:ShowingPackage', '$script:ShowingTokens') {
+    $assignments = @($ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq $variable
+    }, $true) | Where-Object { $_.Parent.Parent -is [System.Management.Automation.Language.ScriptBlockAst] })
+    if ($assignments.Count -ne 1) { throw "Expected one production assignment: $variable" }
+    . ([scriptblock]::Create($assignments[0].Extent.Text))
+}
 $script:Checks = 0
 function Assert-Request([bool] $value, [string] $message) {
     if (-not $value) { throw $message }
@@ -134,6 +142,45 @@ try {
     $null = $script:PanelShowEvent.Set()
     Invoke-PanelRequest
     Assert-Request ($window.Activations -eq 7 -and $script:Shown.Count -eq 1) 'A second start did not raise a busy panel'
+    Remove-Item -LiteralPath $script:PanelRequestFile -ErrorAction SilentlyContinue
+    $script:IsBusy = $false
+
+    # Result tokens (SettingsResults.java): reported when the details close; a request for
+    # the app already shown joins it instead of reopening the details afterwards.
+    $script:Reported = [System.Collections.Generic.List[string]]::new()
+    function Send-PanelSettingsClosed([string[]] $tokens) { $script:Reported.Add(($tokens -join ',')) }
+    $first = '0123456789abcdef0123456789abcdef'; $second = 'fedcba9876543210fedcba9876543210'; $third = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    function Show-AppInfoDialog([string] $pkg) {
+        $script:Shown.Add($pkg)
+        Assert-Request ($script:ShowingPackage -eq $pkg -and $script:Reported.Count -eq 0) 'Nothing is reported while the details are open'
+        # The same app again, from a second request: taken into these details.
+        [IO.File]::WriteAllText($script:PanelRequestFile, "com.example.app`t$second`n")
+        Invoke-PanelRequest
+        Assert-Request (-not (Test-Path -LiteralPath $script:PanelRequestFile)) 'A request for the app shown was not taken'
+        # Another app waits for the details to close.
+        [IO.File]::WriteAllText($script:PanelRequestFile, "com.example.other`t$third`n")
+        Invoke-PanelRequest
+        Assert-Request (Test-Path -LiteralPath $script:PanelRequestFile) 'A request for another app was taken while a dialog was open'
+    }
+    $shownBefore = $script:Shown.Count
+    [IO.File]::WriteAllText($script:PanelRequestFile, "com.example.app`t$first`n")
+    Invoke-PanelRequest
+    Assert-Request ($script:Shown.Count -eq $shownBefore + 1) 'The same app was shown twice'
+    Assert-Request ($script:Reported.Count -eq 1 -and $script:Reported[0] -eq "$first,$second") "Both requests are answered as the details close: $($script:Reported -join ' / ')"
+    Assert-Request (-not $script:ShowingAppInfo -and $null -eq $script:ShowingPackage -and $script:ShowingTokens.Count -eq 0) 'The shown state was left set'
+    # The waiting request for the other app opens next, and is answered in turn.
+    function Show-AppInfoDialog([string] $pkg) { $script:Shown.Add($pkg) }
+    Invoke-PanelRequest
+    Assert-Request ($script:Shown[-1] -eq 'com.example.other' -and $script:Reported[-1] -eq $third) 'The waiting request was not shown and answered'
+    # A request with no token (startActivity) reports nothing; a malformed token is not a package.
+    $reports = $script:Reported.Count
+    [IO.File]::WriteAllText($script:PanelRequestFile, "com.example.app`n")
+    Invoke-PanelRequest
+    Assert-Request ($script:Reported.Count -eq $reports) 'A request without a token reported something'
+    [IO.File]::WriteAllText($script:PanelRequestFile, "com.example.app`tNOT-A-TOKEN`n")
+    $shownCount = $script:Shown.Count
+    Invoke-PanelRequest
+    Assert-Request ($script:Shown.Count -eq $shownCount -and $script:Reported.Count -eq $reports) 'A malformed token reached the details'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

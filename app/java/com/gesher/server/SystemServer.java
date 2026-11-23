@@ -480,6 +480,11 @@ public final class SystemServer {
         }
 
         @Override
+        public int settingsScreensClosed(String[] tokens) {
+            return mServices.atm.settingsScreensClosed(tokens);
+        }
+
+        @Override
         public int lastExitCode(String packageName) {
             Integer code = mServices.atm.lastExitCode(packageName);
             return code == null ? Integer.MIN_VALUE : code;

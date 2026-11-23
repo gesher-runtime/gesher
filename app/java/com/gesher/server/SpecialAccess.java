@@ -21,13 +21,15 @@ import java.util.List;
  * (ManageExternalStorageDetails: UID mode), Display over other apps (DrawOverlayDetails:
  * package mode), Install unknown apps (ExternalSourcesDetails: package mode), Modify system
  * settings (WriteSettingsDetails: package mode), Usage access (UsageAccessDetails: package
- * mode, denial MODE_IGNORED) and Media management (ManageMediaDetails: UID mode). On is
+ * mode, denial MODE_IGNORED) and Media management (MediaManagementAppsDetails: UID mode). On is
  * MODE_ALLOWED; off is the denial mode Settings writes. The modes go through
  * {@link AppOpsService} like any other mode change: persisted with the package's signing
  * identity and reported to app-op watchers ({@code OnOpChangedListener}).
  *
  * <p>As in Settings, a switch exists only for an app whose manifest requests the
- * permission. Nothing is granted unless the user turns a switch on; the permission itself
+ * permission. Install unknown apps is fixed on for an app holding INSTALL_PACKAGES: AOSP's
+ * canRequestPackageInstalls allows such an installer whatever the mode, so the switch could
+ * not turn it off (the row says {@code fixed}, and a change is refused). Nothing is granted unless the user turns a switch on; the permission itself
  * stays ungranted (these are appop permissions: the framework's checks read the mode, and
  * fall back to the permission only for MODE_DEFAULT).
  *
@@ -66,11 +68,14 @@ final class SpecialAccess {
             new Kind(AppOpsManager.OPSTR_MANAGE_MEDIA, AppOpsManager.OP_MANAGE_MEDIA,
                     Manifest.permission.MANAGE_MEDIA, true, AppOpsManager.MODE_ERRORED));
 
-    /** A switch's state for one app: whether the app's own check reads "allowed". */
-    record Entry(Kind kind, boolean allowed) {
-        /** One row of the host protocol: the op's public name, a tab, allowed or denied. */
+    /**
+     * A switch's state for one app: whether the app's own check reads "allowed", and whether
+     * the switch cannot change that (fixed).
+     */
+    record Entry(Kind kind, boolean allowed, boolean fixed) {
+        /** One row of the host protocol: op name TAB allowed|denied [TAB fixed]. */
         String row() {
-            return kind.opName + "\t" + (allowed ? "allowed" : "denied");
+            return kind.opName + "\t" + (allowed ? "allowed" : "denied") + (fixed ? "\tfixed" : "");
         }
     }
 
@@ -102,6 +107,13 @@ final class SpecialAccess {
                 || pkg.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.O;
     }
 
+    /** Whether the mode cannot change the app's answer (an INSTALL_PACKAGES installer). */
+    private static boolean fixed(PackageManagerService pm, ApkPackage pkg, Kind kind) {
+        return kind.op == AppOpsManager.OP_REQUEST_INSTALL_PACKAGES
+                && pm.permissions().checkPermission(pkg.packageName, Manifest.permission.INSTALL_PACKAGES)
+                        == PackageManager.PERMISSION_GRANTED;
+    }
+
     /** What the app's own check answers (Environment, Settings, PackageManager...). */
     private static boolean allowed(PackageManagerService pm, ApkPackage pkg, Kind kind) {
         if (kind.op == AppOpsManager.OP_REQUEST_INSTALL_PACKAGES) {
@@ -120,7 +132,9 @@ final class SpecialAccess {
         ApkPackage pkg = installed(pm, packageName);
         List<Entry> entries = new ArrayList<>();
         for (Kind kind : KINDS) {
-            if (declares(pkg, kind)) entries.add(new Entry(kind, allowed(pm, pkg, kind)));
+            if (declares(pkg, kind)) {
+                entries.add(new Entry(kind, allowed(pm, pkg, kind), fixed(pm, pkg, kind)));
+            }
         }
         return entries;
     }
@@ -135,20 +149,18 @@ final class SpecialAccess {
         if (!declares(pkg, kind)) {
             throw new IllegalArgumentException(packageName + " does not request " + kind.permission);
         }
+        if (fixed(pm, pkg, kind)) {
+            throw new IllegalStateException(packageName + " holds INSTALL_PACKAGES: "
+                    + "its install requests are always allowed");
+        }
         int mode = allow ? AppOpsManager.MODE_ALLOWED : kind.deniedMode;
         AppOpsService ops = pm.appOps();
-        if (kind.uidMode) {
-            if (!ops.setUidModeIfCurrent(kind.op, pkg, mode)) {
-                throw new IllegalStateException(packageName + " changed; try again");
-            }
-        } else {
-            ops.setMode(kind.op, pkg.uid(), pkg.packageName, mode);
-        }
-        ApkPackage current = pm.get(packageName);
-        if (current != pkg || pm.isRemovalPending(packageName)) {
-            throw new IllegalStateException(packageName + " changed; try again");
-        }
-        return new Entry(kind, allowed(pm, pkg, kind));
+        // Both setters commit only for this package generation: a replaced or removed
+        // package is refused before anything is written.
+        boolean written = kind.uidMode ? ops.setUidModeIfCurrent(kind.op, pkg, mode)
+                : ops.setModeIfCurrent(kind.op, pkg, mode);
+        if (!written) throw new IllegalStateException(packageName + " changed; try again");
+        return new Entry(kind, allowed(pm, pkg, kind), false);
     }
 
     static String[] rows(List<Entry> entries) {

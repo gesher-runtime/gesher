@@ -142,6 +142,30 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** A fixed ms-settings: page for an Android Settings screen (SettingsIntents). */
     static volatile java.util.function.Predicate<String> sOpenSettingsPage = WindowsHost::openUrl;
 
+    /** Per-app Settings screens' results, answered as the Control Center's details close. */
+    private volatile SettingsResults mSettingsResults;
+    private final Object mSettingsResultsLock = new Object();
+
+    SettingsResults settingsResults() {
+        SettingsResults results = mSettingsResults;
+        if (results != null) return results;
+        synchronized (mSettingsResultsLock) {
+            if (mSettingsResults == null) {
+                mSettingsResults = new SettingsResults((pending, code) -> deliverResult(
+                        (ActivityRecord) pending.source, pending.resultWho, pending.requestCode,
+                        code, null, (ProcessRecord) pending.process),
+                        pkg -> mPm.canRequestPackageInstalls(pkg, 0));
+            }
+            return mSettingsResults;
+        }
+    }
+
+    /** The Control Center closed the app details it showed for these requests. */
+    public int settingsScreensClosed(String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.closed(tokens);
+    }
+
     /** STARTED: made visible again without being resumed (StartActivityItem). */
     enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STARTED, STOPPING,
             STOPPED, DESTROYING, DESTROYED }
@@ -2476,19 +2500,33 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     settings = SettingsIntents.resolve(intent, pkg -> mPm.get(pkg) != null);
                 }
                 if (settings != null) {
-                    boolean opened = settings.controlCenter
-                            ? ControlCenter.open(settings.packageName)
-                            : sOpenSettingsPage.test(settings.windowsUri);
-                    SystemServer.log("startActivity: " + action + ": " + settings
-                            + (opened ? " opened" : " unavailable"));
-                    if (!opened) return ActivityManager.START_INTENT_NOT_RESOLVED;
-                    // Settings answers a startActivityForResult when the user leaves it;
-                    // Windows' page reports nothing, so the request is not left waiting.
+                    // Settings answers a startActivityForResult when the user leaves it.
                     // Only to an activity of the calling process: another app's token
                     // must not receive a result it did not ask for.
                     ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
-                    if (source != null && requestCode >= 0 && source.app != null
-                            && source.app.pid == originalPid) {
+                    boolean wantsResult = source != null && requestCode >= 0 && source.app != null
+                            && source.app.pid == originalPid;
+                    // An app's details: answered when the Control Center closes them
+                    // (SettingsResults), registered before the Control Center can see the
+                    // request. Windows' pages and the Control Center's own views report
+                    // nothing, so those requests are answered at once.
+                    String token = wantsResult && settings.controlCenter
+                            && settings.packageName != null
+                            ? settingsResults().register(new SettingsResults.Pending(source,
+                                    source.app, resultWho, requestCode, action,
+                                    settings.packageName))
+                            : null;
+                    boolean opened = settings.controlCenter
+                            ? ControlCenter.open(settings.packageName, token)
+                            : sOpenSettingsPage.test(settings.windowsUri);
+                    SystemServer.log("startActivity: " + action + ": " + settings
+                            + (opened ? " opened" : " unavailable")
+                            + (token != null ? " (result when its details close)" : ""));
+                    if (!opened) {
+                        if (token != null) settingsResults().discard(token);
+                        return ActivityManager.START_INTENT_NOT_RESOLVED;
+                    }
+                    if (wantsResult && token == null) {
                         deliverResult(source, resultWho, requestCode,
                                 android.app.Activity.RESULT_CANCELED, null);
                     }

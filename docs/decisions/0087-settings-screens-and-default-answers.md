@@ -94,5 +94,21 @@ app-op modes AOSP Settings writes, through `AppOpsService`, only on the user's c
 a `gesher` service transaction restricted to the host shell. Every switch starts off.
 `canRequestPackageInstalls` now follows `OP_REQUEST_INSTALL_PACKAGES` as AOSP does (it
 answered true for every requesting app before); installs still need the per-commit host
-consent. StorageStatsService still treats a declared PACKAGE_USAGE_STATS as usage access
-(item 5 above); making it follow the new Usage access switch is left for a separate change.
+consent. An INSTALL_PACKAGES holder is always allowed, so its switch is shown fixed on.
+
+Item 4 changes for these screens: a `startActivityForResult` on an app's details is no longer
+answered at once. The request file carries a token (`SettingsResults`), and the Control
+Center reports it (`gesher-app settings-closed`) when the details close; only then does the
+app get its result, so a store re-checking in `onActivityResult` sees the user's decision.
+The result is RESULT_OK where AOSP's screen gives it, Install unknown apps once installs are
+allowed (ExternalSourcesDetails), and RESULT_CANCELED otherwise, as the other details
+screens set no result (from AOSP Settings as known; packages/apps/Settings is not in the
+local AOSP checkout). A request whose details never report is answered after 15 minutes, at
+most 32 wait, and an activity that finished or died meanwhile gets nothing. A request for
+the app already shown joins the open details instead of reopening them. Windows' pages and
+the Control Center's own views still answer RESULT_CANCELED at once.
+
+Item 5 changes too: StorageStatsService decides usage access as AOSP's checkStatsPermission
+does, from `OP_GET_USAGE_STATS` (MODE_ALLOWED allows, MODE_DEFAULT falls back to holding
+PACKAGE_USAGE_STATS, other modes deny), so the Usage access switch governs storage stats as
+it governs usage stats; a declared permission alone no longer gives access.

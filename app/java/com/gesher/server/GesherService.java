@@ -41,6 +41,8 @@ public final class GesherService extends Binder {
     static final int SPECIAL_ACCESS = IBinder.FIRST_CALL_TRANSACTION + 10;
     /** The user turned a special access switch of an installed app on or off. */
     static final int SET_SPECIAL_ACCESS = IBinder.FIRST_CALL_TRANSACTION + 11;
+    /** The Control Center closed the app details shown for these Settings requests. */
+    static final int SETTINGS_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 12;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -102,6 +104,10 @@ public final class GesherService extends Binder {
         default String setSpecialAccess(String packageName, String opName, boolean allowed) {
             throw new UnsupportedOperationException("Special access unavailable");
         }
+        /** The Control Center closed these requests' details (SettingsResults tokens). */
+        default int settingsScreensClosed(String[] tokens) {
+            throw new UnsupportedOperationException("Settings results unavailable");
+        }
         /** A call came: the device is not idle. */
         void touch();
         /** A click on a toast of {@code appId} with the toast's {@code arguments}. */
@@ -121,7 +127,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > SET_SPECIAL_ACCESS) {
+        if (code < INSTALL || code > SETTINGS_CLOSED) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -209,6 +215,22 @@ public final class GesherService extends Binder {
                     String row = mDevice.setSpecialAccess(pkg, op, allowed);
                     reply.writeNoException();
                     reply.writeString(row);
+                    return true;
+                }
+                case SETTINGS_CLOSED: {
+                    String[] tokens = data.createStringArray();
+                    data.enforceNoDataAvail();
+                    if (tokens == null || tokens.length > SettingsResults.MAX_PENDING) {
+                        throw new IllegalArgumentException("Invalid settings result tokens");
+                    }
+                    for (String token : tokens) {
+                        if (!SettingsResults.validToken(token)) {
+                            throw new IllegalArgumentException("Invalid settings result token");
+                        }
+                    }
+                    int answered = mDevice.settingsScreensClosed(tokens);
+                    reply.writeNoException();
+                    reply.writeInt(answered);
                     return true;
                 }
                 default:
@@ -340,12 +362,42 @@ public final class GesherService extends Binder {
             }
         }
 
+        /** A device whose system server predates a transaction answers it with nothing. */
+        private static UnsupportedOperationException olderDevice() {
+            return new UnsupportedOperationException("The running Gesher device does not support"
+                    + " this; restart it (gesher-app shutdown) to use the installed version");
+        }
+
         /** The installed app's special access switches: rows of "op-name TAB allowed|denied". */
         public String[] specialAccess(String packageName) throws RemoteException {
-            Parcel reply = call(SPECIAL_ACCESS, java.util.Objects.requireNonNull(packageName));
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
             try {
-                return reply.createStringArray();
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(java.util.Objects.requireNonNull(packageName));
+                if (!mBinder.transact(SPECIAL_ACCESS, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                String[] rows = reply.createStringArray();
+                if (rows == null) throw olderDevice();
+                return rows;
             } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** Reports the requests whose app details the Control Center closed. */
+        public int settingsScreensClosed(String[] tokens) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeStringArray(java.util.Objects.requireNonNull(tokens));
+                if (!mBinder.transact(SETTINGS_CLOSED, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                return reply.readInt();
+            } finally {
+                data.recycle();
                 reply.recycle();
             }
         }
@@ -360,9 +412,11 @@ public final class GesherService extends Binder {
                 data.writeString(packageName);
                 data.writeString(opName);
                 data.writeBoolean(allowed);
-                mBinder.transact(SET_SPECIAL_ACCESS, data, reply, 0);
+                if (!mBinder.transact(SET_SPECIAL_ACCESS, data, reply, 0)) throw olderDevice();
                 reply.readException();
-                return reply.readString();
+                String row = reply.readString();
+                if (row == null) throw olderDevice();
+                return row;
             } finally {
                 data.recycle();
                 reply.recycle();

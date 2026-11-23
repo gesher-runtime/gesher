@@ -194,14 +194,23 @@ public final class AppOpsService extends IAppOpsService.Default {
 
     @Override public void setMode(int code, int uid, String name, int mode) {
         enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
+        setModeChecked(code, uid, name, null, mode);
+    }
+    /** setMode, committed only while this exact installed package generation is current. */
+    public boolean setModeIfCurrent(int code, ApkPackage expected, int mode) {
+        enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
+        Objects.requireNonNull(expected);
+        return setModeChecked(code, expected.uid(), expected.packageName, expected, mode);
+    }
+    private boolean setModeChecked(int code, int uid, String name, ApkPackage expected, int mode) {
         int op = switchOp(code); validateMode(mode);
         // Android 16's checking service ignores package modes for runtime permission ops.
-        if (mPm.permissions().runtimePermissionForOp(op) != null) return;
+        if (mPm.permissions().runtimePermissionForOp(op) != null) return false;
         List<Change> changes;
         synchronized (mMutationLock) {
             synchronized (mPm) {
                 ApkPackage pkg = packageFor(uid, name);
-                if (pkg == null) return;
+                if (pkg == null || expected != null && pkg != expected) return false;
                 State before = mStore.state();
                 Map<PackageOp, PackageMode> packages = new HashMap<>(before.packages());
                 PackageOp key = new PackageOp(uid, name, op);
@@ -213,6 +222,7 @@ public final class AppOpsService extends IAppOpsService.Default {
             }
         }
         changed(changes);
+        return true;
     }
     @Override public void setUidMode(int code, int uid, int mode) {
         enforce(Manifest.permission.MANAGE_APP_OPS_MODES);

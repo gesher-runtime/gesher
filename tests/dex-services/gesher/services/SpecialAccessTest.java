@@ -15,6 +15,8 @@ import com.gesher.server.ApkPackage;
 import com.gesher.server.AppOpsService;
 import com.gesher.server.PackageManagerService;
 import java.io.File;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -36,6 +38,8 @@ public final class SpecialAccessTest {
     private static int checks;
     private static final String APP = "fixture.access.app", PLAIN = "fixture.access.plain";
     private static final int APP_UID = 12901, PLAIN_UID = 12902, APP_PID = 889010;
+    private static final String INSTALLER = "fixture.access.installer";
+    private static final int INSTALLER_UID = 12903;
     private static final String FILES = AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE;
 
     private static void check(boolean value, String message) {
@@ -127,8 +131,12 @@ public final class SpecialAccessTest {
                 Manifest.permission.PACKAGE_USAGE_STATS, Manifest.permission.MANAGE_MEDIA};
         ApkPackage app = pkg(APP, APP_UID, (byte)17, requested);
         ApkPackage plain = pkg(PLAIN, PLAIN_UID, (byte)18);
+        // An installer signed like the platform holds INSTALL_PACKAGES (signature|privileged).
+        ApkPackage platform = pkg("android", android.os.Process.SYSTEM_UID, (byte)42);
+        ApkPackage installer = pkg(INSTALLER, INSTALLER_UID, (byte)42,
+                Manifest.permission.REQUEST_INSTALL_PACKAGES, Manifest.permission.INSTALL_PACKAGES);
         PackageManagerService pm = (PackageManagerService)make(PackageManagerService.class,
-                new Class<?>[]{Collection.class, boolean.class}, List.of(app, plain), false);
+                new Class<?>[]{Collection.class, boolean.class}, List.of(app, plain, platform, installer), false);
         set(pm, "mPackageEventSender", (java.util.function.Consumer<Intent>)event -> { });
         Object atm = make(type("ActivityTaskManagerService"), new Class<?>[]{PackageManagerService.class}, pm);
         Object am = make(type("ActivityManagerService"), new Class<?>[]{atm.getClass(), PackageManagerService.class,
@@ -290,6 +298,7 @@ public final class SpecialAccessTest {
                 switch (method.getName()) {
                     case "specialAccess": return invoke(type("SpecialAccess"), "rows", invoke(type("SpecialAccess"), "query", pm, args[0]));
                     case "setSpecialAccess": return setAccess(pm, (String)args[0], (String)args[1], (Boolean)args[2]);
+                    case "settingsScreensClosed": return ((String[])args[0]).length;
                     case "touch": return null;
                     default: throw new AssertionError("Unexpected device call " + method.getName());
                 }
@@ -343,6 +352,182 @@ public final class SpecialAccessTest {
                     "The host's grant is what the app reads");
             awaitCount(watcher.calls, 3);
 
+            // The launcher's client: rows, refusals and an older device without the codes.
+            Constructor<?> clientConstructor = type("GesherService$Client").getDeclaredConstructor(IBinder.class);
+            clientConstructor.setAccessible(true);
+            Object client = clientConstructor.newInstance(gesher);
+            String[] clientRows = (String[])clientCall(client, "specialAccess", APP);
+            check(clientRows.length == 6 && clientRows[0].equals(FILES + "\tallowed"), "Client reads the switches");
+            check((FILES + "\tdenied").equals(clientCall(client, "setSpecialAccess", APP, FILES, false)), "Client changes a switch");
+            check((FILES + "\tallowed").equals(clientCall(client, "setSpecialAccess", APP, FILES, true)), "Client changes it back");
+            rejects(IllegalArgumentException.class, () -> clientCall(client, "setSpecialAccess", APP, "android:camera", true));
+            check((Integer)clientCall(client, "settingsScreensClosed", (Object)new String[]{"0123456789abcdef0123456789abcdef"}) == 1,
+                    "Client reports closed Settings requests");
+            rejects(IllegalArgumentException.class, () -> clientCall(client, "settingsScreensClosed", (Object)new String[]{"../x"}));
+            Object older = clientConstructor.newInstance(new Binder());
+            rejects(UnsupportedOperationException.class, () -> clientCall(older, "specialAccess", APP));
+            rejects(UnsupportedOperationException.class, () -> clientCall(older, "setSpecialAccess", APP, FILES, true));
+            rejects(UnsupportedOperationException.class, () -> clientCall(older, "settingsScreensClosed", (Object)new String[0]));
+            // Launcher special-access: exit codes and the protocol rows on standard output.
+            Method launcher = Class.forName("com.gesher.app.Launcher").getDeclaredMethod("specialAccess",
+                    type("GesherService$Client"), List.class, java.io.PrintStream.class);
+            launcher.setAccessible(true);
+            java.io.ByteArrayOutputStream printed = new java.io.ByteArrayOutputStream();
+            java.io.PrintStream out = new java.io.PrintStream(printed, true, "UTF-8");
+            check((Integer)launcher.invoke(null, client, List.of(APP), out) == 0, "special-access exits 0");
+            String text = printed.toString("UTF-8");
+            check(text.startsWith("special-access\t" + FILES + "\tallowed") && text.split("\n").length == 6,
+                    "special-access prints one row per switch: " + text);
+            printed.reset();
+            check((Integer)launcher.invoke(null, client, List.of(APP, "android:write_settings", "allow"), out) == 0
+                    && printed.toString("UTF-8").trim().equals("special-access\tandroid:write_settings\tallowed"),
+                    "special-access OP allow prints the new state");
+            setAccess(pm, APP, "android:write_settings", false);
+            printed.reset();
+            check((Integer)launcher.invoke(null, client, List.of(APP, "android:camera", "allow"), out) == 1
+                    && printed.size() == 0, "A refused change exits 1 with no row");
+            check((Integer)launcher.invoke(null, client, List.of("fixture.absent"), out) == 1, "An unknown package exits 1");
+            check((Integer)launcher.invoke(null, older, List.of(APP), out) == 4 && printed.size() == 0,
+                    "An older device exits 4 with no row");
+
+            // A stale package generation is refused before anything is written (package mode).
+            ApkPackage replaced = pkg(APP, APP_UID, (byte)17, requested);
+            int overlay = ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP);
+            check(!ops.setModeIfCurrent(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, replaced,
+                    overlay == AppOpsManager.MODE_ALLOWED ? AppOpsManager.MODE_ERRORED : AppOpsManager.MODE_ALLOWED),
+                    "An obsolete package generation cannot write a package mode");
+            check(ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP) == overlay,
+                    "The refused write left the mode alone");
+            as(APP_UID, APP_PID, () -> rejects(SecurityException.class,
+                    () -> ops.setModeIfCurrent(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, app, AppOpsManager.MODE_ALLOWED)));
+
+            // An INSTALL_PACKAGES installer: allowed whatever the mode, so the switch is fixed.
+            check(pm.permissions().checkPermission(INSTALLER, Manifest.permission.INSTALL_PACKAGES) == PackageManager.PERMISSION_GRANTED,
+                    "The platform-signed fixture holds INSTALL_PACKAGES");
+            check(rows(pm, INSTALLER).equals(List.of("android:request_install_packages\tallowed\tfixed")),
+                    "Install unknown apps is shown fixed on for an installer: " + rows(pm, INSTALLER));
+            rejects(IllegalStateException.class, () -> setAccess(pm, INSTALLER, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, false));
+            check(pm.canRequestPackageInstalls(INSTALLER, 0) && ops.checkRawMode(AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+                    INSTALLER_UID, INSTALLER) == AppOpsManager.opToDefaultMode(AppOpsManager.OP_REQUEST_INSTALL_PACKAGES),
+                    "The refused change wrote nothing and the installer may still install");
+
+            // Storage stats follow the Usage access op (AOSP checkStatsPermission), not the manifest.
+            File statsData = new File(directory, "data");
+            check(new File(statsData, "media/0").mkdirs(), "Cannot create the storage stats data directory");
+            Object stats = make(type("StorageStatsService"), new Class<?>[]{PackageManagerService.class, File.class}, pm, statsData);
+            Method forUser = stats.getClass().getMethod("queryExternalStatsForUser", String.class, int.class, String.class);
+            Checked queryAsApp = () -> as(APP_UID, APP_PID, () -> forUser.invoke(stats, null, 0, APP));
+            setAccess(pm, APP, AppOpsManager.OPSTR_GET_USAGE_STATS, false);
+            rejects(SecurityException.class, queryAsApp);
+            ops.setMode(AppOpsManager.OP_GET_USAGE_STATS, APP_UID, APP, AppOpsManager.MODE_DEFAULT);
+            rejects(SecurityException.class, queryAsApp);
+            setAccess(pm, APP, AppOpsManager.OPSTR_GET_USAGE_STATS, true);
+            queryAsApp.run();
+            checks++;
+            as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> forUser.invoke(stats, null, 0, PLAIN)));
+            setAccess(pm, APP, AppOpsManager.OPSTR_GET_USAGE_STATS, false);
+            rejects(SecurityException.class, queryAsApp);
+            Method forUid = stats.getClass().getMethod("getCacheQuotaBytes", String.class, int.class, String.class);
+            // Its own uid needs no usage access.
+            as(APP_UID, APP_PID, () -> forUid.invoke(stats, null, APP_UID, APP));
+            as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> forUid.invoke(stats, null, PLAIN_UID, APP)));
+            checks++;
+
+            // A per-app Settings screen opened for a result is answered when the Control
+            // Center reports that its details closed (SettingsResults through the real
+            // activity starter), not at once; RESULT_OK for Install unknown apps once allowed.
+            Object process = ((List<Object>)get(atm, "mProcesses")).get(0);
+            IApplicationThread appThread = (IApplicationThread)get(process, "thread");
+            // Another attached app, to try a result token that is not its own.
+            IApplicationThread plainThread = new IApplicationThread.Default() {
+                final Binder token = new Binder(); @Override public IBinder asBinder() { return token; }
+            };
+            as(PLAIN_UID, APP_PID + 50, () -> {
+                Object plainProcess = make(type("ActivityTaskManagerService$ProcessRecord"),
+                        new Class<?>[]{atm.getClass(), int.class, IApplicationThread.class}, atm, APP_PID + 50, plainThread);
+                set(plainProcess, "packageName", PLAIN); set(plainProcess, "processName", PLAIN);
+                set(plainProcess, "packageCode", plain); set(plainProcess, "ready", true);
+                ((List<Object>)get(atm, "mProcesses")).add(plainProcess);
+            });
+            android.content.pm.ActivityInfo activityInfo = new android.content.pm.ActivityInfo();
+            activityInfo.packageName = APP; activityInfo.name = APP + ".Store";
+            Class<?> recordType = type("ActivityTaskManagerService$ActivityRecord");
+            Object caller = make(recordType, new Class<?>[]{atm.getClass(), android.content.pm.ActivityInfo.class, Intent.class,
+                    int.class, int.class, String.class, recordType, String.class, int.class},
+                    atm, activityInfo, new Intent(), 1, APP_PID, APP, null, null, 0);
+            set(caller, "app", process);
+            Class stateType = type("ActivityTaskManagerService$State");
+            set(caller, "state", Enum.valueOf(stateType, "PAUSED"));  // results queue on the record
+            ((List<Object>)get(atm, "mActivities")).add(caller);
+            IBinder callerToken = (IBinder)get(caller, "token");
+            List<Object> results = (List<Object>)get(caller, "pendingResults");
+            Method starter = null;
+            for (Method m : atm.getClass().getDeclaredMethods()) {
+                if (m.getName().equals("start") && m.getParameterCount() == 8) starter = m;
+            }
+            starter.setAccessible(true);
+            final Method start = starter;
+            Field forResult = type("ControlCenter").getDeclaredField("sOpenForResult");
+            forResult.setAccessible(true);
+            Object previousForResult = forResult.get(null);
+            Field openPlain = type("ControlCenter").getDeclaredField("sOpen");
+            openPlain.setAccessible(true);
+            Object previousOpen = openPlain.get(null);
+            List<String> plainOpens = new java.util.ArrayList<>();
+            openPlain.set(null, (java.util.function.Predicate<String>)pkg -> plainOpens.add(String.valueOf(pkg)));
+            List<String> requests = new java.util.ArrayList<>();
+            forResult.set(null, (java.util.function.BiPredicate<String, String>)(pkg, token) -> requests.add(pkg + "\t" + token));
+            Intent unknownSources = new Intent("android.settings.MANAGE_UNKNOWN_APP_SOURCES", android.net.Uri.parse("package:" + APP));
+            Object[] status = new Object[1];
+            try {
+                setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, false);
+                as(APP_UID, APP_PID, () -> status[0] = start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 7, null));
+                check(Integer.valueOf(android.app.ActivityManager.START_SUCCESS).equals(status[0]), "The screen opened: " + status[0]);
+                check(requests.size() == 1 && requests.get(0).matches(java.util.regex.Pattern.quote(APP) + "\t[0-9a-f]{32}"),
+                        "The Control Center request carries a result token: " + requests);
+                check(results.isEmpty(), "No result before the user decided");
+                String token = requests.get(0).substring(APP.length() + 1);
+                // The user turns Install unknown apps on, then closes the details.
+                setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
+                check(atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{token}).equals(1),
+                        "The close report is accepted");
+                check(results.size() == 1 && (Integer)get(results.get(0), "mResultCode") == android.app.Activity.RESULT_OK
+                        && (Integer)get(results.get(0), "mRequestCode") == 7, "Install unknown apps, allowed, answers RESULT_OK");
+                check(atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{token}).equals(0)
+                        && results.size() == 1, "A result is delivered once");
+                // Left off, or another screen: RESULT_CANCELED, still after the close.
+                setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, false);
+                as(APP_UID, APP_PID, () -> start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 8, null));
+                check(results.size() == 1, "The second request waits too");
+                atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{requests.get(1).substring(APP.length() + 1)});
+                check(results.size() == 2 && (Integer)get(results.get(1), "mResultCode") == android.app.Activity.RESULT_CANCELED,
+                        "Install unknown apps left off answers RESULT_CANCELED");
+                // The caller finished meanwhile: nothing is delivered, and nothing waits.
+                as(APP_UID, APP_PID, () -> start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 9, null));
+                set(caller, "finishing", true);
+                atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{requests.get(2).substring(APP.length() + 1)});
+                check(results.size() == 2, "A finishing caller gets no result");
+                set(caller, "finishing", false);
+                Object pendingResults = get(atm, "mSettingsResults");
+                check((Integer)call(pendingResults, "pendingCount") == 0, "Nothing is left waiting");
+                // A Control Center that does not open: no token kept, the start fails.
+                forResult.set(null, (java.util.function.BiPredicate<String, String>)(pkg, token2) -> false);
+                as(APP_UID, APP_PID, () -> status[0] = start.invoke(atm, appThread, unknownSources, null, APP, callerToken, "who", 10, null));
+                check(Integer.valueOf(android.app.ActivityManager.START_INTENT_NOT_RESOLVED).equals(status[0])
+                        && (Integer)call(pendingResults, "pendingCount") == 0, "A request the Control Center never saw is not kept");
+                // Another process's token gets no result at all (the calling-process guard).
+                forResult.set(null, (java.util.function.BiPredicate<String, String>)(pkg, token3) -> requests.add(pkg + "\t" + token3));
+                int before = requests.size();
+                as(PLAIN_UID, APP_PID + 50, () -> start.invoke(atm, plainThread, unknownSources, null, PLAIN, callerToken, "who", 11, null));
+                check(requests.size() == before && plainOpens.equals(List.of(APP))
+                        && (Integer)call(pendingResults, "pendingCount") == 0 && results.size() == 2,
+                        "A foreign result token neither waits nor receives a result");
+            } finally {
+                forResult.set(null, previousForResult);
+                openPlain.set(null, previousOpen);
+                ((List<Object>)get(atm, "mActivities")).remove(caller);
+            }
+
             // Persistence: a restarted ledger over the same file has the user's decisions.
             setAccess(pm, APP, AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, true);
             ops.reloadNonHistoricalState();
@@ -373,6 +558,20 @@ public final class SpecialAccessTest {
             directory.delete();
         }
         return checks;
+    }
+
+    private static Object clientCall(Object client, String name, Object... args) throws Exception {
+        for (Method method : client.getClass().getDeclaredMethods()) {
+            if (method.getName().equals(name) && method.getParameterCount() == args.length) {
+                method.setAccessible(true);
+                try { return method.invoke(client, args); }
+                catch (InvocationTargetException e) {
+                    if (e.getCause() instanceof Exception cause) throw cause;
+                    throw e;
+                }
+            }
+        }
+        throw new NoSuchMethodException(name);
     }
 
     private static Object call(Object target, String name) throws Exception {

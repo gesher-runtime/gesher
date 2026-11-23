@@ -545,8 +545,16 @@
       "he": "כאן אפשר להסיר את היישום הזה, או לאשר או לשלול את הגישה המיוחדת שלו."
     },
     "cp_access_title": {
-      "en": "Special app access (Android's Settings asks you to decide these):",
-      "he": "גישה מיוחדת של היישום (בהגדרות של אנדרואיד מחליטים עליה כאן):"
+      "en": "Special app access (on Android, you allow these in Settings):",
+      "he": "הרשאות גישה מיוחדות (באנדרואיד מאשרים אותן בהגדרות):"
+    },
+    "cp_access_loading": {
+      "en": "Reading the special access from the Gesher device...",
+      "he": "קורא את הגישה המיוחדת מסביבת גשר..."
+    },
+    "cp_access_fixed": {
+      "en": "{0} (always allowed: this app is itself an installer)",
+      "he": "{0} (תמיד מאושר: היישום הזה הוא בעצמו מתקין יישומים)"
     },
     "cp_access_all_files": {
       "en": "All files access",
