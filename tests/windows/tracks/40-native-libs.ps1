@@ -196,6 +196,7 @@ Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
 } @('JNI_OnLoad ran: ok', 'a native thread that ends attached only warns, as on Android: ok',
+    'GetEnv guest boundary: all passed', 'GetEnv attach/detach: all passed',
     'JniTest all passed')
 
 # Step 5, libc++: a C++ .so against the NDK's libc++_shared.so, which the

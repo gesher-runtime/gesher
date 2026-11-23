@@ -48,7 +48,7 @@ Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
   $http2Out
 } @('Http2DeviceSmoke passed:')
 
-$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'large', 'cancel', 'disabled')
+$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'large', 'cancel', 'disabled', 'sessions')
 foreach ($http2ContractMode in $http2ContractModes) {
   $http2ContractOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + $http2ContractMode) 45
   $http2ContractCode = $LASTEXITCODE
@@ -57,6 +57,13 @@ foreach ($http2ContractMode in $http2ContractModes) {
     $http2ContractOut
   } @('Http2DeviceSmoke passed:')
 }
+
+$http2CreditOut = FixesRun ($dvmFixes + 'Http2CreditContracts') 45
+$http2CreditCode = $LASTEXITCODE
+Check 'network: HTTP/2 returns discarded receive credit exactly once' {
+  if ($http2CreditCode -ne 0) { throw "HTTP/2 receive credit failed: $http2CreditOut" }
+  $http2CreditOut
+} @('Http2CreditContracts: 55 checks, 0 failures; in-memory only, max DATA 1025 bytes')
 
 $http2GzipOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + 'gzip') 45
 $http2GzipCode = $LASTEXITCODE
