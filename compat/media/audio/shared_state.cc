@@ -4,6 +4,8 @@
 
 #include <windows.h>
 
+#include <gesher/binder_endpoint.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -199,12 +201,33 @@ bool GetMasterMute() { return State()->master_mute != 0; }
 
 uint32_t Generation() { return static_cast<uint32_t>(State()->generation); }
 
+namespace {
+
+audio_playback::Activity* PlaybackActivity() {
+  static auto* activity = binder_endpoint::OpenAudioPlaybackActivity();
+  return activity;
+}
+
+}  // namespace
+
+void PreparePlaybackActivity() {
+  if (binder_endpoint::Current().UsesProtectedAudio()) (void)PlaybackActivity();
+}
+
 void MarkStreamActive(int stream, uint64_t until_ms) {
+  static_assert(kNumStreamTypes == audio_playback::kStreamCount);
   if (!Valid(stream)) return;
-  SharedAudioState* s = State();
-  LONG64 old = s->active_until_ms[stream];
+  volatile LONG64* value;
+  if (binder_endpoint::Current().UsesProtectedAudio()) {
+    auto* activity = PlaybackActivity();
+    if (!activity) return;
+    value = &activity->active_until_ms[stream];
+  } else {
+    value = &State()->active_until_ms[stream];
+  }
+  LONG64 old = *value;
   while (static_cast<uint64_t>(old) < until_ms) {
-    LONG64 prev = InterlockedCompareExchange64(&s->active_until_ms[stream],
+    LONG64 prev = InterlockedCompareExchange64(value,
                                                static_cast<LONG64>(until_ms), old);
     if (prev == old) break;
     old = prev;
@@ -213,11 +236,17 @@ void MarkStreamActive(int stream, uint64_t until_ms) {
 
 bool StreamActive(int stream, int in_past_ms) {
   if (!Valid(stream)) return false;
+  if (binder_endpoint::Current().UsesProtectedAudio()) {
+    return binder_endpoint::IsAudioPlaybackActive(stream, in_past_ms);
+  }
   uint64_t until = static_cast<uint64_t>(State()->active_until_ms[stream]);
   return until + static_cast<uint64_t>(std::max(in_past_ms, 0)) >= GetTickCount64();
 }
 
 int NewSessionId() {
+  if (binder_endpoint::Current().UsesProtectedAudio()) {
+    return binder_endpoint::NewProtectedAudioSession();
+  }
   // As AudioFlinger's unique ids: a counter in steps of AUDIO_UNIQUE_ID_USE_MAX
   // (8) with the use in the low bits (AUDIO_UNIQUE_ID_USE_SESSION = 1).
   LONG n = InterlockedIncrement(&State()->next_session);

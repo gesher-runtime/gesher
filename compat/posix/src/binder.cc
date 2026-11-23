@@ -804,6 +804,24 @@ struct RecordPipe {
   ~RecordPipe() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
 };
 
+bool AudioPlaybackRequest(wire::Op op, uint32_t stream, uint32_t in_past_ms, uint64_t* result) {
+  if (!binder_endpoint::Current().UsesProtectedAudio()) return false;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return false;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return false;
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return false;
+  uint32_t request[] = {5 * sizeof(uint32_t), op, wire::kMagic, wire::kVersion, stream, in_past_ms};
+  uint32_t reply[4]{};
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, reply, sizeof(reply), false, deadline) ||
+      reply[0] != 3 * sizeof(uint32_t) || reply[1] != 0) return false;
+  *result = static_cast<uint64_t>(reply[2]) | static_cast<uint64_t>(reply[3]) << 32;
+  return true;
+}
+
 int ReceiveRecordStatus(HANDLE pipe, std::vector<uint8_t>* reply) {
   if (!Receive(pipe, reply) || reply->size() < sizeof(int32_t)) return EIO;
   int32_t status;
@@ -812,6 +830,29 @@ int ReceiveRecordStatus(HANDLE pipe, std::vector<uint8_t>* reply) {
   return -status;
 }
 }  // namespace
+
+audio_playback::Activity* binder_endpoint::OpenAudioPlaybackActivity() {
+  uint64_t handle = 0;
+  if (!AudioPlaybackRequest(wire::kAudioPlaybackPublish, 0, 0, &handle) ||
+      !handle || handle > UINTPTR_MAX) return nullptr;
+  auto section = binder_bootstrap::DecodeHandle(handle);
+  auto* state = static_cast<audio_playback::Activity*>(
+      MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(audio_playback::Activity)));
+  CloseHandle(section);
+  return state;
+}
+
+bool binder_endpoint::IsAudioPlaybackActive(int stream, int in_past_ms) {
+  uint64_t active = 0;
+  return AudioPlaybackRequest(wire::kAudioPlaybackQuery, stream, std::max(0, in_past_ms), &active) &&
+      active == 1;
+}
+
+int binder_endpoint::NewProtectedAudioSession() {
+  uint64_t session = 0;
+  return AudioPlaybackRequest(wire::kAudioPlaybackSession, 0, 0, &session) && session <= INT_MAX
+      ? static_cast<int>(session) : 0;
+}
 
 int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
   if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;

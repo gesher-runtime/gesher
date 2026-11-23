@@ -273,6 +273,7 @@ class Engine : public Mixer {
 
   void StartLocked() {
     if (started_) return;
+    PreparePlaybackActivity();
     started_ = true;
     std::thread([this] { Run(); }).detach();
   }

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <windows.h>
+#include "audio_playback_activity.h"
 
 #include <mutex>
 
@@ -31,6 +32,7 @@ class Binding {
     guest_ = startup.endpoint == binder_bootstrap::Endpoint::kApplication ||
              startup.endpoint == binder_bootstrap::Endpoint::kStandalone;
     standalone_ = startup.endpoint == binder_bootstrap::Endpoint::kStandalone;
+    system_ = startup.endpoint == binder_bootstrap::Endpoint::kSystemServer;
     HANDLE inherited = binder_bootstrap::DecodeHandle(startup.broker);
     if (GetProcessId(inherited) == 0) return;
     if (guest_ || startup.endpoint == binder_bootstrap::Endpoint::kClient) {
@@ -97,6 +99,7 @@ class Binding {
 
   bool IsGuest() const { return guest_; }
   bool IsStandalone() const { return standalone_; }
+  bool UsesProtectedAudio() const { return guest_ || system_; }
 
   DWORD StandaloneRecordBrokerPid() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -118,6 +121,7 @@ class Binding {
   bool operator_ = false;
   bool guest_ = false;
   bool standalone_ = false;
+  bool system_ = false;
 };
 
 inline Binding& Current() {
@@ -126,6 +130,9 @@ inline Binding& Current() {
 }
 
 bool EnrollChild(HANDLE process);
+audio_playback::Activity* OpenAudioPlaybackActivity();
+bool IsAudioPlaybackActive(int stream, int in_past_ms);
+int NewProtectedAudioSession();
 int FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* input_and_output);
 // Closes the caller-owned pin after the broker has captured file identity.
 // The pointer is cleared only if the pin was closed.

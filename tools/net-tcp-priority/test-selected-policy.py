@@ -396,14 +396,14 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = 'd395d45797bb5d6290e353616ea6568a9b2e51af55363d666765cdfcb8c35e4f'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = '89f65dcfb6dcb74b4ab2b2e6f6af846ea91015ce516cc468adb71c9fa80b3014'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
- 'compat/binder/binderd.cc': '3011ce2db55d2e129b7cf693064d1f89fbe8398089b7420a7fa88c47559cf8fb',
+ 'compat/binder/binderd.cc': 'f745c3acb573832e598d58ef3772de050eb3161390c5888ac96a7a9aea57ea46',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
  'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
  'compat/posix/posix.cmake': 'aafaa8d7fe47db48a52890f70d05495e88726ead08becc8297a08fba09423083',
- 'compat/posix/src/binder.cc': 'c949a02add8fdb4102c0248fc796d6a0b39ac20a9ff2a2070455e1b9cd3845d0',
- 'compat/posix/src/binder_wire.h': '72aaf4a8dbb26ab151cde349136b8f0f9976819609a0f101df96a2c4cdfe0d69',
+ 'compat/posix/src/binder.cc': '2f9563f495cc64c73910dbd734e8ab4c86f3c965aee3fdacb8fa6156df6aaf62',
+ 'compat/posix/src/binder_wire.h': '617c862b19c71eec4f1ab4799e6944d5138061a5ec7128cb0c7543f179db0524',
  'compat/posix/src/dirent.cc': 'db31cc15b7cc8d8b2ac881a9e4ceee12ba903a9798ce59eaf150e61cc7dcc921',
  'compat/posix/src/errno.cc': 'f2d2e94807fec9abd2e3785994f388538b1dee9abc49a4b2e574cdd594f89238',
  'compat/posix/src/fd.cc': '4f7ab619d769b885e6f54be626567d4df8ec5a2739901b6beba8a2a5548305dc',

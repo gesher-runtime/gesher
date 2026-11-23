@@ -53,6 +53,7 @@
 
 #include "../posix/src/binder_wire.h"
 #include "../posix/include/gesher/windows_process_identity.h"
+#include "../posix/include/gesher/audio_playback_activity.h"
 #include "../framework/app_container.h"
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
@@ -1839,6 +1840,86 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
   if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
 }
 
+namespace playback = gesher::audio_playback;
+
+struct AudioRegion {
+  peer::OwnedHandle section;
+  playback::Activity* state = nullptr;
+  ~AudioRegion() { if (state) UnmapViewOfFile(state); }
+};
+
+using WeakPeer = std::weak_ptr<const peer::Peer>;
+std::map<WeakPeer, AudioRegion, std::owner_less<WeakPeer>> g_audio_activity;
+std::mutex g_audio_lock;
+uint32_t g_next_audio_session = 1;  // guarded by g_audio_lock
+
+bool AudioPeer(const peer::Registry::Lease& process) {
+  return process && (process->role == peer::Role::kApplication ||
+                     process->role == peer::Role::kSystemServer);
+}
+
+void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
+  uint32_t version = 0, stream = 0, in_past_ms = 0;
+  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
+      !in.Get(&stream) || !in.Get(&in_past_ms) || in.p != in.end) return;
+  const auto process = g_peer_registry->Authenticate(pipe);
+  int32_t status = -EACCES;
+  uint64_t result = 0;
+  if (AudioPeer(process)) {
+    std::lock_guard<std::mutex> lock(g_audio_lock);
+    // A revoked or exited producer cannot leave activity or a mapped view
+    // behind. A retained identity refers to this exact process generation.
+    for (auto at = g_audio_activity.begin(); at != g_audio_activity.end();) {
+      auto owner = at->first.lock();
+      if (!owner || !g_peer_registry->Live(owner)) at = g_audio_activity.erase(at);
+      else ++at;
+    }
+    if (g_peer_registry->Live(process)) {
+      status = 0;
+      if (op == wire::kAudioPlaybackPublish) {
+        auto& region = g_audio_activity[process];
+        if (!region.section) {
+          region.section.reset(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                                  sizeof(playback::Activity), nullptr));
+          if (region.section) {
+            region.state = static_cast<playback::Activity*>(
+                MapViewOfFile(region.section.get(), FILE_MAP_WRITE, 0, 0, sizeof(playback::Activity)));
+          }
+        }
+        HANDLE child = nullptr;
+        if (region.state && DuplicateHandle(GetCurrentProcess(), region.section.get(),
+                                            process->process.get(), &child, FILE_MAP_WRITE, FALSE, 0)) {
+          result = launch::EncodeHandle(child);
+        } else {
+          if (!region.state) g_audio_activity.erase(process);
+          status = -EIO;
+        }
+      } else if (op == wire::kAudioPlaybackQuery && stream < playback::kStreamCount) {
+        const auto now = GetTickCount64();
+        for (const auto& entry : g_audio_activity) {
+          // The bounded timestamp comes from an untrusted producer. Discard
+          // future values outside one mixer interval, rather than extending
+          // them every time the service queries the stream.
+          const auto until = static_cast<ULONGLONG>(
+              InterlockedCompareExchange64(&entry.second.state->active_until_ms[stream], 0, 0));
+          if (until && until <= now + playback::kActiveMs && until + in_past_ms >= now) {
+            result = 1;
+            break;
+          }
+        }
+      } else if (op == wire::kAudioPlaybackSession && g_next_audio_session < INT_MAX / 8u) {
+        result = (g_next_audio_session++ << 3) | 1u;
+      } else {
+        status = -EINVAL;
+      }
+    }
+  }
+  WireReply reply;
+  reply.Put<int32_t>(status);
+  reply.Put<uint64_t>(result);
+  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
+}
+
 void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
   uint32_t version = 0;
   uint64_t source = 0;
@@ -2296,6 +2377,9 @@ void Serve(HANDLE pipe) {
 #ifdef GESHER_RECORD_LOCK_BROKER
       } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
         ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
+      } else if (op == wire::kAudioPlaybackPublish || op == wire::kAudioPlaybackQuery ||
+                 op == wire::kAudioPlaybackSession) {
+        ServeAudioPlayback(pipe, in, op);
 #endif
       } else if (!g_record_only) {
         if (op == wire::kHelloProc || op == wire::kHelloOperator) {

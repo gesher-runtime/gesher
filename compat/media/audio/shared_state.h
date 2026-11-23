@@ -44,6 +44,7 @@ bool GetMasterMute();
 uint32_t Generation();
 
 // A stream is playing (in this process) until about `until_ms` (GetTickCount64).
+void PreparePlaybackActivity();
 void MarkStreamActive(int stream, uint64_t until_ms);
 bool StreamActive(int stream, int in_past_ms);
 

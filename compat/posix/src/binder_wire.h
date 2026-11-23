@@ -123,6 +123,12 @@ enum Op : uint32_t {
   // -> {magic, version, file_handle:u64}; <- {-errno or 0}. After the client
   // closes its temporary pin, it sends {1:u32} and receives the commit status.
   kFileRecordClose = 15,
+  // Protected playback. Each request carries {magic, version, stream, interval}.
+  // Each reply carries {status, payload:u64}. The payload is a section handle
+  // in the sender's process, an activity bit, or a device-unique session ID.
+  kAudioPlaybackPublish = 17,
+  kAudioPlaybackQuery = 18,
+  kAudioPlaybackSession = 19,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
