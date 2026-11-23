@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Exercise production Java settings, Proxy dispatch and native-library discovery.
 
-Settings File*Stream and ZIP constructor sites use counting subclasses which
-delegate to real host file I/O; no storage, encoding or discovery algorithm is
-substituted. StandIn uses small Binder/list-slice host boundaries and the actual
+Settings File*Stream/RandomAccessFile and ZIP constructor sites use counting
+subclasses which delegate to real host file I/O; explicit settings fault/crash
+controls cover write, sync, close and replacement failures. No storage, encoding
+or discovery algorithm is substituted. StandIn uses small Binder/list-slice host boundaries and the actual
 Java Proxy/reflection path. Its portable behavioral fixture also runs on ART.
 HotSpot allocation timing is informational; a generous allocation ceiling detects
 the original per-call method lookup. --source-ref runs the same performance gates
@@ -26,6 +27,8 @@ def main() -> None:
     parser.add_argument('--java-home', type=Path, required=True)
     parser.add_argument('--source-ref')
     parser.add_argument('--component', choices=('settings', 'standin', 'native'))
+    parser.add_argument('--settings-benchmark', action='store_true',
+                        help='Measure the same settings mutation workload, including older source refs')
     args = parser.parse_args()
     java = str(args.java_home / 'bin/java')
     javac = str(args.java_home / 'bin/javac')
@@ -58,6 +61,11 @@ def main() -> None:
                     if source.count(needle) != 1:
                         raise ValueError('Expected one file-stream construction boundary: ' + needle)
                     source = source.replace(needle, 'new CountingFile' + kind + 'Stream(')
+                # Real filesystem adapters provide explicit append/sync/replace fault
+                # boundaries. Older GST1 sources have no RandomAccessFile constructor.
+                source = source.replace('new RandomAccessFile(', 'new CountingRandomAccessFile(')
+                source = source.replace('bytes.getFD().sync()', 'SettingsIO.sync(bytes.getFD())')
+                source = source.replace('Files.move(', 'SettingsIO.move(')
                 sources.append(str(FIXTURES / 'SettingsStoreHost.java'))
                 main_classes = ['com.gesher.server.SettingsStoreHost']
             elif component == 'standin':
@@ -84,6 +92,8 @@ def main() -> None:
                 command = [java, '-XX:-UsePerfData', '-Xmx256m', '-cp', str(classes), main_class]
                 if main_class == 'gesher.services.StandInDispatchTest':
                     command.append('--host')
+                if main_class == 'com.gesher.server.SettingsStoreHost' and args.settings_benchmark:
+                    command.append('--benchmark-only')
                 subprocess.run(command, check=True, timeout=60)
 
 
