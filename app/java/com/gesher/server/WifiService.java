@@ -365,12 +365,9 @@ public final class WifiService extends IWindowsWifi.Stub {
      */
     long bands(WindowsWifi.Hardware hardware) {
         if (!hardware.present()) return 0;
-        long bits = 0;
-        if (hardware.phy(2) || hardware.phy(5) || hardware.phy(6) || mBackend.bandObserved(2400, 2500)) {
-            bits |= IWindowsWifi.BAND_24_GHZ;
-        }
-        if (hardware.phy(4) || hardware.phy(8) || mBackend.bandObserved(4900, 5900)) bits |= IWindowsWifi.BAND_5_GHZ;
-        if (mBackend.bandObserved(5925, 7125)) bits |= IWindowsWifi.BAND_6_GHZ;
+        long bits = observedBands(hardware);
+        if (hardware.phy(2) || hardware.phy(5) || hardware.phy(6)) bits |= IWindowsWifi.BAND_24_GHZ;
+        if (hardware.phy(4) || hardware.phy(8)) bits |= IWindowsWifi.BAND_5_GHZ;
         if (hardware.phy(9)) bits |= IWindowsWifi.BAND_60_GHZ;
         if (hardware.phy(1) || hardware.phy(2) || hardware.phy(4) || hardware.phy(5) || hardware.phy(6)) {
             bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_LEGACY);
@@ -381,6 +378,28 @@ public final class WifiService extends IWindowsWifi.Stub {
         if (hardware.phy(10)) bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11AX);
         if (hardware.phy(11)) bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11BE);
         return bits;
+    }
+
+    private WindowsWifi.Hardware mObservedFor; // guarded by mObservedLock
+    private long mObservedBands; // guarded by mObservedLock
+    private final Object mObservedLock = new Object();
+
+    /**
+     * Bands in which the present adapters have actually received a BSS or held a link.
+     * Reception is a property of the hardware, not of the current surroundings: once
+     * observed it stays reported until the adapter census changes, so the answer does
+     * not follow (and disclose) which access points are nearby right now.
+     */
+    private long observedBands(WindowsWifi.Hardware hardware) {
+        long seen = 0;
+        if (mBackend.bandObserved(2400, 2500)) seen |= IWindowsWifi.BAND_24_GHZ;
+        if (mBackend.bandObserved(4900, 5900)) seen |= IWindowsWifi.BAND_5_GHZ;
+        if (mBackend.bandObserved(5925, 7125)) seen |= IWindowsWifi.BAND_6_GHZ;
+        synchronized (mObservedLock) {
+            if (mObservedFor != hardware) { mObservedFor = hardware; mObservedBands = 0; }
+            mObservedBands |= seen;
+            return mObservedBands;
+        }
     }
 
     // ---- Channel data ------------------------------------------------------------

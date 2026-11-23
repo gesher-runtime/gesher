@@ -550,6 +550,15 @@ public final class WifiServiceHost {
             h.radio.observedLow = 5955; h.radio.observedHigh = 5955;
             h.owner.call(() -> check((h.wifi.getCapabilities(h.owner.name(), 1) & com.gesher.net.IWindowsWifi.BAND_6_GHZ) != 0,
                     "An observed 6 GHz BSS establishes 6 GHz support"));
+            h.radio.observedLow = -1; h.radio.observedHigh = -1;
+            h.owner.call(() -> check((h.wifi.getCapabilities(h.owner.name(), 1) & com.gesher.net.IWindowsWifi.BAND_6_GHZ) != 0,
+                    "Observed 6 GHz reception stays a hardware capability when that BSS leaves"));
+            com.gesher.net.WindowsWifi.Hardware census = h.radio.hardware;
+            h.radio.hardware = new com.gesher.net.WindowsWifi.Hardware(census.interfaces, census.phyTypes,
+                    census.authAlgorithms, census.ciphers);
+            h.owner.call(() -> check((h.wifi.getCapabilities(h.owner.name(), 1) & com.gesher.net.IWindowsWifi.BAND_6_GHZ) == 0,
+                    "A new adapter census needs its own 6 GHz evidence"));
+            h.radio.observedLow = 5955; h.radio.observedHigh = 5955;
             h.noAccess.call(() -> {
                 rejects(() -> h.wifi.getCapabilities(h.noAccess.name(), 0), "Feature group requires ACCESS_WIFI_STATE");
                 check(h.wifi.getCapabilities(h.noAccess.name(), 1) != 0, "Band group carries no permission");

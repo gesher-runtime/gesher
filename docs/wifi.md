@@ -24,6 +24,10 @@ arrival/removal:
 | `is24GHzBandSupported`, `is5GHzBandSupported`, `is60GHzBandSupported` | Band-specific PHY types (DSSS/HR-DSSS/ERP; OFDM/VHT; DMG) or an actually observed BSS/link in the band |
 | `is6GHzBandSupported` | Only an observed 6 GHz BSS or link: Windows reports no 6 GHz capability, so an idle 6E adapter answers false until it sees one |
 
+An observed band is kept until the adapter census changes (interface arrival or
+removal): reception is a hardware property, so the answer does not follow, and does
+not disclose to apps without location access, which access points are nearby now.
+
 Feature queries require `ACCESS_WIFI_STATE`, as `WifiServiceImpl.isFeatureSupported`
 does; band and standard queries have no permission, as on Android. Facilities that
 Windows does not expose to Gesher answer with Android's unsupported results:
