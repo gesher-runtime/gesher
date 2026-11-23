@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include <gesher/capture_policy.h>
+#include "../posix/include/gesher/capture_policy.h"
 
 namespace gesher {
 namespace zygote {

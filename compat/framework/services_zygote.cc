@@ -1000,7 +1000,7 @@ bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation,
     return false;
   }
   auto& previous = authority.stopped_through[installation];
-  previous = std::max(previous, stop_through);
+  previous = (std::max)(previous, stop_through);
   return StopInstallation(authority, installation);
 }
 
