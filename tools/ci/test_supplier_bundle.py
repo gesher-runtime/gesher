@@ -96,10 +96,9 @@ class SupplierBundle(unittest.TestCase):
         self.assertEqual(logs.count('CI_ARTIFACT_BUNDLE_MEMBER '), len(self.h.specs))
         self.assertIn('CI_ARTIFACT_RECEIPT name=core-suppliers id=5000 ', logs)
         self.assertIn(f'CI_ARTIFACT_BUNDLE version=1 count={len(self.h.specs)} ', logs)
-        # Fourteen shards: one producer batch plus seven requests per shard
-        # instead of a twenty-request batch in every shard.
-        self.assertEqual(self.producer_reads + 14 * 7, 118)
-        self.assertEqual(14 * 20, 280)
+        # A shard batch costs as much as the producer batch: the bundle saves
+        # 20 - 7 requests in every shard after the first.
+        self.assertEqual(len(json_reads) + len(redirects), 7)
 
     def test_ledger_records_every_verified_supplier_and_byte(self):
         self.assertEqual([entry['name'] for entry in self.ledger['suppliers']],
@@ -147,7 +146,8 @@ class SupplierBundle(unittest.TestCase):
                      ('manifest', 'tools/ci/web3_query_artifacts.json', 'another manifest, run or source'),
                      ('head_repository_id', '10', 'another manifest, run or source'),
                      ('attempt', '3', 'attempt is invalid'), ('attempt', 2, 'attempt is invalid'),
-                     ('version', 2, 'invalid fields')]
+                     ('version', 2, 'invalid fields'), ('version', True, 'invalid fields'),
+                     ('version', 1.0, 'invalid fields')]
         for key, value, message in mutations:
             with self.subTest(key=key, value=value):
                 ledger = copy.deepcopy(self.ledger)
@@ -176,7 +176,7 @@ class SupplierBundle(unittest.TestCase):
     def test_duplicate_ledger_keys_are_rejected(self):
         raw = json.dumps(self.ledger).encode()
         self.publish(self.bundle_entries(b'{"run_id": "8", ' + raw[1:]))
-        self.rejected('Duplicate batch manifest key')
+        self.rejected('ledger is not strict JSON: Duplicate')
 
     def test_partial_rerun_accepts_a_bundle_from_an_earlier_attempt_of_this_run(self):
         ledger = dict(self.ledger, attempt='1')
@@ -254,6 +254,8 @@ class SupplierBundleWiring(unittest.TestCase):
         self.assertEqual(uploads[0]['with']['path'], 'ci-suppliers/core/')
         self.assertEqual(uploads[0]['with']['if-no-files-found'], 'error')
         self.assertIs(uploads[0]['with']['include-hidden-files'], True)
+        # Shorter than the producers' retention would break reruns of failed shards.
+        self.assertNotIn('retention-days', uploads[0]['with'])
         self.assertEqual(job['env']['GH_TOKEN'], '${{ github.token }}')
 
     def test_every_test_shard_receipts_the_bundle_instead_of_the_batch(self):

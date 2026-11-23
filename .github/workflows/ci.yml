@@ -1957,7 +1957,8 @@ jobs:
           if-no-files-found: error
           # Every ledgered file must arrive; consumers reject any difference.
           include-hidden-files: true
-          retention-days: 7
+          # Default retention, like the producers' artifacts: a rerun of a
+          # failed shard reuses this job's bundle for as long as it can rerun.
 
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})

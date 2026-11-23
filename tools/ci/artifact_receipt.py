@@ -318,9 +318,13 @@ def verify_bundle(staging, specs, relative, committed, value):
     ledger_path = staging / LEDGER
     if _linked(ledger_path) or not ledger_path.is_file() or ledger_path.stat().st_size > _LEDGER_LIMIT:
         raise RuntimeError('Supplier bundle ledger is not a bounded regular file')
-    ledger = json.loads(ledger_path.read_bytes(), object_pairs_hook=_unique_object,
-                        parse_constant=_invalid_constant)
-    if not isinstance(ledger, dict) or set(ledger) != _LEDGER_KEYS or ledger['version'] != 1:
+    try:
+        ledger = json.loads(ledger_path.read_bytes(), object_pairs_hook=_unique_object,
+                            parse_constant=_invalid_constant)
+    except ValueError as error:
+        raise RuntimeError(f'Supplier bundle ledger is not strict JSON: {error}') from None
+    if (not isinstance(ledger, dict) or set(ledger) != _LEDGER_KEYS
+            or type(ledger['version']) is not int or ledger['version'] != 1):
         raise RuntimeError('Supplier bundle ledger has invalid fields')
     expected = {'manifest': relative, 'manifest_sha256': hashlib.sha256(committed).hexdigest(),
                 'repository': value['repo'], 'repository_id': value['repo_id'],
