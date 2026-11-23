@@ -1048,6 +1048,9 @@ public final class TelephonyService {
         private final Object mLock = new Object();
         private final Map<IBinder, Record> mRecords = new HashMap<>();
         private final List<IOnSubscriptionsChangedListener> mSubscriptionListeners = new ArrayList<>();
+        // A death recipient per remote listener binder, so a dead app's records are dropped
+        // as TelephonyRegistry drops them, even when no event is ever delivered (no modem).
+        private final Map<IBinder, IBinder.DeathRecipient> mDeathRecipients = new HashMap<>();
         // The values last delivered, so listeners only hear real changes.
         private ServiceState mServiceState;
         private WindowsCellular.Modem mModem;
@@ -1087,8 +1090,15 @@ public final class TelephonyService {
         public void addOnSubscriptionsChangedListener(String callingPackage, String callingFeatureId,
                 IOnSubscriptionsChangedListener callback) {
             if (callback == null) return;
+            IBinder binder = callback.asBinder();
             synchronized (mLock) {
+                // One record per listener binder, as TelephonyRegistry keeps.
+                mSubscriptionListeners.removeIf(l -> l.asBinder() == binder);
                 mSubscriptionListeners.add(callback);
+            }
+            if (!watchDeath(binder)) {
+                removeSubscriptionListener(callback);
+                return;
             }
             try {
                 callback.onSubscriptionsChanged();
@@ -1105,8 +1115,66 @@ public final class TelephonyService {
 
         private void removeSubscriptionListener(IOnSubscriptionsChangedListener callback) {
             if (callback == null) return;
+            IBinder binder = callback.asBinder();
             synchronized (mLock) {
-                mSubscriptionListeners.removeIf(l -> l.asBinder() == callback.asBinder());
+                mSubscriptionListeners.removeIf(l -> l.asBinder() == binder);
+            }
+            unwatchIfUnused(binder);
+        }
+
+        /**
+         * Drops every record of a listener binder when its process dies. In-process
+         * (local) binders cannot die separately. Returns false if the binder is already dead.
+         */
+        private boolean watchDeath(IBinder binder) {
+            if (binder == null || binder instanceof Binder) return true;
+            IBinder.DeathRecipient recipient;
+            synchronized (mLock) {
+                if (mDeathRecipients.containsKey(binder)) return true;
+                recipient = () -> binderDied(binder);
+                mDeathRecipients.put(binder, recipient);
+            }
+            try {
+                binder.linkToDeath(recipient, 0);
+                return true;
+            } catch (RemoteException e) {
+                synchronized (mLock) {
+                    mDeathRecipients.remove(binder);
+                }
+                return false;
+            }
+        }
+
+        private void binderDied(IBinder binder) {
+            synchronized (mLock) {
+                mRecords.remove(binder);
+                mSubscriptionListeners.removeIf(l -> l.asBinder() == binder);
+                mDeathRecipients.remove(binder);
+            }
+        }
+
+        /** Unlinks a binder's death recipient once no record of it remains. */
+        private void unwatchIfUnused(IBinder binder) {
+            IBinder.DeathRecipient recipient;
+            synchronized (mLock) {
+                if (mRecords.containsKey(binder)) return;
+                for (IOnSubscriptionsChangedListener l : mSubscriptionListeners) {
+                    if (l.asBinder() == binder) return;
+                }
+                recipient = mDeathRecipients.remove(binder);
+            }
+            if (recipient == null) return;
+            try {
+                binder.unlinkToDeath(recipient, 0);
+            } catch (RuntimeException e) {
+                // Already dead or never linked: nothing remains to unlink.
+            }
+        }
+
+        /** Live listener records (phone-state and subscription), for tests. */
+        int listenerCount() {
+            synchronized (mLock) {
+                return mRecords.size() + mSubscriptionListeners.size();
             }
         }
 
@@ -1164,9 +1232,11 @@ public final class TelephonyService {
             IBinder binder = callback.asBinder();
             if (eventSet.isEmpty()) {
                 synchronized (mLock) { mRecords.remove(binder); }
+                unwatchIfUnused(binder);
                 return;
             }
             if (!permitted(eventSet, c)) return;
+            if (!watchDeath(binder)) return;
             Record r = new Record();
             r.callback = callback;
             r.caller = c;

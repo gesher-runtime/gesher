@@ -157,20 +157,28 @@ public final class TelephonyHost {
         @Override public void publish(WindowsCellular.Modem modem, int simState) { simStates.add(simState); }
     }
 
-    static IBinder binder() {
-        return (IBinder) Proxy.newProxyInstance(TelephonyHost.class.getClassLoader(),
+    /** A remote (proxy) binder whose process death the fixture can trigger. */
+    static final class Remote {
+        final List<IBinder.DeathRecipient> recipients = new ArrayList<>();
+        final IBinder binder = (IBinder) Proxy.newProxyInstance(TelephonyHost.class.getClassLoader(),
                 new Class<?>[] {IBinder.class}, (proxy, method, args) -> {
                     switch (method.getName()) {
                         case "hashCode": return System.identityHashCode(proxy);
                         case "equals": return proxy == args[0];
                         case "isBinderAlive": case "pingBinder": return true;
+                        case "linkToDeath": recipients.add((IBinder.DeathRecipient) args[0]); return null;
+                        case "unlinkToDeath": return recipients.remove(args[0]);
                         default: return method.getReturnType() == boolean.class ? false : null;
                     }
                 });
+        void die() {
+            for (IBinder.DeathRecipient r : new ArrayList<>(recipients)) r.binderDied();
+        }
     }
 
     static final class Listener extends IPhoneStateListener.Default {
-        final IBinder binder = binder();
+        final Remote remote = new Remote();
+        final IBinder binder = remote.binder;
         final List<String> events = new ArrayList<>();
         ServiceState state;
         SignalStrength signal;
@@ -183,7 +191,8 @@ public final class TelephonyHost {
     }
 
     static final class SubscriptionsListener extends IOnSubscriptionsChangedListener.Default {
-        final IBinder binder = binder();
+        final Remote remote = new Remote();
+        final IBinder binder = remote.binder;
         int calls;
         @Override public IBinder asBinder() { return binder; }
         @Override public void onSubscriptionsChanged() { calls++; }
@@ -313,6 +322,22 @@ public final class TelephonyHost {
         SubscriptionsListener subscriptions = new SubscriptionsListener();
         t.registry.addOnSubscriptionsChangedListener(STATE.name, null, subscriptions);
         equal(subscriptions.calls, 1, "Subscription listeners hear the initial (empty) state");
+        t.registry.addOnSubscriptionsChangedListener(STATE.name, null, subscriptions);
+        equal(t.registry.listenerCount(), 2, "One record per listener binder");
+        equal(subscriptions.remote.recipients.size(), 1, "One death link per listener binder");
+        // Without a modem no event ever reaches these listeners, so a dead app's records
+        // would stay in system_server forever unless its death drops them.
+        listener.remote.die();
+        subscriptions.remote.die();
+        equal(t.registry.listenerCount(), 0, "Dead listeners are dropped");
+        Listener removed = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name,
+                null, removed, new int[] {TelephonyCallback.EVENT_SERVICE_STATE_CHANGED}, false);
+        equal(removed.remote.recipients.size(), 1, "Listening links to death");
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name,
+                null, removed, new int[0], false);
+        equal(t.registry.listenerCount(), 0, "LISTEN_NONE removes the record");
+        equal(removed.remote.recipients.size(), 0, "and unlinks its death recipient");
     }
 
     static void modem() throws Exception {
@@ -494,12 +519,17 @@ public final class TelephonyHost {
         t.registry.addOnSubscriptionsChangedListener(STATE.name, null, subscriptions);
         equal(subscriptions.calls, 1, "Initial subscriptions call");
 
+        Listener dead = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name, null,
+                dead, new int[] {TelephonyCallback.EVENT_SIGNAL_STRENGTHS_CHANGED}, false);
+        dead.remote.die();
         listener.events.clear();
         spec.signal = 25;
         spec.activation = WindowsCellular.ACTIVATION_DEACTIVATED;
         source.set(spec);
         check(cellular.refresh(), "Change observed");
         equal(listener.events, List.of("signal", "data:0:13"), "Only changed values are delivered");
+        check(dead.events.isEmpty(), "A dead listener's record is gone");
         check(!cellular.refresh(), "An unchanged reading is not a change");
 
         // SIM removal: subscription ends, properties follow, listeners hear it.
