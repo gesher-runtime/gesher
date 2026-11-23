@@ -647,10 +647,6 @@ ssize_t recvfrom(int fd, void* buf, size_t len, int flags, struct sockaddr* addr
   return RecvBuffers(fd, &buffer, 1, flags, addr, addrlen);
 }
 
-namespace {
-void LocalAddressOf(uint32_t index, in_addr* address);
-}  // namespace
-
 ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   msghdr local;
   if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
@@ -675,33 +671,33 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   if (n >= 0) {
     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
     std::vector<unsigned char> control;
-    // Appends one control message, as much of it as fits (Linux's put_cmsg).
+    // Appends one control message, as much of it as fits, as Linux's put_cmsg:
+    // nothing if not even its header fits, else the header with cmsg_len
+    // cut to the room left and as much of the data. False if it did not all
+    // fit (the caller's MSG_CTRUNC).
     auto append = [&](int type, const void* data, size_t size, int level = SOL_SOCKET) -> bool {
       const size_t at = control.size();
-      if (capacity - at < CMSG_LEN(size)) return false;
+      const size_t room = capacity - at;
+      if (room < sizeof(cmsghdr)) return false;
+      const size_t length = CMSG_LEN(size) < room ? CMSG_LEN(size) : room;
       cmsghdr header = {};
-      header.cmsg_len = CMSG_LEN(size);
+      header.cmsg_len = length;
       header.cmsg_level = level;
       header.cmsg_type = type;
-      const size_t space = CMSG_SPACE(size) < capacity - at ? CMSG_SPACE(size) : capacity - at;
+      const size_t space = CMSG_SPACE(size) < room ? CMSG_SPACE(size) : room;
       control.resize(at + space, 0);
       memcpy(control.data() + at, &header, sizeof(header));
-      memcpy(control.data() + at + CMSG_LEN(0), data, size);
-      return true;
+      if (length > CMSG_LEN(0)) memcpy(control.data() + at + CMSG_LEN(0), data, length - CMSG_LEN(0));
+      return length == CMSG_LEN(size);
     };
     if (packet_info.valid) {
       // IP_PKTINFO: the interface and the datagram's destination; ipi_spec_dst
-      // is the local address it was received at (Linux's rt_spec_dst): the
-      // destination itself unless that is a broadcast or multicast address,
-      // then the interface's own IPv4 address.
+      // is the local address it was received at (winsock.cc's
+      // SpecificDestination, Linux's fib_compute_spec_dst).
       in_pktinfo value = {};
       value.ipi_ifindex = static_cast<int>(packet_info.ifindex);
       memcpy(&value.ipi_addr, packet_info.address, sizeof(value.ipi_addr));
-      value.ipi_spec_dst = value.ipi_addr;
-      const uint8_t first = packet_info.address[0];
-      const bool group = first >= 224 && first <= 239;
-      const bool broadcast = value.ipi_addr.s_addr == 0xffffffffu;
-      if (group || broadcast) LocalAddressOf(packet_info.ifindex, &value.ipi_spec_dst);
+      memcpy(&value.ipi_spec_dst, packet_info.local, sizeof(value.ipi_spec_dst));
       if (!append(IP_PKTINFO, &value, sizeof(value), IPPROTO_IP)) local.msg_flags |= MSG_CTRUNC;
     }
     if (pass_credentials) {
@@ -835,21 +831,10 @@ bool WriteInt(int v, void* value, socklen_t* len) {
   return errno = EINVAL, false;
 }
 
-// The first IPv4 address of the interface with this index (unchanged if none).
-void LocalAddressOf(uint32_t index, in_addr* address) {
-  std::vector<ws::Interface> interfaces;
-  if (!ws::ListInterfaces(&interfaces)) return;
-  for (const ws::Interface& iface : interfaces) {
-    if (iface.index != index) continue;
-    for (const ws::InterfaceAddress& a : iface.addresses) {
-      sockaddr_in sin = {};
-      size_t tail = sizeof(sin) - sizeof(sa_family_t);
-      if (a.address.family != ws::Family::kInet || a.address.data_len < tail) continue;
-      memcpy(reinterpret_cast<char*>(&sin) + sizeof(sa_family_t), a.address.data, tail);
-      *address = sin.sin_addr;
-      return;
-    }
-  }
+// An AF_UNIX socketpair (ADR 0088): loopback sockets underneath, but Linux's
+// AF_UNIX has no IP options (EOPNOTSUPP for their levels).
+bool IsUnixPair(const ws::SocketDescription& description) {
+  return description.unix_datagram_pair.load() || description.unix_stream_pair.load();
 }
 
 // The index of the interface with this IPv4 address; 0 for INADDR_ANY.
@@ -977,9 +962,11 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     return 0;
   }
   if (level == IPPROTO_IP && name == IP_PKTINFO) {
-    // recvmsg then delivers each IPv4 datagram's in_pktinfo. Windows reports
-    // it once asked (SetPacketInfo); a stream socket accepts the option as on
-    // Linux, which has nothing to deliver there.
+    // recvmsg then delivers each IPv4 datagram's in_pktinfo, also a dual-stack
+    // IPv6 socket's IPv4 ones. Windows reports it once asked (SetPacketInfo);
+    // a stream socket accepts the option as on Linux, which has nothing to
+    // deliver there. An AF_UNIX pair is not an IP socket (EOPNOTSUPP).
+    if (IsUnixPair(*state.description)) return errno = EOPNOTSUPP, -1;
     if (!ReadInt(value, len, &v)) return -1;
     if (ws::SetPacketInfo(state.socket, v != 0) < 0 && errno != ENOPROTOOPT && errno != EINVAL) return -1;
     state.description->recv_pktinfo.store(v != 0);
@@ -1070,6 +1057,7 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
     return WriteInt(state.description->reuse_addr.load() ? 1 : 0, value, len) ? 0 : -1;
   }
   if (level == IPPROTO_IP && name == IP_PKTINFO) {
+    if (IsUnixPair(*state.description)) return errno = EOPNOTSUPP, -1;
     return WriteInt(state.description->recv_pktinfo.load() ? 1 : 0, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->unix_datagram_pair.load()) {
@@ -1160,7 +1148,10 @@ constexpr uint32_t kTransferPassCredentials = 0x4;
 constexpr uint32_t kTransferNonBlocking = 0x8;
 constexpr uint32_t kTransferPeerCredentials = 0x10;
 constexpr uint32_t kTransferUnixStream = 0x20;
-constexpr int kTransferPidShift = 6;
+constexpr uint32_t kTransferPacketInfo = 0x40;  // IP_PKTINFO
+// The pid fills bits 7..31: pid / 4 < 2^25, pids below 2^27.
+constexpr int kTransferPidShift = 7;
+static_assert((uint64_t{1} << kTransferPidShift) > kTransferPacketInfo, "bits overlap");
 }  // namespace
 
 bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
@@ -1172,6 +1163,7 @@ bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
   if (d.unix_stream_pair.load()) m |= kTransferUnixStream;
   if (d.pass_credentials.load()) m |= kTransferPassCredentials;
   if (d.nonblocking.load()) m |= kTransferNonBlocking;
+  if (d.recv_pktinfo.load()) m |= kTransferPacketInfo;
   if (d.has_peer_credentials && d.peer_pid > 0 && d.peer_pid % 4 == 0 &&
       (static_cast<uint32_t>(d.peer_pid) >> 2) < (1u << (32 - kTransferPidShift)) &&
       d.peer_gid == d.peer_uid) {
@@ -1198,6 +1190,8 @@ int gesher::AdoptSocket(uintptr_t socket, uint64_t metadata) {
     d.unix_datagram_pair.store((metadata & kTransferUnixDatagram) != 0);
     d.unix_stream_pair.store((metadata & kTransferUnixStream) != 0);
     d.pass_credentials.store((metadata & kTransferPassCredentials) != 0);
+    // The Winsock option travels with the socket itself (SetPacketInfo).
+    d.recv_pktinfo.store((metadata & kTransferPacketInfo) != 0);
     if ((metadata & kTransferPeerCredentials) != 0) {
       d.has_peer_credentials = true;
       d.peer_pid = static_cast<int32_t>(((metadata & 0xffffffffu) >> kTransferPidShift) << 2);

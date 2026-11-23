@@ -19,6 +19,7 @@
 #include <mutex>
 #include <atomic>
 #include <new>
+#include <vector>
 
 #include "internal.h"
 #include "socket_internal.h"
@@ -942,6 +943,117 @@ LPFN_WSARECVMSG RecvMsgFunction(SOCKET s) {
   function.store(f, std::memory_order_release);
   return f;
 }
+
+// The host's IPv4 unicast addresses (host byte order), and the local address
+// recently chosen toward a few senders, kept for a second: a broadcast or
+// multicast receive asks for them per datagram.
+struct LocalIpv4 {
+  uint32_t address, mask, ifindex;
+};
+struct SpecificDestinationCache {
+  std::mutex mutex;
+  ULONGLONG loaded = 0;
+  bool valid = false;
+  std::vector<LocalIpv4> addresses;
+  struct Route {
+    uint32_t source = 0, local = 0;
+  } routes[8];
+  size_t next_route = 0;
+};
+constexpr ULONGLONG kLocalAddressLifetimeMs = 1000;
+
+SpecificDestinationCache& LocalAddressCache() {
+  static SpecificDestinationCache* cache = new SpecificDestinationCache;
+  return *cache;
+}
+
+// Refreshes the cache (its mutex held) once it is older than its lifetime.
+void RefreshLocalAddresses(SpecificDestinationCache& cache) {
+  const ULONGLONG now = GetTickCount64();
+  if (cache.valid && now - cache.loaded < kLocalAddressLifetimeMs) return;
+  cache.valid = false;
+  cache.addresses.clear();
+  for (auto& route : cache.routes) route = {};
+  MIB_UNICASTIPADDRESS_TABLE* table = nullptr;
+  if (GetUnicastIpAddressTable(AF_INET, &table) != NO_ERROR) return;
+  for (ULONG i = 0; i < table->NumEntries; ++i) {
+    const MIB_UNICASTIPADDRESS_ROW& row = table->Table[i];
+    // Linux selects among usable (not tentative or duplicate) addresses.
+    if (row.DadState != IpDadStatePreferred) continue;
+    const uint8_t prefix = row.OnLinkPrefixLength > 32 ? 32 : row.OnLinkPrefixLength;
+    LocalIpv4 entry;
+    entry.address = ntohl(row.Address.Ipv4.sin_addr.s_addr);
+    entry.mask = prefix == 0 ? 0 : 0xffffffffu << (32 - prefix);
+    entry.ifindex = row.InterfaceIndex;
+    cache.addresses.push_back(entry);
+  }
+  FreeMibTable(table);
+  cache.loaded = now;
+  cache.valid = true;
+}
+
+// ipi_spec_dst of an IPv4 datagram (host byte order), as Linux's
+// fib_compute_spec_dst: the destination itself when it is one of this host's
+// addresses. For a broadcast (limited or a local subnet's directed broadcast)
+// or multicast destination, the preferred source address of the route back to
+// the sender, or with no sender address (0.0.0.0) an address of the interface
+// it arrived on.
+uint32_t SpecificDestination(uint32_t ifindex, uint32_t destination, uint32_t source) {
+  auto& cache = LocalAddressCache();
+  const bool multicast = (destination >> 28) == 0xe;
+  bool broadcast = destination == 0xffffffffu;
+  uint32_t on_interface = 0, on_sender_subnet = 0;
+  {
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    RefreshLocalAddresses(cache);
+    for (const LocalIpv4& local : cache.addresses) {
+      // A /31 or /32 has no broadcast address (RFC 3021).
+      if (!multicast && !broadcast && local.mask < 0xfffffffeu && destination == (local.address | ~local.mask))
+        broadcast = true;
+      if (local.ifindex != ifindex) continue;
+      if (on_interface == 0) on_interface = local.address;
+      // inet_select_addr prefers an address on the sender's subnet.
+      if (on_sender_subnet == 0 && source != 0 && (source & local.mask) == (local.address & local.mask))
+        on_sender_subnet = local.address;
+    }
+    if (on_sender_subnet != 0) on_interface = on_sender_subnet;
+    if (!multicast && !broadcast) return destination;
+    if (source != 0) {
+      for (const auto& route : cache.routes) {
+        if (route.source == source && route.local != 0) return route.local;
+      }
+    }
+  }
+  if (source != 0) {
+    SOCKADDR_INET to{};
+    to.Ipv4.sin_family = AF_INET;
+    to.Ipv4.sin_addr.s_addr = htonl(source);
+    MIB_IPFORWARD_ROW2 route{};
+    SOCKADDR_INET chosen{};
+    if (GetBestRoute2(nullptr, 0, nullptr, &to, 0, &route, &chosen) == NO_ERROR &&
+        chosen.si_family == AF_INET && chosen.Ipv4.sin_addr.s_addr != 0) {
+      const uint32_t local = ntohl(chosen.Ipv4.sin_addr.s_addr);
+      std::lock_guard<std::mutex> lock(cache.mutex);
+      auto& slot = cache.routes[cache.next_route++ % (sizeof(cache.routes) / sizeof(cache.routes[0]))];
+      slot.source = source;
+      slot.local = local;
+      return local;
+    }
+  }
+  return on_interface != 0 ? on_interface : destination;
+}
+
+// The IPv4 sender of a datagram, also from a dual-stack socket's v4-mapped
+// IPv6 address (host byte order); 0 if none.
+uint32_t Ipv4Source(const sockaddr_storage& peer) {
+  if (peer.ss_family == AF_INET) return ntohl(reinterpret_cast<const sockaddr_in&>(peer).sin_addr.s_addr);
+  if (peer.ss_family != AF_INET6) return 0;
+  const auto& v6 = reinterpret_cast<const sockaddr_in6&>(peer);
+  if (!IN6_IS_ADDR_V4MAPPED(&v6.sin6_addr)) return 0;
+  uint32_t address;
+  std::memcpy(&address, &v6.sin6_addr.s6_addr[12], sizeof(address));
+  return ntohl(address);
+}
 }  // namespace
 
 void SetReceivePacketInfo(PacketInfo* info) { t_packet_info = info; }
@@ -988,15 +1100,17 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
     DWORD win_flags = ToWinMsgFlags(flags & ~(kMsgWaitAll | kMsgOob));
     PacketInfo* packet_info = t_packet_info;
     if (packet_info != nullptr) *packet_info = {};
-    if (packet_info != nullptr && protocol.iAddressFamily == AF_INET) {
+    if (packet_info != nullptr) {
       // IP_PKTINFO: WSARecvMsg returns the datagram's IN_PKTINFO (enabled on
       // the socket by SetPacketInfo) with it, in the same single operation.
+      // A dual-stack IPv6 socket reports it for its IPv4 (v4-mapped) datagrams.
       LPFN_WSARECVMSG recv_msg = RecvMsgFunction(static_cast<SOCKET>(s));
       if (recv_msg == nullptr) return FailIo();
-      alignas(WSACMSGHDR) char control[WSA_CMSG_SPACE(sizeof(IN_PKTINFO)) * 2] = {};
+      alignas(WSACMSGHDR) char control[256] = {};
       WSAMSG message = {};
-      message.name = from != nullptr ? reinterpret_cast<sockaddr*>(&peer) : nullptr;
-      message.namelen = from != nullptr ? peer_len : 0;
+      // The sender is needed for ipi_spec_dst even if the caller does not ask.
+      message.name = reinterpret_cast<sockaddr*>(&peer);
+      message.namelen = peer_len;
       message.lpBuffers = &whole;
       message.dwBufferCount = 1;
       message.Control.buf = control;
@@ -1011,6 +1125,9 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
         packet_info->valid = true;
         packet_info->ifindex = info.ipi_ifindex;
         std::memcpy(packet_info->address, &info.ipi_addr, sizeof(packet_info->address));
+        const uint32_t local = htonl(SpecificDestination(info.ipi_ifindex, ntohl(info.ipi_addr.s_addr),
+                                                         Ipv4Source(peer)));
+        std::memcpy(packet_info->local, &local, sizeof(packet_info->local));
       }
     } else if (WSARecvFrom(static_cast<SOCKET>(s), &whole, 1, &received, &win_flags,
                            from != nullptr ? reinterpret_cast<sockaddr*>(&peer) : nullptr,
