@@ -106,6 +106,45 @@ architectures, using real Windows type declarations. They were not executed on
 Windows here. Full AOSP/ANGLE integration and physical display/GDI behavior
 remain Windows CI/runtime checks; Linux host models do not establish them.
 
+### Production `NOGDI` build regression
+
+PR #391's full build exposed a missing compile condition in the earlier
+standalone refresh check: `gesher_ndk_graphics` defines `NOGDI`, which hides
+`DEVMODEW`, `EnumDisplaySettingsW` and `ENUM_CURRENT_SETTINGS`. In addition,
+`egl_child_surface.h` includes `windows.h` before the pacing header, so changing
+`NOGDI` inside that header would depend on include order.
+
+The display query now lives in `display_refresh.cc`, which enables the SDK's
+GDI declarations before its first Windows include. The public header and its
+consumers retain `NOGDI`; no Windows struct or calling convention is redefined.
+The implementation is an ordinary source of `gesher_ndk_graphics` and uses its
+existing `user32` linkage.
+
+`test_display_refresh_contracts.py` now detects Windows compiler targets and
+also compiles and links the complete implementation with
+`display_refresh_compile_test.cc`. That consumer includes `windows.h` first and
+checks that `NOGDI` remains defined and GDI declarations stay excluded. The
+compile uses the failing production flags, including `-std=gnu++20`,
+`-mno-ms-bitfields`, `-fno-exceptions`, `-DNOGDI`, `-DNOMINMAX`,
+`-DWIN32_LEAN_AND_MEAN`, the Windows 10 version defines and warnings as errors.
+
+Both `x86_64-w64-mingw32-clang++` and `aarch64-w64-mingw32-clang++` from
+LLVM-MinGW 20261006 passed this real SDK compile/link check and the recording
+fixture cross-compilation. The same consumer rejected the original inline
+header with the two CI errors before the repair. The unchanged Linux ASan/UBSan
+suite still passes 12,000 readback comparisons and 44 refresh checks. These are
+targeted build and behavior regressions; the cross-compiled executables were
+not executed on Windows.
+
+```sh
+python3 tools/test_display_refresh_contracts.py \
+  --cxx "$LLVM/bin/x86_64-w64-mingw32-clang++" \
+  --compile-only --output /tmp/display-refresh-x64.exe
+python3 tools/test_display_refresh_contracts.py \
+  --cxx "$LLVM/bin/aarch64-w64-mingw32-clang++" \
+  --compile-only --output /tmp/display-refresh-arm64.exe
+```
+
 ## ABBA host measurement
 
 Command: `python3 tools/test_surface_geometry_contracts.py --measure-only`,

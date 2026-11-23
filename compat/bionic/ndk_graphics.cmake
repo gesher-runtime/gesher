@@ -41,6 +41,7 @@ add_library(gesher_ndk_graphics OBJECT
   ${CMAKE_CURRENT_LIST_DIR}/libandroid_window.cc
   ${CMAKE_CURRENT_LIST_DIR}/egl_gles.cc
   ${CMAKE_CURRENT_LIST_DIR}/egl_child_surface.cc
+  ${CMAKE_CURRENT_LIST_DIR}/display_refresh.cc
   # ADR 0089: AHardwareBuffer, ASurfaceControl, their EGL half, the GPU thread.
   ${CMAKE_CURRENT_LIST_DIR}/gpu_interop.cc
   ${CMAKE_CURRENT_LIST_DIR}/gpu_fence.cc
