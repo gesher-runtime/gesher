@@ -37,8 +37,42 @@ import java.util.concurrent.ConcurrentHashMap;
  * itself, with no Parcel round trip. For an interface without a generated stub the
  * Binder is a plain {@link Binder} with the proxy attached as its local interface, which
  * serves the same process only.
+ *
+ * <p>Gesher's own calls on such a service, outside the interface's AIDL methods, use a
+ * transaction code in {@link #FIRST_EXTENSION_TRANSACTION}..{@link #LAST_EXTENSION_TRANSACTION}:
+ * the generated stub hands those to an implementation that is an {@link Extension}; any
+ * other code goes to the AIDL dispatch as before.
  */
 public final class StandIn<T extends IInterface> implements InvocationHandler {
+    /** First transaction code of Gesher's extension calls, above any AIDL method's. */
+    public static final int FIRST_EXTENSION_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION + 0x4800;
+    public static final int LAST_EXTENSION_TRANSACTION = FIRST_EXTENSION_TRANSACTION + 0xff;
+
+    /**
+     * An implementation that also serves Gesher's extension transactions (codes from
+     * {@link #FIRST_EXTENSION_TRANSACTION}). It authenticates the caller itself.
+     */
+    public interface Extension {
+        /** Whether {@code code} was handled, as {@code Binder.onTransact} answers. */
+        boolean onExtensionTransaction(int code, android.os.Parcel data, android.os.Parcel reply,
+                int flags) throws android.os.RemoteException;
+    }
+
+    /**
+     * An extension transaction that reached a generated stub (app/gen/StubGen.java) whose
+     * delegate is {@code service}, a stand-in's proxy: handled by its implementation if that
+     * is an {@link Extension}, else unknown (false).
+     */
+    public static boolean extensionTransaction(Object service, int code, android.os.Parcel data,
+            android.os.Parcel reply, int flags) throws android.os.RemoteException {
+        if (service == null || !Proxy.isProxyClass(service.getClass())) return false;
+        InvocationHandler handler = Proxy.getInvocationHandler(service);
+        if (!(handler instanceof StandIn)) return false;
+        Object impl = ((StandIn<?>) handler).mImpl;
+        return impl instanceof Extension
+                && ((Extension) impl).onExtensionTransaction(code, data, reply, flags);
+    }
+
     /** Package of the stubs app/gen/StubGen.java generates. */
     static final String STUB_PACKAGE = "com.gesher.server.stub.";
 

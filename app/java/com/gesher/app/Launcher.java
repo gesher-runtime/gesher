@@ -54,7 +54,7 @@ import java.util.Properties;
  *                       install or update the APK, start its launcher activity through the
  *                       system server (am start -W) and show the app's output until the
  *                       app's process ends (--wait, the default). --detach: return once the
- *                       activity has started (its first frame drawn, idle), exit code 0, and
+ *                       activity has started (its first frame drawn, or idle), exit code 0, and
  *                       leave the app running: what gesher-launch asks for
  *                       ($GESHER_LAUNCH_DETACH=1) when nobody reads the output (a Start menu
  *                       shortcut, a double-clicked .apk). Its windows are Win32 windows (--window, the
@@ -746,8 +746,8 @@ public final class Launcher {
                 atm.removeTask(launch.taskId);
             }
             if (detach) {
-                // The activity is up (startActivityAndWait waited until it is idle: it
-                // has drawn its first frame). The app's process belongs to the device
+                // The activity is up (startActivityAndWait waited until it drew its
+                // first frame, or was idle). The app's process belongs to the device
                 // (its system server started it and follows it), not to this launcher:
                 // nothing here keeps it, and the device's idle timeout counts app
                 // processes only.

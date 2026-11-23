@@ -78,6 +78,43 @@ public final class ActivityClientHook implements InvocationHandler {
         sLocalToken = token;
     }
 
+    /** Gesher's extension call on the server's controller (com.gesher.server.StandIn). */
+    public static final String WINDOWS_DRAWN_DESCRIPTOR = "com.gesher.IActivityWindowsDrawn";
+    public static final int WINDOWS_DRAWN = com.gesher.server.StandIn.FIRST_EXTENSION_TRANSACTION;
+
+    private static volatile IBinder sServerBinder;
+
+    /**
+     * Tells the system server that the first frame of an Activity's window ({@code token}:
+     * the Activity's) was drawn, as WindowManagerService learns it in Android
+     * (ActivityRecord.onWindowsDrawn): what completes a launch the server waits for
+     * (startActivityAndWait), even if the Activity's main thread is never idle. One way, as
+     * activityIdle is; gesher-app's single-process Activity has no server to tell.
+     */
+    public static void reportWindowsDrawn(IBinder token) {
+        if (token == null || token == sLocalToken) return;
+        android.os.Parcel data = android.os.Parcel.obtain();
+        try {
+            IBinder server = sServerBinder;
+            if (server == null) {
+                android.app.IActivityTaskManager atm = ActivityTaskManager.getService();
+                IActivityClientController controller =
+                        atm != null ? atm.getActivityClientController() : null;
+                if (controller == null) return;
+                server = controller.asBinder();
+                sServerBinder = server;
+            }
+            data.writeInterfaceToken(WINDOWS_DRAWN_DESCRIPTOR);
+            data.writeStrongBinder(token);
+            server.transact(WINDOWS_DRAWN, data, null, IBinder.FLAG_ONEWAY);
+        } catch (RemoteException | RuntimeException e) {
+            System.err.println("gesher-app: reporting the first frame of activity " + token
+                    + " to the system server: " + e);
+        } finally {
+            data.recycle();
+        }
+    }
+
     private IActivityClientController server() throws RemoteException {
         IActivityClientController s = mServer;
         if (s == null) {

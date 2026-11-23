@@ -123,7 +123,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return info;
     }
 
-    /** How long startActivityAndWait waits for the activity to be idle. */
+    /**
+     * How long startActivityAndWait waits for the activity to draw its first frame or be
+     * idle. Longer than Android's idle timeout (ActivityTaskSupervisor.IDLE_TIMEOUT, 10 s
+     * after the activity resumed): it also covers starting the process, and an app's first
+     * start on Windows (dexopt, an interpreted APK) can take minutes.
+     */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
     private static final AtomicLongFieldUpdater<ProcessRecord> LAST_ACTIVE =
@@ -246,6 +251,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 new WindowContainerToken(new IWindowContainerToken.Stub() {});
         State state = State.INITIALIZING;
         boolean idle;
+        /**
+         * The first frame of one of its windows was drawn in its process (ActivityRecord
+         * .onWindowsDrawn; ActivityClientController#windowsDrawn). Unlike idle it stays
+         * through a resume or relaunch (a preserved window is not drawn "first" again);
+         * a new process must draw anew.
+         */
+        boolean drawn;
         boolean finishing;
         boolean preserveProcessOnFinish;
         int nativeUiCount;
@@ -1541,12 +1553,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         long deadline = SystemClock.uptimeMillis() + WAIT_TIMEOUT_MS;
         synchronized (this) {
             // ActivityTaskSupervisor.waitActivityVisibleOrLaunched: until the launch is
-            // complete (here: the activity is idle), or it went away. A trampoline (a
-            // launcher activity that starts the app's real one and stays below it,
-            // stopped, never idle) completes the launch with that activity: one started
-            // after it in its task that is idle (Android's launch transition ends when
-            // the task's windows are drawn).
-            while (!r.idle && r.state != State.DESTROYED && idleAbove(r) == null) {
+            // complete, or it went away (cleanupActivity). Android completes it when the
+            // activity's windows are drawn (ActivityRecord.onWindowsDrawn ->
+            // reportActivityLaunched), not when its main thread is idle: an app that keeps
+            // its looper busy (a map that posts frame after frame) is never idle, yet has
+            // launched. Here: its first frame was drawn in its process, or else it is idle
+            // (no window drawn: a headless process). A trampoline (a launcher activity that
+            // starts the app's real one and stays below it, stopped, never drawn or idle)
+            // completes the launch with that activity: one started after it in its task
+            // that has launched (Android's launch transition ends when the task's windows
+            // are drawn).
+            while (!launched(r) && r.state != State.DESTROYED && launchedAbove(r) == null) {
                 long left = deadline - SystemClock.uptimeMillis();
                 if (left <= 0) {
                     result.timeout = true;
@@ -1559,9 +1576,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     break;
                 }
             }
-            // A rejected native start or unexpected pre-idle process death is
-            // different from an activity deliberately finishing in onCreate.
-            if (r.launchFailed && !r.idle && idleAbove(r) == null) {
+            // A rejected native start or unexpected process death before the activity
+            // drew or was idle is different from an activity deliberately finishing in
+            // onCreate.
+            if (r.launchFailed && !launched(r) && launchedAbove(r) == null) {
                 result.result = ActivityManager.START_CANCELED;
             }
         }
@@ -1569,11 +1587,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return result;
     }
 
-    /** An activity started after {@code r} in its task that is idle, or null. Guarded by this. */
-    private ActivityRecord idleAbove(ActivityRecord r) {
+    /** Its launch is complete: a window drawn, or idle. Guarded by this. */
+    private static boolean launched(ActivityRecord r) {
+        return r.drawn || r.idle;
+    }
+
+    /**
+     * An activity started after {@code r} in its task that has launched ({@link #launched}),
+     * or null. Guarded by this.
+     */
+    private ActivityRecord launchedAbove(ActivityRecord r) {
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord a = mActivities.get(i);
-            if (a != r && a.taskId == r.taskId && a.idle && a.state != State.DESTROYED
+            if (a != r && a.taskId == r.taskId && launched(a) && a.state != State.DESTROYED
                     && a.startOrder > r.startOrder) {
                 return a;
             }
@@ -4242,6 +4268,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 }
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
+                    // Gone before it drew or was idle, without finishing: a launch waiting
+                    // for it failed (a crash in onCreate), not a deliberate finish.
+                    if (!r.finishing && r.state != State.DESTROYED && !launched(r)) {
+                        r.launchFailed = true;
+                    }
                     r.state = State.DESTROYED;
                     accountActivityFinished(r);
                     mActivities.remove(r);
@@ -4252,12 +4283,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         mTaskRotation.delete(r.taskId);
                     }
                 } else {
-                    if (!r.idle) r.launchFailed = true;
+                    if (!launched(r)) r.launchFailed = true;
                     r.app = null;
                     r.launchGeneration = null;
                     r.launchScheduled = false;
                     r.state = State.STOPPED;
                     r.idle = false;
+                    r.drawn = false;
                     r.stopWhenIdle = false;
                     r.waitingFor = null;
                     r.activityWindowGrant = null;
@@ -5716,6 +5748,20 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         SystemServer.log("activityIdle: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
+    }
+
+    /**
+     * ActivityRecord.onWindowsDrawn: the first frame of the activity's window was drawn in
+     * its process (ActivityClientController#windowsDrawn). A launch waiting for the activity
+     * is complete ({@link #waitForStarted}); unlike idle, it stops no activity behind it.
+     */
+    void activityWindowsDrawn(ActivityRecord r) {
+        synchronized (this) {
+            if (r.drawn || r.state == State.DESTROYED) return;
+            r.drawn = true;
+            notifyAll();
+        }
+        SystemServer.log("activityWindowsDrawn: " + r.name());
     }
 
     /**

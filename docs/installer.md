@@ -80,7 +80,7 @@ process: `com.gesher.app.Launcher` streams the app's log and returns its exit
 code. Without them (a Start menu shortcut, a double-clicked `.apk`: nobody
 reads the output) it sets `GESHER_LAUNCH_DETACH=1` (unless the caller set it):
 the launcher returns once the activity has started (`startActivityAndWait`:
-idle, its first frame drawn), so gesher-launch, `powershell.exe` (and its
+its first frame drawn, or idle), so gesher-launch, `powershell.exe` (and its
 console) and the launcher's `dalvikvm.exe` end instead of staying, about
 185 MB of working set and 800 MB of commit, for each open app. The app's process
 is the device's (its system server started it); the device's idle timeout

@@ -23,12 +23,36 @@ import android.window.SizeConfigurationBuckets;
  * manager about itself ({@link ActivityTaskManagerService}). Tokens the server did not
  * hand out (gesher-app's single-process driver makes its own) get the answers a lone
  * activity on the default display would.
+ *
+ * <p>One report is Gesher's own ({@link StandIn.Extension}): an app process draws its
+ * windows itself (ADR 0029), so the first frame of an Activity's window, which
+ * WindowManagerService sees in Android (ActivityRecord.onWindowsDrawn), reaches the server
+ * from the process's window session (com.gesher.app.window.ActivityClientHook#reportWindowsDrawn).
  */
-public final class ActivityClientController extends IActivityClientController.Default {
+public final class ActivityClientController extends IActivityClientController.Default
+        implements StandIn.Extension {
     private final ActivityTaskManagerService mAtm;
 
     ActivityClientController(ActivityTaskManagerService atm) {
         mAtm = atm;
+    }
+
+    @Override
+    public boolean onExtensionTransaction(int code, android.os.Parcel data,
+            android.os.Parcel reply, int flags) throws RemoteException {
+        if (code != com.gesher.app.window.ActivityClientHook.WINDOWS_DRAWN) return false;
+        data.enforceInterface(com.gesher.app.window.ActivityClientHook.WINDOWS_DRAWN_DESCRIPTOR);
+        IBinder token = data.readStrongBinder();
+        data.enforceNoDataAvail();
+        windowsDrawn(token);
+        if (reply != null) reply.writeNoException();
+        return true;
+    }
+
+    /** The first frame of the Activity's window was drawn, in its own process. */
+    void windowsDrawn(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityWindowsDrawn(r);
     }
 
     @Override

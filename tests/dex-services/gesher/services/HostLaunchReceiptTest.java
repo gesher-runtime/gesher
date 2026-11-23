@@ -89,7 +89,7 @@ public final class HostLaunchReceiptTest {
         }
         set(older,"idle",true);set(foreign,"idle",true);
         List<Object> records=(List<Object>)get(tasks,"mActivities");
-        Method above=method(atm,"idleAbove",recordType);
+        Method above=method(atm,"launchedAbove",recordType);
         Method waitForStart=method(atm,"waitForStarted",int.class,recordType);
         synchronized(tasks) {
             records.addAll(Arrays.asList(older,pending,newer,foreign));
@@ -122,8 +122,126 @@ public final class HostLaunchReceiptTest {
                 WaitResult wasReady=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,pending);
                 require(wasReady.result==ActivityManager.START_SUCCESS,
                         "A completed activity's earlier idle report was discarded");
+                // A trampoline's successor that drew its first frame but is never idle.
+                set(pending,"idle",false);set(pending,"launchFailed",true);
+                set(newer,"state",Enum.valueOf((Class)state,"RESUMED"));set(newer,"idle",false);
+                require(above.invoke(tasks,pending)==null,"A successor that neither drew nor idled completed a launch");
+                set(newer,"drawn",true);
+                require(above.invoke(tasks,pending)==newer,
+                        "A later drawn activity in the same task did not complete its trampoline");
+                WaitResult drawnAbove=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,pending);
+                require(drawnAbove.result==ActivityManager.START_SUCCESS && !drawnAbove.timeout,
+                        "A drawn, never-idle successor was replaced by the original process failure");
             } finally { records.removeAll(Arrays.asList(older,pending,newer,foreign)); }
         }
+    }
+
+    /** Sends Gesher's first-frame report to the controller's binder, as an app process does. */
+    private static void windowsDrawnReport(IBinder controller, IBinder token, String descriptor) throws Exception {
+        Parcel data=Parcel.obtain();
+        try {
+            data.writeInterfaceToken(descriptor);data.writeStrongBinder(token);
+            require(controller.transact(com.gesher.app.window.ActivityClientHook.WINDOWS_DRAWN,data,null,IBinder.FLAG_ONEWAY),
+                    "The controller's generated stub did not serve the first-frame report");
+        } finally { data.recycle(); }
+    }
+
+    /**
+     * ActivityRecord.onWindowsDrawn completes am start -W (startActivityAndWait), not idle: an
+     * activity whose looper never idles but that drew its first frame has launched; one whose
+     * process died before it drew or idled has not; idle alone (no window: headless) still does.
+     */
+    @SuppressWarnings({"unchecked","rawtypes"})
+    private static void firstFrameCompletesLaunch(Object tasks, Class<?> atm, Class<?> recordType,
+            Class<?> processType, ActivityInfo info) throws Exception {
+        Class<?>[] signature = {atm, ActivityInfo.class, Intent.class, int.class,
+                int.class, String.class, recordType, String.class, int.class};
+        Intent intent = new Intent().setComponent(new ComponentName(info.packageName, info.name));
+        Class<?> state = Class.forName(atm.getName()+"$State");
+        List<Object> records=(List<Object>)get(tasks,"mActivities");
+        List<Object> processes=(List<Object>)get(tasks,"mProcesses");
+        Method waitForStart=method(atm,"waitForStarted",int.class,recordType);
+        IBinder controller=((StandIn<?>)get(tasks,"mClient")).asBinder();
+        require(controller.getClass().getName().equals("com.gesher.server.stub.IActivityClientControllerStub"),
+                "The controller is not served by its generated stub: "+controller.getClass().getName());
+
+        // 1. Drawn but never idle (a looper kept busy): the first-frame report from the
+        // activity's process completes a launch that is already waiting.
+        Object process=make(processType,new Class<?>[]{atm,int.class,IApplicationThread.class},tasks,77310,new AppThread());
+        set(process,"packageName",info.packageName);set(process,"processName",info.processName);set(process,"ready",true);
+        Object busy=make(recordType,signature,tasks,info,new Intent(intent),710,Binder.getCallingPid(),"com.gesher.launcher",null,null,-1);
+        set(busy,"app",process);set(busy,"state",Enum.valueOf((Class)state,"RESUMED"));
+        synchronized(tasks){processes.add(process);records.add(busy);((List<Object>)get(process,"activities")).add(busy);}
+        AtomicReference<Object> waited=new AtomicReference<>();
+        Thread waiter=new Thread(()->{
+            try { waited.set(waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,busy)); }
+            catch (Throwable t) { waited.set(t); }
+        },"launch-waiter");
+        waiter.setDaemon(true);waiter.start();
+        Thread.sleep(300);
+        require(waiter.isAlive(),"A resumed activity that neither drew nor idled completed its launch");
+        Method idleNow=method(atm,"activityIdle",recordType);
+        // Wrong descriptor or an unknown extension code changes nothing.
+        try { windowsDrawnReport(controller,(IBinder)get(busy,"token"),"com.gesher.IForged"); require(false,"Forged descriptor accepted"); }
+        catch (SecurityException expected) { checks++; }
+        Parcel unknown=Parcel.obtain();
+        try { require(!controller.transact(com.gesher.app.window.ActivityClientHook.WINDOWS_DRAWN+1,unknown,null,IBinder.FLAG_ONEWAY),
+                "An unknown extension code was handled"); } finally { unknown.recycle(); }
+        windowsDrawnReport(controller,new Binder(),com.gesher.app.window.ActivityClientHook.WINDOWS_DRAWN_DESCRIPTOR);
+        Thread.sleep(100);
+        require(waiter.isAlive() && !(Boolean)get(busy,"drawn"),"A token the server never handed out completed a launch");
+        // The real client path: the window session's report (ActivityClientHook) through the stub.
+        Field serverBinder=field(com.gesher.app.window.ActivityClientHook.class,"sServerBinder");
+        Object previousServer=serverBinder.get(null);
+        serverBinder.set(null,controller);
+        try { com.gesher.app.window.ActivityClientHook.reportWindowsDrawn((IBinder)get(busy,"token")); }
+        finally { serverBinder.set(null,previousServer); }
+        waiter.join(10000);
+        require(!waiter.isAlive(),"The first-frame report did not complete the waiting launch (it waited for idle)");
+        require(waited.get() instanceof WaitResult,"Waiting for the launch failed: "+waited.get());
+        WaitResult drawn=(WaitResult)waited.get();
+        require(drawn.result==ActivityManager.START_SUCCESS && !drawn.timeout && drawn.who.equals(intent.getComponent()),
+                "A drawn, never-idle activity was reported as a failed or timed-out start");
+        require((Boolean)get(busy,"drawn") && !(Boolean)get(busy,"idle"),"The report was not recorded as a drawn window");
+
+        // 2. Normal idle (no window drawn: a headless process) still completes the launch.
+        Object headless=make(recordType,signature,tasks,info,new Intent(intent),711,Binder.getCallingPid(),"com.gesher.launcher",null,null,-1);
+        set(headless,"app",process);set(headless,"state",Enum.valueOf((Class)state,"RESUMED"));
+        synchronized(tasks){records.add(headless);((List<Object>)get(process,"activities")).add(headless);}
+        idleNow.invoke(tasks,headless);
+        WaitResult idle=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,headless);
+        require(idle.result==ActivityManager.START_SUCCESS && !idle.timeout,"An idle activity's launch was not complete");
+
+        // 3. The process dies before the activity drew or idled: a failed start, not success.
+        // The drawn activity in the same process stays a completed launch.
+        Object early=make(recordType,signature,tasks,info,new Intent(intent),712,Binder.getCallingPid(),"com.gesher.launcher",null,null,-1);
+        set(early,"app",process);set(early,"state",Enum.valueOf((Class)state,"RESUMED"));
+        // An activity with saved state is kept across the death, as Android keeps it.
+        Object kept=make(recordType,signature,tasks,info,new Intent(intent),713,Binder.getCallingPid(),"com.gesher.launcher",null,null,-1);
+        set(kept,"app",process);set(kept,"state",Enum.valueOf((Class)state,"RESUMED"));set(kept,"savedState",new Bundle());
+        Object finishing=make(recordType,signature,tasks,info,new Intent(intent),714,Binder.getCallingPid(),"com.gesher.launcher",null,null,-1);
+        set(finishing,"app",process);set(finishing,"state",Enum.valueOf((Class)state,"RESUMED"));set(finishing,"finishing",true);
+        set(busy,"savedState",new Bundle());
+        synchronized(tasks){
+            for (Object r : new Object[]{early,kept,finishing}) { records.add(r);((List<Object>)get(process,"activities")).add(r); }
+        }
+        method(atm,"processDied",processType).invoke(tasks,process);
+        require((Boolean)get(early,"launchFailed") && (Boolean)get(kept,"launchFailed"),
+                "A process death before the first frame was not a failed launch");
+        require(!(Boolean)get(finishing,"launchFailed"),"A deliberately finishing activity's death failed its launch");
+        require(!(Boolean)get(busy,"launchFailed") && !(Boolean)get(busy,"drawn"),
+                "A drawn activity's launch was failed by a later death, or its window outlived its process");
+        require(get(early,"state")==Enum.valueOf((Class)state,"DESTROYED"),"The unsaved activity outlived its process");
+        WaitResult died=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,early);
+        require(died.result==ActivityManager.START_CANCELED && !died.timeout,
+                "A process that died before drawing was reported as a successful start");
+        WaitResult finished=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,finishing);
+        require(finished.result==ActivityManager.START_SUCCESS && !finished.timeout,
+                "A trampoline that finished without a window was reported as a failed start");
+        // A report for an activity whose process is gone completes nothing.
+        windowsDrawnReport(controller,(IBinder)get(early,"token"),com.gesher.app.window.ActivityClientHook.WINDOWS_DRAWN_DESCRIPTOR);
+        require(!(Boolean)get(early,"drawn"),"A late first-frame report revived a dead launch");
+        synchronized(tasks){records.removeAll(Arrays.asList(busy,headless,early,kept,finishing));processes.remove(process);}
     }
     @SuppressWarnings({"unchecked","rawtypes"})
     public static void main(String[] args)throws Exception {
@@ -206,6 +324,7 @@ public final class HostLaunchReceiptTest {
         require(reused.result==ActivityManager.START_DELIVERED_TO_TOP && reused.who.equals(intent.getComponent())
                 && get(record,"launchGeneration")==captured.get() && starts.get()==3,"Reused activity lost its actual record/generation");
         launchReadiness(tasks,atm,recordType,info);
-        System.out.println("HostLaunchReceiptTest all passed: "+checks+" generation, exact route, fast exit, reuse and launch readiness checks");
+        firstFrameCompletesLaunch(tasks,atm,recordType,processType,info);
+        System.out.println("HostLaunchReceiptTest all passed: "+checks+" generation, exact route, fast exit, reuse, launch readiness and first-frame checks");
     }
 }
