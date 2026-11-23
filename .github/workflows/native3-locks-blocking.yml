@@ -24,6 +24,10 @@ jobs:
           fetch-depth: 0
       - name: Pure Python owned exit and cleanup error controls
         run: python3 tests/native3-locks/test_command_cleanup.py
+      - name: Exact FILE argument instruction-pattern controls
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror tests/native3-locks/file_call_pattern_test.cc -o /tmp/file-call-pattern-test
+          /tmp/file-call-pattern-test
       - name: Actual strict archive adversarial controls before producer compilation
         run: python3 tools/native3-locks/artifact/test-verified-artifact.py
   compile:

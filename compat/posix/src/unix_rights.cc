@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include <gesher/file_description.h>
 
 #include <mutex>
 #include <string>
@@ -26,7 +27,9 @@
 #include "binder_wire.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "socket_internal.h"
+#include "record_lock_descriptors.h"
 
 namespace gesher {
 namespace {
@@ -140,21 +143,50 @@ bool Call(Request& request, Reply* reply) {
 
 // The delivered handles of a claim or take, as new descriptors (-1 for one the
 // broker could not deliver, or this process could not adopt).
-bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt) {
+bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt, bool close_on_exec) {
   int32_t status;
   uint32_t count;
   if (!reply.Get(&status) || !reply.Get(&count)) return errno = EIO, false;
   if (status != 0) return errno = -status, false;
+  constexpr size_t entry_size = 3 * sizeof(uint64_t) + sizeof(uint32_t);
+  if (count > wire::kRightsMaxInFlight || reply.bytes.size() - reply.at != count * entry_size)
+    return errno = EIO, false;
   for (uint32_t i = 0; i < count; ++i) {
     uint64_t handle;
-    uint64_t metadata;
-    if (!reply.Get(&handle) || !reply.Get(&metadata)) return errno = EIO, false;
+    uint64_t metadata, shared_handle;
+    uint32_t kind;
+    if (!reply.Get(&handle) || !reply.Get(&metadata) || !reply.Get(&shared_handle) || !reply.Get(&kind))
+      return errno = EIO, false;
     HANDLE h = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
-    if (!adopt) {
+    HANDLE shared = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(shared_handle));
+    if (!adopt || h == nullptr) {
       if (h != nullptr) CloseHandle(h);
+      if (shared != nullptr) CloseHandle(shared);
+      if (adopt) fds->push_back(-1);
       continue;
     }
-    fds->push_back(h == nullptr ? -1 : AdoptTransferred(h, metadata));
+    const bool socket = kind == wire::kSocketFileDescription;
+    const bool fence = kind == wire::kNativeFenceFileDescription;
+    if (handle > UINTPTR_MAX || shared_handle > UINTPTR_MAX ||
+        (socket ? shared != nullptr || (metadata & kTransferredSocket) == 0
+         : fence ? shared != nullptr || metadata != kTransferredCompletedFence
+                 : kind > static_cast<uint32_t>(DescriptorKind::kRandom) ||
+                   shared == nullptr || metadata != 0)) {
+      CloseHandle(h);
+      if (shared) CloseHandle(shared);
+      fds->push_back(-1);
+      continue;
+    }
+    if (socket) {
+      fds->push_back(AdoptSocket(reinterpret_cast<uintptr_t>(h), metadata));
+    } else if (fence) {
+      // Adoption consumes the handle and admits only an immutable, signaled,
+      // read-only Gesher completion event (native_fence.cc).
+      fds->push_back(AdoptNativeFence(h, metadata));
+    } else {
+      // Adoption consumes both handles, including on a failed/retired group.
+      fds->push_back(AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), close_on_exec));
+    }
   }
   return true;
 }
@@ -194,37 +226,6 @@ volatile LONG64* PositionOf(uint16_t port, bool sent) {
 
 }  // namespace
 
-bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata) {
-  if (TransferSocket(fd, handle, metadata)) return true;
-  gesher::Device device;
-  short ready = 0;
-  // Descriptors gesher-base serves itself have no handle another process
-  // could use: they cannot travel (ADR 0088: EINVAL, nothing is sent).
-  if (IsBinderFd(fd) || DeviceFromFd(fd, &device) || LookupEventFd(fd) != nullptr ||
-      LookupInotify(fd) != nullptr || LookupTimerFd(fd) != nullptr || PollEpoll(fd, 0, &ready)) {
-    return errno = EINVAL, false;
-  }
-  const intptr_t h = _get_osfhandle(fd);
-  if (h == -1 || h == -2) return errno = EBADF, false;
-  *handle = static_cast<uintptr_t>(h);
-  *metadata = 0;
-  return true;
-}
-
-int AdoptTransferred(HANDLE owned, uint64_t metadata) {
-  if ((metadata & kTransferredSocket) != 0) {
-    return AdoptSocket(reinterpret_cast<uintptr_t>(owned), metadata);
-  }
-  const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
-  if (fd < 0) {
-    CloseHandle(owned);
-    return -1;
-  }
-  // A memfd keeps its seals on the file; this process must obey them too.
-  RegisterMemfdIfSealed(fd, owned);
-  return fd;
-}
-
 bool UnixRightsAvailable() {
   return Doorbell() != nullptr && Positions() != nullptr;
 }
@@ -254,12 +255,40 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
   request.Put<uint64_t>(queue);
   request.Put<uint64_t>(position);
   request.Put<uint32_t>(static_cast<uint32_t>(fds.size()));
+  std::vector<DescriptorSnapshotPtr> pins;
+  pins.reserve(fds.size());
   for (int fd : fds) {
     uintptr_t handle;
     uint64_t metadata;
-    if (!DescribeForTransfer(fd, &handle, &metadata)) return false;
-    request.Put<uint64_t>(handle);
-    request.Put<uint64_t>(metadata);
+    bool socket = false, fence = false;
+    DescriptorSnapshotPtr snapshot;
+    {
+      record_locks::DescriptorGuard guard;
+      // A completed native fence travels as its typed read-only event, not as
+      // the NUL reservation behind its descriptor (which cannot be shared).
+      fence = TransferNativeFence(fd, &handle, &metadata);
+      socket = !fence && TransferSocket(fd, &handle, &metadata);
+      if (socket || fence) {
+        snapshot = std::make_shared<DescriptorSnapshot>();
+        if (!DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(handle),
+                             GetCurrentProcess(), &snapshot->handle, 0, FALSE, DUPLICATE_SAME_ACCESS))
+          return FailWithLastError(), false;
+      } else {
+        snapshot = CaptureDescriptor(fd);
+      }
+    }
+    if (!snapshot) return false;
+    const bool typed = socket || fence;
+    if (!typed && snapshot->kind == DescriptorKind::kUnshareable) return errno = EINVAL, false;
+    HANDLE shared = typed ? nullptr : ShareFileDescription(snapshot);
+    if (!typed && !shared) return false;
+    request.Put<uint64_t>(reinterpret_cast<uintptr_t>(snapshot->handle));
+    request.Put<uint64_t>(typed ? metadata : 0);
+    request.Put<uint64_t>(reinterpret_cast<uintptr_t>(shared));
+    request.Put<uint32_t>(socket ? wire::kSocketFileDescription
+                          : fence ? wire::kNativeFenceFileDescription
+                                  : static_cast<uint32_t>(snapshot->kind));
+    pins.push_back(std::move(snapshot));
   }
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;
@@ -273,24 +302,24 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
   return true;
 }
 
-bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds) {
+bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
   Request request;
   request.Put<uint32_t>(wire::kRightsClaim);
   request.Put<uint64_t>(token.value[0]);
   request.Put<uint64_t>(token.value[1]);
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;
-  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr);
+  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr, close_on_exec);
 }
 
-bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds) {
+bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec) {
   Request request;
   request.Put<uint32_t>(wire::kRightsTake);
   request.Put<uint64_t>(queue);
   request.Put<uint64_t>(limit);
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;
-  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr);
+  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr, close_on_exec);
 }
 
 void CancelRights(const ws::RightsToken& token) {

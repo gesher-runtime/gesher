@@ -143,7 +143,7 @@ public final class JobNotificationLifecycleTest {
             Object run = make(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
             synchronized (scheduler) {
                 field(jobType, "run").set(job, run);
-                ((List<Object>) field(schedulerType, "mJobs").get(scheduler)).add(job);
+                method(schedulerType, "addJobLocked", jobType).invoke(scheduler, job);
                 Field running = field(schedulerType, "mRunning"); running.setInt(scheduler, running.getInt(scheduler) + 1);
             }
             DelayedStop service = new DelayedStop();

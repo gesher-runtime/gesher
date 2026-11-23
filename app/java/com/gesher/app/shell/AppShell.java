@@ -161,12 +161,24 @@ public final class AppShell {
             return;  // up to date
         }
 
+        ApkPackage addon = com.gesher.server.MicrogAddons.stagedAddon(packageName, codePath);
+        if (addon != null) {
+            // A staged microG addon (system/priv-app, not installed with gesher-app): its
+            // windows get its icon, but no Start menu shortcut, which gesher-app-microg.ps1
+            // -Remove would leave behind; the Control Center opens microG's settings.
+            removeShortcut(old);
+            if (old != null) new File(shellDir(packageName), RECORD).delete();
+            writeWindowIcon(addon, packageName, changed);
+            return;
+        }
         ApkPackage pkg = ApkPackage.parseCodeDirectory(codePath);
         ActivityInfo launcher = launcherActivity(pkg);
         if (launcher == null) {
             // As a launcher's app list: only apps with a MAIN/LAUNCHER activity.
             log(packageName + " has no launcher activity: no Start menu shortcut");
             removeShortcut(old);
+            if (old != null) new File(shellDir(packageName), RECORD).delete();
+            writeWindowIcon(pkg, packageName, changed);
             return;
         }
         AppIcon icon = AppIcon.load(pkg.apkPath, pkg.applicationInfo(0), launcher);
@@ -208,6 +220,31 @@ public final class AppShell {
         log("Start menu shortcut " + link + ": " + icon.label + ", AppUserModelID " + id
                 + ", icon " + (icon.hasImages() ? iconPath : "Gesher's") + " from "
                 + icon.source);
+    }
+
+    /**
+     * A package without a launcher activity still has windows (a settings Activity another app
+     * or `launch <package>` starts), whose task shows the application's icon as on Android.
+     * Without a shortcut, its window takes {@code gesher-shell/icon.ico}
+     * (WindowSession.appIcon), written here from the application icon; unchanged code (an
+     * APK no newer than it) keeps the one already written. {@link #unregisterQuietly}, or
+     * gesher-app-microg.ps1 -Remove for a staged addon, removes it.
+     */
+    private static void writeWindowIcon(ApkPackage pkg, String packageName, boolean changed)
+            throws java.io.IOException {
+        File dir = shellDir(packageName);
+        File ico = new File(dir, ICON);
+        if (!changed && ico.isFile() && ico.lastModified() >= new File(pkg.apkPath).lastModified()) {
+            return;
+        }
+        AppIcon icon = AppIcon.load(pkg.apkPath, pkg.applicationInfo(0), null);
+        if (!icon.hasImages()) {
+            log("no window icon for " + packageName + ": " + icon.source);
+            return;
+        }
+        dir.mkdirs();
+        icon.writeIco(ico);
+        log("window icon " + ico + " for " + packageName + " from " + icon.source);
     }
 
     /**

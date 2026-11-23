@@ -116,6 +116,82 @@ static void futex_selection(int flags) {
   futex_check("same-address requeue retains waiter", futex_call(&word,FUTEX_WAKE | flags,1,NULL,NULL,0) == 1);
   futex_join(&w,started);
 }
+struct futex_mover {
+  volatile int* source;
+  volatile int* target;
+  volatile int* stop;
+  volatile int* progressed;
+  int flags, iterations;
+  unsigned long moves, failures;
+  pthread_t thread;
+};
+static void* futex_move_thread(void* opaque) {
+  struct futex_mover* m = (struct futex_mover*)opaque;
+  for (int i = 0; m->iterations < 0 || i < m->iterations; ++i) {
+    if (__atomic_load_n(m->stop, __ATOMIC_ACQUIRE)) break;
+    long result = futex_call(m->source,FUTEX_CMP_REQUEUE | m->flags,0,
+                            (const struct timespec*)(uintptr_t)INT_MAX,m->target,0);
+    if (result < 0) ++m->failures; else m->moves += (unsigned long)result;
+    if (result > 0) __atomic_store_n(m->progressed,1,__ATOMIC_RELEASE);
+  }
+  return NULL;
+}
+static void futex_requeue_race(int flags, int finish, int offset) {
+  // Include near addresses and an offset that collides in the production
+  // bucket hash. The assertions concern only the public requeue contract.
+  volatile int words[8193] = {0};
+  volatile int stop = 0, progressed = 0;
+  struct futex_waiter waiters[4]; int started[4];
+  for (int i = 0; i < 4; ++i) started[i] = futex_start(&waiters[i],&words[0],flags,1 << i);
+  struct futex_mover movers[2] = {
+    {&words[0],&words[offset],&stop,&progressed,flags,finish ? -1 : 2000,0,0,0},
+    {&words[offset],&words[0],&stop,&progressed,flags,finish ? -1 : 2000,0,0,0}
+  };
+  int moving[2];
+  for (int i = 0; i < 2; ++i) {
+    moving[i] = pthread_create(&movers[i].thread,NULL,futex_move_thread,&movers[i]) == 0;
+    futex_check("create opposing requeue worker",moving[i]);
+  }
+  if (finish == 1) {
+    // Join while both requeue directions remain active: each waiter must
+    // remove itself from whichever queue currently owns its stack node.
+    for (int i = 0; i < 4; ++i) if (started[i]) {
+      futex_check("join waiter timing out during requeue",pthread_join(waiters[i].thread,NULL) == 0);
+      futex_check("migration preserves timeout result",waiters[i].result == -1 && waiters[i].error == ETIMEDOUT);
+    }
+    __atomic_store_n(&stop,1,__ATOMIC_RELEASE);
+  } else if (finish == 2) {
+    // Race wake/return with migration too. A waiter may move between the two
+    // wake calls; retry only when neither queue selected it.
+    for (int attempt = 0; attempt < 500 && !__atomic_load_n(&progressed,__ATOMIC_ACQUIRE); ++attempt) {
+      struct timespec pause = {0,1000000}; nanosleep(&pause,NULL);
+    }
+    futex_check("migration starts before concurrent wake",__atomic_load_n(&progressed,__ATOMIC_ACQUIRE));
+    for (int i = 0; i < 4; ++i) {
+      long selected = 0;
+      for (int attempt = 0; attempt < 200 && selected == 0; ++attempt) {
+        selected = futex_call(&words[0],FUTEX_WAKE_BITSET | flags,INT_MAX,NULL,NULL,1 << i) +
+                   futex_call(&words[offset],FUTEX_WAKE_BITSET | flags,INT_MAX,NULL,NULL,1 << i);
+        if (selected == 0) { struct timespec pause = {0,1000000}; nanosleep(&pause,NULL); }
+      }
+      futex_check("wake during migration selects each mask once",selected == 1);
+      futex_join(&waiters[i],started[i]);
+    }
+    __atomic_store_n(&stop,1,__ATOMIC_RELEASE);
+  }
+  for (int i = 0; i < 2; ++i) if (moving[i]) {
+    futex_check("opposing requeues complete without deadlock",pthread_join(movers[i].thread,NULL) == 0);
+    futex_check("opposing requeues preserve compare values",movers[i].failures == 0);
+  }
+  futex_check("requeue race actually moved waiters",movers[0].moves + movers[1].moves > 0);
+  for (int i = 0; i < 4; ++i) {
+    long selected = futex_call(&words[0],FUTEX_WAKE_BITSET | flags,INT_MAX,NULL,NULL,1 << i) +
+                    futex_call(&words[offset],FUTEX_WAKE_BITSET | flags,INT_MAX,NULL,NULL,1 << i);
+    futex_check(finish ? "retired stack node is removed from both queues" :
+                        "opposing requeues retain each mask exactly once",selected == (finish ? 0 : 1));
+    if (!finish) futex_join(&waiters[i],started[i]);
+  }
+}
 static void futex_concurrency(void) {
   for (int round = 0; round < 8; ++round) {
     volatile int word = 0;
@@ -125,6 +201,12 @@ static void futex_concurrency(void) {
     futex_check("second wake sees exactly two remaining", futex_call(&word,FUTEX_WAKE_PRIVATE,INT_MAX,NULL,NULL,0) == 2);
     for (int i = 0; i < 4; ++i) futex_join(&waiters[i],started[i]);
     futex_check("retired stack waiters are not retained", futex_call(&word,FUTEX_WAKE_PRIVATE,INT_MAX,NULL,NULL,0) == 0);
+  }
+  for (int flags = 0; flags <= FUTEX_PRIVATE_FLAG; flags += FUTEX_PRIVATE_FLAG) {
+    futex_requeue_race(flags,0,1);
+    futex_requeue_race(flags,0,8192);
+    futex_requeue_race(flags,1,1);
+    futex_requeue_race(flags,2,1);
   }
 }
 static int futex_run(FutexApi wait_api, FutexApi wake_api, int concurrency) {

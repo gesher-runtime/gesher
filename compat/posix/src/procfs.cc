@@ -40,6 +40,9 @@
 #include <vector>
 
 #include "internal.h"
+#include "ofd_internal.h"
+#include "revocable_internal.h"
+#include "record_lock_descriptors.h"
 
 #include <gesher/process_name.h>
 
@@ -842,7 +845,18 @@ bool ReadLink(const std::wstring& name, std::string* target) {
     }
     return errno = EINVAL, false;
   }
-  if (n.link == "fd") return FdTarget(n.fd, target);
+  if (n.link == "fd") {
+    auto snapshot = CaptureDescriptor(n.fd);
+    if (!snapshot) return false;
+    if (FileDescriptionIsRevocable(snapshot)) {
+      // A revocable capability is not permission to open its private backing
+      // pathname as an unrestricted file. Opening this proc link is handled
+      // below and retains the same revocation group.
+      *target = "anon_inode:[gesher-revocable]";
+      return true;
+    }
+    return FdTarget(n.fd, target);
+  }
   wchar_t buf[32768];
   DWORD length = n.link == "exe" ? GetModuleFileNameW(nullptr, buf, 32768)
                                  : GetCurrentDirectoryW(32768, buf);
@@ -863,16 +877,22 @@ bool List(const std::wstring& name, std::vector<Entry>* entries) {
 }
 
 int Open(const std::wstring& name, int flags) {
+  if ((flags & O_PATH) != 0) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW;
   Node n = Lookup(name, false);
   if (n.type == kNone) return errno = (flags & O_CREAT) != 0 ? EACCES : ENOENT, -1;
   if (n.type == kLink) {
     if ((flags & O_NOFOLLOW) != 0 && (flags & O_PATH) == 0) return errno = ELOOP, -1;
-    // Opening the link opens its file again (pipes and sockets: the same one).
+    // A proc-fd open requests a new open description, with the requested
+    // access, status and descriptor flags. Duplicating a pipe/device handle
+    // would silently share its original status and force CLOEXEC instead.
     if (n.link == "fd") {
-      HANDLE h = HandleFromFd(n.fd);
-      if (h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_DISK) {
-        return fcntl(n.fd, F_DUPFD_CLOEXEC, 0);
-      }
+      auto snapshot = CaptureDescriptor(n.fd);
+      if (!snapshot) return -1;
+      if (FileDescriptionIsRevocable(snapshot)) return ReopenRevocableFileDescription(snapshot, flags);
+      // NPFS does not expose a fresh endpoint on this existing byte queue
+      // through ReOpenFile. Fail rather than returning an alias with a
+      // different access direction or shared O_NONBLOCK state.
+      if (GetFileType(snapshot->handle) != FILE_TYPE_DISK) return errno = EOPNOTSUPP, -1;
     }
     std::string target;
     if (!ReadLink(name, &target)) return -1;
@@ -880,17 +900,50 @@ int Open(const std::wstring& name, int flags) {
   }
   if (n.type == kDir) return errno = (flags & O_ACCMODE) != O_RDONLY ? EISDIR : EOPNOTSUPP, -1;
   if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
+  if ((flags & O_DIRECT) != 0) return errno = EINVAL, -1;
+  if ((flags & O_NOATIME) != 0) return errno = EOPNOTSUPP, -1;
   if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_TRUNC | O_CREAT)) != 0) {
     return errno = EACCES, -1;
   }
   std::string content = Content(n);
+  record_locks::DescriptorGuard descriptors;
   int fd = memfd_create("procfs", (flags & O_CLOEXEC) != 0 ? MFD_CLOEXEC : 0);
   if (fd < 0) return -1;
   if (_write(fd, content.data(), static_cast<unsigned>(content.size())) !=
           static_cast<int>(content.size()) ||
       _lseeki64(fd, 0, SEEK_SET) != 0) {
     int saved = gesher_errno_from_crt(errno);
-    _close(fd);
+    close(fd);
+    return errno = saved, -1;
+  }
+  // The content builder needs write access; the caller does not. Reduce the
+  // actual kernel handle's rights before publishing the descriptor, so both
+  // POSIX I/O and direct/native consumers see the requested read-only/O_PATH
+  // access. A metadata-only O_RDONLY would still permit writes through mmap.
+  HANDLE readonly = nullptr;
+  DWORD access = (flags & O_PATH) != 0 ? FILE_READ_ATTRIBUTES | SYNCHRONIZE : FILE_GENERIC_READ;
+  BOOL inherit = (flags & O_CLOEXEC) == 0;
+  if (!DuplicateHandle(GetCurrentProcess(), HandleFromFd(fd), GetCurrentProcess(),
+                         &readonly, access, inherit, 0)) {
+    int saved = ErrnoFromWin32(GetLastError());
+    close(fd);
+    return errno = saved, -1;
+  }
+  if (close(fd) < 0) {
+    int saved = errno;
+    CloseHandle(readonly);
+    return errno = saved, -1;
+  }
+  fd = _open_osfhandle(reinterpret_cast<intptr_t>(readonly), _O_RDONLY | _O_BINARY |
+                      ((flags & O_CLOEXEC) != 0 ? _O_NOINHERIT : 0));
+  if (fd < 0) {
+    int saved = gesher_errno_from_crt(errno);
+    CloseHandle(readonly);
+    return errno = saved, -1;
+  }
+  if (RegisterOfd(fd, flags | ((flags & O_PATH) == 0 ? O_LARGEFILE : 0)) < 0) {
+    int saved = errno;
+    close(fd);
     return errno = saved, -1;
   }
   return fd;

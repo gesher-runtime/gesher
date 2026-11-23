@@ -9,6 +9,9 @@ uint64_t Time(const FILETIME& value) {
   return (static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
 }
 int WinError() { return gesher::ErrnoFromWin32(GetLastError()); }
+// The upper 64 bits of an identity taken from the legacy file index, so that it
+// stays apart from FileIdInfo identities of another volume with the same serial.
+constexpr uint64_t kLegacyFileIndex = UINT64_MAX;
 
 struct BasicObject {
   ULONG attributes, granted_access, handle_count, pointer_count, reserved[10];
@@ -86,7 +89,23 @@ int FileIdentity(HANDLE file, File* identity) {
   if (file == nullptr || file == INVALID_HANDLE_VALUE) return EBADF;
   if (GetFileType(file) != FILE_TYPE_DISK) return EINVAL;
   FILE_ID_INFO info{};
-  if (!GetFileInformationByHandleEx(file, FileIdInfo, &info, sizeof(info))) return WinError();
+  if (!GetFileInformationByHandleEx(file, FileIdInfo, &info, sizeof(info))) {
+    const DWORD error = GetLastError();
+    // FAT32/exFAT/UDF (USB drives, SD cards, disc images) and some redirectors
+    // do not implement FileIdInformation; every handle on such a volume takes
+    // this path. Their 64-bit file index tells apart files open at the same
+    // time. On FAT/exFAT it follows the directory entry, so renaming an open
+    // file can change it and leave that file's locks until their owner exits;
+    // FAT has no more stable identifier.
+    if (error != ERROR_INVALID_PARAMETER && error != ERROR_INVALID_FUNCTION &&
+        error != ERROR_NOT_SUPPORTED) return gesher::ErrnoFromWin32(error);
+    BY_HANDLE_FILE_INFORMATION legacy{};
+    if (!GetFileInformationByHandle(file, &legacy)) return WinError();
+    identity->volume = legacy.dwVolumeSerialNumber;
+    identity->id_low = (static_cast<uint64_t>(legacy.nFileIndexHigh) << 32) | legacy.nFileIndexLow;
+    identity->id_high = kLegacyFileIndex;
+    return 0;
+  }
   identity->volume = info.VolumeSerialNumber;
   std::memcpy(&identity->id_low, info.FileId.Identifier, sizeof(uint64_t));
   std::memcpy(&identity->id_high, info.FileId.Identifier + sizeof(uint64_t), sizeof(uint64_t));
