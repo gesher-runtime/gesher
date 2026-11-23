@@ -110,8 +110,9 @@ nonblocking reads, coalescing, callbacks, deadlines and queued grant revocation.
 `tools/test_windows_wifi_native.py` compiles the unchanged production native source
 against explicit test Win32/WLAN calls under ASan/UBSan. It covers callback ordering,
 bounded waits, denied operations, exact byte fields, size checks and teardown.
-Its two negative controls demonstrate that premature notifications and omission of
-the live eligibility check are detected. This host boundary does not verify the
+Its three negative controls demonstrate that premature notifications, omission of
+the live eligibility check, and a profile list that could not be read being reported
+as an empty one are detected. This host boundary does not verify the
 Windows ABI; the source is also compiled against the real llvm-mingw headers.
 
 Windows track 50 runs `WindowsWifiTest` on ART and checks that live reads remain

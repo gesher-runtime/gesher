@@ -51,6 +51,7 @@ public final class WifiService extends IWindowsWifi.Stub {
         boolean disconnect(int ifIndex, String removeProfile, String restoreProfile);
         boolean storeProfile(int ifIndex, String xml, String profile);
         String currentProfile(int ifIndex);
+        /** null when the interface's profile list could not be read. */
         List<String> profiles(int ifIndex, String prefix);
         boolean hasIpv4(int ifIndex);
     }

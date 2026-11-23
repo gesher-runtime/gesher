@@ -64,6 +64,8 @@ Gesher has no Android supplicant; it can only ask Windows to connect.
 - Only the first adapter with an enabled radio is used for specifier and
   suggestion connections. Suggestion profiles are still deleted on the adapter they
   were stored on when its radio is off or another adapter has become the primary
-  one, since Windows would otherwise auto-join them there later.
+  one, since Windows would otherwise auto-join them there later. An adapter Windows
+  cannot reach for now (disabled, unplugged, WLAN service stopped) keeps its records
+  until the deletion succeeds there.
 - Real adapter behaviour (profile acceptance by drivers, WPA3-SAE and OWE profile
   support on older Windows builds, notification timing) needs hardware validation.

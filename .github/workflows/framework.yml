@@ -836,6 +836,7 @@ jobs:
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME"
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control premature-notification
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control skip-eligibility
+          python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control listing-failure-as-empty
 
       - name: Windows cellular telephony services and native Mobile Broadband contracts
         run: |

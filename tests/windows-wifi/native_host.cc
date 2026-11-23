@@ -21,6 +21,7 @@ bool enum_failure=false; // the WLAN service behind an open handle went away
 std::vector<std::wstring> stored_profiles, deleted_profiles, connected_profiles;
 int disconnects=0; bool pinned=false, set_profile_failure=false, cancel_on_wait=false;
 std::wstring positioned; DWORD position=0; bool position_failure=false;
+DWORD delete_result=ERROR_SUCCESS; bool profiles_failure=false;
 DWORD connect_reason=0; int connect_notifications=1; std::wstring notify_profile; bool foreign_first=false;
 bool index_failure=false, delay_after_bss=false, delay_close=false;
 int adapters=1; size_t ie_size=2;
@@ -38,7 +39,7 @@ void reset() {
     capability_failure=pairs_overflow=ihv_phy=false;
     enum_failure=false;
     stored_profiles.clear();deleted_profiles.clear();connected_profiles.clear();disconnects=0;pinned=false;
-    set_profile_failure=cancel_on_wait=false;positioned.clear();position=0;position_failure=false;connect_reason=0;connect_notifications=1;notify_profile.clear();foreign_first=false;
+    set_profile_failure=cancel_on_wait=false;delete_result=ERROR_SUCCESS;profiles_failure=false;positioned.clear();position=0;position_failure=false;connect_reason=0;connect_notifications=1;notify_profile.clear();foreign_first=false;
     adapters=1;ie_size=2;clock=0;filetime=1'000'000'000'000ULL;callback=nullptr;context=nullptr;last_context=nullptr;armed.clear();wlan_broken=false;
 }
 void notify(int index,DWORD code=wlan_notification_acm_scan_complete,DWORD source=WLAN_NOTIFICATION_SOURCE_ACM) {
@@ -168,7 +169,10 @@ DWORD WlanSetProfilePosition(HANDLE,const GUID*,LPCWSTR name,DWORD position,PVOI
     if(fixture::position_failure)return ERROR_ACCESS_DENIED;
     fixture::positioned=name;fixture::position=position;return ERROR_SUCCESS;
 }
-DWORD WlanDeleteProfile(HANDLE,const GUID*,LPCWSTR name,PVOID) {fixture::deleted_profiles.push_back(name);return ERROR_SUCCESS;}
+DWORD WlanDeleteProfile(HANDLE,const GUID*,LPCWSTR name,PVOID) {
+    if(fixture::delete_result==ERROR_SUCCESS)fixture::deleted_profiles.push_back(name);
+    return fixture::delete_result;
+}
 void connect_notify(const std::wstring& profile,DWORD code,DWORD reason) {
     if(!fixture::callback)return;
     WLAN_CONNECTION_NOTIFICATION_DATA data{};wcsncpy(data.strProfileName,profile.c_str(),255);data.wlanReasonCode=reason;
@@ -189,6 +193,7 @@ DWORD WlanConnect(HANDLE,const GUID* guid,const WLAN_CONNECTION_PARAMETERS* para
 }
 DWORD WlanDisconnect(HANDLE,const GUID*,PVOID) {++fixture::disconnects;return ERROR_SUCCESS;}
 DWORD WlanGetProfileList(HANDLE,const GUID*,PVOID,WLAN_PROFILE_INFO_LIST** output) {
+    if(fixture::profiles_failure)return ERROR_ACCESS_DENIED;
     size_t size=offsetof(WLAN_PROFILE_INFO_LIST,ProfileInfo)+3*sizeof(WLAN_PROFILE_INFO);
     auto* list=static_cast<WLAN_PROFILE_INFO_LIST*>(calloc(1,size));list->dwNumberOfItems=3;
     wcscpy(list->ProfileInfo[0].strProfileName,L"Gesher-r-1");list->ProfileInfo[0].dwFlags=WLAN_PROFILE_USER;
@@ -359,8 +364,25 @@ int main() {
     reset();position_failure=true;
     check(!StoreProfile(backend,6,L"<name>Gesher-s-1</name>",L"Gesher-s-1") && deleted_profiles.size()==1
             && deleted_profiles[0]==L"Gesher-s-1","A suggestion Windows cannot rank below the user's networks is removed");
+    reset();delete_result=ERROR_NOT_FOUND;
+    check(StoreProfile(backend,6,nullptr,L"Gesher-s-1"),"A profile already gone from the interface counts as deleted");
+    reset();delete_result=ERROR_ACCESS_DENIED;
+    check(!StoreProfile(backend,6,nullptr,L"Gesher-s-1"),"A refused deletion is a failure");
     reset();
-    check(Profiles(backend,6,L"Gesher-")==L"Gesher-r-1\n","Only per-user Gesher profiles are listed for cleanup");
+    check(!StoreProfile(backend,99,nullptr,L"Gesher-s-1") && deleted_profiles.empty(),
+            "No deletion on an absent interface");
+    reset();
+    std::wstring names=L"stale";
+    check(Profiles(backend,6,L"Gesher-",&names) && names==L"Gesher-r-1\n","Only per-user Gesher profiles are listed for cleanup");
+    check(Profiles(backend,6,L"Gesher-s-9",&names) && names.empty(),"A read list without the profile is empty");
+    // A list that cannot be read is not an empty one: it never shows a profile as absent.
+    check(!Profiles(backend,99,L"Gesher-",&names) && names.empty(),"An absent interface has no readable list");
+    profiles_failure=true;
+    check(!Profiles(backend,6,L"Gesher-",&names),"A failed profile list is a failure");
+    reset();enum_failure=true;
+    check(!Profiles(backend,6,L"Gesher-",&names),"A WLAN service that went away has no readable list");
+    reset();
+    check(!Profiles(unavailable,6,L"Gesher-",&names),"No WLAN API has no readable list");
     reset();
     check(CurrentProfile(backend,6).empty() || CurrentProfile(backend,6)==L"","Connected fixture interface without a profile name");
     std::cout<<"WindowsWifi native boundary all passed: "<<checks<<"\n";

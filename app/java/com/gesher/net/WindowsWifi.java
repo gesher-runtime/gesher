@@ -408,16 +408,22 @@ public final class WindowsWifi {
         }
     }
 
-    /** This user's per-user profiles on the interface whose names start with prefix. */
+    /**
+     * This user's per-user profiles on the interface whose names start with prefix, or
+     * null when the interface's profile list could not be read (no WLAN service, an
+     * absent interface, a failed list): that is not evidence that a profile is absent.
+     */
     public static List<String> profiles(int ifIndex, String prefix) {
-        List<String> names = new ArrayList<>();
+        String raw;
         try {
             load();
-            String raw = nativeProfiles(ifIndex, prefix);
-            if (raw != null) for (String name : raw.split("\n")) if (name.startsWith(prefix)) names.add(name);
+            raw = nativeProfiles(ifIndex, prefix);
         } catch (RuntimeException | LinkageError unavailable) {
-            // No listing: nothing is known to be Gesher's.
+            return null;
         }
+        if (raw == null) return null;
+        List<String> names = new ArrayList<>();
+        for (String name : raw.split("\n")) if (!name.isEmpty() && name.startsWith(prefix)) names.add(name);
         return names;
     }
 
@@ -480,50 +486,63 @@ public final class WindowsWifi {
      * The cached adapter census. The first read runs on its own thread and its caller
      * waits at most a bound: a WLAN service that hangs (or is slow to start) in
      * WlanOpenHandle/WlanEnumInterfaces must not stall system-server boot. A census not
-     * finished in time reports no hardware to that caller, and to every later caller
-     * without waiting again while it still runs; the late result is cached for later
-     * callers, and WLAN interface arrival/removal refreshes it.
+     * finished in time reports no hardware to that caller. A later caller arriving while
+     * it runs waits only for the rest of that first bound, never a new one, so a healthy
+     * census is not misreported and a hung one does not hold every caller again. The
+     * late result is cached for later callers, and WLAN interface arrival/removal
+     * refreshes it.
      */
     static final class Census {
         private final java.util.function.Supplier<Hardware> mSource;
         private Hardware mValue; // guarded by this
         private Thread mProbe; // guarded by this: the first census, while it runs
+        private long mDeadline; // guarded by this: nanoTime the first caller's wait ends
 
         Census(java.util.function.Supplier<Hardware> source) { mSource = source; }
 
         Hardware get(long timeoutMs) {
             Thread probe;
+            long waitNanos;
+            boolean first;
             synchronized (this) {
                 if (mValue != null) return mValue;
-                // Only the caller that starts the census waits for it. While it is still
-                // running (hung), later callers are answered at once with no hardware.
-                if (mProbe != null) return NO_HARDWARE;
-                mProbe = new Thread(() -> {
-                    Hardware fresh = null;
-                    try {
-                        fresh = mSource.get();
-                    } finally {
-                        synchronized (this) {
-                            // A refresh that finished meanwhile is newer than this read.
-                            if (mValue == null) mValue = fresh != null ? fresh : NO_HARDWARE;
-                            mProbe = null;
+                long now = System.nanoTime();
+                first = mProbe == null;
+                if (first) {
+                    mDeadline = now + TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeoutMs));
+                    mProbe = new Thread(() -> {
+                        Hardware fresh = null;
+                        try {
+                            fresh = mSource.get();
+                        } finally {
+                            synchronized (this) {
+                                // A refresh that finished meanwhile is newer than this read.
+                                if (mValue == null) mValue = fresh != null ? fresh : NO_HARDWARE;
+                                mProbe = null;
+                            }
                         }
-                    }
-                }, "gesher-wlan-census");
-                mProbe.setDaemon(true);
-                mProbe.start();
+                    }, "gesher-wlan-census");
+                    mProbe.setDaemon(true);
+                    mProbe.start();
+                }
                 probe = mProbe;
+                // A later caller waits at most what is left of the first caller's bound.
+                waitNanos = Math.min(mDeadline - now, TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMs)));
             }
-            try {
-                probe.join(Math.max(1, timeoutMs));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            if (waitNanos > 0) {
+                try {
+                    TimeUnit.NANOSECONDS.timedJoin(probe, waitNanos);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
             synchronized (this) {
                 if (mValue != null) return mValue;
             }
-            System.out.println("WindowsWifi: WLAN census did not finish within " + timeoutMs
-                    + " ms; reporting no Wi-Fi hardware");
+            if (first) {
+                System.out.println("WindowsWifi: WLAN census did not finish within " + timeoutMs
+                        + " ms; reporting no Wi-Fi hardware");
+            }
             return NO_HARDWARE;
         }
 

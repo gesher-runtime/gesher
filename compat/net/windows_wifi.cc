@@ -580,7 +580,9 @@ bool LowestPriority(Api& api, HANDLE handle, const GUID& guid, const WCHAR* prof
 }
 
 // Stores (or removes, with xml == nullptr) a per-user profile without connecting. A stored
-// profile ranks below the user's own; if Windows cannot place it there it is removed.
+// profile ranks below the user's own; if Windows cannot place it there it is removed. A
+// removal succeeds when the interface's profile store no longer has the profile, also
+// when it was already gone (ERROR_NOT_FOUND).
 bool StoreProfile(Api& api, ULONG if_index, const WCHAR* xml, const WCHAR* profile) {
   if (!api.connectable() || wlan_broken.load()) return false;
   Client client(api);
@@ -588,7 +590,10 @@ bool StoreProfile(Api& api, ULONG if_index, const WCHAR* xml, const WCHAR* profi
   GUID guid{};
   if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
       || !InterfaceGuid(api, client.handle, if_index, &guid)) return false;
-  if (!xml) return api.delete_profile(client.handle, &guid, profile, nullptr) == ERROR_SUCCESS;
+  if (!xml) {
+    DWORD deleted = api.delete_profile(client.handle, &guid, profile, nullptr);
+    return deleted == ERROR_SUCCESS || deleted == ERROR_NOT_FOUND;
+  }
   if (api.set_profile(client.handle, &guid, WLAN_PROFILE_USER, xml, nullptr, TRUE, nullptr, &reason) != ERROR_SUCCESS) {
     return false;
   }
@@ -598,20 +603,25 @@ bool StoreProfile(Api& api, ULONG if_index, const WCHAR* xml, const WCHAR* profi
 }
 
 // Names of this user's profiles on the interface that start with prefix, '\n'-separated.
-std::wstring Profiles(Api& api, ULONG if_index, const WCHAR* prefix) {
-  if (!api.ready() || !api.profiles || wlan_broken.load()) return {};
+// False when the interface's complete profile list could not be read (no WLAN API or
+// service, an unknown or absent interface, a failed or oversized list): that is not
+// evidence that a profile is absent.
+bool Profiles(Api& api, ULONG if_index, const WCHAR* prefix, std::wstring* out) {
+  out->clear();
+  if (!api.ready() || !api.profiles || wlan_broken.load()) return false;
   Client client(api);
   DWORD version = 0;
   GUID guid{};
   if (api.open(2, nullptr, &version, &client.handle) != ERROR_SUCCESS
-      || !InterfaceGuid(api, client.handle, if_index, &guid)) return {};
+      || !InterfaceGuid(api, client.handle, if_index, &guid)) return false;
   Memory memory(api);
   if (api.profiles(client.handle, &guid, nullptr, reinterpret_cast<WLAN_PROFILE_INFO_LIST**>(&memory.value)) != ERROR_SUCCESS
-      || !memory.value) return {};
+      || !memory.value) return false;
   const auto* list = static_cast<const WLAN_PROFILE_INFO_LIST*>(memory.value);
+  if (list->dwNumberOfItems > 4096) return false;
   std::wstring names;
   size_t prefix_length = wcslen(prefix);
-  for (DWORD i = 0; i < list->dwNumberOfItems && i < 4096; i++) {
+  for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
     WCHAR name[WLAN_MAX_NAME_LENGTH];
     memcpy(name, list->ProfileInfo[i].strProfileName, sizeof(name));
     name[WLAN_MAX_NAME_LENGTH - 1] = 0;
@@ -621,7 +631,8 @@ std::wstring Profiles(Api& api, ULONG if_index, const WCHAR* prefix) {
       names += L'\n';
     }
   }
-  return names;
+  *out = names;
+  return true;
 }
 
 // The connected profile's name on this interface, or empty when not connected.
@@ -722,7 +733,9 @@ jstring WindowsWifi_nativeCurrentProfile(JNIEnv* env, jclass, jint if_index) {
 jstring WindowsWifi_nativeProfiles(JNIEnv* env, jclass, jint if_index, jstring prefix) {
   std::wstring wide_prefix;
   if (if_index <= 0 || !Wide(env, prefix, &wide_prefix, 64)) return nullptr;
-  std::wstring names = Profiles(Wlan(), static_cast<ULONG>(if_index), wide_prefix.c_str());
+  std::wstring names;
+  // null: the list could not be read; "" is a read list without matching profiles.
+  if (!Profiles(Wlan(), static_cast<ULONG>(if_index), wide_prefix.c_str(), &names)) return nullptr;
   return env->NewString(reinterpret_cast<const jchar*>(names.c_str()), static_cast<jsize>(names.size()));
 }
 jstring WindowsWifi_nativeHardware(JNIEnv* env, jclass) {

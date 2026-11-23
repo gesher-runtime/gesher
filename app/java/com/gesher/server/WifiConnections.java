@@ -909,10 +909,17 @@ final class WifiConnections {
         if (failed) scheduleRetry(); else retryDone();
     }
 
-    /** Deletes a suggestion profile; one already gone from Windows (e.g. the user deleted it) counts too. */
+    /**
+     * Deletes a suggestion profile. One already gone (e.g. the user deleted it) counts
+     * only when the interface's profile list was read and lacks it: an interface that is
+     * absent for now (adapter disabled or unplugged, WLAN service stopped) keeps the
+     * record, so backoff and the interface's return delete it.
+     */
     private boolean deleted(int ifIndex, String name) {
-        return ifIndex > 0 && (mBackend.storeProfile(ifIndex, null, name)
-                || !mBackend.profiles(ifIndex, name).contains(name));
+        if (ifIndex <= 0) return false;
+        if (mBackend.storeProfile(ifIndex, null, name)) return true;
+        List<String> listed = mBackend.profiles(ifIndex, name);
+        return listed != null && !listed.contains(name);
     }
 
     /** Profile name to XML for every approved, unblocked suggestion. */
@@ -984,7 +991,9 @@ final class WifiConnections {
 
     private void cleanupNow(int ifIndex) {
         synchronized (mLock) { if (mCleaned) return; }
-        for (String stale : mBackend.profiles(ifIndex, WlanProfiles.PREFIX)) {
+        List<String> listed = mBackend.profiles(ifIndex, WlanProfiles.PREFIX);
+        if (listed == null) return; // not read: a later pass cleans up
+        for (String stale : listed) {
             if (!OWN_PROFILE.matcher(stale).matches()) continue;
             synchronized (mLock) {
                 if (mActive != null && stale.equals(mActive.profile)
@@ -1091,16 +1100,31 @@ final class WifiConnections {
         for (String name : gone) mWorker.execute(() -> removeApp(name));
     }
 
-    /** Posted to the profile thread without waiting, as WifiServiceImpl posts it to the Wi-Fi thread. */
+    /**
+     * The caller's current suggested network is identified and blocked when the call is
+     * made, so a later add or remove from the app applies after it, as on Android, where
+     * both run in order on the Wi-Fi thread. Windows is changed on the profile thread,
+     * without the caller waiting (WifiServiceImpl posts it).
+     */
     void disallowCurrent(WifiService.Owner owner, BlockingOption option) {
-        String packageName = owner.name();
+        if (mBackend.wifiState() != WifiManager.WIFI_STATE_ENABLED) return;
+        int ifIndex = mBackend.primaryInterface();
+        String current = ifIndex <= 0 ? null : mBackend.currentProfile(ifIndex);
         long seconds = Math.max(1, option.getBlockingTimeSeconds());
+        synchronized (mLock) {
+            Apps app = mSuggestions.get(owner.name());
+            if (app == null || ownerLocked(owner.name(), app, current) == null) return;
+            // Every pass leaves a blocked profile off Windows until the block expires.
+            mBlocked.put(current, System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds));
+            mGeneration++;
+        }
         try {
             mProfiles.execute(() -> {
                 try {
-                    disallowNow(packageName, seconds);
+                    disallowNow(ifIndex, current, seconds);
                 } catch (RuntimeException failed) {
                     SystemServer.log("Wi-Fi network not disallowed: " + failed);
+                    scheduleRetry();
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException stopped) {
@@ -1108,21 +1132,13 @@ final class WifiConnections {
         }
     }
 
-    private void disallowNow(String packageName, long seconds) {
-        if (mBackend.wifiState() != WifiManager.WIFI_STATE_ENABLED) return;
-        int ifIndex = mBackend.primaryInterface();
-        String current = ifIndex <= 0 ? null : mBackend.currentProfile(ifIndex);
-        synchronized (mLock) {
-            Apps app = mSuggestions.get(packageName);
-            if (app == null || mInstalledOn != ifIndex || ownerLocked(packageName, app, current) == null) return;
-            // Every pass leaves a blocked profile off Windows until the block expires.
-            mBlocked.put(current, System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds));
-            mGeneration++;
-        }
+    /** Profile thread: leaves the blocked network and removes its profile for the block. */
+    private void disallowNow(int ifIndex, String blocked, long seconds) {
         // Windows has no per-BSSID block list: removing the profile for the blocking
         // period disconnects and prevents auto-join for the whole network, then it returns.
-        if (current.equals(mBackend.currentProfile(ifIndex)) && mBackend.disconnect(ifIndex, current, null)) {
-            synchronized (mLock) { if (mInstalledOn == ifIndex) mInstalled.remove(current); }
+        // If Windows has meanwhile left that network, the pass below deletes the profile.
+        if (blocked.equals(mBackend.currentProfile(ifIndex)) && mBackend.disconnect(ifIndex, blocked, null)) {
+            synchronized (mLock) { if (mInstalledOn == ifIndex) mInstalled.remove(blocked); }
         }
         reconcile();
         try { mTimers.schedule(this::queueReconcile, seconds, TimeUnit.SECONDS); }

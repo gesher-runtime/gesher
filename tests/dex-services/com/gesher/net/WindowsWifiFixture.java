@@ -261,12 +261,50 @@ public final class WindowsWifiFixture {
         started = System.nanoTime();
         check(census.get(5_000) == WindowsWifi.NO_HARDWARE && System.nanoTime() - started < TimeUnit.SECONDS.toNanos(1),
                 "A later caller does not wait for a hung census again");
+        // The probe thread may not have run yet on a loaded host: wait until it is in the census.
+        long probing = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (reads.get() == 0 && System.nanoTime() < probing) Thread.sleep(1);
         check(census.get(50) == WindowsWifi.NO_HARDWARE && reads.get() == 1, "A hung census is not started twice");
         hung.countDown();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (census.get(50) != hardware && System.nanoTime() < deadline) Thread.sleep(5);
         check(census.get(0) == hardware && reads.get() == 1, "The late census result is kept for later callers");
         check(new WindowsWifi.Census(() -> hardware).get(1_000) == hardware, "A prompt census is reported");
+        // A caller arriving while a healthy census still runs (within the first bound) gets its result.
+        CountDownLatch slow = new CountDownLatch(1);
+        AtomicInteger slowReads = new AtomicInteger();
+        WindowsWifi.Census healthy = new WindowsWifi.Census(() -> {
+            slowReads.incrementAndGet();
+            try { slow.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return hardware;
+        });
+        WindowsWifi.Hardware[] boot = new WindowsWifi.Hardware[1];
+        Thread first = new Thread(() -> boot[0] = healthy.get(5_000));
+        first.start();
+        while (slowReads.get() == 0) Thread.sleep(1);
+        Thread finisher = new Thread(() -> {
+            try { Thread.sleep(200); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            slow.countDown();
+        });
+        finisher.start();
+        check(healthy.get(5_000) == hardware, "A caller during a healthy census gets its result, not no hardware");
+        first.join(5_000);
+        check(boot[0] == hardware && slowReads.get() == 1, "The healthy census runs once for both callers");
+        // A later caller waits only for the rest of the first caller's bound.
+        CountDownLatch stuck = new CountDownLatch(1);
+        WindowsWifi.Census hanging = new WindowsWifi.Census(() -> {
+            try { stuck.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return hardware;
+        });
+        Thread bootCaller = new Thread(() -> hanging.get(400));
+        long bootStarted = System.nanoTime();
+        bootCaller.start();
+        Thread.sleep(100);
+        check(hanging.get(5_000) == WindowsWifi.NO_HARDWARE
+                && System.nanoTime() - bootStarted < TimeUnit.MILLISECONDS.toNanos(1_500),
+                "A caller during a hung census waits no longer than the first bound");
+        stuck.countDown();
+        bootCaller.join(5_000);
         Recorder recorder = new Recorder();
         ((List<WindowsWifi.Events>) get("EVENTS")).add(recorder);
         set("sWatching", true);

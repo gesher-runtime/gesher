@@ -9,18 +9,27 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--java-home',type=Path,required=True)
-    parser.add_argument('--negative-control', choices=('premature-notification', 'skip-eligibility'))
+    parser.add_argument('--negative-control', choices=('premature-notification', 'skip-eligibility',
+                                                               'listing-failure-as-empty'))
     args=parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='windows-wifi-native-') as temporary:
         output=Path(temporary)/'wifi-native'
         extra=[]
         if args.negative_control:
             source=(ROOT/'compat/net/windows_wifi.cc').read_text()
-            before,after = (('state{-2}', 'state{0}') if args.negative_control=='premature-notification'
-                            else ('if (!eligible(context))', 'if (false)'))
-            if source.count(before)!=1: raise AssertionError('Negative control target changed')
+            if args.negative_control=='listing-failure-as-empty':
+                # A profile list that could not be read reported as a read, empty one.
+                start=source.find('bool Profiles(Api& api')
+                end=source.find('\n}\n',start)
+                if start<0 or end<0 or source.count('bool Profiles(Api& api')!=1:
+                    raise AssertionError('Negative control target changed')
+                source=source[:start]+source[start:end].replace('return false;','return true;')+source[end:]
+            else:
+                before,after = (('state{-2}', 'state{0}') if args.negative_control=='premature-notification'
+                                else ('if (!eligible(context))', 'if (false)'))
+                if source.count(before)!=1: raise AssertionError('Negative control target changed')
+                source=source.replace(before,after)
             negative=Path(temporary)/'negative.cc'
-            source=source.replace(before,after)
             if args.negative_control=='premature-notification':
                 source=source.replace('    wait.items[i].state = 0;\n', '')
             negative.write_text(source)
@@ -32,8 +41,9 @@ def main():
                         *extra,str(ROOT/'tests/windows-wifi/native_host.cc'),'-o',str(output)],check=True)
         result=subprocess.run([str(output)],timeout=20,capture_output=bool(args.negative_control),text=True)
         if args.negative_control:
-            expected=('Pre-request notifications' if args.negative_control=='premature-notification'
-                      else 'Permission revoked during native initialization')
+            expected={'premature-notification':'Pre-request notifications',
+                      'skip-eligibility':'Permission revoked during native initialization',
+                      'listing-failure-as-empty':'An absent interface has no readable list'}[args.negative_control]
             if result.returncode==0 or expected not in result.stderr:
                 raise AssertionError('Negative control did not fail at the intended production contract: '+result.stderr)
             print('Caught native negative control:',args.negative_control)

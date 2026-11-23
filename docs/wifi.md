@@ -16,10 +16,11 @@ when the package manager starts, finds at least one WLAN interface. A missing
 interfaces leave it out. The census runs on its own thread and boot waits for it at
 most 5 s: a WLAN service that hangs or is still starting leaves `FEATURE_WIFI` out for
 that boot (logged as `WindowsWifi: WLAN census did not finish ...`) instead of
-stalling the system server. Only that first caller waits: while the census is still
-running, later capability queries are answered at once with no hardware. Its late
-result is still used for the capability answers below, but system features stay fixed until the next start, as on Android. Wi-Fi
-Direct, Aware, RTT and Passpoint features are never declared.
+stalling the system server. A capability query made while the census is still
+running waits only for the rest of that first 5 s, never a new bound: a healthy census
+answers it, a hung one means no hardware at once. Its late result is still used for
+the capability answers below, but system features stay fixed until the next start, as
+on Android. Wi-Fi Direct, Aware, RTT and Passpoint features are never declared.
 
 Capability answers come from the same census, refreshed on WLAN interface
 arrival/removal:
@@ -180,22 +181,28 @@ IPv4 address).
   Deletions do not wait for a radio: a profile is deleted on the interface it was
   stored on while that adapter's radio is off, and when another adapter becomes the
   primary one the previous adapter's profiles are deleted there and the suggestions
-  stored on the new one. Stores wait for a radio. A profile Windows refused to store
-  or delete, or a store waiting for the radio, is retried on the next WLAN event and
-  with backoff (5 s doubling to 5 min, reset by the next complete pass).
+  stored on the new one. Stores wait for a radio. A profile counts as deleted only
+  when Windows deleted it, reported it not found, or listed the interface's profiles
+  without it; an adapter that is disabled or unplugged, or a stopped WLAN service,
+  keeps the record. A profile Windows refused to store or delete, or a store waiting
+  for the radio, is retried on the next WLAN event (including the adapter's return)
+  and with backoff (5 s doubling to 5 min, reset by the next complete pass).
 - When Windows joins an app-interaction suggestion, the app receives the explicit
   `ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION` broadcast with
   `EXTRA_NETWORK_SUGGESTION`, if location is on, it holds fine location and its
   fine-location app op is allowed (`enforceCanAccessScanResults`).
-- `disallowCurrentSuggestedNetwork` returns at once, as Android posts it to the Wi-Fi
-  thread; the profile thread then disconnects the app's current suggested network
-  and removes its profile for the blocking period; every profile pass honours the
+- `disallowCurrentSuggestedNetwork` identifies and blocks the app's current suggested
+  network when called, so the app's later adds and removals apply after it, as on
+  Android; it returns without waiting for Windows (Android posts it to the Wi-Fi
+  thread), and the profile thread then disconnects that network and removes its
+  profile for the blocking period; every profile pass honours the
   block until it expires, then the profile returns. Windows has no BSSID block list,
   so the whole network is blocked even when `BlockingOption` asks for the BSSID only.
 - An uninstalled app's suggestions and approvals are dropped as soon as the
   package-removal event arrives, and the next profile pass deletes its profiles,
-  without holding the event's sender. WLAN events and profile
-  installations are coalesced: at most one pass of each is queued at a time. The store lives for the system server's lifetime (Android persists it).
+  without holding the event's sender. WLAN events and profile installations are
+  coalesced: at most one pass of each is queued at a time. The store lives for the
+  system server's lifetime (Android persists it).
   Once the WLAN interface is known after a start (the first WLAN event,
   request or suggestion), per-user profiles with exactly Gesher's generated names
   (`Gesher-r-` plus 16 hex digits, `Gesher-s-` plus 24) left by an earlier run are
