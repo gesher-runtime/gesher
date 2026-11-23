@@ -16,7 +16,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("framework-classes", "core-classes", "app-classes", "apksig", "java-home"):
         parser.add_argument("--" + name, required=True, type=Path)
-    parser.add_argument("--group", choices=("all", "services", "pending", "events", "broadcasts", "providers", "activities", "starting", "provider-install", "activity-start", "termination"), default="all")
+    parser.add_argument("--group", choices=("all", "services", "pending", "events", "broadcasts", "providers", "provider-death", "activities", "starting", "provider-install", "activity-start", "termination"), default="all")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:
