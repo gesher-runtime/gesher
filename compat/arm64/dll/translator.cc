@@ -34,6 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -103,6 +104,72 @@ void RefreshCodeCache(A64::Jit* jit, uint64_t* seen) {
     jit->ClearCache();
     *seen = generation;
   }
+}
+
+// --- guest instruction cache maintenance -----------------------------------
+// A guest that writes instructions (an inline hook a packer places on a
+// function, a JIT's code) makes them visible to execution as on ARM: with
+// IC IVAU for each cache line written (or IC IALLU), then ISB. Each Jit has
+// translated copies of guest code, so an invalidation is recorded here and
+// every Jit drops its copies of those lines before its next dispatch; the
+// one running the IC drops them at the end of the current block. Without it a
+// Jit keeps running the instructions a function had before it was patched.
+struct IcacheInvalidation {
+  uint64_t generation;
+  uintptr_t start;
+  uintptr_t end;  // exclusive; end == 0: the whole cache
+};
+std::mutex g_icache_mutex;
+std::deque<IcacheInvalidation> g_icache_invalidations;  // oldest first
+std::atomic<uint64_t> g_icache_generation{0};
+uint64_t g_icache_dropped = 0;  // the newest generation of a dropped record
+// Older records are dropped; a Jit that has not seen them clears its cache.
+constexpr size_t kIcacheInvalidations = 1024;
+
+void NoteIcacheInvalidation(uintptr_t start, uintptr_t end) {
+  std::lock_guard<std::mutex> lock(g_icache_mutex);
+  // A range __builtin___clear_cache walks line by line: merge with the last.
+  if (!g_icache_invalidations.empty() && end != 0) {
+    IcacheInvalidation& last = g_icache_invalidations.back();
+    if (last.end != 0 && start <= last.end && end >= last.start &&
+        last.generation == g_icache_generation.load(std::memory_order_relaxed)) {
+      last.start = std::min(last.start, start);
+      last.end = std::max(last.end, end);
+      last.generation = g_icache_generation.load(std::memory_order_relaxed) + 1;
+      g_icache_generation.store(last.generation, std::memory_order_release);
+      return;
+    }
+  }
+  const uint64_t generation = g_icache_generation.load(std::memory_order_relaxed) + 1;
+  g_icache_invalidations.push_back({generation, start, end});
+  if (g_icache_invalidations.size() > kIcacheInvalidations) {
+    g_icache_dropped = std::max(g_icache_dropped, g_icache_invalidations.front().generation);
+    g_icache_invalidations.pop_front();
+  }
+  g_icache_generation.store(generation, std::memory_order_release);
+}
+
+// Called outside Jit::Run, with RefreshCodeCache.
+void RefreshIcache(A64::Jit* jit, uint64_t* seen) {
+  if (*seen == g_icache_generation.load(std::memory_order_acquire)) return;
+  std::lock_guard<std::mutex> lock(g_icache_mutex);
+  const uint64_t now = g_icache_generation.load(std::memory_order_relaxed);
+  // Records newer than *seen are those with a larger generation (a merged
+  // record carries its latest one). If one this Jit has not seen was dropped,
+  // it clears everything.
+  bool whole = *seen < g_icache_dropped;
+  if (!whole) {
+    for (const IcacheInvalidation& r : g_icache_invalidations) {
+      if (r.generation <= *seen) continue;
+      if (r.end == 0) {
+        whole = true;
+        break;
+      }
+      jit->InvalidateCacheRange(r.start, r.end - r.start);
+    }
+  }
+  if (whole) jit->ClearCache();
+  *seen = now;
 }
 
 void AddRegion(uintptr_t start, size_t size) {
@@ -770,6 +837,7 @@ class Env final : public A64::UserCallbacks {
       conf.code_cache_size = (jits_.empty() ? 32 : 8) * 1024 * 1024;
       jits_.push_back(std::make_unique<A64::Jit>(conf));
       code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
+      icache_generations_.push_back(g_icache_generation.load(std::memory_order_acquire));
     }
     return jits_[depth].get();
   }
@@ -855,6 +923,21 @@ class Env final : public A64::UserCallbacks {
                   "instruction 0x%08x at 0x%llx is undefined or not supported by the translator",
                   insn, static_cast<unsigned long long>(pc));
     GuestCrash(kSigIll, 1, "ILL_ILLOPC", pc, detail);
+  }
+
+  // IC IVAU / IC IALLU(IS): see NoteIcacheInvalidation. Lines are CTR_EL0's
+  // IminLine (dynarmic's default CTR_EL0: 64 bytes).
+  void InstructionCacheOperationRaised(A64::InstructionCacheOperation op, uint64_t va) override {
+    A64::Jit* jit = CurrentJit();
+    if (op == A64::InstructionCacheOperation::InvalidateByVAToPoU) {
+      constexpr uint64_t kLine = 64;
+      const uintptr_t start = static_cast<uintptr_t>(va & ~(kLine - 1));
+      NoteIcacheInvalidation(start, start + kLine);
+      if (jit != nullptr) jit->InvalidateCacheRange(start, kLine);
+    } else {
+      NoteIcacheInvalidation(0, 0);
+      if (jit != nullptr) jit->ClearCache();
+    }
   }
 
   void CallSVC(std::uint32_t swi) override {
@@ -1080,13 +1163,14 @@ class Env final : public A64::UserCallbacks {
       // A host call can abort a nested load while this outer Jit is paused.
       // Nested Jit creation may grow the vector: keep no reference across Run.
       RefreshCodeCache(jit, &code_generations_[depth_ - 1]);
+      RefreshIcache(jit, &icache_generations_[depth_ - 1]);
       pending_call_ = {};
       jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2);
       int saved_running = t_guest_running;
       t_guest_running = 1;
       counters_.runs.Bump();
       A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_relaxed);
-      jit->Run();
+      const Dynarmic::HaltReason halt = jit->Run();
       running_jit_.store(saved_jit, std::memory_order_relaxed);
       t_guest_running = saved_running;
       // SVC saves its following PC; NoExecuteFault saves X30. Returning from
@@ -1103,6 +1187,11 @@ class Env final : public A64::UserCallbacks {
         jit->SetRegister(0, static_cast<uint64_t>(result));
       } else if (pending.fn != nullptr) {
         CallHost(jit, pending.fn, pending.va_index, pending.pointer_variadic_fixed);
+      } else if (Dynarmic::Has(halt, Dynarmic::HaltReason::CacheInvalidation) &&
+                 !Dynarmic::Has(halt, Dynarmic::HaltReason::UserDefined1)) {
+        // Stopped only to drop translations an IC instruction invalidated
+        // (Run has dropped them): the guest carries on at its PC.
+        continue;
       } else {
         return;
       }
@@ -1190,6 +1279,7 @@ class Env final : public A64::UserCallbacks {
 
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   std::vector<uint64_t> code_generations_;  // one generation for each jits_ entry
+  std::vector<uint64_t> icache_generations_;  // the IC invalidations each jits_ entry has seen
   PendingHostCall pending_call_;
   uint32_t fpcr_ = 0;
   uint32_t fpsr_ = 0;
@@ -2050,6 +2140,13 @@ bool InTranslatorCode(const void* start, size_t size) {
     if (first < page + kCodePage && first + size > page) return true;
   }
   return false;
+}
+
+void InvalidateGuestCode(const void* start, size_t size) {
+  if (size == 0) return;
+  const uintptr_t first = reinterpret_cast<uintptr_t>(start);
+  if (first > UINTPTR_MAX - size) return;
+  NoteIcacheInvalidation(first, first + size);
 }
 
 void AddGuestCode(const void* start, size_t size) {

@@ -36,6 +36,10 @@ bool InGuestCode(uintptr_t addr);
 // Registers the pages of [start, start + size) as guest code, unless they
 // already are: memory the guest made PROT_EXEC itself.
 void AddGuestCode(const void* start, size_t size);
+// Every Jit drops its translations of [start, start + size) before it next
+// runs guest code there (guest instruction-cache maintenance; see
+// NoteIcacheInvalidation in translator.cc).
+void InvalidateGuestCode(const void* start, size_t size);
 
 // Does [start, start + size) touch the translator's own code pages (the
 // trampolines and guest-side helpers it writes)?

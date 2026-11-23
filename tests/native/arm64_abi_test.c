@@ -289,8 +289,8 @@ static void test_written_code(void) {
     int ok = mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
     check("calling code made PROT_EXEC by mprotect", ok && ((int (*)(void))code)() == 42);
   }
-  // Still mapped: the translator keeps the blocks it translated at an address
-  // (it does not act on IC IVAU), so a new mapping there would run the old code.
+  // Still mapped: a new mapping at the same address, written without an IC
+  // instruction, could run the blocks translated for the old one.
   uint32_t* rwx =
       mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (rwx != MAP_FAILED) {
@@ -319,6 +319,34 @@ static void test_written_code(void) {
   void* handle = ok ? call("libdl.so", RTLD_NOW, dlopen) : NULL;
   check("force_dlopen: dlopen through the trampoline", handle != NULL);
   check("force_dlopen: dlsym on its handle", handle != NULL && dlsym(handle, "dlopen") != NULL);
+}
+
+// Code rewritten after it ran: a packer's inline hook over a function already
+// called (mprotect RWX, write, mprotect R-X, as the kernel then makes the new
+// instructions visible), and a JIT's rewrite followed by IC IVAU
+// (__builtin___clear_cache) alone. Each call must run the current instructions.
+static int __attribute__((noinline)) call_code(const uint32_t* code) { return ((int (*)(void))code)(); }
+
+static void test_rewritten_code(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  uint32_t* code = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  check("mmap for rewritten code", code != MAP_FAILED);
+  if (code == MAP_FAILED) return;
+  code[0] = 0x52800020;  // mov w0, #1
+  code[1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)code, (char*)(code + 2));
+  int ok = mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("rewritten code: first version runs", ok && call_code(code) == 1 && call_code(code) == 1);
+  ok = mprotect(code, page, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  code[0] = 0x52800040;  // mov w0, #2
+  ok = ok && mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("rewritten code: an in-place hook (RWX, write, R-X) runs", ok && call_code(code) == 2);
+  ok = mprotect(code, page, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  check("rewritten code: still the hook while writable", ok && call_code(code) == 2);
+  code[0] = 0x52800060;  // mov w0, #3
+  __builtin___clear_cache((char*)code, (char*)(code + 1));
+  check("rewritten code: IC IVAU makes a rewrite visible", ok && call_code(code) == 3);
+  munmap(code, page);
 }
 
 // Called by arm64_elf_test with the trampoline of a host function: re-protects
@@ -384,6 +412,7 @@ int gesher_selftest(const char* dir) {
   test_va_list();
   test_host_pointer();
   test_written_code();
+  test_rewritten_code();
   failures += Arm64FpcrContracts();
   failures += Arm64FpsrContracts();
   printf(failures == 0 ? "arm64_abi_test: all passed\n" : "arm64_abi_test: %d failed\n", failures);

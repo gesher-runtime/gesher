@@ -466,6 +466,12 @@ int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
   int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
                                                                               host_prot);
   if (r == 0 && (prot & kProtExec) != 0) AddGuestCode(addr, len);
+  // Linux makes instructions written to a page visible to execution when it
+  // maps the page executable again (an inline hook: mprotect RWX, write,
+  // mprotect R-X; arm64's set_pte_at syncs the instruction cache for a newly
+  // written executable page), without an IC instruction from the program.
+  // Translations of that code are the instruction cache here: drop them.
+  if (r == 0 && (prot & kProtExec) != 0) InvalidateGuestCode(addr, len);
   return r;
 }
 
