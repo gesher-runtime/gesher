@@ -125,6 +125,11 @@ std::string Narrow(const wchar_t* input) {
 static bool BinderDeviceExists() { return false; }
 static int SystemFontPath(const char*, std::wstring*) { return 0; }
 namespace procfs { static unsigned Type(const std::wstring&) { return 0; } }
+// The SQLite path fixture has no attached USB block broker.
+namespace usb_block {
+constexpr const char* kBlockName = "sdb";
+static bool Attached() { return false; }
+}
 '''
     signatures = ["bool IsDriveLetter(", "std::string_view NextPart(", "PathKind VirtualKind(",
                   "bool DrivePath(", "void Lengthen(", "PathKind MapPath(", "bool DiskPath("]
