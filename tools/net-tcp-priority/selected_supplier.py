@@ -40,12 +40,21 @@ def normalized(path):
 
 
 def check_selected(supplier, context):
-    """Validate portable metadata only; never resolve a Linux path on Windows."""
+    """The canonical entry retains its exact repository and selected-role gate."""
     assert set(context)==set(CONTEXT) and supplier['context']==context
     assert context['GITHUB_REPOSITORY']=='gesher-runtime/gesher' and context['GITHUB_REPOSITORY_ID']=='1426153186'
+    _check_selected_facts(supplier, context, receipt_role=ROLE, authority_role=ROLE,
+        publisher_role='publisher-reference-unmodified-v1', workspace_name='tcp-selected-supplier',
+        factory_name='build-minimum-supplier.sh', factory_log='selected-minimum-factory.log')
+
+
+def _check_selected_facts(supplier, context, *, receipt_role, authority_role,
+                          publisher_role, workspace_name, factory_name, factory_log):
+    """Shared factual checks; only strict typed entry points choose these constants."""
+    assert set(context)==set(CONTEXT) and supplier['context']==context
     assert re.fullmatch('[0-9a-f]{40}',context['GITHUB_SHA'])
     assert all(re.fullmatch('[1-9][0-9]*',context[k]) for k in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
-    assert supplier['role']==ROLE and minimum.ROLE==ROLE and minimum.PIN['role']==ROLE
+    assert supplier['role']==receipt_role and minimum.ROLE==ROLE and minimum.PIN['role']==ROLE
     assert supplier['supplier_selection']=='selected-minimum' and supplier['rebuilt_from_reference_source'] is True
     assert supplier['producer_job']=='compile' and supplier['patch_sha256'] is None
     assert supplier['ordered_patch_sha256']==minimum.PIN['ordered_patch_sha256']
@@ -53,7 +62,7 @@ def check_selected(supplier, context):
     archive=supplier['compiler_archive']
     assert archive==dict(url=URL,sha256=minimum.PIN['compiler_archive_sha256'],bytes=84003044)
     compiler=normalized(supplier['compiler_root'])
-    suffix='/tcp-selected-supplier/'+NAME
+    suffix='/'+workspace_name+'/'+NAME
     assert compiler.endswith(suffix)
     workspace=compiler[:-len('/'+NAME)]
     source=workspace+'/source';build=source+'/build'
@@ -62,12 +71,12 @@ def check_selected(supplier, context):
     assert authority_digest(authority)==supplier['minimum_authority_sha256']
     expected_context={k:context[k] for k in AUTHORITY_CONTEXT}
     assert all(authority[k]==v for k,v in expected_context.items())
-    assert authority['role']==ROLE and authority['pin']==minimum.PIN
+    assert authority['role']==authority_role and authority['pin']==minimum.PIN
     assert authority['source_files']==minimum.PIN['output_source_sha256']
     assert authority['compiler_archive_sha256']==archive['sha256']
     minimum.validate_layout(authority['private_record_layout'])
     original=authority['original']
-    assert original['context']==expected_context and original['role']=='publisher-reference-unmodified-v1'
+    assert original['context']==expected_context and original['role']==publisher_role
     assert original['compiler_archive_sha256']==archive['sha256']
     assert set(authority['files'])==set(original['files'])==LIBRARIES
     assert supplier['libraries_before']==original['files'] and supplier['libraries_after']==authority['files']
@@ -109,7 +118,7 @@ def check_selected(supplier, context):
     assert len(supplier['symbols'])==len(set(supplier['symbols'])) and not any('gesher_' in n for n in supplier['symbols'])
     assert set(authority['build_logs'])==BUILD_LOGS
     for value in authority['build_logs'].values():digest(value)
-    assert 'selected-minimum-factory.log' in supplier['logs']
+    assert factory_log in supplier['logs']
     for value in supplier['logs'].values():digest(value)
 
     objects=authority['dll_symbol_objects']
@@ -135,8 +144,8 @@ def check_selected(supplier, context):
         actual_source=actual_source if actual_source.startswith('/') else posixpath.join(build,actual_source)
         assert posixpath.normpath(actual_source)==source+'/mingw-w64-libraries/winpthreads/src/thread.c'
     assert paths<=compiled
-    expected_factory=['bash',workspace.rsplit('/',1)[0]+'/tools/host-pthread-authority/build-minimum-supplier.sh',compiler,source]
-    factory=[row for row in supplier['commands'] if row['log']=='selected-minimum-factory.log']
+    expected_factory=['bash',workspace.rsplit('/',1)[0]+'/tools/host-pthread-authority/'+factory_name,compiler,source]
+    factory=[row for row in supplier['commands'] if row['log']==factory_log]
     assert len(factory)==1 and factory[0]['argv']==expected_factory and factory[0]['cwd']==workspace.rsplit('/',1)[0]
 
 

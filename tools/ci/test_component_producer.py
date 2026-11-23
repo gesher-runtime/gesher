@@ -12,6 +12,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -251,6 +252,32 @@ class ComponentConsumers(unittest.TestCase):
         with patch.object(coherent_tcp_context, 'context', return_value=component.supplier_context(self.consumer)):
             with self.assertRaises(AssertionError):
                 selected.verify_manifest(self.destination / 'provenance.json')
+
+    def test_authenticated_canonical_archive_rejects_all_diagnostic_receipt_roles(self):
+        import coherent_tcp_context
+        selected, supplier = self.selected_payload()
+        fork = load('component_fork_supplier', 'tools/net-tcp-priority/fork_supplier.py')
+        for path, role in (((), fork.ROLE), (('minimum_authority',), fork.minimum.ROLE),
+                           (('minimum_authority', 'original'), fork.minimum.PUBLISHER_ROLE)):
+            with self.subTest(path=path):
+                changed = copy.deepcopy(supplier)
+                record = changed
+                for key in path:
+                    record = record[key]
+                record['role'] = role
+                changed['minimum_authority_sha256'] = selected.authority_digest(changed['minimum_authority'])
+                self.configure(self.name, payload=dict(supplier=changed,
+                               supplier_selection='selected-minimum', producer_job='compile'))
+                # A matching archive and retained producer are necessary, but
+                # cannot turn a diagnostic nested receipt into canonical proof.
+                self.stage()
+                with patch.object(coherent_tcp_context, 'context',
+                                  return_value=component.supplier_context(self.consumer)), \
+                        self.assertRaises(AssertionError):
+                    selected.verify_manifest(self.destination / 'provenance.json')
+                self.assertEqual(os.environ['GITHUB_RUN_ATTEMPT'], '2')
+                shutil.rmtree(self.destination)
+                shutil.rmtree(self.root / 'ci-suppliers' / component.POLICIES[self.name][2])
 
     def test_correlation_validates_each_producer_with_its_own_context(self):
         self.configure('tcp-selected-correlation', '2', '3')

@@ -23,11 +23,11 @@ Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
   $httpEngineOut
 } @('HttpEngineDeviceSmoke passed:')
 
-foreach ($httpCacheTest in @('HttpEngineCacheTest', 'HttpEngineConnectionLifetimeTest')) {
+foreach ($httpCacheTest in @('HttpEngineCacheTest', 'HttpEngineConnectionLifetimeTest', 'HttpEngineReadBufferTest')) {
   $httpCacheOut = FixesRun ($dvmFixes + $httpCacheTest) 90
   $httpCacheCode = $LASTEXITCODE
-  Check "network: $httpCacheTest private cache and transport ownership on ART" {
-    if ($httpCacheCode -ne 0) { throw "HTTP cache contract failed: $httpCacheOut" }
+  Check "network: $httpCacheTest real-provider contracts on ART" {
+    if ($httpCacheCode -ne 0) { throw "HTTP engine contract failed: $httpCacheOut" }
     $httpCacheOut
   } @("${httpCacheTest} passed:")
 }

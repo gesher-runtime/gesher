@@ -1,9 +1,21 @@
+param([switch] $ForkDiagnostic)
 $ErrorActionPreference = 'Stop'
 $selection = $env:TCP_SUPPLIER_ROLE
 if ($selection -cnotin @('canonical','selected-minimum')) { throw 'Missing exact supplier selection' }
 $expectedSupplierRole = if ($selection -ceq 'canonical') { 'canonical-publisher-unmodified-v1' } else { 'gesher-winpthreads-selected-minimum-v1' }
 $expectedPrefix = if ($selection -ceq 'canonical') { 'tcp-canonical-supplier' } else { 'tcp-selected-supplier' }
 $expectedProducer = "compile-$selection"
+$artifactName = "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+$supplierChecker = 'tools/net-tcp-priority/selected_supplier.py'
+if ($ForkDiagnostic) {
+  python tools/toolchain/fork_tcp_context.py --job windows
+  if ($LASTEXITCODE -ne 0) { throw 'Fork TCP diagnostic context rejected' }
+  if ($selection -cne 'selected-minimum') { throw 'Fork TCP requires the selected minimum recipe' }
+  $expectedSupplierRole = 'gesher-tcp-supplier-fork-diagnostic-v1'
+  $expectedPrefix = 'tcp-fork-diagnostic-supplier'
+  $artifactName = "tcp-fork-diagnostic-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+  $supplierChecker = 'tools/net-tcp-priority/fork_supplier.py'
+}
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Native fixture is CI-only' }
 $trusted = @{
   'tools/windows4/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
@@ -28,7 +40,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
 $ciSource = $sourceJson | ConvertFrom-Json
 . (Join-Path $PSScriptRoot '../ci/receipt-diagnostics.ps1')
 $producerAttempt = $env:GITHUB_RUN_ATTEMPT
-if ($env:GITHUB_WORKFLOW -ceq 'ci') {
+if ($env:GITHUB_WORKFLOW -ceq 'ci' -and -not $ForkDiagnostic) {
   python tools/toolchain/coherent_tcp_context.py
   if ($LASTEXITCODE -ne 0) { throw 'Canonical TCP consumer context rejected' }
   $proofJson = python tools/ci/component_producer.py stage tcp-selected-minimum
@@ -46,8 +58,8 @@ if ($env:GITHUB_WORKFLOW -ceq 'ci') {
   if ($jobs.Count -ne 1 -or $jobs[0].conclusion -cne 'success' -or "$($jobs[0].run_id)" -cne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $jobs[0].head_sha -cne $ciSource.api_head_sha) { throw 'Producer mismatch' }
   $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
   if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact inventory' }
-  $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -CEQ "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT")
-  Write-CiArtifactInventory -Name "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT" -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
+  $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -CEQ $artifactName)
+  Write-CiArtifactInventory -Name $artifactName -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
   if ($rows.Count -ne 1) { throw 'Artifact not unique' }
   $a = $rows[0]
   if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $ciSource.head_repository_id -or $a.workflow_run.head_sha -cne $ciSource.api_head_sha -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact source/run/attempt provenance mismatch' }
@@ -124,7 +136,7 @@ foreach ($build in 'out','out-arm64') {
 }
 $s = $m.supplier
 if ($selection -ceq 'selected-minimum') {
-  python tools/net-tcp-priority/selected_supplier.py --manifest tcp-fixture/provenance.json
+  python $supplierChecker --manifest tcp-fixture/provenance.json
   if ($LASTEXITCODE -ne 0) { throw 'Selected original-profile minimum supplier authority failed' }
 }
 if ($s.role -cne $expectedSupplierRole -or $s.supplier_selection -cne $selection -or $s.rebuilt_from_reference_source -cne ($selection -ceq 'selected-minimum') -or $s.producer_job -cne 'compile' -or
