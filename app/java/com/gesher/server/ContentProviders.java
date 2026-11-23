@@ -177,10 +177,11 @@ final class ContentProviders {
         mUriGrants = new UriGrants(pm, atm, this);
         mSettings = new SettingsProvider(pm, atm);
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
-        mCallLog = new CallLogProvider(this, pm, atm, mUriGrants);
+        mCallLog = new CallLogProvider(this, mUriGrants);
         pm.setHostedProviders(this);
     }
 
+    PackageManagerService packageManager() { return mPm; }
     UriGrants uriGrants() { return mUriGrants; }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
     CallLogProvider callLog() { return mCallLog; }

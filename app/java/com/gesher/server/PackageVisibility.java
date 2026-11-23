@@ -57,7 +57,6 @@ final class PackageVisibility {
                     apk.parsed.getTargetSdkVersion()));
             mProtectedBroadcasts.addAll(apk.parsed.getProtectedBroadcasts());
         }
-        addHost(ContactsProviderSupport.applicationInfo());
         // Preserve the identity of the existing host definitions. These entries
         // do not supply an installed APK manifest or any additional visibility edge.
         if (browser) addHost(BrowserPackageSupport.createApplicationInfo(0));

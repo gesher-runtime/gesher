@@ -9,37 +9,36 @@ import android.content.AttributionSource;
 import android.content.ContentProvider;
 import android.content.ContentUris;
 import android.content.ContentValues;
-import android.content.Intent;
+import android.content.Context;
+import android.content.PermissionChecker;
 import android.content.UriMatcher;
+import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
+import android.os.Binder;
+import android.os.Process;
 import android.provider.CallLog;
 
 import java.io.File;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Built-in SQLite-backed {@code content://call_log} provider for
  * {@link CallLog.Calls}. Starts empty on a clean device and enforces
- * {@code READ_CALL_LOG} / {@code WRITE_CALL_LOG}, AppOps, and URI grants.
+ * {@code READ_CALL_LOG} / {@code WRITE_CALL_LOG} and their AppOps.
  */
 final class CallLogProvider extends ContentProvider {
     private static final int CALLS = 1;
     private static final int CALLS_ID = 2;
     private static final int CALLS_FILTER = 3;
 
-    private static final int DB_VERSION = 2;
-    private static final Uri NOTIFY_URI = Uri.parse("content://call_log/calls");
+    private static final int DB_VERSION = 1;
+    private static final Uri NOTIFY_URI = CallLog.CONTENT_URI;
 
     private static final UriMatcher sUriMatcher = new UriMatcher(UriMatcher.NO_MATCH);
     private static final Map<String, String> sCallsProjectionMap;
@@ -61,13 +60,16 @@ final class CallLogProvider extends ContentProvider {
                 "call_screening_app_name", "block_reason", "last_modified",
                 "missed_reason", "subject", "location", "priority",
                 "composer_photo_uri", "is_business_call", "asserted_display_name",
-                "transcription"
+                "transcription", "transcription_state", "phone_account_hidden",
+                "add_for_all_users", "is_call_log_phone_account_migration_pending"
         }) {
             map.put(col, col);
         }
         sCallsProjectionMap = Collections.unmodifiableMap(map);
     }
 
+    private final AttributionSource mDataSource = new AttributionSource.Builder(Process.SYSTEM_UID)
+            .setPackageName(ContactsProviderSupport.PACKAGE).build();
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
     private final UriGrants mGrants;
@@ -76,22 +78,18 @@ final class CallLogProvider extends ContentProvider {
     private final Object mDbLock = new Object();
     private SQLiteDatabase mDb;
     private boolean mInitialized;
+    private boolean mStrictPhoneComparison;
+    private int mPhoneMinMatch;
     private Throwable mInitializationFailure;
 
-    CallLogProvider(ContentProviders providers, PackageManagerService pm,
-            ActivityTaskManagerService atm, UriGrants grants) {
-        this(providers, pm, atm, grants,
+    CallLogProvider(ContentProviders providers, UriGrants grants) {
+        this(providers, grants,
                 new File(ContactsProviderSupport.dataDirectory(), "databases/calllog.db"));
     }
 
-    CallLogProvider(PackageManagerService pm, ActivityTaskManagerService atm, File databaseFile) {
-        this(null, pm, atm, null, databaseFile);
-    }
-
-    CallLogProvider(ContentProviders providers, PackageManagerService pm,
-            ActivityTaskManagerService atm, UriGrants grants, File databaseFile) {
-        mPm = pm;
-        mCallers = pm == null ? null : new CallerIdentity(pm, atm);
+    CallLogProvider(ContentProviders providers, UriGrants grants, File databaseFile) {
+        mPm = providers == null ? null : providers.packageManager();
+        mCallers = providers == null ? null : providers.callers();
         mGrants = grants;
         mDatabase = databaseFile.getAbsoluteFile();
         if (providers != null) {
@@ -108,37 +106,53 @@ final class CallLogProvider extends ContentProvider {
     }
 
     synchronized ContentProviderHolder holder() {
+        attachTo(android.app.GesherSettingsContext.get());
+        return ContactsProviderSupport.holder(info(), getIContentProvider());
+    }
+
+    synchronized void attachTo(Context context) {
         if (mInitializationFailure != null) {
             throw new IllegalStateException("CallLog provider initialization failed",
                     mInitializationFailure);
         }
-        ProviderInfo declared = info();
-        if (!mInitialized) {
-            try {
-                attachInfo(ContactsProviderSupport.contextForProvider(mGrants, mRegistration),
-                        declared);
-                mInitialized = true;
-            } catch (RuntimeException | Error failure) {
-                mInitializationFailure = failure;
-                shutdown();
-                throw failure;
-            }
+        if (mInitialized) return;
+        try {
+            attachInfo(ContactsProviderSupport.contextForProvider(context, mGrants, mRegistration),
+                    info());
+            mInitialized = true;
+        } catch (RuntimeException | Error failure) {
+            mInitializationFailure = failure;
+            shutdown();
+            throw failure;
         }
-        return ContactsProviderSupport.holder(declared, getIContentProvider());
     }
 
     @Override
     protected int enforceReadPermissionInner(Uri uri, AttributionSource source) {
-        return ContactsProviderSupport.enforcePermissionInner(
-                mPm, mCallers, mGrants, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                ContactsProviderSupport.READ_CALL_LOG, source);
+        return enforceCallLogPermission(source, ContactsProviderSupport.READ_CALL_LOG);
     }
 
     @Override
     protected int enforceWritePermissionInner(Uri uri, AttributionSource source) {
-        return ContactsProviderSupport.enforcePermissionInner(
-                mPm, mCallers, mGrants, uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                ContactsProviderSupport.WRITE_CALL_LOG, source);
+        return enforceCallLogPermission(source, ContactsProviderSupport.WRITE_CALL_LOG);
+    }
+
+    private int enforceCallLogPermission(AttributionSource source, String permission) {
+        if (Binder.getCallingPid() == Process.myPid()) return PermissionChecker.PERMISSION_GRANTED;
+        ContactsProviderSupport.authenticate(mCallers, source);
+        // This in-process call would otherwise see the incoming app's Binder identity
+        // while authenticating the system provider attribution at the head of the chain.
+        long identity = Binder.clearCallingIdentity();
+        try {
+            int result = PermissionChecker.checkPermissionForDataDeliveryFromDataSource(
+                    getContext(), permission, -1, new AttributionSource(mDataSource, source), null);
+            if (result == PermissionChecker.PERMISSION_HARD_DENIED) {
+                throw new SecurityException("Call-log access requires " + permission);
+            }
+            return result;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
     }
 
     @Override
@@ -224,33 +238,26 @@ final class CallLogProvider extends ContentProvider {
                 + "composer_photo_uri TEXT,"
                 + "is_business_call INTEGER NOT NULL DEFAULT 0,"
                 + "asserted_display_name TEXT,"
-                + "transcription TEXT"
+                + "transcription TEXT,"
+                + "transcription_state INTEGER NOT NULL DEFAULT 0,"
+                + "phone_account_hidden INTEGER NOT NULL DEFAULT 0,"
+                + "add_for_all_users INTEGER NOT NULL DEFAULT 0,"
+                + "is_call_log_phone_account_migration_pending INTEGER NOT NULL DEFAULT 0"
                 + ");");
         db.execSQL("CREATE INDEX IF NOT EXISTS calls_date_idx ON calls(date DESC);");
     }
 
     private static void onUpgradeDatabase(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion < 2) {
-            Set<String> cols = existingColumns(db, "calls");
-            if (!cols.contains("transcription")) {
-                db.execSQL("ALTER TABLE calls ADD COLUMN transcription TEXT;");
-            }
-        }
-    }
-
-    private static Set<String> existingColumns(SQLiteDatabase db, String table) {
-        Set<String> cols = new HashSet<>();
-        try (Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null)) {
-            int nameIdx = c.getColumnIndex("name");
-            while (c.moveToNext()) {
-                if (nameIdx >= 0) cols.add(c.getString(nameIdx));
-            }
-        }
-        return cols;
+        throw new IllegalStateException("Unsupported call-log schema upgrade: "
+                + oldVersion + " to " + newVersion);
     }
 
     @Override
     public boolean onCreate() {
+        mStrictPhoneComparison = getContext().getResources().getBoolean(
+                com.android.internal.R.bool.config_use_strict_phone_number_comparation);
+        mPhoneMinMatch = getContext().getResources().getInteger(
+                com.android.internal.R.integer.config_phonenumber_compare_min_match);
         return true;
     }
 
@@ -270,101 +277,105 @@ final class CallLogProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, ContactsProviderSupport.READ_CALL_LOG);
-        int match = sUriMatcher.match(uri);
-        String effectiveSelection = selection;
-        String[] effectiveArgs = selectionArgs;
-        String filterQuery = null;
-        switch (match) {
+        SQLiteQueryBuilder qb = queryBuilder();
+        restrictVoicemails(qb, uri, false);
+        qb.appendWhereStandalone("phone_account_hidden = 0");
+        String[] args = selectionArgs;
+        switch (sUriMatcher.match(uri)) {
             case CALLS:
                 break;
             case CALLS_ID:
-                effectiveSelection = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                effectiveArgs = ContactsProviderSupport.prependArgs(
-                        selectionArgs, Long.toString(ContentUris.parseId(uri)));
+                qb.appendWhereStandalone("_id = " + ContentUris.parseId(uri));
                 break;
             case CALLS_FILTER:
-                filterQuery = uri.getPathSegments().get(2);
+                int strict = mStrictPhoneComparison ? 1 : 0;
+                qb.appendWhereStandalone("PHONE_NUMBERS_EQUAL(number, ?, "
+                        + strict + ", " + mPhoneMinMatch + ")");
+                args = ContactsProviderSupport.prependArgs(selectionArgs, uri.getLastPathSegment());
                 break;
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
         String limit = ContactsProviderSupport.parseLimit(uri);
+        String order = sortOrder != null ? sortOrder : "date DESC";
+        Cursor cursor;
+        synchronized (mDbLock) {
+            cursor = qb.query(openDatabase(), projection, selection, args,
+                    null, null, order, limit);
+        }
+        try {
+            ContactsProviderSupport.setNotificationUri(cursor, getContext(), NOTIFY_URI);
+            return cursor;
+        } catch (RuntimeException | Error failure) {
+            cursor.close();
+            throw failure;
+        }
+    }
+
+    private static SQLiteQueryBuilder queryBuilder() {
         SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
         qb.setTables("calls");
         qb.setProjectionMap(sCallsProjectionMap);
         qb.setStrict(true);
         qb.setStrictColumns(true);
         qb.setStrictGrammar(true);
-        String order = sortOrder != null ? sortOrder : "date DESC";
-        Cursor cursor;
-        synchronized (mDbLock) {
-            SQLiteDatabase db = openDatabase();
-            if (filterQuery != null) {
-                List<Long> matchedIds = findMatchingCallIds(db, filterQuery);
-                String idClause = idInClause(matchedIds);
-                effectiveSelection = ContactsProviderSupport.combineSelection(selection, idClause);
+        return qb;
+    }
+
+    private void restrictVoicemails(SQLiteQueryBuilder qb, Uri uri, boolean write) {
+        if (allowsVoicemails(uri)) {
+            enforceVoicemailPermission(write);
+        } else {
+            qb.appendWhereStandalone("type != " + CallLog.Calls.VOICEMAIL_TYPE);
+        }
+    }
+
+    private static boolean allowsVoicemails(Uri uri) {
+        return uri.getBooleanQueryParameter(CallLog.Calls.ALLOW_VOICEMAILS_PARAM_KEY, false);
+    }
+
+    private static boolean isVoicemail(ContentValues values) {
+        Object value = values == null ? null : values.get(CallLog.Calls.TYPE);
+        if (value == null) return false;
+        // Validate the integer form before SQLite applies column affinity.
+        try {
+            return Integer.parseInt(value.toString()) == CallLog.Calls.VOICEMAIL_TYPE;
+        } catch (NumberFormatException invalidType) {
+            throw new IllegalArgumentException("Call-log type must be an integer", invalidType);
+        }
+    }
+
+    private static void requireVoicemailUri(Uri uri) {
+        if (!allowsVoicemails(uri)) {
+            throw new IllegalArgumentException("Use the voicemail-enabled URI for voicemail records");
+        }
+    }
+
+    private void enforceVoicemailPermission(boolean write) {
+        if (Binder.getCallingPid() == Process.myPid()) return;
+        String permission = write ? "com.android.voicemail.permission.WRITE_VOICEMAIL"
+                : "com.android.voicemail.permission.READ_VOICEMAIL";
+        if (mCallers == null || mPm.permissions().checkPermission(mCallers.callerPackage(),
+                permission) != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Permission Denial: requires " + permission);
+        }
+    }
+
+    private static void validateColumns(ContentValues values) {
+        if (values == null) return;
+        for (String column : values.keySet()) {
+            if (!sCallsProjectionMap.containsKey(column)) {
+                throw new IllegalArgumentException("Unknown call-log column " + column);
             }
-            cursor = qb.query(db, projection, effectiveSelection, effectiveArgs,
-                    null, null, order, limit);
         }
-        ContactsProviderSupport.setNotificationUri(cursor, getContext(), uri);
-        return cursor;
-    }
-
-    private static List<Long> findMatchingCallIds(SQLiteDatabase db, String query) {
-        List<Long> ids = new ArrayList<>();
-        if (query == null || query.isEmpty()) return ids;
-        boolean hasLetters = containsLetters(query);
-        String normalizedQuery = ContactsProviderSupport.normalizePhoneNumber(query);
-        String lowerQuery = query.toLowerCase(Locale.ROOT);
-        try (Cursor c = db.rawQuery(
-                "SELECT _id, number, normalized_number, name FROM calls", null)) {
-            while (c.moveToNext()) {
-                long id = c.getLong(0);
-                String number = c.getString(1);
-                String normalized = c.getString(2);
-                String name = c.getString(3);
-                boolean matched = false;
-                if (!hasLetters && normalizedQuery != null) {
-                    matched = ContactsProviderSupport.phoneNumbersEqualLoose(number, query)
-                            || ContactsProviderSupport.phoneNumbersEqualLoose(normalized, query);
-                } else if (name != null && name.toLowerCase(Locale.ROOT).contains(lowerQuery)) {
-                    matched = true;
-                }
-                if (matched) ids.add(id);
-            }
-        }
-        return ids;
-    }
-
-    private static boolean containsLetters(String s) {
-        for (int i = 0; i < s.length(); i++) {
-            if (Character.isLetter(s.charAt(i))) return true;
-        }
-        return false;
-    }
-
-    private static String idInClause(List<Long> ids) {
-        if (ids.isEmpty()) return "1 = 0";
-        StringBuilder sb = new StringBuilder("_id IN (");
-        for (int i = 0; i < ids.size(); i++) {
-            if (i > 0) sb.append(',');
-            sb.append(ids.get(i));
-        }
-        sb.append(')');
-        return sb.toString();
     }
 
     @Override
     public Uri insert(Uri uri, ContentValues values) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CALL_LOG);
         if (sUriMatcher.match(uri) != CALLS) {
             throw new IllegalArgumentException("Unknown URL " + uri);
         }
-        ContentValues prepared = prepareInsertValues(values);
+        ContentValues prepared = prepareInsertValues(uri, values);
         long rowId;
         synchronized (mDbLock) {
             rowId = openDatabase().insertOrThrow("calls", null, prepared);
@@ -375,8 +386,6 @@ final class CallLogProvider extends ContentProvider {
 
     @Override
     public int bulkInsert(Uri uri, ContentValues[] values) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CALL_LOG);
         if (sUriMatcher.match(uri) != CALLS) {
             throw new IllegalArgumentException("Unknown URL " + uri);
         }
@@ -387,7 +396,7 @@ final class CallLogProvider extends ContentProvider {
             db.beginTransaction();
             try {
                 for (ContentValues item : values) {
-                    if (db.insertOrThrow("calls", null, prepareInsertValues(item)) > 0) {
+                    if (db.insertOrThrow("calls", null, prepareInsertValues(uri, item)) > 0) {
                         inserted++;
                     }
                 }
@@ -404,33 +413,26 @@ final class CallLogProvider extends ContentProvider {
 
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CALL_LOG);
-        int match = sUriMatcher.match(uri);
-        String effectiveSelection = selection;
-        String[] effectiveArgs = selectionArgs;
-        switch (match) {
+        validateColumns(values);
+        if (isVoicemail(values)) requireVoicemailUri(uri);
+        SQLiteQueryBuilder qb = queryBuilder();
+        restrictVoicemails(qb, uri, true);
+        switch (sUriMatcher.match(uri)) {
             case CALLS:
                 break;
             case CALLS_ID:
-                effectiveSelection = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                effectiveArgs = ContactsProviderSupport.prependArgs(
-                        selectionArgs, Long.toString(ContentUris.parseId(uri)));
+                qb.appendWhereStandalone("_id = " + ContentUris.parseId(uri));
                 break;
             default:
-                throw new IllegalArgumentException("Unknown URL " + uri);
+                throw new UnsupportedOperationException("Cannot update URL " + uri);
         }
         ContentValues prepared = values == null ? new ContentValues() : new ContentValues(values);
-        if (prepared.containsKey("number") && !prepared.containsKey("normalized_number")) {
-            String normalized = ContactsProviderSupport.normalizePhoneNumber(prepared.getAsString("number"));
-            if (normalized != null) prepared.put("normalized_number", normalized);
-        }
         if (!prepared.containsKey("last_modified")) {
             prepared.put("last_modified", System.currentTimeMillis());
         }
         int count;
         synchronized (mDbLock) {
-            count = openDatabase().update("calls", prepared, effectiveSelection, effectiveArgs);
+            count = qb.update(openDatabase(), prepared, selection, selectionArgs);
         }
         if (count > 0) {
             ContactsProviderSupport.notifyChange(getContext(), NOTIFY_URI);
@@ -440,25 +442,14 @@ final class CallLogProvider extends ContentProvider {
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CALL_LOG);
-        int match = sUriMatcher.match(uri);
-        String effectiveSelection = selection;
-        String[] effectiveArgs = selectionArgs;
-        switch (match) {
-            case CALLS:
-                break;
-            case CALLS_ID:
-                effectiveSelection = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                effectiveArgs = ContactsProviderSupport.prependArgs(
-                        selectionArgs, Long.toString(ContentUris.parseId(uri)));
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown URL " + uri);
+        if (sUriMatcher.match(uri) != CALLS) {
+            throw new UnsupportedOperationException("Cannot delete URL " + uri);
         }
+        SQLiteQueryBuilder qb = queryBuilder();
+        restrictVoicemails(qb, uri, true);
         int count;
         synchronized (mDbLock) {
-            count = openDatabase().delete("calls", effectiveSelection, effectiveArgs);
+            count = qb.delete(openDatabase(), selection, selectionArgs);
         }
         if (count > 0) {
             ContactsProviderSupport.notifyChange(getContext(), NOTIFY_URI);
@@ -466,15 +457,16 @@ final class CallLogProvider extends ContentProvider {
         return count;
     }
 
-    private static ContentValues prepareInsertValues(ContentValues values) {
+    private ContentValues prepareInsertValues(Uri uri, ContentValues values) {
+        validateColumns(values);
+        if (isVoicemail(values)) {
+            requireVoicemailUri(uri);
+            enforceVoicemailPermission(true);
+        }
         ContentValues copy = values == null ? new ContentValues() : new ContentValues(values);
         if (!copy.containsKey("new")) copy.put("new", 1);
         if (!copy.containsKey("presentation")) copy.put("presentation", 1);
         if (!copy.containsKey("last_modified")) copy.put("last_modified", System.currentTimeMillis());
-        if (copy.containsKey("number") && !copy.containsKey("normalized_number")) {
-            String normalized = ContactsProviderSupport.normalizePhoneNumber(copy.getAsString("number"));
-            if (normalized != null) copy.put("normalized_number", normalized);
-        }
         return copy;
     }
 }

@@ -124,7 +124,7 @@ try {
 
   $callLogOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'CallLogContractTest') 120
   $callLogCode = $LASTEXITCODE
-  Check 'services: CallLog provider CRUD, strict SQL, phone matching, AppOps, URI grants and admission' {
+  Check 'services: CallLog provider CRUD, strict SQL, phone matching, voicemail, AppOps and admission' {
     $global:LASTEXITCODE = $callLogCode
     $callLogOut
   } @('CallLogContractTest all passed')
