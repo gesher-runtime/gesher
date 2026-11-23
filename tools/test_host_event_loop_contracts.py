@@ -137,22 +137,18 @@ def main():
     if args.case in (None, 'epoll'):
         # Complete eventfd producers and epoll state complement the declared
         # fairness adapter above, under the same maintained CI gate.
-        command = [sys.executable, str(ROOT / 'tools/test_epoll_eventfd_edges.py'), '--cxx', args.cxx]
-        if args.source_ref:
-            command += ['--source-ref', args.source_ref]
-        if args.sanitize:
-            command += ['--sanitize']
-        if subprocess.run(command, timeout=180).returncode:
-            failed.append('eventfd-edge')
         # Whole production registry/ctl/owners are exercised independently of
         # the deliberately numeric descriptor boundaries in the older corpora.
-        command = [sys.executable, str(ROOT / 'tools/test_epoll_virtual_owners.py'), '--cxx', args.cxx]
-        if args.source_ref:
-            command += ['--source-ref', args.source_ref]
-        if args.sanitize:
-            command += ['--sanitize']
-        if subprocess.run(command, timeout=180).returncode:
-            failed.append('virtual-owner')
+        for script, case in [('test_epoll_eventfd_edges.py', 'eventfd-edge'),
+                             ('test_epoll_readonly_edges.py', 'readonly-edge'),
+                             ('test_epoll_virtual_owners.py', 'virtual-owner')]:
+            command = [sys.executable, str(ROOT / 'tools' / script), '--cxx', args.cxx]
+            if args.source_ref:
+                command += ['--source-ref', args.source_ref]
+            if args.sanitize:
+                command += ['--sanitize']
+            if subprocess.run(command, timeout=180).returncode:
+                failed.append(case)
     return int(bool(failed))
 
 

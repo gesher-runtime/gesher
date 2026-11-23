@@ -55,7 +55,18 @@ def main():
         assert role in ('canonical','selected-minimum')
     assert os.environ['GITHUB_JOB'] == 'compile'
     assert output('git', 'rev-parse', 'HEAD').strip() == context['GITHUB_SHA']
-    workspace = ROOT / {'canonical':'tcp-canonical-supplier','retirement':'tcp-private-supplier','selected-minimum':'tcp-selected-supplier'}[role]
+    _build_supplier(context, role)
+
+
+def _build_supplier(context, role, diagnostic=None):
+    fork = None
+    if diagnostic is not None:
+        import fork_supplier as fork
+        fork.identity.assert_current(diagnostic, 'compile')
+        assert context == diagnostic['context'] and role == 'selected-minimum'
+    workspace_name = (fork.WORKSPACE if fork else
+        {'canonical':'tcp-canonical-supplier','retirement':'tcp-private-supplier','selected-minimum':'tcp-selected-supplier'}[role])
+    workspace = ROOT / workspace_name
     assert not workspace.exists(), 'Private supplier workspace must be fresh'
     workspace.mkdir()
     commands = []
@@ -69,7 +80,7 @@ def main():
             except (subprocess.SubprocessError, OSError):
                 log.flush()
                 print('TCP_PRIORITY_SUPPLIER_BUILD_FAILURE', name, flush=True)
-                if name=='selected-minimum-factory.log':
+                if name in ('selected-minimum-factory.log', 'fork-diagnostic-factory.log'):
                     print((workspace/name).read_text(errors='replace'),end='',flush=True)
                 else:
                     print('\n'.join((workspace / name).read_text(errors='replace').splitlines()[-100:]), flush=True)
@@ -124,11 +135,12 @@ def main():
     patch = HERE / 'supplier-retirement.patch'
     minimum_authority=None
     if role=='selected-minimum':
-        factory=ROOT/'tools/host-pthread-authority/build-minimum-supplier.sh'
-        run(['bash',factory,llvm,source],ROOT,'selected-minimum-factory.log',900)
+        factory=ROOT/'tools/host-pthread-authority'/(fork.FACTORY if fork else 'build-minimum-supplier.sh')
+        factory_log=fork.FACTORY_LOG if fork else 'selected-minimum-factory.log'
+        run(['bash',factory,llvm,source],ROOT,factory_log,900)
         # Full bounded indexed authority transport and actual SDK/map output.
-        print((workspace/'selected-minimum-factory.log').read_text(),end='',flush=True)
-        minimum_authority=json.loads((llvm/'gesher-winpthreads-authority.json').read_text())
+        print((workspace/factory_log).read_text(),end='',flush=True)
+        minimum_authority=json.loads((llvm/(fork.minimum.RECEIPT if fork else 'gesher-winpthreads-authority.json')).read_text())
     if role == 'retirement':
         run(['git', 'apply', '--check', patch], source, 'patch-check.log')
         run(['git', 'apply', patch], source, 'patch-apply.log')
@@ -160,7 +172,7 @@ def main():
     changed_sources = {p: sha(source / p) for p in tracked if p}
     expected_changes = {'mingw-w64-libraries/winpthreads/src/thread.c'} if role != 'canonical' else set()
     assert {p for p in original_sources if original_sources[p] != changed_sources[p]} == expected_changes
-    receipt = dict(context=context, role={'canonical':'canonical-publisher-unmodified-v1','retirement':'static-detached-retirement-experiment-v1','selected-minimum':'gesher-winpthreads-selected-minimum-v1'}[role], supplier_selection=role, rebuilt_from_reference_source=(role != 'canonical'), upstream=UPSTREAM,
+    receipt = dict(context=context, role=(fork.ROLE if fork else {'canonical':'canonical-publisher-unmodified-v1','retirement':'static-detached-retirement-experiment-v1','selected-minimum':'gesher-winpthreads-selected-minimum-v1'}[role]), supplier_selection=role, rebuilt_from_reference_source=(role != 'canonical'), upstream=UPSTREAM,
                    source_before=original_sources, source_after=changed_sources, patch_sha256=(sha(patch) if role == 'retirement' else None),
                    compiler_archive=dict(url=URL, sha256=sha(archive), bytes=archive.stat().st_size),
                    compiler_root=str(llvm), producer_job='compile', compiler_driver_sha256=sha(compiler),
@@ -175,7 +187,11 @@ def main():
         from selected_supplier import check_selected,authority_digest
         receipt.update(ordered_patch_sha256=minimum_authority['pin']['ordered_patch_sha256'],
                        minimum_authority=minimum_authority,minimum_authority_sha256=authority_digest(minimum_authority))
-        check_selected(receipt,context)
+        if fork:
+            receipt.update(evidence_schema=fork.SCHEMA, diagnostic=diagnostic)
+            fork.check_supplier(receipt, diagnostic)
+        else:
+            check_selected(receipt,context)
     destination = ROOT / 'tcp-supplier-receipt.json'
     assert not destination.exists()
     destination.write_text(json.dumps(receipt, sort_keys=True, indent=2))
@@ -190,7 +206,9 @@ def main():
                    public_headers_unchanged=True, symbols_unchanged=True, dll_exports_unchanged=True)
     if role=='selected-minimum':
         summary.update(ordered_patch_sha256=receipt['ordered_patch_sha256'],minimum_authority_sha256=receipt['minimum_authority_sha256'])
-    print('TCP_PRIORITY_SUPPLIER_BUILD', json.dumps(summary), flush=True)
+    if fork:
+        summary.update(evidence_schema=fork.SCHEMA, diagnostic=diagnostic)
+    print('TCP_FORK_DIAGNOSTIC_SUPPLIER_BUILD' if fork else 'TCP_PRIORITY_SUPPLIER_BUILD', json.dumps(summary), flush=True)
     for path in INPUTS:
         key = 'mingw-w64-libraries/winpthreads/' + path
         print('TCP_PRIORITY_SUPPLIER_SOURCE', json.dumps(dict(path=key, before=original_sources[key], after=changed_sources[key])), flush=True)
@@ -205,4 +223,10 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--fork-diagnostic']:
+        import fork_supplier
+        diagnostic = fork_supplier.identity.current('compile')
+        _build_supplier(diagnostic['context'], 'selected-minimum', diagnostic)
+    else:
+        assert not sys.argv[1:], 'Unknown supplier invocation'
+        main()

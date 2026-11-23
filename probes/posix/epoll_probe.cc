@@ -48,6 +48,7 @@ static void check(const char* what, int ok) {
 #include "../../tests/native/epoll_eventfd_edge_wait_test.inc"
 #define OWNER_READONLY_REAL
 #include "../../tests/native/epoll_virtual_owner_test.inc"
+#include "../../tests/native/epoll_readonly_edge_test.inc"
 
 struct PausedSnapshot {
   HANDLE sampled = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -141,12 +142,18 @@ int main(int argc, char** argv) {
     printf("eventfd edge Windows: %s\n", fails == 0 ? "all passed" : "FAILED");
     return fails != 0;
   }
+  if (argc == 2 && strcmp(argv[1], "--readonly-edge") == 0) {
+    test_epoll_readonly_edges();
+    printf("readonly edge Windows: %s\n", fails == 0 ? "all passed" : "FAILED");
+    return fails != 0;
+  }
   if (argc != 1) return 2;
   test_epoll_nested();
   test_event_loop_contracts();
   test_epoll_eventfd_edge_waits();
   test_epoll_virtual_owners();
   test_epoll_readonly_owners();
+  test_epoll_readonly_edges();
   TestSnapshotWakeup();
   TestWaiterLifetime();
   uint64_t v = 0;

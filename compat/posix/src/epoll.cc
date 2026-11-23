@@ -100,12 +100,14 @@ struct EventFd {
     // including zero writes and writes while already readable. A successful
     // read similarly publishes a write notification. Levels alone lose those
     // notifications, and lose a drain/refill entirely between epoll waits.
+    // Read-only producers publish when they enqueue a new inotify record or
+    // expire an armed timer; an unread periodic timer is not a new producer.
     bool edge_notified = false;
-    if (!read_only && notification != 0) {
+    if (notification != 0) {
       if ((notification & EPOLLIN) != 0) ++read_generation;
       if ((notification & EPOLLOUT) != 0) ++write_generation;
     }
-    const uint32_t wake_notification = (read_only ? 0 : notification) | became_ready;
+    const uint32_t wake_notification = notification | became_ready;
     if (wake_notification != 0) {
       size_t kept = 0;
       for (auto& weak : edge_watches) {
@@ -161,8 +163,9 @@ struct Entry {
   std::weak_ptr<Epoll> child;
   std::shared_ptr<OwnerWatch> owner_watch = nullptr;
   bool ordinary_eventfd = false;
-  // Only ordinary eventfds have producer notifications in this increment.
-  // Timer/inotify, sockets, pipes and nested targets retain their prior path.
+  uint32_t readable_events = EPOLLIN;
+  // Eventfd, timerfd and inotify publish producer notifications. Sockets,
+  // pipes and nested targets retain their separate readiness path.
   std::shared_ptr<EventFd> edge_source = nullptr;
   std::shared_ptr<EventFdEdgeWatch> edge_watch = nullptr;
   std::shared_ptr<EventFd> watch_source = nullptr;
@@ -238,9 +241,9 @@ class EpollWaiter {
 uint32_t EventFdEdgeReady(Entry& entry, bool consume) {
   EventFd& source = *entry.edge_source;
   std::lock_guard<std::mutex> lock(source.mutex);
-  // eventfd publishes the canonical IN/OUT bits, not the normal-band bits.
-  const uint32_t input = entry.events & EPOLLIN;
-  const uint32_t output = entry.events & EPOLLOUT;
+  // Inotify also reports RDNORM; eventfd and timerfd report canonical IN.
+  const uint32_t input = entry.events & entry.readable_events;
+  const uint32_t output = source.read_only ? 0 : entry.events & EPOLLOUT;
   if (!entry.edge_initial &&
       (input == 0 || entry.read_generation == source.read_generation) &&
       (output == 0 || entry.write_generation == source.write_generation)) return 0;
@@ -256,19 +259,27 @@ uint32_t EventFdEdgeReady(Entry& entry, bool consume) {
 }
 
 void ConfigureEventFdEntry(Entry& entry, const std::shared_ptr<EventFd>& source,
-                      const std::shared_ptr<EpollWakeChannels>& wake) {
+                      const std::shared_ptr<EpollWakeChannels>& wake, bool inotify) {
   entry.ordinary_eventfd = source && !source->read_only;
+  entry.readable_events = EPOLLIN | (inotify ? uint32_t{EPOLLRDNORM} : 0);
   if (!source) return;
+  const bool edge = (entry.events & EPOLLET) != 0;
   auto watch = std::make_shared<EventFdEdgeWatch>();
-  watch->events = ((entry.events & (EPOLLIN | (source->read_only ? uint32_t{EPOLLRDNORM} : 0))) != 0
-                       ? uint32_t{EPOLLIN} : 0) |
+  // Edge entries match the bits their file reports (inotify adds RDNORM).
+  // Level entries match the generic level path, which reports IN and RDNORM
+  // for every read-only readiness and only canonical IN for an eventfd.
+  const uint32_t input = edge ? entry.readable_events
+                              : EPOLLIN | (source->read_only ? uint32_t{EPOLLRDNORM} : 0);
+  watch->events = ((entry.events & input) != 0 ? uint32_t{EPOLLIN} : 0) |
                   (source->read_only ? 0 : entry.events & EPOLLOUT);
-  watch->level = (entry.events & EPOLLET) == 0 || !entry.ordinary_eventfd;
+  // Eventfd, timerfd and inotify all publish producer notifications, so every
+  // edge entry uses its source's generations; level entries wake on readiness.
+  watch->level = !edge;
   watch->wake = wake;
   std::lock_guard<std::mutex> lock(source->mutex);
   std::erase_if(source->edge_watches, [](const auto& weak) { return weak.expired(); });
   source->edge_watches.push_back(watch);
-  if ((entry.events & EPOLLET) != 0 && entry.ordinary_eventfd) entry.edge_source = source;
+  if (edge) entry.edge_source = source;
   entry.edge_watch = std::move(watch);
   entry.watch_source = source;
 }
@@ -701,7 +712,7 @@ std::shared_ptr<EventFd> NewReadiness(bool nonblocking) {
 void SetReadable(EventFd& e, bool readable) {
   std::lock_guard<std::mutex> lock(e.mutex);
   e.counter = readable ? 1 : 0;
-  e.Update();
+  e.Update(readable ? uint32_t{EPOLLIN} : 0);
 }
 
 std::shared_ptr<Inotify> LookupInotify(int fd) {
@@ -793,8 +804,8 @@ int epoll_create1(int flags) {
 
 int epoll_create(int size) { return size <= 0 ? (errno = EINVAL, -1) : epoll_create1(0); }
 
-// Ordinary eventfds publish edge notifications. The other descriptor backends
-// still use level readiness; their edge and exclusive contracts remain open.
+// Eventfds, timerfds and inotify publish edge notifications. Other descriptor
+// backends still use level readiness; their edge/exclusive contracts remain open.
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
   gesher::record_locks::DescriptorGuard descriptors;
   if (gesher::HandleFromFd(epfd) == INVALID_HANDLE_VALUE ||
@@ -828,14 +839,16 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
         if (it != ep->entries.end()) return errno = EEXIST, -1;
         ep->entries[key] = {events, event->data, ep->next_id++, true, child};
         gesher::ConfigureOwnerEntry(ep->entries[key], key, owner, ep);
-        gesher::ConfigureEventFdEntry(ep->entries[key], owner ? owner->object.eventfd : nullptr, ep->wake);
+        gesher::ConfigureEventFdEntry(ep->entries[key], owner ? owner->object.eventfd : nullptr,
+                                      ep->wake, owner && owner->object.inotify != nullptr);
         break;
       case EPOLL_CTL_MOD:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
         if ((it->second.events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
         it->second = {events, event->data, ep->next_id++, true, child};
         gesher::ConfigureOwnerEntry(it->second, key, owner, ep);
-        gesher::ConfigureEventFdEntry(it->second, owner ? owner->object.eventfd : nullptr, ep->wake);
+        gesher::ConfigureEventFdEntry(it->second, owner ? owner->object.eventfd : nullptr,
+                                      ep->wake, owner && owner->object.inotify != nullptr);
         break;
       case EPOLL_CTL_DEL:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
