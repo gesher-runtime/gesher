@@ -406,6 +406,7 @@ jobs:
           python3 tools/test_audio_mixer_allocations.py --sanitize
           python3 tools/test_audio_unity_rate.py --sanitize
           python3 tools/test_audio_capture_allocations.py --sanitize
+          python3 tools/test_audio_capture_unity.py --sanitize --negative-controls
           python3 tools/test_capture_stream_selection.py --sanitize
           python3 tools/test_audio_file_source.py --sanitize
           python3 tools/test_audio_rate_history.py --sanitize
