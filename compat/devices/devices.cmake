@@ -16,11 +16,15 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/location_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/sensors.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/sensors_jni.cc
+  ${CMAKE_SOURCE_DIR}/compat/devices/speech_jni.cc
+  ${CMAKE_SOURCE_DIR}/compat/devices/speech_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/winrt.cc)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devices)
 target_link_libraries(framework_runtime PUBLIC ole32)
 # Bluetooth (docs/bluetooth.md): Winsock's AF_BTH sockets and WSASetService for
 # RFCOMM; IID_IUnknown. BluetoothApis.dll and the WinRT classes are found at run time.
+# Speech synthesis (docs/tts.md): IID_IStream; shcore.dll's
+# CreateStreamOverRandomAccessStream is found at run time.
 target_link_libraries(framework_runtime PUBLIC ws2_32 uuid)
 
 # libcamera_metadata (system/media/camera/Android.bp): the metadata buffers
