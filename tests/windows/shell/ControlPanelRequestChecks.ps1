@@ -43,7 +43,7 @@ $startup = $text.Substring($start, $end + 2 - $start)
 $suffix = [guid]::NewGuid().ToString('N')
 $startup = $startup.Replace('Local\Gesher.ControlPanel', "Local\Gesher.ControlPanelCheck$suffix")
 $probe = Join-Path ([IO.Path]::GetTempPath()) "gesher-panel-start-$suffix.ps1"
-[IO.File]::WriteAllText($probe, $startup + "`nexit 7`n")
+[IO.File]::WriteAllText($probe, '$root = $PSScriptRoot' + "`n" + $startup + "`nexit 7`n")
 $created = $false
 $mutex = [System.Threading.Mutex]::new($false, "Local\Gesher.ControlPanelCheck$suffix", [ref] $created)
 $show = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, "Local\Gesher.ControlPanelCheck$suffix.Show")
