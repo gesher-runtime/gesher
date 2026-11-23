@@ -4,6 +4,17 @@
 The backend uses real files, descriptors, mappings and memory-map permissions.
 It cannot prove Windows delete-on-close or executable mapping behavior; the
 unchanged Os fixture and shared Android ELF tests remain mandatory.
+
+A second fixture compiles the whole of memfd_seals.cc over a separate model of
+the Win32 calls that decide F_ADD_SEALS(F_SEAL_WRITE): LockFileEx locks (real
+OFD locks of private open descriptions, so they conflict, stack and vanish with
+a process as on Windows), DuplicateHandle, and the GESHER.SEALS extended
+attribute (storage shared by every process of the test). It exercises the
+writable-mapping lease: EBUSY while a writable shared mapping lives, release
+on unmap/partial unmap/failed map/process death, and the serialization of seal
+additions against each other and against writable mmap, across threads and
+across forked processes. It is not a Windows runtime: NTFS EAs, real LockFileEx
+ownership and VirtualAlloc2 mappings are covered only by the Windows CI jobs.
 """
 import argparse
 import hashlib
@@ -20,6 +31,18 @@ def extract(source, begin, end):
     if source.count(begin) != 1 or source.count(end) != 1:
         raise ValueError("production source boundaries changed")
     return source[source.index(begin):source.index(end, source.index(begin))]
+
+
+def lease_template(seals):
+    """Whole production memfd_seals.cc, minus the headers the model replaces."""
+    for header in ('#include <io.h>\n', '#include "internal.h"\n', '#include "record_lock_liveness.h"\n'):
+        if seals.count(header) != 1:
+            raise ValueError("memfd_seals.cc include boundary changed: " + header.strip())
+        seals = seals.replace(header, "")
+    template = (ROOT / "tests/native/memfd_lease_host_test.cc.in").read_text()
+    if template.count("@MEMFD_SEALS@") != 1:
+        raise ValueError("template boundary changed: @MEMFD_SEALS@")
+    return template.replace("@MEMFD_SEALS@", seals)
 
 
 def main():
@@ -43,6 +66,7 @@ def main():
     dispatcher = dispatcher[dispatcher.index(marker):]
     guest = extract(source("compat/bionic/shim.cc"), "int64_t BIONIC_SYSV Syscall(",
                     "\nvoid ReportUnresolved(")
+    seals = source("compat/posix/src/memfd_seals.cc")
     template = (ROOT / "tests/native/memfd_host_test.cc.in").read_text()
     for marker, value in (("@MEMFD_BACKEND@", backend), ("@POSIX_DISPATCH@", dispatcher),
                           ("@BIONIC_DISPATCH@", guest)):
@@ -53,19 +77,25 @@ def main():
         directory = Path(temporary)
         cpp, executable = directory / "memfd.cc", directory / "memfd"
         cpp.write_text(template)
-        command = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+        flags = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
             "-Wno-unused-function", "-fno-exceptions", "-D_GNU_SOURCE", "-pthread",
-            "-I", str(ROOT / "tests/native"), str(cpp), "-o", str(executable)]
-        if args.sanitize:
-            command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+            "-I", str(ROOT / "tests/native")]
+        sanitizer = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"] if args.sanitize else []
+        command = flags + [str(cpp), "-o", str(executable)] + sanitizer
         subprocess.run(command, check=True, timeout=120)
         environment = os.environ.copy()
         if args.sanitize:
             environment["UBSAN_OPTIONS"] = "halt_on_error=1:" + environment.get("UBSAN_OPTIONS", "")
+        lease_cpp, lease_executable = directory / "lease.cc", directory / "lease"
+        lease_cpp.write_text(lease_template(seals))
+        lease_command = flags + [str(lease_cpp), "-o", str(lease_executable)] + sanitizer
+        subprocess.run(lease_command, check=True, timeout=120)
         failures = []
-        for case in ("direct", "posix", "guest", "faults"):
-            result = subprocess.run([str(executable), case], cwd=directory, env=environment,
-                                    text=True, capture_output=True, timeout=45)
+        cases = [(name, executable) for name in ("direct", "posix", "guest", "faults")]
+        cases += [(name, lease_executable) for name in ("basics", "lifetime", "races")]
+        for case, binary in cases:
+            result = subprocess.run([str(binary), case], cwd=directory, env=environment,
+                                    text=True, capture_output=True, timeout=120)
             print(result.stdout, end="", flush=True)
             if result.returncode:
                 failures.append(case)

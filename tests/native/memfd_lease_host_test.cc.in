@@ -1,0 +1,598 @@
+// The exact production memfd_seals.cc is inserted below, whole, over a Linux model
+// of the Win32 calls it makes. This is not a Windows runtime. The model is real
+// where the contract needs it to be: a memfd's seals live in storage shared by
+// every handle and every process of the test; each LockFileEx lock is an OFD lock
+// of a private open file description (so, as on Windows, a shared lock never
+// admits an exclusive one even through the same handle, locks stack, and a
+// process's death or the close of the last handle of a file object releases them);
+// DuplicateHandle makes another handle of the same file object.
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <array>
+#include <atomic>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#ifndef F_SEAL_FUTURE_WRITE
+#define F_SEAL_FUTURE_WRITE 0x0010
+#endif
+
+using DWORD = uint32_t;
+using ULONG = uint32_t;
+using LONG = int32_t;
+using UCHAR = unsigned char;
+using USHORT = uint16_t;
+using ULONG_PTR = uintptr_t;
+using BOOLEAN = unsigned char;
+using BOOL = int;
+using HANDLE = void*;
+using HMODULE = void*;
+#define NTAPI
+static constexpr BOOL TRUE = 1, FALSE = 0;
+static HANDLE const INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t{-1});
+static constexpr DWORD ERROR_SUCCESS = 0, ERROR_NOT_LOCKED = 158, ERROR_LOCK_VIOLATION = 33,
+                       ERROR_NOT_ENOUGH_MEMORY = 8, ERROR_ACCESS_DENIED = 5;
+static constexpr DWORD LOCKFILE_FAIL_IMMEDIATELY = 1, LOCKFILE_EXCLUSIVE_LOCK = 2;
+static constexpr DWORD DUPLICATE_SAME_ACCESS = 2, FILE_WRITE_DATA = 2, FILE_CURRENT = 1;
+struct OVERLAPPED { ULONG_PTR Internal, InternalHigh; DWORD Offset, OffsetHigh; HANDLE hEvent; };
+union LARGE_INTEGER { int64_t QuadPart; };
+
+static thread_local DWORD last_error;
+static DWORD GetLastError() { return last_error; }
+static HANDLE GetCurrentProcess() { return reinterpret_cast<HANDLE>(intptr_t{-1}); }
+static void Sleep(DWORD milliseconds) { usleep(milliseconds * 1000); }
+
+// Handles are descriptors; each descriptor belongs to a file object.
+static std::mutex model_mutex;
+static std::map<int, int> object_of;  // descriptor -> file object
+static int next_object = 1;
+struct LockRecord { int object; uint64_t byte; int fd; };
+static std::vector<LockRecord> lock_records;
+static bool fail_duplicate = false;
+static std::atomic<int> lock_calls{0}, unlock_calls{0}, duplicate_calls{0};
+
+static int NativeFd(HANDLE handle) { return static_cast<int>(reinterpret_cast<intptr_t>(handle)); }
+static HANDLE NativeHandle(int fd) { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd)); }
+
+static BOOL LockFileEx(HANDLE handle, DWORD flags, DWORD, DWORD length_low, DWORD length_high, OVERLAPPED* at) {
+  ++lock_calls;
+  if (length_low != 1 || length_high != 0 || (flags & LOCKFILE_FAIL_IMMEDIATELY) == 0) { last_error = 87; return FALSE; }
+  std::lock_guard<std::mutex> guard(model_mutex);
+  auto object = object_of.find(NativeFd(handle));
+  if (object == object_of.end()) { last_error = 6; return FALSE; }
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/self/fd/%d", NativeFd(handle));
+  const int fd = open(path, O_RDWR | O_CLOEXEC);  // a new open file description of the same file
+  if (fd < 0) { last_error = ERROR_ACCESS_DENIED; return FALSE; }
+  struct flock lock = {};
+  lock.l_type = (flags & LOCKFILE_EXCLUSIVE_LOCK) != 0 ? F_WRLCK : F_RDLCK;
+  lock.l_whence = SEEK_SET;
+  const uint64_t byte = (static_cast<uint64_t>(at->OffsetHigh) << 32) | at->Offset;
+  lock.l_start = static_cast<off_t>(byte);
+  lock.l_len = 1;
+  if (fcntl(fd, F_OFD_SETLK, &lock) != 0) {
+    close(fd);
+    last_error = ERROR_LOCK_VIOLATION;
+    return FALSE;
+  }
+  lock_records.push_back({object->second, byte, fd});
+  return TRUE;
+}
+static BOOL UnlockFileEx(HANDLE handle, DWORD, DWORD, DWORD, OVERLAPPED* at) {
+  ++unlock_calls;
+  std::lock_guard<std::mutex> guard(model_mutex);
+  auto object = object_of.find(NativeFd(handle));
+  const uint64_t byte = (static_cast<uint64_t>(at->OffsetHigh) << 32) | at->Offset;
+  if (object != object_of.end()) {
+    for (auto it = lock_records.begin(); it != lock_records.end(); ++it) {
+      if (it->object == object->second && it->byte == byte) {
+        close(it->fd);
+        lock_records.erase(it);
+        return TRUE;
+      }
+    }
+  }
+  last_error = ERROR_NOT_LOCKED;
+  return FALSE;
+}
+static BOOL DuplicateHandle(HANDLE, HANDLE handle, HANDLE, HANDLE* result, DWORD, BOOL, DWORD) {
+  ++duplicate_calls;
+  std::lock_guard<std::mutex> guard(model_mutex);
+  auto object = object_of.find(NativeFd(handle));
+  if (fail_duplicate) { last_error = ERROR_NOT_ENOUGH_MEMORY; return FALSE; }
+  if (object == object_of.end()) { last_error = 6; return FALSE; }
+  const int fd = dup(NativeFd(handle));
+  if (fd < 0) { last_error = ERROR_NOT_ENOUGH_MEMORY; return FALSE; }
+  object_of[fd] = object->second;
+  *result = NativeHandle(fd);
+  return TRUE;
+}
+static BOOL CloseHandle(HANDLE handle) {
+  std::lock_guard<std::mutex> guard(model_mutex);
+  auto object = object_of.find(NativeFd(handle));
+  if (object == object_of.end()) { last_error = 6; return FALSE; }
+  const int file_object = object->second;
+  object_of.erase(object);
+  close(NativeFd(handle));
+  for (const auto& entry : object_of) if (entry.second == file_object) return TRUE;
+  // The last handle of the file object is gone: its locks go with it.
+  for (auto it = lock_records.begin(); it != lock_records.end();) {
+    if (it->object == file_object) { close(it->fd); it = lock_records.erase(it); } else ++it;
+  }
+  return TRUE;
+}
+static BOOL GetFileSizeEx(HANDLE handle, LARGE_INTEGER* size) {
+  struct stat status;
+  if (fstat(NativeFd(handle), &status) != 0) { last_error = 6; return FALSE; }
+  size->QuadPart = status.st_size;
+  return TRUE;
+}
+static BOOL SetFilePointerEx(HANDLE handle, LARGE_INTEGER distance, LARGE_INTEGER* position, DWORD) {
+  const off_t at = lseek(NativeFd(handle), static_cast<off_t>(distance.QuadPart), SEEK_CUR);
+  if (position != nullptr) position->QuadPart = at;
+  return at >= 0;
+}
+
+// The seals live in one table in memory shared by every process of the test,
+// keyed by file: the extended attribute of an NTFS file.
+struct EaSlot { std::atomic<uint64_t> file; std::atomic<uint32_t> value; };
+static EaSlot* ea_table;
+static constexpr size_t kEaSlots = 4096;
+static std::atomic<int>* ea_jitter;  // when set, each EA call yields for a random moment
+static uint64_t FileKey(HANDLE handle) {
+  struct stat status;
+  return fstat(NativeFd(handle), &status) != 0 ? 0 : (static_cast<uint64_t>(status.st_dev) << 40) ^ status.st_ino;
+}
+// An NTFS file's extended attributes die with the file; a Linux inode number can be
+// reused by the next file, so a new file of the model starts without any.
+static void ForgetEa(const char* path) {
+  struct stat status;
+  if (stat(path, &status) != 0) return;
+  const uint64_t key = (static_cast<uint64_t>(status.st_dev) << 40) ^ status.st_ino;
+  for (size_t i = 0; i < kEaSlots; ++i) {
+    uint64_t expected = key;
+    ea_table[i].file.compare_exchange_strong(expected, ~uint64_t{0});  // tombstone, never matched
+  }
+}
+static void Jitter() {
+  if (ea_jitter->load() != 0) usleep(static_cast<unsigned>(rand() % 40));
+}
+static LONG NTAPI FakeSetEa(HANDLE handle, void*, void* in, ULONG) {
+  Jitter();
+  const unsigned char* bytes = static_cast<const unsigned char*>(in);
+  uint32_t value;
+  memcpy(&value, bytes + 8 + bytes[5] + 1, sizeof(value));
+  const uint64_t key = FileKey(handle);
+  for (size_t i = 0; i < kEaSlots; ++i) {
+    uint64_t expected = 0;
+    if (ea_table[i].file.load() == key || ea_table[i].file.compare_exchange_strong(expected, key)) {
+      Jitter();
+      ea_table[i].value.store(value);
+      return 0;
+    }
+  }
+  return -1;
+}
+static LONG NTAPI FakeQueryEa(HANDLE handle, void*, void* out, ULONG size, BOOLEAN, void*, ULONG, ULONG*, BOOLEAN) {
+  Jitter();
+  unsigned char* bytes = static_cast<unsigned char*>(out);
+  memset(bytes, 0, size);
+  const char name[] = "GESHER.SEALS";
+  bytes[5] = sizeof(name) - 1;
+  memcpy(bytes + 8, name, sizeof(name));
+  const uint64_t key = FileKey(handle);
+  for (size_t i = 0; i < kEaSlots; ++i) {
+    if (ea_table[i].file.load() == key) {
+      const uint32_t value = ea_table[i].value.load();
+      bytes[6] = sizeof(value);
+      memcpy(bytes + 8 + bytes[5] + 1, &value, sizeof(value));
+      break;
+    }
+  }
+  return 0;
+}
+static HMODULE GetModuleHandleW(const wchar_t*) { return reinterpret_cast<HMODULE>(intptr_t{1}); }
+static void* GetProcAddress(HMODULE, const char* name) {
+  if (strcmp(name, "NtSetEaFile") == 0) return reinterpret_cast<void*>(&FakeSetEa);
+  if (strcmp(name, "NtQueryEaFile") == 0) return reinterpret_cast<void*>(&FakeQueryEa);
+  return nullptr;
+}
+
+namespace gesher {
+static int ErrnoFromWin32(DWORD error) {
+  return error == ERROR_NOT_ENOUGH_MEMORY ? ENOMEM : error == ERROR_ACCESS_DENIED ? EACCES : EIO;
+}
+static HANDLE HandleFromFd(int fd) {
+  std::lock_guard<std::mutex> guard(model_mutex);
+  return object_of.count(fd) != 0 ? NativeHandle(fd) : INVALID_HANDLE_VALUE;
+}
+namespace record_locks {
+static int HandleAccess(HANDLE handle, uint32_t* access) {
+  const int flags = fcntl(NativeFd(handle), F_GETFL);
+  if (flags < 0) return EBADF;
+  *access = (flags & O_ACCMODE) == O_RDONLY ? 0 : FILE_WRITE_DATA;
+  return 0;
+}
+}  // namespace record_locks
+}  // namespace gesher
+
+@MEMFD_SEALS@
+
+static int failures, assertions;
+static void check(const char* label, bool okay) {
+  ++assertions;
+  if (!okay) ++failures;
+  printf("%-92s %s\n", label, okay ? "ok" : "FAIL");
+  fflush(stdout);
+}
+#define CHECK(expression) check(#expression, (expression))
+#define CHECK_L(label, expression) check(label, (expression))
+
+namespace {
+
+// A new file and file object of the model, holding no seals yet.
+struct Memfd {
+  std::string path;
+  int fd = -1;
+};
+int OpenFile(const std::string& path) {
+  const int fd = open(path.c_str(), O_RDWR);
+  if (fd >= 0) {
+    std::lock_guard<std::mutex> guard(model_mutex);
+    object_of[fd] = next_object++;
+  }
+  return fd;
+}
+Memfd CreateMemfd(bool allow_sealing = true) {
+  char pattern[] = "./lease-XXXXXX";
+  const int raw = mkstemp(pattern);
+  close(raw);
+  ForgetEa(pattern);
+  Memfd memfd{pattern};
+  memfd.fd = OpenFile(memfd.path);
+  if (!gesher::InitMemfdSeals(NativeHandle(memfd.fd), allow_sealing)) abort();
+  return memfd;
+}
+void CloseFd(int fd) { CloseHandle(NativeHandle(fd)); }
+
+int MapShared(int fd, bool writable, std::shared_ptr<void>* lease, bool* deny_write = nullptr) {
+  bool deny = false;
+  const int error = gesher::MemfdSharedMapHandleError(gesher::HandleFromFd(fd), writable, deny_write ? deny_write : &deny, lease);
+  return error;
+}
+int Seal(int fd, unsigned seals) { return gesher::AddMemfdSeals(fd, seals) == 0 ? 0 : errno; }
+int Seals(int fd) { return gesher::GetMemfdSeals(fd); }
+
+void Basics() {
+  Memfd file = CreateMemfd();
+  std::shared_ptr<void> lease;
+  CHECK_L("writable shared map of an unsealed memfd succeeds and holds a lease",
+          MapShared(file.fd, true, &lease) == 0 && lease != nullptr);
+  CHECK_L("F_SEAL_WRITE is EBUSY while the writable shared mapping lives", Seal(file.fd, F_SEAL_WRITE) == EBUSY);
+  CHECK_L("a failed F_SEAL_WRITE stores no part of the request", Seals(file.fd) == 0 && Seal(file.fd, F_SEAL_GROW) == 0);
+  CHECK_L("F_SEAL_WRITE with F_SEAL_SHRINK is refused as a whole", Seal(file.fd, F_SEAL_WRITE | F_SEAL_SHRINK) == EBUSY &&
+          Seals(file.fd) == F_SEAL_GROW);
+  CHECK_L("F_SEAL_FUTURE_WRITE has no mapping condition", Seal(file.fd, F_SEAL_FUTURE_WRITE) == 0);
+  lease.reset();  // munmap of the last writable page
+  CHECK_L("F_SEAL_WRITE succeeds once the writable mapping is unmapped", Seal(file.fd, F_SEAL_WRITE) == 0);
+  CHECK_L("the stored seals are exactly the requested ones",
+          Seals(file.fd) == (F_SEAL_GROW | F_SEAL_FUTURE_WRITE | F_SEAL_WRITE));
+  CHECK_L("lock bytes leave no stale lock after the exclusive seal", lock_records.empty());
+  bool deny = false;
+  CHECK_L("a writable shared map after the write seal is EPERM and returns no lease",
+          MapShared(file.fd, true, &lease, &deny) == EPERM && lease == nullptr);
+  CHECK_L("a read-only shared map after the write seal is allowed but may never become writable",
+          MapShared(file.fd, false, &lease, &deny) == 0 && lease == nullptr && deny);
+  CloseFd(file.fd);
+  unlink(file.path.c_str());
+}
+
+void PartialUnmap() {
+  // munmap of part of a mapping splits its view's bookkeeping; every piece shares
+  // the lease, which ends only with the last of them.
+  Memfd file = CreateMemfd();
+  std::shared_ptr<void> lease;
+  CHECK(MapShared(file.fd, true, &lease) == 0);
+  std::shared_ptr<void> lower = lease, upper = lease;
+  lease.reset();
+  CHECK_L("a mapping split in two still holds the file writable", Seal(file.fd, F_SEAL_WRITE) == EBUSY);
+  lower.reset();
+  CHECK_L("EBUSY lasts until the last writable page is gone", Seal(file.fd, F_SEAL_WRITE) == EBUSY);
+  upper.reset();
+  CHECK_L("the last piece's unmap releases the file", Seal(file.fd, F_SEAL_WRITE) == 0);
+  CloseFd(file.fd);
+  unlink(file.path.c_str());
+
+  // Two independent mappings, in either order of release.
+  for (int first = 0; first < 2; ++first) {
+    Memfd two = CreateMemfd();
+    std::shared_ptr<void> a, b;
+    CHECK(MapShared(two.fd, true, &a) == 0 && MapShared(two.fd, true, &b) == 0);
+    (first == 0 ? a : b).reset();
+    CHECK_L("one of two writable mappings keeps the file busy", Seal(two.fd, F_SEAL_WRITE) == EBUSY);
+    (first == 0 ? b : a).reset();
+    CHECK_L("both writable mappings gone: the seal succeeds", Seal(two.fd, F_SEAL_WRITE) == 0);
+    CloseFd(two.fd);
+    unlink(two.path.c_str());
+  }
+}
+
+void Handles() {
+  // close(fd) after mmap, the usual pattern: the mapping keeps its claim.
+  Memfd file = CreateMemfd();
+  const int other = OpenFile(file.path);  // another handle, as another process would hold
+  std::shared_ptr<void> lease;
+  CHECK(MapShared(file.fd, true, &lease) == 0);
+  CloseFd(file.fd);
+  CHECK_L("closing the mapped descriptor does not release the mapping's lease", Seal(other, F_SEAL_WRITE) == EBUSY);
+  lease.reset();
+  CHECK_L("the lease's own handle is closed with it", Seal(other, F_SEAL_WRITE) == 0);
+  CloseFd(other);
+  unlink(file.path.c_str());
+
+  // A descriptor of a file object holding a lease does not seal it either.
+  Memfd same = CreateMemfd();
+  std::shared_ptr<void> held;
+  CHECK(MapShared(same.fd, true, &held) == 0);
+  CHECK_L("the descriptor that mapped it cannot seal it while mapped", Seal(same.fd, F_SEAL_WRITE) == EBUSY);
+  CHECK_L("EBUSY leaves the change byte free for other seals", Seal(same.fd, F_SEAL_SHRINK) == 0);
+  held.reset();
+  CloseFd(same.fd);
+  unlink(same.path.c_str());
+}
+
+void Failures() {
+  Memfd file = CreateMemfd();
+  std::shared_ptr<void> lease;
+  fail_duplicate = true;
+  CHECK_L("a lease that cannot get its handle denies the mapping with that error",
+          MapShared(file.fd, true, &lease) == ENOMEM && lease == nullptr);
+  fail_duplicate = false;
+  CHECK_L("a denied mapping leaves nothing locked", lock_records.empty() && Seal(file.fd, F_SEAL_WRITE) == 0);
+  CloseFd(file.fd);
+  unlink(file.path.c_str());
+
+  // A mapping the caller never completes (MapFile failed) just drops its lease.
+  Memfd retry = CreateMemfd();
+  {
+    std::shared_ptr<void> abandoned;
+    CHECK(MapShared(retry.fd, true, &abandoned) == 0);
+  }
+  CHECK_L("a lease dropped on a failed MapFile releases the file", Seal(retry.fd, F_SEAL_WRITE) == 0);
+  CloseFd(retry.fd);
+  unlink(retry.path.c_str());
+
+  // A writable request must come with somewhere to put its lease.
+  Memfd bare = CreateMemfd();
+  CHECK_L("a writable request without a lease slot is refused, not tracked silently",
+          MapShared(bare.fd, true, nullptr) == EINVAL && lock_records.empty());
+  CHECK_L("a read-only request needs no lease", MapShared(bare.fd, false, nullptr) == 0);
+  CloseFd(bare.fd);
+  unlink(bare.path.c_str());
+
+  // Not a memfd: no lease, nothing to seal.
+  char pattern[] = "./plain-XXXXXX";
+  close(mkstemp(pattern));
+  ForgetEa(pattern);
+  const int plain = OpenFile(pattern);
+  std::shared_ptr<void> none;
+  CHECK_L("a file without seals never takes a lease", MapShared(plain, true, &none) == 0 && none == nullptr);
+  CloseFd(plain);
+  unlink(pattern);
+}
+
+void Sealing() {
+  Memfd file = CreateMemfd(false);
+  CHECK_L("a memfd without MFD_ALLOW_SEALING refuses seals", Seal(file.fd, F_SEAL_WRITE) == EPERM && Seals(file.fd) == F_SEAL_SEAL);
+  CloseFd(file.fd);
+  unlink(file.path.c_str());
+  Memfd sealing = CreateMemfd();
+  CHECK_L("F_SEAL_SEAL is accepted", Seal(sealing.fd, F_SEAL_SEAL) == 0);
+  CHECK_L("nothing can be added after F_SEAL_SEAL", Seal(sealing.fd, F_SEAL_GROW) == EPERM);
+  CloseFd(sealing.fd);
+  unlink(sealing.path.c_str());
+}
+
+// What the lease costs: Win32 calls per operation, counted, not timed (the model's
+// calls are not Windows').
+void Cost() {
+  Memfd file = CreateMemfd();
+  auto counts = [&](auto&& operation) {
+    const int locks = lock_calls, unlocks = unlock_calls, duplicates = duplicate_calls;
+    operation();
+    return std::array<int, 3>{lock_calls - locks, unlock_calls - unlocks, duplicate_calls - duplicates};
+  };
+  std::shared_ptr<void> lease;
+  auto map = counts([&] { MapShared(file.fd, true, &lease); });
+  printf("cost: writable shared map: %d LockFileEx, %d UnlockFileEx, %d DuplicateHandle\n", map[0], map[1], map[2]);
+  CHECK_L("a writable shared map takes one shared lock on a handle of its own", (map == std::array<int, 3>{1, 0, 1}));
+  auto readonly = counts([&] { std::shared_ptr<void> none; MapShared(file.fd, false, &none); });
+  CHECK_L("a read-only shared map takes no lock and no handle", (readonly == std::array<int, 3>{0, 0, 0}));
+  auto busy = counts([&] { Seal(file.fd, F_SEAL_WRITE); });
+  printf("cost: F_SEAL_WRITE refused: %d LockFileEx, %d UnlockFileEx\n", busy[0], busy[1]);
+  CHECK_L("a refused F_SEAL_WRITE takes the change byte and tries the lease byte", (busy == std::array<int, 3>{2, 1, 0}));
+  auto release = counts([&] { lease.reset(); });
+  printf("cost: unmap of the last writable page: %d UnlockFileEx\n", release[1]);
+  CHECK_L("the last unmap releases with one unlock", (release == std::array<int, 3>{0, 1, 0}));
+  auto other = counts([&] { Seal(file.fd, F_SEAL_SHRINK); });
+  CHECK_L("a seal that is not F_SEAL_WRITE takes only the change byte", (other == std::array<int, 3>{1, 1, 0}));
+  auto write = counts([&] { Seal(file.fd, F_SEAL_WRITE); });
+  printf("cost: F_SEAL_WRITE granted: %d LockFileEx, %d UnlockFileEx\n", write[0], write[1]);
+  CHECK_L("F_SEAL_WRITE granted takes the change byte and the lease byte", (write == std::array<int, 3>{2, 2, 0}));
+  auto repeat = counts([&] { Seal(file.fd, F_SEAL_WRITE); });
+  CHECK_L("adding a seal already held takes only the change byte", (repeat == std::array<int, 3>{1, 1, 0}));
+  CloseFd(file.fd);
+  unlink(file.path.c_str());
+}
+
+// A process that dies holding a lease releases it: the OS drops its locks.
+void ProcessDeath() {
+  for (const bool kill_it : {true, false}) {
+    Memfd file = CreateMemfd();
+    int ready[2];
+    if (pipe(ready) != 0) abort();
+    const pid_t child = fork();
+    if (child == 0) {
+      const int own = OpenFile(file.path);
+      std::shared_ptr<void> lease;
+      if (MapShared(own, true, &lease) != 0) _exit(2);
+      if (write(ready[1], "x", 1) != 1) _exit(3);
+      if (kill_it) pause();
+      _exit(0);  // exits without unmapping: no destructor runs
+    }
+    char byte;
+    CHECK(read(ready[0], &byte, 1) == 1);
+    if (kill_it) {
+      CHECK_L("a live process's writable mapping holds the file busy", Seal(file.fd, F_SEAL_WRITE) == EBUSY);
+      kill(child, SIGKILL);
+    }
+    int status = 0;
+    waitpid(child, &status, 0);
+    CHECK_L(kill_it ? "a killed process's lease is gone: the seal succeeds"
+                    : "an exited process's lease is gone: the seal succeeds",
+            Seal(file.fd, F_SEAL_WRITE) == 0);
+    close(ready[0]);
+    close(ready[1]);
+    CloseFd(file.fd);
+    unlink(file.path.c_str());
+  }
+}
+
+// F_SEAL_WRITE against a writable shared mmap: exactly one of them may win.
+void ThreadRace() {
+  int seal_won = 0, map_won = 0, both = 0, neither = 0;
+  for (int round = 0; round < 1500; ++round) {
+    Memfd file = CreateMemfd();
+    std::atomic<int> go{0};
+    int seal_result = -1, map_result = -1;
+    std::shared_ptr<void> lease;
+    std::thread sealer([&] {
+      while (go.load() == 0) {}
+      for (int spin = round % 7; spin > 0; --spin) std::this_thread::yield();
+      seal_result = Seal(file.fd, F_SEAL_WRITE);
+    });
+    std::thread mapper([&] {
+      while (go.load() == 0) {}
+      for (int spin = (round / 7) % 7; spin > 0; --spin) std::this_thread::yield();
+      map_result = MapShared(file.fd, true, &lease);
+    });
+    go.store(1);
+    sealer.join();
+    mapper.join();
+    const bool sealed = seal_result == 0, mapped = map_result == 0;
+    if (sealed && mapped) ++both;
+    else if (!sealed && !mapped) ++neither;
+    else if (sealed) ++seal_won;
+    else ++map_won;
+    if (sealed != ((Seals(file.fd) & F_SEAL_WRITE) != 0)) ++both;  // stored state must match the answer
+    if (!sealed && seal_result != EBUSY) ++neither;
+    if (!mapped && map_result != EPERM) ++neither;
+    lease.reset();
+    CloseFd(file.fd);
+    unlink(file.path.c_str());
+  }
+  printf("thread race: seal won %d, map won %d (both %d, neither %d)\n", seal_won, map_won, both, neither);
+  CHECK_L("no round let a write seal and a writable shared mapping both succeed", both == 0);
+  CHECK_L("every round had one winner: EBUSY only against a mapping, EPERM only after a seal", neither == 0);
+  CHECK_L("both orders of the race were exercised", seal_won > 0 && map_won > 0);
+}
+
+// The same race between two processes, each with its own handle (own file object).
+void ProcessRace() {
+  auto* shared = static_cast<std::atomic<int>*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+  int seal_won = 0, map_won = 0, both = 0, neither = 0;
+  for (int round = 0; round < 400; ++round) {
+    Memfd file = CreateMemfd();
+    shared[0] = 0;
+    const pid_t child = fork();
+    if (child == 0) {
+      const int own = OpenFile(file.path);
+      while (shared[0].load() == 0) {}
+      for (int spin = round % 5; spin > 0; --spin) sched_yield();
+      { const int result = Seal(own, F_SEAL_WRITE); _exit(result == 0 ? 0 : (result == EBUSY ? 1 : 2)); }
+    }
+    std::shared_ptr<void> lease;
+    shared[0] = 1;
+    for (int spin = (round / 5) % 5; spin > 0; --spin) sched_yield();
+    const int map_result = MapShared(file.fd, true, &lease);
+    int status = 0;
+    waitpid(child, &status, 0);
+    const int seal_status = WIFEXITED(status) ? WEXITSTATUS(status) : 99;
+    const bool sealed = seal_status == 0, mapped = map_result == 0;
+    if (sealed && mapped) ++both;
+    else if (!sealed && !mapped) ++neither;
+    else if (sealed) ++seal_won;
+    else ++map_won;
+    if (!sealed && seal_status != 1) ++neither;
+    if (!mapped && map_result != EPERM) ++neither;
+    lease.reset();
+    CloseFd(file.fd);
+    unlink(file.path.c_str());
+  }
+  printf("process race: seal won %d, map won %d (both %d, neither %d)\n", seal_won, map_won, both, neither);
+  CHECK_L("across processes no round let a write seal and a writable mapping both succeed", both == 0);
+  CHECK_L("across processes every round had one winner with the right error", neither == 0);
+  CHECK_L("across processes both orders of the race were exercised", seal_won > 0 && map_won > 0);
+}
+
+// Seals added in two processes at once must all be stored.
+void ChangeRace() {
+  auto* shared = static_cast<std::atomic<int>*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+  ea_jitter->store(1);
+  int lost = 0, failed = 0;
+  const unsigned wanted[][2] = {{F_SEAL_SHRINK, F_SEAL_GROW}, {F_SEAL_WRITE, F_SEAL_SHRINK}, {F_SEAL_FUTURE_WRITE, F_SEAL_WRITE | F_SEAL_GROW}};
+  for (int round = 0; round < 300; ++round) {
+    Memfd file = CreateMemfd();
+    const unsigned* pair = wanted[round % 3];
+    shared[0] = 0;
+    const pid_t child = fork();
+    if (child == 0) {
+      const int own = OpenFile(file.path);
+      while (shared[0].load() == 0) {}
+      _exit(Seal(own, pair[0]) == 0 ? 0 : 1);
+    }
+    shared[0] = 1;
+    const int mine = Seal(file.fd, pair[1]);
+    int status = 0;
+    waitpid(child, &status, 0);
+    if (mine != 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) ++failed;
+    if (Seals(file.fd) != static_cast<int>(pair[0] | pair[1])) ++lost;
+    CloseFd(file.fd);
+    unlink(file.path.c_str());
+  }
+  ea_jitter->store(0);
+  printf("change race: lost updates %d, failed adds %d\n", lost, failed);
+  CHECK_L("concurrent additions from two processes both fail-free", failed == 0);
+  CHECK_L("no concurrent addition overwrote another's seals", lost == 0);
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  ea_table = static_cast<EaSlot*>(mmap(nullptr, sizeof(EaSlot) * kEaSlots, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+  ea_jitter = static_cast<std::atomic<int>*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+  if (ea_table == MAP_FAILED || ea_jitter == MAP_FAILED) return 2;
+  const std::string name = argv[1];
+  if (name == "basics") { Basics(); PartialUnmap(); Handles(); Failures(); Sealing(); Cost(); }
+  else if (name == "lifetime") ProcessDeath();
+  else if (name == "races") { ThreadRace(); ProcessRace(); ChangeRace(); }
+  else return 2;
+  check("lease model ends with no lock left", lock_records.empty());
+  printf("Memfd lease host: %d assertions, %d failures\n", assertions, failures);
+  return failures == 0 ? 0 : 1;
+}
