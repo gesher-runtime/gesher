@@ -585,6 +585,27 @@ public final class ContactsProviderContractTest {
                     new String[] { Long.toString(rawId) }, null)) {
                 check(c != null && c.getCount() == 0, "Hard-deleted raw_contact removed completely");
             }
+
+            Uri scopedAccount = syncRawUri.buildUpon()
+                    .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME, "scoped@example.org")
+                    .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE, "com.example.sync")
+                    .build();
+            Uri otherDataSet = scopedAccount.buildUpon()
+                    .appendQueryParameter(ContactsContract.RawContacts.DATA_SET, "other").build();
+            Uri original = provider.insert(scopedAccount, new ContentValues());
+            Uri preserved = provider.insert(otherDataSet, new ContentValues());
+            try (Cursor c = provider.query(scopedAccount, new String[] {"_id"}, null, null, null)) {
+                check(c != null && c.getCount() == 1 && c.moveToFirst()
+                        && c.getLong(0) == ContentUris.parseId(original),
+                        "Account parameters scope the query to the requested data set");
+            }
+            check(provider.delete(scopedAccount, null, null) == 1,
+                    "Account-scoped delete removes only the requested data set");
+            try (Cursor c = provider.query(preserved, new String[] {"_id"}, null, null, null)) {
+                check(c != null && c.getCount() == 1 && c.moveToFirst()
+                        && c.getLong(0) == ContentUris.parseId(preserved),
+                        "Account-scoped delete preserves the other data set");
+            }
         } finally {
             provider.shutdown();
         }

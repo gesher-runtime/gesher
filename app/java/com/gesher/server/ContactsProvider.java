@@ -42,6 +42,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -56,8 +57,8 @@ import java.util.TreeSet;
  * this implementation.
  *
  * <p><b>Limitation (1:1 contacts without multi-raw-contact aggregation):</b>
- * Inserting a {@code raw_contact} without an explicit {@code contact_id} creates a
- * 1:1 {@code contacts} row; automatic cross-account raw-contact aggregation and
+ * Inserting a {@code raw_contact} creates its own aggregate {@code contacts}
+ * row. Automatic cross-account raw-contact aggregation and
  * split/join heuristics are not implemented.
  */
 final class ContactsProvider extends ContentProvider {
@@ -976,7 +977,8 @@ final class ContactsProvider extends ContentProvider {
             case CONTACTS_ENTITY:
                 qb.setTables("view_contacts_entity");
                 qb.setProjectionMap(sContactsEntityProjectionMap);
-                qb.appendWhereStandalone("is_user_profile = 0 AND deleted = 0 AND contact_id = ?");
+                qb.appendWhereStandalone("is_user_profile = 0 AND deleted = 0");
+                effSelection = scopedSelection(selection, "contact_id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, uri.getPathSegments().get(1));
                 if (sortOrder == null) sortOrder = "raw_contact_id, data_id";
                 break;
@@ -987,7 +989,7 @@ final class ContactsProvider extends ContentProvider {
                 qb.appendWhereStandalone("COALESCE(is_user_profile, 0) = 0");
                 if (!syncAdapter) qb.appendWhereStandalone("deleted = 0");
                 if (match == RAW_CONTACT_ENTITY) {
-                    qb.appendWhereStandalone("raw_contact_id = ?");
+                    effSelection = scopedSelection(selection, "raw_contact_id = ?");
                     effArgs = ContactsProviderSupport.prependArgs(selectionArgs, uri.getPathSegments().get(1));
                 }
                 if (sortOrder == null) sortOrder = "raw_contact_id, data_id";
@@ -1132,6 +1134,13 @@ final class ContactsProvider extends ContentProvider {
             qb.appendWhereStandalone("COALESCE(is_user_profile, 0) = 0");
         }
         if (localInvisible) qb.appendWhereStandalone("0");
+        if (qb.getProjectionMap().containsKey("account_name")) {
+            AccountFilter account = AccountFilter.fromUri(uri);
+            if (account != null) {
+                qb.appendWhereStandalone(account.selection());
+                effArgs = account.withArgs(effArgs);
+            }
+        }
         Cursor cursor;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
@@ -1174,6 +1183,54 @@ final class ContactsProvider extends ContentProvider {
         return DatabaseUtils.concatenateWhere(scope, selection);
     }
 
+    private static final class AccountFilter {
+        final String name;
+        final String type;
+        final String dataSet;
+
+        private AccountFilter(String name, String type, String dataSet) {
+            this.name = name;
+            this.type = type;
+            this.dataSet = dataSet;
+        }
+
+        static AccountFilter fromUri(Uri uri) {
+            String name = uri.getQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME);
+            String type = uri.getQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE);
+            boolean hasName = name != null && !name.isEmpty();
+            boolean hasType = type != null && !type.isEmpty();
+            if (hasName != hasType) {
+                throw new IllegalArgumentException("Specify both account name and account type");
+            }
+            if (!hasName) return null;
+            return new AccountFilter(name, type,
+                    uri.getQueryParameter(ContactsContract.RawContacts.DATA_SET));
+        }
+
+        String selection() {
+            return "account_name = ? AND account_type = ? AND "
+                    + (dataSet == null ? "data_set IS NULL" : "data_set = ?");
+        }
+
+        String[] withArgs(String[] args) {
+            return dataSet == null ? ContactsProviderSupport.prependArgs(args, name, type)
+                    : ContactsProviderSupport.prependArgs(args, name, type, dataSet);
+        }
+
+        void applyTo(ContentValues values) {
+            setValue(values, "account_name", name);
+            setValue(values, "account_type", type);
+            setValue(values, "data_set", dataSet);
+        }
+
+        private static void setValue(ContentValues values, String column, String expected) {
+            if (values.containsKey(column) && !Objects.equals(values.getAsString(column), expected)) {
+                throw new IllegalArgumentException("Conflicting account " + column);
+            }
+            values.put(column, expected);
+        }
+    }
+
     private static String idInClause(String column, Collection<Long> ids) {
         if (ids.isEmpty()) return "1 = 0";
         StringBuilder sb = new StringBuilder(column).append(" IN (");
@@ -1207,13 +1264,13 @@ final class ContactsProvider extends ContentProvider {
         boolean shouldSync = false;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
+            db.beginTransaction();
             boolean outermost = (mBatchDepth == 0);
             if (outermost) {
                 mBatchDirty = false;
                 mBatchSyncToNetwork = false;
             }
             mBatchDepth++;
-            db.beginTransaction();
             boolean committed = false;
             try {
                 results = super.applyBatch(operations);
@@ -1301,12 +1358,14 @@ final class ContactsProvider extends ContentProvider {
         ContentValues copy = values == null ? new ContentValues() : new ContentValues(values);
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
+        AccountFilter account = AccountFilter.fromUri(uri);
         switch (match) {
             case RAW_CONTACTS:
             case PROFILE_RAW_CONTACTS: {
                 boolean isProfile = match == PROFILE_RAW_CONTACTS;
                 copy.remove("contact_id");
                 requireKeys(copy, RAW_WRITE_COLUMNS);
+                if (account != null) account.applyTo(copy);
                 ContentValues contactValues = new ContentValues();
                 contactValues.put("contact_last_updated_timestamp", now);
                 contactValues.put("is_user_profile", isProfile ? 1 : 0);
@@ -1328,19 +1387,21 @@ final class ContactsProvider extends ContentProvider {
             case RAW_CONTACTS_DATA: {
                 long rawId = Long.parseLong(uri.getPathSegments().get(1));
                 copy.put("raw_contact_id", rawId);
-                return insertDataLocked(db, copy, null, now, syncAdapter);
+                return insertDataLocked(db, copy, null, account, now, syncAdapter);
             }
             case DATA:
             case PHONES:
             case EMAILS:
             case POSTALS:
-                return insertDataLocked(db, copy, forcedMime(match), now, syncAdapter);
+                return insertDataLocked(db, copy, forcedMime(match), account, now, syncAdapter);
             case GROUPS:
                 requireKeys(copy, GROUP_WRITE_COLUMNS);
+                if (account != null) account.applyTo(copy);
                 if (!syncAdapter && !copy.containsKey("dirty")) copy.put("dirty", 1);
                 return db.insertOrThrow("groups", null, copy);
             case SETTINGS:
                 requireKeys(copy, SETTINGS_WRITE_COLUMNS);
+                if (account != null) account.applyTo(copy);
                 db.insertWithOnConflict("settings", null, copy, SQLiteDatabase.CONFLICT_REPLACE);
                 return 1;
             default:
@@ -1349,7 +1410,7 @@ final class ContactsProvider extends ContentProvider {
     }
 
     private long insertDataLocked(SQLiteDatabase db, ContentValues copy, String forcedMime,
-            long now, boolean syncAdapter) {
+            AccountFilter account, long now, boolean syncAdapter) {
         String mimetype = forcedMime != null ? forcedMime : copy.getAsString("mimetype");
         copy.remove("mimetype");
         Long rawContactId = copy.getAsLong("raw_contact_id");
@@ -1358,6 +1419,11 @@ final class ContactsProvider extends ContentProvider {
         if (rawContactId == null || !hasRemainingRows(db, "raw_contacts",
                 "_id = ? AND deleted = 0 AND raw_contact_is_user_profile = 0", rawContactId)) {
             throw new IllegalArgumentException("Data insert requires an existing raw contact");
+        }
+        if (account != null && queryIds(db, "SELECT _id FROM raw_contacts WHERE "
+                + account.selection() + " AND _id = ?",
+                account.withArgs(new String[] {Long.toString(rawContactId)})).isEmpty()) {
+            throw new IllegalArgumentException("Data raw contact belongs to another account");
         }
         copy.put("raw_contact_id", rawContactId);
         if (mimetype == null || mimetype.isEmpty()) {
@@ -1544,7 +1610,14 @@ final class ContactsProvider extends ContentProvider {
             selectionArgs = ContactsProviderSupport.prependArgs(
                     selectionArgs, Long.toString(ContentUris.parseId(uri)));
         }
-        if (where != null) qb.appendWhere(where);
+        if (qb.getProjectionMap().containsKey("account_name")) {
+            AccountFilter account = AccountFilter.fromUri(uri);
+            if (account != null) {
+                qb.appendWhereStandalone(account.selection());
+                selectionArgs = account.withArgs(selectionArgs);
+            }
+        }
+        if (where != null) qb.appendWhereStandalone(where);
         Set<Long> ids = new HashSet<>();
         try (Cursor c = qb.query(db, new String[] { "_id" }, selection, selectionArgs,
                 null, null, null)) {
