@@ -396,7 +396,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = '0411d27b971370362208fc84c5d0155e9e65b3b3e3ac5060d09a9165590f0f97'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = '7dceaab18f11c56188a923f9d7f4c4d70621582181da2d76fc77d104e9937497'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/binder/binderd.cc': '2f37f06e5b5a088c59bf3e676bbb3c22b526b11eb891195a083c9dc811ff0f36',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
@@ -426,6 +426,8 @@ APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/posix/src/system_properties.cc': 'bb8b16bfd421ddef655bec8e933ea0196f18f1b697e59d13c6155c5c487b594a',
  'compat/posix/src/unistd.cc': '586933c9fbb8199caf5fe4fb562363a9397a8020b291b584ce82f2bbbcf8f0c4',
  'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
+ 'tests/native/ofd_transfer_host_test.cc.in': 'd1f0a1ac8987d92e938e2b460d009108c79ee364bdc4bd79759a230f4c18891e',
+ 'tools/test_ofd_transfer_contracts.py': '536e36bd194754f6330e2de2f1cf722b203e22ae0393048dd712915abf0d2c48',
 }
 
 def preceding_appcontainer_identity_sources():
