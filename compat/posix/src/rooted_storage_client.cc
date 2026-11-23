@@ -5,6 +5,7 @@
 #include <gesher/cohost_bootstrap.h>
 
 #include <algorithm>
+#include <array>
 #include <string_view>
 #include <utility>
 
@@ -16,7 +17,8 @@ namespace wire = rooted_storage_wire;
 static_assert(sizeof(wchar_t) == 2);
 
 std::wstring AbsoluteDosPath(std::wstring path) {
-  if (path.starts_with(L"\\\\?\\") && !path.starts_with(L"\\\\?\\UNC\\")) path.erase(0, 4);
+  if (path.starts_with(L"\\\\?\\UNC\\")) path.replace(0, 8, L"\\\\");
+  if (path.size() >= 7 && path.starts_with(L"\\\\?\\") && path[5] == L':') path.erase(0, 4);
   std::replace(path.begin(), path.end(), L'/', L'\\');
   const DWORD size = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
   if (size == 0 || size > wire::kMaxPathUnits + 1) return {};
@@ -29,14 +31,21 @@ std::wstring AbsoluteDosPath(std::wstring path) {
 }
 
 bool Within(std::wstring_view path, std::wstring_view root) {
-  return !root.empty() && path.size() >= root.size() &&
-      CompareStringOrdinal(path.data(), static_cast<int>(root.size()), root.data(),
-                           static_cast<int>(root.size()), TRUE) == CSTR_EQUAL &&
-      (path.size() == root.size() || root.back() == L'\\' || path[root.size()] == L'\\');
+  if (root.empty() || path.size() < root.size() ||
+      (path.size() != root.size() && root.back() != L'\\' && path[root.size()] != L'\\')) return false;
+  path = path.substr(0, root.size());
+  if (root.size() >= 3 && root[1] == L':' && root[2] == L'\\') {
+    if (CompareStringOrdinal(path.data(), 1, root.data(), 1, TRUE) != CSTR_EQUAL) return false;
+    path.remove_prefix(1);
+    root.remove_prefix(1);
+  }
+  // A case-sensitive Windows directory can have two real sibling names.
+  // Match only an exact spelling authenticated by the launch metadata.
+  return path == root;
 }
 
 int Call(wire::Op operation, const Selection& path, const Selection& target, uint32_t flags,
-         wire::Reply* reply) {
+         wire::Reply* reply, wire::Filesystem* filesystem = nullptr) {
   if (path.error != 0) return path.error;
   if (target.error != 0) return target.error;
   if (!path.matched || (operation == wire::Op::kRename && !target.matched)) return EXDEV;
@@ -85,6 +94,9 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
     return EPROTO;
   }
   if (!state.VerifyPeer(pipe)) return EACCES;
+  if (reply->status == 0 && operation == wire::Op::kStatAndroidData &&
+      (!binder_bootstrap::Transfer(pipe, filesystem, sizeof(*filesystem), false, deadline) ||
+       !state.VerifyPeer(pipe))) return EIO;
   if (reply->handle != 0) {
     wire::OpenAck ack, committed;
     // The host starts its five-second delivery window before writing the
@@ -102,26 +114,64 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
 }
 }  // namespace
 
+bool HasBroker() {
+  const auto& state = cohost_bootstrap::Current();
+  return state && !state.storage_pipe.empty();
+}
+
+int StatAndroidData(wire::Filesystem* filesystem) {
+  if (filesystem == nullptr) return EFAULT;
+  wire::Reply reply;
+  return Call(wire::Op::kStatAndroidData, {true, 0, wire::kCredential, {}}, {}, 0, &reply, filesystem);
+}
+
 Selection Lookup(const std::wstring& mapped) {
   const auto& state = cohost_bootstrap::Current();
   if (!state || state.storage_pipe.empty()) return {};
-  struct Roots {
-    std::wstring credential, device;
+  struct Root {
+    std::wstring path;
+    uint32_t area;
   };
-  static const Roots roots{AbsoluteDosPath(state.credential), AbsoluteDosPath(state.device)};
-  if (roots.credential.empty() || roots.device.empty()) return {false, EACCES, wire::kCredential, {}};
+  static const std::array roots{
+      Root{AbsoluteDosPath(state.credential), wire::kCredential},
+      Root{AbsoluteDosPath(state.device), wire::kDevice},
+      Root{AbsoluteDosPath(state.credential_canonical), wire::kCredential},
+      Root{AbsoluteDosPath(state.device_canonical), wire::kDevice},
+  };
+  if (std::any_of(roots.begin(), roots.end(), [](const Root& root) { return root.path.empty(); })) {
+    return {false, EACCES, wire::kCredential, {}};
+  }
   const std::wstring absolute = AbsoluteDosPath(mapped);
   if (absolute.empty()) return {false, ENAMETOOLONG, wire::kCredential, {}};
-  const bool ce = Within(absolute, roots.credential);
-  const bool de = Within(absolute, roots.device);
-  if (!ce && !de) return {};
-  const bool choose_device = de && (!ce || roots.device.size() > roots.credential.size());
-  const auto& root = choose_device ? roots.device : roots.credential;
-  size_t start = root.size();
+  const Root* selected = nullptr;
+  for (const auto& root : roots) {
+    if (Within(absolute, root.path) && (!selected || root.path.size() > selected->path.size())) selected = &root;
+  }
+  if (!selected) return {};
+  size_t start = selected->path.size();
   if (start < absolute.size() && absolute[start] == L'\\') ++start;
   auto relative = absolute.substr(start);
   std::replace(relative.begin(), relative.end(), L'\\', L'/');
-  return {true, 0, choose_device ? wire::kDevice : wire::kCredential, std::move(relative)};
+  return {true, 0, selected->area, std::move(relative)};
+}
+
+std::wstring DescriptorPath(HANDLE file) {
+  const auto& state = cohost_bootstrap::Current();
+  if (!state || state.storage_pipe.empty()) return {};
+  constexpr DWORD format = FILE_NAME_NORMALIZED | VOLUME_NAME_NT;
+  const DWORD size = GetFinalPathNameByHandleW(file, nullptr, 0, format);
+  if (size == 0 || size > wire::kMaxPathUnits + 1) return {};
+  std::wstring name(size, L'\0');
+  const DWORD used = GetFinalPathNameByHandleW(file, name.data(), size, format);
+  if (used == 0 || used >= size) return {};
+  name.resize(used);
+  if (Within(name, state.credential_nt)) {
+    return state.credential_canonical + name.substr(state.credential_nt.size());
+  }
+  if (Within(name, state.device_nt)) {
+    return state.device_canonical + name.substr(state.device_nt.size());
+  }
+  return {};
 }
 
 int Open(const Selection& path, uint32_t flags, HANDLE* file, bool* created) {

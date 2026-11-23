@@ -56,6 +56,10 @@ std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
 // The file open on a handle, as a Linux path (LinuxPath). False with errno
 // set if it has no file name (a pipe, a console, NUL).
 bool FinalPath(HANDLE h, std::string* out) {
+  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
+    *out = gesher::LinuxPath(scoped.c_str());
+    return true;
+  }
   wchar_t buf[32768];
   DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0) {

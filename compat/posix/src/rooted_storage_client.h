@@ -22,6 +22,13 @@ struct Selection {
 // Accepts a Windows path from MapPath, including its encoded on-disk names.
 Selection Lookup(const std::wstring& mapped);
 
+// Resolves a real handle's kernel name to the exact rooted DOS name. A lowbox
+// can query the NT object name even when Win32 drive translation is denied.
+std::wstring DescriptorPath(HANDLE file);
+
+bool HasBroker();
+int StatAndroidData(rooted_storage_wire::Filesystem* filesystem);
+
 // Return 0 or positive Linux errno. A successful Open returns a real, owned,
 // non-inheritable kernel handle, never a reusable numeric protocol identifier.
 int Open(const Selection& path, uint32_t flags, HANDLE* file, bool* created = nullptr);

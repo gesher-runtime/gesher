@@ -27,6 +27,7 @@
 #include <windows.h>
 #include <psapi.h>
 #include <gesher/file_description.h>
+#include <gesher/filesystem_capacity.h>
 
 #include <array>
 #include <memory>
@@ -74,15 +75,14 @@ int NiceFromPriority(int priority) {
   return 19;
 }
 
-void FillStatvfs(ULARGE_INTEGER avail, ULARGE_INTEGER total, ULARGE_INTEGER free,
-                 struct statvfs* buf) {
+void FillStatvfs(uint64_t avail, uint64_t total, uint64_t free, struct statvfs* buf) {
   const unsigned long long block = 4096;
   memset(buf, 0, sizeof(*buf));
   buf->f_bsize = block;
   buf->f_frsize = block;
-  buf->f_blocks = total.QuadPart / block;
-  buf->f_bfree = free.QuadPart / block;
-  buf->f_bavail = avail.QuadPart / block;
+  buf->f_blocks = total / block;
+  buf->f_bfree = free / block;
+  buf->f_bavail = avail / block;
   buf->f_namemax = 255;
 }
 
@@ -120,6 +120,14 @@ int uname(struct utsname* buf) {
 
 namespace {
 
+int RootedStatvfs(HANDLE file, struct statvfs* buf) {
+  gesher::rooted_storage_wire::Filesystem capacity;
+  const int error = gesher::QueryFilesystemCapacity(file, &capacity);
+  if (error != 0) return errno = error, -1;
+  FillStatvfs(capacity.available_bytes, capacity.total_bytes, capacity.free_bytes, buf);
+  return 0;
+}
+
 // Keep the final Win32 namespace intact: in particular, \\?\UNC\ is not a
 // drive prefix that can be removed. A handle also follows a file symlink or
 // directory junction to the volume containing the actual file.
@@ -147,7 +155,7 @@ int StatvfsHandle(HANDLE h, struct statvfs* buf) {
   ULARGE_INTEGER avail, total, free;
   if (!GetDiskFreeSpaceExW(root.c_str(), &avail, &total, &free))
     return gesher::FailWithLastError();
-  FillStatvfs(avail, total, free, buf);
+  FillStatvfs(avail.QuadPart, total.QuadPart, free.QuadPart, buf);
   return 0;
 }
 
@@ -210,6 +218,13 @@ bool ParentFilesystemPath(std::wstring* path) {
 int statvfs(const char* path, struct statvfs* buf) {
   if (path == nullptr || buf == nullptr) return errno = EFAULT, -1;
   if (*path == '\0') return errno = ENOENT, -1;
+  if (strcmp(path, "/data") == 0 && gesher::storage_root::HasBroker()) {
+    gesher::rooted_storage_wire::Filesystem capacity;
+    const int error = gesher::storage_root::StatAndroidData(&capacity);
+    if (error != 0) return errno = error, -1;
+    FillStatvfs(capacity.available_bytes, capacity.total_bytes, capacity.free_bytes, buf);
+    return 0;
+  }
   std::wstring mapped;
   gesher::PathKind kind = gesher::MapPath(path, &mapped);
   if (kind == gesher::PathKind::kMissing) return errno = ENOENT, -1;
@@ -218,7 +233,7 @@ int statvfs(const char* path, struct statvfs* buf) {
       HANDLE h;
       const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
       if (error != 0) return errno = error, -1;
-      const int result = StatvfsHandle(h, buf);
+      const int result = RootedStatvfs(h, buf);
       const int saved_errno = errno;
       CloseHandle(h);
       errno = saved_errno;
@@ -269,6 +284,7 @@ int fstatvfs(int fd, struct statvfs* buf) {
   if (buf == nullptr) return errno = EFAULT, -1;
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (!gesher::storage_root::DescriptorPath(h).empty()) return RootedStatvfs(h, buf);
   return StatvfsHandle(h, buf);
 }
 

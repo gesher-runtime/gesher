@@ -333,11 +333,14 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
       (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
     return errno = ENOTDIR, false;
   }
-  DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  std::wstring dir(n, L'\0');
-  n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
-  dir.resize(n);
+  auto dir = storage_root::DescriptorPath(h);
+  if (dir.empty()) {
+    DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    dir.resize(n);
+    n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
+    dir.resize(n);
+  }
   *out = LinuxPath(dir.c_str());
   if (out->back() != '/') *out += '/';
   *out += path;

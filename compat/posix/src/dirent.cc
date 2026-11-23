@@ -176,6 +176,9 @@ DIR* fdopendir(int fd) {
     errno = ENOTDIR;
     return nullptr;
   }
+  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
+    return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
+  }
   wchar_t path[32768];
   DWORD n = GetFinalPathNameByHandleW(h, path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0 || n >= 32768) {
