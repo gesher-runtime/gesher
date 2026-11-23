@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <string>
@@ -68,8 +69,9 @@ static BOOL MoveFileExW(const wchar_t*, const wchar_t*, DWORD) { ++moves; last_e
 static int _wcsicmp(const wchar_t* a, const wchar_t* b) { return wcscasecmp(a, b); }
 static int _wcsnicmp(const wchar_t* a, const wchar_t* b, size_t n) { return wcsncasecmp(a, b, n); }
 namespace gesher {
+#include "uncontained_storage_fixture.h"
 static int FailWithLastError() { errno = last_error; return -1; }
-static bool DiskPath(const char* path, std::wstring* result, int) {
+static bool DiskPath(const char* path, std::wstring* result, int, bool = false) {
   if (!path) { errno = EFAULT; return false; }
   result->assign(path, path + std::strlen(path)); return true;
 }

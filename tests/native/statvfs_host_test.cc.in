@@ -6,12 +6,15 @@
 #include <cerrno>
 #include <codecvt>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <locale>
 #include <map>
 #include <string>
 #include <vector>
+
+@ROOTED_STORAGE_WIRE@
 
 using DWORD = uint32_t;
 using HANDLE = void*;
@@ -182,6 +185,22 @@ static HANDLE HandleFromFd(int fd) {
   auto found = descriptors.find(fd);
   return found == descriptors.end() ? INVALID_HANDLE_VALUE : found->second;
 }
+
+#if STATVFS_HAS_ROOTED_STORAGE
+// The ordinary host fixture has no AppContainer storage broker. Keep the
+// protected operations fail-closed if a regression dispatches to them.
+static int QueryFilesystemCapacity(HANDLE, rooted_storage_wire::Filesystem*) { std::abort(); }
+namespace storage_root {
+struct Selection {
+  explicit operator bool() const { return false; }
+};
+static bool HasBroker() { return false; }
+static Selection Lookup(const std::wstring&) { return {}; }
+static std::wstring DescriptorPath(HANDLE) { return {}; }
+static int StatAndroidData(rooted_storage_wire::Filesystem*) { std::abort(); }
+static int Open(const Selection&, uint32_t, HANDLE*) { std::abort(); }
+}  // namespace storage_root
+#endif
 }
 
 namespace host_statistics {

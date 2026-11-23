@@ -18,17 +18,21 @@ def main() -> None:
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     source = (ROOT / "compat/framework/services_zygote.cc").read_text()
-    start, end = "int64_t ChildStartTime(int pid)", "bool Kill(int pid)"
-    if source.count(start) != 1 or source.count(end) != 1:
-        raise ValueError("Production child lifetime boundaries changed")
-    production = source[source.index(start):source.index(end)]
+    production = []
+    for start, end in (
+        ("int64_t ChildStartTime(int pid)", "void* OpenProtectedChildFile("),
+        ("bool KillChild(int pid, int64_t start_time)", "bool Kill(int pid)"),
+    ):
+        if source.count(start) != 1 or source.count(end) != 1 or source.index(start) >= source.index(end):
+            raise ValueError(f"Production child lifetime boundaries changed for {start}")
+        production.append(source[source.index(start):source.index(end)])
     print("services_zygote.cc SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     template = (ROOT / "tests/native/zygote_child_lifetime_host_test.cc.in").read_text()
     if template.count("@PRODUCTION_CHILD_LIFETIME@") != 1:
         raise ValueError("Missing production child lifetime marker")
     with tempfile.TemporaryDirectory(prefix="gesher-child-lifetime-") as directory:
         work = Path(directory); generated = work / "contracts.cc"; binary = work / "contracts"
-        generated.write_text(template.replace("@PRODUCTION_CHILD_LIFETIME@", production))
+        generated.write_text(template.replace("@PRODUCTION_CHILD_LIFETIME@", "".join(production)))
         command = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
                 str(generated), "-o", str(binary)]
         if args.sanitize:

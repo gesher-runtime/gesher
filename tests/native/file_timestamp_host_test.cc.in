@@ -178,6 +178,7 @@ static BOOL SetFileTime(HANDLE handle, const FILETIME* created, const FILETIME* 
 }
 
 namespace gesher {
+#include "uncontained_storage_fixture.h"
 enum class PathKind { kFile, kMissing, kVirtual };
 static int FailWithLastError() { errno = static_cast<int>(last_error); return -1; }
 static HANDLE HandleFromFd(int fd) {
