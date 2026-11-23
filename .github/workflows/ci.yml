@@ -490,6 +490,9 @@ jobs:
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
 
+      - name: DownloadManager provider, queue and transfer over real HTTP sockets
+        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
         run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
 
