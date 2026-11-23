@@ -89,6 +89,37 @@ void FileOperations(const storage::Roots& roots, const fs::path& dir) {
   Check(storage::Remove(roots, kCE, L"files", true) == 0, "remove an empty directory");
 }
 
+void WinVfsHandles(const storage::Roots& roots, const fs::path& dir) {
+  OpenRequest options;
+  options.access = Access::kReadWrite;
+  options.create = true;
+  options.exclusive = true;
+  options.share_mode = 0;
+  HANDLE file = INVALID_HANDLE_VALUE;
+  const int result = storage::Open(roots, kCE, L"sqlite-exclusive", options, &file);
+  Check(result == 0, "open a real exclusive database handle");
+  if (result != 0) return;
+  HANDLE other = INVALID_HANDLE_VALUE;
+  Check(storage::Open(roots, kCE, L"sqlite-exclusive", {}, &other) == EACCES &&
+        other == INVALID_HANDLE_VALUE, "exclusive database sharing blocks concurrent open");
+  CloseHandle(file);
+
+  options.share_mode = FILE_SHARE_READ | FILE_SHARE_WRITE;
+  options.delete_on_close = true;
+  options.overlapped = true;
+  file = INVALID_HANDLE_VALUE;
+  const int temp = storage::Open(roots, kCE, L"sqlite-temp", options, &file);
+  Check(temp == 0, "open a real overlapped delete-on-close temp file");
+  if (temp != 0) return;
+  OVERLAPPED io{};
+  DWORD transferred = 0;
+  const bool queued = WriteFile(file, "safe", 4, nullptr, &io) || GetLastError() == ERROR_IO_PENDING;
+  Check(queued && GetOverlappedResult(file, &io, &transferred, TRUE) && transferred == 4,
+        "overlapped file preserves real I/O");
+  CloseHandle(file);
+  Check(!fs::exists(dir / L"CE/sqlite-temp"), "last close retires the real temp file");
+}
+
 void BoundaryOperations(const storage::Roots& roots, const fs::path& dir) {
   std::ofstream(dir / L"outside" / L"sentinel", std::ios::binary) << "outside";
   Check(CreateHardLinkW((dir / L"CE/aliased").c_str(), (dir / L"outside/sentinel").c_str(), nullptr),
@@ -131,6 +162,7 @@ int wmain(int argc, wchar_t** argv) {
   storage::Roots roots{Pin(dir / L"CE"), Pin(dir / L"DE")};
   if (roots.credential == INVALID_HANDLE_VALUE || roots.device == INVALID_HANDLE_VALUE) return 2;
   FileOperations(roots, dir);
+  WinVfsHandles(roots, dir);
   BoundaryOperations(roots, dir);
   CloseHandle(roots.credential);
   CloseHandle(roots.device);

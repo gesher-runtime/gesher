@@ -84,9 +84,16 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
   } else if (reply->handle == 0 || reply->handle == UINT64_MAX || reply->handle > UINTPTR_MAX) {
     return EPROTO;
   }
-  if (!state.VerifyPeer(pipe)) {
-    if (reply->handle != 0) CloseHandle(binder_bootstrap::DecodeHandle(reply->handle));
-    return EACCES;
+  if (!state.VerifyPeer(pipe)) return EACCES;
+  if (reply->handle != 0) {
+    wire::OpenAck ack, committed;
+    if (!binder_bootstrap::Transfer(pipe, &ack, sizeof(ack), true, deadline) ||
+        !binder_bootstrap::Transfer(pipe, &committed, sizeof(committed), false, deadline)) return EIO;
+    if (committed.magic != wire::kOpenCommitMagic || committed.version != wire::kVersion) return EPROTO;
+    if (!state.VerifyPeer(pipe)) {
+      CloseHandle(binder_bootstrap::DecodeHandle(reply->handle));
+      return EACCES;
+    }
   }
   return reply->status;
 }

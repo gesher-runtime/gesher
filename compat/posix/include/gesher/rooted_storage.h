@@ -27,6 +27,9 @@ struct OpenRequest {
   bool directory = false;
   bool read_only_create = false;
   bool write_through = false;
+  DWORD share_mode = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+  bool delete_on_close = false;
+  bool overlapped = false;
 };
 
 struct DirectoryEntry {

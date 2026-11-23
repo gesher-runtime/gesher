@@ -60,6 +60,15 @@ struct Reply {
   uint64_t handle = 0;  // Only a successful kOpen supplies a guest-owned handle.
 };
 
-static_assert(sizeof(Request) == 32 && sizeof(Reply) == 24);
+// A successful kOpen is an offer. The guest echoes OpenAck with kOpenAckMagic
+// and owns the handle only after the host replies with kOpenCommitMagic.
+constexpr uint32_t kOpenAckMagic = 0x47535241;     // GSRA
+constexpr uint32_t kOpenCommitMagic = 0x47535243;  // GSRC
+struct OpenAck {
+  uint32_t magic = kOpenAckMagic;
+  uint32_t version = kVersion;
+};
+
+static_assert(sizeof(Request) == 32 && sizeof(Reply) == 24 && sizeof(OpenAck) == 8);
 
 }  // namespace gesher::rooted_storage_wire

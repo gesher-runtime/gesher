@@ -75,7 +75,7 @@ int CheckDirectory(HANDLE file) {
 
 int OpenChild(HANDLE parent, std::wstring_view name, ACCESS_MASK access, ULONG disposition,
               ULONG options, ULONG sharing, HANDLE* result, ULONG file_attributes = FILE_ATTRIBUTE_NORMAL,
-              bool* created = nullptr) {
+              bool* created = nullptr, bool overlapped = false) {
   using Create = NTSTATUS(WINAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
                                    PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
   static const auto create = reinterpret_cast<Create>(
@@ -86,9 +86,10 @@ int OpenChild(HANDLE parent, std::wstring_view name, ACCESS_MASK access, ULONG d
   OBJECT_ATTRIBUTES attributes{};
   InitializeObjectAttributes(&attributes, &object_name, OBJ_CASE_INSENSITIVE, parent, nullptr);
   IO_STATUS_BLOCK io{};
+  if (!overlapped) options |= FILE_SYNCHRONOUS_IO_NONALERT;
   NTSTATUS status = create(result, access | SYNCHRONIZE, &attributes, &io, nullptr,
                            file_attributes, sharing, disposition,
-                           options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+                           options | FILE_OPEN_REPARSE_POINT,
                            nullptr, 0);
   if (status < 0) return NativeError(status);
   if (created != nullptr) *created = io.Information == FILE_CREATED;
@@ -163,40 +164,55 @@ int Open(const Roots& roots, Area area, std::wstring_view path, OpenRequest requ
   ACCESS_MASK rights = FILE_READ_ATTRIBUTES;
   switch (request.access) {
     case Access::kRead: rights |= FILE_READ_DATA; break;
-    case Access::kWrite: rights |= FILE_WRITE_DATA | FILE_APPEND_DATA; break;
-    case Access::kReadWrite: rights |= FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA; break;
+      case Access::kWrite: rights |= FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES; break;
+      case Access::kReadWrite:
+        rights |= FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES;
+        break;
     case Access::kMetadata: break;
     case Access::kMetadataWrite: rights |= FILE_WRITE_ATTRIBUTES; break;
     default: return EINVAL;
   }
   const bool writes = request.access == Access::kReadWrite || request.access == Access::kWrite;
   const bool metadata = request.access == Access::kMetadata || request.access == Access::kMetadataWrite;
-  if ((request.exclusive && !request.create) || (request.truncate && !writes) ||
+  if ((request.share_mode & ~kShareAll) != 0 || (request.exclusive && !request.create) ||
+      (request.truncate && !writes) ||
       (request.read_only_create && !request.create) || (metadata && request.create) ||
-      (request.directory && (writes || request.create))) return EINVAL;
+      (request.directory && (writes || request.create || request.delete_on_close)) ||
+      (metadata && request.delete_on_close)) return EINVAL;
+  if (request.delete_on_close) rights |= DELETE;
   Resolved scope;
   int error = Resolve(roots, area, path, &scope);
   if (error != 0) return error;
   if (scope.leaf.empty()) {
     if (request.create && request.exclusive) return EEXIST;
-    if (request.create || writes) return EISDIR;
+    if (request.create || writes || request.delete_on_close) return EISDIR;
+    if (request.share_mode != kShareAll || request.overlapped) return EOPNOTSUPP;
     return DuplicateDirectory(scope.parent, rights, result);
   }
   const ULONG disposition = !request.create ? FILE_OPEN : request.exclusive ? FILE_CREATE : FILE_OPEN_IF;
-  ULONG options = request.directory ? FILE_DIRECTORY_FILE : (request.create || writes ? FILE_NON_DIRECTORY_FILE : 0);
+  ULONG options = request.directory ? FILE_DIRECTORY_FILE :
+      (request.create || writes || request.delete_on_close ? FILE_NON_DIRECTORY_FILE : 0);
   if (request.write_through) options |= FILE_WRITE_THROUGH;
   const ULONG file_attributes = request.read_only_create ? FILE_ATTRIBUTE_READONLY : FILE_ATTRIBUTE_NORMAL;
   HANDLE opened = INVALID_HANDLE_VALUE;
   bool fresh = false;
-  error = OpenChild(scope.parent, scope.leaf, rights, disposition, options, kShareAll, &opened,
-                    file_attributes, &fresh);
+  error = OpenChild(scope.parent, scope.leaf, rights, disposition, options, request.share_mode, &opened,
+                    file_attributes, &fresh, request.overlapped);
   if (error != 0) return error;
   File owned(opened);
   BY_HANDLE_FILE_INFORMATION info{};
   error = GetInfo(opened, &info);
   if (error != 0) return error;
   // Native overwrite dispositions can truncate before the link check.
-  if (request.truncate && !SetEndOfFile(opened)) return ErrnoFromWin32(GetLastError());
+  FILE_END_OF_FILE_INFO end{};
+  if (request.truncate && !SetFileInformationByHandle(opened, FileEndOfFileInfo, &end, sizeof(end))) {
+    return ErrnoFromWin32(GetLastError());
+  }
+  FILE_DISPOSITION_INFO deletion{TRUE};
+  if (request.delete_on_close &&
+      !SetFileInformationByHandle(opened, FileDispositionInfo, &deletion, sizeof(deletion))) {
+    return ErrnoFromWin32(GetLastError());
+  }
   if (created != nullptr) *created = fresh;
   *result = owned.release();
   return 0;
