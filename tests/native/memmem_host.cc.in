@@ -1,0 +1,233 @@
+#include <algorithm>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <random>
+#include <string>
+#include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+#define BIONIC_SYSV
+namespace production {
+void* Memmem(const void*, size_t, const void*, size_t);
+}
+namespace baseline {
+@BASELINE@
+}
+
+static size_t compared = 0;
+static int ObservedMemcmp(const void* a, const void* b, size_t size) {
+  const auto* x = static_cast<const uint8_t*>(a);
+  const auto* y = static_cast<const uint8_t*>(b);
+  for (size_t i = 0; i < size; ++i) {
+    ++compared;
+    if (x[i] != y[i]) return x[i] < y[i] ? -1 : 1;
+  }
+  return 0;
+}
+static const void* ObservedMemchr(const void* data, int byte, size_t size) {
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  for (size_t i = 0; i < size; ++i) {
+    ++compared;
+    if (bytes[i] == byte) return bytes + i;
+  }
+  return nullptr;
+}
+@OBSERVED@
+namespace counted_baseline {
+@COUNTED_BASELINE@
+}
+
+static size_t checks = 0;
+static void check(const char* name, bool ok) {
+  ++checks;
+  if (!ok) {
+    std::fprintf(stderr, "FAIL %s (check %zu)\n", name, checks);
+    std::exit(1);
+  }
+}
+#define memmem production::Memmem
+#include "memmem_test.inc"
+#undef memmem
+
+struct Guarded {
+  uint8_t* mapping;
+  size_t page;
+  Guarded() {
+#ifdef _WIN32
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    page = info.dwPageSize;
+    mapping = static_cast<uint8_t*>(VirtualAlloc(nullptr, page * 3, MEM_RESERVE | MEM_COMMIT,
+                                                  PAGE_NOACCESS));
+    DWORD old;
+    check("guard allocation", mapping && VirtualProtect(mapping + page, page, PAGE_READWRITE, &old));
+#else
+    page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    mapping = static_cast<uint8_t*>(mmap(nullptr, page * 3, PROT_NONE,
+                                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    check("guard allocation", mapping != MAP_FAILED &&
+          mprotect(mapping + page, page, PROT_READ | PROT_WRITE) == 0);
+#endif
+  }
+  ~Guarded() {
+#ifdef _WIN32
+    VirtualFree(mapping, 0, MEM_RELEASE);
+#else
+    munmap(mapping, page * 3);
+#endif
+  }
+  uint8_t* bytes(size_t size, bool at_end) { return mapping + page + (at_end ? page - size : 0); }
+};
+
+static void GuardChecks() {
+  Guarded hmem, nmem;
+  const size_t lengths[] = {0, 1, 2, 3, 15, 16, 17, 31, 32, 63, 64, 127, 256, 511, 512};
+  for (bool hend : {false, true}) for (bool nend : {false, true}) {
+    for (size_t hn : lengths) for (size_t nn : lengths) {
+      uint8_t* h = hmem.bytes(hn, hend);
+      uint8_t* n = nmem.bytes(nn, nend);
+      std::memset(h, 0x81, hn);
+      std::memset(n, 0x81, nn);
+      if (nn) n[nn - 1] = 0xfe;
+      check("guarded miss", production::Memmem(h, hn, n, nn) == memmem_oracle(h, hn, n, nn));
+      if (nn <= hn && nn) {
+        h[hn - 1] = 0xfe;
+        check("guarded last-position hit", production::Memmem(h, hn, n, nn) == h + hn - nn);
+      }
+    }
+  }
+}
+
+static void Differential() {
+  std::mt19937 random(0x723ea186);
+  std::vector<uint8_t> h(4097), n(2049);
+  for (size_t round = 0; round < 120000; ++round) {
+    size_t hn = random() % h.size(), nn = random() % n.size();
+    unsigned alphabet = 2 + random() % 255;
+    for (size_t i = 0; i < hn; ++i) h[i] = random() % alphabet;
+    for (size_t i = 0; i < nn; ++i) n[i] = random() % alphabet;
+    if (nn <= hn && round % 3) std::copy_n(n.data(), nn, h.data() + random() % (hn - nn + 1));
+    const void* expected = memmem_oracle(h.data(), hn, n.data(), nn);
+    check("seeded binary differential", production::Memmem(h.data(), hn, n.data(), nn) == expected);
+    compared = 0;
+    check("counted source preserves result", observed::FindBytes(h.data(), hn, n.data(), nn) == expected);
+    check("linear byte-comparison bound", compared <= 18 * hn + 8 * nn + 1);
+  }
+
+  // Exhaust all binary strings through eight/six bits, expanding each bit to
+  // five bytes so both sides of the 16-byte fast-path boundary are exercised.
+  for (size_t hn = 0; hn <= 8; ++hn) for (size_t nn = 0; nn <= 6; ++nn) {
+    for (unsigned hv = 0; hv < (1u << hn); ++hv) {
+      for (size_t i = 0; i < hn * 5; ++i) h[i] = (hv >> (i / 5)) & 1;
+      for (unsigned nv = 0; nv < (1u << nn); ++nv) {
+        for (size_t i = 0; i < nn * 5; ++i) n[i] = (nv >> (i / 5)) & 1;
+        check("exhaustive repeated binary words", production::Memmem(h.data(), hn * 5, n.data(), nn * 5) ==
+              memmem_oracle(h.data(), hn * 5, n.data(), nn * 5));
+      }
+    }
+  }
+}
+
+using Search = void* (*)(const void*, size_t, const void*, size_t);
+struct Workload { std::string name; std::vector<uint8_t> h, n; size_t calls; };
+
+static std::vector<Workload> Workloads() {
+  std::vector<Workload> all;
+  std::mt19937 random(0x3cafe119);
+  auto add = [&](const char* name, size_t hn, size_t nn, size_t calls) -> Workload& {
+    all.push_back({name, std::vector<uint8_t>(hn), std::vector<uint8_t>(nn), calls});
+    auto& w = all.back();
+    for (auto& c : w.h) c = random() % 256;
+    for (auto& c : w.n) c = random() % 256;
+    return w;
+  };
+  auto& tiny = add("tiny-end-match", 32, 2, 200000);
+  std::copy(tiny.n.begin(), tiny.n.end(), tiny.h.end() - tiny.n.size());
+  auto& tiny_first = add("tiny-immediate-match", 32, 2, 200000);
+  std::copy(tiny_first.n.begin(), tiny_first.n.end(), tiny_first.h.begin());
+  auto& one = add("single-byte-end-match", 32, 1, 200000);
+  std::fill(one.h.begin(), one.h.end(), 17);
+  one.n[0] = one.h.back() = 18;
+  add("empty-needle", 32, 0, 200000);
+  add("tiny-miss", 32, 8, 200000);
+  add("short-random-miss", 4096, 8, 4000);
+  add("long-random-miss", 1 << 20, 64, 8);
+  auto& middle = add("middle-match", 1 << 20, 64, 8);
+  std::copy(middle.n.begin(), middle.n.end(), middle.h.begin() + (1 << 19));
+  auto& prefix = add("repeated-prefix-miss", 1 << 20, 4096, 4);
+  std::fill(prefix.h.begin(), prefix.h.end(), 'a');
+  std::fill(prefix.n.begin(), prefix.n.end(), 'a');
+  prefix.n.back() = 'b';
+  auto& periodic = add("periodic-miss", 1 << 20, 257, 8);
+  for (size_t i = 0; i < periodic.h.size(); ++i) periodic.h[i] = i % 2;
+  for (size_t i = 0; i < periodic.n.size(); ++i) periodic.n[i] = i % 2;
+  periodic.n.back() = 2;
+  auto& immediate = add("immediate-long-match", 1 << 20, 4096, 100000);
+  std::copy(immediate.n.begin(), immediate.n.end(), immediate.h.begin());
+  add("whole-buffer-miss", 4096, 4096, 100000);
+  return all;
+}
+
+static double Time(Search call, Workload& w, const void* expected) {
+  const std::clock_t start = std::clock();
+  for (size_t i = 0; i < w.calls; ++i) {
+    if (call(w.h.data(), w.h.size(), w.n.data(), w.n.size()) != expected) {
+      std::fprintf(stderr, "FAIL benchmark result %s\n", w.name.c_str());
+      std::exit(1);
+    }
+  }
+  return 1e9 * static_cast<double>(std::clock() - start) / CLOCKS_PER_SEC / w.calls;
+}
+
+static void Measure() {
+  for (auto& w : Workloads()) {
+    const void* expected = baseline::Memmem(w.h.data(), w.h.size(), w.n.data(), w.n.size());
+    check("benchmark parity", production::Memmem(w.h.data(), w.h.size(), w.n.data(), w.n.size()) == expected);
+    for (int repeat = 0; repeat < 5; ++repeat) {
+      double before, after;
+      if (repeat % 2 == 0) {
+        before = Time(baseline::Memmem, w, expected);
+        after = Time(production::Memmem, w, expected);
+      } else {
+        after = Time(production::Memmem, w, expected);
+        before = Time(baseline::Memmem, w, expected);
+      }
+      std::printf("{\"kind\":\"timing\",\"workload\":\"%s\",\"haystack\":%zu,\"needle\":%zu,"
+                  "\"calls\":%zu,\"repeat\":%d,\"baseline_cpu_ns\":%.3f,\"candidate_cpu_ns\":%.3f}\n",
+                  w.name.c_str(), w.h.size(), w.n.size(), w.calls, repeat, before, after);
+    }
+  }
+}
+
+static void WorkBound() {
+  std::vector<uint8_t> h(16384, 'a'), n(1024, 'a');
+  n.back() = 'b';
+  compared = 0;
+  check("counted baseline miss", counted_baseline::Memmem(h.data(), h.size(), n.data(), n.size()) == nullptr);
+  size_t before = compared;
+  compared = 0;
+  check("counted candidate miss", observed::FindBytes(h.data(), h.size(), n.data(), n.size()) == nullptr);
+  check("adversarial long needle linear bound", compared <= 4 * h.size() + 8 * n.size());
+  check("at least 99 percent fewer repeated-prefix byte comparisons", compared * 100 < before);
+  std::printf("{\"kind\":\"work\",\"haystack\":%zu,\"needle\":%zu,"
+              "\"baseline_comparisons\":%zu,\"candidate_comparisons\":%zu}\n",
+              h.size(), n.size(), before, compared);
+}
+
+int main(int argc, char**) {
+  test_memmem_contracts();
+  GuardChecks();
+  Differential();
+  WorkBound();
+  if (argc > 1) Measure();
+  std::printf("memmem: %zu production contract/work checks passed\n", checks);
+}

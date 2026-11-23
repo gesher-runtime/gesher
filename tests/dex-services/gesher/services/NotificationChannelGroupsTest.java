@@ -539,8 +539,10 @@ public final class NotificationChannelGroupsTest {
         Object run = make(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
         field(runType, "state").setInt(run, 2); // Constructed executing-job fixture.
         field(jobType, "run").set(job, run);
-        ((List<Object>)field(schedulerType,"mJobs").get(scheduler)).add(job);
-        field(schedulerType, "mRunning").setInt(scheduler, 1);
+        synchronized (scheduler) {
+            method(schedulerType, "addJobLocked", jobType).invoke(scheduler, job);
+            field(schedulerType, "mRunning").setInt(scheduler, 1);
+        }
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "0", true);
         try { ((IJobCallback)run).setNotification(8387, 41, f.notification("uij"),
                 android.app.job.JobService.JOB_END_NOTIFICATION_POLICY_DETACH); }

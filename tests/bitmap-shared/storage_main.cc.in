@@ -1,0 +1,114 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+#if !BITMAP_BASELINE
+static int storage_checks;
+static void storage_check(bool condition) { ++storage_checks; assert(condition); }
+
+static void SendDescriptor(int socket, int descriptor) {
+  char payload = 'b'; iovec io{&payload, 1};
+  alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
+  msghdr message{}; message.msg_iov = &io; message.msg_iovlen = 1;
+  message.msg_control = control; message.msg_controllen = sizeof(control);
+  auto* header = CMSG_FIRSTHDR(&message);
+  header->cmsg_level = SOL_SOCKET; header->cmsg_type = SCM_RIGHTS;
+  header->cmsg_len = CMSG_LEN(sizeof(int));
+  std::memcpy(CMSG_DATA(header), &descriptor, sizeof(descriptor));
+  assert(sendmsg(socket, &message, 0) == 1);
+}
+static int ReceiveDescriptor(int socket) {
+  char payload; iovec io{&payload, 1};
+  alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
+  msghdr message{}; message.msg_iov = &io; message.msg_iovlen = 1;
+  message.msg_control = control; message.msg_controllen = sizeof(control);
+  assert(recvmsg(socket, &message, 0) == 1);
+  auto* header = CMSG_FIRSTHDR(&message);
+  assert(header && header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS);
+  int fd; std::memcpy(&fd, CMSG_DATA(header), sizeof(fd)); return fd;
+}
+
+int main() {
+  using gesher::hwui::SharedBitmapRegion;
+  const int original_fds = FdCount();
+  auto info = SkImageInfo::Make(128, 128, kN32_SkColorType, kPremul_SkAlphaType);
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    auto region = SharedBitmapRegion::Allocate(65536);
+    storage_check(bool(region));
+    static_cast<uint8_t*>(region.pixels())[0] = 0x35;
+    static_cast<uint8_t*>(region.pixels())[65535] = 0xa7;
+    const int sealed = fcntl(region.fd(), F_GET_SEALS);
+    storage_check((sealed & (F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_FUTURE_WRITE)) ==
+                  (F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_FUTURE_WRITE));
+    storage_check(ftruncate(region.fd(), 4096) == -1 && errno == EPERM);
+    storage_check(pwrite(region.fd(), "x", 1, 0) == -1 && errno == EPERM);
+    auto bad_write = SharedBitmapRegion::Map(region.fd(), 65536, false);
+    storage_check(!bad_write);
+    auto first = region.TakeBitmap(info, 512, true);
+    storage_check(first && !region && first->isImmutable());
+    auto next_region = SharedBitmapRegion::Map(first->getAshmemFd(), 65536, true);
+    auto second = next_region.TakeBitmap(info, 512, true);
+    storage_check(second && first->getAshmemFd() != second->getAshmemFd());
+    storage_check(first->pixels() != second->pixels());
+    first.reset();
+    storage_check(static_cast<uint8_t*>(second->pixels())[0] == 0x35 &&
+                  static_cast<uint8_t*>(second->pixels())[65535] == 0xa7);
+    second.reset();
+    storage_check(FdCount() == original_fds && maps_live == 0);
+  }
+  for (int point : {CREATE, TRUNCATE, MAP, SEAL}) {
+    failure = point;
+    auto region = SharedBitmapRegion::Allocate(65536);
+    storage_check(!region && errno == ENOMEM);
+    storage_check(FdCount() == original_fds && maps_live == 0);
+  }
+  storage_check(!SharedBitmapRegion::Allocate(0));
+  storage_check(!SharedBitmapRegion::Allocate(size_t(INT_MAX) + 1));
+  storage_check(!SharedBitmapRegion::Map(-1, 65536, true));
+  {
+    auto region = SharedBitmapRegion::Allocate(65536);
+    const int fds = FdCount();
+    for (int point : {DUP, STAT, MAP}) {
+      failure = point;
+      storage_check(!SharedBitmapRegion::Map(region.fd(), 65536, true));
+      storage_check(FdCount() == fds && maps_live == 1);
+    }
+    storage_check(!SharedBitmapRegion::Map(region.fd(), 65537, true) && errno == EOVERFLOW);
+  }
+  storage_check(FdCount() == original_fds && maps_live == 0);
+
+  // Actual separate Linux process, actual SCM_RIGHTS transfer, and final sender
+  // mapping/fd destruction before recipient reads. Windows Binder is a separate
+  // mandatory public API gate, not emulated by this control.
+  int sockets[2]; assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+  auto region = SharedBitmapRegion::Allocate(65536);
+  assert(region);
+  std::memset(region.pixels(), 0x6c, 65536);
+  auto sender = region.TakeBitmap(info, 512, true);
+  const pid_t parent = getpid();
+  const pid_t child = fork(); assert(child >= 0);
+  if (child == 0) {
+    close(sockets[0]); sender.reset(); // retire inherited resources before receive
+    int transferred = ReceiveDescriptor(sockets[1]);
+    auto received_region = SharedBitmapRegion::Map(transferred, 65536, true);
+    close(transferred);
+    auto recipient = received_region.TakeBitmap(info, 512, true);
+    assert(recipient && getpid() != parent && write(sockets[1], "r", 1) == 1);
+    char message; assert(read(sockets[1], &message, 1) == 1 && message == 'd');
+    auto* bytes = static_cast<uint8_t*>(recipient->pixels());
+    for (int i = 0; i < 65536; ++i) assert(bytes[i] == 0x6c);
+    recipient.reset(); close(sockets[1]);
+    assert(FdCount() == original_fds && maps_live == 0);
+    _exit(0);
+  }
+  close(sockets[1]); SendDescriptor(sockets[0], sender->getAshmemFd());
+  char ready; assert(read(sockets[0], &ready, 1) == 1 && ready == 'r');
+  sender.reset();
+  storage_check(maps_live == 0);
+  assert(write(sockets[0], "d", 1) == 1); close(sockets[0]);
+  int status = 0; assert(waitpid(child, &status, 0) == child);
+  storage_check(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+  storage_check(FdCount() == original_fds && maps_live == 0);
+  std::printf("Bitmap shared storage: %d checks and separate-process descriptor lifetime passed\n", storage_checks);
+  return 0;
+}
+#else
+int main() { return 0; }
+#endif

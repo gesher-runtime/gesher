@@ -17,12 +17,15 @@ import com.android.internal.textservice.ISpellCheckerSessionListener;
 import com.android.internal.textservice.ITextServicesSessionListener;
 import com.gesher.server.SpellCheckerCatalog.Entry;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 
-/** Owns one binding per client session. ActiveServices shares the provider's actual Service. */
+/** One owned provider binding with independent client sessions, as in Android textservices. */
 final class SpellCheckerSessions {
     private final ActivityManagerService mActivity;
     private final SpellCheckerCatalog mCatalog;
@@ -34,6 +37,30 @@ final class SpellCheckerSessions {
         return thread;
     });
     private final Map<IBinder, Request> mRequests = new HashMap<>(); // worker only
+    private final Map<ComponentName, Binding> mBindings = new HashMap<>(); // worker only
+
+    private final class Binding {
+        final Entry entry;
+        final ComponentName component;
+        final Set<Request> requests = new LinkedHashSet<>();
+        final Set<Request> pending = new LinkedHashSet<>();
+        final IBinder.DeathRecipient death = () -> mWorker.execute(() -> retire(this));
+        final IServiceConnection connection = new IServiceConnection.Stub() {
+            @Override public void connected(ComponentName component, IBinder service,
+                    IBinderSession session, boolean dead) {
+                mWorker.execute(() -> providerConnected(Binding.this, service, dead));
+            }
+        };
+        boolean bound;
+        boolean released;
+        IBinder provider;
+        ISpellCheckerService checker;
+
+        Binding(Entry entry) {
+            this.entry = entry;
+            component = entry.info.getComponent();
+        }
+    }
 
     private final class Request {
         final Entry entry;
@@ -45,14 +72,7 @@ final class SpellCheckerSessions {
         final int attributes;
         final IBinder client;
         final IBinder.DeathRecipient death = () -> mWorker.execute(() -> retire(this, true));
-        final IServiceConnection connection = new IServiceConnection.Stub() {
-            @Override public void connected(ComponentName component, IBinder service,
-                    IBinderSession session, boolean dead) {
-                mWorker.execute(() -> providerConnected(Request.this, service, dead));
-            }
-        };
-        boolean bound;
-        IBinder provider;
+        Binding binding;
         ISpellCheckerSession session;
 
         Request(Entry entry, int pid, String locale, ITextServicesSessionListener ready,
@@ -65,6 +85,33 @@ final class SpellCheckerSessions {
             this.extras = extras == null ? null : new Bundle(extras);
             this.attributes = attributes;
             this.client = listener.asBinder();
+        }
+    }
+
+    /** A provider retaining a completed/canceled callback must not retain its client or group. */
+    private static final class SessionCallback extends ISpellCheckerServiceCallback.Stub {
+        private WeakReference<SpellCheckerSessions> owner;
+        private WeakReference<Request> request;
+
+        SessionCallback(SpellCheckerSessions owner, Request request) {
+            this.owner = new WeakReference<>(owner);
+            this.request = new WeakReference<>(request);
+        }
+
+        @Override public void onSessionCreated(ISpellCheckerSession session) {
+            SpellCheckerSessions target;
+            Request pending;
+            synchronized (this) {
+                // Android's callback consumes its request once. In particular, do not
+                // close a duplicate Binder that may be the already-delivered session.
+                if (request == null) return;
+                target = owner.get();
+                pending = request.get();
+                owner = null;
+                request = null;
+            }
+            if (target == null || pending == null) close(session);
+            else target.mWorker.execute(() -> target.complete(pending, session));
         }
     }
 
@@ -81,9 +128,13 @@ final class SpellCheckerSessions {
     }
 
     void packageRemoving(String packageName) {
+        // Capture the actual generation before queueing. A late removal task must
+        // not close a newly installed provider with the same package/component.
+        ApkPackage retiring = mCatalog.owner(packageName);
+        if (retiring == null) return;
         mWorker.execute(() -> {
-            for (Request request : new ArrayList<>(mRequests.values())) {
-                if (packageName.equals(request.entry.owner.packageName)) retire(request, true);
+            for (Binding binding : new ArrayList<>(mBindings.values())) {
+                if (binding.entry.owner == retiring) retire(binding);
             }
         });
     }
@@ -104,40 +155,70 @@ final class SpellCheckerSessions {
         }
         mRequests.put(request.client, request);
         ComponentName component = request.entry.info.getComponent();
-        Intent intent = new Intent(SpellCheckerService.SERVICE_INTERFACE).setComponent(component);
-        try {
-            request.bound = mActivity.bindSpellChecker(intent, request.connection,
-                    () -> mCatalog.ownerCurrent(request.entry)) > 0;
-        } catch (RuntimeException failure) {
-            // Bind may have published a connection before process-launch failure.
-            request.bound = true;
-            retire(request, false);
+        Binding binding = mBindings.get(component);
+        if (binding != null && binding.entry.owner != request.entry.owner) {
+            retire(binding);
+            binding = null;
+        }
+        boolean first = binding == null;
+        if (first) {
+            binding = new Binding(request.entry);
+            mBindings.put(component, binding);
+        }
+        request.binding = binding;
+        binding.requests.add(request);
+        binding.pending.add(request);
+        if (!first) {
+            if (binding.checker != null) dispatch(binding, request);
             return;
         }
-        if (!request.bound) {
-            retire(request, false);
+        Intent intent = new Intent(SpellCheckerService.SERVICE_INTERFACE).setComponent(component);
+        Entry selected = binding.entry;
+        try {
+            binding.bound = mActivity.bindSpellChecker(intent, binding.connection,
+                    () -> mCatalog.ownerCurrent(selected)) > 0;
+        } catch (RuntimeException failure) {
+            // Bind may have published a connection before process-launch failure.
+            binding.bound = true;
+            retire(binding);
             return;
+        }
+        if (!binding.bound) retire(binding);
+    }
+
+    private void providerConnected(Binding binding, IBinder provider, boolean dead) {
+        if (mBindings.get(binding.component) != binding || binding.released) return;
+        if (dead || provider == null || !mCatalog.current(binding.entry)) {
+            retire(binding);
+            return;
+        }
+        if (binding.provider != null) return;
+        try {
+            provider.linkToDeath(binding.death, 0);
+            binding.provider = provider;
+            binding.checker = ISpellCheckerService.Stub.asInterface(provider);
+        } catch (RemoteException | RuntimeException failure) {
+            retire(binding);
+            return;
+        }
+        while (!binding.pending.isEmpty() && !binding.released) {
+            dispatch(binding, binding.pending.iterator().next());
         }
     }
 
-    private void providerConnected(Request request, IBinder provider, boolean dead) {
-        if (mRequests.get(request.client) != request) return;
-        if (dead || provider == null || !mCatalog.current(request.entry)) {
-            retire(request, true);
+    private void dispatch(Binding binding, Request request) {
+        if (!binding.pending.remove(request)) return;
+        if (!mCatalog.current(binding.entry)) {
+            retire(binding);
             return;
         }
-        if (request.provider != null) return;
         try {
-            provider.linkToDeath(request.death, 0);
-            request.provider = provider;
-            ISpellCheckerService.Stub.asInterface(provider).getISpellCheckerSession(request.locale,
-                    request.listener, request.extras, request.attributes,
-                    new ISpellCheckerServiceCallback.Stub() {
-                        @Override public void onSessionCreated(ISpellCheckerSession session) {
-                            mWorker.execute(() -> complete(request, session));
-                        }
-                    });
-        } catch (RemoteException | RuntimeException failure) {
+            binding.checker.getISpellCheckerSession(request.locale, request.listener,
+                    request.extras, request.attributes, new SessionCallback(this, request));
+        } catch (RemoteException failure) {
+            // A dead provider retires its shared binding, not another provider's sessions.
+            retire(binding);
+        } catch (RuntimeException failure) {
             retire(request, true);
         }
     }
@@ -165,12 +246,33 @@ final class SpellCheckerSessions {
     private void retire(Request request, boolean closeDeliveredSession) {
         if (!mRequests.remove(request.client, request)) return;
         unlink(request.client, request.death);
-        if (request.provider != null) unlink(request.provider, request.death);
+        Binding binding = request.binding;
+        binding.requests.remove(request);
+        binding.pending.remove(request);
         // Explicit close already sends onClose via Android's SpellCheckerSession before
         // calling finishSpellCheckerService. Only the death/error paths own that message.
         if (closeDeliveredSession) close(request.session);
-        if (request.bound) {
-            try { mActivity.unbindService(request.connection); }
+        request.session = null;
+        if (binding.requests.isEmpty()) release(binding);
+    }
+
+    private void retire(Binding binding) {
+        if (binding.released) return;
+        mBindings.remove(binding.component, binding);
+        for (Request request : new ArrayList<>(binding.requests)) retire(request, true);
+        release(binding);
+    }
+
+    private void release(Binding binding) {
+        if (binding.released) return;
+        binding.released = true;
+        mBindings.remove(binding.component, binding);
+        if (binding.provider != null) unlink(binding.provider, binding.death);
+        binding.provider = null;
+        binding.checker = null;
+        if (binding.bound) {
+            binding.bound = false;
+            try { mActivity.unbindService(binding.connection); }
             catch (RuntimeException failure) {
                 SystemServer.log("textservices: could not release spell-checker binding: "
                         + failure.getClass().getSimpleName());

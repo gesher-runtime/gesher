@@ -290,9 +290,12 @@ public final class AccountSecurityTest {
         accounts.clear();
         Account visible = new Account("visible-delegated@example.test", type);
         Account hidden = new Account("hidden-delegated@example.test", type);
+        // No stored value: USER_MANAGED_NOT_VISIBLE, which Android's getAccountsByTypeForPackage
+        // returns to the managing authenticator (includeUserManagedNotVisible).
+        Account unset = new Account("unset-delegated@example.test", type);
         String clientKey = (String) method(caller, "key").invoke(client);
-        Object visibleEntry = null;
-        for (Account account : java.util.Arrays.asList(visible, hidden,
+        Object visibleEntry = null, unsetEntry = null;
+        for (Account account : java.util.Arrays.asList(visible, hidden, unset,
                 new Account("other-type@example.test", "unregistered.other"),
                 new Account("foreign-owner@example.test", type),
                 new Account("stale-owner@example.test", type))) {
@@ -301,15 +304,22 @@ public final class AccountSecurityTest {
             field(value, "ownerIdentity", account.name.startsWith("foreign-") ? clientCode
                     : account.name.startsWith("stale-") ? "old-owner-code" : ownerCode);
             @SuppressWarnings("unchecked") Map<String, Integer> visibility = (Map<String, Integer>) field(value, "visibility");
-            if (!account.equals(hidden)) visibility.put(clientKey, AccountManager.VISIBILITY_VISIBLE);
+            if (account.equals(hidden)) visibility.put(clientKey, AccountManager.VISIBILITY_NOT_VISIBLE);
+            else if (!account.equals(unset)) visibility.put(clientKey, AccountManager.VISIBILITY_VISIBLE);
             accounts.put(account, value);
             if (account.equals(visible)) visibleEntry = value;
+            if (account.equals(unset)) unsetEntry = value;
         }
         Account[] delegated = (Account[]) query.invoke(manager, type, clientName, owner);
-        require(delegated.length == 1 && visible.equals(delegated[0]),
-                "Typed owner delegation leaked hidden, foreign-owned, stale-code or other-type accounts");
+        require(delegated.length == 2 && java.util.Arrays.asList(delegated).containsAll(
+                        java.util.Arrays.asList(visible, unset)),
+                "Typed owner delegation leaked denied, foreign-owned, stale-code or other-type accounts,"
+                        + " or omitted a USER_MANAGED_NOT_VISIBLE account");
+        Method visibleTo = method(service, "visible", caller, Account.class, entry);
+        require(!(Boolean) visibleTo.invoke(manager, client, unset, unsetEntry),
+                "Offering an unset account to its authenticator made it visible to the client");
         Account[] self = (Account[]) query.invoke(manager, type, ownerName, owner);
-        require(self.length == 2 && java.util.Arrays.asList(self).contains(hidden),
+        require(self.length == 3 && java.util.Arrays.asList(self).contains(hidden),
                 "Normal authenticator self enumeration changed");
         denied(() -> query.invoke(manager, type, ownerName, client));
         denied(() -> query.invoke(manager, null, clientName, owner));
@@ -323,7 +333,7 @@ public final class AccountSecurityTest {
         require(visibility.size() == 1 && visibility.get(clientKey) == AccountManager.VISIBILITY_VISIBLE,
                 "Owner enumeration mutated visibility");
         visibility.clear(); visibility.put(clientName + "\u0000old-client-code", AccountManager.VISIBILITY_VISIBLE);
-        require(((Account[]) query.invoke(manager, type, clientName, owner)).length == 0,
+        require(!(Boolean) visibleTo.invoke(manager, client, visible, visibleEntry),
                 "Client code replacement inherited prior visibility");
         visibility.clear(); visibility.put(clientKey, AccountManager.VISIBILITY_VISIBLE);
 

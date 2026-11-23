@@ -531,11 +531,18 @@ jint SYSV DetachCurrentThreadSysv(JavaVM*) {
 }
 
 jint SYSV GetEnvSysv(JavaVM* proxy, void** penv, jint version) {
+  // Only the JNI 1.x family has a guest ABI bridge. Reject other interfaces
+  // before calling the host: a successful JVMTI GetEnv creates an environment
+  // that must be disposed, and its host function table is not guest-callable.
+  // Leave validation of individual JNI 1.x versions to the host VM.
+  if ((version & 0xffff0000) != 0x00010000) {
+    if (penv != nullptr) *penv = nullptr;
+    return JNI_EVERSION;
+  }
   JavaVM* vm = RealVm();
   void* env = nullptr;
   jint rc = vm->functions->GetEnv(vm, &env, version);
-  // A JNI version gets the proxy; anything else (JVMTI) is passed on as it is.
-  if (rc == JNI_OK && (version & 0xffff0000) == 0x00010000) {
+  if (rc == JNI_OK) {
     env = WrapFor(IsGuestVm(proxy), static_cast<JNIEnv*>(env));
   }
   if (penv != nullptr) *penv = rc == JNI_OK ? env : nullptr;
