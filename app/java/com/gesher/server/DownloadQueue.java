@@ -249,13 +249,18 @@ final class DownloadQueue {
                 catch (RuntimeException ignored) { /* The row's state stays as last written. */ }
             }
         } finally {
+            // Completion work happens while the download still counts as running: a
+            // retry scheduled from here is deferred to the end of this execution.
+            if (state != null) {
+                try { finished(id, state.status); }
+                catch (RuntimeException e) { SystemServer.log("downloads: finishing " + id + ": " + e); }
+            }
             boolean again;
             synchronized (this) {
                 if (transfer != null) mRunning.remove(id);
                 mQueued.remove(id);
                 again = mRescheduled.remove(id);
             }
-            if (state != null) finished(id, state.status);
             if (again) schedule(id);
         }
     }
