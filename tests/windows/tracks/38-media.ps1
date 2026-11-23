@@ -221,6 +221,9 @@ Check 'media: WASAPI refills the requested group using endpoint padding' {
 Check 'media: I420 rows to RGBA give the reference pixel for every Y, U, V and width (generic and AVX2)' {
   & "$Dir/media_yuv_rgba_test.exe"
 } @('generic rows: every Y, U, V gives the reference pixel', 'yuv_rgba_test all passed')
+Check 'media: full I420 odd/even crops preserve exact pixels, padding, scalar overlap and retained QueueSurface owners' {
+  & "$Dir/media_i420_crop_test.exe"
+} @('I420 cropped rows, exact pixels, guards and retained surfaces passed')
 Check 'media: target-sized retriever pixels match the pinned full-image Skia oracle with bounded row storage' {
   & "$Dir/media_retriever_pixels_test.exe"
 } @('filtered crop/rotation, config and bounded row storage passed')

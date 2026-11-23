@@ -249,6 +249,15 @@ add_executable(media_yuv_rgba_test "${CMAKE_SOURCE_DIR}/tests/media/yuv_rgba_tes
 target_include_directories(media_yuv_rgba_test PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_options(media_yuv_rgba_test PRIVATE -Wall -Wextra -Werror)
 
+# Actual full cropped-frame conversion and QueueSurface ownership. This links
+# the production renderer and hostgraphics objects, without host test adapters.
+add_executable(media_i420_crop_test "${CMAKE_SOURCE_DIR}/tests/media/i420_crop_test.cc")
+target_include_directories(media_i420_crop_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_i420_crop_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -Wno-deprecated-copy)
+target_link_libraries(media_i420_crop_test PRIVATE gesher_media_player_core gesher_elf)
+gesher_graphics_cxx(media_i420_crop_test)
+
 add_executable(wasapi_refill_test "${CMAKE_SOURCE_DIR}/tests/media/wasapi_refill_test.cc")
 target_include_directories(wasapi_refill_test PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_options(wasapi_refill_test PRIVATE -Wall -Wextra -Werror)

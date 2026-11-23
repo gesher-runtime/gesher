@@ -330,6 +330,7 @@ jobs:
           python3 tools/test_deferred_rewrite_failures.py --sanitize
           python3 tools/test_msync_contracts.py --sanitize
           python3 tools/test_retriever_frame_contracts.py --sanitize
+          python3 tools/test_i420_crop.py --sanitize --negative-controls
           python3 tools/test_utc_time_contracts.py --sanitize
           python3 tools/test_sleep_contracts.py --sanitize
 
