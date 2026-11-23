@@ -139,6 +139,10 @@ Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app-microg.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-control-panel.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-panel-actions.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-view.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-dashboard.xaml"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-confirm.xaml"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-message.xaml"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-panel-native.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-update.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-runtime-files.ps1"; DestDir: "{app}"; Flags: ignoreversion

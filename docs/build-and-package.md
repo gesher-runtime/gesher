@@ -124,3 +124,25 @@ Windows/ART application run was performed for this change. Those are pending CI
 validation, requiring the complete source-bound supplier batch and disposable
 Windows environment described above. No diagnosis of any previous local
 installer failure is implied by this refactor.
+
+## Presentation resources
+
+Ship `gesher-panel-view.ps1` and all three `gesher-panel-*.xaml` files beside the
+panel, using the explicit Inno manifest entries. The loader uses its script
+location, not the working directory. CI verifies installed presence. Run
+`powershell -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows/shell/ControlPanelPresentationChecks.ps1`
+to load the production resources without showing the dashboard or starting its
+runtime/profile operations. This checks WPF loading, translation resources,
+confirmation style selection and package PowerShell syntax; it is not an
+installer or Windows/ART integration test.
+
+For frame presentation, build `window_frame_test` and run its executable on
+Windows (the native Windows contract track does this with a 30-second bound).
+It uses a private desktop and the production header without starting Android.
+A standalone local compile uses C++17, Windows 10 API definitions, `-UNOGDI
+-Wall -Wextra -Werror`, and user32/gdi32. Separately compile the production
+`gesher_window.cc` translation unit with the POSIX and Windows include paths;
+the standalone fixture alone cannot establish full Window integration.
+`ControlPanelPresentationChecks.ps1 -PackageDirectory PATH` also accepts an
+isolated package-layout copy of the helper/XAML/catalog files for relocation
+checks without installing anything.

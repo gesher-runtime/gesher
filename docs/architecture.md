@@ -95,7 +95,8 @@ All desktop scripts remain in `tools/package` and are installed by `gesher.iss`.
 
 | File | Responsibility |
 | --- | --- |
-| `gesher-control-panel.ps1` | WPF presentation, refresh, action admission/completion, update confirmation and close policy. |
+| `gesher-control-panel.ps1` | View coordination, refresh, action admission/completion, update confirmation and close policy. |
+| `gesher-panel-view.ps1`, `gesher-panel-{dashboard,confirm,message}.xaml` | Window construction, literal localized resources, layout, styles and templates; no operations or event ownership. |
 | `gesher-panel-actions.ps1` | APK error propagation and background execution, including ConsoleHost/native handle ownership. |
 | `gesher-panel-native.ps1` | Native desktop and metadata monitoring helpers. |
 | `gesher-app.ps1` | Application/device command entry point and runtime/profile orchestration. |
@@ -117,3 +118,21 @@ Update orchestration stays with confirmation/rendering in the panel; transport
 and installer helpers already live in `gesher-update.ps1`. Further splitting
 should follow responsibility rather than line counts.
 See [Build and package](build-and-package.md) for derived artifacts and validation.
+
+## Native presentation boundaries
+
+Credential dialog `*CreateControls` helpers build controls and fonts on the same
+modal thread after state installation. Callbacks retain population, foreground,
+focus, cancellation, owner-process checks, result mapping and disposal. The
+existing `host_dialog_theme.h` remains the shared C/C++ presentation layer;
+no second theme or runtime is introduced. `PaintSplash` owns GDI painting;
+launcher process discovery, timeouts and cancellation remain in the launcher.
+
+`window_frame.h` owns initial frame construction, DPI-aware client-to-frame
+geometry, Back bar bounds/drawing and non-client geometry/hit testing. It has no
+Android events or HWND/COM lifetime ownership. `gesher_window.cc` retains window
+creation on its STA, splash discovery/position application, popup/owner policy,
+readiness, input, Back state and Android key delivery, close events and rendering.
+Windows still provides the standard caption buttons. Shared frame geometry now
+serves both client resizing and minimum track size.
+See [presentation separation](ui-presentation-separation.md) for validation limits.
