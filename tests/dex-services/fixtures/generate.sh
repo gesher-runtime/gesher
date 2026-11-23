@@ -30,6 +30,11 @@ apksigner sign --ks "$work/old.p12" --ks-pass $pass --next-signer --ks "$work/ne
   --ks-pass $pass --lineage "$work/lineage" --out "$here/rotated.apk" "$here/unsigned.apk"
 apksigner sign --ks "$work/old.p12" --ks-pass $pass --v1-signing-enabled false \
   --v3-signing-enabled false --out "$here/v2only.apk" "$here/unsigned.apk"
+# A well-formed feature split whose throwaway signer differs from v2only.apk.
+"$bt/aapt2" link -o "$work/split.apk" --manifest "$here/BadSignatureSplitManifest.xml" -I "$framework_res"
+"$bt/zipalign" -f 4 "$work/split.apk" "$work/split-aligned.apk"
+apksigner sign --ks "$work/new.p12" --ks-pass $pass --v1-signing-enabled false \
+  --v3-signing-enabled false --out "$here/bad-signature-split.apk" "$work/split-aligned.apk"
 rm -f "$here"/*.idsig
 # Detached, synthetic installer-advisory checksum signature. Its throwaway signer is
 # deliberately different from the APK signer; it must never establish APK trust.

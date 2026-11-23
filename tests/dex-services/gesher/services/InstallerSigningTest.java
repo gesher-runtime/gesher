@@ -4,7 +4,9 @@
  */
 package gesher.services;
 
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import com.android.internal.pm.parsing.PackageParserException;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -35,6 +37,11 @@ public final class InstallerSigningTest {
     }
 
     private static void reject(File root, File previousApk, File incoming, String code) throws Exception {
+        reject(root, previousApk, incoming, code, 0);
+    }
+
+    private static void reject(File root, File previousApk, File incoming, String code,
+            int parseError) throws Exception {
         // These are independent installed-device histories. Do not carry a
         // descendant signer admitted by one case into the next case's boot scan.
         File device = Files.createTempDirectory(root.toPath(), "reject-").toFile();
@@ -60,8 +67,14 @@ public final class InstallerSigningTest {
             throw new AssertionError("Installer accepted " + code);
         } catch (InvocationTargetException rejected) {
             Throwable cause = rejected.getCause();
-            require(cause instanceof SecurityException, "Install failed for the wrong reason: " + cause);
-            require(cause.getMessage().contains(code), "Unexpected install rejection: " + cause.getMessage());
+            if (parseError != 0) {
+                require(cause instanceof PackageParserException
+                                && ((PackageParserException) cause).error == parseError,
+                        "Unexpected cluster parse rejection: " + cause);
+            } else {
+                require(cause instanceof SecurityException, "Install failed for the wrong reason: " + cause);
+                require(cause.getMessage().contains(code), "Unexpected install rejection: " + cause.getMessage());
+            }
         }
         require(pmClass.getMethod("get", String.class).invoke(pm, pkg) == previous,
                 "Rejected update replaced the previous PM object");
@@ -153,7 +166,12 @@ public final class InstallerSigningTest {
         Files.createDirectories(splitDirectory.toPath());
         File base = new File(splitDirectory, "base.apk");
         Files.copy(v2.toPath(), base.toPath());
-        Files.copy(rotated.toPath(), new File(splitDirectory, "split_other.apk").toPath());
+        File split = new File(splitDirectory, "split_other.apk");
+        Files.copy(v2.toPath(), split.toPath());
+        reject(data, v2, base, "INSTALL_PARSE_FAILED_BAD_MANIFEST",
+                PackageManager.INSTALL_PARSE_FAILED_BAD_MANIFEST);
+        Files.copy(new File(fixtures, "bad-signature-split.apk").toPath(), split.toPath(),
+                StandardCopyOption.REPLACE_EXISTING);
         reject(data, v2, base, "INSTALL_FAILED_BAD_SPLIT_SIGNATURE");
         File capabilities = new File(fixtures.getParentFile(), "identity-fixtures");
         if (capabilities.isDirectory()) {
