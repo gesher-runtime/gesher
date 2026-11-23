@@ -83,14 +83,23 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   If that frequency exceeds CNTFRQ_EL0's 32 bits, both use a 1 GHz scale;
   conversion uses a 128-bit intermediate so long-running hosts do not overflow.
 
-- **Instruction cache**: a guest's `IC IVAU` (a line of 64 bytes, CTR_EL0's
-  IminLine) and `IC IALLU` are recorded as invalidations, as is an `mprotect`
-  that makes a range executable (the Linux kernel syncs the instruction cache
-  of such a page, so an inline hook written RWX and then mapped R-X runs
-  without an IC instruction). The Jit that ran the IC drops its translations
-  at the end of the block; every other Jit drops the recorded ranges before
-  its next dispatch, or its whole cache if it missed records that were
-  discarded (1024 are kept). `arm64_abi_test`'s `test_rewritten_code`.
+- **Instruction cache**: a guest's `IC IVAU` lines (CTR_EL0's IminLine,
+  64 bytes) collect into a per-thread range that goes to every live Jit at
+  the next `ISB` (`hook_isb`; `__builtin___clear_cache` ends with one), or
+  before a line that does not extend it, a WFE/YIELD hint or the thread's
+  next host call or syscall. A Jit running guest code on another thread halts
+  at its next block boundary and drops the range, as `IC IVAU` is broadcast
+  on ARM: a thread spinning in guest code sees the rewrite (a Jit that does
+  not run for a while clears its whole cache after 256 ranges instead of
+  accumulating them). `IC IALLU`/`IC IALLUIS` are EL1-only and UNDEFINED at
+  EL0: SIGILL. As a conservative choice (Linux does not guarantee it for a
+  page that already ran), an `mprotect` that makes pages executable drops the
+  translations of those that were writable or not executable before (an
+  inline hook written RWX, then mapped R-X); a range that stays R-X keeps
+  them. An executable `mmap` drops its whole range (a reused address).
+  `arm64_abi_test`'s `test_rewritten_code` and
+  `test_rewritten_code_other_thread`; `GESHER_ARM64_ABI_CRASH=ic-iallu` runs
+  the SIGILL case.
 
 - **Thread reuse**: the Env of an exited guest thread (its Jits with their
   translated code, guest stack and TLS block) is pooled, at most 8

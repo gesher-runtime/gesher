@@ -457,6 +457,7 @@ constexpr int kProtWrite = 2;
 constexpr int kProtExec = 4;
 void* g_mprotect = nullptr;
 void* g_mmap = nullptr;
+void* g_munmap = nullptr;
 
 int GuestProt(int prot) { return (prot & kProtExec) != 0 ? (prot & ~kProtExec) | kProtRead : prot; }
 
@@ -465,21 +466,34 @@ int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
   if (InTranslatorCode(addr, len)) host_prot = kProtRead | kProtWrite;
   int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
                                                                               host_prot);
+  // A conservative choice, not a Linux guarantee: arm64 Linux syncs the
+  // instruction cache only for a page it has not seen executable yet, and a
+  // program that rewrites code that already ran must use IC IVAU. Packers'
+  // inline hooks (mprotect RWX, write, mprotect R-X) often rely on the page
+  // change alone, so the translations of pages that were writable or not
+  // executable before this call are dropped; a range that stays R-X keeps them.
+  if (r == 0) GuestProtectionChanged(addr, len, (prot & kProtExec) != 0,
+                                     (prot & kProtWrite) != 0, false);
   if (r == 0 && (prot & kProtExec) != 0) AddGuestCode(addr, len);
-  // Linux makes instructions written to a page visible to execution when it
-  // maps the page executable again (an inline hook: mprotect RWX, write,
-  // mprotect R-X; arm64's set_pte_at syncs the instruction cache for a newly
-  // written executable page), without an IC instruction from the program.
-  // Translations of that code are the instruction cache here: drop them.
-  if (r == 0 && (prot & kProtExec) != 0) InvalidateGuestCode(addr, len);
   return r;
 }
 
 void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd, int64_t off) {
   void* p = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, int, int, int, int64_t)>(g_mmap)(
       addr, len, GuestProt(prot), flags, fd, off);
-  if (p != reinterpret_cast<void*>(-1) && (prot & kProtExec) != 0) AddGuestCode(p, len);
+  if (p == reinterpret_cast<void*>(-1)) return p;
+  // New contents: an executable mapping may reuse an address (MAP_FIXED, or
+  // one an unmapped library or JIT buffer had) whose old code was translated.
+  GuestProtectionChanged(p, len, (prot & kProtExec) != 0, (prot & kProtWrite) != 0, true);
+  if ((prot & kProtExec) != 0) AddGuestCode(p, len);
   return p;
+}
+
+// The pages' last guest protection no longer describes their contents.
+int GESHER_SYSV GuestMunmap(void* addr, size_t len) {
+  int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t)>(g_munmap)(addr, len);
+  if (r == 0) ForgetGuestProtection(addr, len);
+  return r;
 }
 
 // libc-style result: -1 with errno set on failure.
@@ -514,6 +528,9 @@ int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
       if (g_mprotect == nullptr) break;
       return GuestMprotect(reinterpret_cast<void*>(a[0]), static_cast<size_t>(a[1]),
                            static_cast<int>(a[2]));
+    case 215:  // munmap
+      if (g_munmap == nullptr) break;
+      return GuestMunmap(reinterpret_cast<void*>(a[0]), static_cast<size_t>(a[1]));
     case 222:  // mmap
       if (g_mmap == nullptr) break;
       return reinterpret_cast<int64_t>(GuestMmap(reinterpret_cast<void*>(a[0]),
@@ -819,7 +836,9 @@ bool InitGuestLibc() {
 
   g_mprotect = Host("mprotect");
   g_mmap = Host("mmap");
+  g_munmap = Host("munmap");
   if (g_mprotect) Override("mprotect", reinterpret_cast<void*>(&GuestMprotect));
+  if (g_munmap) Override("munmap", reinterpret_cast<void*>(&GuestMunmap));
   if (g_mmap) {
     Override("mmap", reinterpret_cast<void*>(&GuestMmap));
     Override("mmap64", reinterpret_cast<void*>(&GuestMmap));

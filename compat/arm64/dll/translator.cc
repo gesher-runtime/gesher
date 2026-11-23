@@ -34,7 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -109,67 +109,108 @@ void RefreshCodeCache(A64::Jit* jit, uint64_t* seen) {
 // --- guest instruction cache maintenance -----------------------------------
 // A guest that writes instructions (an inline hook a packer places on a
 // function, a JIT's code) makes them visible to execution as on ARM: with
-// IC IVAU for each cache line written (or IC IALLU), then ISB. Each Jit has
-// translated copies of guest code, so an invalidation is recorded here and
-// every Jit drops its copies of those lines before its next dispatch; the
-// one running the IC drops them at the end of the current block. Without it a
-// Jit keeps running the instructions a function had before it was patched.
-struct IcacheInvalidation {
-  uint64_t generation;
-  uintptr_t start;
-  uintptr_t end;  // exclusive; end == 0: the whole cache
+// IC IVAU for each cache line written, then ISB. Each Jit has translated
+// copies of guest code: an invalidation goes to every live Jit at once, as
+// IC IVAU is broadcast to every PE on ARM. dynarmic's InvalidateCacheRange is
+// thread-safe and halts a Jit running guest code at its next block boundary
+// (the halt check of a linked block included), so a thread spinning in guest
+// code drops the copies promptly; a Jit that is not running (an outer Jit
+// paused under a host call, a pooled Env's) drops them when it next runs.
+struct LiveJit {
+  A64::Jit* jit;
+  std::atomic<uint32_t>* posted;  // ranges posted since its last dispatch
 };
-std::mutex g_icache_mutex;
-std::deque<IcacheInvalidation> g_icache_invalidations;  // oldest first
-std::atomic<uint64_t> g_icache_generation{0};
-uint64_t g_icache_dropped = 0;  // the newest generation of a dropped record
-// Older records are dropped; a Jit that has not seen them clears its cache.
-constexpr size_t kIcacheInvalidations = 1024;
+std::mutex g_live_jits_mutex;
+std::vector<LiveJit> g_live_jits;
+// A Jit that does not run for a while (a pooled Env's) accumulates posted
+// ranges in its invalidation set: beyond this many it clears its whole cache.
+constexpr uint32_t kMaxPostedRanges = 256;
 
-void NoteIcacheInvalidation(uintptr_t start, uintptr_t end) {
-  std::lock_guard<std::mutex> lock(g_icache_mutex);
-  // A range __builtin___clear_cache walks line by line: merge with the last.
-  if (!g_icache_invalidations.empty() && end != 0) {
-    IcacheInvalidation& last = g_icache_invalidations.back();
-    if (last.end != 0 && start <= last.end && end >= last.start &&
-        last.generation == g_icache_generation.load(std::memory_order_relaxed)) {
-      last.start = std::min(last.start, start);
-      last.end = std::max(last.end, end);
-      last.generation = g_icache_generation.load(std::memory_order_relaxed) + 1;
-      g_icache_generation.store(last.generation, std::memory_order_release);
-      return;
-    }
-  }
-  const uint64_t generation = g_icache_generation.load(std::memory_order_relaxed) + 1;
-  g_icache_invalidations.push_back({generation, start, end});
-  if (g_icache_invalidations.size() > kIcacheInvalidations) {
-    g_icache_dropped = std::max(g_icache_dropped, g_icache_invalidations.front().generation);
-    g_icache_invalidations.pop_front();
-  }
-  g_icache_generation.store(generation, std::memory_order_release);
+void RegisterJit(A64::Jit* jit, std::atomic<uint32_t>* posted) {
+  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
+  g_live_jits.push_back({jit, posted});
 }
 
-// Called outside Jit::Run, with RefreshCodeCache.
-void RefreshIcache(A64::Jit* jit, uint64_t* seen) {
-  if (*seen == g_icache_generation.load(std::memory_order_acquire)) return;
-  std::lock_guard<std::mutex> lock(g_icache_mutex);
-  const uint64_t now = g_icache_generation.load(std::memory_order_relaxed);
-  // Records newer than *seen are those with a larger generation (a merged
-  // record carries its latest one). If one this Jit has not seen was dropped,
-  // it clears everything.
-  bool whole = *seen < g_icache_dropped;
-  if (!whole) {
-    for (const IcacheInvalidation& r : g_icache_invalidations) {
-      if (r.generation <= *seen) continue;
-      if (r.end == 0) {
-        whole = true;
-        break;
-      }
-      jit->InvalidateCacheRange(r.start, r.end - r.start);
+void UnregisterJit(A64::Jit* jit) {
+  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
+  std::erase_if(g_live_jits, [jit](const LiveJit& j) { return j.jit == jit; });
+}
+
+void InvalidateEveryJit(uintptr_t start, uintptr_t end) {
+  if (end <= start) return;
+  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
+  for (const LiveJit& j : g_live_jits) {
+    if (j.posted->fetch_add(1, std::memory_order_relaxed) < kMaxPostedRanges) {
+      j.jit->InvalidateCacheRange(start, end - start);
+    } else {
+      j.jit->ClearCache();
     }
   }
-  if (whole) jit->ClearCache();
-  *seen = now;
+}
+
+// --- guest page protection ---------------------------------------------------
+// The pages the guest mapped executable and not writable (mmap or mprotect),
+// whose translations are therefore current: page-aligned, disjoint, coalesced
+// [start, end) ranges. An mprotect that makes a range executable drops the
+// translations of every page outside them (written while writable, or not
+// guest code before), not of a range that stays R-X.
+std::mutex g_clean_exec_mutex;
+std::map<uintptr_t, uintptr_t> g_clean_exec;  // start -> end
+
+void EraseCleanExec(uintptr_t first, uintptr_t end) {
+  auto it = g_clean_exec.upper_bound(first);
+  if (it != g_clean_exec.begin()) --it;
+  while (it != g_clean_exec.end() && it->first < end) {
+    const uintptr_t s = it->first, e = it->second;
+    if (e <= first) {
+      ++it;
+      continue;
+    }
+    it = g_clean_exec.erase(it);
+    if (s < first) g_clean_exec.emplace(s, first);
+    if (e > end) {
+      g_clean_exec.emplace(end, e);
+      break;
+    }
+  }
+}
+
+void InsertCleanExec(uintptr_t first, uintptr_t end) {
+  EraseCleanExec(first, end);
+  auto next = g_clean_exec.lower_bound(first);
+  if (next != g_clean_exec.end() && next->first == end) {
+    end = next->second;
+    g_clean_exec.erase(next);
+  }
+  auto prev = g_clean_exec.lower_bound(first);
+  if (prev != g_clean_exec.begin() && std::prev(prev)->second == first) {
+    std::prev(prev)->second = end;
+    return;
+  }
+  g_clean_exec.emplace(first, end);
+}
+
+// The parts of [first, end) outside g_clean_exec.
+std::vector<CodeRegion> UncleanParts(uintptr_t first, uintptr_t end) {
+  std::vector<CodeRegion> parts;
+  uintptr_t cursor = first;
+  auto it = g_clean_exec.upper_bound(first);
+  if (it != g_clean_exec.begin()) --it;
+  for (; it != g_clean_exec.end() && it->first < end && cursor < end; ++it) {
+    if (it->second <= cursor) continue;
+    if (it->first > cursor) parts.push_back({cursor, it->first});
+    cursor = std::max(cursor, it->second);
+  }
+  if (cursor < end) parts.push_back({cursor, end});
+  return parts;
+}
+
+bool PageRange(const void* start, size_t size, uintptr_t* first, uintptr_t* end) {
+  const uintptr_t s = reinterpret_cast<uintptr_t>(start);
+  if (size == 0 || s > UINTPTR_MAX - size - 0xFFF) return false;
+  *first = s & ~uintptr_t{0xFFF};
+  *end = (s + size + 0xFFF) & ~uintptr_t{0xFFF};
+  return true;
 }
 
 void AddRegion(uintptr_t start, size_t size) {
@@ -706,6 +747,7 @@ class Env final : public A64::UserCallbacks {
   }
 
   ~Env() override {
+    for (auto& jit : jits_) UnregisterJit(jit.get());
     jits_.clear();
     for (size_t id : ids_) ReleaseProcessorId(id);
     VirtualFree(tls_block_, 0, MEM_RELEASE);
@@ -813,6 +855,9 @@ class Env final : public A64::UserCallbacks {
       // would scan all kMaxProcessors slots, not the ids in use.
       conf.fastmem_exclusive_access = false;
       conf.enable_cycle_counting = false;
+      // ISB applies the IC IVAU lines this thread collected (FlushIcache).
+      conf.hook_isb = true;
+      icache_line_ = uint64_t{4} << (conf.ctr_el0 & 0xF);  // CTR_EL0.IminLine, log2 words
       conf.optimizations = Dynarmic::all_safe_optimizations;
       if (ProfilePreciseEnabled()) {
         conf.optimizations &= ~(Dynarmic::OptimizationFlag::BlockLinking |
@@ -837,7 +882,8 @@ class Env final : public A64::UserCallbacks {
       conf.code_cache_size = (jits_.empty() ? 32 : 8) * 1024 * 1024;
       jits_.push_back(std::make_unique<A64::Jit>(conf));
       code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
-      icache_generations_.push_back(g_icache_generation.load(std::memory_order_acquire));
+      posted_.push_back(std::make_unique<std::atomic<uint32_t>>(0));
+      RegisterJit(jits_.back().get(), posted_.back().get());
     }
     return jits_[depth].get();
   }
@@ -925,19 +971,38 @@ class Env final : public A64::UserCallbacks {
     GuestCrash(kSigIll, 1, "ILL_ILLOPC", pc, detail);
   }
 
-  // IC IVAU / IC IALLU(IS): see NoteIcacheInvalidation. Lines are CTR_EL0's
-  // IminLine (dynarmic's default CTR_EL0: 64 bytes).
+  // IC IVAU: the line (CTR_EL0's IminLine) joins this thread's pending range,
+  // which every Jit drops at the next ISB (as __builtin___clear_cache ends),
+  // or before a line that does not extend it, a hint or the next host call
+  // or syscall. A range is applied once, not a Run exit for each line.
+  // IC IALLU and IC IALLUIS are EL1 instructions, UNDEFINED at EL0: SIGILL.
   void InstructionCacheOperationRaised(A64::InstructionCacheOperation op, uint64_t va) override {
-    A64::Jit* jit = CurrentJit();
-    if (op == A64::InstructionCacheOperation::InvalidateByVAToPoU) {
-      constexpr uint64_t kLine = 64;
-      const uintptr_t start = static_cast<uintptr_t>(va & ~(kLine - 1));
-      NoteIcacheInvalidation(start, start + kLine);
-      if (jit != nullptr) jit->InvalidateCacheRange(start, kLine);
-    } else {
-      NoteIcacheInvalidation(0, 0);
-      if (jit != nullptr) jit->ClearCache();
+    if (op != A64::InstructionCacheOperation::InvalidateByVAToPoU) {
+      pending_call_.undefined = true;
+      CurrentJit()->HaltExecution(Dynarmic::HaltReason::UserDefined2);
+      return;
     }
+    const uintptr_t start = static_cast<uintptr_t>(va & ~(icache_line_ - 1));
+    const uintptr_t end = start + icache_line_;
+    if (icache_end_ != 0 && (end < icache_start_ || start > icache_end_)) FlushIcache();
+    if (icache_end_ == 0) {
+      icache_start_ = start;
+      icache_end_ = end;
+    } else {
+      icache_start_ = std::min(icache_start_, start);
+      icache_end_ = std::max(icache_end_, end);
+    }
+  }
+
+  void InstructionSynchronizationBarrierRaised() override { FlushIcache(); }
+
+  // The pending IC IVAU range goes to every Jit, this thread's too (one that
+  // is running halts at the end of the current block and continues at its PC).
+  void FlushIcache() {
+    if (icache_end_ == 0) return;
+    const uintptr_t start = icache_start_, end = icache_end_;
+    icache_start_ = icache_end_ = 0;
+    InvalidateEveryJit(start, end);
   }
 
   void CallSVC(std::uint32_t swi) override {
@@ -984,6 +1049,7 @@ class Env final : public A64::UserCallbacks {
       case A64::Exception::WaitForInterrupt:
       case A64::Exception::WaitForEvent:
         counters_.hints.Bump();
+        FlushIcache();
         WaitForEvent(pc);
         return;
       case A64::Exception::SendEvent:
@@ -997,6 +1063,7 @@ class Env final : public A64::UserCallbacks {
         return;
       case A64::Exception::Yield:
         counters_.hints.Bump();
+        FlushIcache();
         YieldProcessor();
         return;
       default: {
@@ -1150,6 +1217,7 @@ class Env final : public A64::UserCallbacks {
     int va_index = -1;
     bool syscall = false;
     int pointer_variadic_fixed = -1;
+    bool undefined = false;  // IC IALLU(IS) at EL0
   };
 
   void QueueHostCall(A64::Jit* jit, const Trampoline& signature) {
@@ -1163,7 +1231,8 @@ class Env final : public A64::UserCallbacks {
       // A host call can abort a nested load while this outer Jit is paused.
       // Nested Jit creation may grow the vector: keep no reference across Run.
       RefreshCodeCache(jit, &code_generations_[depth_ - 1]);
-      RefreshIcache(jit, &icache_generations_[depth_ - 1]);
+      // Run drops the ranges posted so far before it dispatches.
+      posted_[depth_ - 1]->store(0, std::memory_order_relaxed);
       pending_call_ = {};
       jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2);
       int saved_running = t_guest_running;
@@ -1173,10 +1242,24 @@ class Env final : public A64::UserCallbacks {
       const Dynarmic::HaltReason halt = jit->Run();
       running_jit_.store(saved_jit, std::memory_order_relaxed);
       t_guest_running = saved_running;
+      // Lines this thread invalidated without an ISB yet: before it leaves
+      // guest code (the host function may wait for another guest thread).
+      FlushIcache();
       // SVC saves its following PC; NoExecuteFault saves X30. Returning from
       // Run restores host MXCSR before executing arbitrary native host code.
       // A fresh dispatch then uses the actual (possibly changed) guest FPCR.
       PendingHostCall pending = pending_call_;
+      if (pending.undefined) {
+        // The SYS instruction is at PC - 4 (dynarmic set PC past it).
+        const uint64_t pc = jit->GetPC() - 4;
+        uint32_t insn = 0;
+        if (InGuestCode(pc)) std::memcpy(&insn, reinterpret_cast<void*>(pc), 4);
+        char detail[112];
+        std::snprintf(detail, sizeof(detail),
+                      "undefined instruction 0x%08x (IC IALLU/IALLUIS: EL1 only, UNDEFINED at EL0)",
+                      insn);
+        GuestCrash(kSigIll, 1, "ILL_ILLOPC", pc, detail);
+      }
       if (pending.syscall) {
         HostFenvScope host_fenv;
         uint64_t args[6];
@@ -1189,8 +1272,8 @@ class Env final : public A64::UserCallbacks {
         CallHost(jit, pending.fn, pending.va_index, pending.pointer_variadic_fixed);
       } else if (Dynarmic::Has(halt, Dynarmic::HaltReason::CacheInvalidation) &&
                  !Dynarmic::Has(halt, Dynarmic::HaltReason::UserDefined1)) {
-        // Stopped only to drop translations an IC instruction invalidated
-        // (Run has dropped them): the guest carries on at its PC.
+        // Stopped only to drop translations an IC IVAU (of this thread or
+        // another) invalidated (Run has dropped them): the guest carries on.
         continue;
       } else {
         return;
@@ -1279,7 +1362,10 @@ class Env final : public A64::UserCallbacks {
 
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   std::vector<uint64_t> code_generations_;  // one generation for each jits_ entry
-  std::vector<uint64_t> icache_generations_;  // the IC invalidations each jits_ entry has seen
+  // jits_[i]'s count of ranges posted to it since its last dispatch.
+  std::vector<std::unique_ptr<std::atomic<uint32_t>>> posted_;
+  uint64_t icache_line_ = 64;
+  uintptr_t icache_start_ = 0, icache_end_ = 0;  // pending IC IVAU lines; end 0: none
   PendingHostCall pending_call_;
   uint32_t fpcr_ = 0;
   uint32_t fpsr_ = 0;
@@ -1945,6 +2031,7 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* info) {
 
 // --- the API table -----------------------------------------------------------
 void ApiAddCode(const void* start, size_t size, const char* /*name*/) {
+  ForgetGuestProtection(start, size);  // the loader's mapping, not the guest's
   AddRegion(reinterpret_cast<uintptr_t>(start), size);
 }
 
@@ -1952,6 +2039,7 @@ void ApiRemoveCode(const void* mapping_base, size_t mapping_size) {
   const uintptr_t first = reinterpret_cast<uintptr_t>(mapping_base);
   if (mapping_size == 0 || first > UINTPTR_MAX - mapping_size) return;
   const uintptr_t end = first + mapping_size;
+  ForgetGuestProtection(mapping_base, mapping_size);
   {
     std::unique_lock<std::shared_mutex> lock(g_regions_mutex);
     // A guest mprotect registration may span more than the aborted mapping.
@@ -2142,11 +2230,38 @@ bool InTranslatorCode(const void* start, size_t size) {
   return false;
 }
 
-void InvalidateGuestCode(const void* start, size_t size) {
-  if (size == 0) return;
-  const uintptr_t first = reinterpret_cast<uintptr_t>(start);
-  if (first > UINTPTR_MAX - size) return;
-  NoteIcacheInvalidation(first, first + size);
+void GuestProtectionChanged(const void* start, size_t size, bool exec, bool write, bool mapped) {
+  uintptr_t first, end;
+  if (!PageRange(start, size, &first, &end)) return;
+  std::vector<CodeRegion> stale;
+  {
+    std::lock_guard<std::mutex> lock(g_clean_exec_mutex);
+    if (exec) {
+      if (mapped) stale.push_back({first, end});
+      else stale = UncleanParts(first, end);
+    }
+    if (exec && !write) InsertCleanExec(first, end);
+    else EraseCleanExec(first, end);
+  }
+  if (stale.empty()) return;
+  {
+    // Only registered guest code can have been translated (MemoryReadCode).
+    std::shared_lock<std::shared_mutex> lock(g_regions_mutex);
+    std::erase_if(stale, [](const CodeRegion& part) {
+      for (const CodeRegion& r : g_regions) {
+        if (r.start < part.end && part.start < r.end) return false;
+      }
+      return true;
+    });
+  }
+  for (const CodeRegion& r : stale) InvalidateEveryJit(r.start, r.end);
+}
+
+void ForgetGuestProtection(const void* start, size_t size) {
+  uintptr_t first, end;
+  if (!PageRange(start, size, &first, &end)) return;
+  std::lock_guard<std::mutex> lock(g_clean_exec_mutex);
+  EraseCleanExec(first, end);
 }
 
 void AddGuestCode(const void* start, size_t size) {

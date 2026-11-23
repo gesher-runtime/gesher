@@ -36,10 +36,14 @@ bool InGuestCode(uintptr_t addr);
 // Registers the pages of [start, start + size) as guest code, unless they
 // already are: memory the guest made PROT_EXEC itself.
 void AddGuestCode(const void* start, size_t size);
-// Every Jit drops its translations of [start, start + size) before it next
-// runs guest code there (guest instruction-cache maintenance; see
-// NoteIcacheInvalidation in translator.cc).
-void InvalidateGuestCode(const void* start, size_t size);
+// The guest changed the protection of [start, start + size) (mprotect), or
+// mapped it (mmap: `mapped`). Making pages executable drops every Jit's
+// translations of those that were writable or not executable before (all of
+// them for a new mapping, which may reuse an address that held other code).
+void GuestProtectionChanged(const void* start, size_t size, bool exec, bool write, bool mapped);
+// [start, start + size) was unmapped or mapped by the loader: its protection
+// is no longer the guest's last mprotect/mmap of it.
+void ForgetGuestProtection(const void* start, size_t size);
 
 // Does [start, start + size) touch the translator's own code pages (the
 // trampolines and guest-side helpers it writes)?

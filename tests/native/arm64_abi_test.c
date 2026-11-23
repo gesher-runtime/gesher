@@ -14,7 +14,9 @@
 //    va_list converted to System V), with more than six integer arguments;
 //  - a host function pointer from dlsym called directly by guest code;
 //  - code the guest writes and makes PROT_EXEC itself, in an anonymous mapping
-//    and over a libc string (Facebook's force_dlopen).
+//    and over a libc string (Facebook's force_dlopen);
+//  - code rewritten after it ran (an in-place hook, IC IVAU), also while
+//    another thread spins in it; IC IALLU is SIGILL (GESHER_ARM64_ABI_CRASH).
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -346,7 +348,73 @@ static void test_rewritten_code(void) {
   code[0] = 0x52800060;  // mov w0, #3
   __builtin___clear_cache((char*)code, (char*)(code + 1));
   check("rewritten code: IC IVAU makes a rewrite visible", ok && call_code(code) == 3);
+  // Two functions a page apart, each rewritten with its own IC IVAU line.
+  code[0] = 0x52800080;  // mov w0, #4
+  code[page / 4 - 2] = 0x52800020;  // mov w0, #1
+  code[page / 4 - 1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)code, (char*)(code + 1));
+  __builtin___clear_cache((char*)(code + page / 4 - 2), (char*)(code + page / 4));
+  ok = ok && call_code(code) == 4 && call_code(code + page / 4 - 2) == 1;
+  code[page / 4 - 2] = 0x528000A0;  // mov w0, #5
+  __builtin___clear_cache((char*)(code + page / 4 - 2), (char*)(code + page / 4 - 1));
+  check("rewritten code: IC IVAU of separate lines", ok && call_code(code + page / 4 - 2) == 5);
   munmap(code, page);
+}
+
+// Another thread rewrites code this one is running in a loop that never
+// leaves guest code: IC IVAU is broadcast, and the spinning thread's next ISB
+// runs the new instructions (it must not keep the old ones and spin forever).
+static uint32_t* spin_code;
+static atomic_int spin_started, spin_give_up, spin_saw;
+
+static void* spin_thread(void* arg) {
+  (void)arg;
+  int calls = 0;
+  int r;
+  while ((r = call_code(spin_code)) == 1 && !atomic_load_explicit(&spin_give_up, memory_order_relaxed)) {
+    if (++calls == 1000) atomic_store(&spin_started, 1);
+    __asm__ volatile("isb" ::: "memory");
+  }
+  atomic_store(&spin_saw, r);
+  return NULL;
+}
+
+static void test_rewritten_code_other_thread(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  spin_code = mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  check("mmap for code another thread rewrites", spin_code != MAP_FAILED);
+  if (spin_code == MAP_FAILED) return;
+  spin_code[0] = 0x52800020;  // mov w0, #1
+  spin_code[1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)spin_code, (char*)(spin_code + 2));
+  pthread_t t;
+  if (pthread_create(&t, NULL, spin_thread, NULL) != 0) {
+    check("rewritten code: a thread spinning in guest code", 0);
+    return;
+  }
+  struct timespec ms = {0, 1000000};
+  for (int i = 0; i < 5000 && !atomic_load(&spin_started); ++i) nanosleep(&ms, NULL);
+  nanosleep(&ms, NULL);
+  spin_code[0] = 0x52800040;  // mov w0, #2
+  __builtin___clear_cache((char*)spin_code, (char*)(spin_code + 1));
+  for (int i = 0; i < 5000 && atomic_load(&spin_saw) == 0; ++i) nanosleep(&ms, NULL);
+  int saw = atomic_load(&spin_saw);
+  atomic_store(&spin_give_up, 1);
+  pthread_join(t, NULL);
+  check("rewritten code: a thread spinning in guest code runs the rewrite",
+        atomic_load(&spin_started) && saw == 2);
+  munmap(spin_code, page);
+}
+
+// IC IALLU is an EL1 instruction, UNDEFINED at EL0: the process gets SIGILL
+// (GESHER_ARM64_ABI_CRASH=ic-iallu: a run that must end with that report).
+static void crash_mode(void) {
+  const char* mode = getenv("GESHER_ARM64_ABI_CRASH");
+  if (mode != NULL && strcmp(mode, "ic-iallu") == 0) {
+    __asm__ volatile("ic iallu" ::: "memory");
+    printf("ic iallu: no SIGILL\n");
+    exit(1);
+  }
 }
 
 // Called by arm64_elf_test with the trampoline of a host function: re-protects
@@ -399,6 +467,7 @@ static int __attribute__((noinline)) protected_frame(const char* s) {
 
 int gesher_selftest(const char* dir);
 int gesher_selftest(const char* dir) {
+  crash_mode();
   failures = 0;
   printf("arm64_abi_test:\n");
   check("stack protector frames return", protected_frame("guarded") == 7);
@@ -413,6 +482,7 @@ int gesher_selftest(const char* dir) {
   test_host_pointer();
   test_written_code();
   test_rewritten_code();
+  test_rewritten_code_other_thread();
   failures += Arm64FpcrContracts();
   failures += Arm64FpsrContracts();
   printf(failures == 0 ? "arm64_abi_test: all passed\n" : "arm64_abi_test: %d failed\n", failures);
