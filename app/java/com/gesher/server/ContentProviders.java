@@ -193,21 +193,23 @@ final class ContentProviders {
 
     /** Ambiguous declarations never select an attacker simply because it installed first. */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
-        ProviderInfo found = null;
-        for (ApkPackage pkg : pm.packages()) {
-            if (pm.isRemovalPending(pkg.packageName)) continue;
-            for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
-                    | PackageManager.GET_URI_PERMISSION_PATTERNS
-                    | PackageManager.GET_SHARED_LIBRARY_FILES)) {
-                if (!hasAuthority(info, authority)) continue;
-                if (found != null && (!found.packageName.equals(info.packageName)
-                        || !found.name.equals(info.name))) {
-                    throw new SecurityException("Conflicting content provider authority");
+        synchronized (pm) {
+            ProviderInfo found = null;
+            for (ApkPackage pkg : pm.providerPackages(authority)) {
+                if (pm.isRemovalPending(pkg.packageName)) continue;
+                for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                        | PackageManager.GET_URI_PERMISSION_PATTERNS
+                        | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+                    if (!hasAuthority(info, authority)) continue;
+                    if (found != null && (!found.packageName.equals(info.packageName)
+                            || !found.name.equals(info.name))) {
+                        throw new SecurityException("Conflicting content provider authority");
+                    }
+                    found = info;
                 }
-                found = info;
             }
+            return found;
         }
-        return found;
     }
 
     private String callerPackage(ActivityTaskManagerService.ProcessRecord caller, String claimed) {
@@ -648,6 +650,58 @@ final class ContentProviders {
         }
     }
 
+    /**
+     * A client observed DeadObjectException before the process death recipient ran.
+     * A report is only evidence: probe the exact published Binder outside all lifecycle
+     * monitors, then recheck the connection, publication and process incarnations.
+     */
+    void unstableProviderDied(IBinder connection) {
+        if (connection == null) throw new NullPointerException("connection is null");
+        if (!(connection instanceof Connection)) {
+            throw new IllegalArgumentException("Not a content provider connection");
+        }
+        int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
+        boolean system = mCallers.isSystem();
+        ActivityTaskManagerService.ProcessRecord caller = system ? null : mAtm.callerProcess(pid);
+        if (!system) mCallers.callerPackage();
+        final Connection reported;
+        synchronized (this) {
+            reported = callerConnectionLocked(connection, system, pid, uid);
+            if (reported == null) return;
+            if (!system && (reported.client != caller || reported.clientCode == null
+                    || mPm.get(reported.client.packageName) != reported.clientCode)) {
+                throw new SecurityException("Provider connection belongs to a retired caller");
+            }
+        }
+
+        // pingBinder can cross a process boundary. Do not let a client kill a live
+        // provider, or hold the service/ATM monitors while awaiting the provider.
+        if (reported.provider.pingBinder()) return;
+
+        // ATM -> providers is the existing provider-retirement lock order. Mark the
+        // authenticated owner dead before releasing either lock so new work cannot
+        // reuse it, without turning an unexpected death into an intentional force-stop.
+        synchronized (mAtm) {
+            synchronized (this) {
+                ContentProviderHolder published = mPublished.get(reported.authority);
+                if (mConnections.get(connection) != reported
+                        || !system && (mAtm.callerProcess(pid) != caller
+                            || caller.exiting || caller.dead
+                            || mPm.get(caller.packageName) != reported.clientCode)
+                        || published == null || published.provider.asBinder() != reported.provider
+                        || mPublishedBy.get(reported.authority) != reported.owner
+                        || mPublishedCode.get(reported.authority) != reported.ownerCode
+                        || mPm.get(reported.owner.packageName) != reported.ownerCode
+                        || mAtm.callerProcess(reported.owner.pid) != reported.owner
+                        || reported.owner.packageCode != reported.ownerCode) return;
+                reported.owner.dead = true;
+            }
+        }
+        long identity = Binder.clearCallingIdentity();
+        try { mAtm.processDied(reported.owner); }
+        finally { Binder.restoreCallingIdentity(identity); }
+    }
+
     /** Whether processes of other packages use the process's providers. */
     synchronized boolean hasClients(ActivityTaskManagerService.ProcessRecord app) {
         for (Map.Entry<String, Set<ActivityTaskManagerService.ProcessRecord>> clients : mClients.entrySet()) {
@@ -730,6 +784,11 @@ final class ContentProviders {
             // A waiter must re-resolve disabled declarations instead of waiting two minutes.
             notifyAll();
         }
+        notifyLostConnections(lost);
+    }
+
+    /** Connections have already been removed; application callbacks run without locks. */
+    private void notifyLostConnections(List<Connection> lost) {
         for (Connection connection : lost) {
             if (connection.stable > 0) {
                 mAtm.providerDependencyDied(connection.client, connection.clientCode);
@@ -747,18 +806,25 @@ final class ContentProviders {
      * The process went away: so did the providers it published, and its use of others'.
      * Returns the processes that lost their last client.
      */
-    synchronized List<ActivityTaskManagerService.ProcessRecord> processDied(
+    List<ActivityTaskManagerService.ProcessRecord> processDied(
             ActivityTaskManagerService.ProcessRecord app) {
-        unpublish(app);
-        mConnections.values().removeIf(c -> c.client == app || c.owner == app);
+        List<Connection> lost = new ArrayList<>();
         List<ActivityTaskManagerService.ProcessRecord> unused = new ArrayList<>();
-        for (Map.Entry<String,
-                Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
-            if (e.getValue().remove(app) && e.getValue().isEmpty()) {
-                ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(e.getKey());
-                if (owner != null && !hasClients(owner) && !unused.contains(owner)) unused.add(owner);
+        synchronized (this) {
+            unpublish(app);
+            mConnections.values().removeIf(c -> {
+                if (c.owner == app && c.client != app) lost.add(c);
+                return c.client == app || c.owner == app;
+            });
+            for (Map.Entry<String,
+                    Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
+                if (e.getValue().remove(app) && e.getValue().isEmpty()) {
+                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(e.getKey());
+                    if (owner != null && !hasClients(owner) && !unused.contains(owner)) unused.add(owner);
+                }
             }
         }
+        notifyLostConnections(lost);
         return unused;
     }
 }

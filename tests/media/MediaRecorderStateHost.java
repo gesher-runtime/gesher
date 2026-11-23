@@ -28,6 +28,7 @@ public final class MediaRecorderStateHost implements AutoCloseable {
     native void size(long value);
     native void parameter(String value);
     native void file(FileDescriptor fd) throws IOException;
+    native void nextFile(FileDescriptor fd) throws IOException;
     native void prepare() throws IOException;
     native void start();
     native void pause();
@@ -173,6 +174,56 @@ public final class MediaRecorderStateHost implements AutoCloseable {
             r.expectError();
         }
     }
+    static void nextDescriptors(File target) throws Exception {
+        File next = new File(target + ".next");
+        File rejected = new File(target + ".rejected");
+        try (MediaRecorderStateHost r = new MediaRecorderStateHost();
+                RandomAccessFile out = new RandomAccessFile(next, "rw")) {
+            expect(IllegalArgumentException.class, () -> r.nextFile(null));
+            expect(IllegalStateException.class, () -> r.nextFile(out.getFD()));
+            expect(IllegalStateException.class, () -> r.nextFile(new FileDescriptor()));
+            try (RandomAccessFile readOnly = new RandomAccessFile(next, "r")) {
+                expect(IOException.class, () -> r.nextFile(readOnly.getFD()));
+            }
+            r.config(target, 3);
+            expect(IllegalStateException.class, () -> r.nextFile(out.getFD()));
+            expect(IllegalStateException.class, () -> r.nextFile(new FileDescriptor()));
+            r.prepare();
+            expect(IOException.class, () -> r.nextFile(new FileDescriptor()));
+            try (RandomAccessFile readOnly = new RandomAccessFile(next, "r")) {
+                expect(IOException.class, () -> r.nextFile(readOnly.getFD()));
+            }
+            out.setLength(10000);
+            r.nextFile(out.getFD());
+            check(next.length() == 0, "pending file is truncated on admission");
+            try (RandomAccessFile second = new RandomAccessFile(rejected, "rw")) {
+                second.setLength(7000);
+                expect(IllegalStateException.class, () -> r.nextFile(second.getFD()));
+                check(rejected.length() == 0, "Stagefright truncates before duplicate-pending rejection");
+            }
+            r.start(); r.pause();
+            expect(IllegalStateException.class, () -> r.nextFile(out.getFD()));
+            r.resume(); feed(3); r.stop();
+            check(target.length() > 0 && next.length() == 0, "unused pending file stays unused on stop");
+            expect(IllegalStateException.class, () -> r.nextFile(out.getFD()));
+            expect(IllegalStateException.class, () -> r.nextFile(new FileDescriptor()));
+            // Failed argument/admission calls above never put the recorder into ERROR.
+            r.config(target, 3); r.prepare(); r.nextFile(out.getFD()); r.reset();
+            r.config(target, 3); r.prepare(); r.nextFile(out.getFD());
+        }
+        try (MediaRecorderStateHost r = new MediaRecorderStateHost();
+                RandomAccessFile out = new RandomAccessFile(next, "rw")) {
+            r.source(1); r.format(1); r.audioEncoder(3); // THREE_GPP is not MPEG_4.
+            try (RandomAccessFile first = new RandomAccessFile(target, "rw")) { r.file(first.getFD()); }
+            r.prepare();
+            expect(IllegalStateException.class, () -> r.nextFile(out.getFD()));
+            expect(IllegalStateException.class, () -> r.nextFile(new FileDescriptor()));
+            r.release();
+            expect(IllegalArgumentException.class, () -> r.nextFile(null));
+            expect(IllegalStateException.class, () -> r.nextFile(out.getFD()));
+            expect(IllegalStateException.class, () -> r.nextFile(new FileDescriptor()));
+        }
+    }
     static void clipping(File target) throws Exception {
         for (int[] row : new int[][]{{3, 96000, 999999999, 48000, 192000},
                 {3, 1000, 1, 44100, 96000}, {7, 96000, 999999999, 48000, 510000},
@@ -220,7 +271,8 @@ public final class MediaRecorderStateHost implements AutoCloseable {
     }
     public static void main(String[] args) throws Exception {
         System.load(args[0]); File target = new File(args[1], "jni-state.m4a");
-        parameters(target); ordering(target); failures(target); descriptors(target); clipping(target); sourcesAndVideo(target);
+        parameters(target); ordering(target); failures(target); descriptors(target); nextDescriptors(target);
+        clipping(target); sourcesAndVideo(target);
         System.out.println("MediaRecorder production JNI + state: " + checks + " checks passed");
     }
 }

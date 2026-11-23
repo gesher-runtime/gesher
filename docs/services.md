@@ -66,6 +66,28 @@ atomically with Android's unique-name rules, preserving existing contents.
 read/write access; trees also carry a prefix grant. Persisting and releasing each
 mode uses the shared durable URI-grant store.
 
+`MediaStore.ACTION_PICK_IMAGES` uses the same Windows open dialog with the
+[photo picker](https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/tags/android-16.0.0_r4/photopicker/)
+request contract. Its manifest filters accept only `image/*`, `video/*` or no data,
+so an explicit non-media type is not resolved. The wildcard type, alone or in
+`EXTRA_MIME_TYPES`, means `image/*` and `video/*`. Only `EXTRA_PICK_IMAGES_MAX`
+enables multiple selection; `EXTRA_ALLOW_MULTIPLE` does not apply. A limit outside
+`1..getPickImagesMaxLimit()`, or non-media `EXTRA_MIME_TYPES`, starts and then
+returns `RESULT_CANCELED` without UI, as the photo picker does. The dialog title
+states the limit, and a larger selection is cancelled rather than truncated. Results
+carry read and persistable grants. Unlike Android, the returned URIs are
+`content://com.gesher.documents` SAF document URIs, not `content://media/picker`
+URIs; both support streams, `OpenableColumns` queries and persisted grants.
+
+An `ACTION_CHOOSER` around a document request lists the system picker as one of
+its choices, as DocumentsUI appears in Android's chooser; see
+[intent-chooser.md](intent-chooser.md).
+
+Android's MIME map (`DefaultMimeMapFactory`, from the framework jar's
+`mime.types` resources) replaces libcore's minimal default in every Gesher process
+during `Main.bootstrap`, as `RuntimeInit.commonInit` installs it. A failure to load
+it is logged and leaves libcore's map in effect.
+
 Multiple selection and `EXTRA_MIME_TYPES` retain all valid entries; there is no
 256-document or 64-filter policy. Native results are checked against the actual
 JNI array and C++ container representation limits before conversion, following

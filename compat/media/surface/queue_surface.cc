@@ -155,13 +155,15 @@ void QueueSurface::Abandon() {
 }
 
 bool QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* pixels,
-                             int64_t timestamp_ns) {
-  if (width <= 0 || height <= 0 || stride < width || pixels == nullptr) return false;
+                             int64_t timestamp_ns, int video_scaling_mode) {
+  if (width <= 0 || height <= 0 || stride < width || pixels == nullptr ||
+      (video_scaling_mode != 1 && video_scaling_mode != 2)) return false;
   // The copy is made unlocked: a large frame does not hold up this surface's
   // own producer or its readers.
   auto f = std::make_shared<RecycledFrame>(frame_pool_, width, height);
   f->width = width;
   f->height = height;
+  f->video_scaling_mode = video_scaling_mode;
   f->pixels.resize(static_cast<size_t>(width) * height);
   if (stride == width) {
     memcpy(f->pixels.data(), pixels, f->pixels.size() * sizeof(uint32_t));
@@ -247,11 +249,12 @@ int QueueSurface::unlockAndPost() {
   return UnlockAndPost(std::nullopt);
 }
 
-int QueueSurface::UnlockAndPostWithTimestamp(int64_t timestamp_ns) {
-  return UnlockAndPost(timestamp_ns);
+int QueueSurface::UnlockAndPostWithTimestamp(int64_t timestamp_ns, int video_scaling_mode) {
+  if (video_scaling_mode != 1 && video_scaling_mode != 2) return -EINVAL;
+  return UnlockAndPost(timestamp_ns, video_scaling_mode);
 }
 
-int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns) {
+int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode) {
   std::function<void()> listener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -261,13 +264,14 @@ int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns) {
       buffer_ = nullptr;
       return -ENODEV;
     }
-    listener = PublishLocked(timestamp_ns);
+    listener = PublishLocked(timestamp_ns, video_scaling_mode);
   }
   if (listener) listener();
   return 0;
 }
 
-std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns) {
+std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns,
+                                                int video_scaling_mode) {
   static gesher::perf::Site copy_site("queue surface: publish a queued frame (copy)");
   const int64_t start = gesher::perf::Now();
   if (buffer_ == nullptr) return {};
@@ -275,6 +279,7 @@ std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timesta
   auto f = std::make_shared<RecycledFrame>(frame_pool_, buffer_->width, buffer_->height);
   f->width = buffer_->width;
   f->height = buffer_->height;
+  f->video_scaling_mode = video_scaling_mode;
   const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
   const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
   f->pixels.resize(static_cast<size_t>(f->width) * f->height);

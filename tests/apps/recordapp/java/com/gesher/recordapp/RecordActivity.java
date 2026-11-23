@@ -1191,6 +1191,18 @@ public class RecordActivity extends Activity {
 
     private static final long EXPLICIT_TIMESTAMP_NS = 9_000_000_000_000_001L;
 
+    private static byte[][] imagePlaneSnapshot(Image image) {
+        Image.Plane[] planes = image.getPlanes();
+        byte[][] bytes = new byte[planes.length][];
+        for (int i = 0; i < planes.length; i++) {
+            ByteBuffer buffer = planes[i].getBuffer().duplicate();
+            buffer.clear();
+            bytes[i] = new byte[buffer.remaining()];
+            buffer.get(bytes[i]);
+        }
+        return bytes;
+    }
+
     void imageReader() throws Exception {
         File file = new File(getFilesDir(), "h264.mp4");
         if (!file.exists()) {
@@ -1203,24 +1215,45 @@ public class RecordActivity extends Activity {
         final Video seen = new Video();
         final List<Long> observedTimestamps = new ArrayList<>();
         final String[] format = new String[1];
+        final Image[] heldImage = new Image[1];
+        final byte[][][] heldPixels = new byte[1][][];
+        final boolean[] heldIntact = {true}, finished = {false};
         reader.setOnImageAvailableListener(rd -> {
-            Image img = rd.acquireNextImage();
-            if (img == null) return;
-            Image.Plane[] p = img.getPlanes();
-            int x = img.getWidth() / 2, y = img.getHeight() / 2;
             synchronized (seen) {
+                if (finished[0]) return;
+                Image img = rd.acquireNextImage();
+                if (img == null) return;
+                Image.Plane[] p = img.getPlanes();
+                int x = img.getWidth() / 2, y = img.getHeight() / 2;
                 observedTimestamps.add(img.getTimestamp());
                 format[0] = img.getFormat() + " " + img.getWidth() + "x" + img.getHeight() + " " + p.length + " planes";
                 seen.color(colorOf(p[0].getBuffer().get(y * p[0].getRowStride() + x * p[0].getPixelStride()) & 0xff,
                         p[1].getBuffer().get((y / 2) * p[1].getRowStride() + (x / 2) * p[1].getPixelStride()) & 0xff,
                         p[2].getBuffer().get((y / 2) * p[2].getRowStride() + (x / 2) * p[2].getPixelStride()) & 0xff));
                 seen.frames++;
+                if (heldImage[0] == null) {
+                    heldImage[0] = img;
+                    heldPixels[0] = imagePlaneSnapshot(img);
+                } else {
+                    // An acquired image must own its bytes while later codec
+                    // outputs reuse slots and the reader replaces pending images.
+                    heldIntact[0] &= java.util.Arrays.deepEquals(heldPixels[0],
+                            imagePlaneSnapshot(heldImage[0]));
+                    img.close();
+                }
             }
-            img.close();
         }, new Handler(ht.getLooper()));
         List<Long> expectedTimestamps = new ArrayList<>();
         Video v = decodeVideoSlowly(file, reader.getSurface(), expectedTimestamps);
         Thread.sleep(500);
+        synchronized (seen) {
+            finished[0] = true;
+            if (heldImage[0] != null) {
+                heldIntact[0] &= java.util.Arrays.deepEquals(heldPixels[0],
+                        imagePlaneSnapshot(heldImage[0]));
+                heldImage[0].close();
+            }
+        }
         reader.close();
         ht.quitSafely();
         synchronized (seen) {
@@ -1247,6 +1280,7 @@ public class RecordActivity extends Activity {
             }
             say("imagereader timestamps: " + (timestampsMatch && sawDefault && sawZero
                     && sawPositive && sawNegative ? "pass" : "fail"));
+            say("imagereader retained image: " + (heldIntact[0] && seen.frames >= 40 ? "pass" : "fail"));
         }
     }
 
