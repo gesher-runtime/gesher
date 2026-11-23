@@ -26,7 +26,7 @@ $trusted = @{
   'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
   'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
   'tools/ci/github_read.py'='997d37c8f6677bb8e1bbfb38d5c87f504b3eb0e4'
-  'tools/ci/github_jobs.py'='f4278108b42329950525fb9fa34b78ae75694915'
+  'tools/ci/github_jobs.py'='ae6864eaf1f612317c917a10a2f45e5c8b15ac0c'
 }
 foreach ($entry in $trusted.GetEnumerator()) {
   $actualHelperBlob = git hash-object $entry.Key

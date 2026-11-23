@@ -14,7 +14,7 @@ from unittest.mock import call, patch
 
 from artifact_candidates import main as select_batch_artifacts, read_artifacts
 from github_read import GitHubReadError, get_json, main
-from github_jobs import get_jobs
+from github_jobs import get_jobs, main as jobs_main
 from github_read import GitHubTransientError
 
 
@@ -496,6 +496,10 @@ def inventory(count, start=1, size=None):
 
 
 class JobsTest(unittest.TestCase):
+    def setUp(self):
+        self.diagnostics = io.StringIO()
+        self.enterContext(contextlib.redirect_stderr(self.diagnostics))
+
     def test_complete_two_page_inventory_preserves_every_job_field(self):
         first, second = inventory(73), inventory(73, 51, 23)
         with patch('github_jobs.get_json', side_effect=[TRANSIENT, first, second]) as read, \
@@ -521,13 +525,57 @@ class JobsTest(unittest.TestCase):
         malformed = inventory(73, size=73); malformed['jobs'][5]['id'] = True
         negative = inventory(73, size=73); negative['jobs'][5]['id'] = -6
         nonobject = inventory(73, size=73); nonobject['jobs'][5] = None
-        for page in (inventory(101, size=100), inventory(73, size=72), inventory(73, size=101),
-                     inventory(1, size=2), duplicate, malformed, negative, nonobject,
+        for page in (inventory(101, size=100), inventory(73, size=101),
+                     duplicate, malformed, negative, nonobject,
                      {'total_count': 0}, None):
             with self.subTest(page=page):
                 with patch('github_jobs.get_json', side_effect=[copy.deepcopy(page)]) as read:
                     with self.assertRaises(GitHubReadError): get_jobs(JOBS_ENDPOINT)
                 self.assertEqual(read.call_count, 1)
+
+    def test_inconsistent_single_page_is_discarded_before_complete_retry(self):
+        for count, received, fresh_count in ((0, 1, 1), (1, 0, 1), (50, 49, 50),
+                                              (51, 50, 51), (73, 74, 74), (100, 99, 100)):
+            with self.subTest(count=count, received=received):
+                old, fresh = inventory(count, size=received), inventory(fresh_count, size=fresh_count)
+                if old['jobs']: old['jobs'][0]['name'] = 'discarded-snapshot'
+                with patch('github_jobs.get_json', side_effect=[old, fresh]) as read, \
+                        patch('github_jobs.time.sleep') as sleep:
+                    self.assertEqual(get_jobs(JOBS_ENDPOINT), fresh)
+                self.assertEqual(read.call_args_list,
+                    [call(JOBS_ENDPOINT + '?per_page=100&page=1', retry_transient=False)] * 2)
+                sleep.assert_called_once_with(1)
+        self.assertIn('total_count=100 received_count=99', self.diagnostics.getvalue())
+        self.assertNotIn('discarded-snapshot', self.diagnostics.getvalue())
+
+    def test_single_page_inconsistency_exhausts_without_partial_cli_output(self):
+        for count, received in ((73, 72), (1, 2)):
+            stdout = io.StringIO()
+            with self.subTest(count=count, received=received), \
+                    patch('github_jobs.get_json', side_effect=[inventory(count, size=received)] * 3) as read, \
+                    patch('github_jobs.time.sleep') as sleep, \
+                    patch.object(sys, 'argv', ['github_jobs.py', JOBS_ENDPOINT]), contextlib.redirect_stdout(stdout):
+                self.assertEqual(jobs_main(), 1)
+            self.assertEqual(read.call_count, 3)
+            self.assertEqual(sleep.call_args_list, [call(1), call(2)])
+            self.assertEqual(stdout.getvalue(), '')
+        self.assertIn('attempt=3/3 retry=false', self.diagnostics.getvalue())
+        self.assertIn('CI_GITHUB_JOBS_ERROR Inconsistent job page:', self.diagnostics.getvalue())
+
+    def test_single_page_final_retry_can_succeed_but_malformed_retry_cannot(self):
+        short, fresh = inventory(73, size=72), inventory(73, size=73)
+        with patch('github_jobs.get_json', side_effect=[short, short, fresh]) as read, \
+                patch('github_jobs.time.sleep') as sleep:
+            self.assertEqual(get_jobs(JOBS_ENDPOINT), fresh)
+        self.assertEqual(read.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [call(1), call(2)])
+        duplicate = copy.deepcopy(fresh); duplicate['jobs'][1]['id'] = duplicate['jobs'][0]['id']
+        with patch('github_jobs.get_json', side_effect=[short, duplicate, fresh]) as read, \
+                patch('github_jobs.time.sleep') as sleep:
+            with self.assertRaisesRegex(GitHubReadError, 'repeated job identity'):
+                get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(read.call_count, 2)
+        sleep.assert_called_once_with(1)
 
     def test_only_transient_failures_fall_back_to_fifty_row_pages(self):
         with patch('github_jobs.get_json', side_effect=[GitHubReadError('quota')]) as read:
@@ -548,16 +596,51 @@ class JobsTest(unittest.TestCase):
         nonobject = inventory(1); nonobject['jobs'][0] = None
         duplicate = inventory(50); duplicate['jobs'][1]['id'] = 1
         cases = [
-            [inventory(101)], [inventory(-1)], [{'total_count': True, 'jobs': []}],
-            [inventory(73, size=49)], [inventory(73), inventory(73, 51, 22)],
-            [inventory(73), inventory(73, 50, 23)],
-            [inventory(1, size=2)], [malformed], [nonobject], [duplicate],
-            [{'total_count': 0}], [None],
+            ([inventory(101)], 1), ([inventory(-1)], 1), ([{'total_count': True, 'jobs': []}], 1),
+            ([inventory(73, size=49)], 3), ([inventory(73), inventory(73, 51, 22)], 3),
+            ([inventory(73), inventory(73, 50, 23)], 1),
+            ([inventory(1, size=2)], 3), ([malformed], 1), ([nonobject], 1), ([duplicate], 1),
+            ([{'total_count': 0}], 1), ([None], 1),
         ]
-        for pages in cases:
+        for pages, attempts in cases:
             with self.subTest(pages=pages):
-                with patch('github_jobs.get_json', side_effect=[TRANSIENT, *copy.deepcopy(pages)]):
+                with patch('github_jobs.get_json', side_effect=[TRANSIENT, *copy.deepcopy(pages) * attempts]) as read, \
+                        patch('github_jobs.time.sleep') as sleep:
                     with self.assertRaises(GitHubReadError): get_jobs(JOBS_ENDPOINT)
+                self.assertEqual(read.call_count, 1 + len(pages) * attempts)
+                self.assertEqual(sleep.call_count, attempts - 1)
+
+    def test_short_second_page_restarts_from_page_one_at_boundaries(self):
+        for count in (51, 100):
+            old, fresh = inventory(count), inventory(count)
+            old['jobs'][0]['name'] = 'discarded-first-page'
+            short, complete = inventory(count, 51, count - 51), inventory(count, 51, count - 50)
+            with self.subTest(count=count), \
+                    patch('github_jobs.get_json', side_effect=[TRANSIENT, old, short, fresh, complete]) as read, \
+                    patch('github_jobs.time.sleep') as sleep:
+                result = get_jobs(JOBS_ENDPOINT)
+            self.assertEqual(result['jobs'], fresh['jobs'] + complete['jobs'])
+            self.assertEqual([c.args[0] for c in read.call_args_list],
+                [JOBS_ENDPOINT + '?per_page=100&page=1'] +
+                [JOBS_ENDPOINT + '?per_page=50&page=1', JOBS_ENDPOINT + '?per_page=50&page=2'] * 2)
+            sleep.assert_called_once_with(1)
+
+    def test_count_change_cannot_hide_duplicate_or_malformed_page_identity(self):
+        for identity in (1, True, -1):
+            second = inventory(74, 51, 24); second['jobs'][0]['id'] = identity
+            with self.subTest(identity=identity), \
+                    patch('github_jobs.get_json', side_effect=[TRANSIENT, inventory(73), second]) as read, \
+                    patch('github_jobs.time.sleep') as sleep:
+                with self.assertRaisesRegex(GitHubReadError, 'job identity'): get_jobs(JOBS_ENDPOINT)
+            self.assertEqual(read.call_count, 3)
+            sleep.assert_not_called()
+
+    def test_inconsistency_then_transport_fallback_keeps_both_budgets_bounded(self):
+        pages = [inventory(73, size=72)] * 2 + [TRANSIENT] + [inventory(73), inventory(74, 51, 24)] * 3
+        with patch('github_jobs.get_json', side_effect=pages) as read, patch('github_jobs.time.sleep') as sleep:
+            with self.assertRaisesRegex(GitHubReadError, 'changed between pages'): get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(read.call_count, 9)
+        self.assertEqual(sleep.call_args_list, [call(1), call(2), call(1), call(2)])
 
     def test_transport_error_never_returns_first_page_as_complete(self):
         with patch('github_jobs.get_json', side_effect=[TRANSIENT, inventory(73), GitHubReadError('502')]):
