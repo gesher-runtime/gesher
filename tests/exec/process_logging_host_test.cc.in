@@ -25,7 +25,7 @@ struct JNIEnv {};
 constexpr DWORD INFINITE = 0xffffffffu;
 constexpr DWORD WAIT_OBJECT_0 = 0, ERROR_SUCCESS = 0;
 constexpr DWORD PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, SYNCHRONIZE = 0x100000;
-constexpr bool FALSE = false;
+[[maybe_unused]] constexpr bool FALSE = false;
 constexpr bool kHasDuplicateWait = @HAS_DUPLICATE_WAIT@;
 constexpr bool kHasSharedOwner = @HAS_SHARED_OWNER@;
 
