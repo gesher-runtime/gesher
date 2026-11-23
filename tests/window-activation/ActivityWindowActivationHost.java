@@ -130,6 +130,7 @@ public final class ActivityWindowActivationHost {
             set(window, "handler", handler);
             windows.put(windowToken, window);
             events.clear();
+            current(null);  // set only by the finish scenarios
         }
 
         void resume() throws Exception {
@@ -204,7 +205,7 @@ public final class ActivityWindowActivationHost {
         try {
             body.run(new Fixture());
             System.out.println("PASS " + name);
-        } catch (AssertionError e) {
+        } catch (AssertionError | ReflectiveOperationException | RuntimeException e) {
             failures.add(name + ": " + e.getMessage());
             System.out.println("FAIL " + name + ": " + e.getMessage());
         }

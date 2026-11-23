@@ -440,12 +440,15 @@ public final class WindowSession extends IWindowSession.Stub {
                     // An Activity may finish after adding its window but before the window's
                     // first relayout creates the Win32 window and its handler (an Activity
                     // that finishes right after onResume): the finish still closes it.
+                    // Never run inline: the close handler finishes the Activity again, from
+                    // inside this finish() and under mWindows.
                     Handler handler = w.handler != null ? w.handler : finishHandler();
-                    if (handler != null) {
-                        handler.post(() -> finishWindow(key));
-                    } else {
-                        finishWindow(key);  // no looper to defer to
+                    if (handler == null) {
+                        log("window \"" + w.title() + "\": its Activity's finish has no"
+                                + " looper to run on");
+                        return false;
                     }
+                    handler.post(() -> finishWindow(key));
                     return true;
                 }
             }
