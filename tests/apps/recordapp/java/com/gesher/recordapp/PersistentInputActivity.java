@@ -62,7 +62,16 @@ public final class PersistentInputActivity extends Activity {
     }
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        new Thread(this::exercise, "persistent-input-acceptance").start();
+        // The in-process launcher (com.gesher.app.Main --activity) returns after onResume and the
+        // VM exits, so the local producer path runs here, in onCreate, like RecordActivity: it
+        // never waits on the main looper. The separate-process path binds a service whose
+        // connection callback arrives on the main thread, so it must run off it; that path is
+        // launched with --keep-task, which keeps the process until the activity finishes.
+        if (getIntent().getBooleanExtra("persistent.remote", false)) {
+            new Thread(this::exercise, "persistent-input-acceptance").start();
+        } else {
+            exercise();
+        }
     }
     private <T> T ui(java.util.concurrent.Callable<T> work) throws Exception {
         FutureTask<T> task = new FutureTask<>(work);
