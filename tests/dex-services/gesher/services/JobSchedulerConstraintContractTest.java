@@ -118,7 +118,7 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static class TestService extends IJobService.Stub {
+    static class TestService extends IJobService.Stub {
         int starts;
         int stops;
         int networkChanges;
@@ -176,7 +176,7 @@ public final class JobSchedulerConstraintContractTest {
         public void getTransferredUploadBytes(JobParameters params, JobWorkItem item) { }
     }
 
-    private static final class TestRunHandle {
+    static final class TestRunHandle {
         final Object job;
         final Object run;
         final TestService service;
@@ -190,7 +190,7 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static final class Harness implements AutoCloseable {
+    static final class Harness implements AutoCloseable {
         final Object pm, atm, am, scheduler;
         final Class<?> schedulerType, jobType, runType;
         final PackageImpl parsed;
@@ -1603,6 +1603,7 @@ public final class JobSchedulerConstraintContractTest {
         android.system.Os.unsetenv("GESHER_BINDER_UID");
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true);
         contracts();
+        JobSchedulerContentTriggerTest.contracts(true);
         System.out.println("JobSchedulerConstraintContractTest all passed: " + checks + " checks");
     }
 }

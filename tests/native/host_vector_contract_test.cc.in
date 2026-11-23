@@ -1,9 +1,14 @@
 // Actual production vector + scalar + virtual-object dispatch. Real Linux file,
 // pipe, socket and eventfd operations stand at the declared Windows OS boundary.
+#include <algorithm>
+#include <array>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
+#include <cstring>
 #include <fcntl.h>
 #include <map>
+#include <limits>
 #include <memory>
 #include <pthread.h>
 #include <sys/eventfd.h>
@@ -17,12 +22,22 @@
 #include <vector>
 static constexpr intptr_t INVALID_HANDLE_VALUE = -1;
 static constexpr int FILE_TYPE_PIPE = 3;
+static constexpr int FILE_TYPE_DISK = 1, FILE_TYPE_CHAR = 2;
 static constexpr uint32_t FILE_WRITE_DATA = 2;
 using HANDLE = intptr_t;
+using DWORD = uint32_t;
+static int GetFileType(intptr_t fd);
 #ifndef IOV_MAX
 #define IOV_MAX 1024
 #endif
 namespace gesher {
+// Explicit native-fence registry boundary. A Linux NUL fd reproduces the CRT
+// placeholder; the actual production scalar/vector dispatch must reject I/O.
+struct NativeFence {};
+static std::map<int, std::shared_ptr<NativeFence>> fences;
+static std::shared_ptr<NativeFence> LookupNativeFence(int fd) {
+  auto found = fences.find(fd); return found == fences.end() ? nullptr : found->second;
+}
 struct EventFd {
   // Retain the kernel description independently of the first public fd, just
   // as a production registry object survives closing one of its aliases.
@@ -50,6 +65,7 @@ static bool LookupSocket(int fd, SocketFd* state) {
 }
 static intptr_t HandleFromFd(int fd) { return fcntl(fd, F_GETFD) < 0 ? -1 : fd; }
 static int CrtResult(int value) { return value; }
+static int GetFileStatusFlags(int fd) { return ::fcntl(fd, F_GETFL); }
 namespace record_locks {
 // The native Windows boundary queries the held handle's GrantedAccess with
 // NtQueryObject. Linux's real descriptor access mode supplies that boundary.
@@ -65,7 +81,37 @@ static int notified, woke;
 static void InotifyNoteWrite(int) { ++notified; }
 static bool HasPollWaiters() { return true; }
 static void WakePollers() { ++woke; }
+struct DescriptorSnapshot {
+  HANDLE handle;
+  ~DescriptorSnapshot() { ::close(static_cast<int>(handle)); }
+};
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
+  int duplicate = ::dup(fd);
+  if (duplicate < 0) return {};
+  return DescriptorSnapshotPtr(new DescriptorSnapshot{duplicate});
+}
+static int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count) {
+  return static_cast<int>(::read(static_cast<int>(snapshot->handle), bytes, count));
+}
+static int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count) {
+  int result = static_cast<int>(::write(static_cast<int>(snapshot->handle), bytes, count));
+  if (result > 0) {
+    InotifyNoteWrite(static_cast<int>(snapshot->handle));
+    if (GetFileType(snapshot->handle) == FILE_TYPE_PIPE) WakePollers();
+  }
+  return result;
+}
+static int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count, int64_t offset) {
+  return ::pwrite(static_cast<int>(snapshot->handle), bytes, count, offset);
+}
 namespace ws {
+static bool CopyFromUser(void* to, const void* from, size_t size) {
+  if (!size) return true;
+  if (!from) return false;
+  std::memcpy(to, from, size);
+  return true;
+}
 struct Buffer { void* data; size_t size; };
 static ssize_t SendOwned(int fd, Buffer* buffers, size_t count, int flags, void*, const std::shared_ptr<int>&) {
   std::vector<iovec> iov; for (size_t i = 0; i < count; ++i) iov.push_back({buffers[i].data, buffers[i].size});
@@ -74,12 +120,28 @@ static ssize_t SendOwned(int fd, Buffer* buffers, size_t count, int flags, void*
 static ssize_t RecvOwned(int, Buffer*, size_t, int, void*, const std::shared_ptr<int>&) { return -1; }
 }
 }
-static int GetFileType(intptr_t fd) { struct stat info{}; return fstat(int(fd), &info) == 0 && S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : 1; }
+static int GetFileType(intptr_t fd) {
+  struct stat info{};
+  if (fstat(int(fd), &info) != 0) return 0;
+  if (S_ISFIFO(info.st_mode)) return FILE_TYPE_PIPE;
+  return S_ISREG(info.st_mode) || S_ISDIR(info.st_mode) ? FILE_TYPE_DISK : FILE_TYPE_CHAR;
+}
 // Virtual Windows descriptors reserve a CRT NUL fd. An erroneous direct CRT
 // call must reproduce that successful discard instead of writing the eventfd.
 static int _write(int fd, const void* bytes, unsigned count) {
   if (gesher::objects.count(fd)) return int(count);
   return ::write(fd, bytes, count);
+}
+// File I/O is an OS boundary in this vector-routing fixture. The exact native
+// file adapter is separately exercised by test_file_io_contracts.py and the
+// Windows process fixture; this suite owns vector/virtual-object dispatch.
+static bool NativeFileIo(int fd, void* bytes, unsigned count, bool writing, int* result) {
+  struct stat info{};
+  if (::fstat(fd, &info) < 0 || !S_ISREG(info.st_mode)) return false;
+  if (!writing) std::abort();
+  *result = static_cast<int>(::write(fd, bytes, count));
+  if (*result > 0) gesher::InotifyNoteWrite(fd);
+  return true;
 }
 using gesher::SocketFd;
 #define write routed_write
@@ -90,6 +152,9 @@ namespace {
 #define writev routed_writev
 @WRITEV@
 #undef writev
+#define pwritev routed_pwritev
+@PWRITEV@
+#undef pwritev
 #undef write
 static int adapted_eventfd(unsigned value, int flags) {
   int fd = ::eventfd(value, flags);
@@ -114,8 +179,13 @@ static int adapted_timerfd_create() {
   if (fd >= 0) gesher::objects[fd] = {std::make_shared<gesher::EventFd>(fd, true), {}, {}};
   return fd;
 }
-static int adapted_dup(int fd) { int alias = ::dup(fd); if (alias >= 0 && gesher::objects.count(fd)) gesher::objects[alias] = gesher::objects[fd]; return alias; }
-static int adapted_close(int fd) { gesher::objects.erase(fd); return ::close(fd); }
+static int adapted_dup(int fd) {
+  int alias = ::dup(fd);
+  if (alias >= 0 && gesher::objects.count(fd)) gesher::objects[alias] = gesher::objects[fd];
+  if (alias >= 0 && gesher::fences.count(fd)) gesher::fences[alias] = gesher::fences[fd];
+  return alias;
+}
+static int adapted_close(int fd) { gesher::objects.erase(fd); gesher::fences.erase(fd); return ::close(fd); }
 static int failed, checked;
 static void check(const char* label, int passed) { ++checked; if (!passed) { ++failed; std::printf("FAIL %s\n", label); } }
 #define eventfd adapted_eventfd
@@ -133,8 +203,36 @@ static void check(const char* label, int passed) { ++checked; if (!passed) { ++f
 #undef close
 #undef writev
 #undef write
+#define writev routed_writev
+#define pwritev routed_pwritev
+#include "file_description_contract_test.inc"
+#undef pwritev
+#undef writev
 int main() {
   test_writev_event_contract();
+  int fence = ::open("/dev/null", O_RDWR);
+  check("fence routing placeholder created", fence >= 0);
+  if (fence >= 0) {
+    gesher::fences[fence] = std::make_shared<gesher::NativeFence>();
+    uint64_t payload = 1;
+    iovec bytes[] = {{&payload, sizeof(payload)}}, empty[] = {{nullptr, 0}};
+    auto check_fence = [&](int fd) {
+      errno = 0;
+      check("native fence scalar write rejected", routed_write(fd, &payload, sizeof(payload)) == -1 && errno == EINVAL);
+      errno = 0;
+      check("native fence vector write rejected", routed_writev(fd, bytes, 1) == -1 && errno == EINVAL);
+      errno = 0;
+      check("native fence empty vector rejected", routed_writev(fd, nullptr, 0) == -1 && errno == EINVAL);
+      errno = 0;
+      check("native fence zero-length vector rejected", routed_writev(fd, empty, 1) == -1 && errno == EINVAL);
+    };
+    check_fence(fence);
+    int alias = adapted_dup(fence);
+    check("native fence routing alias created", alias >= 0);
+    adapted_close(fence);
+    if (alias >= 0) { check_fence(alias); adapted_close(alias); }
+  }
+  test_vector_append_contracts();
   int timer = adapted_timerfd_create();
   check("routing timer created", timer >= 0);
   if (timer >= 0) {
@@ -165,7 +263,7 @@ int main() {
   char a[] = "a", b[] = "b", bytes[2]; iovec iov[] = {{a, 1}, {b, 1}};
   int before_notes = gesher::notified, before_wake = gesher::woke;
   check("vector pipe payload", routed_writev(pipefd[1], iov, 2) == 2 && ::read(pipefd[0], bytes, 2) == 2 && bytes[0] == 'a' && bytes[1] == 'b');
-  check("vector pipe preserves notifications", gesher::notified == before_notes + 2 && gesher::woke == before_wake + 2);
+  check("vector pipe is one write and one notification", gesher::notified == before_notes + 1 && gesher::woke == before_wake + 1);
   iovec empty[] = {{nullptr, 0}, {nullptr, 0}};
   before_notes = gesher::notified; before_wake = gesher::woke;
   check("zero vector does not fabricate write bookkeeping", routed_writev(pipefd[1], empty, 2) == 0 &&
@@ -175,7 +273,7 @@ int main() {
   check("routing regular file", fd >= 0);
   before_notes = gesher::notified; before_wake = gesher::woke;
   check("vector file payload", routed_writev(fd, iov, 2) == 2 && ::pread(fd, bytes, 2, 0) == 2 && bytes[0] == 'a' && bytes[1] == 'b');
-  check("vector file preserves notification only", gesher::notified == before_notes + 2 && gesher::woke == before_wake);
+  check("vector file is one write and one notification", gesher::notified == before_notes + 1 && gesher::woke == before_wake);
   ::close(fd); ::unlink(path);
   std::printf("production vector routing: %d checks, %d failures\n", checked, failed);
   return failed != 0;

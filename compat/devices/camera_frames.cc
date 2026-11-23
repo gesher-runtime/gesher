@@ -29,8 +29,10 @@
 #include <vector>
 
 #include "core_jni_helpers.h"
+#include "camera_frames.h"
 #include "camera_trace.h"
 #include "../media/surface/reader_surface.h"
+#include "../media/video/video_decoder.h"
 
 // libandroid_runtime's host ANativeWindow_fromSurface and the ANativeWindow
 // functions dalvikvm defines (docs/graphics.md, docs/native-libs.md).
@@ -435,6 +437,96 @@ int QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv1
     i->planes.push_back({ySize + cSize, cSize, cw, 1});
   }
   return EnqueueImage(env, r, i);
+}
+
+// MediaCodec already owns I420. Keep it native and write only the final Image
+// storage, rather than interleaving NV12, copying a Java array and deinterleaving
+// it again. Image planes remain independent, since applications may write them.
+void CopyReaderPlane(const uint8_t* source, int stride, int width, int height,
+                     uint8_t* target, int target_width, int target_height) {
+  if (width == target_width && height == target_height) {
+    if (stride == width) {
+      memcpy(target, source, static_cast<size_t>(width) * height);
+    } else {
+      for (int y = 0; y < height; ++y)
+        memcpy(target + static_cast<size_t>(y) * width,
+               source + static_cast<size_t>(y) * stride, static_cast<size_t>(width));
+    }
+    return;
+  }
+  for (int y = 0; y < target_height; ++y) {
+    const size_t row = static_cast<size_t>(static_cast<int64_t>(y) * height / target_height) * stride;
+    for (int x = 0; x < target_width; ++x)
+      target[static_cast<size_t>(y) * target_width + x] =
+          source[row + static_cast<int64_t>(x) * width / target_width];
+  }
+}
+
+int QueueVideoFrame(JNIEnv* env, const std::shared_ptr<Reader>& r,
+                    const gesher::media::VideoFrame& frame, int64_t timestamp_ns) {
+  // Validate the complete backing storage before forming any cropped pointer.
+  // The old NV12 route discards an incomplete final chroma block; retain its
+  // even visible extent and nearest-neighbour luma/chroma sampling exactly.
+  if (frame.width <= 0 || frame.height <= 0 || frame.height == INT32_MAX ||
+      frame.stride_y < frame.width || frame.stride_uv < (static_cast<int64_t>(frame.width) + 1) / 2 ||
+      frame.crop_left < 0 || frame.crop_top < 0 ||
+      frame.crop_right < frame.crop_left || frame.crop_right >= frame.width ||
+      frame.crop_bottom < frame.crop_top || frame.crop_bottom >= frame.height)
+    return BAD_VALUE;
+  const uint64_t y_bytes = static_cast<uint64_t>(frame.stride_y) * frame.height;
+  const uint64_t c_bytes = static_cast<uint64_t>(frame.stride_uv) * ((static_cast<uint64_t>(frame.height) + 1) / 2);
+  if (y_bytes + 2 * c_bytes > frame.data.size()) return BAD_VALUE;
+  const int w = frame.visible_width() & ~1, h = frame.visible_height() & ~1;
+  if (w <= 0 || h <= 0) return BAD_VALUE;
+  {
+    std::lock_guard<std::mutex> lock(r->mutex);
+    if (r->closed) return NO_INIT;
+  }
+  if (r->halFormat == kHalBlob) return 1;  // No JPEG bytes from a video decoder.
+
+  const uint8_t* y = frame.y() + static_cast<size_t>(frame.crop_top) * frame.stride_y + frame.crop_left;
+  const size_t chroma_offset = static_cast<size_t>(frame.crop_top / 2) * frame.stride_uv + frame.crop_left / 2;
+  const uint8_t* u = frame.u() + chroma_offset;
+  const uint8_t* v = frame.v() + chroma_offset;
+  auto* image = new Image();
+  image->width = r->width;
+  image->height = r->height;
+  image->timestampNs = timestamp_ns;
+  image->dataSpace = r->dataSpace;
+  image->halFormat = r->halFormat;
+  const int tw = r->width, th = r->height;
+  if (r->halFormat == kHalRgba8888) {
+    image->data.resize(static_cast<size_t>(tw) * th * 4);
+    for (int ty = 0; ty < th; ++ty) {
+      const int sy = static_cast<int>(static_cast<int64_t>(ty) * h / th);
+      uint8_t* row = image->data.data() + static_cast<size_t>(ty) * tw * 4;
+      for (int tx = 0; tx < tw; ++tx) {
+        const int sx = static_cast<int>(static_cast<int64_t>(tx) * w / tw);
+        const int c = y[static_cast<size_t>(sy) * frame.stride_y + sx] - 16;
+        const size_t chroma = static_cast<size_t>(sy / 2) * frame.stride_uv + sx / 2;
+        const int d = u[chroma] - 128, e = v[chroma] - 128;
+        row[tx * 4 + 0] = Clamp((298 * c + 409 * e + 128) >> 8);
+        row[tx * 4 + 1] = Clamp((298 * c - 100 * d - 208 * e + 128) >> 8);
+        row[tx * 4 + 2] = Clamp((298 * c + 516 * d + 128) >> 8);
+        row[tx * 4 + 3] = 255;
+      }
+    }
+    image->planes.push_back({0, image->data.size(), tw * 4, 4});
+  } else {
+    const size_t y_size = static_cast<size_t>(tw) * th;
+    const int cw = (tw + 1) / 2, ch = (th + 1) / 2;
+    const size_t c_size = static_cast<size_t>(cw) * ch;
+    image->data.resize(y_size + 2 * c_size);
+    CopyReaderPlane(y, frame.stride_y, w, h, image->data.data(), tw, th);
+    CopyReaderPlane(u, frame.stride_uv, w / 2, h / 2, image->data.data() + y_size, cw, ch);
+    CopyReaderPlane(v, frame.stride_uv, w / 2, h / 2, image->data.data() + y_size + c_size, cw, ch);
+    image->planes.push_back({0, y_size, tw, 1});
+    image->planes.push_back({y_size, c_size, cw, 1});
+    image->planes.push_back({y_size + c_size, c_size, cw, 1});
+  }
+  // Close may race the unlocked conversion. EnqueueImage rechecks ownership
+  // under the reader lock and releases the result if the consumer is gone.
+  return EnqueueImage(env, r, image);
 }
 
 // CameraFrames.nativeDeliver: 0 delivered, 1 unsupported format, otherwise an
@@ -890,6 +982,13 @@ const gesher_builtin_symbol kMediaJni[] = {
 };
 
 }  // namespace
+
+int QueueImageReaderVideoFrame(JNIEnv* env, jobject surface,
+                               const gesher::media::VideoFrame& frame,
+                               int64_t timestamp_ns) {
+  auto reader = ReaderForSurface(env, surface);
+  return reader != nullptr ? QueueVideoFrame(env, reader, frame, timestamp_ns) : NO_INIT;
+}
 
 void LogCameraDeliveryTrace() {
   gDeliveryTrace.Log();

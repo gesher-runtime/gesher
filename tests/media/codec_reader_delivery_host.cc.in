@@ -1,0 +1,376 @@
+// Production queue and delivery; JNI object/array/window adapters are explicit.
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <thread>
+#include <vector>
+#include "compat/media/video/video_decoder.h"
+using gesher::media::VideoFrame;
+
+thread_local bool count_allocations = false;
+thread_local uint64_t native_allocated_bytes = 0, java_array_bytes = 0, java_copy_bytes = 0;
+thread_local std::function<void(size_t)> allocation_hook;
+[[gnu::noinline]] void* operator new(size_t size) {
+  if (count_allocations) native_allocated_bytes += size;
+  if (allocation_hook) allocation_hook(size);
+  if (void* p = std::malloc(size ? size : 1)) return p;
+  std::abort();
+}
+[[gnu::noinline]] void* operator new[](size_t size) { return ::operator new(size); }
+[[gnu::noinline]] void operator delete(void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete(void* p, size_t) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p, size_t) noexcept { std::free(p); }
+struct Uncounted {
+  bool old = count_allocations;
+  Uncounted() { count_allocations = false; }
+  ~Uncounted() { count_allocations = old; }
+};
+int checks = 0, failures = 0;
+bool baseline = false;
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; if (failures < 16) std::fprintf(stderr, "FAIL reader delivery: %s\n", reason); }
+}
+using jint = int32_t;
+using jlong = int64_t;
+using jsize = int32_t;
+using jbyte = int8_t;
+using jclass = void*;
+using jmethodID = void*;
+struct Object { jlong values[8]{}; };
+using jobject = Object*;
+struct Array { std::vector<jbyte> bytes; };
+using jbyteArray = Array*;
+constexpr int JNI_ABORT = 2;
+struct JNIEnv {
+  bool exception = false, fail_event = false;
+  int local_refs = 0, events = 0, pins = 0, releases = 0;
+  std::unique_ptr<Array> array;
+  std::function<void()> event_hook;
+  bool IsSameObject(jobject left, jobject right) { return left == right; }
+  jobject NewLocalRef(jobject value) { if (value) ++local_refs; return value; }
+  void DeleteLocalRef(jobject value) { if (value) --local_refs; }
+  void DeleteGlobalRef(jobject) {}
+  jlong GetLongField(jobject object, int field) { return object->values[field]; }
+  void SetLongField(jobject object, int field, jlong value) { object->values[field] = value; }
+  void SetIntField(jobject object, int field, jint value) { object->values[field] = value; }
+  void CallStaticVoidMethod(int, int, jobject) {
+    ++events;
+    if (event_hook) event_hook();
+    if (fail_event) exception = true;
+  }
+  int PushLocalFrame(int) { return 0; }
+  jobject PopLocalFrame(jobject result) { array.reset(); return result; }
+  jmethodID GetStaticMethodID(jclass, const char*, const char*) { return reinterpret_cast<void*>(1); }
+  void ExceptionClear() { exception = false; }
+  bool ExceptionCheck() { return exception; }
+  jbyteArray NewByteArray(jsize size) {
+    if (count_allocations) java_array_bytes += size;
+    Uncounted uncounted;
+    array = std::make_unique<Array>();
+    array->bytes.resize(size);
+    return array.get();
+  }
+  void SetByteArrayRegion(jbyteArray target, jsize start, jsize size, const jbyte* source) {
+    if (count_allocations) java_copy_bytes += size;
+    std::memcpy(target->bytes.data() + start, source, size);
+  }
+  jsize GetArrayLength(jbyteArray value) { return static_cast<jsize>(value->bytes.size()); }
+  jbyte* GetByteArrayElements(jbyteArray value, void*) { ++pins; return value->bytes.data(); }
+  void ReleaseByteArrayElements(jbyteArray, jbyte*, int mode) { Check(mode == JNI_ABORT, "input arrays are not written"); ++releases; }
+  jint CallStaticIntMethod(jclass, jmethodID, jobject surface, jbyteArray value, jint w, jint h,
+                          jlong timestamp, jbyteArray jpeg);
+};
+JNIEnv* current_env = nullptr;
+JNIEnv* AttachedEnv(const char*) { return current_env; }
+jclass CameraFramesClass(JNIEnv*) { return reinterpret_cast<void*>(1); }
+bool CheckException(JNIEnv* env, const char*) {
+  const bool failed = env->exception;
+  env->exception = false;
+  return failed;
+}
+void jniThrowException(JNIEnv* env, const char*, const char*) { env->exception = true; }
+struct ANativeWindow {};
+struct ANativeWindow_Buffer { int width, height, stride; void* bits; };
+ANativeWindow* ANativeWindow_fromSurface(JNIEnv*, jobject) { return nullptr; }
+void ANativeWindow_release(ANativeWindow*) {}
+int ANativeWindow_getWidth(ANativeWindow*) { return 0; }
+int ANativeWindow_getHeight(ANativeWindow*) { return 0; }
+int ANativeWindow_setBuffersGeometry(ANativeWindow*, int, int, int) { return -19; }
+int ANativeWindow_lock(ANativeWindow*, ANativeWindow_Buffer*, void*) { return -19; }
+int ANativeWindow_unlockAndPost(ANativeWindow*) { return -19; }
+namespace gesher::media { struct ReaderSurface { void Close() {} }; }
+namespace gesher::devices::camera { struct TraceSample { explicit TraceSample(int) {} void Step(int) {} }; }
+
+namespace android {
+constexpr int OK = 0, NO_INIT = -19, BAD_VALUE = -22, UNKNOWN_ERROR = -2147483647, NO_MEMORY = -12;
+namespace {
+constexpr int kHalBlob = 0x21, kHalRgba8888 = 1;
+@TYPES@
+struct { int readerContext = 0, imageBuffer = 1, imageTimestamp = 2, imageDataSpace = 3,
+             imageTransform = 4, imageScalingMode = 5, readerClass = 1, postEvent = 1; } gIr;
+std::mutex gReadersMutex;
+std::vector<std::shared_ptr<Reader>> gReaders;
+int gDeliveryTrace = 0;
+@LOOKUP@
+@READER_OF@
+@ENQUEUE@
+@RELEASE@
+@ACQUIRE@
+@CLOSE@
+@NV12_CONVERT@
+@QUEUE_FRAME@
+@JNI_DELIVERY@
+@NATIVE_DELIVERY@
+}  // namespace
+@NATIVE_ENTRY@
+}  // namespace android
+jint JNIEnv::CallStaticIntMethod(jclass, jmethodID, jobject surface, jbyteArray value, jint w, jint h,
+                                jlong timestamp, jbyteArray jpeg) {
+  return android::CameraFrames_deliver(this, 0, surface, value, w, h, timestamp, jpeg);
+}
+@CODEC_DELIVERY@
+using namespace android;
+
+struct Target {
+  JNIEnv env;
+  Object java_reader, surface, weak;
+  std::shared_ptr<Reader> reader = std::make_shared<Reader>();
+  Target(int w, int h, int format = 0x23, int max = 2) {
+    reader->width = w; reader->height = h; reader->halFormat = format;
+    reader->maxImages = max; reader->dataSpace = 0x8c20000;
+    reader->surface = &surface; reader->weakSelf = &weak;
+    java_reader.values[gIr.readerContext] = reinterpret_cast<jlong>(new std::shared_ptr<Reader>(reader));
+    std::lock_guard<std::mutex> lock(gReadersMutex);
+    gReaders.push_back(reader);
+  }
+  ~Target() { Close(); Check(env.local_refs == 0, "local references retire"); }
+  void Close() { ImageReader_close(&env, &java_reader); }
+  int Deliver(const VideoFrame& frame, int64_t timestamp) {
+    current_env = &env;
+    return DeliverToReader(&surface, frame, timestamp);
+  }
+  Image* Acquire() {
+    Object image;
+    int result = ImageReader_imageSetup(&env, &java_reader, &image);
+    if (result != 0) return nullptr;
+    auto* ptr = reinterpret_cast<Image*>(image.values[gIr.imageBuffer]);
+    Check(ptr->timestampNs == image.values[gIr.imageTimestamp], "public timestamp copied");
+    Check(ptr->dataSpace == image.values[gIr.imageDataSpace], "public dataspace copied");
+    return ptr;
+  }
+};
+
+uint8_t Pattern(int x, int y, int plane, int seed) {
+  return static_cast<uint8_t>((x * 13 + y * 29 + plane * 73 + seed * 17) & 255);
+}
+VideoFrame Frame(int w, int h, int left, int top, int padding, int seed) {
+  VideoFrame f;
+  f.width = w + left + padding; f.height = h + top + padding;
+  f.stride_y = f.width + padding; f.stride_uv = (f.width + 1) / 2 + padding;
+  f.crop_left = left; f.crop_top = top; f.crop_right = left + w - 1; f.crop_bottom = top + h - 1;
+  const size_t y_bytes = static_cast<size_t>(f.stride_y) * f.height;
+  const size_t c_bytes = static_cast<size_t>(f.stride_uv) * ((f.height + 1) / 2);
+  f.data.assign(y_bytes + 2 * c_bytes, 0xcd);
+  for (int y = 0; y < f.height; ++y)
+    for (int x = 0; x < f.width; ++x)
+      f.data[static_cast<size_t>(y) * f.stride_y + x] = Pattern(x, y, 0, seed);
+  for (int y = 0; y < (f.height + 1) / 2; ++y)
+    for (int x = 0; x < (f.width + 1) / 2; ++x)
+      for (int p = 1; p <= 2; ++p)
+        f.data[y_bytes + (p - 1) * c_bytes + static_cast<size_t>(y) * f.stride_uv + x] = Pattern(x, y, p, seed);
+  return f;
+}
+
+void Pixels(const Image& image, const VideoFrame& frame, int seed) {
+  const int w = frame.visible_width() & ~1, h = frame.visible_height() & ~1;
+  if (image.halFormat == 1) {
+    Check(image.planes.size() == 1, "RGBA one plane");
+    for (int ty = 0; ty < image.height; ++ty) {
+      const int y = ty * h / image.height;
+      for (int tx = 0; tx < image.width; ++tx) {
+        const int x = tx * w / image.width;
+        const int Y = Pattern(frame.crop_left + x, frame.crop_top + y, 0, seed) - 16;
+        const int U = Pattern(frame.crop_left / 2 + x / 2, frame.crop_top / 2 + y / 2, 1, seed) - 128;
+        const int V = Pattern(frame.crop_left / 2 + x / 2, frame.crop_top / 2 + y / 2, 2, seed) - 128;
+        const uint8_t expected[] = {static_cast<uint8_t>(std::clamp((298*Y+409*V+128)>>8,0,255)),
+          static_cast<uint8_t>(std::clamp((298*Y-100*U-208*V+128)>>8,0,255)),
+          static_cast<uint8_t>(std::clamp((298*Y+516*U+128)>>8,0,255)), 255};
+        Check(std::memcmp(image.data.data() + (static_cast<size_t>(ty)*image.width+tx)*4, expected, 4) == 0,
+              "RGBA bytes equal old NV12 route");
+      }
+    }
+    return;
+  }
+  Check(image.planes.size() == 3, "YUV/PRIVATE retain three native planes");
+  for (int p = 0; p < 3; ++p) {
+    const int dw = p ? (image.width + 1) / 2 : image.width;
+    const int dh = p ? (image.height + 1) / 2 : image.height;
+    const int sw = p ? w / 2 : w, sh = p ? h / 2 : h;
+    const int left = p ? frame.crop_left / 2 : frame.crop_left;
+    const int top = p ? frame.crop_top / 2 : frame.crop_top;
+    const auto& plane = image.planes[p];
+    Check(plane.rowStride == dw && plane.pixelStride == 1 && plane.size == static_cast<size_t>(dw)*dh,
+          "tight independent planar layout");
+    for (int y = 0; y < dh; ++y)
+      for (int x = 0; x < dw; ++x)
+        Check(image.data[plane.offset + static_cast<size_t>(y)*dw+x] ==
+              Pattern(left+x*sw/dw, top+y*sh/dh, p, seed), "exact crop/scale plane byte");
+  }
+}
+
+void PixelCases() {
+  const int dimensions[][4] = {{2,2,2,2},{16,10,16,10},{17,11,17,11},{16,10,7,5},
+    {17,11,31,15},{8,12,1,1},{128,72,63,35},{32,24,64,48}};
+  for (const auto& d : dimensions)
+    for (int crop : {0,1,2,3})
+      for (int pad : {0,7})
+        for (int format : {0x23,0x22,1}) {
+          Target target(d[2], d[3], format);
+          auto frame = Frame(d[0],d[1],crop,crop,pad,7);
+          const auto old = frame.data;
+          const int64_t timestamp = crop == 0 ? 0 : crop == 1 ? -9000000000000001LL : 9000000000000001LL;
+          Check(target.Deliver(frame,timestamp) == OK, "valid delivery accepted");
+          auto* image = target.Acquire();
+          Check(image != nullptr, "Image available");
+          if (!image) continue;
+          Check(image->width == d[2] && image->height == d[3] && image->timestampNs == timestamp,
+                "dimensions and timestamp unchanged");
+          Pixels(*image,frame,7);
+          Check(frame.data == old, "decoder bytes unchanged");
+          image->data[0] ^= 0xff;
+          Check(frame.data == old, "writable image cannot mutate decoder frame");
+          ReleaseImage(target.reader,image);
+        }
+}
+
+void Lifetimes() {
+  Target target(16,8,0x23,2);
+  auto frame = Frame(16,8,1,1,5,1);
+  Check(target.Deliver(frame,1) == OK, "first image");
+  Image* held = target.Acquire();
+  Check(held != nullptr, "hold first image");
+  auto held_bytes = held->data;
+  for (int i = 2; i <= 7; ++i) {
+    auto next = Frame(16,8,1,1,5,i);
+    Check(target.Deliver(next,i) == OK, "replacement frame");
+  }
+  Check(target.reader->pending.size() == 2 && held->data == held_bytes, "pending bounded and held image unchanged");
+  Image* second = target.Acquire();
+  Check(second && second->timestampNs == 6, "old pending retired in original FIFO order");
+  Object blocked;
+  Check(ImageReader_imageSetup(&target.env,&target.java_reader,&blocked) == 2, "maxImages applies only to acquired images");
+  ReleaseImage(target.reader,second);
+  Image* last = target.Acquire();
+  Check(last && last->timestampNs == 7, "last pending survives");
+  ReleaseImage(target.reader,last);
+  target.Close();
+  Check(held->data == held_bytes, "native acquired storage retained until release");
+  ReleaseImage(target.reader,held);
+  Check(target.Deliver(frame,8) == NO_INIT, "closed surface fails");
+  Check(target.reader->acquired == 0 && target.reader->pending.empty(), "close/release retire all images");
+  {
+    Target jpeg(16,8,0x21);
+    Check(jpeg.Deliver(frame,9) == BAD_VALUE && jpeg.reader->pending.empty(), "JPEG without encoded bytes remains unsupported");
+  }
+  {
+    Target reentrant(16,8);
+    reentrant.env.event_hook = [&] { reentrant.Close(); };
+    Check(reentrant.Deliver(frame,10) == OK, "callback may reenter and close after publication");
+    Check(reentrant.reader->closed && reentrant.reader->pending.empty(), "reentrant close retires queued ownership");
+  }
+  {
+    Target throwing(16,8);
+    throwing.env.fail_event = true;
+    Check(throwing.Deliver(frame,11) == UNKNOWN_ERROR && !throwing.env.exception,
+          "callback exception retains error translation");
+  }
+#if NATIVE_DELIVERY
+  {
+    Target closing(16,8);
+    std::promise<void> converting, closed;
+    auto conversion = converting.get_future(); auto complete = closed.get_future();
+    std::thread closer([&] { conversion.wait(); closing.Close(); closed.set_value(); });
+    bool fired = false;
+    allocation_hook = [&](size_t size) {
+      if (!fired && size == 16*8*3/2) { fired = true; converting.set_value(); complete.wait(); }
+    };
+    Check(closing.Deliver(frame,12) == NO_INIT, "close racing conversion is rejected at enqueue");
+    allocation_hook = nullptr; closer.join();
+    Check(fired && closing.reader->pending.empty(), "racing close has no queued storage");
+  }
+  for (int bad = 0; bad < 7; ++bad) {
+    Target invalid(16,8);
+    auto broken = frame;
+    switch (bad) {
+      case 0: broken.crop_left = -1; break;
+      case 1: broken.crop_right = broken.width; break;
+      case 2: broken.stride_y = broken.width-1; break;
+      case 3: broken.stride_uv = 0; break;
+      case 4: broken.data.pop_back(); break;
+      case 5: broken.crop_bottom = broken.crop_top-1; break;
+      case 6: broken.height = INT32_MAX; break;
+    }
+    Check(invalid.Deliver(broken,13) == BAD_VALUE && invalid.reader->pending.empty(), "invalid backing rejected before access");
+  }
+#endif
+  for (int round = 0; round < 200; ++round) {
+    Target cycle(16,8);
+    Check(cycle.Deliver(frame,round) == OK, "reopen has its own surface owner");
+    auto* image = cycle.Acquire();
+    Check(image && image->timestampNs == round, "no stale frame after reopen");
+    ReleaseImage(cycle.reader,image);
+  }
+}
+
+void Measure(int w, int h) {
+  Target target(w,h);
+  auto frame = Frame(w,h,0,0,0,7);
+  constexpr int frames = 12;
+  uint64_t checksum = 0, retained = 0;
+  // Prime the deque block so its allocator growth does not obscure frame bytes.
+  Check(target.Deliver(frame,-1) == OK, "measurement warmup");
+  auto* warm = target.Acquire(); ReleaseImage(target.reader,warm);
+  native_allocated_bytes = java_array_bytes = java_copy_bytes = 0;
+  for (int n = 0; n < frames; ++n) {
+    count_allocations = true;
+    const int result = target.Deliver(frame,n);
+    count_allocations = false;
+    Check(result == OK, "measurement output");
+    auto* image = target.Acquire();
+    Check(image != nullptr, "measurement acquired");
+    retained = image->data.size();
+    for (uint8_t byte : image->data) checksum = (checksum * 131) ^ byte;
+    ReleaseImage(target.reader,image);
+  }
+  if (!baseline) {
+    Check(java_array_bytes == 0 && java_copy_bytes == 0, "no full frame JNI arrays or copies");
+    Check(native_allocated_bytes < static_cast<uint64_t>(w)*h*3/2*frames + 4096, "only final image frame storage allocated");
+  }
+  std::printf("MEASURE {\"width\":%d,\"height\":%d,\"frames\":%d,\"checksum\":%llu,"
+              "\"retained_image_bytes\":%llu,\"native_allocated_bytes\":%llu,"
+              "\"java_array_bytes\":%llu,\"java_copy_bytes\":%llu}\n", w,h,frames,
+              static_cast<unsigned long long>(checksum),static_cast<unsigned long long>(retained),
+              static_cast<unsigned long long>(native_allocated_bytes),static_cast<unsigned long long>(java_array_bytes),
+              static_cast<unsigned long long>(java_copy_bytes));
+}
+
+int main(int argc, char**) {
+  baseline = argc > 1;
+  PixelCases(); Lifetimes();
+  Measure(1280,720); Measure(1920,1080); Measure(3840,2160);
+  Check(gReaders.empty(), "all native reader owners retired");
+  std::printf("%d codec reader checks; %d failures\n",checks,failures);
+  return failures ? 1 : 0;
+}

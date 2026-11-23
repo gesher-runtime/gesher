@@ -193,21 +193,23 @@ final class ContentProviders {
 
     /** Ambiguous declarations never select an attacker simply because it installed first. */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
-        ProviderInfo found = null;
-        for (ApkPackage pkg : pm.packages()) {
-            if (pm.isRemovalPending(pkg.packageName)) continue;
-            for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
-                    | PackageManager.GET_URI_PERMISSION_PATTERNS
-                    | PackageManager.GET_SHARED_LIBRARY_FILES)) {
-                if (!hasAuthority(info, authority)) continue;
-                if (found != null && (!found.packageName.equals(info.packageName)
-                        || !found.name.equals(info.name))) {
-                    throw new SecurityException("Conflicting content provider authority");
+        synchronized (pm) {
+            ProviderInfo found = null;
+            for (ApkPackage pkg : pm.providerPackages(authority)) {
+                if (pm.isRemovalPending(pkg.packageName)) continue;
+                for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                        | PackageManager.GET_URI_PERMISSION_PATTERNS
+                        | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+                    if (!hasAuthority(info, authority)) continue;
+                    if (found != null && (!found.packageName.equals(info.packageName)
+                            || !found.name.equals(info.name))) {
+                        throw new SecurityException("Conflicting content provider authority");
+                    }
+                    found = info;
                 }
-                found = info;
             }
+            return found;
         }
-        return found;
     }
 
     private String callerPackage(ActivityTaskManagerService.ProcessRecord caller, String claimed) {
