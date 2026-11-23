@@ -149,6 +149,21 @@ public final class ManagerConstructionBatchTest {
         require(telephony.getServiceState() == null, "no-modem service state reported");
         require(telephony.getImei(0) == null && telephony.getTypeAllocationCode(0) == null,
                 "no-modem device identifier reported");
+        // The managers' null-service answers (AOSP has no phone service without
+        // FEATURE_TELEPHONY); getCellLocation used to throw NullPointerException here.
+        require(telephony.getAllCellInfo() == null && telephony.getCellLocation() == null,
+                "no-modem cell information reported");
+        require(!telephony.isDataEnabled() && !telephony.isDataRoamingEnabled()
+                        && !telephony.hasIccCard(),
+                "no-modem data switch or ICC card reported");
+        require(telephony.getCardIdForDefaultEuicc() == TelephonyManager.UNINITIALIZED_CARD_ID,
+                "no-modem eUICC card ID was not UNINITIALIZED_CARD_ID");
+        try {
+            telephony.isEmergencyNumber("112");
+            throw new AssertionError("no-modem isEmergencyNumber did not throw");
+        } catch (IllegalStateException expected) {
+            // TelephonyManager's "telephony service is null."
+        }
         require(telephony.getSimCarrierId() == TelephonyManager.UNKNOWN_CARRIER_ID,
                 "no-modem carrier ID was not UNKNOWN_CARRIER_ID");
         require("".equals(telephony.getNetworkOperatorName()) && "".equals(telephony.getSimOperator())
