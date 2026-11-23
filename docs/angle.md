@@ -7,6 +7,12 @@ The build was done on branch `wip/angle`, hwui's GL pipeline on it on
 `wip/hwui-gl`; the decision records are [0018](decisions/0018-angle-build.md)
 and [0030](decisions/0030-angle-hwui-skiagl.md).
 
+The device advertises ES 3.0 (`ro.opengles.version=196608` in `app/build.prop`,
+`ConfigurationInfo.reqGlEsVersion`): what ANGLE gives on any Direct3D 11 device,
+WARP included. Google Play hides apps whose `<uses-feature android:glEsVersion>`
+is above it (Chrome asks for 3.0). 3.1 depends on the adapter and is not claimed.
+`GlBindingsTest` checks the property against an ES 3 context's `GL_VERSION`.
+
 ## What is built, and how
 
 - **Source**: upstream ANGLE (`chromium.googlesource.com/angle/angle`) at
