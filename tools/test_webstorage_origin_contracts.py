@@ -85,6 +85,9 @@ def main():
             "android/webkit/WebStorage.java": WEB_STORAGE,
             "com/gesher/app/webview/WebView2Host.java": BRIDGE,
             "com/gesher/app/webview/GesherWebStorage.java": source,
+            "com/gesher/app/webview/WebStorageQueries.java": """package com.gesher.app.webview;
+                final class WebStorageQueries { static void query(String origin, boolean quota,
+                android.webkit.ValueCallback<Long> callback) { } }""",
             "com/gesher/app/webview/WebStorageDispatchTest.java": TEST,
         }
         for name, contents in files.items():

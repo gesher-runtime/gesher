@@ -34,6 +34,7 @@ jmethodID g_on_resource_request = nullptr;
 jmethodID g_on_bridge_call = nullptr;
 jmethodID g_on_bridge_request = nullptr;
 jmethodID g_on_global = nullptr;
+jmethodID g_on_service_worker = nullptr;
 
 // The calling thread's JNIEnv, attaching it (as a daemon) the first time:
 // the WebView thread.
@@ -169,6 +170,24 @@ void GlobalCallback(int32_t type, int64_t id, int32_t arg, const std::wstring& a
   env->CallStaticVoidMethod(g_host_class, g_on_global, type, static_cast<jlong>(id), arg, ja);
   CheckException(env);
   env->DeleteLocalRef(ja);
+}
+
+bool ServiceWorkerCallback(int64_t id, const std::wstring& url, const std::wstring& method,
+    const std::wstring& headers) {
+  JNIEnv* env = Env();
+  if (env == nullptr) return false;
+  jstring ju = JStr(env, url), jm = JStr(env, method), jh = JStr(env, headers);
+  jboolean accepted = JNI_FALSE;
+  if (ju && jm && jh) {
+    accepted = env->CallStaticBooleanMethod(g_host_class, g_on_service_worker,
+        static_cast<jlong>(id), ju, jm, jh);
+  }
+  bool failed = env->ExceptionCheck();
+  if (failed) env->ExceptionClear();
+  if (ju) env->DeleteLocalRef(ju);
+  if (jm) env->DeleteLocalRef(jm);
+  if (jh) env->DeleteLocalRef(jh);
+  return !failed && accepted == JNI_TRUE;
 }
 
 Host* Get(jlong handle) { return reinterpret_cast<Host*>(handle); }
@@ -432,6 +451,28 @@ jboolean JNICALL WebView2Host_clearOriginData(JNIEnv* env, jclass, jstring origi
   return Host::ClearOriginData(Str(env, origin), cb) ? JNI_TRUE : JNI_FALSE;
 }
 
+jboolean JNICALL WebView2Host_queryOriginStorage(JNIEnv* env, jclass, jstring origin, jlong cb) {
+  if (origin == nullptr) return JNI_FALSE;
+  return Host::QueryOriginStorage(Str(env, origin), cb) ? JNI_TRUE : JNI_FALSE;
+}
+
+jboolean JNICALL WebView2Host_enableServiceWorkers(JNIEnv*, jclass, jlong cb) {
+  return Host::EnableServiceWorkers(cb) ? JNI_TRUE : JNI_FALSE;
+}
+
+jboolean JNICALL WebView2Host_respondToServiceWorker(JNIEnv* env, jclass, jlong id, jint status,
+    jstring reason, jstring headers, jbyteArray body) {
+  std::vector<uint8_t> bytes;
+  if (body) {
+    bytes.resize(static_cast<size_t>(env->GetArrayLength(body)));
+    if (!bytes.empty()) env->GetByteArrayRegion(body, 0, static_cast<jsize>(bytes.size()),
+                                              reinterpret_cast<jbyte*>(bytes.data()));
+    if (env->ExceptionCheck()) return JNI_FALSE;
+  }
+  return Host::RespondToServiceWorker(id, status, Str(env, reason), Str(env, headers),
+                                     std::move(bytes)) ? JNI_TRUE : JNI_FALSE;
+}
+
 const JNINativeMethod kMethods[] = {
     {"nRuntimeVersion", "()Ljava/lang/String;", reinterpret_cast<void*>(&WebView2Host_runtimeVersion)},
     {"nLoaderKind", "()Ljava/lang/String;", reinterpret_cast<void*>(&WebView2Host_loaderKind)},
@@ -492,6 +533,10 @@ const JNINativeMethod kMethods[] = {
     {"nDeleteCookies", "(IJ)Z", reinterpret_cast<void*>(&WebView2Host_deleteCookies)},
     {"nClearBrowsingData", "(IJ)Z", reinterpret_cast<void*>(&WebView2Host_clearBrowsingData)},
     {"nClearOriginData", "(Ljava/lang/String;J)Z", reinterpret_cast<void*>(&WebView2Host_clearOriginData)},
+    {"nQueryOriginStorage", "(Ljava/lang/String;J)Z", reinterpret_cast<void*>(&WebView2Host_queryOriginStorage)},
+    {"nEnableServiceWorkers", "(J)Z", reinterpret_cast<void*>(&WebView2Host_enableServiceWorkers)},
+    {"nRespondToServiceWorker", "(JILjava/lang/String;Ljava/lang/String;[B)Z",
+     reinterpret_cast<void*>(&WebView2Host_respondToServiceWorker)},
 };
 
 }  // namespace
@@ -514,9 +559,11 @@ extern "C" jint JNI_OnLoad_gesher_webview(JavaVM* vm, void*) {
       "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
   g_on_bridge_request = env->GetMethodID(c, "onBridgeRequest", "(JLjava/lang/String;)V");
   g_on_global = env->GetStaticMethodID(c, "onGlobal", "(IJILjava/lang/String;)V");
+  g_on_service_worker = env->GetStaticMethodID(c, "onServiceWorkerRequest",
+      "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
   if (g_on_event == nullptr || g_on_navigation_starting == nullptr ||
       g_on_resource_request == nullptr || g_on_bridge_call == nullptr || g_on_global == nullptr
-      || g_on_bridge_request == nullptr) {
+      || g_on_bridge_request == nullptr || g_on_service_worker == nullptr) {
     return JNI_ERR;
   }
   if (env->RegisterNatives(c, kMethods, sizeof(kMethods) / sizeof(kMethods[0])) < 0) {
@@ -524,6 +571,7 @@ extern "C" jint JNI_OnLoad_gesher_webview(JavaVM* vm, void*) {
   }
   env->DeleteLocalRef(c);
   Host::SetGlobalCallback(&GlobalCallback);
+  Host::SetServiceWorkerCallback(&ServiceWorkerCallback);
   return JNI_VERSION_1_6;
 }
 

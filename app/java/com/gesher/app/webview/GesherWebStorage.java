@@ -9,7 +9,8 @@ import java.util.Map;
 /**
  * WebStorage over WebView2's profile (docs/webview.md). HTTP(S) origin deletion
  * removes its first-party file systems and IndexedDB. Unsupported origins do
- * nothing; partitioned third-party data, quotas and usage are not implemented.
+ * nothing. Per-origin usage/quota comes from Chromium. Full origin enumeration
+ * and partitioned third-party deletion remain unsupported.
  */
 final class GesherWebStorage extends WebStorage {
     static final int DOM_DATA = WebView2Host.DATA_ALL_DOM_STORAGE | WebView2Host.DATA_FILE_SYSTEMS
@@ -24,12 +25,12 @@ final class GesherWebStorage extends WebStorage {
 
     @Override
     public void getUsageForOrigin(String origin, ValueCallback<Long> callback) {
-        if (callback != null) callback.onReceiveValue(0L);
+        WebStorageQueries.query(origin, false, callback);
     }
 
     @Override
     public void getQuotaForOrigin(String origin, ValueCallback<Long> callback) {
-        if (callback != null) callback.onReceiveValue(0L);
+        WebStorageQueries.query(origin, true, callback);
     }
 
     @Override

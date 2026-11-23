@@ -16,7 +16,9 @@ int checks, failures, submissions, completions, live_work;
 bool accept = true, available = true;
 HRESULT completed_status = S_OK;
 int64_t completed_id = 0;
-constexpr int32_t kGlobalDone = 2;
+constexpr int32_t kGlobalDone = 2, kGlobalStorage = 3;
+int32_t expected_type = kGlobalDone;
+std::wstring completed_payload;
 
 void Check(bool condition, const char* description) {
   ++checks;
@@ -36,8 +38,9 @@ struct GlobalCompletion {
   GlobalWork operation;
 };
 
-void ReportGlobal(int32_t type, int64_t id, int32_t status, const std::wstring&) {
-  Check(type == kGlobalDone, "completion event type");
+void ReportGlobal(int32_t type, int64_t id, int32_t status, const std::wstring& value) {
+  Check(type == expected_type, "completion event type");
+  completed_payload = value;
   ++completions;
   completed_status = status;
   completed_id = id;
@@ -76,12 +79,14 @@ bool PostGlobal(std::function<void(const GlobalWork&)> fn) {
 class Host {
  public:
   static bool ClearOriginData(const std::wstring& origin, int64_t callback_id);
+  static bool QueryOriginStorage(const std::wstring& origin, int64_t callback_id);
 };
 
 // The only source substitution changes the COM receiver type to RecordingCore.
 // Admission, captures, method/parameters, HRESULT handling and leases are actual
 // production code. The real COM callback implementation comes from com_util.h.
 @CLEAR_ORIGIN_DATA@
+@QUERY_ORIGIN_STORAGE@
 
 void Reset() {
   core.callback.Reset();
@@ -91,6 +96,8 @@ void Reset() {
   core.method.clear();
   core.parameters.clear();
   submissions = completions = 0;
+  expected_type = kGlobalDone;
+  completed_payload.clear();
   accept = available = true;
 }
 
@@ -183,12 +190,53 @@ void FailuresAndEncoding() {
         "JSON string escapes preserve property boundaries");
   Reset();
 }
+void QueryMeasurements() {
+  Reset();
+  expected_type = kGlobalStorage;
+  Check(Host::QueryOriginStorage(L"HTTPS://EXAMPLE.INVALID:443", 91), "real quota query admitted");
+  Check(core.method == L"Storage.getUsageAndQuota", "query uses actual Chromium quota manager");
+  Check(core.parameters == L"{\"origin\":\"https://example.invalid/\"}", "canonical first-party origin passed");
+  Check(live_work == 1 && completions == 0, "query owns asynchronous work lease");
+  if (core.callback) {
+    core.callback->Invoke(S_OK, L"{\"usage\":1234,\"quota\":99999}");
+    Check(completed_payload == L"{\"usage\":1234,\"quota\":99999}" &&
+          completed_id == 91 && completed_status == S_OK && live_work == 0,
+          "real measurement forwarded without invented values");
+    core.callback->Invoke(S_OK, L"{\"usage\":7}");
+    Check(completions == 1, "duplicate query completion ignored");
+  }
+  Reset();
+  Check(!Host::QueryOriginStorage(L"https://example.invalid/path", 92), "query rejects non-origin before dispatch");
+  Check(submissions == 0 && core.calls == 0, "invalid query never starts work");
+  Reset();
+  expected_type = kGlobalStorage;
+  available = false;
+  Check(Host::QueryOriginStorage(L"https://example.invalid", 93), "unavailable query admitted");
+  Check(completions == 1 && FAILED(completed_status) && completed_payload.empty() && live_work == 0,
+        "unavailable query reports failure and releases lease");
+  Reset();
+  expected_type = kGlobalStorage;
+  core.result = E_FAIL;
+  Check(Host::QueryOriginStorage(L"https://example.invalid", 94), "failed query submission admitted");
+  Check(completions == 1 && completed_status == E_FAIL && completed_payload.empty() && live_work == 0,
+        "COM query failure releases lease");
+  if (core.callback) core.callback->Invoke(S_OK, L"{\"usage\":1234}");
+  Check(completions == 1, "late callback after submission failure ignored");
+  Reset();
+  expected_type = kGlobalStorage;
+  Check(Host::QueryOriginStorage(L"https://example.invalid", 95), "async failed query admitted");
+  if (core.callback) core.callback->Invoke(E_FAIL, L"{\"usage\":1234}");
+  Check(completions == 1 && completed_payload.empty() && live_work == 0,
+        "failure never reports a spurious measurement");
+  Reset();
+}
 }  // namespace
 
 int main() {
   ValidOrigins();
   InvalidOrigins();
   FailuresAndEncoding();
+  QueryMeasurements();
   std::printf("WebStorage native contracts: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

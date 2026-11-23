@@ -5,6 +5,9 @@ import android.net.Uri;
 import android.os.Handler;
 import android.util.Log;
 import android.webkit.ValueCallback;
+import android.webkit.ServiceWorkerClient;
+import android.webkit.ServiceWorkerWebSettings;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebMessage;
 import android.webkit.WebMessagePort;
 import android.webkit.WebResourceRequest;
@@ -150,7 +153,15 @@ public final class SupportLib {
         private final ProxyController mProxy = new ProxyController();
 
         public String[] getSupportedFeatures() {
-            return FEATURES.clone();
+            try {
+                GesherServiceWorkers.get(); // Report support only after the native filter is installed.
+                String[] result = java.util.Arrays.copyOf(FEATURES, FEATURES.length + 2);
+                result[FEATURES.length] = "SERVICE_WORKER_BASIC_USAGE";
+                result[FEATURES.length + 1] = "SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST";
+                return result;
+            } catch (UnsupportedOperationException | IllegalStateException unavailable) {
+                return FEATURES.clone();
+            }
         }
 
         public InvocationHandler createWebView(WebView webView) {
@@ -174,12 +185,42 @@ public final class SupportLib {
         }
 
         public InvocationHandler getServiceWorkerController() {
-            return null;  // the framework's (API 24+)
+            return Boundary.of(new ServiceWorkers(GesherServiceWorkers.get()));
         }
 
         public InvocationHandler getTracingController() {
             return null;  // the framework's (API 28+)
         }
+    }
+
+    /** The same singleton used by the framework ServiceWorkerController. */
+    public static final class ServiceWorkers {
+        private final GesherServiceWorkers mController;
+        ServiceWorkers(GesherServiceWorkers controller) { mController = controller; }
+        public InvocationHandler getServiceWorkerWebSettings() {
+            return Boundary.of(new WorkerSettings(mController.getServiceWorkerWebSettings()));
+        }
+        public void setServiceWorkerClient(InvocationHandler client) {
+            mController.setServiceWorkerClient(client == null ? null : new ServiceWorkerClient() {
+                @Override public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+                    return (WebResourceResponse) call(client, "ServiceWorkerClientBoundaryInterface",
+                            "shouldInterceptRequest", new Class<?>[] {WebResourceRequest.class}, request);
+                }
+            });
+        }
+    }
+
+    public static final class WorkerSettings {
+        private final ServiceWorkerWebSettings mSettings;
+        WorkerSettings(ServiceWorkerWebSettings settings) { mSettings = settings; }
+        public void setCacheMode(int mode) { mSettings.setCacheMode(mode); }
+        public int getCacheMode() { return mSettings.getCacheMode(); }
+        public void setAllowContentAccess(boolean allow) { mSettings.setAllowContentAccess(allow); }
+        public boolean getAllowContentAccess() { return mSettings.getAllowContentAccess(); }
+        public void setAllowFileAccess(boolean allow) { mSettings.setAllowFileAccess(allow); }
+        public boolean getAllowFileAccess() { return mSettings.getAllowFileAccess(); }
+        public void setBlockNetworkLoads(boolean block) { mSettings.setBlockNetworkLoads(block); }
+        public boolean getBlockNetworkLoads() { return mSettings.getBlockNetworkLoads(); }
     }
 
     // ---- WebViewProviderBoundaryInterface ----
@@ -456,6 +497,20 @@ public final class SupportLib {
     // ---- WebkitToCompatConverterBoundaryInterface ----
 
     public static final class Converter {
+        public InvocationHandler convertServiceWorkerSettings(Object settings) {
+            if (!(settings instanceof ServiceWorkerWebSettings)) {
+                throw new IllegalArgumentException("not service-worker settings");
+            }
+            return Boundary.of(new WorkerSettings((ServiceWorkerWebSettings) settings));
+        }
+
+        public Object convertServiceWorkerSettings(InvocationHandler settings) {
+            if (settings instanceof Boundary && ((Boundary) settings).delegate instanceof WorkerSettings) {
+                return ((WorkerSettings) ((Boundary) settings).delegate).mSettings;
+            }
+            throw new IllegalArgumentException("not Gesher service-worker settings");
+        }
+
         public InvocationHandler convertSettings(WebSettings settings) {
             return Boundary.of(new Settings(settings));
         }

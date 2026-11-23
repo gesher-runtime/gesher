@@ -243,7 +243,8 @@ bool EnsureThread() {
     if (!DuplicateHandle(GetCurrentProcess(), g_ready, GetCurrentProcess(), &ready,
                          0, FALSE, DUPLICATE_SAME_ACCESS)) return false;
   }
-  DWORD wait = WaitForSingleObject(ready, INFINITE);
+  // A failed STA startup must not hang an Android caller before its own timeout.
+  DWORD wait = WaitForSingleObject(ready, 5000);
   CloseHandle(ready);
   std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
   return wait == WAIT_OBJECT_0 && g_thread_phase == ThreadPhase::kRunning && g_thread_ready;
@@ -587,6 +588,62 @@ std::map<Impl*, std::shared_ptr<Impl>> g_retiring;
 bool FinishDestroy(const std::shared_ptr<Impl>& impl);
 std::shared_ptr<Impl> g_service;  // a hidden host for cookies and data, when no WebView exists
 
+// WebView2 requires a single SERVICE_WORKER filter per profile. Keep it on the
+// hidden service controller so closing/replacing a public WebView cannot lose it.
+Host::ServiceWorkerCallback g_worker_callback = nullptr;
+bool g_workers_enabled = false;
+struct WorkerRequest {
+  Com<ICoreWebView2WebResourceRequestedEventArgs> args;
+  Com<ICoreWebView2WebResourceRequest> request;
+  Com<ICoreWebView2Deferral> deferral;
+  GlobalWork operation;
+  ULONGLONG deadline;
+};
+std::map<int64_t, WorkerRequest> g_worker_requests;
+int64_t g_next_worker_request = 1;
+
+std::wstring Headers(ICoreWebView2HttpRequestHeaders* headers);
+bool ScrubBridgeRequest(ICoreWebView2WebResourceRequest* request);
+
+bool DispatchServiceWorker(ICoreWebView2WebResourceRequestedEventArgs* args,
+    ICoreWebView2WebResourceRequest* request, const std::wstring& url,
+    ICoreWebView2WebResourceResponse* denied) {
+  // Never let failed admission or a Java exception turn a blocked load into a
+  // network request. A successful null interception explicitly clears denial.
+  if (FAILED(args->put_Response(denied))) {
+    ScrubBridgeRequest(request);
+    return false;
+  }
+  if (!g_worker_callback || g_worker_requests.size() >= 128) return true;
+  CoString method;
+  Com<ICoreWebView2HttpRequestHeaders> request_headers;
+  if (FAILED(request->get_Method(method.Put())) ||
+      FAILED(request->get_Headers(request_headers.Put())) || !request_headers) return true;
+  auto operation = std::make_shared<GlobalOperation>();
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    if (g_thread_phase != ThreadPhase::kRunning) return true;
+    operation->admitted = true;
+    ++g_global_operations;
+  }
+  WorkerRequest pending;
+  pending.args = Com<ICoreWebView2WebResourceRequestedEventArgs>(args);
+  pending.request = Com<ICoreWebView2WebResourceRequest>(request);
+  if (FAILED(args->GetDeferral(pending.deferral.Put())) || !pending.deferral) return true;
+  pending.operation = std::move(operation);
+  pending.deadline = GetTickCount64() + kBridgeTimeoutMs;
+  const int64_t id = g_next_worker_request++;
+  g_worker_requests.emplace(id, std::move(pending));
+  if (!g_worker_callback(id, url, method.str(), Headers(request_headers.get()))) {
+    auto it = g_worker_requests.find(id);
+    if (it != g_worker_requests.end()) {
+      it->second.deferral->Complete();
+      g_worker_requests.erase(it);
+    }
+  }
+  return true;
+}
+
 // This path is reserved on every origin, including absent/stale capabilities.
 // No arguments or method names are ever accepted from the URL.
 std::wstring BridgePath(const std::wstring& url) {
@@ -620,6 +677,17 @@ bool ScrubBridgeRequest(ICoreWebView2WebResourceRequest* request) {
   return content && method && uri && framing;
 }
 
+void CancelServiceWorkerRequests() {
+  // Closing a controller may resume original requests. Remove their destinations
+  // and upload bodies before completing outstanding denied deferrals.
+  for (auto& entry : g_worker_requests) {
+    ScrubBridgeRequest(entry.second.request.get());
+    entry.second.deferral->Complete();
+  }
+  g_worker_requests.clear();
+  g_workers_enabled = false;
+}
+
 void CancelBridgeRequests(Impl* impl) {
   ++impl->bridge_generation;
   impl->prepared_calls.clear();
@@ -632,8 +700,17 @@ void CancelBridgeRequests(Impl* impl) {
   }
 }
 
+void ExpireServiceWorkerRequests(ULONGLONG now) {
+  for (auto it = g_worker_requests.begin(); it != g_worker_requests.end();) {
+    if (it->second.deadline > now) { ++it; continue; }
+    it->second.deferral->Complete();  // The denied response remains installed.
+    it = g_worker_requests.erase(it);
+  }
+}
+
 void CALLBACK BridgeTimeouts(HWND, UINT, UINT_PTR, DWORD) {
   ULONGLONG now = GetTickCount64();
+  ExpireServiceWorkerRequests(now);
   for (Impl* impl : g_live) {
     for (auto it = impl->prepared_calls.begin(); it != impl->prepared_calls.end();) {
       if (it->second.deadline <= now) it = impl->prepared_calls.erase(it);
@@ -1316,6 +1393,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           if (SUCCEEDED(args->put_Response(denied.get()))) return S_OK;
                           if (auto impl = weak.lock()) {
                             impl->bridge_guarded = false;
+                            if (impl == g_service) CancelServiceWorkerRequests();
                             impl->failed = true;
                             impl->webview->Stop();
                             impl->controller->Close();
@@ -1331,6 +1409,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                             ScrubBridgeRequest(request.get());
                             if (auto impl = weak.lock()) {
                               impl->bridge_guarded = false;
+                              if (impl == g_service) CancelServiceWorkerRequests();
                               impl->failed = true;
                               impl->webview->Stop();
                               impl->controller->Close();
@@ -1372,6 +1451,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           if (!ScrubBridgeRequest(request.get())) {
                             if (impl) {
                               impl->bridge_guarded = false;
+                              if (impl == g_service) CancelServiceWorkerRequests();
                               impl->failed = true;
                               impl->webview->Stop();
                               impl->controller->Close();
@@ -1397,6 +1477,30 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         }
                         auto impl = weak.lock();
                         if (!impl || impl->destroyed || impl->closing || impl->listener == nullptr) return S_OK;
+                        if (g_workers_enabled && impl == g_service) {
+                          Com<ICoreWebView2WebResourceRequestedEventArgs2> source;
+                          COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS kind =
+                              COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_NONE;
+                          if (!Com<ICoreWebView2WebResourceRequestedEventArgs>(args).As(
+                                  IID_ICoreWebView2WebResourceRequestedEventArgs2, &source) ||
+                              FAILED(source->get_RequestedSourceKind(&kind))) {
+                            if (SUCCEEDED(args->put_Response(denied.get()))) return S_OK;
+                            ScrubBridgeRequest(request.get());
+                            if (impl == g_service) CancelServiceWorkerRequests();
+                            impl->failed = true;
+                            impl->webview->Stop();
+                            impl->controller->Close();
+                            return E_ABORT;
+                          }
+                          if (kind == COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_SERVICE_WORKER) {
+                            if (DispatchServiceWorker(args, request.get(), url, denied.get())) return S_OK;
+                            if (impl == g_service) CancelServiceWorkerRequests();
+                            impl->failed = true;
+                            impl->webview->Stop();
+                            impl->controller->Close();
+                            return E_ABORT;
+                          }
+                        }
                         COREWEBVIEW2_WEB_RESOURCE_CONTEXT context =
                             COREWEBVIEW2_WEB_RESOURCE_CONTEXT_OTHER;
                         args->get_ResourceContext(&context);
@@ -1881,6 +1985,21 @@ void WithCoreWebView(std::function<void(ICoreWebView2*)> fn) {
   }
 }
 
+void WithServiceWebView(std::function<void(ICoreWebView2*)> fn) {
+  if (!g_service) {
+    g_service = std::make_shared<Impl>();
+    g_service->listener = &g_null_listener;
+    g_service->service_waiting.push_back(std::move(fn));
+    Start(g_service);
+  } else if (g_service->failed || g_service->destroyed) {
+    fn(nullptr);
+  } else if (g_service->ready) {
+    fn(g_service->webview.get());
+  } else {
+    g_service->service_waiting.push_back(std::move(fn));
+  }
+}
+
 void WithCookieManager(int64_t callback_id,
                        std::function<void(ICoreWebView2CookieManager*)> fn) {
   WithCoreWebView([callback_id, fn = std::move(fn)](ICoreWebView2* wv) {
@@ -2032,6 +2151,8 @@ void TryShutdown() {
     g_service.reset();
   }
   g_env.Reset();
+  g_workers_enabled = false;
+  g_worker_callback = nullptr;
   g_global_callback = nullptr;
   g_owner_cleanup_ok = ok;
   PostQuitMessage(0);
@@ -2859,6 +2980,87 @@ bool Host::ClearOriginData(const std::wstring& origin, int64_t callback_id) {
       }
     });
   });
+}
+
+bool Host::QueryOriginStorage(const std::wstring& origin, int64_t callback_id) {
+  std::wstring key;
+  if (!OriginStorageKey(origin, &key)) return false;
+  return PostGlobal([key = std::move(key), callback_id](const GlobalWork& operation) {
+    WithCoreWebView([operation, key, callback_id](ICoreWebView2* wv) {
+      if (wv == nullptr) {
+        ReportGlobal(kGlobalStorage, callback_id, static_cast<int32_t>(E_FAIL), L"");
+        return;
+      }
+      const std::wstring params = L"{\"origin\":" + JsonString(key) + L"}";
+      auto pending = std::make_shared<GlobalCompletion>(operation);
+      HRESULT hr = wv->CallDevToolsProtocolMethod(
+          L"Storage.getUsageAndQuota", params.c_str(),
+          GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                          [pending, callback_id](HRESULT error, LPCWSTR result) -> HRESULT {
+                            GlobalWork work = std::move(pending->operation);
+                            if (!work) return S_OK;
+                            ReportGlobal(kGlobalStorage, callback_id, static_cast<int32_t>(error),
+                                         SUCCEEDED(error) && result ? result : L"");
+                            return S_OK;
+                          }).get());
+      if (FAILED(hr)) {
+        GlobalWork work = std::move(pending->operation);
+        if (work) ReportGlobal(kGlobalStorage, callback_id, static_cast<int32_t>(hr), L"");
+      }
+    });
+  });
+}
+
+void Host::SetServiceWorkerCallback(ServiceWorkerCallback callback) { g_worker_callback = callback; }
+
+bool Host::EnableServiceWorkers(int64_t callback_id) {
+  return PostGlobal([callback_id](const GlobalWork& operation) {
+    WithServiceWebView([operation, callback_id](ICoreWebView2* wv) {
+      HRESULT hr = E_NOINTERFACE;
+      Com<ICoreWebView2_22> modern;
+      if (wv && g_service && !g_service->failed && g_workers_enabled) hr = S_OK;
+      else if (wv && g_service && g_service->bridge_guarded && !g_service->failed && g_worker_callback &&
+          Com<ICoreWebView2>(wv).As(IID_ICoreWebView2_22, &modern)) {
+        hr = modern->AddWebResourceRequestedFilterWithRequestSourceKinds(
+            L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+            COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_SERVICE_WORKER);
+        if (SUCCEEDED(hr)) g_workers_enabled = true;
+      }
+      ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
+    });
+  });
+}
+
+bool Host::RespondToServiceWorker(int64_t id, int32_t status, const std::wstring& reason,
+    const std::wstring& headers, std::vector<uint8_t> bytes) {
+  SharedBody body;
+  if (status > 0 && !bytes.empty()) body = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+  auto task = std::make_unique<std::function<void()>>(
+      [id, status, reason, headers, body = std::move(body)] {
+        auto it = g_worker_requests.find(id);
+        if (it == g_worker_requests.end()) return;  // Expired or already completed.
+        WorkerRequest pending = std::move(it->second);
+        g_worker_requests.erase(it);
+        if (GetTickCount64() < pending.deadline && g_service && !g_service->destroyed) {
+          if (status == 0) pending.args->put_Response(nullptr);
+          else if (status > 0 && g_service->env) {
+            Com<IStream> stream;
+            Com<ICoreWebView2WebResourceResponse> response;
+            if (SUCCEEDED(OwnedStream::Create(body, stream.Put())) &&
+                SUCCEEDED(g_service->env->CreateWebResourceResponse(stream.get(), status,
+                    reason.c_str(), headers.c_str(), response.Put()))) {
+              pending.args->put_Response(response.get());
+            }
+          }
+        }
+        pending.deferral->Complete();
+      });
+  // This operation completes an admitted lease, including during orderly closure.
+  // It must not create/reopen a thread or require new global-work admission.
+  std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+  if (g_thread_phase == ThreadPhase::kJoined || !QueueTaskLocked(task.get())) return false;
+  task.release();
+  return true;
 }
 
 bool Host::ClearBrowsingData(int32_t kinds, int64_t callback_id) {

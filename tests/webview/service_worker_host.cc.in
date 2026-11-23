@@ -1,0 +1,125 @@
+// Exact production worker admission, completion and expiry with recording COM/task seams.
+// No browser, JNI, Windows dispatch loop or network is used.
+#include <cstdint>
+#include <cstdio>
+#include <cwchar>
+#include <cstdlib>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <map>
+#include <string>
+#include <vector>
+#include <utility>
+using HRESULT=int; using ULONG=unsigned long; using ULONGLONG=uint64_t;
+using LPWSTR=wchar_t*; using LPCWSTR=const wchar_t*;
+constexpr HRESULT S_OK=0,E_FAIL=-1,E_NOINTERFACE=-2;
+#define FAILED(x) ((x)<0)
+#define SUCCEEDED(x) ((x)>=0)
+using REFIID=int;
+int failures,checks;
+void Check(bool ok,const char* message){++checks;if(!ok){++failures;std::fprintf(stderr,"FAIL: %s\n",message);}}
+namespace gesher::webview {
+@COM@
+struct CoString {wchar_t* data=nullptr;~CoString(){std::free(data);} LPWSTR* Put(){return &data;} std::wstring str()const{return data?data:L"";}};
+template<class T> struct Recorded {
+ ULONG refs=1; ULONG AddRef(){return ++refs;} ULONG Release(){ULONG n=--refs;if(!n)delete static_cast<T*>(this);return n;}
+ HRESULT QueryInterface(REFIID,void** out){*out=nullptr;return E_NOINTERFACE;}
+};
+using SharedBody=std::shared_ptr<const std::vector<uint8_t>>;
+struct IStream:Recorded<IStream>{SharedBody bytes;};
+struct OwnedStream {static HRESULT result;static HRESULT Create(SharedBody bytes,IStream** out){*out=nullptr;if(FAILED(result))return result;auto* stream=new IStream();stream->bytes=std::move(bytes);*out=stream;return S_OK;}};
+HRESULT OwnedStream::result=S_OK;
+struct ICoreWebView2WebResourceResponse:Recorded<ICoreWebView2WebResourceResponse>{int status=403;std::wstring reason,headers;Com<IStream> body;};
+struct ICoreWebView2Deferral:Recorded<ICoreWebView2Deferral>{int completed=0;HRESULT Complete(){++completed;return S_OK;}};
+struct ICoreWebView2HttpRequestHeaders:Recorded<ICoreWebView2HttpRequestHeaders>{std::wstring text=L"X-Test: value\r\n";};
+struct ICoreWebView2WebResourceRequest:Recorded<ICoreWebView2WebResourceRequest>{
+ bool scrubbed=false; HRESULT method_result=S_OK,headers_result=S_OK;std::wstring method=L"POST";
+ Com<ICoreWebView2HttpRequestHeaders> headers{new ICoreWebView2HttpRequestHeaders(),false};
+ HRESULT get_Method(LPWSTR* out){*out=nullptr;if(FAILED(method_result))return method_result;*out=wcsdup(method.c_str());return S_OK;}
+ HRESULT get_Headers(ICoreWebView2HttpRequestHeaders** out){*out=nullptr;if(FAILED(headers_result))return headers_result;*out=headers.get();(*out)->AddRef();return S_OK;}
+};
+struct ICoreWebView2WebResourceRequestedEventArgs:Recorded<ICoreWebView2WebResourceRequestedEventArgs>{
+ HRESULT response_result=S_OK,deferral_result=S_OK;int response_updates=0;
+ Com<ICoreWebView2WebResourceResponse> response;
+ Com<ICoreWebView2Deferral> deferral{new ICoreWebView2Deferral(),false};
+ HRESULT put_Response(ICoreWebView2WebResourceResponse* r){++response_updates;if(FAILED(response_result))return response_result;response=Com<ICoreWebView2WebResourceResponse>(r);return S_OK;}
+ HRESULT GetDeferral(ICoreWebView2Deferral** out){*out=nullptr;if(FAILED(deferral_result))return deferral_result;*out=deferral.get();(*out)->AddRef();return S_OK;}
+};
+struct Environment:Recorded<Environment>{HRESULT result=S_OK;HRESULT CreateWebResourceResponse(IStream* body,int status,LPCWSTR reason,LPCWSTR headers,ICoreWebView2WebResourceResponse** out){*out=nullptr;if(FAILED(result))return result;auto* r=new ICoreWebView2WebResourceResponse();r->body=Com<IStream>(body);r->status=status;r->reason=reason;r->headers=headers;*out=r;return S_OK;}};
+struct Impl{bool destroyed=false;Com<Environment> env{new Environment(),false};};
+std::shared_ptr<Impl> g_service=std::make_shared<Impl>();
+std::mutex g_lifecycle_mutex;
+enum class ThreadPhase{kRunning,kClosing,kJoined};
+ThreadPhase g_thread_phase=ThreadPhase::kRunning;
+int g_global_operations=0;
+struct GlobalOperation {bool admitted=false;~GlobalOperation(){if(admitted)--g_global_operations;}};
+using GlobalWork=std::shared_ptr<GlobalOperation>;
+uint64_t tick=100;
+constexpr ULONGLONG kBridgeTimeoutMs=30000;
+ULONGLONG GetTickCount64(){return tick;}
+std::vector<std::function<void()>*> tasks;
+bool accept_tasks=true;
+bool QueueTaskLocked(std::function<void()>* task){if(!accept_tasks)return false;tasks.push_back(task);return true;}
+void Drain(){auto pending=std::move(tasks);tasks.clear();for(auto* task:pending){(*task)();delete task;}}
+class Host {public:using ServiceWorkerCallback=bool(*)(int64_t,const std::wstring&,const std::wstring&,const std::wstring&);static bool RespondToServiceWorker(int64_t,int32_t,const std::wstring&,const std::wstring&,std::vector<uint8_t>);};
+Host::ServiceWorkerCallback g_worker_callback=nullptr;
+bool g_workers_enabled=true;
+@STATE@
+std::wstring Headers(ICoreWebView2HttpRequestHeaders* headers){return headers->text;}
+bool ScrubBridgeRequest(ICoreWebView2WebResourceRequest* request) {request->scrubbed=true;return true;}
+@DISPATCH@
+@EXPIRE@
+@CANCEL@
+@RESPOND@
+
+Com<ICoreWebView2WebResourceRequestedEventArgs> args;
+Com<ICoreWebView2WebResourceRequest> request;
+Com<ICoreWebView2WebResourceResponse> denied;
+int callbacks;bool accept_callback=true;int64_t last_id;
+std::wstring last_url,last_method,last_headers;
+bool Callback(int64_t id,const std::wstring& url,const std::wstring& method,const std::wstring& headers){
+ ++callbacks;last_id=id;last_url=url;last_method=method;last_headers=headers;
+ Check(args->response.get()==denied.get(),"denial installed before invoking Java");return accept_callback;
+}
+void Reset(){
+ Drain();ExpireServiceWorkerRequests(UINT64_MAX);
+ Check(g_global_operations==0,"no leaked worker admission lease");
+ args=Com<ICoreWebView2WebResourceRequestedEventArgs>(new ICoreWebView2WebResourceRequestedEventArgs(),false);
+ request=Com<ICoreWebView2WebResourceRequest>(new ICoreWebView2WebResourceRequest(),false);
+ denied=Com<ICoreWebView2WebResourceResponse>(new ICoreWebView2WebResourceResponse(),false);
+ callbacks=0;accept_callback=true;accept_tasks=true;g_worker_callback=Callback;
+ g_thread_phase=ThreadPhase::kRunning;g_service->destroyed=false;g_service->env->result=S_OK;OwnedStream::result=S_OK;tick=100;
+}
+bool Dispatch(){return DispatchServiceWorker(args.get(),request.get(),L"https://worker.invalid/a",denied.get());}
+void Admission(){
+ Reset();Check(Dispatch(),"worker admitted");Check(callbacks==1&&g_worker_requests.size()==1&&g_global_operations==1,"one callback/deferral/lease");
+ Check(last_method==L"POST"&&last_headers==L"X-Test: value\r\n"&&last_url==L"https://worker.invalid/a","request metadata unchanged");
+ Check(Host::RespondToServiceWorker(last_id,0,L"",L"",{}),"pass-through queued");Check(args->response.get()==denied.get(),"denial kept until response task");Drain();
+ Check(!args->response&&args->deferral->completed==1&&g_worker_requests.empty()&&g_global_operations==0,"successful null interception resumes once");
+ Host::RespondToServiceWorker(last_id,0,L"",L"",{});Drain();Check(args->deferral->completed==1,"duplicate response ignored");
+ Reset();accept_callback=false;Check(Dispatch(),"failed Java admission denied");Check(args->response.get()==denied.get()&&args->deferral->completed==1&&g_worker_requests.empty()&&g_global_operations==0,"queue rejection cannot release network or retain lease");
+ Reset();g_worker_callback=nullptr;Check(Dispatch()&&callbacks==0&&g_global_operations==0,"missing Java callback denied");
+ Reset();args->response_result=E_FAIL;Check(!Dispatch()&&callbacks==0&&g_global_operations==0,"failure installing denial aborts before callback");
+ Reset();request->method_result=E_FAIL;Check(Dispatch()&&callbacks==0&&g_global_operations==0,"method failure denied without deferral");
+ Reset();request->headers_result=E_FAIL;Check(Dispatch()&&callbacks==0&&g_global_operations==0,"headers failure denied without deferral");
+ Reset();args->deferral_result=E_FAIL;Check(Dispatch()&&callbacks==0&&g_global_operations==0,"deferral failure releases admission lease");
+ Reset();g_thread_phase=ThreadPhase::kClosing;Check(Dispatch()&&callbacks==0&&g_global_operations==0,"closing refuses new work");
+}
+void Responses(){
+ Reset();Dispatch();Host::RespondToServiceWorker(last_id,201,L"Created",L"Content-Type: app/test\r\n",{1,2,3});Drain();
+ Check(args->response&&args->response.get()!=denied.get()&&args->response->status==201&&args->response->reason==L"Created","app response status preserved");
+ Check(args->response->headers==L"Content-Type: app/test\r\n"&&args->response->body&&*args->response->body->bytes==std::vector<uint8_t>({1,2,3}),"app headers/body preserved");
+ Check(args->deferral->completed==1&&g_global_operations==0,"app response releases work");
+ Reset();Dispatch();Host::RespondToServiceWorker(last_id,-1,L"",L"",{});Drain();Check(args->response.get()==denied.get()&&args->deferral->completed==1,"callback failure retains denial");
+ Reset();Dispatch();g_service->env->result=E_FAIL;Host::RespondToServiceWorker(last_id,200,L"OK",L"",{4});Drain();Check(args->response.get()==denied.get()&&g_global_operations==0,"response construction failure cannot leak request");
+ Reset();Dispatch();OwnedStream::result=E_FAIL;Host::RespondToServiceWorker(last_id,200,L"OK",L"",{4});Drain();Check(args->response.get()==denied.get()&&g_global_operations==0,"stream creation failure cannot leak request");
+ Reset();Dispatch();g_thread_phase=ThreadPhase::kClosing;Check(Host::RespondToServiceWorker(last_id,0,L"",L"",{}),"admitted response can complete during closure");Drain();Check(g_global_operations==0,"closure response releases lease");
+ Reset();Dispatch();accept_tasks=false;Check(!Host::RespondToServiceWorker(last_id,0,L"",L"",{}),"failed queue report truthful");tick+=30001;ExpireServiceWorkerRequests(tick);Check(args->deferral->completed==1&&args->response.get()==denied.get()&&g_global_operations==0,"expired response denied and released");
+ Reset();Dispatch();tick+=30001;Host::RespondToServiceWorker(last_id,0,L"",L"",{});Drain();Check(args->response.get()==denied.get()&&args->deferral->completed==1,"late queued response never releases expired request");
+ Reset();Dispatch();CancelServiceWorkerRequests();Check(request->scrubbed&&args->deferral->completed==1&&g_worker_requests.empty()&&g_global_operations==0&&!g_workers_enabled,"controller failure scrubs originals and releases all worker leases");
+ Reset();for(int i=0;i<128;++i)Check(Dispatch(),"within bounded admission");Check(callbacks==128&&g_worker_requests.size()==128,"128 outstanding requests max");Check(Dispatch()&&callbacks==128,"overflow denied without additional callback");ExpireServiceWorkerRequests(UINT64_MAX);Check(g_global_operations==0&&g_worker_requests.empty(),"all timed-out requests release leases");
+ Reset();
+}
+} // namespace gesher::webview
+int main(){using namespace gesher::webview;Admission();Responses();std::printf("Service-worker native production contracts: %d checks, %d failures\n",checks,failures);return failures?1:0;}

@@ -5,9 +5,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
-import android.webkit.ServiceWorkerClient;
 import android.webkit.ServiceWorkerController;
-import android.webkit.ServiceWorkerWebSettings;
 import android.webkit.TokenBindingService;
 import android.webkit.TracingConfig;
 import android.webkit.TracingController;
@@ -95,7 +93,7 @@ final class GesherWebViewFactory implements WebViewFactoryProvider {
     @Override
     public ServiceWorkerController getServiceWorkerController() {
         synchronized (mLock) {
-            if (mServiceWorkers == null) mServiceWorkers = new GesherServiceWorkers();
+            if (mServiceWorkers == null) mServiceWorkers = GesherServiceWorkers.get();
             return mServiceWorkers;
         }
     }
@@ -219,61 +217,4 @@ final class GesherWebViewFactory implements WebViewFactoryProvider {
         }
     }
 
-    private static final class GesherServiceWorkers extends ServiceWorkerController {
-        private final ServiceWorkerWebSettings mSettings = new ServiceWorkerWebSettings() {
-            private int mCacheMode;
-            private boolean mContent = true;
-            private boolean mFile;
-            private boolean mBlock;
-
-            @Override
-            public void setCacheMode(int mode) {
-                mCacheMode = mode;
-            }
-
-            @Override
-            public int getCacheMode() {
-                return mCacheMode;
-            }
-
-            @Override
-            public void setAllowContentAccess(boolean allow) {
-                mContent = allow;
-            }
-
-            @Override
-            public boolean getAllowContentAccess() {
-                return mContent;
-            }
-
-            @Override
-            public void setAllowFileAccess(boolean allow) {
-                mFile = allow;
-            }
-
-            @Override
-            public boolean getAllowFileAccess() {
-                return mFile;
-            }
-
-            @Override
-            public void setBlockNetworkLoads(boolean flag) {
-                mBlock = flag;
-            }
-
-            @Override
-            public boolean getBlockNetworkLoads() {
-                return mBlock;
-            }
-        };
-
-        @Override
-        public ServiceWorkerWebSettings getServiceWorkerWebSettings() {
-            return mSettings;
-        }
-
-        @Override
-        public void setServiceWorkerClient(ServiceWorkerClient client) {
-        }
-    }
 }

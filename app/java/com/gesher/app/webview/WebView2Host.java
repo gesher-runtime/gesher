@@ -371,7 +371,7 @@ public final class WebView2Host {
 
     // ---- Cookies and browsing data (process-wide) ----
 
-    /** Global results: kGlobalCookies (1) and kGlobalDone (2). */
+    /** Global results: kGlobalCookies (1), kGlobalDone (2), kGlobalStorage (3). */
     public interface GlobalCallback {
         void onResult(int type, int hresult, String value);
     }
@@ -435,6 +435,25 @@ public final class WebView2Host {
     public static boolean clearOriginData(String origin, GlobalCallback callback) {
         if (origin == null || origin.isEmpty()) return false;
         return submitGlobal(callback, id -> nClearOriginData(origin, id));
+    }
+
+    static boolean queryOriginStorage(String origin, GlobalCallback callback) {
+        if (origin == null || origin.isEmpty()) return false;
+        return submitGlobal(callback, id -> nQueryOriginStorage(origin, id));
+    }
+
+    static boolean enableServiceWorkers(GlobalCallback callback) {
+        return submitGlobal(callback, WebView2Host::nEnableServiceWorkers);
+    }
+
+    static boolean respondToServiceWorker(long id, int status, String reason,
+            String headers, byte[] body) {
+        return nRespondToServiceWorker(id, status, reason, headers, body);
+    }
+
+    private static boolean onServiceWorkerRequest(long id, String url, String method,
+            String headers) {
+        return GesherServiceWorkers.dispatch(id, url, method, headers);
     }
 
     /**
@@ -548,4 +567,8 @@ public final class WebView2Host {
     private static native boolean nDeleteCookies(int which, long callbackId);
     private static native boolean nClearBrowsingData(int kinds, long callbackId);
     private static native boolean nClearOriginData(String origin, long callbackId);
+    private static native boolean nQueryOriginStorage(String origin, long callbackId);
+    private static native boolean nEnableServiceWorkers(long callbackId);
+    private static native boolean nRespondToServiceWorker(long id, int status, String reason,
+            String headers, byte[] body);
 }

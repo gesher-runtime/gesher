@@ -47,6 +47,8 @@ def main():
             raise ValueError("native admission guard changed; update the negative control")
         body = body.replace(guard, "(void)OriginStorageKey(origin, &key);")
     source = source.replace("@CLEAR_ORIGIN_DATA@", body.replace("ICoreWebView2*", "RecordingCore*"))
+    query = function(current, "bool Host::QueryOriginStorage(")
+    source = source.replace("@QUERY_ORIGIN_STORAGE@", query.replace("ICoreWebView2*", "RecordingCore*"))
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="gesher-webstorage-native-") as temporary:
