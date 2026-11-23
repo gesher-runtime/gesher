@@ -94,7 +94,12 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   it read code from), so a JIT's flushes of new code neither stop other
   threads' Jits nor build up in a paused one (an outer Jit under a blocking
   host call, a pooled Env's), which keeps its cache; past 256 ranges waiting
-  for its next dispatch they go to it rounded to whole pages.
+  for its next dispatch they go to it rounded to whole pages. dynarmic has no
+  hook for `DSB`: a thread whose `IC IVAU` lines are followed by `DSB ISH`
+  but no `ISB`, hint, host call or syscall (it spins in guest code waiting
+  for another thread to run the new code) does not broadcast them until one
+  of those; other threads keep running the old code until then.
+  `__builtin___clear_cache` and ARM's documented sequence end with `ISB`.
   `IC IALLU`/`IC IALLUIS` are EL1-only and UNDEFINED at
   EL0: SIGILL. As a conservative choice (Linux does not guarantee it for a
   page that already ran), an `mprotect` that makes pages executable drops the
