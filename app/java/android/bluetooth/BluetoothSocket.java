@@ -107,6 +107,7 @@ public final class BluetoothSocket implements Closeable {
                 throw failed(result);
             }
             mChannel = channel[0];
+            mPeerEof = false;  // EOF belongs to the previous connection only.
             mConnected = true;
             if (mSecure) {
                 secureLink(mDevice.getAddress(), 1);
@@ -229,15 +230,20 @@ public final class BluetoothSocket implements Closeable {
                 // Reading again after the peer's EOF keeps returning -1 (InputStream contract).
                 if (mPeerEof && !mClosed && peerEofReturnsMinusOne()) return -1;
             }
-            int n = WindowsBluetooth.nativeRfcommRead(handle(), b, off, len);
+            long reading = handle();
+            int n = WindowsBluetooth.nativeRfcommRead(reading, b, off, len);
             if (n > 0) return n;
             boolean eof;
             synchronized (mLock) {
                 // Native 0 is the end of the stream, and also what a read woken by a local
                 // close() reports; only the former is a peer EOF.
                 eof = n == 0 && !mClosed;
-                if (eof) mPeerEof = true;
-                dropLink();
+                // A second read from the old connection can finish after a
+                // successful reconnect. Its EOF must not poison the new link.
+                if (mNative == reading) {
+                    if (eof) mPeerEof = true;
+                    dropLink();
+                }
             }
             if (eof && peerEofReturnsMinusOne()) return -1;
             throw new IOException("bt socket closed, read return: " + (n == 0 ? -1 : n));

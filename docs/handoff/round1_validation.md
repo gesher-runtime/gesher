@@ -19,6 +19,19 @@ its existing independent lock and interrupts blocked native reads. Array reads
 and writes retain their existing path. Tests observe buffers at the native
 boundary, distinct concurrent byte values, peer EOF, local close and native errors.
 
+Independent review found and repaired two additional regressions: peer EOF is
+cleared on successful reconnection, and a late read completion from the old
+connection cannot disconnect the new link; WASAPI shared event mode now passes
+zero for both buffer duration and periodicity, as required by `IAudioClient`.
+Only the polled fallback requests a 200 ms buffer. The WASAPI boundary rejects
+nonzero event-mode durations so this error cannot silently hide behind fallback.
+
+The shared native memfd guest assertions now verify seal success after the last
+unmap, including an original descriptor closed after `mmap`, a duplicated seal
+descriptor, partial unmap and `MAP_FIXED` replacement beside an already-dead
+tail. The 12 mapping-lease checks also run unchanged against the real Linux
+kernel before the modeled Windows checks.
+
 ## Executed checks
 
 All checks below passed on the integrated tree. Linux host tests compile or
@@ -28,13 +41,13 @@ replace ordinary application behavior.
 | Check | Result |
 | --- | --- |
 | `tools/test_mmap_noreplace_contracts.py --sanitize` | 274 checks, zero failures; partial live/dead tails, mapping handle and lease retirement |
-| `tools/test_memfd_contracts.py --sanitize` | direct/POSIX/guest routes: 57 checks each; faults: 19; lease basics: 44; process lifetime: 6; race assertions: 9; zero failures |
+| `tools/test_memfd_contracts.py --sanitize` | Linux kernel mapping-lease reference: 12; direct/POSIX/guest routes: 57 checks each; faults: 19; lease basics: 44; process lifetime: 6; race assertions: 9; zero failures |
 | `tools/net-tcp-priority/test-selected-policy.py` | PASS; both exact-source transition chains preserved |
 | `tools/net-tcp-priority/test-vector-policy.py` | PASS; 33 mutations, 4 repinned property and 7 repinned memfd controls rejected |
 | `tools/test_media_player_priming.py --sanitize` | 209 checks, zero failures; unchanged captured-tone tolerances pass |
 | `tools/test_capture_stream_selection.py` | 2,061 checks pass |
 | `python3 -m unittest discover -s tools/media_capture -p 'test_*.py'` | 12 tests pass |
-| `tools/test_bluetooth_socket_contracts.py` | all five cases pass, including buffer reuse/concurrent values and blocked single-byte close |
+| `tools/test_bluetooth_socket_contracts.py` | all six cases pass, including buffer reuse/concurrent values, blocked single-byte close and reconnection with a late old read |
 | `tools/test_bluetooth_sdp_contracts.py` | bounded pool, lookup coalescing and failure recovery pass |
 | `tools/test_bluetooth_watch_contracts.py` | nonblocking startup, state fallback and single watch pass |
 | `tools/test_handwriting_callbacks_host.py` | null callbacks and remote callback failures pass |
@@ -82,6 +95,7 @@ Windows CPU measurements or end-to-end application benchmarks.
 - [Win32 LockFileEx lifetime and shared/exclusive locking](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex)
 - [Android 17 RFCOMM stream EOF change](https://developer.android.com/about/versions/17/behavior-changes-17#bluetoothsocket)
 - [WASAPI event handle contract](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-seteventhandle)
+- [WASAPI shared event-mode initialization](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize)
 
 The memfd fixtures target writable shared mapping ownership and seal races.
 They do not certify every mmap/mprotect permission transition. Real NTFS EA

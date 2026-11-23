@@ -22,7 +22,8 @@ namespace gesher::media {
 namespace {
 
 // A source without a data signal of its own is pulled every period; one with a
-// signal waits for it, and this bounds that wait (the endpoint buffers 200 ms).
+// signal waits for it, and this bounds that wait. In shared event mode WASAPI
+// chooses the endpoint buffer duration; packets normally wake us each period.
 constexpr int kPeriodMs = 10;
 constexpr int kSignalSafetyMs = 50;
 

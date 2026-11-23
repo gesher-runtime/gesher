@@ -167,6 +167,41 @@ public final class BluetoothSocketHostTest {
             WindowsBluetooth.readHook=null;WindowsBluetooth.closeHook=null;socket.close();
         }
     }
+    private static void reconnectAfterEof()throws Exception{
+        BluetoothHost.target=37;
+        WindowsBluetooth.opened.set(10); // the fixture's handle 1 is the blocked-connect case
+        BluetoothSocket socket=connected();
+        java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch released=new java.util.concurrent.CountDownLatch(1);
+        AtomicReference<Throwable> failure=new AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger oldReads=new java.util.concurrent.atomic.AtomicInteger();
+        WindowsBluetooth.readHook=(handle,b,off,len)->{
+            if(handle!=5){b[off]=0x55;return 1;}
+            if(oldReads.getAndIncrement()==0){
+                entered.countDown();
+                try{check(released.await(5,TimeUnit.SECONDS),"old read completes after reconnect");}
+                catch(InterruptedException e){throw new AssertionError(e);}
+            }
+            return 0;
+        };
+        Thread oldReader=new Thread(()->{
+            try{check(socket.getInputStream().read(new byte[1],0,1)==-1,"old connection reports its EOF");}
+            catch(Throwable e){failure.set(e);}
+        });
+        oldReader.start();
+        try{
+            check(entered.await(5,TimeUnit.SECONDS),"old connection has an outstanding read");
+            check(socket.getInputStream().read()==-1,"second old read observes EOF");
+            socket.connect();
+            check(socket.isConnected()&&socket.getInputStream().read()==0x55,"fresh connection clears sticky EOF");
+            released.countDown();oldReader.join(5000);
+            check(!oldReader.isAlive()&&failure.get()==null,"late old read completes: "+failure.get());
+            check(socket.isConnected()&&socket.getInputStream().read()==0x55,"late old EOF preserves fresh connection");
+        }finally{
+            released.countDown();oldReader.join(5000);socket.close();
+            WindowsBluetooth.readHook=null;BluetoothHost.target=10000;
+        }
+    }
     public static void main(String[] args)throws Exception{
         switch(args[0]){
             case "parallel-connect":parallelConnect();break;
@@ -174,6 +209,7 @@ public final class BluetoothSocketHostTest {
             case "peer-eof":peerEof();break;
             case "single-byte":singleByte();break;
             case "blocked-single-byte-close":blockedSingleByteClose();break;
+            case "reconnect-after-eof":reconnectAfterEof();break;
             default:throw new AssertionError("unknown case "+args[0]);
         }
         System.out.println("BluetoothSocketHostTest passed: "+args[0]);
