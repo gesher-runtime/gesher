@@ -43,7 +43,8 @@ class ProtocolTests(unittest.TestCase):
                 protocol._retry(operation, time.monotonic() + 10)
             self.assertIs(failed.exception, error)
             self.assertEqual(operation.call_count, 5)
-            self.assertEqual(sleep.call_count, 4)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list],
+                             [protocol.RETRY_SECONDS * (2 ** retry) for retry in range(4)])
 
     def test_generic_permission_other_native_errors_and_cancellation_are_not_retried(self):
         for windows, error in [(True, PermissionError(errno.EACCES, "unclassified")),

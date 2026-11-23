@@ -35,7 +35,8 @@ function InvokePerfFileIo([scriptblock] $Operation, [Diagnostics.Stopwatch] $Clo
           $nativeCode -notin @(5, 32) -or $attempt -eq 4) { throw }
       $remaining = $TimeoutSeconds - $Clock.Elapsed.TotalSeconds
       if ($remaining -le 0) { throw 'Workload protocol exceeded its existing deadline' }
-      Start-Sleep -Milliseconds ([int][Math]::Min(10, [Math]::Floor($remaining * 1000)))
+      $backoff = 10 * [Math]::Pow(2, $attempt)
+      Start-Sleep -Milliseconds ([int][Math]::Min($backoff, [Math]::Floor($remaining * 1000)))
       continue
     }
     if ($Clock.Elapsed.TotalSeconds -ge $TimeoutSeconds) { throw 'Workload protocol exceeded its existing deadline' }

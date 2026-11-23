@@ -40,7 +40,8 @@ def _retry(operation, deadline):
             if not WINDOWS or getattr(error, "winerror", None) not in (5, 32) or attempt == MAX_ATTEMPTS - 1:
                 raise
             _deadline(deadline)
-            time.sleep(min(RETRY_SECONDS, max(0, deadline - time.monotonic())))
+            backoff = RETRY_SECONDS * (2 ** attempt)
+            time.sleep(min(backoff, max(0, deadline - time.monotonic())))
         else:
             _deadline(deadline)
             return value
