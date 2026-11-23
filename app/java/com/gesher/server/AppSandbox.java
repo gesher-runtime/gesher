@@ -42,7 +42,7 @@ final class AppSandbox {
     static final int MODIFY = 0x001301BF;
 
     static boolean enabled() {
-        return "appcontainer".equalsIgnoreCase(System.getenv(ENV));
+        return SystemServer.isProtectedDevice() || "appcontainer".equalsIgnoreCase(System.getenv(ENV));
     }
 
     /**
@@ -150,6 +150,10 @@ final class AppSandbox {
         List<String> caps = capabilities(internet);
         SystemServer.log("sandbox: " + packageName + " in AppContainer " + container
                 + " with " + caps);
+        if (SystemServer.isProtectedDevice()) {
+            return Zygote.spawnProtectedApp(commandLine, env, logFile.getPath(), container,
+                    caps, pkg);
+        }
         return Zygote.spawnInAppContainer(commandLine, env, logFile.getPath(), container,
                 packageName, caps);
     }

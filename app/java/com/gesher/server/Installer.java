@@ -797,6 +797,9 @@ final class Installer {
             if (notifications != null) notifications.packageRemoved(packageName);
             // Retire any background start already queued while capabilities were canceled.
             mAtm.forceStopPackage(packageName);
+            if (SystemServer.isProtectedDevice() && !Zygote.revokeProtectedInstallation(target)) {
+                throw new IOException("Could not revoke native process identity for " + packageName);
+            }
             try (PackageUids.Admission identity = PackageUids.prepareRetire(target)) {
                 quarantine.stage();
                 identity.commit();

@@ -151,6 +151,12 @@ public final class SystemServer {
         }
     }
 
+    private static volatile boolean protectedDevice;
+
+    static boolean isProtectedDevice() {
+        return protectedDevice;
+    }
+
     private static void run(String[] args) throws Exception {
         String buildProp = null;
         String frameworkRes = null;
@@ -165,6 +171,7 @@ public final class SystemServer {
                 case "--framework-res": frameworkRes = args[++i]; break;
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--persistent": persistent = true; break;
+                case "--protected-launch": protectedDevice = true; break;
                 case "--adopt": adopt = args[++i]; break;
                 case "--idle-timeout": idleTimeoutS = Long.parseLong(args[++i]); break;
                 default:
@@ -179,6 +186,12 @@ public final class SystemServer {
         if (System.getenv("GESHER_BINDER") == null) {
             throw new IllegalStateException("$GESHER_BINDER is not set: the system server"
                     + " registers its services with servicemanager over binderd");
+        }
+        if (protectedDevice) {
+            System.loadLibrary("android_runtime");
+            if (!persistent || adopt != null || !Zygote.nativeHasProtectedLaunchAuthority()) {
+                throw new IllegalStateException("Protected system server requires a live launch authority");
+            }
         }
         StandIn.setTag(TAG);
         // Binder calls from this process carry the system uid, as system_server's do
@@ -196,8 +209,8 @@ public final class SystemServer {
             // The device goes as a whole: binderd, servicemanager and the app processes
             // end with this process (a kill-on-close job; app processes join it as its
             // children).
-            boolean job = Zygote.joinJob(0);
-            if (adopt != null) {
+            boolean job = protectedDevice || Zygote.joinJob(0);
+            if (!protectedDevice && adopt != null) {
                 for (String pid : adopt.split(",")) {
                     if (!pid.isEmpty()) job &= Zygote.joinJob(Integer.parseInt(pid.trim()));
                 }

@@ -6,6 +6,7 @@ package com.gesher.server;
 
 import java.io.File;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * The Gesher device's processes: a zygote, lite. Windows has no fork, so an app process
@@ -29,6 +30,14 @@ public final class Zygote {
     static native int nativeSpawnInAppContainer(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,
             String[] capabilities);
+    private static native int[] nativeStartProtectedDevice(String device, String[] commands,
+            String[] logs, String[] environment);
+    static native boolean nativeHasProtectedLaunchAuthority();
+    private static native int nativeSpawnProtectedApp(String commandLine, String[] setEnv,
+            String[] unsetEnv, String logPath, String container, String displayName,
+            String[] capabilities, int uid, long installHigh, long installLow);
+    private static native boolean nativeRevokeProtectedInstallation(long installHigh,
+            long installLow);
     static native int nativeEnsureAppContainer(String container, String displayName);
     static native int nativeGrantToAppContainer(String path, String container, int access,
             boolean inherit);
@@ -99,6 +108,40 @@ public final class Zygote {
                     + container + " failed: Win32 error " + (-pid));
         }
         return pid;
+    }
+
+    public static int[] startProtectedDevice(String device, List<String> commands,
+            List<File> logs, List<String> environment) {
+        String[] paths = new String[logs.size()];
+        for (int i = 0; i < paths.length; i++) {
+            File log = logs.get(i);
+            log.getParentFile().mkdirs();
+            paths[i] = windowsPath(log.getPath());
+        }
+        int[] pids = nativeStartProtectedDevice(device, commands.toArray(new String[0]),
+                paths, environment.toArray(new String[0]));
+        if (pids.length != 3) throw new IllegalStateException("Protected device startup failed");
+        return pids;
+    }
+
+    static int spawnProtectedApp(String commandLine, List<String> setEnv, String logPath,
+            String container, List<String> capabilities, ApkPackage pkg) {
+        UUID owner = UUID.fromString(pkg.enabledStateOwner());
+        int pid = nativeSpawnProtectedApp(commandLine, setEnv.toArray(new String[0]),
+                new String[] {"GESHER_BINDER_UID"}, windowsPath(logPath), container,
+                pkg.packageName, capabilities.toArray(new String[0]), pkg.uid(),
+                owner.getMostSignificantBits(), owner.getLeastSignificantBits());
+        if (pid <= 0) {
+            throw new IllegalStateException("Protected launch failed for "
+                    + pkg.packageName + " with Win32 error " + (-pid));
+        }
+        return pid;
+    }
+
+    static boolean revokeProtectedInstallation(ApkPackage pkg) {
+        UUID owner = UUID.fromString(pkg.enabledStateOwner());
+        return nativeRevokeProtectedInstallation(owner.getMostSignificantBits(),
+                owner.getLeastSignificantBits());
     }
 
     /** The process's creation time, 0 when it does not run. */

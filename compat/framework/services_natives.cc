@@ -178,6 +178,47 @@ static jint Zygote_spawnInAppContainer(JNIEnv* env, jclass, jstring commandLine,
                                                ZygoteString(env, logPath), spec);
 }
 
+static jintArray Zygote_startProtectedDevice(JNIEnv* env, jclass, jstring device,
+                                             jobjectArray commands, jobjectArray logs,
+                                             jobjectArray environment) {
+    auto started = gesher::zygote::StartProtectedDevice(ZygoteString(env, device),
+        ZygoteStrings(env, commands), ZygoteStrings(env, logs), ZygoteStrings(env, environment));
+    jintArray result = env->NewIntArray(static_cast<jsize>(started.size()));
+    if (result != nullptr && !started.empty()) {
+        std::vector<jint> pids(started.begin(), started.end());
+        env->SetIntArrayRegion(result, 0, static_cast<jsize>(pids.size()), pids.data());
+    }
+    return result;
+}
+
+static jboolean Zygote_hasProtectedLaunchAuthority(JNIEnv*, jclass) {
+    return gesher::zygote::HasProtectedLaunchAuthority();
+}
+
+static std::array<uint8_t, 16> ZygoteInstallation(jlong high, jlong low) {
+    std::array<uint8_t, 16> id{};
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+        id[shift / 8] = static_cast<uint8_t>(static_cast<uint64_t>(high) >> shift);
+        id[8 + shift / 8] = static_cast<uint8_t>(static_cast<uint64_t>(low) >> shift);
+    }
+    return id;
+}
+
+static jint Zygote_spawnProtectedApp(JNIEnv* env, jclass, jstring commandLine,
+                                     jobjectArray set, jobjectArray unset, jstring logPath,
+                                     jstring name, jstring displayName, jobjectArray capabilities,
+                                     jint uid, jlong installHigh, jlong installLow) {
+    gesher::zygote::AppContainerSpec spec{
+        ZygoteString(env, name), ZygoteString(env, displayName), ZygoteStrings(env, capabilities)};
+    return gesher::zygote::SpawnProtectedApp(ZygoteString(env, commandLine),
+        ZygoteStrings(env, set), ZygoteStrings(env, unset), ZygoteString(env, logPath),
+        spec, static_cast<uint32_t>(uid), ZygoteInstallation(installHigh, installLow));
+}
+
+static jboolean Zygote_revokeProtectedInstallation(JNIEnv*, jclass, jlong high, jlong low) {
+    return gesher::zygote::RevokeProtectedInstallation(ZygoteInstallation(high, low));
+}
+
 static jint Zygote_ensureAppContainer(JNIEnv* env, jclass, jstring name, jstring displayName) {
     return static_cast<jint>(gesher::zygote::EnsureAppContainer(ZygoteString(env, name),
                                                                 ZygoteString(env, displayName)));
@@ -290,6 +331,15 @@ static const JNINativeMethod gZygoteMethods[] = {
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"
      "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I",
      GESHER_JNI(Zygote_spawnInAppContainer)},
+    {"nativeStartProtectedDevice",
+     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)[I",
+     GESHER_JNI(Zygote_startProtectedDevice)},
+    {"nativeHasProtectedLaunchAuthority", "()Z", GESHER_JNI(Zygote_hasProtectedLaunchAuthority)},
+    {"nativeSpawnProtectedApp",
+     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"
+     "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;IJJ)I",
+     GESHER_JNI(Zygote_spawnProtectedApp)},
+    {"nativeRevokeProtectedInstallation", "(JJ)Z", GESHER_JNI(Zygote_revokeProtectedInstallation)},
     {"nativeEnsureAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_ensureAppContainer)},
     {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",

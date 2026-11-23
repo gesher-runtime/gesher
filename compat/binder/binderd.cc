@@ -56,10 +56,13 @@
 #include "../framework/app_container.h"
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
+#include "launch_channel.h"
 
 namespace {
 
 namespace wire = gesher::binder_wire;
+namespace launch = gesher::binder_launch;
+namespace peer = gesher::binder_peer;
 
 bool g_trace = false;
 
@@ -203,6 +206,7 @@ struct Proc {
   uint64_t key = 0;
   int pid = 0;
   uint32_t uid = 0;
+  gesher::binder_peer::Registry::Lease identity;
   bool is_dead = false;
   std::map<uint64_t, Node*> nodes;
   std::map<uint32_t, Ref*> refs_by_desc;
@@ -228,6 +232,7 @@ Node* g_context_mgr_node = nullptr;
 uint32_t g_next_proc_id = 1;
 // GESHER_SANDBOX=appcontainer (ADR 0090): set once in main, before the first client.
 bool g_sandbox = false;
+std::unique_ptr<gesher::binder_peer::Registry> g_peer_registry;
 uint64_t g_next_buffer_id = 1;
 int g_next_debug_id = 1;
 
@@ -478,27 +483,37 @@ constexpr size_t kFlatObjectSize = sizeof(flat_binder_object);
 
 // A handle of another process, for a BINDER_TYPE_FD object: duplicated from
 // the sender into the receiver (0 if that fails), or closed in its process.
-uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+HANDLE ProcessForTransfer(const Proc* proc, peer::OwnedHandle* legacy_owner) {
+  if (proc->identity) return proc->identity->process.get();
+  if (g_peer_registry) return nullptr;
+  legacy_owner->reset(OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(proc->pid)));
+  return legacy_owner->get();
+}
+
+uint64_t DuplicateRemoteHandle(const Proc* from_proc, const Proc* to_proc, uint64_t handle) {
   if (handle == 0) return 0;
-  HANDLE from = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(from_pid));
-  HANDLE to = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(to_pid));
+  if (g_peer_registry && (!g_peer_registry->Live(from_proc->identity) ||
+                          !g_peer_registry->Live(to_proc->identity))) return 0;
+  peer::OwnedHandle legacy_from;
+  peer::OwnedHandle legacy_to;
+  HANDLE from = ProcessForTransfer(from_proc, &legacy_from);
+  HANDLE to = ProcessForTransfer(to_proc, &legacy_to);
   HANDLE dup = nullptr;
   bool ok = from != nullptr && to != nullptr &&
             DuplicateHandle(from, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), to,
                             &dup, 0, FALSE, DUPLICATE_SAME_ACCESS);
-  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu", from_pid, to_pid, GetLastError());
-  if (from != nullptr) CloseHandle(from);
-  if (to != nullptr) CloseHandle(to);
+  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu",
+               from_proc->pid, to_proc->pid, GetLastError());
   return ok ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(dup)) : 0;
 }
 
-void CloseRemoteHandle(int pid, uint64_t handle) {
+void CloseRemoteHandle(const Proc* proc, uint64_t handle) {
   if (handle == 0) return;
-  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(pid));
+  peer::OwnedHandle legacy;
+  HANDLE p = ProcessForTransfer(proc, &legacy);
   if (p == nullptr) return;
   DuplicateHandle(p, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), nullptr, nullptr,
                   0, FALSE, DUPLICATE_CLOSE_SOURCE);
-  CloseHandle(p);
 }
 
 wire::FileDescription* DescriptionAt(Buffer* buffer, uint64_t offset) {
@@ -510,7 +525,7 @@ wire::FileDescription* DescriptionAt(Buffer* buffer, uint64_t offset) {
 
 void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
   if (auto* description = DescriptionAt(buffer, offset)) {
-    CloseRemoteHandle(buffer->proc->pid, description->shared_handle);
+    CloseRemoteHandle(buffer->proc, description->shared_handle);
     description->shared_handle = 0;
   }
 }
@@ -539,7 +554,7 @@ void ReleaseBufferObjects(Buffer* buffer) {
       case BINDER_TYPE_FD:
         // Staging handles always belong to the broker. Successful delivery
         // already closes/zeros them; abort/release closes any still present.
-        CloseRemoteHandle(proc->pid, fp.binder);
+        CloseRemoteHandle(proc, fp.binder);
         CloseStagingDescription(buffer, off);
         break;
       default:
@@ -707,16 +722,16 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
         Log("proc %u: a file descriptor without a Windows handle cannot be sent", proc->id);
         return BR_FAILED_REPLY;
       }
-      uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
+      uint64_t dup = DuplicateRemoteHandle(proc, target_proc, fp.binder);
       if (dup == 0) return BR_FAILED_REPLY;
       auto* description = DescriptionAt(buffer, off);
       uint64_t shared = description
-          ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
+          ? DuplicateRemoteHandle(proc, target_proc, description->shared_handle) : 0;
       // Sockets and completed native fences are typed handles without an OFD.
       const bool typed = description && (description->kind == wire::kSocketFileDescription ||
                                          description->kind == wire::kNativeFenceFileDescription);
       if (!description || (!typed && shared == 0)) {
-        CloseRemoteHandle(target_proc->pid, dup);
+        CloseRemoteHandle(target_proc, dup);
         return BR_FAILED_REPLY;
       }
       description->shared_handle = shared;
@@ -966,7 +981,7 @@ void CloseStagingFds(Buffer* buffer) {
     const uint64_t staging = object.pad_binder;
     object.pad_binder = 0;
     memcpy(buffer->data.data() + offset, &object, sizeof(object));
-    CloseRemoteHandle(buffer->proc->pid, staging);
+    CloseRemoteHandle(buffer->proc, staging);
     CloseStagingDescription(buffer, offset);
   }
 }
@@ -1591,10 +1606,91 @@ bool ClientIsRestricted(HANDLE pipe) {
          principal.integrity < SECURITY_MANDATORY_MEDIUM_RID;
 }
 
+void ReapRevokedPeers() {
+  std::vector<std::shared_ptr<Proc>> revoked;
+  {
+    std::lock_guard<std::mutex> lock(g_lock);
+    for (const auto& entry : g_procs) {
+      if (!g_peer_registry->Live(entry.second->identity)) revoked.push_back(entry.second);
+    }
+  }
+  for (const auto& proc : revoked) ProcRelease(proc.get());
+}
+
+void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
+                          gesher::process_identity::Principal authority) {
+  peer::OwnedHandle endpoint_owner(endpoint);
+  peer::Registry::Lease system;
+  launch::Request request;
+  while (launch::Transfer(endpoint, &request, sizeof(request), false)) {
+    gesher::process_identity::Principal sender;
+    if (request.magic != 0x474c4152 || request.version != 1 ||
+        !gesher::process_identity::ReadPipePrincipal(endpoint, &sender) || !(sender == authority) ||
+        (system && !g_peer_registry->Live(system))) {
+      break;
+    }
+    bool accepted = false;
+    switch (request.action) {
+      case launch::Action::kEnroll: {
+        peer::OwnedHandle process(launch::DecodeHandle(request.process));
+        const bool app = request.role == peer::Role::kApplication;
+        const bool role_allowed = system ? app : !app;
+        auto* container = request.container.bytes.data();
+        const bool sid_matches = app
+            ? request.container.size != 0 && request.container.size <= request.container.bytes.size() &&
+                IsValidSid(container) && GetLengthSid(container) == request.container.size
+            : request.container.size == 0;
+        if (role_allowed && sid_matches &&
+            (request.role != peer::Role::kLauncher || request.pid == launcher_pid)) {
+          accepted = g_peer_registry->Enroll(std::move(process), request.pid, request.birth,
+              request.role, request.uid, request.installation, app ? container : nullptr);
+        }
+        break;
+      }
+      case launch::Action::kHandoff:
+        if (!system) {
+          system = g_peer_registry->FindGeneration(request.pid, request.birth, peer::Role::kSystemServer);
+          accepted = static_cast<bool>(system);
+        }
+        break;
+      case launch::Action::kRetire:
+        if (!system || g_peer_registry->FindGeneration(request.pid, request.birth,
+                                                        peer::Role::kApplication)) {
+          accepted = g_peer_registry->Retire(request.pid, request.birth);
+        }
+        if (accepted) ReapRevokedPeers();
+        break;
+      case launch::Action::kRevokeInstallation:
+        if (system && request.installation != std::array<uint8_t, 16>{}) {
+          g_peer_registry->RevokeInstallation(request.installation);
+          ReapRevokedPeers();
+          accepted = true;
+        }
+        break;
+    }
+    uint32_t status = accepted ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+    if (!launch::Transfer(endpoint, &status, sizeof(status), true)) break;
+  }
+  g_peer_registry->CloseAuthority();
+  ReapRevokedPeers();
+  ExitProcess(ERROR_BROKEN_PIPE);
+}
+
 void ServeProc(HANDLE pipe, In in) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
-  if (g_sandbox && ClientIsRestricted(pipe)) {
+  peer::Registry::Lease identity;
+  if (g_peer_registry) {
+    identity = g_peer_registry->Authenticate(pipe);
+    if (!identity || identity->generation.pid > INT32_MAX) {
+      WireReply reply;
+      reply.Put<int32_t>(-EPERM);
+      if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
+      return;
+    }
+    pid = identity->generation.pid;
+    uid = identity->uid;
+  } else if (g_sandbox && ClientIsRestricted(pipe)) {
     // A first step of kernel-verified identity (ADR 0090, milestone M2 completes it):
     // a restricted process is an app, at its own pid. It cannot claim a system UID
     // (SYSTEM_UID 1000 and every other below FIRST_APPLICATION_UID) or another pid.
@@ -1614,10 +1710,12 @@ void ServeProc(HANDLE pipe, In in) {
   Proc* proc = proc_owner.get();
   {
     std::lock_guard<std::mutex> lock(g_lock);
+    if (g_peer_registry && !g_peer_registry->Live(identity)) return;
     proc->id = g_next_proc_id++;
     proc->key = RandomKey();
     proc->pid = static_cast<int>(pid);
     proc->uid = uid;
+    proc->identity = std::move(identity);
     g_procs[proc->id] = proc_owner;
   }
   TRACE("proc %u: pid %u opened the device", proc->id, pid);
@@ -1718,19 +1816,29 @@ void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
 void ServeRights(HANDLE pipe, In in) {
   uint32_t version;
   ULONG client_pid = 0;
+  peer::Registry::Lease identity;
+  peer::OwnedHandle legacy_client;
   HANDLE client = nullptr;
-  if (in.Get(&version) && version == wire::kRightsVersion &&
-      GetNamedPipeClientProcessId(pipe, &client_pid)) {
-    client = OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid);
+  if (in.Get(&version) && version == wire::kRightsVersion) {
+    if (g_peer_registry) {
+      identity = g_peer_registry->Authenticate(pipe);
+      if (identity) {
+        client_pid = identity->generation.pid;
+        client = identity->process.get();
+      }
+    } else if (GetNamedPipeClientProcessId(pipe, &client_pid)) {
+      legacy_client.reset(OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid));
+      client = legacy_client.get();
+    }
   }
   WireReply hello;
   hello.Put<int32_t>(client != nullptr ? 0 : -ESRCH);
   if (!WriteMessage(pipe, hello) || client == nullptr) {
-    if (client != nullptr) CloseHandle(client);
     return;
   }
   std::vector<uint8_t> msg;
   while (ReadMessage(pipe, &msg)) {
+    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
     In req{msg.data(), msg.data() + msg.size()};
     uint32_t op;
     if (!req.Get(&op)) break;
@@ -1866,7 +1974,6 @@ void ServeRights(HANDLE pipe, In in) {
     }
     if (!WriteMessage(pipe, reply)) break;
   }
-  CloseHandle(client);
 }
 
 int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
@@ -1879,6 +1986,8 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
     }
     case BINDER_SET_CONTEXT_MGR:
     case BINDER_SET_CONTEXT_MGR_EXT: {
+      if (g_peer_registry && (!proc->identity ||
+                              proc->identity->role != peer::Role::kServiceManager)) return -EPERM;
       flat_binder_object fbo = {};
       if (request == BINDER_SET_CONTEXT_MGR_EXT && !in.Get(&fbo)) return -EINVAL;
       if (g_context_mgr_node != nullptr) {
@@ -1923,12 +2032,16 @@ void ServeThread(HANDLE pipe, In in) {
   }
   std::shared_ptr<Thread> thread_owner;
   std::shared_ptr<Proc> proc_owner;
+  const auto identity = g_peer_registry ? g_peer_registry->Authenticate(pipe)
+                                        : peer::Registry::Lease{};
   Thread* thread = nullptr;
   Proc* proc = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto it = g_procs.find(proc_id);
-    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
+    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead &&
+        (!g_peer_registry || (identity && it->second->identity == identity &&
+                              g_peer_registry->Live(identity)))) {
       proc_owner = it->second;
       proc = proc_owner.get();
       thread_owner = std::make_shared<Thread>();
@@ -1950,6 +2063,7 @@ void ServeThread(HANDLE pipe, In in) {
 
   std::vector<uint8_t> msg;
   while (ReadMessage(pipe, &msg)) {
+    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
     In req{msg.data(), msg.data() + msg.size()};
     uint32_t op;
     if (!req.Get(&op)) break;
@@ -2072,7 +2186,23 @@ int main(int argc, char** argv) {
   // app processes' AppContainers through the binder-client capability and a Low
   // label, and nothing else beyond this user and SYSTEM. Otherwise the default.
   SECURITY_ATTRIBUTES pipe_security{sizeof(pipe_security), nullptr, FALSE};
-  g_sandbox = gesher::appcontainer::Enabled();
+  launch::Startup bootstrap;
+  if (launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap)) {
+    gesher::process_identity::Process process;
+    const HANDLE endpoint = launch::DecodeHandle(bootstrap.channel);
+    ULONG launcher_pid = 0;
+    if (!gesher::process_identity::ReadLiveProcess(GetCurrentProcess(), &process) ||
+        process.principal.container.size != 0 || process.principal.restricted ||
+        process.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID ||
+        !GetNamedPipeClientProcessId(endpoint, &launcher_pid) ||
+        !SetHandleInformation(endpoint, HANDLE_FLAG_INHERIT, 0)) {
+      Log("invalid protected launch authority");
+      return EXIT_FAILURE;
+    }
+    g_peer_registry = std::make_unique<peer::Registry>(process.principal);
+    std::thread(ServeLaunchAuthority, endpoint, launcher_pid, process.principal).detach();
+  }
+  g_sandbox = g_peer_registry || gesher::appcontainer::Enabled();
   if (g_sandbox) {
     DWORD error = gesher::appcontainer::BinderPipeSecurity(&pipe_security.lpSecurityDescriptor);
     if (error != ERROR_SUCCESS) {

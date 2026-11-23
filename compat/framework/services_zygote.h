@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,20 @@ int SpawnInAppContainer(const std::u16string& command_line,
                         const std::vector<std::u16string>& set,
                         const std::vector<std::u16string>& unset, const std::u16string& log_path,
                         const AppContainerSpec& sandbox);
+
+// Start the broker, service manager and server as one device bootstrap.
+// Only the broker and server inherit their respective private control handles.
+std::vector<int> StartProtectedDevice(const std::u16string& device,
+    const std::vector<std::u16string>& commands, const std::vector<std::u16string>& logs,
+    const std::vector<std::u16string>& environment);
+
+// A protected SystemServer must enroll the actual contained child before it
+// runs. The install UUID and UID come from the server's durable package data.
+int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std::u16string>& set,
+    const std::vector<std::u16string>& unset, const std::u16string& log_path,
+    const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation);
+bool RevokeProtectedInstallation(const std::array<uint8_t, 16>& installation);
+bool HasProtectedLaunchAuthority();
 
 // The container's profile for this Windows user, created if it does not exist.
 uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& display_name);

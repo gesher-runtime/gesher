@@ -425,31 +425,49 @@ public final class Launcher {
         state.setProperty(Device.STATE_DEVICE, name);
         state.setProperty(Device.STATE_SHUTDOWN_EVENT, Device.shutdownEventName());
         state.setProperty("started", String.valueOf(System.currentTimeMillis()));
-        int binderd = Zygote.spawn(Zygote.quote(dir + "binderd.exe") + " " + name, env,
-                new File(logs, "binderd.log").getPath(), true);
-        record(state, Device.BINDERD, binderd);
-        if (!Zygote.waitForBinder(name, binderd, 30_000)) {
-            int code = Zygote.exitCode(binderd);
-            Zygote.kill(binderd);
-            printTail(new File(logs, "binderd.log"), 40);
-            throw new IllegalStateException(text("binder_handshake", name, code));
-        }
-        log(text("binder_ready", name, binderd));
-        int servicemanager = Zygote.spawn(Zygote.quote(dir + "servicemanager.exe"), env,
-                new File(logs, "servicemanager.log").getPath(), true);
-        record(state, Device.SERVICEMANAGER, servicemanager);
-        Device.write(Device.stateFile(), state);
-
+        File binderLog = new File(logs, "binderd.log");
+        File managerLog = new File(logs, "servicemanager.log");
+        File serverLog = new File(logs, "system_server.log");
+        String binderCommand = Zygote.quote(dir + "binderd.exe") + " " + name;
+        String managerCommand = Zygote.quote(dir + "servicemanager.exe");
+        String vm = Zygote.vmCommandLine(Launcher.class.getName());
         String idle = System.getenv("GESHER_IDLE_TIMEOUT");
-        List<String> args = new ArrayList<>(List.of("--persistent", "--adopt",
-                binderd + "," + servicemanager));
+        List<String> args = new ArrayList<>(List.of("--persistent"));
         if (idle != null && !idle.isEmpty()) {
             args.add("--idle-timeout");
             args.add(idle);
         }
-        int server = Zygote.spawn(Zygote.commandLine(
-                Zygote.vmCommandLine(Launcher.class.getName()), SystemServer.class.getName(),
-                args), env, new File(logs, "system_server.log").getPath(), true);
+        int binderd;
+        int servicemanager;
+        int server;
+        if ("appcontainer-trusted".equals(System.getenv("GESHER_SANDBOX"))) {
+            args.add("--protected-launch");
+            int[] children = Zygote.startProtectedDevice(name, List.of(binderCommand,
+                    managerCommand, Zygote.commandLine(vm, SystemServer.class.getName(), args)),
+                    List.of(binderLog, managerLog, serverLog), env);
+            binderd = children[0];
+            servicemanager = children[1];
+            server = children[2];
+            record(state, Device.BINDERD, binderd);
+            record(state, Device.SERVICEMANAGER, servicemanager);
+        } else {
+            binderd = Zygote.spawn(binderCommand, env, binderLog.getPath(), true);
+            record(state, Device.BINDERD, binderd);
+            if (!Zygote.waitForBinder(name, binderd, 30_000)) {
+                int code = Zygote.exitCode(binderd);
+                Zygote.kill(binderd);
+                printTail(binderLog, 40);
+                throw new IllegalStateException(text("binder_handshake", name, code));
+            }
+            log(text("binder_ready", name, binderd));
+            servicemanager = Zygote.spawn(managerCommand, env, managerLog.getPath(), true);
+            record(state, Device.SERVICEMANAGER, servicemanager);
+            Device.write(Device.stateFile(), state);
+            args.add("--adopt");
+            args.add(binderd + "," + servicemanager);
+            server = Zygote.spawn(Zygote.commandLine(vm, SystemServer.class.getName(), args),
+                    env, serverLog.getPath(), true);
+        }
         record(state, Device.SYSTEM_SERVER, server);
         Device.write(Device.stateFile(), state);
         if (!waitReady(state)) {
