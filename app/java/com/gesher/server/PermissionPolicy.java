@@ -57,6 +57,10 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     private final Map<IBinder, RegisteredAttribution> mAttributions = new WeakHashMap<>();
     private volatile CallerIdentity mCallers;
 
+    PermissionPolicy(PackageManagerService pm) {
+        this(pm, false);
+    }
+
     PermissionPolicy(PackageManagerService pm, boolean cohost) {
         mPm = pm;
         mCohost = cohost;
