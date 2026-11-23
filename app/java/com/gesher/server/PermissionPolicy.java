@@ -140,12 +140,16 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     synchronized boolean granted(String name, String packageName) {
         ApkPackage pkg = mPm.get(packageName);
         if (pkg == null || name == null) return false;
+        return granted(name, pkg, uidMembers(pkg.uid()), null);
+    }
+
+    private boolean granted(String name, ApkPackage pkg, List<ApkPackage> members,
+            ApkPackage scoped) {
         if (GmsSignatureSpoofing.PERMISSION_FAKE_PACKAGE_SIGNATURE.equals(name)) {
             return pkg.parsed.getRequestedPermissions().contains(name)
                     && GmsSignatureSpoofing.isTrustedPackage(pkg);
         }
-        List<ApkPackage> members = uidMembers(pkg.uid());
-        PermissionInfo info = mCatalog.get(name);
+        PermissionInfo info = mCatalog.get(name, scoped);
         // A normal grant depends on the installed UID's manifest requests, not
         // runtime decisions or flags. Flag queries still take the full path below.
         if (info != null && (info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE)
@@ -154,7 +158,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         }
         if (permissionState(pkg.uid(), name, members, info).granted) return true;
         String fuller = fullerPermission(name);
-        return fuller != null && permissionState(pkg.uid(), fuller, members).granted;
+        return fuller != null && permissionState(pkg.uid(), fuller, members,
+                mCatalog.get(fuller, scoped)).granted;
     }
 
     /** Android 16 PermissionFlags distinguishes the permission grant from its AppOps grant. */
@@ -664,11 +669,117 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     public boolean canRequest(String pkg, String permission) {
-        ApkPackage installed = mPm.get(pkg);
-        PermissionInfo info = mCatalog.get(permission);
-        return installed != null && installed.parsed.getRequestedPermissions().contains(permission)
+        return canRequest(mPm.get(pkg), permission, mCatalog.get(permission));
+    }
+
+    private static boolean canRequest(ApkPackage code, String permission, PermissionInfo info) {
+        return code != null && code.parsed.getRequestedPermissions().contains(permission)
                 && info != null && (info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE)
                         == PermissionInfo.PROTECTION_DANGEROUS;
+    }
+
+    /** Admission is an operation on the host's existing policy owner and UID registry. */
+    ScopedOwner openScopedOwner(String apk,
+            java.util.function.BooleanSupplier processLive) throws Exception {
+        if (!SystemServer.isProtectedDevice() || !Zygote.nativeHasProtectedLaunchAuthority(false)) {
+            throw new SecurityException("Standalone permission admission requires the protected system server");
+        }
+        java.util.Objects.requireNonNull(processLive);
+        Zygote.StandaloneInput input = new Zygote.StandaloneInput(apk);
+        try {
+            ApkPackage code = ApkPackage.parseStandaloneInput(input);
+            synchronized (mPm) {
+                if (mPm.isRemovalPending(code.packageName)) {
+                    throw new SecurityException("Standalone permission owner is retiring");
+                }
+                ApkPackage installed = mPm.get(code.packageName);
+                try (PackageUids.Admission identity = PackageUids.prepare(List.of(code),
+                        mPm.packageSnapshot().values())) {
+                    identity.commit();
+                    identity.accept();
+                }
+                return new ScopedOwner(input, code, installed, processLive);
+            }
+        } catch (Exception | Error failure) {
+            input.close();
+            throw failure;
+        }
+    }
+
+    /** Exact transient source without publishing it as an installed package. */
+    final class ScopedOwner implements AutoCloseable {
+        private final Zygote.StandaloneInput mInput;
+        private final ApkPackage mCode;
+        private final ApkPackage mInstalled;
+        private final java.util.function.BooleanSupplier mProcessLive;
+        private boolean mClosed; // guarded by the PM monitor
+
+        private ScopedOwner(Zygote.StandaloneInput input, ApkPackage code, ApkPackage installed,
+                java.util.function.BooleanSupplier processLive) {
+            mInput = input;
+            mCode = code;
+            mInstalled = installed;
+            mProcessLive = processLive;
+        }
+
+        ApkPackage code() { return mCode; }
+        Zygote.StandaloneInput input() { return mInput; }
+        String packageName() { return mCode.packageName; }
+
+        boolean isCurrent() {
+            synchronized (mPm) {
+                return !mClosed && mInput.isOpen() && mProcessLive.getAsBoolean()
+                        && !mPm.isRemovalPending(packageName())
+                        && mPm.get(packageName()) == mInstalled;
+            }
+        }
+
+        private List<ApkPackage> members() {
+            List<ApkPackage> members = new ArrayList<>(uidMembers(mCode.uid()));
+            members.removeIf(member -> member.packageName.equals(packageName()));
+            members.add(mCode);
+            return members;
+        }
+
+        boolean canRequest(String name) {
+            synchronized (mPm) {
+                return isCurrent() && PermissionPolicy.canRequest(mCode, name,
+                        mCatalog.get(name, mCode));
+            }
+        }
+
+        int check(String name) {
+            if (name == null) return PackageManager.PERMISSION_DENIED;
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                return isCurrent() && granted(name, mCode, members(), mCode)
+                        ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
+            } }
+        }
+
+        // This call is private to the real host consent controller.
+        void grantAfterConsent(String permission) {
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                if (!isCurrent()) return;
+                PermissionInfo info = mCatalog.get(permission, mCode);
+                if (!PermissionPolicy.canRequest(mCode, permission, info)
+                        || mCode.parsed.getTargetSdkVersion() < 23) return;
+                List<ApkPackage> members = members();
+                PermissionState old = permissionState(mCode.uid(), permission, members, info);
+                if (old.restricted || (old.flags & PackageManager.FLAG_PERMISSION_SYSTEM_FIXED) != 0) return;
+                Map<Integer, Integer> before = runtimeModes(mCode.uid());
+                writeRuntimeDecision(mCode.uid(), permission, info, members, old, "granted");
+                publishRuntimeModes(mCode.uid(), before);
+            } }
+            permissionsChanged(mCode, () -> false);
+        }
+
+        @Override public void close() {
+            synchronized (mPm) {
+                if (mClosed) return;
+                mClosed = true;
+                mInput.close();
+            }
+        }
     }
 
     public boolean isProtectedBroadcast(String action) { return mCatalog.isProtectedBroadcast(action); }
@@ -709,16 +820,21 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             wasGranted = granted(permission, pkg);
             Map<Integer, Integer> before = runtimeModes(installed.uid());
             List<ApkPackage> members = uidMembers(installed.uid());
-            mDecisions.setProperty(legacyGrantKey(installed.uid(), permission), Boolean.toString(
-                    storedLegacyGrant(installed.uid(), permission, info, requestingTargetSdk(permission, members))));
-            mDecisions.setProperty(uidKey(installed.uid(), permission), decision);
-            mDecisions.setProperty(flagsKey(installed.uid(), permission), Integer.toString(old.flags));
-            for (ApkPackage member : members) mDecisions.remove(legacyKey(member, permission));
-            scheduleWrite();
+            writeRuntimeDecision(installed.uid(), permission, info, members, old, decision);
             publishRuntimeModes(installed.uid(), before);
         } }
         if (killOnRevoke) permissionChanged(installed, permission, wasGranted);
         else permissionsChanged(installed, () -> false);
+    }
+
+    private void writeRuntimeDecision(int uid, String permission, PermissionInfo info,
+            List<ApkPackage> members, PermissionState old, String decision) {
+        mDecisions.setProperty(legacyGrantKey(uid, permission), Boolean.toString(
+                storedLegacyGrant(uid, permission, info, requestingTargetSdk(permission, members))));
+        mDecisions.setProperty(uidKey(uid, permission), decision);
+        mDecisions.setProperty(flagsKey(uid, permission), Integer.toString(old.flags));
+        for (ApkPackage member : members) mDecisions.remove(legacyKey(member, permission));
+        scheduleWrite();
     }
 
     private void permissionChanged(ApkPackage installed, String permission, boolean wasGranted) {

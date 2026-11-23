@@ -26,6 +26,14 @@ import java.util.function.Consumer;
 final class PermissionRequests {
     public interface Decision { boolean allow(String packageName, String permissionNames); }
 
+    private interface Owner {
+        String name();
+        boolean isCurrent();
+        boolean canRequest(String permission);
+        int check(String permission);
+        void grantAfterConsent(String permission);
+    }
+
     private final PackageManagerService mPm;
     private final Executor mExecutor;
     private final Decision mDecision;
@@ -59,7 +67,41 @@ final class PermissionRequests {
     private static native boolean nativeConfirm(String packageLabel, String permissionNames);
 
     void request(ApkPackage captured, String[] requested, Consumer<Intent> completion) {
-        if (captured == null || requested == null || requested.length > 128) {
+        if (captured == null) throw new IllegalArgumentException("Invalid runtime permission owner");
+        PermissionPolicy policy = mPm.permissions();
+        request(new Owner() {
+            @Override public String name() { return captured.packageName; }
+            @Override public boolean isCurrent() {
+                return !mPm.isRemovalPending(name()) && mPm.get(name()) == captured;
+            }
+            @Override public boolean canRequest(String permission) {
+                return policy.canRequest(name(), permission);
+            }
+            @Override public int check(String permission) {
+                return policy.checkPermission(name(), permission);
+            }
+            @Override public void grantAfterConsent(String permission) {
+                policy.grantRuntime(name(), permission, 0);
+            }
+        }, requested, completion);
+    }
+
+    void requestScoped(PermissionPolicy.ScopedOwner captured, String[] requested,
+            Consumer<Intent> completion) {
+        if (captured == null) throw new IllegalArgumentException("Invalid runtime permission owner");
+        request(new Owner() {
+            @Override public String name() { return captured.packageName(); }
+            @Override public boolean isCurrent() { return captured.isCurrent(); }
+            @Override public boolean canRequest(String permission) { return captured.canRequest(permission); }
+            @Override public int check(String permission) { return captured.check(permission); }
+            @Override public void grantAfterConsent(String permission) {
+                captured.grantAfterConsent(permission);
+            }
+        }, requested, completion);
+    }
+
+    private void request(Owner owner, String[] requested, Consumer<Intent> completion) {
+        if (requested == null || requested.length > 128) {
             throw new IllegalArgumentException("Invalid runtime permission request");
         }
         String[] names = requested.clone();
@@ -69,7 +111,7 @@ final class PermissionRequests {
             }
         }
         boolean accepted;
-        synchronized (mPending) { accepted = mPending.add(captured.packageName); }
+        synchronized (mPending) { accepted = mPending.add(owner.name()); }
         if (!accepted) {
             int[] denied = new int[names.length];
             Arrays.fill(denied, PackageManager.PERMISSION_DENIED);
@@ -81,45 +123,40 @@ final class PermissionRequests {
                 int[] grants = new int[names.length];
                 Arrays.fill(grants, PackageManager.PERMISSION_DENIED);
                 try {
-                    PermissionPolicy policy = mPm.permissions();
                     List<String> prompt = new ArrayList<>();
                     for (String name : names) {
-                        if (name != null && policy.canRequest(captured.packageName, name)
-                                && policy.checkPermission(captured.packageName, name)
-                                        != PackageManager.PERMISSION_GRANTED
+                        if (name != null && owner.canRequest(name)
+                                && owner.check(name) != PackageManager.PERMISSION_GRANTED
                                 && !prompt.contains(name)) prompt.add(name);
                     }
-                    boolean allow = !prompt.isEmpty() && !mPm.isRemovalPending(captured.packageName)
-                            && mPm.get(captured.packageName) == captured
-                            && mDecision.allow(captured.packageName, describe(policy, prompt));
+                    boolean allow = !prompt.isEmpty() && owner.isCurrent()
+                            && mDecision.allow(owner.name(), describe(mPm.permissions(), prompt));
                     // PM.add/remove are synchronized on the PM. Keep identity stable
                     // across the final recheck and the entire grant operation.
                     synchronized (mPm) {
-                        if (!mPm.isRemovalPending(captured.packageName) && mPm.get(captured.packageName) == captured) {
+                        if (owner.isCurrent()) {
                             if (allow) {
                                 for (String name : prompt) {
-                                    if (policy.canRequest(captured.packageName, name)) {
-                                        policy.grantRuntime(captured.packageName, name, 0);
-                                    }
+                                    if (owner.canRequest(name)) owner.grantAfterConsent(name);
                                 }
                             }
                             for (int i = 0; i < names.length; i++) {
                                 if (names[i] != null) {
-                                    grants[i] = policy.checkPermission(captured.packageName, names[i]);
+                                    grants[i] = owner.check(names[i]);
                                 }
                             }
                         }
                     }
                 } catch (RuntimeException e) {
-                    SystemServer.log("permission request denied for " + captured.packageName
+                    SystemServer.log("permission request denied for " + owner.name()
                             + ": " + e.getClass().getSimpleName());
                 } finally {
-                    synchronized (mPending) { mPending.remove(captured.packageName); }
+                    synchronized (mPending) { mPending.remove(owner.name()); }
                 }
                 completion.accept(result(names, grants));
             });
         } catch (RuntimeException e) {
-            synchronized (mPending) { mPending.remove(captured.packageName); }
+            synchronized (mPending) { mPending.remove(owner.name()); }
             throw e;
         }
     }

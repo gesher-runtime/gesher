@@ -82,12 +82,14 @@ public final class Zygote {
     /** Host-only read lease held before examining or starting this source file. */
     static final class StandaloneInput implements AutoCloseable {
         final String path;
-        private long pin;
+        private volatile long pin;
 
         StandaloneInput(String path) {
             this.path = new File(path).getAbsolutePath();
             pin = nativePinStandaloneInput(windowsPath(this.path));
         }
+
+        boolean isOpen() { return pin != 0; }
 
         void copyForVerification(Path target) throws IOException {
             if (pin == 0) throw new IllegalStateException("Standalone code lease is closed");

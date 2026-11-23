@@ -15,9 +15,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiPredicate;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /** Server-local consent injection; no Windows security prompt is automated. */
@@ -136,6 +138,51 @@ public final class PermissionRequestsTest {
                         == PackageManager.PERMISSION_DENIED
                         && grant(policy, pkg, LOCATION) == PackageManager.PERMISSION_DENIED,
                 "replacement inherited an in-flight consent grant");
+
+        // The permission contract uses the same live host PM and decisions. Isolate
+        // this test from Windows admission by controlling only the process lifetime.
+        Class<?> scopeType = Class.forName("com.gesher.server.PermissionPolicy$ScopedOwner");
+        Class<?> inputType = Class.forName("com.gesher.server.Zygote$StandaloneInput");
+        Constructor<?> pin = inputType.getDeclaredConstructor(String.class);
+        pin.setAccessible(true);
+        Constructor<?> scoped = scopeType.getDeclaredConstructor(policy.getClass(),
+                inputType, apkClass, apkClass, BooleanSupplier.class);
+        scoped.setAccessible(true);
+        AtomicBoolean live = new AtomicBoolean(true);
+        try (AutoCloseable owner = (AutoCloseable) scoped.newInstance(policy, pin.newInstance(args[0]), apk,
+                replacement, (BooleanSupplier) live::get)) {
+            Object lostProcess = controller(pm, pmClass, Runnable::run, (name, description) -> {
+                live.set(false);
+                return true;
+            });
+            reply.set(null);
+            Consumer<Intent> completed = reply::set;
+            Method requestScoped = method(lostProcess.getClass(), "requestScoped",
+                    scopeType, String[].class, Consumer.class);
+            requestScoped.invoke(lostProcess, owner, new String[]{LOCATION}, completed);
+            require(reply.get().getIntArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_RESULTS)[0]
+                            == PackageManager.PERMISSION_DENIED
+                            && grant(policy, pkg, LOCATION) == PackageManager.PERMISSION_DENIED,
+                    "retired scoped process inherited consent");
+        }
+        try (AutoCloseable owner = (AutoCloseable) scoped.newInstance(policy, pin.newInstance(args[0]), apk,
+                replacement, (BooleanSupplier) () -> true)) {
+            reply.set(null);
+            Object hostConsent = controller(pm, pmClass, Runnable::run, (name, description) -> {
+                require(pkg.equals(name) && description.contains(LOCATION), "scoped consent owner");
+                return true;
+            });
+            Consumer<Intent> completed = reply::set;
+            method(hostConsent.getClass(), "requestScoped", scopeType, String[].class, Consumer.class)
+                    .invoke(hostConsent, owner, new String[]{LOCATION, PRIVILEGED}, completed);
+            int[] scopedGrants = reply.get().getIntArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_RESULTS);
+            require(scopedGrants[0] == PackageManager.PERMISSION_GRANTED
+                            && scopedGrants[1] == PackageManager.PERMISSION_DENIED
+                            && grant(policy, pkg, LOCATION) == PackageManager.PERMISSION_GRANTED
+                            && method(pmClass, "get", String.class).invoke(pm, pkg) == replacement,
+                    "scoped consent did not use the host's existing permission state and publication");
+        }
+        System.out.println("PermissionRequestsTest: scoped consent shares the host decisions and drops expired owners");
         System.out.println("PermissionRequestsTest: async grant/deny, result mapping and replacement race passed");
     }
 }
