@@ -1125,7 +1125,8 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (touchscreen and faketouch, matching {@link com.gesher.app.DeviceProfile#configuration()},
      * both orientations) whose launcher could host app widgets (apps reach
      * AppWidgetManager only on devices with app_widgets, and phone apps assume it).
-     * Telephony, Wi-Fi, sensors and the rest are absent. Bluetooth
+     * Telephony, Wi-Fi and the rest are absent. Sensors follow the ones SensorManager
+     * lists ({@link #addSensorFeatures}). Bluetooth
      * (docs/bluetooth.md) is there when the host has a radio: FEATURE_BLUETOOTH with an
      * adapter, FEATURE_BLUETOOTH_LE when Windows reports LE support (apps such as
      * companion apps check it before anything else). Cameras follow the real devices
@@ -1164,7 +1165,40 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
+        try {
+            addSensorFeatures(FEATURES, WindowsSensors.types());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no sensors to report.
+        }
         addLocationFeatures(FEATURES);
+    }
+
+    /**
+     * FEATURE_SENSOR_* for the sensor types SensorManager lists (Windows.Devices.Sensors'
+     * accelerometer, gyrometer, magnetometer and light sensor, docs/devices.md), so
+     * hasSystemFeature agrees with getDefaultSensor. A rotation vector has no feature.
+     */
+    public static void addSensorFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            int[] types) {
+        if (types == null) return;
+        for (int type : types) {
+            switch (type) {
+                case android.hardware.Sensor.TYPE_ACCELEROMETER:
+                    addFeature(features, PackageManager.FEATURE_SENSOR_ACCELEROMETER);
+                    break;
+                case android.hardware.Sensor.TYPE_GYROSCOPE:
+                    addFeature(features, PackageManager.FEATURE_SENSOR_GYROSCOPE);
+                    break;
+                case android.hardware.Sensor.TYPE_MAGNETIC_FIELD:
+                    addFeature(features, PackageManager.FEATURE_SENSOR_COMPASS);
+                    break;
+                case android.hardware.Sensor.TYPE_LIGHT:
+                    addFeature(features, PackageManager.FEATURE_SENSOR_LIGHT);
+                    break;
+                default:
+                    break;
+            }
+        }
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */

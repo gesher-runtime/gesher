@@ -318,9 +318,30 @@ const JNINativeMethod gBaseEventQueueMethods[] = {
     {"nativeInjectSensorData", "(JI[FIJ)I", GESHER_JNI(BaseEventQueue_inject)},
 };
 
+// com.gesher.server.WindowsSensors.nativeTypes: the TYPE_* of each sensor the
+// SystemSensorManager natives above list (hub::List(), the same list in every
+// process), for PackageManagerService's FEATURE_SENSOR_* answers.
+jintArray WindowsSensors_types(JNIEnv* env, jclass) {
+  const std::vector<hub::Sensor>& list = hub::List();
+  std::vector<jint> types;
+  types.reserve(list.size());
+  for (const hub::Sensor& sensor : list) types.push_back(sensor.type);
+  jintArray result = env->NewIntArray(static_cast<jsize>(types.size()));
+  if (result != nullptr && !types.empty()) {
+    env->SetIntArrayRegion(result, 0, static_cast<jsize>(types.size()), types.data());
+  }
+  return result;
+}
+
+const JNINativeMethod gWindowsSensorsMethods[] = {
+    {"nativeTypes", "()[I", GESHER_JNI(WindowsSensors_types)},
+};
+
 }  // namespace
 
 int register_gesher_sensors(JNIEnv* env) {
+  RegisterGesherNatives(env, "com/gesher/server/WindowsSensors", gWindowsSensorsMethods,
+                        NELEM(gWindowsSensorsMethods));
   RegisterGesherNatives(env, "android/hardware/SystemSensorManager", gSystemSensorManagerMethods,
                         NELEM(gSystemSensorManagerMethods));
   RegisterGesherNatives(env, "android/hardware/SystemSensorManager$BaseEventQueue",

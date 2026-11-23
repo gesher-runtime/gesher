@@ -60,6 +60,13 @@ Windows without them (no location service, no Media Foundation) gets clean
   Readings are polled at the rate asked for; on-change sensors report changes
   only. The CI runners have none: the list is empty and `registerListener`
   answers false (checked).
+- The package manager's system features follow the same list
+  (`PackageManagerService.addSensorFeatures`, through `WindowsSensors`):
+  `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass` (the
+  magnetometer) and `.light` when SensorManager lists that type, so
+  `hasSystemFeature` and Google Play's filtering agree with `getDefaultSensor`.
+  The rotation vector has no feature of its own. Without a sensor no feature
+  is claimed.
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.
