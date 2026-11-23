@@ -80,6 +80,8 @@ struct CohostSpec {
   std::u16string credential_nt{};
   std::u16string device_nt{};
   std::array<void*, 3> standard_handles{};
+  std::u16string build_prop{};
+  std::u16string framework_res{};
 };
 uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& spec,
                         uint64_t pin, uint32_t uid, const CohostSpec& services, uint32_t* exit_code);

@@ -559,9 +559,22 @@ static jintArray Zygote_cohostPermissionExchange(JNIEnv* env, jclass, jint opera
     return result;
 }
 
+static DWORD PinCohostInput(const std::u16string& path, OwnedHandle* file) {
+    if (path.empty()) return ERROR_SUCCESS;
+    if (path.find(u'\0') != std::u16string::npos) return ERROR_INVALID_NAME;
+    const std::wstring windows(path.begin(), path.end());
+    file->reset(CreateFileW(windows.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!*file) return GetLastError();
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileType(file->get()) != FILE_TYPE_DISK || !GetFileInformationByHandle(file->get(), &info) ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return ERROR_ACCESS_DENIED;
+    return ERROR_SUCCESS;
+}
+
 static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring name,
         jstring display, jobjectArray capabilities, jlong pin, jint uid, jobject permissions,
-        jstring credential, jstring device, jintArray standardDescriptors) {
+        jstring credential, jstring device, jintArray standardDescriptors, jstring buildProp, jstring frameworkRes) {
     if (pin <= 0 || permissions == nullptr || !gesher::zygote::HasProtectedLaunchAuthority()) {
         jniThrowException(env, "java/lang/SecurityException", "Protected cohost cannot launch");
         return 0;
@@ -607,6 +620,25 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
     {
         const auto credentialPath = ZygoteString(env, credential);
         const auto devicePath = ZygoteString(env, device);
+        const auto buildPath = ZygoteString(env, buildProp);
+        const auto frameworkPath = ZygoteString(env, frameworkRes);
+        OwnedHandle buildInput, frameworkInput;
+        const char* inputOption = "--build-prop";
+        failure = PinCohostInput(buildPath, &buildInput);
+        if (failure == ERROR_SUCCESS) {
+            inputOption = "--framework-res";
+            failure = PinCohostInput(frameworkPath, &frameworkInput);
+        }
+        if (failure != ERROR_SUCCESS || ((!buildPath.empty() || !frameworkPath.empty()) &&
+                                         (credentialPath.empty() || devicePath.empty()))) {
+            env->DeleteGlobalRef(host);
+            char message[128];
+            std::snprintf(message, sizeof(message),
+                "Cannot open the caller-selected bootstrap input %s (Win32 error %lu)",
+                inputOption, failure == ERROR_SUCCESS ? ERROR_INVALID_PARAMETER : failure);
+            jniThrowException(env, "java/lang/IllegalArgumentException", message);
+            return 0;
+        }
         CohostDirectory credentialRoot, deviceRoot;
         std::unique_ptr<gesher::rooted_storage::Server> storage;
         if (!credentialPath.empty() || !devicePath.empty()) {
@@ -619,7 +651,8 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
                 return 0;
             }
             storage = std::make_unique<gesher::rooted_storage::Server>(
-                gesher::rooted_storage::Roots{credentialRoot.directory.get(), deviceRoot.directory.get()});
+                gesher::rooted_storage::Roots{credentialRoot.directory.get(), deviceRoot.directory.get()},
+                buildInput.get(), frameworkInput.get());
             if (storage->name().empty()) {
                 env->DeleteGlobalRef(host);
                 jniThrowException(env, "java/lang/SecurityException", "Cannot create rooted storage");
@@ -646,7 +679,7 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
                 if (env->ExceptionCheck()) return ERROR_ACCESS_DENIED;
                 return authority.Start(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
             }, std::move(credentialRoot.canonical), std::move(deviceRoot.canonical),
-            std::move(credentialRoot.nt), std::move(deviceRoot.nt), streams};
+            std::move(credentialRoot.nt), std::move(deviceRoot.nt), streams, buildPath, frameworkPath};
         gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
                                              ZygoteStrings(env, capabilities)};
         failure = gesher::zygote::RunPinnedCohost(ZygoteString(env, command), spec,
@@ -755,7 +788,8 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_runContainedStandalone)},
     {"nativeRunPinnedCohost",
      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;JI"
-     "Lcom/gesher/server/CohostPermissionHost;Ljava/lang/String;Ljava/lang/String;[I)I",
+     "Lcom/gesher/server/CohostPermissionHost;Ljava/lang/String;Ljava/lang/String;[I"
+     "Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_runPinnedCohost)},
     {"nativeCohostPermissionLive", "(J)Z", GESHER_JNI(Zygote_cohostPermissionLive)},
     {"nativeCancelCohost", "(J)V", GESHER_JNI(Zygote_cancelCohost)},

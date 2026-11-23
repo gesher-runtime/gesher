@@ -6,6 +6,7 @@
 #include <gesher/rooted_storage_wire.h>
 
 #include <string>
+#include <optional>
 
 namespace gesher::storage_root {
 
@@ -25,6 +26,10 @@ Selection Lookup(const std::wstring& mapped);
 // Resolves a real handle's kernel name to the exact rooted DOS name. A lowbox
 // can query the NT object name even when Win32 drive translation is denied.
 std::wstring DescriptorPath(HANDLE file);
+
+// Match only the caller-selected original bootstrap file.
+std::optional<rooted_storage_wire::Op> LookupBootstrap(const std::wstring& mapped);
+int OpenBootstrap(rooted_storage_wire::Op operation, HANDLE* file);
 
 bool HasBroker();
 int StatAndroidData(rooted_storage_wire::Filesystem* filesystem);

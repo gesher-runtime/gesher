@@ -67,6 +67,8 @@ bool Valid(const wire::Request& request) {
     case wire::Op::kRemove: return (request.flags & ~wire::kDirectory) == 0;
     case wire::Op::kRename: return (request.flags & ~wire::kReplace) == 0;
     case wire::Op::kStatAndroidData:
+    case wire::Op::kOpenBuildProp:
+    case wire::Op::kOpenFrameworkRes:
       return request.source_area == wire::kCredential && request.flags == 0 && request.path_units == 0;
   }
   return false;
@@ -99,7 +101,8 @@ bool ReadName(HANDLE pipe, uint32_t units, std::wstring* name, ULONGLONG deadlin
 }
 
 int Dispatch(const Roots& roots, const wire::Request& request, std::wstring_view path,
-             std::wstring_view target, OwnedHandle* opened, bool* created, wire::Filesystem* filesystem) {
+             std::wstring_view target, OwnedHandle* opened, bool* created, wire::Filesystem* filesystem,
+             HANDLE build_prop, HANDLE framework_res) {
   const Area area = ReadArea(request.source_area);
   switch (request.operation) {
     case wire::Op::kOpen: {
@@ -112,6 +115,15 @@ int Dispatch(const Roots& roots, const wire::Request& request, std::wstring_view
     case wire::Op::kRemove: return Remove(roots, area, path, (request.flags & wire::kDirectory) != 0);
     case wire::Op::kRename:
       return Rename(roots, area, path, ReadArea(request.target_area), target, (request.flags & wire::kReplace) != 0);
+    case wire::Op::kOpenBuildProp:
+    case wire::Op::kOpenFrameworkRes: {
+      const HANDLE source = request.operation == wire::Op::kOpenBuildProp ? build_prop : framework_res;
+      if (!source) return ENOENT;
+      const HANDLE file = ReOpenFile(source, GENERIC_READ, FILE_SHARE_READ, 0);
+      if (file == INVALID_HANDLE_VALUE) return EIO;
+      opened->reset(file);
+      return 0;
+    }
     case wire::Op::kStatAndroidData: {
       // Retain the exact legacy logical /data backing-volume resolution. The
       // trusted host has no guest bootstrap scope, so this cannot recurse.
@@ -153,9 +165,11 @@ class PendingHandle {
 
 class Server::State {
  public:
-  explicit State(const Roots& roots) : name(PipeName()) {
+  State(const Roots& roots, HANDLE build_prop, HANDLE framework_res) : name(PipeName()) {
     if (!Retain(roots.credential, &ce_, 0, DUPLICATE_SAME_ACCESS) ||
-        !Retain(roots.device, &de_, 0, DUPLICATE_SAME_ACCESS)) {
+        !Retain(roots.device, &de_, 0, DUPLICATE_SAME_ACCESS) ||
+        (build_prop && !Retain(build_prop, &build_prop_, 0, DUPLICATE_SAME_ACCESS)) ||
+        (framework_res && !Retain(framework_res, &framework_res_, 0, DUPLICATE_SAME_ACCESS))) {
       ce_.reset();
       de_.reset();
     }
@@ -267,7 +281,8 @@ class Server::State {
     bool created = false;
     wire::Reply reply;
     wire::Filesystem filesystem{};
-    reply.status = Dispatch(roots(), request, path, target, &file, &created, &filesystem);
+    reply.status = Dispatch(roots(), request, path, target, &file, &created, &filesystem,
+                            build_prop_.get(), framework_res_.get());
     if (!IsLive()) return;
     const ULONGLONG send_deadline = GetTickCount64() + kOperationWindowMillis;
     if (file) {
@@ -318,13 +333,14 @@ class Server::State {
     }
   }
 
-  OwnedHandle ce_, de_, child_, job_;
+  OwnedHandle ce_, de_, child_, job_, build_prop_, framework_res_;
   Process launch_;
   std::atomic<bool> stopped_{false};
   std::array<Instance, 2> instances_;
 };
 
-Server::Server(const Roots& roots) : state_(new State(roots)) {}
+Server::Server(const Roots& roots, HANDLE build_prop, HANDLE framework_res)
+    : state_(new State(roots, build_prop, framework_res)) {}
 Server::~Server() = default;
 const std::wstring& Server::name() const { return state_->name; }
 DWORD Server::Start(HANDLE child, HANDLE job) { return state_->Start(child, job); }

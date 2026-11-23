@@ -93,6 +93,14 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       auto& selected = gesher::standalone_input::Current();
       const bool inherited = selected.Matches(windows);
       if (!inherited) {
+        if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
+          HANDLE h;
+          const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
+          if (error != 0) return errno = error, -1;
+          const int result = FromHandle(h, buf);
+          CloseHandle(h);
+          return result;
+        }
         if (const auto rooted = gesher::storage_root::Lookup(windows)) {
           HANDLE h;
           const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);

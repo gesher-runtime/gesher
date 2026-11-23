@@ -12,7 +12,7 @@ namespace gesher::rooted_storage {
 // retained Windows job can request operations on these host-selected roots.
 class Server {
  public:
-  explicit Server(const Roots& roots);
+  explicit Server(const Roots& roots, HANDLE build_prop = nullptr, HANDLE framework_res = nullptr);
   ~Server();
   Server(const Server&) = delete;
   Server& operator=(const Server&) = delete;

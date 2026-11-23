@@ -88,9 +88,10 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
       !binder_bootstrap::Transfer(pipe, reply, sizeof(*reply), false, deadline)) return EIO;
   if (reply->magic != wire::kMagic || reply->version != wire::kVersion || reply->status < 0 ||
       reply->status > 4095 || (reply->flags & ~wire::kCreated) != 0) return EPROTO;
-  if (reply->status != 0 || operation != wire::Op::kOpen) {
+  if (reply->status != 0 || !wire::OpensHandle(operation)) {
     if (reply->handle != 0 || reply->flags != 0) return EPROTO;
-  } else if (reply->handle == 0 || reply->handle == UINT64_MAX || reply->handle > UINTPTR_MAX) {
+  } else if (reply->handle == 0 || reply->handle == UINT64_MAX || reply->handle > UINTPTR_MAX ||
+             (operation != wire::Op::kOpen && reply->flags != 0)) {
     return EPROTO;
   }
   if (!state.VerifyPeer(pipe)) return EACCES;
@@ -174,12 +175,29 @@ std::wstring DescriptorPath(HANDLE file) {
   return {};
 }
 
-int Open(const Selection& path, uint32_t flags, HANDLE* file, bool* created) {
+std::optional<wire::Op> LookupBootstrap(const std::wstring& mapped) {
+  const auto& state = cohost_bootstrap::Current();
+  if (!state || (state.build_prop.empty() && state.framework_res.empty())) return std::nullopt;
+  const std::wstring absolute = AbsoluteDosPath(mapped);
+  static const std::array inputs{
+      std::pair{state.build_prop.empty() ? std::wstring{} : AbsoluteDosPath(state.build_prop),
+                wire::Op::kOpenBuildProp},
+      std::pair{state.framework_res.empty() ? std::wstring{} : AbsoluteDosPath(state.framework_res),
+                wire::Op::kOpenFrameworkRes},
+  };
+  for (const auto& [bound, operation] : inputs) {
+    if (absolute.size() == bound.size() && Within(absolute, bound)) return operation;
+  }
+  return std::nullopt;
+}
+
+static int OpenKind(wire::Op operation, const Selection& path, uint32_t flags,
+                    HANDLE* file, bool* created) {
   if (!file) return EINVAL;
   *file = INVALID_HANDLE_VALUE;
   if (created) *created = false;
   wire::Reply reply;
-  const int error = Call(wire::Op::kOpen, path, {}, flags, &reply);
+  const int error = Call(operation, path, {}, flags, &reply);
   if (error != 0) return error;
   HANDLE result = binder_bootstrap::DecodeHandle(reply.handle);
   if (GetFileType(result) != FILE_TYPE_DISK) {
@@ -189,6 +207,15 @@ int Open(const Selection& path, uint32_t flags, HANDLE* file, bool* created) {
   *file = result;
   if (created) *created = (reply.flags & wire::kCreated) != 0;
   return 0;
+}
+
+int Open(const Selection& path, uint32_t flags, HANDLE* file, bool* created) {
+  return OpenKind(wire::Op::kOpen, path, flags, file, created);
+}
+
+int OpenBootstrap(wire::Op operation, HANDLE* file) {
+  if (operation != wire::Op::kOpenBuildProp && operation != wire::Op::kOpenFrameworkRes) return EINVAL;
+  return OpenKind(operation, {true, 0, wire::kCredential, {}}, 0, file, nullptr);
 }
 
 int MakeDirectory(const Selection& path) {

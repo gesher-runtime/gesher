@@ -10,7 +10,12 @@ constexpr uint32_t kMagic = 0x47535253;  // GSRS
 constexpr uint32_t kVersion = 1;
 constexpr uint32_t kMaxPathUnits = 32767;
 
-enum class Op : uint32_t { kOpen = 1, kMakeDirectory, kRemove, kRename, kStatAndroidData };
+enum class Op : uint32_t {
+  kOpen = 1, kMakeDirectory, kRemove, kRename, kStatAndroidData, kOpenBuildProp, kOpenFrameworkRes,
+};
+constexpr bool OpensHandle(Op op) {
+  return op == Op::kOpen || op == Op::kOpenBuildProp || op == Op::kOpenFrameworkRes;
+}
 constexpr uint32_t kCredential = 0;
 constexpr uint32_t kDevice = 1;
 

@@ -1283,6 +1283,8 @@ DWORD PrepareCohost(const CohostSpec& services, CohostHandles* handles) {
       cohost_bootstrap::Store(&record->device_canonical, Wide(services.device_canonical)) &&
       cohost_bootstrap::Store(&record->credential_nt, Wide(services.credential_nt)) &&
       cohost_bootstrap::Store(&record->device_nt, Wide(services.device_nt)) &&
+      cohost_bootstrap::Store(&record->build_prop, Wide(services.build_prop)) &&
+      cohost_bootstrap::Store(&record->framework_res, Wide(services.framework_res)) &&
       cohost_bootstrap::Store(&record->storage_pipe, Wide(services.storage_pipe)) &&
       cohost_bootstrap::Store(&record->permission_pipe, Wide(services.permission_pipe));
   UnmapViewOfFile(bytes);

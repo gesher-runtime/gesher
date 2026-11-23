@@ -5,6 +5,7 @@
 
 #include <gesher/system_properties.h>
 #include <gesher/environment.h>
+#include <gesher/cohost_bootstrap.h>
 
 #include <windows.h>
 
@@ -19,6 +20,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "rooted_storage_client.h"
 
 namespace gesher::properties {
 namespace {
@@ -66,6 +69,7 @@ struct Area {
   void* view = nullptr;
   uint32_t cached_generation = 0;
   Snapshot values;
+  Snapshot overrides;
   std::wstring root, path, persistent;
   bool writable = false;
   ~Area() { if (view) UnmapViewOfFile(view); }
@@ -197,17 +201,20 @@ bool Decode(const std::string& data, Snapshot* values) {
   *values = std::move(parsed);
   return true;
 }
+bool ReadContents(HANDLE file, std::string* data) {
+  LARGE_INTEGER size;
+  if (!GetFileSizeEx(file, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
+  data->resize(static_cast<size_t>(size.QuadPart));
+  DWORD count = 0;
+  return ReadFile(file, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
+         count == data->size();
+}
 bool Read(const std::wstring& path, std::string* data, bool optional) {
   Handle file;
   file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file.value == INVALID_HANDLE_VALUE) return optional && GetLastError() == ERROR_FILE_NOT_FOUND;
-  LARGE_INTEGER size;
-  if (!GetFileSizeEx(file.value, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
-  data->resize(static_cast<size_t>(size.QuadPart));
-  DWORD count = 0;
-  return ReadFile(file.value, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
-         count == data->size();
+  return ReadContents(file.value, data);
 }
 bool WritePersistent(const std::wstring& path, const Snapshot& values) {
   std::string data = Encode(values);
@@ -280,6 +287,38 @@ Snapshot Initial() {
   }
   return values;
 }
+
+bool LoadBootstrapOverrides(Area* area) {
+  if (area->writable) return true;
+  const auto& scope = cohost_bootstrap::Current();
+  if (!scope || scope.build_prop.empty()) return true;
+  Handle file;
+  if (storage_root::OpenBootstrap(rooted_storage_wire::Op::kOpenBuildProp, &file.value) != 0) return false;
+  std::string data;
+  if (!ReadContents(file.value, &data)) return false;
+  for (size_t start = 0; start < data.size();) {
+    const size_t end = data.find('\n', start);
+    const std::string line = Trim(data.substr(start, end == std::string::npos ? end : end - start));
+    start = end == std::string::npos ? data.size() : end + 1;
+    if (line.empty() || line.front() == '#') continue;
+    const size_t equal = line.find('=');
+    if (equal == 0 || equal == std::string::npos) continue;
+    std::string name = Trim(line.substr(0, equal));
+    if (!name.empty() && name.back() == '?') name = Trim(name.substr(0, name.size() - 1));
+    std::string text = Trim(line.substr(equal + 1));
+    if (!Valid(name, text)) continue;
+    const auto existing = area->values.find(name);
+    const bool present = existing != area->values.end();
+    // Match the standalone Java loader. Existing ro.* properties stay
+    // immutable, and an assignment of the existing value changes no serial.
+    if (present && (name.starts_with("ro.") || existing->second.text == text)) continue;
+    Value update{text, Serial(name, text, present ? existing->second.serial : 0, present)};
+    area->values[name] = update;
+    area->overrides[name] = std::move(update);
+  }
+  return true;
+}
+
 bool Refresh(Area* area) {
   const auto* header = static_cast<const Header*>(area->view);
   for (int attempt = 0; attempt < 8; ++attempt) {
@@ -295,6 +334,7 @@ bool Refresh(Area* area) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
     if (used > kCapacity || !Decode(data, &area->values)) return false;
+    for (const auto& [name, value] : area->overrides) area->values[name] = value;
     area->cached_generation = generation;
     return true;
   }
@@ -418,7 +458,7 @@ Area* Current() { // LocalMutex is held by every caller.
     header->version = kVersion;
     if (!Publish(area.get(), std::move(initial))) return nullptr;
   }
-  if (!Refresh(area.get()) || !InheritRoot(session, data)) return nullptr;
+  if (!Refresh(area.get()) || !LoadBootstrapOverrides(area.get()) || !InheritRoot(session, data)) return nullptr;
   Area* result = area.get();
   auto inserted = cached.emplace(session, std::move(area));
   last_session = &inserted.first->first;

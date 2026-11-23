@@ -18,13 +18,15 @@ namespace gesher::cohost_bootstrap {
 // handle pins the live native server generation without any control rights.
 struct Metadata {
   uint32_t magic = 0x47434f48;  // GCOH
-  uint32_t version = 2;
+  uint32_t version = 3;
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> credential{};
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> device{};
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> credential_canonical{};
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> device_canonical{};
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> credential_nt{};
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> device_nt{};
+  std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> build_prop{};
+  std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> framework_res{};
   std::array<wchar_t, 256> storage_pipe{};
   std::array<wchar_t, 256> permission_pipe{};
 };
@@ -68,14 +70,16 @@ class Binding {
     const auto* metadata = static_cast<const Metadata*>(
         MapViewOfFile(section_, FILE_MAP_READ, 0, 0, sizeof(Metadata)));
     if (metadata == nullptr) return;
-    valid_ = metadata->magic == 0x47434f48 && metadata->version == 2 &&
+    valid_ = metadata->magic == 0x47434f48 && metadata->version == 3 &&
         Load(metadata->credential, &credential) && Load(metadata->device, &device) &&
         Load(metadata->credential_canonical, &credential_canonical) &&
         Load(metadata->device_canonical, &device_canonical) &&
         Load(metadata->credential_nt, &credential_nt) && Load(metadata->device_nt, &device_nt) &&
+        Load(metadata->build_prop, &build_prop) && Load(metadata->framework_res, &framework_res) &&
         Load(metadata->storage_pipe, &storage_pipe) && Load(metadata->permission_pipe, &permission_pipe) &&
         ((!storage_pipe.empty() && !credential.empty() && !device.empty()) ||
-         (storage_pipe.empty() && credential.empty() && device.empty())) &&
+         (storage_pipe.empty() && credential.empty() && device.empty() &&
+          build_prop.empty() && framework_res.empty())) &&
         (!storage_pipe.empty() || !permission_pipe.empty());
     UnmapViewOfFile(metadata);
   }
@@ -113,6 +117,8 @@ class Binding {
   std::wstring device_canonical;
   std::wstring credential_nt;
   std::wstring device_nt;
+  std::wstring build_prop;
+  std::wstring framework_res;
   std::wstring storage_pipe;
   std::wstring permission_pipe;
   HANDLE storage_host = nullptr;

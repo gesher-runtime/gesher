@@ -199,6 +199,21 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     if (owned == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
     return FdFromHandle(owned, flags);
   }
+  if (const auto bootstrap = storage_root::LookupBootstrap(path)) {
+    if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
+    if ((flags & (O_CREAT | O_TRUNC)) != 0 || (Access(flags) & GENERIC_WRITE) != 0) {
+      return errno = EACCES, -1;
+    }
+    HANDLE owned;
+    const int error = storage_root::OpenBootstrap(*bootstrap, &owned);
+    if (error != 0) return errno = error, -1;
+    if ((flags & O_CLOEXEC) == 0 && !SetHandleInformation(owned, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+      const int result = FailWithLastError();
+      CloseHandle(owned);
+      return result;
+    }
+    return FdFromHandle(owned, flags);
+  }
   if (const auto rooted = storage_root::Lookup(path)) {
     namespace wire = rooted_storage_wire;
     uint32_t access = wire::kMetadata;

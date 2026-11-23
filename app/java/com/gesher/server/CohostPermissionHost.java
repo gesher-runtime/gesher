@@ -62,6 +62,23 @@ final class CohostPermissionHost implements AutoCloseable {
                 capabilities.add(AppSandbox.PRIVATE_NETWORK);
             }
             List<String> arguments = new ArrayList<>(options);
+            String buildProp = null;
+            String frameworkRes = null;
+            for (int i = 0; i < arguments.size(); ++i) {
+                switch (arguments.get(i)) {
+                    case "--build-prop", "--framework-res" -> {
+                        String option = arguments.get(i);
+                        if (++i == arguments.size()) throw new IllegalArgumentException("Missing " + option + " file");
+                        String selected = new java.io.File(arguments.get(i)).getAbsolutePath();
+                        arguments.set(i, selected);
+                        if ("--build-prop".equals(option)) buildProp = Zygote.windowsPath(selected);
+                        else frameworkRes = Zygote.windowsPath(selected);
+                    }
+                    case "--display", "--activity" -> i++;
+                    case "--ez" -> i += 2;
+                    default -> { }
+                }
+            }
             if (dataDir != null) {
                 arguments.add("--data-dir");
                 arguments.add(code.credentialProtectedDataDir());
@@ -72,7 +89,7 @@ final class CohostPermissionHost implements AutoCloseable {
             return input().runCohost(command, profile, code.packageName,
                     capabilities.toArray(String[]::new), code.uid(), this,
                     Zygote.windowsPath(code.credentialProtectedDataDir()),
-                    Zygote.windowsPath(code.deviceProtectedDataDir()), streams);
+                    Zygote.windowsPath(code.deviceProtectedDataDir()), streams, buildProp, frameworkRes);
         } finally {
             Zygote.nativeDeleteAppContainer(profile);
         }

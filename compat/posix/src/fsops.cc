@@ -319,6 +319,14 @@ int Access(const char* path, int mode, bool follow) {
   if (gesher::standalone_input::Current().Matches(windows)) {
     return (mode & (W_OK | X_OK)) != 0 ? (errno = EACCES, -1) : 0;
   }
+  if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
+    if ((mode & (W_OK | X_OK)) != 0) return errno = EACCES, -1;
+    HANDLE h;
+    const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
+    if (error != 0) return errno = error, -1;
+    CloseHandle(h);
+    return 0;
+  }
   const auto rooted = gesher::storage_root::Lookup(windows);
   HANDLE h;
   if (rooted) {
