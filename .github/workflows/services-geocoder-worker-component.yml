@@ -41,9 +41,10 @@ jobs:
             'tests/windows/helpers/pid-census-exit-probe.ps1' = '21926a098bfc48e86b5723765ae3f4234615b5ab'
             'tests/windows/helpers/PidCensusExitProbe.cs' = 'c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9'
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
-            # The shared track's existing camera callback-admission gate and
-            # geocoder implementation retain their original pin.
-            'tests/windows/tracks/58-devices.ps1' = 'b912825df72db2afdd06c65edf760cc03c78e650'
+            # The reviewed shared track includes sensor flush, current camera grant
+            # admission, explicit fixture permissions and the camera callback-admission
+            # gate. Its geocoder implementation retains the existing validation.
+            'tests/windows/tracks/58-devices.ps1' = '0cddb9e852a5c96291a86255738727a27a3996cd'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

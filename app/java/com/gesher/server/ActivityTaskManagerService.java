@@ -44,6 +44,8 @@ import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IRemoteCallback;
@@ -191,6 +193,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         Configuration config;
         /** Actual manual-driver lifecycle; null for a server-driven application. */
         State inProcessActivityState;
+        InProcessActivity inProcessActivity;
         /** Actual activity-start history for BIND_ALLOW_OOM_MANAGEMENT; owned by this process. */
         boolean shortcutHasShownUi;
         final List<ActivityRecord> activities = new ArrayList<>();
@@ -688,6 +691,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return app;
     }
 
+    private record InProcessActivity(Binder token, Handler handler,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {}
+
+    private boolean isCurrentInProcessApplication(ProcessRecord app) {
+        return app != null && app.inProcessActivityState != null && app.ready
+                && !app.dead && !app.exiting && !app.pidSuperseded
+                && attachedProcessByPid(app.pid) == app
+                && app.packageCode != null && mPm.get(app.packageName) == app.packageCode
+                && !mPm.isRemovalPending(app.packageName)
+                && app.packageCode.matchesEnabledApplication(0)
+                && (app.enabledProcessLifetime == null || app.enabledProcessLifetime.getAsBoolean());
+    }
+
+    synchronized Binder registerInProcessActivity(ProcessRecord app,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {
+        if (!isCurrentInProcessApplication(app) || app.inProcessActivity != null
+                || app.pid != Binder.getCallingPid() || app.uid != Binder.getCallingUid()) {
+            throw new SecurityException("Standalone activity requires its admitted process");
+        }
+        Binder token = new Binder("Standalone activity");
+        app.inProcessActivity = new InProcessActivity(token, new Handler(Looper.getMainLooper()),
+                Objects.requireNonNull(active), Objects.requireNonNull(result));
+        return token;
+    }
+
     /** Manual-driver lifecycle is used for AppOps state, never as proof of Windows focus. */
     synchronized void inProcessActivityState(ProcessRecord app, State state) {
         if (app.inProcessActivityState == null || app.dead || app.exiting
@@ -708,6 +736,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.ready = false;
             app.exiting = true;
             app.inProcessActivityState = State.STOPPED;
+            app.inProcessActivity = null;
         }
         processDied(app);
     }
@@ -2156,24 +2185,50 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         mAm.callers().requirePackage(callingPackage);
         final ActivityRecord source;
         final ProcessRecord process;
+        final InProcessActivity standalone;
         final ApkPackage captured;
         synchronized (this) {
             source = forToken(resultToToken);
-            if (source == null || source.app == null || source.finishing
-                    || source.state == State.DESTROYED || caller == null
-                    || source.app.pid != Binder.getCallingPid()
-                    || !caller.asBinder().equals(source.app.thread.asBinder())
-                    || !source.info.packageName.equals(callingPackage)) {
-                throw new SecurityException("Permission request must come from its own activity");
+            if (source == null) {
+                process = attachedProcessByPid(Binder.getCallingPid());
+                if (!isCurrentInProcessApplication(process) || process.inProcessActivity == null
+                        || process.inProcessActivity.token() != resultToToken || caller == null
+                        || Binder.getCallingUid() != process.uid
+                        || !caller.asBinder().equals(process.thread.asBinder())
+                        || !process.packageName.equals(callingPackage)
+                        || !process.inProcessActivity.active().getAsBoolean()) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                standalone = process.inProcessActivity;
+                captured = process.packageCode;
+            } else {
+                if (source.app == null || source.finishing || source.state == State.DESTROYED
+                        || caller == null || source.app.pid != Binder.getCallingPid()
+                        || !caller.asBinder().equals(source.app.thread.asBinder())
+                        || !source.info.packageName.equals(callingPackage)) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                process = source.app;
+                standalone = null;
+                captured = mPm.get(callingPackage);
             }
-            process = source.app;
-            captured = mPm.get(callingPackage);
         }
         if (intent.getIntExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_DEVICE_ID, 0) != 0) {
             throw new SecurityException("Only the default permission device is supported");
         }
         mPermissionRequests.request(captured,
                 intent.getStringArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_NAMES), data -> {
+                    if (standalone != null) {
+                        standalone.handler().post(() -> {
+                            synchronized (ActivityTaskManagerService.this) {
+                                if (!isCurrentInProcessApplication(process)
+                                        || process.inProcessActivity != standalone
+                                        || process.packageCode != captured) return;
+                            }
+                            standalone.result().dispatch(standalone.token(), resultWho, requestCode, data);
+                        });
+                        return;
+                    }
                     synchronized (ActivityTaskManagerService.this) {
                         if (source.app != process || source.finishing
                                 || source.state == State.DESTROYED || !mActivities.contains(source)
