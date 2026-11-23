@@ -22,7 +22,15 @@
 // Clock transport for the Linux lifecycle fixture. Suspend semantics are
 // exercised with the actual adapter in tools/test_clock_domains.py.
 namespace gesher {
+// The unity-rate transcript advances this by one nominal period per mix.
+// Lifecycle checks leave it disabled and use the host clock.
+inline thread_local int64_t fixture_playback_ns = -1;
 inline int AndroidClockGettime(clockid_t clock, timespec* value) {
+  if (clock == CLOCK_MONOTONIC && fixture_playback_ns >= 0) {
+    value->tv_sec = fixture_playback_ns / 1000000000;
+    value->tv_nsec = fixture_playback_ns % 1000000000;
+    return 0;
+  }
   return clock_gettime(clock, value);
 }
 inline int64_t MonotonicNanos() {

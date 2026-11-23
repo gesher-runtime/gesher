@@ -965,7 +965,7 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
       rs.Reset();
       starved_since_ns_ = -1;
     }
-  } else {
+  } else if (!starved) {
     starved_since_ns_ = -1;
   }
 
