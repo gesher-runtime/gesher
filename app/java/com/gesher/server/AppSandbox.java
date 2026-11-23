@@ -118,17 +118,18 @@ final class AppSandbox {
             throw new IllegalStateException("AppContainer property area for " + packageName
                     + ": Win32 error " + propertyError);
         }
-        // dalvikvm.exe's own directory: a Windows path already (GetModuleFileNameW).
-        String exeDir = exeDirectory();
-        if (exeDir == null && SystemServer.isProtectedDevice()) {
-            throw new IllegalStateException("The contained runtime directory is unavailable");
-        }
-        if (exeDir != null) {
-            int granted = Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, true);
-            checkGrant(granted, RUNTIME_FILES, exeDir);
-        }
-        for (String dir : runtimeDirectories()) {
-            grantCapability(dir, RUNTIME_FILES, READ_EXECUTE, true);
+        if (SystemServer.isProtectedDevice()) {
+            prepareStandaloneRuntime();
+        } else {
+            // The earlier developer fixture keeps its existing layout.
+            String exeDir = exeDirectory();
+            if (exeDir != null) {
+                checkGrant(Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, true),
+                        RUNTIME_FILES, exeDir);
+            }
+            for (String dir : runtimeDirectories()) {
+                grantCapability(dir, RUNTIME_FILES, READ_EXECUTE, true);
+            }
         }
         // The APK itself; its directory (and the oat files in it) only when it is the
         // package's own code directory under data/app. An APK run from where the user
@@ -210,14 +211,32 @@ final class AppSandbox {
     static void prepareStandaloneRuntime() {
         String exeDir = exeDirectory();
         if (exeDir == null) throw new IllegalStateException("The contained runtime is unavailable");
-        ensureGrant(Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, true),
+        String runtime = Zygote.fromWindowsPath(exeDir);
+        // Share the runtime files, not other files that happen to sit next to
+        // dalvikvm (including a standalone APK or DEX chosen by the caller).
+        ensureGrant(Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, false),
                 RUNTIME_FILES, exeDir);
-        for (String path : runtimeDirectories()) {
-            if (!new File(path).isDirectory()) continue;
-            String windows = Zygote.windowsPath(path);
-            ensureGrant(Zygote.nativeGrantToCapability(windows, RUNTIME_FILES, READ_EXECUTE, true),
-                    RUNTIME_FILES, windows);
+        for (String name : List.of("dalvikvm.exe", "gesher-exec.exe", "gesher_arm64.dll",
+                "libEGL.dll", "libGLESv2.dll", "WebView2Loader.dll", "libgesher_webview_bridge.so",
+                "framework-res.apk", "build.prop")) {
+            grantRuntimePath(new File(runtime, name), false);
         }
+        grantRuntimePath(new File(runtime, "framework"), true);
+        for (String name : List.of("ANDROID_ROOT", "ANDROID_ART_ROOT", "ANDROID_I18N_ROOT",
+                "ANDROID_TZDATA_ROOT")) {
+            String directory = System.getenv(name);
+            if (directory != null && !directory.isEmpty()) grantRuntimePath(new File(directory), true);
+        }
+        for (String jar : System.getProperty("java.boot.class.path", "").split(":")) {
+            if (!jar.isEmpty()) grantRuntimePath(new File(jar), false);
+        }
+    }
+
+    private static void grantRuntimePath(File path, boolean inherit) {
+        if (!path.exists()) return;
+        String windows = Zygote.windowsPath(path.getPath());
+        ensureGrant(Zygote.nativeGrantToCapability(windows, RUNTIME_FILES, READ_EXECUTE, inherit),
+                RUNTIME_FILES, windows);
     }
 
     private static void grantCapability(String path, String capability, int access,

@@ -53,11 +53,15 @@
 
 #include "../posix/src/binder_wire.h"
 #include "../posix/include/gesher/windows_process_identity.h"
-#include "../posix/include/gesher/audio_playback_activity.h"
+#include "../posix/include/gesher/audio_device_state.h"
 #include "../framework/app_container.h"
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 #include "launch_channel.h"
+#ifdef GESHER_AUDIO_RENDER_BROKER
+#include "brokered_audio.h"
+#include "shared_state.h"
+#endif
 #ifdef GESHER_RECORD_LOCK_BROKER
 #include "../posix/src/record_lock_descriptors.h"
 #endif
@@ -1855,7 +1859,7 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
   if (ReplyRecordLock(pipe, error, result)) WaitForClient(pipe, false);
 }
 
-namespace playback = gesher::audio_playback;
+namespace playback = gesher::audio_state;
 
 struct AudioRegion {
   peer::OwnedHandle section;
@@ -1867,6 +1871,30 @@ using WeakPeer = std::weak_ptr<const peer::Peer>;
 std::map<WeakPeer, AudioRegion, std::owner_less<WeakPeer>> g_audio_activity;
 std::mutex g_audio_lock;
 uint32_t g_next_audio_session = 1;  // guarded by g_audio_lock
+peer::OwnedHandle g_audio_device_controls;
+playback::DeviceState* g_audio_controls_view = nullptr;
+
+bool PrepareAudioDeviceControls() {
+  if (!g_audio_device_controls) {
+    peer::OwnedHandle section(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                                 sizeof(playback::DeviceState), nullptr));
+    if (!section) return false;
+    auto* state = static_cast<playback::DeviceState*>(
+        MapViewOfFile(section.get(), FILE_MAP_WRITE, 0, 0, sizeof(playback::DeviceState)));
+    if (!state) return false;
+    playback::InitDeviceState(state);
+    g_audio_device_controls = std::move(section);
+    g_audio_controls_view = state;
+  }
+  return true;
+}
+
+HANDLE DuplicateAudioDeviceControls(const peer::Registry::Lease& process, bool writable) {
+  if (!PrepareAudioDeviceControls()) return nullptr;
+  HANDLE child = nullptr;
+  return DuplicateHandle(GetCurrentProcess(), g_audio_device_controls.get(), process->process.get(),
+                         &child, writable ? FILE_MAP_WRITE : FILE_MAP_READ, FALSE, 0) ? child : nullptr;
+}
 
 bool AudioPeer(const peer::Registry::Lease& process) {
   return process && (process->role == peer::Role::kApplication ||
@@ -1924,6 +1952,17 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
         }
       } else if (op == wire::kAudioPlaybackSession && g_next_audio_session < INT_MAX / 8u) {
         result = (g_next_audio_session++ << 3) | 1u;
+      } else if (op == wire::kAudioDeviceControls && stream <= 1) {
+        const bool writable = stream == 1;
+        // A record-only broker belongs to one standalone app's process tree.
+        // Only the real SystemServer sets shared controls for a normal device.
+        if (writable && !g_record_only && process->role != peer::Role::kSystemServer) {
+          status = -EACCES;
+        } else {
+          const HANDLE section = DuplicateAudioDeviceControls(process, writable);
+          if (section) result = launch::EncodeHandle(section);
+          else status = -EIO;
+        }
       } else {
         status = -EINVAL;
       }
@@ -1934,6 +1973,37 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
   reply.Put<uint64_t>(result);
   if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
 }
+
+#ifdef GESHER_AUDIO_RENDER_BROKER
+std::set<std::pair<DWORD, uint64_t>> g_audio_renderers;
+
+void ServeAudioRender(HANDLE pipe, In in) {
+  uint32_t version = 0, length = 0;
+  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
+      !in.Get(&length) || length > gesher::media::kAudioRenderLabelChars ||
+      static_cast<size_t>(in.end - in.p) != length * sizeof(char16_t)) return;
+  const auto process = g_peer_registry->Authenticate(pipe);
+  if (!process || process->role != peer::Role::kApplication) return;
+  std::u16string label(length, u'\0');
+  if (!in.Read(label.data(), length * sizeof(char16_t))) return;
+  for (char16_t& ch : label) {
+    if (ch < u' ') ch = u' ';
+  }
+  const auto id = std::pair{process->generation.pid, process->generation.birth};
+  {
+    std::lock_guard<std::mutex> lock(g_audio_lock);
+    if (!PrepareAudioDeviceControls() || !g_audio_renderers.insert(id).second) return;
+    gesher::media::UseBrokerAudioControls(g_audio_controls_view);
+  }
+  gesher::media::ServeBrokeredAudio(pipe, label, process->generation.pid, [&] {
+    return g_peer_registry->Live(process);
+  });
+  {
+    std::lock_guard<std::mutex> lock(g_audio_lock);
+    g_audio_renderers.erase(id);
+  }
+}
+#endif
 
 void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
   uint32_t version = 0;
@@ -2376,7 +2446,7 @@ bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
   uint32_t length = 0;
   if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) ||
       !launch::Transfer(pipe, &length, sizeof(length), false, deadline) ||
-      length < 2 * sizeof(uint32_t) || length > 64) return false;
+      length < 2 * sizeof(uint32_t) || length > 256) return false;
   request->resize(length);
   return launch::Transfer(pipe, request->data(), length, false, deadline);
 }
@@ -2393,8 +2463,12 @@ void Serve(HANDLE pipe) {
       } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
         ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
       } else if (op == wire::kAudioPlaybackPublish || op == wire::kAudioPlaybackQuery ||
-                 op == wire::kAudioPlaybackSession) {
+                 op == wire::kAudioPlaybackSession || op == wire::kAudioDeviceControls) {
         ServeAudioPlayback(pipe, in, op);
+#ifdef GESHER_AUDIO_RENDER_BROKER
+      } else if (op == wire::kAudioRender) {
+        ServeAudioRender(pipe, in);
+#endif
 #endif
       } else if (!g_record_only) {
         if (op == wire::kHelloProc || op == wire::kHelloOperator) {

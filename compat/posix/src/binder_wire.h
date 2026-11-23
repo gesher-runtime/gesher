@@ -131,6 +131,11 @@ enum Op : uint32_t {
   kAudioPlaybackPublish = 17,
   kAudioPlaybackQuery = 18,
   kAudioPlaybackSession = 19,
+  // Audio request framing, with the writable flag in the stream field.
+  kAudioDeviceControls = 20,
+  // Open a bounded protected WASAPI render connection. The payload is a
+  // version and a UTF-16 label, followed by the audio_render protocol.
+  kAudioRender = 21,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

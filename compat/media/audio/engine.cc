@@ -16,6 +16,8 @@
 #include "log.h"
 #include "shared_state.h"
 #include "sink.h"
+#include "brokered_audio.h"
+#include <gesher/binder_endpoint.h>
 
 namespace gesher::media {
 
@@ -293,7 +295,8 @@ class Engine : public Mixer {
       std::lock_guard<std::mutex> lock(mu_);
       name = app_name_;
     }
-    auto s = OpenWasapiSink(name, &error);
+    auto s = binder_endpoint::Current().IsGuest() ? OpenBrokeredAudio(name, &error)
+                                                 : OpenWasapiSink(name, &error);
     if (s != nullptr) return s;
     if (first || error != last_error_) MEDIA_LOGW("audio output: %s", error.c_str());
     last_error_ = error;
