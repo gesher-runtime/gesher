@@ -46,10 +46,17 @@ def main() -> int:
         if len(matches) != 1:
             raise ValueError("missing or ambiguous public registration: " + name)
         registrations.extend(matches)
+    host_implementation = section(host, "// --- statvfs ---", "// --- mount ---")
+    rooted_storage = "gesher::storage_root::HasBroker()" in host_implementation
+    wire_declarations = ""
+    if rooted_storage:
+        wire_header = ROOT / "compat/posix/include/gesher/rooted_storage_wire.h"
+        wire_declarations = re.sub(r"^#pragma once$\n", "", wire_header.read_text(encoding="utf-8"), flags=re.M)
     replacements = {
+        "@ROOTED_STORAGE_WIRE@": wire_declarations,
         "@HOST_TYPES@": section(header, "typedef unsigned long long fsblkcnt_t;", "#define ST_RDONLY"),
         "@FILL_IMPLEMENTATION@": section(host, "void FillStatvfs(", '\n}  // namespace\n\nextern "C"'),
-        "@HOST_IMPLEMENTATION@": section(host, "// --- statvfs ---", "// --- mount ---"),
+        "@HOST_IMPLEMENTATION@": host_implementation,
         "@GUEST_IMPLEMENTATION@": section(guest, "// bionic's struct statvfs:", "// pathconf/fpathconf"),
         "@PUBLIC_REGISTRATIONS@": "\n".join(registrations),
     }
@@ -67,7 +74,8 @@ def main() -> int:
         generated.write_text(template, encoding="utf-8")
         command = shlex.split(args.cxx) + [
             "-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fno-exceptions",
-            "-fno-builtin", "-I", str(ROOT / "compat/bionic"),
+            "-fno-builtin", f"-DSTATVFS_HAS_ROOTED_STORAGE={int(rooted_storage)}",
+            "-I", str(ROOT / "compat/bionic"),
             "-I", str(ROOT / "compat/arm64/include"), str(generated), "-o", str(executable),
         ]
         if args.sanitize:
