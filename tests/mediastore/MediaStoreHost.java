@@ -407,7 +407,22 @@ public final class MediaStoreHost {
         check(rows(index.query(camera, dupUri, null, args())).isEmpty(), "deleted row is gone");
         check(index.delete(legacy, Uri.parse(IMAGES + "/" + ContentUris.parseId(noExtUri)), args()) == 1,
                 "a legacy writer deletes another app's image");
-        pass("media: delete(uri) removes the owner's row and file; others' rows need write access");
+        ContentValues trash = new ContentValues();
+        trash.put("is_trashed", 1);
+        check(index.update(camera, photo, trash, args()) == 1, "the owner trashes its item");
+        Map<String, String> trashedRow = rows(index.query(camera, photo, null, args())).get(0);
+        check(new File(trashedRow.get("_data")).getName().startsWith(".trashed-") && !finalFile.exists()
+                && rows(index.query(camera, IMAGES, null, args("_id=?", new String[] {Long.toString(photoId)}, null))).isEmpty(),
+                "a trashed item is renamed .trashed-<expires>-<name> and leaves default queries");
+        trash.put("is_trashed", 0);
+        check(index.update(camera, photo, trash, args()) == 1 && finalFile.isFile(), "untrashing restores the file");
+        App manager = new App("com.example.files", 10111, 35, MediaStoreIndex.MANAGE_EXTERNAL_STORAGE);
+        check(rows(index.query(manager, FILES, null, args())).size() >= 5, "MANAGE_EXTERNAL_STORAGE reads every row");
+        ContentValues tag = new ContentValues();
+        tag.put("is_favorite", 1);
+        check(index.update(manager, photo, tag, args()) == 1, "MANAGE_EXTERNAL_STORAGE writes others' items");
+        pass("media: delete(uri) removes the owner's row and file; others' rows need write access; "
+                + "the owner trashes/untrashes; MANAGE_EXTERNAL_STORAGE has global access");
 
         // ---- 7. scanning files written directly ------------------------------------------
         File dcim = new File(volume, "DCIM/Camera");
