@@ -10184,5 +10184,1300 @@
     "cpu family\t: 6",
     "model\t\t: 207",
     "model name\t: INTEL(R) XEON(R) PLATINUM 8573C"
-  ]
+  ],
+  "main_composition": {
+    "feature": "95370dc8d0d408a64e64854c9fc387941a5b2d96",
+    "main": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+    "local_merge": "01f4abe12a313192d95ddc058871a7055f58f22c",
+    "tree": "f55af7a61c415a940cd32aa33c257228933e9beb",
+    "feature_only_unchanged": 9,
+    "incoming_only_unchanged": 75,
+    "overlap": [
+      ".github/workflows/ci.yml"
+    ],
+    "source_files": [
+      {
+        "path": "compat/devices/camera_frames.cc",
+        "sha256": "afa6fcffb4ad9753d9086e01e631adeb723b074bde6edb7fd83b987c291db152"
+      },
+      {
+        "path": "compat/media/jni/media_codec_jni.cc",
+        "sha256": "6d8c93c1dc87fcb65a28ef4d30ee6aa18939d4a3410d631c57d770cf1ba23976"
+      },
+      {
+        "path": "tests/media/codec_reader_delivery_host.cc.in",
+        "sha256": "41bbdef0c65d670fca6c93b545c535f89cc42c492abb495cfc6c0be99ae7b80d"
+      },
+      {
+        "path": "tests/media/image_reader_rgba_contract.inc",
+        "sha256": "9af3afb0bdc60cca6ec447b02d4b44835a3c1ece7a6ec98a0a4b0813f963662e"
+      },
+      {
+        "path": "tests/media/image_reader_rgba_vm.inc",
+        "sha256": "7b7fe8cf973fedbd699d41f1251f123d7845bb1981424462b822d5df249ac40f"
+      },
+      {
+        "path": "tools/test_codec_reader_delivery.py",
+        "sha256": "f08c8203a0745c5b04c4d884514d860f941e69fabec11b4c6eb4944e5ded28ad"
+      },
+      {
+        "path": "tools/test_image_reader_rgba.py",
+        "sha256": "d746e678d9cbb5fd7ff33990d0ad3543c32665010d5aab9402a63423ca0ff35e"
+      },
+      {
+        "path": "tools/benchmark_image_reader_rgba.py",
+        "sha256": "48c9c8839de3d849537473b70258a7b85085645ada6e2d6c48bb4aefc234eb14"
+      },
+      {
+        "path": "tests/dex-services/gesher/services/SurfaceParcelTest.java",
+        "sha256": "31f8fa36e3599e5cef8f83b91736686feff2c9a2af0217c4e6e6579a168b0cbf"
+      }
+    ]
+  },
+  "target_compilation": {
+    "patches": [
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/system/core/0001-gesher-compat-open-flags.patch",
+        "sha256": "bdd951b654afb53a87059e0f6223e0421b6a563c437cde30852b1c6bc84db66e"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/system/core/0002-cutils-sockets-unix-on-gesher.patch",
+        "sha256": "593df9e1f8a22c83340d40eca9873ba768a4bbdd355c0fc1f62e2cccf025460d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/system/core/0003-libutils-posix-threads-on-gesher.patch",
+        "sha256": "c9fe947889e0e830e3e7a6a26b8a0a280560102058ca4e8c8609926da807c539"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/system/core/0004-core-tests-on-gesher.patch",
+        "sha256": "da7b44bd30ed400af9eff66b2f74f1a8e9ea2a354592b536a8bec48828cb6154"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/system/core/0005-libutils-filemap-zero-length-on-gesher.patch",
+        "sha256": "54c2c5761a095ecc2353abc2279d2009a3deeb60a04081e56e62dbfea47a039f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/system/core/0006-libutils-monotonic-clocks-on-gesher.patch",
+        "sha256": "1127aadbcba1ee3f5c1aa97542103a5e583c41e69980959c316b5261b33d195f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0001-gesher-jni-helpers.patch",
+        "sha256": "ac3ad7398f8c0c0b77aecb0e300f204a9c51a4f6272b4fd56a5052909ae419bc"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0002-sysv-jni-tables.patch",
+        "sha256": "fc9f8def4f32c175a07d1033a3109cf27999ec763c73c4bba18b518d4764556b"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0003-androidfw-gesher-posix.patch",
+        "sha256": "2aa352535a8fff086663080893a992529181b6e18131d679be2597920bfbb7e9"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0004-androidfw-device-sources-and-tests.patch",
+        "sha256": "9df530f2f88842b343194c1cbee0ab398bc2e773d40dd4b34ccae798d3e8bf06"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0100-graphics-hwui-jni-helpers.patch",
+        "sha256": "f6670f3dbc54f3675527dac9583eba2d3af26422e12c0ade40450883f05ba096"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0101-graphics-hwui-sysv-jni-tables.patch",
+        "sha256": "d0f31bab590ed6d1c756f518ca913ce996e42bd581e887f4330463defe516958"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0102-graphics-hwui-critical-native.patch",
+        "sha256": "254e7ba89f6dd26c8236b596c78d453c256374c4edb8130ef88d63525893c266"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0103-graphics-hwui-cpu-pipeline-present.patch",
+        "sha256": "ac3fb7a2d7a1d320f7ae8c385a14c8929eef9242a6bc0fd2e8b9546e68338682"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0200-e2e-sysv-jni-tables.patch",
+        "sha256": "1054bec014f792778600e44d2233d4ea454cce1ebcf8acb12a2d8f5b5cfc10d9"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0300-media-surfaceview-frames-without-compositor.patch",
+        "sha256": "079d894dc143e64db5c241724602da0c2b6ef0945b90f6923d36eefb4b3c206c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0450-posix-fileobserver-inotify.patch",
+        "sha256": "96b947d75dd33ddc9c2725fd3d2b5229f6d85eeead64069f113d7188d6bd4a4d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0591-media3-optional-session2-manager.patch",
+        "sha256": "ac2905d6c03fe65432242b6847977d20942e725168b79a13fa5db4f09659d082"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0620-native3-host-abitmap-software.patch",
+        "sha256": "114ef4df3203b24a3256f0b930a6fb632c73d8be12d5a8a0cf3cd165b7ee8efd"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0650-aot3-close-failed-jar-open.patch",
+        "sha256": "006e81114fb09a2b0da32588ba42701528bacc751d40e0275f4b808c0a2d82cf"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0760-gl-sysv-jni-tables.patch",
+        "sha256": "59bb75f7d2b1dd76d7141f32f51454c064d119c5913631037e2b8e439b8fcbe1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0780-cursorwindow-parcel-jni-windows.patch",
+        "sha256": "77048e4d5a58f885a5b8efceb3a279ac99d45287405f603dc6a07227c3b2408e"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0781-sqlite-raw-statement-jlong-windows.patch",
+        "sha256": "c9f355ebf3b9da5037ed1c8cf26889714ced9341576f532fc0de39cd8abf51ac"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0782-webview-lazy-provider-windows.patch",
+        "sha256": "9b27cadd76047e3a6c2e70ca101d3c4555fa77f0cf7a78c11c11ea7e8f4645cc"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0783-parser-apk-assets-lifetime.patch",
+        "sha256": "3c43ce3b033ea099783028b6d8b4428f8045c25b9cfe7008ba8c823235ed7445"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0784-speech-recognition-connection-lifecycle.patch",
+        "sha256": "1f6019b5f86e643a3ca337d112afa99e7e010d86d344e0d2dfe7d35d2e3d8f20"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/frameworks/base/0785-bitmap-shared-storage-gesher.patch",
+        "sha256": "efb32053718abc7d1b2bc0fc5aec80b3e3d9939f646d2262264321b206f8458d"
+      }
+    ],
+    "results": [
+      {
+        "arch": "x86_64",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+          "-std=c++23",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-Wno-non-virtual-dtor",
+          "-Wno-deprecated-anon-enum-enum-conversion",
+          "-Wno-deprecated-copy",
+          "-Wno-inconsistent-missing-override",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/framework/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libcutils/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/libbase/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_jni",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/header_only_include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices/camera_frames.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/x86_64-camera_frames.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/x86_64.d"
+        ],
+        "returncode": 0,
+        "output": "",
+        "object_sha256": "10db0c5c09373b46cc637e8e5d2ab577a88f4cd4f62580672c83d22c264b18ff"
+      },
+      {
+        "arch": "aarch64",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+          "-std=c++23",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-Wno-non-virtual-dtor",
+          "-Wno-deprecated-anon-enum-enum-conversion",
+          "-Wno-deprecated-copy",
+          "-Wno-inconsistent-missing-override",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/framework/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libcutils/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/libbase/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_jni",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/header_only_include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices/camera_frames.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/aarch64-camera_frames.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/aarch64.d"
+        ],
+        "returncode": 1,
+        "output": "In file included from /workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices/camera_frames.cc:31:\nIn file included from /workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/core_jni_helpers.h:45:\n/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only/nativehelper/jni_macros.h:266:27: error: 'sysv_abi' calling convention is not supported for this target [-Werror,-Wignored-attributes]\n  266 |   static R __attribute__((sysv_abi)) Call(A... args) { return F(args...); }\n      |                           ^\n1 error generated.\n"
+      }
+    ],
+    "source_sha256": "afa6fcffb4ad9753d9086e01e631adeb723b074bde6edb7fd83b987c291db152",
+    "baseline": {
+      "ref": "8f53b6045e26f0bb4a482c69099d084db3e94963",
+      "source_sha256": "5cf8388aac7fe4cb5bc0977213e07ce03610a80947c0e11bcd5206cc638d41c4",
+      "results": [
+        {
+          "arch": "x86_64",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+            "-std=c++23",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-Wno-non-virtual-dtor",
+            "-Wno-deprecated-anon-enum-enum-conversion",
+            "-Wno-deprecated-copy",
+            "-Wno-inconsistent-missing-override",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/framework/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libcutils/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/libbase/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_jni",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/header_only_include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/baseline-camera_frames.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/x86_64-baseline-camera_frames.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/x86_64-baseline.d",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices"
+          ],
+          "returncode": 0,
+          "output": ""
+        },
+        {
+          "arch": "aarch64",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+            "-std=c++23",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-Wno-non-virtual-dtor",
+            "-Wno-deprecated-anon-enum-enum-conversion",
+            "-Wno-deprecated-copy",
+            "-Wno-inconsistent-missing-override",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/framework/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libcutils/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/libbase/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_jni",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/header_only_include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/baseline-camera_frames.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/aarch64-baseline-camera_frames.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-windows/aarch64-baseline.d",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices"
+          ],
+          "returncode": 1,
+          "output": "In file included from /workspace/scratch/aa09b1a0dc1f/media-camera-windows/baseline-camera_frames.cc:31:\nIn file included from /workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/core_jni_helpers.h:45:\n/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only/nativehelper/jni_macros.h:266:27: error: 'sysv_abi' calling convention is not supported for this target [-Werror,-Wignored-attributes]\n  266 |   static R __attribute__((sysv_abi)) Call(A... args) { return F(args...); }\n      |                           ^\n1 error generated.\n"
+        }
+      ]
+    },
+    "actual_compiled_inputs": [
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices/camera_frames.cc",
+        "sha256": "afa6fcffb4ad9753d9086e01e631adeb723b074bde6edb7fd83b987c291db152"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/dlfcn.h",
+        "sha256": "01fa1fa927595efe37d145b00658a959d47927ff47db2bb1e5d1e42f373488fb"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/gesher/builtin_library.h",
+        "sha256": "2f86c7aebced50820884297dd084df0e2ecd5a645f539d5fa42305e7a94274b8"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_jni/jni.h",
+        "sha256": "6bf820c7e2d01c0eb05e7907ccaeb15f0efdeef3d3ec99bb380c829b7a84448d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include/nativehelper/JNIHelp.h",
+        "sha256": "f5b78c75f404d1622fbe8cb40c55438e948d934ffe25d18a467ccf4346654b30"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/sys/cdefs.h",
+        "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/errno.h",
+        "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/stdio.h",
+        "sha256": "f6c4eda0b038078d19877a172476cf817509d957fe2f110f0c5902406691a029"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/sys/types.h",
+        "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/stdlib.h",
+        "sha256": "3459e9a3e6e4a34e7edaa87f43b699ddd0744aaaf629b8340ce0c40f1648b9a1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/string.h",
+        "sha256": "e974a535a22d1c55e902fc920cbcbba674d00ab5f6fc0ee2c5a4dc156d8e3230"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/unistd.h",
+        "sha256": "faa5a6a28c043c5c625f71ec7f366d0d9310e72c714403247d5caf94a64ef396"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+        "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/sys/time.h",
+        "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/header_only_include/nativehelper/scoped_local_ref.h",
+        "sha256": "d3cfeaedca89015cc1c1f24ad5e874d4eb838985b335e8cf2378b2e9d02ae723"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/header_only_include/nativehelper/nativehelper_utils.h",
+        "sha256": "e216014aef0ba4c7c889009a75e2fbcbcc33cc6ba8c2e98af42021d51da9dc8d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/Errors.h",
+        "sha256": "001f9c16788f4dbe3a6d70f2a8e9b55d6928f91e086de498d86ad327d869ff19"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/time.h",
+        "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/core_jni_helpers.h",
+        "sha256": "1c0f10d50c2adcd2a660a4ff25b74ad8b49b6a6fab6b9acd33707ab09d471003"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform/nativehelper/JNIPlatformHelp.h",
+        "sha256": "57ef3faa2a46d68ec7059d62d62fa4929f8884458f9e1b8889c01c60abba1c25"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include/android/file_descriptor_jni.h",
+        "sha256": "3f161955bdfd39b2c369638d0abf83112e09d9b38bb86a2ec74e82b90ec27a5e"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/header_only_include/nativehelper/scoped_utf_chars.h",
+        "sha256": "1c42c156fb3731b129bc638cbe09b51555c62d21e6bd05846e36dc3a4c27b849"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/include/android_runtime/AndroidRuntime.h",
+        "sha256": "6d518a63b8a6918f5428b02e7b2e05e252b89e55d3660a32d86813a7f462f714"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/pthread.h",
+        "sha256": "d4fe7254746eb4e56154baf165ab2f8cd90b9913a9340499ed4433dafc29297c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/sched.h",
+        "sha256": "1877ae536e02a44dda621c92fd371a80e70338712d656f4325754f59077e553c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/String16.h",
+        "sha256": "124f739abb40670113944f64513b0b0f0ede84c4b28e7f374eabfe157628d711"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/String8.h",
+        "sha256": "e8a54e2521d7e01d92ef594c1996250ef2eae231d9293949a7976cfd86d77620"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/Unicode.h",
+        "sha256": "ddd4c6cee350ada5e9a5e22412219f29eb690612c0eee1567fe4909cc0c663cc"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/TypeHelpers.h",
+        "sha256": "ee23abbcbf8d610f1516e4a73ede98845f4b48b614a7af8dcbc9ddd4d3669aeb"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/Vector.h",
+        "sha256": "81aa7c328ab0c2722a2eec9d2979c85d519eeeab78d68cf58e566122f7613294"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log.h",
+        "sha256": "a88a797a352663075686bc6e3bf76675e1606367eaf12efd70f75706b84a595c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_id.h",
+        "sha256": "c905e4e217e2bc389c0ae2d9a489ead7fbe9aef649f7d036bb8688be1ea9dd5d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_main.h",
+        "sha256": "e402f10ca5457d85d231c831ca0daca6ab0dd22b2564dad924c2194e1132fb5c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_radio.h",
+        "sha256": "b84f5357c3d5cacdd034b28c67a7a3d69ee9d3dae39be9175660ed44afc5edf5"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_safetynet.h",
+        "sha256": "3381a2b153f0542a47202e0230daf9d30b68b04e970690c2947940dc05312cfa"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_system.h",
+        "sha256": "35e31b751960fd45760546baa1e6b1ae5cc0f3c25d5b292c50e1487dd36670f0"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_time.h",
+        "sha256": "ba916f8fa49be1db30aeb6cbff4f7323164e0e327cfdecf7e1dc95b7f9491d9c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/VectorImpl.h",
+        "sha256": "2c0d7bff0eb9e8aee019ec5c2a939951200104068ece641485014f0c5f4c2bf2"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/threads.h",
+        "sha256": "5041ef681318648bbe35dee6c703823a693270c104f3592a9ce7bdcb956dfbeb"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/AndroidThreads.h",
+        "sha256": "7466edd48e83400f9e74ede4d27e12ae133a74fcb4bf037c29a3272e0c201536"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/ThreadDefs.h",
+        "sha256": "de5c708631c8e4ed59fc0ac7f5d8664c78f6aaf216862d6d6499dacbae482497"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics.h",
+        "sha256": "3ad78e6b394e080fb034e1ae4ff6f893e2ecf6c093235990b3d9e8d0daf8250d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base.h",
+        "sha256": "58dadf516c74c48ebf0ca652f5eb5fb15a0f432fe7b4d18888bf36b42444fa4a"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base-v1.0.h",
+        "sha256": "1950723d8660b2c00cf5685f51031e79af0814ad4c00b94ef48caf4af3646d1f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base-v1.1.h",
+        "sha256": "8e22bfdc66a7ec548e972238b53e827574303ea3c066a7cd4e9708159b5b6d39"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base-v1.2.h",
+        "sha256": "37cc94dc65e7cd6cf370332c7c580a831f53b3a8e80b701a6c5777caf54e3b4f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-sw.h",
+        "sha256": "957e089937f69aee425c4a2de7995ab42bfbee606567963af625fa429e7f5497"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/thread_defs.h",
+        "sha256": "61bfca4ee0e3c9bc6515a973d7f9a71a4f1712eb3d09f72053fbcdb52713c2e1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Condition.h",
+        "sha256": "28bea3fec945b0f47ddf8ac7bee6a3ea7e24d552e56d4c4cf759832e061d85cc"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/posix/include/limits.h",
+        "sha256": "ad1000a6aa83f302257851a0549af40080ccd1506c65cd4fa626075900bf0a91"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Mutex.h",
+        "sha256": "f12a8b48b70985c76dac7d27a015bd7cac3bd516a5227cbb0d8d7f4b152c9890"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Timers.h",
+        "sha256": "d4ca83693f7ed1ae6a2f637aa803baa70f17460593488b2a22c9b870e48c9d79"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Compat.h",
+        "sha256": "3c4131e296a6f4e02a6664f598fbc21b5ce401ed5d98d9e1f4f6f239112d9b10"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/RWLock.h",
+        "sha256": "4bfd8594bf73658667bad2a0ebbafe52bce8dbfe6443887635ab2b3720aedad4"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Thread.h",
+        "sha256": "5b01f402466a3b7db397100ce9c8254a3b2b2ec324d2cb904daa20b3dd8b40d1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/RefBase.h",
+        "sha256": "558de5dced90cd9b8e6857438cf1d729359d682a8298b9b28d19df2c118097f4"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/LightRefBase.h",
+        "sha256": "69e4814a1fb150b747bfff3a144535c6cc8584e037a2b847b7b719c1a75e94f1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/StrongPointer.h",
+        "sha256": "b39e9d4ddc9fabfc088d3f96b224104dec5eaf24273abfb79143c83945ffcbf4"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/AllocatorTracker.h",
+        "sha256": "13baf072cf8999bb26cae2129fe5bfba5d8bd959d9f3bea40cd336db9fb81d9a"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/jni_wrappers.h",
+        "sha256": "73ddffcdf1d52b93159cdcd7ab50b2527660898541c05494498599b407fbee94"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only/nativehelper/jni_macros.h",
+        "sha256": "41b7fb8f8da391df284dd07f4bfee91108aba5ba7660f071af7c04dfb0adc8d9"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/libnativehelper-android16/include_platform_header_only/nativehelper/detail/signature_checker.h",
+        "sha256": "2fd3c44d74445cea62b68fe10ab53a03f03af3f1bccd4a0b85fcc1505a318b01"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices/camera_frames.h",
+        "sha256": "ae1edaa8b1a390452c94e5ac19260d9998e8ccc6348704d244461b13bb833986"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/devices/camera_trace.h",
+        "sha256": "b68948691cd94bf046b6fc01befe5a6bb6de23baaa8c2a09ffb33f012c17a1e8"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/media/surface/reader_surface.h",
+        "sha256": "1324b39a408f3bcff0a19adaeb4603819e6de49cb53149557e6400ebf5213eba"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/media/video/video_decoder.h",
+        "sha256": "695cf652218d9dd17927af3ea5bee81e7b6b413ccc4eb975be53e41002d2a4de"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/media/player/extractor.h",
+        "sha256": "9e7aed13df31142af066ae64040282afdc08c905b2b2124abb30dcc1c1d3561d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/compat/media/player/data_source.h",
+        "sha256": "59748aabd2c49e16effbfc530628adda45d252d330bc5444907f185985e6daa9"
+      }
+    ],
+    "toolchain": "llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64",
+    "nativehelper_checkout": "2d584ec2da2c5271ed1576593c6590d652806f0d",
+    "scope": "Complete unchanged production TU with real pinned AOSP header closure and existing project patches. x64 strict passes baseline/current. ARM64 strict baseline/current fail the same pre-existing unconditional SysV ABI thunk annotation; no warning suppression, stub header, ARM64 success, Windows link or runtime is claimed.",
+    "header_manifest_sha256": "f3d325847d4ed85d7e4341eb30c034d89fb35f0ab2444590c6341c26190b8b97",
+    "architecture_scope": {
+      "production_host": "Windows x64 ART/managed SysV AMD64 ABI (docs/decisions/0006-managed-abi.md)",
+      "arm64_guests": "ARM64 Android code translates to x64 through gesher_arm64.dll; this is not a native Windows ARM64 framework build",
+      "current_ci": "Full ci.yml framework and host artifacts are Windows x64; arm64 job is guest translation. A separate aarch64 Windows toolchain file does not establish full native framework support.",
+      "aarch64_exploratory_strict_full_tu": "Both unchanged8f baseline and candidate fail identically at unconditional existing nativehelper SysV thunk annotation, with -Werror retained."
+    }
+  },
+  "aosp_header_provenance": {
+    "tag": "android-16.0.0_r4",
+    "files": [
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/include/android_runtime/AndroidRuntime.h",
+        "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/jni/include/android_runtime/AndroidRuntime.h?format=TEXT",
+        "sha256": "6d518a63b8a6918f5428b02e7b2e05e252b89e55d3660a32d86813a7f462f714",
+        "includes": [
+          "#include <jni.h>",
+          "#include <pthread.h>",
+          "#include <utils/Errors.h>",
+          "#include <utils/String16.h>",
+          "#include <utils/String8.h>",
+          "#include <utils/Vector.h>",
+          "#include <utils/threads.h>"
+        ],
+        "patched_sha256": "6d518a63b8a6918f5428b02e7b2e05e252b89e55d3660a32d86813a7f462f714"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/jni_wrappers.h",
+        "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/jni/jni_wrappers.h?format=TEXT",
+        "sha256": "73ddffcdf1d52b93159cdcd7ab50b2527660898541c05494498599b407fbee94",
+        "includes": [
+          "#include <jni.h>",
+          "#include <log/log.h>",
+          "#include <nativehelper/JNIHelp.h>",
+          "#include <string>"
+        ],
+        "patched_sha256": "73ddffcdf1d52b93159cdcd7ab50b2527660898541c05494498599b407fbee94"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/Errors.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/Errors.h?format=TEXT",
+        "sha256": "001f9c16788f4dbe3a6d70f2a8e9b55d6928f91e086de498d86ad327d869ff19",
+        "includes": [
+          "#include <errno.h>",
+          "#include <stdint.h>",
+          "#include <sys/types.h>",
+          "#include <string>"
+        ],
+        "patched_sha256": "001f9c16788f4dbe3a6d70f2a8e9b55d6928f91e086de498d86ad327d869ff19"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/String16.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/String16.h?format=TEXT",
+        "sha256": "124f739abb40670113944f64513b0b0f0ede84c4b28e7f374eabfe157628d711",
+        "includes": [
+          "#include <iostream>",
+          "#include <string>",
+          "#include <string_view>",
+          "#include <utils/Errors.h>",
+          "#include <utils/String8.h>",
+          "#include <utils/TypeHelpers.h>",
+          "#include <compare>"
+        ],
+        "patched_sha256": "124f739abb40670113944f64513b0b0f0ede84c4b28e7f374eabfe157628d711"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/String8.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/String8.h?format=TEXT",
+        "sha256": "e8a54e2521d7e01d92ef594c1996250ef2eae231d9293949a7976cfd86d77620",
+        "includes": [
+          "#include <iostream>",
+          "#include <string>",
+          "#include <string_view>",
+          "#include <utils/Errors.h>",
+          "#include <utils/Unicode.h>",
+          "#include <utils/TypeHelpers.h>",
+          "#include <string.h> // for strcmp",
+          "#include <stdarg.h>",
+          "#include <compare>"
+        ],
+        "patched_sha256": "e8a54e2521d7e01d92ef594c1996250ef2eae231d9293949a7976cfd86d77620"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/Vector.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/Vector.h?format=TEXT",
+        "sha256": "81aa7c328ab0c2722a2eec9d2979c85d519eeeab78d68cf58e566122f7613294",
+        "includes": [
+          "#include <stdint.h>",
+          "#include <sys/types.h>",
+          "#include <log/log.h>",
+          "#include <utils/TypeHelpers.h>",
+          "#include <utils/VectorImpl.h>"
+        ],
+        "patched_sha256": "81aa7c328ab0c2722a2eec9d2979c85d519eeeab78d68cf58e566122f7613294"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/StrongPointer.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/StrongPointer.h?format=TEXT",
+        "sha256": "b39e9d4ddc9fabfc088d3f96b224104dec5eaf24273abfb79143c83945ffcbf4",
+        "includes": [
+          "#include <functional>",
+          "#include <type_traits>  // for common_type.",
+          "#include <utils/AllocatorTracker.h>"
+        ],
+        "patched_sha256": "b39e9d4ddc9fabfc088d3f96b224104dec5eaf24273abfb79143c83945ffcbf4"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/RefBase.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/RefBase.h?format=TEXT",
+        "sha256": "558de5dced90cd9b8e6857438cf1d729359d682a8298b9b28d19df2c118097f4",
+        "includes": [
+          "#include <atomic>",
+          "#include <functional>",
+          "#include <memory>",
+          "#include <type_traits>  // for common_type.",
+          "#include <stdint.h>",
+          "#include <sys/types.h>",
+          "#include <stdlib.h>",
+          "#include <string.h>",
+          "#include <utils/LightRefBase.h>",
+          "#include <utils/StrongPointer.h>",
+          "#include <utils/TypeHelpers.h>"
+        ],
+        "patched_sha256": "558de5dced90cd9b8e6857438cf1d729359d682a8298b9b28d19df2c118097f4"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/TypeHelpers.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/TypeHelpers.h?format=TEXT",
+        "sha256": "ee23abbcbf8d610f1516e4a73ede98845f4b48b614a7af8dcbc9ddd4d3669aeb",
+        "includes": [
+          "#include <new>",
+          "#include <type_traits>",
+          "#include <stdint.h>",
+          "#include <string.h>",
+          "#include <sys/types.h>"
+        ],
+        "patched_sha256": "ee23abbcbf8d610f1516e4a73ede98845f4b48b614a7af8dcbc9ddd4d3669aeb"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/VectorImpl.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/VectorImpl.h?format=TEXT",
+        "sha256": "2c0d7bff0eb9e8aee019ec5c2a939951200104068ece641485014f0c5f4c2bf2",
+        "includes": [
+          "#include <assert.h>",
+          "#include <stdint.h>",
+          "#include <sys/types.h>",
+          "#include <utils/Errors.h>"
+        ],
+        "patched_sha256": "2c0d7bff0eb9e8aee019ec5c2a939951200104068ece641485014f0c5f4c2bf2"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/Unicode.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/Unicode.h?format=TEXT",
+        "sha256": "ddd4c6cee350ada5e9a5e22412219f29eb690612c0eee1567fe4909cc0c663cc",
+        "includes": [
+          "#include <sys/types.h>",
+          "#include <stdint.h>"
+        ],
+        "patched_sha256": "ddd4c6cee350ada5e9a5e22412219f29eb690612c0eee1567fe4909cc0c663cc"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/threads.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/threads.h?format=TEXT",
+        "sha256": "5041ef681318648bbe35dee6c703823a693270c104f3592a9ce7bdcb956dfbeb",
+        "includes": [
+          "#include <utils/AndroidThreads.h>",
+          "#include <utils/Condition.h>",
+          "#include <utils/Errors.h>",
+          "#include <utils/Mutex.h>",
+          "#include <utils/RWLock.h>",
+          "#include <utils/Thread.h>"
+        ],
+        "patched_sha256": "5041ef681318648bbe35dee6c703823a693270c104f3592a9ce7bdcb956dfbeb"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/AllocatorTracker.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/AllocatorTracker.h?format=TEXT",
+        "sha256": "13baf072cf8999bb26cae2129fe5bfba5d8bd959d9f3bea40cd336db9fb81d9a",
+        "patched_sha256": "13baf072cf8999bb26cae2129fe5bfba5d8bd959d9f3bea40cd336db9fb81d9a"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/binder/include/utils/LightRefBase.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/binder/include/utils/LightRefBase.h?format=TEXT",
+        "sha256": "69e4814a1fb150b747bfff3a144535c6cc8584e037a2b847b7b719c1a75e94f1",
+        "patched_sha256": "69e4814a1fb150b747bfff3a144535c6cc8584e037a2b847b7b719c1a75e94f1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/log/log.h?format=TEXT",
+        "sha256": "a88a797a352663075686bc6e3bf76675e1606367eaf12efd70f75706b84a595c",
+        "patched_sha256": "a88a797a352663075686bc6e3bf76675e1606367eaf12efd70f75706b84a595c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/AndroidThreads.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/AndroidThreads.h?format=TEXT",
+        "sha256": "684561d203a63d3825a7a881d8c29cc63108e85e63aaca8b53e4c412b0098f78",
+        "patched_sha256": "7466edd48e83400f9e74ede4d27e12ae133a74fcb4bf037c29a3272e0c201536"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Condition.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/Condition.h?format=TEXT",
+        "sha256": "277962fe2496381c9a6071f0a20faa5beacc0929ee0ef855fdaf6da84df87ff6",
+        "patched_sha256": "28bea3fec945b0f47ddf8ac7bee6a3ea7e24d552e56d4c4cf759832e061d85cc"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/RWLock.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/RWLock.h?format=TEXT",
+        "sha256": "7819fc00e5c5ccd16507d87663f635d1700cddc1fdda591728da7582c2a1d988",
+        "patched_sha256": "4bfd8594bf73658667bad2a0ebbafe52bce8dbfe6443887635ab2b3720aedad4"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Thread.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/Thread.h?format=TEXT",
+        "sha256": "5c84a6a10daba4c36d85e3a8058883f64762b9b19e988c9fb7a6b9b62b9a04c5",
+        "patched_sha256": "5b01f402466a3b7db397100ce9c8254a3b2b2ec324d2cb904daa20b3dd8b40d1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Mutex.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/Mutex.h?format=TEXT",
+        "sha256": "f1e0cb4a0068c6b12caa0aa412897f4bad4e6a990c8caad93bca3af7b721dc65",
+        "patched_sha256": "f12a8b48b70985c76dac7d27a015bd7cac3bd516a5227cbb0d8d7f4b152c9890"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_safetynet.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/log/log_safetynet.h?format=TEXT",
+        "sha256": "3381a2b153f0542a47202e0230daf9d30b68b04e970690c2947940dc05312cfa",
+        "patched_sha256": "3381a2b153f0542a47202e0230daf9d30b68b04e970690c2947940dc05312cfa"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_main.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/log/log_main.h?format=TEXT",
+        "sha256": "e402f10ca5457d85d231c831ca0daca6ab0dd22b2564dad924c2194e1132fb5c",
+        "patched_sha256": "e402f10ca5457d85d231c831ca0daca6ab0dd22b2564dad924c2194e1132fb5c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_radio.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/log/log_radio.h?format=TEXT",
+        "sha256": "b84f5357c3d5cacdd034b28c67a7a3d69ee9d3dae39be9175660ed44afc5edf5",
+        "patched_sha256": "b84f5357c3d5cacdd034b28c67a7a3d69ee9d3dae39be9175660ed44afc5edf5"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/android/log.h?format=TEXT",
+        "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f",
+        "patched_sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_id.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/log/log_id.h?format=TEXT",
+        "sha256": "c905e4e217e2bc389c0ae2d9a489ead7fbe9aef649f7d036bb8688be1ea9dd5d",
+        "patched_sha256": "c905e4e217e2bc389c0ae2d9a489ead7fbe9aef649f7d036bb8688be1ea9dd5d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_time.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/log/log_time.h?format=TEXT",
+        "sha256": "ba916f8fa49be1db30aeb6cbff4f7323164e0e327cfdecf7e1dc95b7f9491d9c",
+        "patched_sha256": "ba916f8fa49be1db30aeb6cbff4f7323164e0e327cfdecf7e1dc95b7f9491d9c"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/log/log_system.h",
+        "url": "https://android.googlesource.com/platform/system/logging/+/android-16.0.0_r4/liblog/include/log/log_system.h?format=TEXT",
+        "sha256": "35e31b751960fd45760546baa1e6b1ae5cc0f3c25d5b292c50e1487dd36670f0",
+        "patched_sha256": "35e31b751960fd45760546baa1e6b1ae5cc0f3c25d5b292c50e1487dd36670f0"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/ThreadDefs.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/ThreadDefs.h?format=TEXT",
+        "sha256": "a79d24c4b914966236fb95bd97ea360d9fff75dbc28e0c6b0753abab1d1956ea",
+        "patched_sha256": "de5c708631c8e4ed59fc0ac7f5d8664c78f6aaf216862d6d6499dacbae482497"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Timers.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/Timers.h?format=TEXT",
+        "sha256": "d4ca83693f7ed1ae6a2f637aa803baa70f17460593488b2a22c9b870e48c9d79",
+        "patched_sha256": "d4ca83693f7ed1ae6a2f637aa803baa70f17460593488b2a22c9b870e48c9d79"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/thread_defs.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libsystem/include/system/thread_defs.h?format=TEXT",
+        "sha256": "61bfca4ee0e3c9bc6515a973d7f9a71a4f1712eb3d09f72053fbcdb52713c2e1",
+        "patched_sha256": "61bfca4ee0e3c9bc6515a973d7f9a71a4f1712eb3d09f72053fbcdb52713c2e1"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libsystem/include/system/graphics.h?format=TEXT",
+        "sha256": "3ad78e6b394e080fb034e1ae4ff6f893e2ecf6c093235990b3d9e8d0daf8250d",
+        "patched_sha256": "3ad78e6b394e080fb034e1ae4ff6f893e2ecf6c093235990b3d9e8d0daf8250d"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libutils/include/utils/Compat.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libutils/include/utils/Compat.h?format=TEXT",
+        "sha256": "ac4a73a4893c874b91880c58eac7a2aacd94ff086579c4fdf5ee5bf7d94f31b5",
+        "patched_sha256": "3c4131e296a6f4e02a6664f598fbc21b5ce401ed5d98d9e1f4f6f239112d9b10"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libsystem/include/system/graphics-base.h?format=TEXT",
+        "sha256": "58dadf516c74c48ebf0ca652f5eb5fb15a0f432fe7b4d18888bf36b42444fa4a",
+        "patched_sha256": "58dadf516c74c48ebf0ca652f5eb5fb15a0f432fe7b4d18888bf36b42444fa4a"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base-v1.0.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libsystem/include/system/graphics-base-v1.0.h?format=TEXT",
+        "sha256": "1950723d8660b2c00cf5685f51031e79af0814ad4c00b94ef48caf4af3646d1f",
+        "includes": [],
+        "patched_sha256": "1950723d8660b2c00cf5685f51031e79af0814ad4c00b94ef48caf4af3646d1f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base-v1.1.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libsystem/include/system/graphics-base-v1.1.h?format=TEXT",
+        "sha256": "8e22bfdc66a7ec548e972238b53e827574303ea3c066a7cd4e9708159b5b6d39",
+        "includes": [],
+        "patched_sha256": "8e22bfdc66a7ec548e972238b53e827574303ea3c066a7cd4e9708159b5b6d39"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-base-v1.2.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libsystem/include/system/graphics-base-v1.2.h?format=TEXT",
+        "sha256": "37cc94dc65e7cd6cf370332c7c580a831f53b3a8e80b701a6c5777caf54e3b4f",
+        "includes": [],
+        "patched_sha256": "37cc94dc65e7cd6cf370332c7c580a831f53b3a8e80b701a6c5777caf54e3b4f"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/core/libsystem/include/system/graphics-sw.h",
+        "url": "https://android.googlesource.com/platform/system/core/+/android-16.0.0_r4/libsystem/include/system/graphics-sw.h?format=TEXT",
+        "sha256": "957e089937f69aee425c4a2de7995ab42bfbee606567963af625fa429e7f5497",
+        "includes": [],
+        "patched_sha256": "957e089937f69aee425c4a2de7995ab42bfbee606567963af625fa429e7f5497"
+      },
+      {
+        "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/frameworks/base/core/jni/core_jni_helpers.h",
+        "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/jni/core_jni_helpers.h?format=TEXT",
+        "sha256": "35e941e2e9aeb17cb9174f03cc0aa1be9d88fe5fdb1571ca2f15745aed0d0b65",
+        "patched_sha256": "1c0f10d50c2adcd2a660a4ff25b74ad8b49b6a6fab6b9acd33707ab09d471003"
+      }
+    ],
+    "nativehelper": {
+      "checkout": "2d584ec2da2c5271ed1576593c6590d652806f0d",
+      "existing_project_patches": [
+        {
+          "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/libnativehelper/0001-no-dllexport-in-gesher.patch",
+          "sha256": "718f5f8d6efd218b0eebbc24ac15225a94e6166ee36ada4b09fda43441f73c04"
+        },
+        {
+          "path": "/workspace/scratch/aa09b1a0dc1f/gesher-image-reader-rgba/patches/libnativehelper/0002-sysv-jni-in-gesher.patch",
+          "sha256": "317b87dccf7cb17ba197e64912cd17f8927b34490456df85ad7a96a13047485f"
+        }
+      ],
+      "both_modified_headers_independently_rebuilt_identically": true
+    }
+  },
+  "independent_evidence_review": {
+    "checks": 3150,
+    "reports": [
+      {
+        "file": "reader-rgba-abba-v1-20261123.json",
+        "sha256": "024a1108860c432815e0c12d532e16c3a82098e60e1f366e8977d04f9ba1fb2b",
+        "receipts": 192,
+        "observations": 384,
+        "blocks": 6,
+        "summary": {
+          "720p": {
+            "first": {
+              "cpu_ns_change_percent": -64.42623868899815,
+              "wall_ns_change_percent": -64.40270157963799
+            },
+            "steady": {
+              "cpu_ns_change_percent": -84.73040581045723,
+              "wall_ns_change_percent": -84.7280821110122
+            }
+          },
+          "single_pixel": {
+            "first": {
+              "cpu_ns_change_percent": 17.125382262996936,
+              "wall_ns_change_percent": 14.60614152202937
+            },
+            "steady": {
+              "cpu_ns_change_percent": 1.7821152373571847,
+              "wall_ns_change_percent": 1.7760315006343008
+            }
+          },
+          "1080p": {
+            "first": {
+              "cpu_ns_change_percent": -62.11934561501891,
+              "wall_ns_change_percent": -62.083672598800696
+            },
+            "steady": {
+              "cpu_ns_change_percent": -82.68096893746973,
+              "wall_ns_change_percent": -82.88045528643266
+            }
+          },
+          "odd": {
+            "first": {
+              "cpu_ns_change_percent": -59.006587762962816,
+              "wall_ns_change_percent": -58.65137858235465
+            },
+            "steady": {
+              "cpu_ns_change_percent": -94.18104612202856,
+              "wall_ns_change_percent": -94.17990542047728
+            }
+          },
+          "empty_control": {
+            "first": {
+              "cpu_ns_change_percent": -5.324305060584466,
+              "wall_ns_change_percent": -5.046094129063561
+            },
+            "steady": {
+              "cpu_ns_change_percent": -2.6340927730108876,
+              "wall_ns_change_percent": -2.6485125406756738
+            }
+          },
+          "4k": {
+            "first": {
+              "cpu_ns_change_percent": -62.88137798179554,
+              "wall_ns_change_percent": -62.89553414192896
+            },
+            "steady": {
+              "cpu_ns_change_percent": -75.33448247874882,
+              "wall_ns_change_percent": -75.33231307824164
+            }
+          },
+          "scaled_control": {
+            "first": {
+              "cpu_ns_change_percent": -1.0891981179297239,
+              "wall_ns_change_percent": -1.2365680600423534
+            },
+            "steady": {
+              "cpu_ns_change_percent": 2.0887825622074585,
+              "wall_ns_change_percent": 2.059686726461085
+            }
+          },
+          "tiny": {
+            "first": {
+              "cpu_ns_change_percent": 12.526208590427125,
+              "wall_ns_change_percent": 11.619405713092057
+            },
+            "steady": {
+              "cpu_ns_change_percent": -85.36976767374344,
+              "wall_ns_change_percent": -85.37112429199563
+            }
+          }
+        }
+      },
+      {
+        "file": "reader-rgba-pilot-20261123.json",
+        "sha256": "cbce514786991c403af2b0d978eceaa3c78df109eb274170f8331631f1e3f9ec",
+        "receipts": 32,
+        "observations": 64,
+        "blocks": 1,
+        "summary": {
+          "720p": {
+            "first": {
+              "cpu_ns_change_percent": -12.163076332767808,
+              "wall_ns_change_percent": -12.164343510195973
+            },
+            "steady": {
+              "cpu_ns_change_percent": -82.01518575023682,
+              "wall_ns_change_percent": -82.0086864873231
+            }
+          },
+          "single_pixel": {
+            "first": {
+              "cpu_ns_change_percent": 5.185553346587146,
+              "wall_ns_change_percent": -0.5041015535493298
+            },
+            "steady": {
+              "cpu_ns_change_percent": 27.495646134875116,
+              "wall_ns_change_percent": 27.571359866184597
+            }
+          },
+          "1080p": {
+            "first": {
+              "cpu_ns_change_percent": 11.976757672530969,
+              "wall_ns_change_percent": 11.977765987267741
+            },
+            "steady": {
+              "cpu_ns_change_percent": -81.83413368577604,
+              "wall_ns_change_percent": -81.7428709903117
+            }
+          },
+          "odd": {
+            "first": {
+              "cpu_ns_change_percent": -58.99454916642897,
+              "wall_ns_change_percent": -58.6137293299491
+            },
+            "steady": {
+              "cpu_ns_change_percent": -94.17487604165024,
+              "wall_ns_change_percent": -94.28864044061172
+            }
+          },
+          "empty_control": {
+            "first": {
+              "cpu_ns_change_percent": -5.562696372465014,
+              "wall_ns_change_percent": -5.924768657613266
+            },
+            "steady": {
+              "cpu_ns_change_percent": 4.086461562892207,
+              "wall_ns_change_percent": 4.155572647494266
+            }
+          },
+          "4k": {
+            "first": {
+              "cpu_ns_change_percent": -41.016115741368374,
+              "wall_ns_change_percent": -41.01651991760207
+            },
+            "steady": {
+              "cpu_ns_change_percent": -75.44579633530262,
+              "wall_ns_change_percent": -75.44142069514211
+            }
+          },
+          "scaled_control": {
+            "first": {
+              "cpu_ns_change_percent": 1.8333027952523562,
+              "wall_ns_change_percent": 1.2137598926365234
+            },
+            "steady": {
+              "cpu_ns_change_percent": 8.157201401325054,
+              "wall_ns_change_percent": 7.2089798454304965
+            }
+          },
+          "tiny": {
+            "first": {
+              "cpu_ns_change_percent": 7.591355126121235,
+              "wall_ns_change_percent": 4.04799165362546
+            },
+            "steady": {
+              "cpu_ns_change_percent": -77.58475611119596,
+              "wall_ns_change_percent": -77.58861478705211
+            }
+          }
+        }
+      }
+    ],
+    "source_scope": "Actual-source QueueRgba/readers with declared JNI adapters; full component lifecycle and full-pixel oracle timed. No ART/IPC/Canvas/Windows/device timing claim. First phase follows input/oracle allocation and is not process startup. All adverse first/tiny/scaled/control receipts retained."
+  },
+  "current_main_validation_logs": {
+    "reader-rgba-main982-app-build.log": {
+      "sha256": "043c2356d4cd8172579bb8620cf1b2b5c13bd58e03e9556a8b2d8c27679b27ec",
+      "content": "StubGen: com.gesher.server.stub.IPermissionCheckerStub (3 methods)\nStubGen: com.gesher.server.stub.IActivityManagerStub (273 methods)\nStubGen: com.gesher.server.stub.IActivityTaskManagerStub (102 methods)\nStubGen: com.gesher.server.stub.IUriGrantsManagerStub (7 methods)\nStubGen: com.gesher.server.stub.IActivityClientControllerStub (72 methods)\nStubGen: com.gesher.server.stub.IPackageManagerStub (222 methods)\nStubGen: com.gesher.server.stub.IPackageInstallerStub (34 methods)\nStubGen: com.gesher.server.stub.IPackageInstallerSessionStub (34 methods)\nStubGen: com.gesher.server.stub.IRestrictionsManagerStub (6 methods)\nStubGen: com.gesher.server.stub.IBlobStoreManagerStub (13 methods)\nStubGen: com.gesher.server.stub.IDeviceIdentifiersPolicyServiceStub (2 methods)\nStubGen: com.gesher.server.stub.IRollbackManagerStub (8 methods)\nStubGen: com.gesher.server.stub.IWindowManagerStub (160 methods)\nStubGen: com.gesher.server.stub.IWindowSessionStub (40 methods)\nStubGen: com.gesher.server.stub.IDisplayManagerStub (69 methods)\nStubGen: com.gesher.server.stub.IUserManagerStub (107 methods)\nStubGen: com.gesher.server.stub.IInputMethodManagerStub (34 methods)\nStubGen: com.gesher.server.stub.ITextServicesManagerStub (6 methods)\nStubGen: com.gesher.server.stub.INotificationManagerStub (170 methods)\nStubGen: com.gesher.server.stub.IUiModeManagerStub (30 methods)\nStubGen: com.gesher.server.stub.IInputManagerStub (84 methods)\nStubGen: com.gesher.server.stub.IAudioServiceStub (285 methods)\nStubGen: com.gesher.server.stub.IMediaRouterServiceStub (45 methods)\nStubGen: com.gesher.server.stub.IContentServiceStub (41 methods)\nStubGen: com.gesher.server.stub.IStorageManagerStub (55 methods)\nStubGen: com.gesher.server.stub.ISessionManagerStub (30 methods)\nStubGen: com.gesher.server.stub.ISessionStub (18 methods)\nStubGen: com.gesher.server.stub.ISessionControllerStub (37 methods)\nStubGen: com.gesher.server.stub.IUsbManagerStub (51 methods)\nStubGen: com.gesher.server.stub.IPowerManagerStub (72 methods)\nStubGen: com.gesher.server.stub.IDeviceIdleControllerStub (22 methods)\nStubGen: com.gesher.server.stub.IThermalServiceStub (14 methods)\nStubGen: com.gesher.server.stub.IAlarmManagerStub (10 methods)\nStubGen: com.gesher.server.stub.IClipboardStub (12 methods)\nStubGen: com.gesher.server.stub.IAppOpsServiceStub (61 methods)\nStubGen: com.gesher.server.stub.IAppWidgetServiceStub (37 methods)\nStubGen: com.gesher.server.stub.IStatusBarServiceStub (74 methods)\nStubGen: com.gesher.server.stub.ISearchManagerStub (6 methods)\nStubGen: com.gesher.server.stub.ILocaleManagerStub (5 methods)\nStubGen: com.gesher.server.stub.IGrammaticalInflectionManagerStub (4 methods)\nStubGen: com.gesher.server.stub.IJobSchedulerStub (19 methods)\nStubGen: com.gesher.server.stub.IBatteryPropertiesRegistrarStub (2 methods)\nStubGen: com.gesher.server.stub.IBatteryStatsStub (99 methods)\nStubGen: com.gesher.server.stub.ILocationManagerStub (62 methods)\nStubGen: com.gesher.server.stub.IVibratorManagerServiceStub (12 methods)\nStubGen: com.gesher.server.stub.IAccountManagerStub (46 methods)\nStubGen: com.gesher.server.stub.IDropBoxManagerServiceStub (5 methods)\nStubGen: com.gesher.server.stub.IUsageStatsManagerStub (39 methods)\nStubGen: com.gesher.server.stub.IStorageStatsManagerStub (14 methods)\nStubGen: com.gesher.server.stub.IDevicePolicyManagerStub (421 methods)\nStubGen: com.gesher.server.stub.ITelephonyStub (420 methods)\nStubGen: com.gesher.server.stub.IPhoneSubInfoStub (40 methods)\nStubGen: com.gesher.server.stub.ISubStub (60 methods)\nStubGen: com.gesher.server.stub.ITelephonyRegistryStub (63 methods)\nStubGen: com.gesher.server.stub.ITrustManagerStub (18 methods)\nStubGen: com.gesher.server.stub.IShortcutServiceStub (24 methods)\nStubGen: com.gesher.server.stub.ICrossProfileAppsStub (10 methods)\nStubGen: com.gesher.server.stub.ISensitiveContentProtectionManagerStub (1 methods)\nStubGen: com.gesher.server.stub.IPermissionManagerStub (33 methods)\nStubGen: com.gesher.server.stub.IDomainVerificationManagerStub (9 methods)\nCompatChangesGen: 3 changes (0 disabled, 1 enabled since an SDK, 2 enabled after an SDK, 0 logging only) in 31777 classes; 0 @ChangeId, 2849 compat annotations (Landroid/compat/annotation/UnsupportedAppUsage;); 3 in sources (0 unresolved), 38 version codes\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.\nframework-location: 453 classes into gesher-app.jar\next (tagsoup): 22 classes into gesher-app.jar\nboot link check: 292 framework references to gesher-app classes, 0 unresolved\ngesher-app written to /workspace/scratch/aa09b1a0dc1f/reader-rgba-main982-app-build\n"
+    },
+    "reader-rgba-main982-services-build.log": {
+      "sha256": "79c285cb4e773a815f1998fb6df46d2c4c2ef8ab67a2fb451531e4eb854518f6",
+      "content": "Note: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.\nservices-tests.dex written to /workspace/scratch/aa09b1a0dc1f/reader-rgba-main982-services-build\n"
+    },
+    "reader-rgba-main982-test_fork_diagnostic.log": {
+      "sha256": "4139f832f5ba1e0342e70f2a47c1c16d9ea2cbfeab2e2ef6459a4dcd7604b838",
+      "content": "CANONICAL_SUPPLIER_BASELINE_PARITY leaf_mutants=564\n......................\n----------------------------------------------------------------------\nRan 22 tests in 1.695s\n\nOK\n"
+    },
+    "reader-rgba-main982-test-selected-policy.log": {
+      "sha256": "8c5fbf3e0a1c933e08fe243c344da366b5d0b9df0751ae36860c97ce3f1be49f",
+      "content": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\n"
+    },
+    "reader-rgba-main982-test-selected-supplier.log": {
+      "sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120",
+      "content": "TCP_SELECTED_SUPPLIER_METADATA_PASS projection=SYNTHETIC_LOG_METADATA_ONLY semantic_mutants=36 authority_hash_negative=1 actual_selected_runtime_claim=false native_processes_started=0\n"
+    }
+  }
 }

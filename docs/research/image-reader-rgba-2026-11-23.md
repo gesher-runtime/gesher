@@ -26,6 +26,15 @@ Both exact `QueueRgba` body hashes, all extracted source and fixture hashes,
 compiler commands and executable hashes are in the
 [raw report](image-reader-rgba-2026-11-23.json).
 
+The feature was subsequently composed with published main
+`98215dd7e798090fb5ab6160490ae78f1793ab3a` through an exact automatic ordered
+merge. All nine feature-only and all 75 incoming-only paths retained their
+respective blobs; the only overlap was the CI file, which merged without a
+conflict. Every measured production/extraction/fixture/benchmark file and the
+real SurfaceParcel test remained byte-identical. The raw report records this
+composition separately, preserving the original timing attribution to the
+measured source rather than relabelling it as a new experiment.
+
 Android's [ImageReader contract](https://developer.android.com/reference/android/media/ImageReader)
 describes queued images produced through its Surface, concurrent acquisitions
 bounded by `maxImages`, and explicit `Image.close()` retirement. An acquired
@@ -159,7 +168,24 @@ and checks that the first remains unchanged. The original six-frame descriptor
 reuse checks remain, followed by another descriptor-retirement assertion.
 The existing mandatory Windows services track requires the new success marker.
 The complete app and services test Java/D8 builds pass against the real framework
-classes. Actual Windows execution and its CI aggregate remain pending.
+classes, including a fresh build after composition with main `98215dd7`.
+
+Both the unchanged baseline and candidate **complete production
+`camera_frames.cc` translation units compile for Windows x64** with the project's
+strict C++23 warning set and LLVM-MinGW 20261006. The actual pinned AOSP
+`android-16.0.0_r4` header closure and existing project patches are used; no
+stand-in headers or disabled diagnostics are involved. Commands, all compiled
+input hashes, raw/patched header provenance and diagnostics are embedded in the
+raw report.
+
+A separate native AArch64 target attempt fails identically for the baseline and
+candidate: the existing nativehelper SysV JNI thunk has an unconditional
+`sysv_abi` attribute unsupported for that target. `-Werror` remains enabled and
+the failure is retained. [The ARM64 design](../arm64.md) describes translated
+ARM64 guests on an x64 Windows runtime; this cross-compilation attempt does not
+establish a native ARM64 Windows framework target. No ARM64 compilation success,
+Windows linking, actual Windows execution or translated-guest qualification is
+claimed here. Those runtime and aggregate CI requirements remain pending.
 
 ## Reproduction
 
