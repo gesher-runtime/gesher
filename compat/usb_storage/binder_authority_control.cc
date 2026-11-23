@@ -112,17 +112,7 @@ class BinderServiceQueryGrant {
   explicit BinderServiceQueryGrant(LocalMemory package)
       : scope_(ExclusiveSlot(), std::try_to_lock), package_(std::move(package)) {}
   ~BinderServiceQueryGrant() {
-    if (applied_) {
-      std::vector<BYTE> security;
-      PACL dacl = nullptr;
-      if (ReadAcl(&security, &dacl) == ERROR_SUCCESS) {
-        DWORD index = MAXDWORD;
-        if (FindAce(dacl, &index) == ERROR_SUCCESS && index != MAXDWORD &&
-            DeleteAce(dacl, index)) {
-          SetServiceObjectSecurity(service_, DACL_SECURITY_INFORMATION, security.data());
-        }
-      }
-    }
+    if (applied_) Retire();
     if (service_) CloseServiceHandle(service_);
   }
 
@@ -170,6 +160,31 @@ class BinderServiceQueryGrant {
     }
     // A stale exact read-only ACE from a stopped instance may be retired here.
     applied_ = true;
+    return ERROR_SUCCESS;
+  }
+
+  DWORD Retire() {
+    if (!applied_) return ERROR_SUCCESS;
+    std::vector<BYTE> security;
+    PACL dacl = nullptr;
+    DWORD status = ReadAcl(&security, &dacl);
+    if (status != ERROR_SUCCESS) return status;
+    DWORD index = MAXDWORD;
+    status = FindAce(dacl, &index);
+    if (status != ERROR_SUCCESS) return status;
+    if (index != MAXDWORD) {
+      if (!DeleteAce(dacl, index) ||
+          !SetServiceObjectSecurity(service_, DACL_SECURITY_INFORMATION, security.data())) {
+        return GetLastError();
+      }
+      status = ReadAcl(&security, &dacl);
+      if (status != ERROR_SUCCESS) return status;
+      index = MAXDWORD;
+      status = FindAce(dacl, &index);
+      if (status != ERROR_SUCCESS) return status;
+      if (index != MAXDWORD) return ERROR_INVALID_ACL;
+    }
+    applied_ = false;
     return ERROR_SUCCESS;
   }
 
@@ -253,10 +268,8 @@ DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker, const std::wstrin
   LocalMemory descriptor, package;
   DWORD status = ConnectionSecurity(broker.process(), &descriptor, &package);
   if (status != ERROR_SUCCESS) return status;
-  control->service_query_ =
-      std::unique_ptr<BinderServiceQueryGrant>(new (std::nothrow) BinderServiceQueryGrant(std::move(package)));
-  if (!control->service_query_) return ERROR_NOT_ENOUGH_MEMORY;
-  status = control->service_query_->Apply();
+  BinderServiceQueryGrant service_query(std::move(package));
+  status = service_query.Apply();
   if (status != ERROR_SUCCESS) return status;
   SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
   status = AuthorityPeer::Create(broker.process(), locator.c_str(), &security, &control->peer_);
@@ -290,6 +303,10 @@ DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker, const std::wstrin
   status = control->peer_->Authenticate();
   if (status != ERROR_SUCCESS) return control->FailClosed(status);
   status = control->Exchange(static_cast<uint32_t>(wire::Operation::kReady), 0, 0, nullptr);
+  if (status != ERROR_SUCCESS) return control->FailClosed(status);
+  // The receiver retains its open SCM handle for the session. No further
+  // AppContainer token needs access to the installed service object.
+  status = service_query.Retire();
   if (status != ERROR_SUCCESS) return control->FailClosed(status);
   *result = std::move(control);
   return ERROR_SUCCESS;
@@ -329,7 +346,6 @@ DWORD BinderAuthorityControl::Transfer(void* data, DWORD bytes, bool writing) {
 
 DWORD BinderAuthorityControl::FailClosed(DWORD status) {
   peer_.reset();
-  service_query_.reset();
   // No numeric remote handle can be closed after a send starts. The broker
   // may already have consumed that value. Retire the exact process instead.
   if (broker_ && WaitForSingleObject(broker_, 0) == WAIT_TIMEOUT) {

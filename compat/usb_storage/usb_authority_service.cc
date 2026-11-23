@@ -7,6 +7,7 @@
 #include <shlobj.h>
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -288,6 +289,47 @@ DWORD Uninstall(const std::wstring& image) {
   return DeleteService(service.get()) ? ERROR_SUCCESS : GetLastError();
 }
 
+DWORD ClearInterruptedBootstrapQueries() {
+  // A crash between creation and retirement of a bootstrap query ACE cannot
+  // close an SCM DACL with a process handle. Clean that service-owned entry
+  // before exposing the new service instance.
+  ScHandle manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+  if (!manager.get()) return GetLastError();
+  ScHandle service(OpenServiceW(manager.get(), kService, READ_CONTROL | WRITE_DAC));
+  if (!service.get()) return GetLastError();
+  DWORD bytes = 0;
+  if (QueryServiceObjectSecurity(service.get(), DACL_SECURITY_INFORMATION, nullptr, 0, &bytes) ||
+      GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes == 0 || bytes > 64 * 1024) {
+    return ERROR_INVALID_DATA;
+  }
+  std::vector<BYTE> security(bytes);
+  if (!QueryServiceObjectSecurity(service.get(), DACL_SECURITY_INFORMATION,
+                                  security.data(), bytes, &bytes)) return GetLastError();
+  BOOL present = FALSE, defaulted = FALSE;
+  PACL acl = nullptr;
+  if (!GetSecurityDescriptorDacl(security.data(), &present, &acl, &defaulted) ||
+      !present || !acl || !IsValidAcl(acl)) return ERROR_INVALID_ACL;
+  constexpr SID_IDENTIFIER_AUTHORITY kPackageAuthority = SECURITY_APP_PACKAGE_AUTHORITY;
+  constexpr DWORD kTemporaryAccess = SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS;
+  bool changed = false;
+  for (DWORD i = acl->AceCount; i != 0; --i) {
+    void* raw = nullptr;
+    if (!GetAce(acl, i - 1, &raw)) return GetLastError();
+    auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
+    if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE || ace->Header.AceFlags != 0 ||
+        ace->Mask != kTemporaryAccess) continue;
+    PSID sid = &ace->SidStart;
+    if (!IsValidSid(sid) || *GetSidSubAuthorityCount(sid) <= 2 ||
+        std::memcmp(GetSidIdentifierAuthority(sid), &kPackageAuthority,
+                    sizeof(kPackageAuthority)) != 0 ||
+        *GetSidSubAuthority(sid, 0) != SECURITY_APP_PACKAGE_BASE_RID) continue;
+    if (!DeleteAce(acl, i - 1)) return GetLastError();
+    changed = true;
+  }
+  return !changed || SetServiceObjectSecurity(service.get(), DACL_SECURITY_INFORMATION,
+                                              security.data()) ? ERROR_SUCCESS : GetLastError();
+}
+
 struct ServiceContext {
   SERVICE_STATUS_HANDLE status = nullptr;
   HANDLE stop = nullptr;
@@ -324,8 +366,9 @@ void WINAPI ServiceMain(DWORD argc, wchar_t**) {
   if (!service.status) return;
   Report(service, SERVICE_START_PENDING);
   std::wstring image;
-  const DWORD status = event_error != ERROR_SUCCESS ? event_error :
+  DWORD status = event_error != ERROR_SUCCESS ? event_error :
       (argc == 1 && IsLocalSystem() ? TrustedImage(&image) : ERROR_ACCESS_DENIED);
+  if (status == ERROR_SUCCESS) status = ClearInterruptedBootstrapQueries();
   if (status != ERROR_SUCCESS) {
     Report(service, SERVICE_STOPPED, status);
     return;

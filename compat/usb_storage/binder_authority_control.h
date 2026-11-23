@@ -12,7 +12,6 @@ namespace gesher::usb_storage {
 
 class AuthorityLaunch;
 class AuthorityPeer;
-class BinderServiceQueryGrant;
 
 // Private capability transfer from the Windows service to a broker the same
 // service has created with AuthorityLaunch. The session's owner serializes
@@ -40,7 +39,6 @@ class BinderAuthorityControl {
   // Neither the handle nor the server endpoint leaves the authority.
   HANDLE broker_ = nullptr;
   HANDLE stop_ = nullptr;
-  std::unique_ptr<BinderServiceQueryGrant> service_query_;
   std::unique_ptr<AuthorityPeer> peer_;
 };
 

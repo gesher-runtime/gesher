@@ -33,6 +33,12 @@ function Assert-ProtectedOwner([string]$Path) {
     if ($sid -notin $trustedOwners) { throw "Unprotected owner on $Path" }
 }
 
+function Read-ServiceAcl {
+    $sddl = @(& sc.exe sdshow $service | Where-Object { $_ -match '^[OGDS]:' }) -join ''
+    if ($LASTEXITCODE -ne 0 -or -not $sddl) { throw 'Could not read the optional service ACL.' }
+    [Security.AccessControl.RawSecurityDescriptor]::new($sddl)
+}
+
 $setupPath = [IO.Path]::GetFullPath($Setup)
 $outside = Start-Process -FilePath ([IO.Path]::GetFullPath($BrokerImage)) `
     -ArgumentList 'install-service' -PassThru -Wait -WindowStyle Hidden
@@ -59,9 +65,7 @@ try {
     Assert-ProtectedOwner $folder
     Assert-ProtectedOwner $exe
     Assert-ProtectedOwner $uninstall
-    $sddl = @(& sc.exe sdshow $service | Where-Object { $_ -match '^[OGDS]:' }) -join ''
-    if ($LASTEXITCODE -ne 0 -or -not $sddl) { throw 'Could not read the optional service ACL.' }
-    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($sddl)
+    $descriptor = Read-ServiceAcl
     $queryAccess = $false
     foreach ($ace in $descriptor.DiscretionaryAcl) {
         if ($ace.AceType -ne [Security.AccessControl.AceType]::AccessAllowed) { continue }
@@ -73,6 +77,16 @@ try {
         }
     }
     if (-not $queryAccess) { throw 'Authenticated users cannot query the optional service.' }
+    # Represent a query-only AppContainer ACE left behind by an interrupted
+    # bootstrap. Starting the authority must retire this exact ACE.
+    $stalePackage = [Security.Principal.SecurityIdentifier]::new('S-1-15-2-400-401-402-403-404-405-406')
+    $staleAce = [Security.AccessControl.CommonAce]::new(
+        [Security.AccessControl.AceFlags]::None,
+        [Security.AccessControl.AceQualifier]::AccessAllowed, 0x5, $stalePackage, $false, $null)
+    $descriptor.DiscretionaryAcl.InsertAce($descriptor.DiscretionaryAcl.Count, $staleAce)
+    $testAcl = $descriptor.GetSddlForm([Security.AccessControl.AccessControlSections]::Access)
+    & sc.exe sdset $service $testAcl | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not set the isolated interrupted-bootstrap test ACL.' }
     Start-Service -Name $service
     $controller = Get-Service -Name $service
     try {
@@ -80,6 +94,10 @@ try {
             [ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(20))
     } finally {
         $controller.Dispose()
+    }
+    $after = Read-ServiceAcl
+    if ($after.DiscretionaryAcl | Where-Object { $_.SecurityIdentifier -eq $stalePackage }) {
+        throw 'Service startup did not clear the stale bootstrap query grant.'
     }
     # Exercise the uninstall stop path with the service still running.
 } finally {

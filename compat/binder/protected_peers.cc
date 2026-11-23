@@ -22,10 +22,6 @@ struct FreeSecurity {
   void operator()(void* value) const { LocalFree(value); }
 };
 
-struct CloseHandleOwner {
-  void operator()(void* value) const { CloseHandle(value); }
-};
-
 DWORD CheckObjectSecurity(HANDLE process, PSID authority) {
   PSID owner = nullptr;
   PACL dacl = nullptr;
@@ -52,15 +48,6 @@ DWORD CheckObjectSecurity(HANDLE process, PSID authority) {
   }
   PSID granted = const_cast<DWORD*>(&ace->SidStart);
   return IsValidSid(granted) && EqualSid(granted, authority) ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
-}
-
-DWORD ProcessSession(HANDLE process, DWORD* session) {
-  HANDLE raw = nullptr;
-  if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) return GetLastError();
-  const std::unique_ptr<void, CloseHandleOwner> token(raw);
-  DWORD bytes = 0;
-  return GetTokenInformation(token.get(), TokenSessionId, session, sizeof(*session), &bytes)
-      ? ERROR_SUCCESS : GetLastError();
 }
 
 }  // namespace
@@ -104,8 +91,9 @@ DWORD ProtectedPeers::RegisterOwned(HANDLE launched_process, uint32_t android_ui
   FILETIME created{}, exited{}, kernel{}, user{};
   if (!GetProcessTimes(peer->process_, &created, &exited, &kernel, &user)) return GetLastError();
   peer->creation_time_ = (uint64_t{created.dwHighDateTime} << 32) | created.dwLowDateTime;
-  error = ProcessSession(peer->process_, &peer->session_);
-  if (error != ERROR_SUCCESS) return error;
+  // The retained live process object anchored this PID. Get the OS session
+  // without asking a protected lowbox broker to open another process token.
+  if (!ProcessIdToSessionId(peer->pid_, &peer->session_)) return GetLastError();
   peer->uid_ = android_uid;
 
   std::lock_guard lock(mutex_);
