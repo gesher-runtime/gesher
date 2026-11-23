@@ -1887,7 +1887,9 @@ std::map<WeakPeer, AudioRegion, std::owner_less<WeakPeer>> g_audio_activity;
 std::mutex g_audio_lock;
 uint32_t g_next_audio_session = 1;  // guarded by g_audio_lock
 peer::OwnedHandle g_audio_device_controls;
+#ifdef GESHER_AUDIO_RENDER_BROKER
 playback::DeviceState* g_audio_controls_view = nullptr;
+#endif
 
 bool PrepareAudioDeviceControls() {
   if (!g_audio_device_controls) {
@@ -1899,7 +1901,11 @@ bool PrepareAudioDeviceControls() {
     if (!state) return false;
     playback::InitDeviceState(state);
     g_audio_device_controls = std::move(section);
+#ifdef GESHER_AUDIO_RENDER_BROKER
     g_audio_controls_view = state;
+#else
+    UnmapViewOfFile(state);
+#endif
   }
   return true;
 }

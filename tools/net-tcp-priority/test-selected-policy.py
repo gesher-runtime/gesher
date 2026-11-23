@@ -396,9 +396,9 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = 'de262cd638746ab7f665cf29824394150d0c36d57ec77529ef0f5748719c9ed9'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = 'f712fbf4c04dbf05004de268c9ecffc6e51db05dc85b8fb1a8da3daec2f679fc'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
- 'compat/binder/binderd.cc': '34c62aa0ca3c990723db2ee4595947ba1fa6a0db5b813c4edce58e0647adb100',
+ 'compat/binder/binderd.cc': 'df80bb25874fe2c9857ae31ce4826ada591f2cc625d104b2bda768b3ee785960',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
  'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
  'compat/posix/posix.cmake': 'aafaa8d7fe47db48a52890f70d05495e88726ead08becc8297a08fba09423083',
