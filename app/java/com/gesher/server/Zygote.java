@@ -44,7 +44,8 @@ public final class Zygote {
         int CAMERA_CHECK = 3;
         int CAMERA_FINISH = 4;
         int CAMERA_RESET = 5;
-        boolean allowed(int uid, int kind, long installationHigh, long installationLow, long session);
+        boolean allowed(int uid, int kind, long installationHigh, long installationLow, long session,
+                String attributionTag);
     }
 
     static native boolean nativeAttachCapturePermissionPolicy(CapturePolicy policy);

@@ -1636,13 +1636,15 @@ peer::OwnedHandle g_capture_policy;
 
 [[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process,
                                         gesher::capture_policy::Kind kind,
-                                        uint64_t session = 0) {
+                                        uint64_t session = 0,
+                                        gesher::capture_policy::Attribution attribution = {}) {
   const bool finish = kind == gesher::capture_policy::Kind::kCameraFinish;
   if (!process || process->role != peer::Role::kApplication ||
       (!finish && !g_peer_registry->Live(process))) return false;
   std::lock_guard<std::mutex> lock(g_capture_policy_lock);
   if (!g_capture_policy) return false;
-  gesher::capture_policy::Request request{process->uid, kind, process->installation, session};
+  gesher::capture_policy::Request request{process->uid, kind, process->installation, session,
+                                          attribution};
   uint32_t allowed = 0;
   const ULONGLONG deadline = GetTickCount64() + 500;
   if (!launch::Transfer(g_capture_policy.get(), &request, sizeof(request), true, deadline) ||
@@ -2077,7 +2079,9 @@ void ServeCamera(HANDLE pipe, In in) {
   using Kind = gesher::capture_policy::Kind;
   gesher::devices::camera::ServeBrokeredCamera(pipe, info_only != 0,
       [&] { return g_peer_registry->Live(process); },
-      [&] { return CaptureAuthorized(process, Kind::kCameraStart, session); },
+      [&](const auto& attribution) {
+        return CaptureAuthorized(process, Kind::kCameraStart, session, attribution);
+      },
       [&] { return CaptureAuthorized(process, Kind::kCameraCheck, session); }, session != 0);
   if (session) {
     CaptureAuthorized(process, Kind::kCameraFinish, session);

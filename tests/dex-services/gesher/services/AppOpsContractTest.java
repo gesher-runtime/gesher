@@ -1506,6 +1506,27 @@ public final class AppOpsContractTest {
         call(service, "attach", new Class<?>[]{type("CallerIdentity"), Supplier.class}, get(h.am, "mCallers"), states);
         return service;
     }
+
+    private static void protectedCameraAttribution(Harness h) throws Exception {
+        Token restriction = new Token();
+        h.ops.setUserRestriction(OP_CAMERA, true, restriction, 0,
+                new android.os.PackageTagsList.Builder().add(NAME, "one").build());
+        Class<?>[] signature = {ApkPackage.class, String.class, java.util.function.IntSupplier.class};
+        java.util.function.IntSupplier active = () -> UID_STATE_TOP;
+        Object admitted = call(h.service, "startCameraDelivery", signature, h.owner, "one", active);
+        check(admitted != null && (boolean)call(admitted, "check", new Class<?>[0]),
+                "Protected camera session keeps the admitted tag for repeated policy checks");
+        check(call(h.service, "startCameraDelivery", signature, h.owner, "unlisted", active) == null,
+                "Undeclared camera tag cannot claim the tag exemption");
+        h.ops.setUserRestriction(OP_CAMERA, true, restriction, 0, null);
+        check(!(boolean)call(admitted, "check", new Class<?>[0]),
+                "Replacing the restriction ends the tagged camera delivery");
+        var attributed = h.ops.getOpsForPackage(UID, NAME, new int[]{OP_CAMERA}).get(0).getOps().get(0)
+                .getAttributedOpEntries();
+        check(attributed.containsKey("one") && attributed.containsKey(null) && !attributed.containsKey("unlisted"),
+                "Protected camera records the declared attribution and normalizes undeclared tags");
+        restriction.die();
+    }
     public static int run(boolean parcel) throws Exception {
         FixtureServiceContext.Scope previous = serviceContexts;
         try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
@@ -1517,6 +1538,7 @@ public final class AppOpsContractTest {
     private static int runWithServiceContext(boolean parcel) throws Exception {
         binder = parcel; checks = 0;
         Harness h = new Harness(); fixedModeRefreshCost(h); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
+        protectedCameraAttribution(h);
         permissionCheckerEdges();
         foregroundServiceExit();
         return checks;

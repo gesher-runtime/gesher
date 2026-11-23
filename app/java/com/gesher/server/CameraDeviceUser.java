@@ -172,10 +172,17 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private WindowsCamera.Capture mCapture;
     /** The size {@link #mCapture} was opened for (the largest stream's then). */
     private Size mCaptureFor;
+    private final String mAttributionTag;
 
     CameraDeviceUser(CameraService service, String cameraId, WindowsCamera.Device device,
             ICameraDeviceCallbacks callbacks) {
+        this(service, cameraId, device, callbacks, null);
+    }
+
+    CameraDeviceUser(CameraService service, String cameraId, WindowsCamera.Device device,
+            ICameraDeviceCallbacks callbacks, String attributionTag) {
         mService = service;
+        mAttributionTag = attributionTag;
         mCameraId = cameraId;
         mDevice = device;
         mCallbackQueue = new CameraCallbacks(cameraId, callbacks, () -> {
@@ -750,7 +757,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private void open(Size size) throws WindowsCamera.OpenException {
         long start = SystemClock.elapsedRealtime();
         WindowsCamera.Capture capture = WindowsCamera.open(mDevice.id, size.getWidth(),
-                size.getHeight());
+                size.getHeight(), mAttributionTag);
         mCapture = capture;
         mCaptureFor = size;
         CameraService.log("camera " + mCameraId + " (" + mDevice.name + ") capturing at "

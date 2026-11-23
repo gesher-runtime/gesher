@@ -23,13 +23,13 @@ final class ProtectedCameraPolicy {
         mPm = pm;
     }
 
-    boolean installed(int uid, int kind, long high, long low, long session,
+    boolean installed(int uid, int kind, long high, long low, long session, String tag,
             ActivityManagerService am) {
         if (kind != Zygote.CapturePolicy.CAMERA_START) return existing(kind, session);
         String installation = new UUID(high, low).toString();
         for (ApkPackage pkg : mPm.packages()) {
             if (pkg.uid() != uid || !installation.equals(pkg.enabledStateOwner())) continue;
-            return start(session, pkg, () -> {
+            return start(session, pkg, tag, () -> {
                 if (mPm.get(pkg.packageName) != pkg || mPm.isRemovalPending(pkg.packageName)
                         || mPm.checkUidPermission(Manifest.permission.CAMERA, uid)
                                 != PackageManager.PERMISSION_GRANTED) return -1;
@@ -40,10 +40,10 @@ final class ProtectedCameraPolicy {
         return false;
     }
 
-    boolean scoped(int kind, long session, PermissionPolicy.ScopedOwner owner,
+    boolean scoped(int kind, long session, PermissionPolicy.ScopedOwner owner, String tag,
             IntSupplier foregroundState) {
         if (kind != Zygote.CapturePolicy.CAMERA_START) return existing(kind, session);
-        return start(session, owner.code(), () -> owner.isCurrent()
+        return start(session, owner.code(), tag, () -> owner.isCurrent()
                 && owner.check(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                 && permitsForeground(owner.mode(Manifest.permission.CAMERA))
                         ? foregroundState.getAsInt() : -1);
@@ -53,9 +53,9 @@ final class ProtectedCameraPolicy {
         return mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_FOREGROUND;
     }
 
-    private boolean start(long session, ApkPackage owner, IntSupplier policy) {
+    private boolean start(long session, ApkPackage owner, String tag, IntSupplier policy) {
         if (session == 0 || mDeliveries.containsKey(session)) return false;
-        AppOpsService.CameraDelivery delivery = mPm.appOps().startCameraDelivery(owner, policy);
+        AppOpsService.CameraDelivery delivery = mPm.appOps().startCameraDelivery(owner, tag, policy);
         if (delivery == null) return false;
         mDeliveries.put(session, delivery);
         return true;

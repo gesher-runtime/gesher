@@ -155,8 +155,8 @@ final class CohostPermissionHost implements AutoCloseable {
     }
 
     /** The private capture server invokes this for the pinned caller only. */
-    private boolean dispatchCamera(int kind, long session) {
-        return mCamera.scoped(kind, session, mOwner,
+    private boolean dispatchCamera(int kind, long session, String tag) {
+        return mCamera.scoped(kind, session, mOwner, tag,
                 () -> WindowsHost.sessionLockState() == 0 && isForeground()
                         ? AppOpsManager.UID_STATE_TOP : -1);
     }

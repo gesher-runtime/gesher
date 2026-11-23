@@ -3,6 +3,7 @@
 #pragma once
 
 #include "camera_mf.h"
+#include <gesher/capture_policy.h>
 
 #include <functional>
 #include <string>
@@ -11,9 +12,10 @@
 namespace gesher::devices::camera {
 
 const std::vector<Device>& ListBrokered(std::string* status);
-std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int height, HRESULT* hr);
+std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int height,
+                                     capture_policy::Attribution attribution, HRESULT* hr);
 void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()>& live,
-                         const std::function<bool()>& start,
+                         const std::function<bool(const capture_policy::Attribution&)>& start,
                          const std::function<bool()>& authorized, bool slot);
 
 }  // namespace gesher::devices::camera

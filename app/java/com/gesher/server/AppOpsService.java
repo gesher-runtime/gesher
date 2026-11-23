@@ -582,7 +582,8 @@ public final class AppOpsService extends IAppOpsService.Default {
             int foregroundState = mPolicy.getAsInt();
             synchronized (mLock) {
                 if (foregroundState >= 0 && mCameraDeliveries.contains(mStarted)) {
-                    return !restricted(OP_CAMERA, mStarted.key.uid, mStarted.key.name, null, false);
+                    if (!restricted(OP_CAMERA, mStarted.key.uid, mStarted.key.name,
+                            mStarted.key.tag, false)) return true;
                 }
                 close();
                 return false;
@@ -596,11 +597,11 @@ public final class AppOpsService extends IAppOpsService.Default {
         }
     }
 
-    CameraDelivery startCameraDelivery(ApkPackage owner, java.util.function.IntSupplier policy) {
+    CameraDelivery startCameraDelivery(ApkPackage owner, String tag, java.util.function.IntSupplier policy) {
         int state = policy.getAsInt();
-        OpKey key = new OpKey(OP_CAMERA, owner.uid(), owner.packageName, null, 0);
+        OpKey key = new OpKey(OP_CAMERA, owner.uid(), owner.packageName, attribution(owner, tag), 0);
         synchronized (mLock) {
-            if (state < 0 || restricted(OP_CAMERA, key.uid, key.name, null, false)) {
+            if (state < 0 || restricted(OP_CAMERA, key.uid, key.name, key.tag, false)) {
                 record(key, false, OP_FLAG_SELF, null);
                 notifyStarted(key, MODE_IGNORED, OP_FLAG_SELF, 0, -1, START_TYPE_FAILED);
                 return null;

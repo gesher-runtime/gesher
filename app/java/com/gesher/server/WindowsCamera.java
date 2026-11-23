@@ -175,10 +175,14 @@ public final class WindowsCamera {
 
     /** Opens {@code id} at its offered size nearest to {@code width} x {@code height}. */
     public static Capture open(String id, int width, int height) throws OpenException {
+        return open(id, width, height, null);
+    }
+
+    static Capture open(String id, int width, int height, String attributionTag) throws OpenException {
         int[] out = new int[3];
         long handle;
         try {
-            handle = nativeOpen(id, width, height, out);
+            handle = nativeOpen(id, width, height, attributionTag, out);
         } catch (UnsatisfiedLinkError e) {
             throw new OpenException(id, 0x80004001);
         }
@@ -190,7 +194,7 @@ public final class WindowsCamera {
 
     private static native String nativeStatus();
 
-    private static native long nativeOpen(String id, int width, int height, int[] out);
+    private static native long nativeOpen(String id, int width, int height, String attributionTag, int[] out);
 
     private static native int nativeRead(long handle, byte[] nv12);
 

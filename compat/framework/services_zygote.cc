@@ -235,7 +235,8 @@ class CapturePolicyServer {
     while (server.Exchange(&request, sizeof(request), false)) {
       uint32_t allowed = request.uid >= 10000 && request.uid <= 19999 &&
           request.kind >= capture_policy::Kind::kMicrophone &&
-          request.kind <= capture_policy::Kind::kCameraFinish && server.allowed_(request);
+          request.kind <= capture_policy::Kind::kCameraFinish &&
+          request.attribution.valid() && server.allowed_(request);
       if (!server.Exchange(&allowed, sizeof(allowed), true)) break;
     }
     server.allowed_({0, capture_policy::Kind::kCameraReset});

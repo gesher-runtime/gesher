@@ -292,13 +292,20 @@ static jint Zygote_openProtectedChildFile(JNIEnv* env, jclass, jint pid, jlong b
     return fd;
 }
 
+static jstring CaptureAttributionTag(JNIEnv* env, const gesher::capture_policy::Request& request) {
+    const auto& attribution = request.attribution;
+    if (request.kind != gesher::capture_policy::Kind::kCameraStart ||
+        !attribution.valid() || attribution.length == attribution.kNone) return nullptr;
+    return env->NewString(reinterpret_cast<const jchar*>(attribution.tag.data()), attribution.length);
+}
+
 static jboolean Zygote_attachCapturePermissionPolicy(JNIEnv* env, jclass, jobject predicate) {
     if (predicate == nullptr) return JNI_FALSE;
     JavaVM* vm = nullptr;
     if (env->GetJavaVM(&vm) != JNI_OK) return JNI_FALSE;
     jclass type = env->GetObjectClass(predicate);
     if (type == nullptr) return JNI_FALSE;
-    const jmethodID method = env->GetMethodID(type, "allowed", "(IIJJJ)Z");
+    const jmethodID method = env->GetMethodID(type, "allowed", "(IIJJJLjava/lang/String;)Z");
     env->DeleteLocalRef(type);
     if (method == nullptr) return JNI_FALSE;
     const jobject policy = env->NewGlobalRef(predicate);
@@ -312,9 +319,10 @@ static jboolean Zygote_attachCapturePermissionPolicy(JNIEnv* env, jclass, jobjec
                 high |= static_cast<uint64_t>(request.installation[i]) << (8 * i);
                 low |= static_cast<uint64_t>(request.installation[8 + i]) << (8 * i);
             }
-            const bool allowed = thread->CallBooleanMethod(
+            jstring tag = CaptureAttributionTag(thread, request);
+            const bool allowed = !thread->ExceptionCheck() && thread->CallBooleanMethod(
                 policy, method, static_cast<jint>(request.uid), static_cast<jint>(request.kind),
-                static_cast<jlong>(high), static_cast<jlong>(low), static_cast<jlong>(request.session));
+                static_cast<jlong>(high), static_cast<jlong>(low), static_cast<jlong>(request.session), tag);
             const bool failed = thread->ExceptionCheck();
             if (failed) thread->ExceptionClear();
             vm->DetachCurrentThread();
@@ -711,7 +719,7 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
     if (dispatch == nullptr) return 0;
     jmethodID clipboard = env->GetMethodID(type, "dispatchClipboard", "(I[B)[B");
     if (clipboard == nullptr) return 0;
-    jmethodID camera = env->GetMethodID(type, "dispatchCamera", "(IJ)Z");
+    jmethodID camera = env->GetMethodID(type, "dispatchCamera", "(IJLjava/lang/String;)Z");
     if (camera == nullptr) return 0;
     JavaVM* vm = nullptr;
     if (env->GetJavaVM(&vm) != JNI_OK) {
@@ -818,8 +826,9 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
                 if (request.kind != Kind::kMicrophone) {
                     JNIEnv* thread = nullptr;
                     if (vm->AttachCurrentThread(&thread, nullptr) != JNI_OK) return false;
-                    const bool allowed = thread->CallBooleanMethod(host, camera,
-                        static_cast<jint>(request.kind), static_cast<jlong>(request.session));
+                    jstring tag = CaptureAttributionTag(thread, request);
+                    const bool allowed = !thread->ExceptionCheck() && thread->CallBooleanMethod(host, camera,
+                        static_cast<jint>(request.kind), static_cast<jlong>(request.session), tag);
                     const bool failed = thread->ExceptionCheck();
                     if (failed) thread->ExceptionClear();
                     vm->DetachCurrentThread();

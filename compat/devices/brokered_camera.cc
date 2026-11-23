@@ -210,7 +210,8 @@ const std::vector<Device>& ListBrokered(std::string* status) {
   return *devices;
 }
 
-std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int height, HRESULT* hr) {
+std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int height,
+                                     capture_policy::Attribution attribution, HRESULT* hr) {
   *hr = E_ABORT;
   CameraPipe pipe(binder_endpoint::OpenCamera(false));
   if (!pipe.valid()) return nullptr;
@@ -220,6 +221,7 @@ std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int heig
   const auto deadline = GetTickCount64() + kExchangeMs;
   if (!Transfer(pipe.get(), size, true, deadline) ||
       !ExchangeText(pipe.get(), symbol, true, deadline) ||
+      !Transfer(pipe.get(), attribution, true, deadline) ||
       !Transfer(pipe.get(), reply, false, deadline) ||
       !Acknowledge(pipe.get(), true, deadline)) return nullptr;
   *hr = reply.result;
@@ -233,7 +235,7 @@ std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int heig
 }
 #else
 void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()>& live,
-                         const std::function<bool()>& start,
+                         const std::function<bool(const capture_policy::Attribution&)>& start,
                          const std::function<bool()>& authorized, bool slot) {
   DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
   if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) || !live()) return;
@@ -244,8 +246,10 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
   const auto deadline = GetTickCount64() + kExchangeMs;
   std::string id;
   Geometry requested{};
+  capture_policy::Attribution attribution;
   if (!Transfer(pipe, requested, false, deadline) ||
-      !ExchangeText(pipe, id, false, deadline)) return;
+      !ExchangeText(pipe, id, false, deadline) ||
+      !Transfer(pipe, attribution, false, deadline) || !attribution.valid()) return;
   OpenReply reply{E_ACCESSDENIED, {}};
   std::unique_ptr<Capture> capture;
   const auto admitted = [&] {
@@ -259,7 +263,7 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
         requested.width <= 32768 && requested.height <= 32768 && !id.empty() &&
         id.find('\0') == std::string::npos && id != "gesher-test") {
       reply.result = E_ACCESSDENIED;
-      if (start() && admitted()) {
+      if (start(attribution) && admitted()) {
         capture = OpenRevocable(id, requested.width, requested.height, &reply.result, admitted);
       }
     }

@@ -6,7 +6,6 @@ package com.gesher.server;
 
 import android.Manifest;
 import android.app.ActivityThread;
-import android.app.AppOpsManager;
 import android.content.AttributionSourceState;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
@@ -455,7 +454,8 @@ public final class CameraService extends ICameraService.Default {
                     + " does not have " + Manifest.permission.CAMERA);
         }
         CameraDeviceUser previous;
-        CameraDeviceUser user = new CameraDeviceUser(this, cameraId, d, callbacks);
+        CameraDeviceUser user = new CameraDeviceUser(this, cameraId, d, callbacks,
+                clientAttribution.attributionTag);
         synchronized (mOpen) {
             previous = mOpen.put(cameraId, user);
         }

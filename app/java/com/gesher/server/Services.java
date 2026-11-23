@@ -130,11 +130,11 @@ public final class Services {
         sLast = created;
         if (SystemServer.isProtectedDevice()) {
             ProtectedCameraPolicy camera = new ProtectedCameraPolicy(pm);
-            if (!Zygote.nativeAttachCapturePermissionPolicy((uid, kind, high, low, session) ->
+            if (!Zygote.nativeAttachCapturePermissionPolicy((uid, kind, high, low, session, tag) ->
                     kind == Zygote.CapturePolicy.MICROPHONE
                         ? pm.checkUidPermission(android.Manifest.permission.RECORD_AUDIO, uid)
                             == android.content.pm.PackageManager.PERMISSION_GRANTED
-                        : camera.installed(uid, kind, high, low, session, am))) {
+                        : camera.installed(uid, kind, high, low, session, tag, am))) {
                 SystemServer.log("The protected capture permission channel is unavailable");
             }
         }
