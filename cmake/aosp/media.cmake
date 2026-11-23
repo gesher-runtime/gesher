@@ -124,6 +124,16 @@ target_compile_options(media_muxer_verify PRIVATE -Wall -Wextra -Werror -Wno-unu
   -Wno-deprecated-copy)
 set_target_properties(media_muxer_verify PROPERTIES CXX_STANDARD 23)
 
+# The actual pure helper, including unaligned and protected-page boundaries.
+# This default native target accompanies the unchanged ART/NDK muxer gates.
+add_executable(media_annexb_contracts
+  "${CMAKE_SOURCE_DIR}/tests/media/annexb_split_contracts.cc"
+  ${_media}/encode/codec_config.cc)
+target_include_directories(media_annexb_contracts PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_annexb_contracts PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(media_annexb_contracts PRIVATE pthread)
+set_target_properties(media_annexb_contracts PROPERTIES CXX_STANDARD 23)
+
 add_library(gesher_media_player OBJECT
   ${_media}/jni/java_data_source.cc
   ${_media}/jni/media_codec_jni.cc
