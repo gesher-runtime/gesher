@@ -112,6 +112,10 @@ jobs:
         run: |
           & .\query-pool-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
+      - name: Java DNS admission and completion ownership on Windows
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
       - name: Durable settings journal, replacement and crash recovery contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -480,6 +484,9 @@ jobs:
 
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
+
+      - name: Java DNS admission, cancellation, callback ownership and actual deadlines
+        run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
 
       - name: WebStorage origin, owned WebView responses and running-task contracts
         run: |

@@ -569,6 +569,9 @@ Check 'services: android.net.DnsResolver (the Connectivity module''s API) resolv
   $fixesOut
 } @('FrameworkFixesTest: android.net.DnsResolver: query and rawQuery answer localhost through the executor, other types NOTIMP, a cancelled query is silent',
   'FrameworkFixesTest all passed')
+Check 'services: bounded DNS ownership through real ART and Windows localhost lookup' {
+  FixesRun ($dvmFixes + 'gesher.services.DnsAdmissionTest') 80
+} @('DnsAdmissionTest passed:')
 Check 'services: BluetoothManager without an adapter, and android.os.Debug''s native heap counters' {
   $global:LASTEXITCODE = $fixesCode
   $fixesOut
