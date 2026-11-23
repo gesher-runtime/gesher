@@ -158,6 +158,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     // and the covered Activity's pause transaction to be scheduled.
                     synchronized (mLaunchLock) {
                         ControlCenter.forgetResult(pending.token);
+                        if (pending.continuation != null) pending.continuation.accept(pending.hostClosed);
                         if (pending.requestCode >= 0) {
                             deliverResult((ActivityRecord) pending.source, pending.resultWho,
                                     pending.requestCode, code, null, (ProcessRecord) pending.process);
@@ -230,6 +231,66 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             else if (resumeCovered) { realStartActivity(covered); resume(covered); }
             updateTopResumed();
         }
+    }
+
+    /** The Activity that launched the confirmation remains covered until the user decides. */
+    final class InstallConfirmationVisit {
+        private final ActivityRecord source;
+        private final ProcessRecord process;
+        private final String resultWho;
+        private final int requestCode;
+        private Runnable releaseCover;
+        private boolean completed;
+
+        InstallConfirmationVisit(IBinder sourceToken, int callerPid, String resultWho, int requestCode) {
+            synchronized (ActivityTaskManagerService.this) {
+                ActivityRecord record = sourceToken == null ? null : forToken(sourceToken);
+                ProcessRecord app = record == null ? null : record.app;
+                boolean attached = app != null && app == processByPid(callerPid);
+                this.source = attached ? record : null;
+                this.process = attached ? app : null;
+            }
+            this.resultWho = resultWho;
+            this.requestCode = requestCode;
+        }
+
+        void cover(Intent intent) {
+            if (source != null) releaseCover = coverWithSettings(source, process, intent);
+        }
+
+        void finish(boolean confirmed) {
+            synchronized (mLaunchLock) {
+                if (completed) return;
+                completed = true;
+                try {
+                    if (source != null && requestCode >= 0) {
+                        deliverResult(source, resultWho, requestCode,
+                                confirmed ? android.app.Activity.RESULT_OK : android.app.Activity.RESULT_CANCELED,
+                                null, process);
+                    }
+                } finally {
+                    if (releaseCover != null) releaseCover.run();
+                }
+            }
+        }
+    }
+
+    /** Opens the unknown-source choice for an already committed installer continuation. */
+    boolean openInstallSourceSettings(String packageName, Intent launchIntent,
+            InstallConfirmationVisit visit, java.util.function.Consumer<Boolean> complete) {
+        // Host completion cannot pass admission and pause under mLaunchLock.
+        SettingsResults results = settingsResults();
+        SettingsResults.Pending pending = new SettingsResults.Pending(null, null,
+                null, -1, SettingsResults.UNKNOWN_SOURCES, packageName);
+        pending.continuation = complete;
+        String token = results.register(pending);
+        if (token == null) return false;
+        if (!ControlCenter.open(packageName, token, results::cancel)) {
+            results.discard(token);
+            return false;
+        }
+        visit.cover(launchIntent);
+        return true;
     }
 
     /** A dialog is now visible in this exact Control Center host process. */
@@ -2851,6 +2912,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 }
                 if (!matchingThread) throw new SecurityException("Unrecognized activity caller thread");
             }
+        }
+        if (PackageInstallerService.isConfirmationIntent(intent)) {
+            boolean newTask = (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
+            return mPm.packageInstallerService().openConfirmation(intent, resultToToken,
+                    originalPid, resultWho, newTask ? -1 : requestCode);
         }
         if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
             return requestPermissions(caller, callingPackage, intent, resultToToken,

@@ -628,6 +628,9 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
         if (isRemovalPending(className.getPackageName())) return null;
+        if (userId == 0 && PackageInstallerService.CONFIRM_ACTIVITY.equals(className)) {
+            return mInstallerService.confirmationInfo();
+        }
         ApkPackage p = get(className.getPackageName());
         if (p == null && userId == 0 && ExactAlarmAccessRequests.PACKAGE.equals(className.getPackageName())) {
             ActivityInfo nativeActivity = exactAlarmAccessRequests().activityInfo(className, flags);
@@ -671,6 +674,12 @@ public final class PackageManagerService extends IPackageManager.Default {
     // A query spanning multiple records must not straddle an atomic enabled-state
     // batch. These readers do metadata/filter work only, never application callbacks.
     private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags, int userId) {
+        if (userId == 0 && PackageInstallerService.isConfirmationIntent(intent)) {
+            ResolveInfo confirmation = new ResolveInfo();
+            confirmation.activityInfo = mInstallerService.confirmationInfo();
+            confirmation.isDefault = true;
+            return List.of(confirmation);
+        }
         if (ExactAlarmAccessRequests.handles(intent, resolvedType)) {
             if (userId != 0) return new ArrayList<>();
             Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
@@ -1669,6 +1678,10 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     private final PackageInstallerService mInstallerService = new PackageInstallerService(this);
+
+    PackageInstallerService packageInstallerService() {
+        return mInstallerService;
+    }
 
     private java.io.File appMetadata(String packageName, int userId) {
         if (userId != 0) throw new SecurityException("Only user 0 is supported");

@@ -452,17 +452,23 @@ package's signing identity, app-op watchers notified, and read by the app's own 
 `MediaStore.canManageMedia`). Every switch starts off (each op's default; the appop
 permissions themselves are never granted). The Control Center reads and writes them with
 `gesher-app special-access PACKAGE [OP allow|deny]`, a `gesher` service transaction that
-only the host shell may call (an attached app is refused), and the device checks the
-package, the op and the manifest request again; the dialog reads and changes them in the
-background. A `startActivityForResult` on an app's details is answered when the details close
-(`SettingsResults`: a token file per waiting request in `data/system/control-panel-results`,
-`gesher-app settings-closed`; as AOSP's ExternalSourcesDetails, Install unknown apps answers
-RESULT_OK only if the user turned its switch on during the visit, RESULT_CANCELED if turned
-off or not turned, and the other screens RESULT_CANCELED; a waiting request that one for
-another app replaces before it was shown is answered at once; after 15 minutes at the
-latest), so the app re-checks after the user decided. `canRequestPackageInstalls` answers
-only about the caller's own package (another app's caller gets SecurityException, as AOSP). Exact alarms (always allowed
-here) and full-screen intents (`canUseFullScreenIntent` is not implemented) have no switch.
+only the host shell may call (an attached app is refused). The device checks the package,
+the op and eligibility, and the dialog reads and changes switches in the background.
+
+A per-app Settings visit pauses the originating activity while the Control Center covers it.
+A `startActivityForResult` answers on close. Install unknown apps returns `RESULT_OK` when the
+last change in that visit turned the switch on. Other outcomes return `RESULT_CANCELED`.
+A request that has not been displayed expires after 15 minutes or when a newer request
+replaces it. A visible visit waits for the same Control Center process to report its close
+and cancels if that process exits unexpectedly.
+
+`canRequestPackageInstalls` answers only for the calling package. An untrusted
+`PackageInstaller` session with a valid APK and an eligible source whose mode needs a user
+decision returns `STATUS_PENDING_USER_ACTION`. The installer app launches the returned
+confirmation intent, which opens its own Install unknown apps screen. The server checks the
+source again when that screen closes, requires user confirmation of the specific APK, and
+checks authorization before publishing package code. Trusted install sources keep their
+existing Windows confirmation. Exact alarms and full-screen intents have no switch.
 StorageStatsService honours the Usage access op as usage stats do.
 Alert window admission uses the caller's installed process identity and Android's
 target-SDK and AppOps rules. A window admitted in a hidden mode stays hidden, including

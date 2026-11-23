@@ -391,6 +391,12 @@ final class Installer {
     /** Server-owned immutable session metadata, copied before package publication. */
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource) throws Exception {
+        return install(apk, sessionMetadata, installSource, () -> {});
+    }
+
+    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
+            PackageInstallSource installSource, Runnable authorize) throws Exception {
+        authorize.run();
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
         recoverRemovals();
@@ -401,7 +407,7 @@ final class Installer {
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             ContactsProviderSupport.checkPackageAdmission(parsed);
-            return unchanged(apk, recorded.packageName, parsed, recorded, null);
+            return unchanged(apk, recorded.packageName, parsed, recorded, null, authorize);
         }
         File tempDir = null;
         File pendingCode = null;
@@ -487,7 +493,7 @@ final class Installer {
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
-                        installSource);
+                        installSource, authorize);
             }
             int n = 1;
             if (old != null) {
@@ -576,6 +582,7 @@ final class Installer {
             // The incoming manifest cannot authorize moving an older app's data.
             // Boot preparation used the committed manifest before any update;
             // changing defaultToDeviceProtectedStorage later does not migrate CE.
+            authorize.run();
             installed.prepareInstallDataDirectories(old != null || previous != null);
             // Keep the running generation until parsing and native extraction succeed.
             if (old != null || previous != null) mAtm.forceStopPackage(pkg);
@@ -584,7 +591,7 @@ final class Installer {
                 NotificationManagerService notifications = NotificationManagerService.sLast;
                 if (notifications != null) notifications.packageRemoved(pkg);
             }
-            publishInstalled(entry, installed);
+            publishInstalled(entry, installed, authorize);
             if (old != null && !old.codePath.equals(entry.codePath)) {
                 delete(new File(old.codePath));
             }
@@ -607,8 +614,10 @@ final class Installer {
     }
 
     /** Owner creation can fail; finish it before committing the installed registry. */
-    private void publishInstalled(Entry entry, ApkPackage installed) throws IOException {
+    private void publishInstalled(Entry entry, ApkPackage installed, Runnable authorize)
+            throws IOException {
         synchronized (mPm) {
+            authorize.run();
             try (PackageUids.Admission identity = mPm.prepareAdd(installed)) {
                 identity.commit();
                 // A failed registry write rolls back both attribution below and
@@ -636,7 +645,8 @@ final class Installer {
 
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
-            PackageInstallSource installSource) throws Exception {
+            PackageInstallSource installSource, Runnable authorize) throws Exception {
+        authorize.run();
         Entry entry = old.withInstallSource(installSource);
         SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                 + old.codePath + ")");
@@ -662,14 +672,20 @@ final class Installer {
                 installed.setSystemAddon(true);
             }
             installed.prepareInstalledDataDirectories();
-            if (entry != old) publishInstalled(entry, installed);
-            else mPm.add(installed, this);
+            if (entry != old) publishInstalled(entry, installed, authorize);
+            else synchronized (mPm) {
+                authorize.run();
+                mPm.add(installed, this);
+            }
         } else if (entry != old) {
             // An explicit session reinstall can change attribution even when code bytes
             // are unchanged. A direct host launch of the same file keeps the old record.
             synchronized (mPm) {
+                authorize.run();
                 persistInstallSource(mPm.get(pkg), entry.installSource);
             }
+        } else synchronized (mPm) {
+            authorize.run();
         }
         return new String[] {pkg, "unchanged", old.codePath,
                 String.valueOf(parsed.versionCode())};

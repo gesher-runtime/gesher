@@ -59,6 +59,8 @@ final class SettingsResults {
         /** The last turn of the screen's switch during the visit (null: none). */
         Boolean toggle;
         Runnable releaseCover;
+        java.util.function.Consumer<Boolean> continuation;
+        boolean hostClosed;
 
         Pending(Object source, Object process, String resultWho, int requestCode, String action,
                 String packageName) {
@@ -218,6 +220,7 @@ final class SettingsResults {
                 pending = mPending.get(token);
                 if (pending == null || (pending.panel != null && !pending.panel.equals(panel))) continue;
                 mPending.remove(token);
+                pending.hostClosed = pending.panel != null && pending.panel.equals(panel);
             }
             finish(pending, resultCode(pending));
             answered++;

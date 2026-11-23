@@ -316,6 +316,125 @@ public final class PackageInstallerSessionTest {
                 && !new File(replacementCode, "base.dm").exists() && manager.getAppMetadataFd(pkg, 0) == null,
                 "Same-content session incorrectly retained metadata from its previous install");
     }
+    private static void declareInstallSource(com.gesher.server.ApkPackage source) throws Exception {
+        var parsed = (com.android.internal.pm.parsing.pkg.PackageImpl)source.parsed;
+        Field uses = parsed.getClass().getDeclaredField("usesPermissionMapping");
+        uses.setAccessible(true);
+        uses.set(parsed, new HashMap<>(parsed.getUsesPermissionMapping()));
+        parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                android.Manifest.permission.REQUEST_INSTALL_PACKAGES, 0, Set.of()));
+    }
+
+    private static void sourceMode(com.gesher.server.PackageManagerService pm, String name, int mode)
+            throws Exception {
+        var source = pm.get(name);
+        if (!source.parsed.getRequestedPermissions().contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES)) {
+            declareInstallSource(source);
+        }
+        require(pm.appOps().setModeIfCurrent(android.app.AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+                source, mode), "Install-source app-op was not recorded");
+    }
+
+    private static void until(java.util.function.BooleanSupplier condition, String message) throws Exception {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(10);
+        require(condition.getAsBoolean(), message);
+    }
+
+    private static void installSourceContinuation(IPackageInstaller service,
+            com.gesher.server.PackageManagerService pm, Object atm, String pkg, File apk,
+            AtomicReference<String> caller, AtomicReference<Boolean> allow, AtomicInteger prompts,
+            AtomicReference<Runnable> duringConsent, List<Runnable> jobs) throws Exception {
+        Field opener = Class.forName("com.gesher.server.ControlCenter").getDeclaredField("sOpenForResult");
+        opener.setAccessible(true);
+        Object original = opener.get(null);
+        List<String> visits = new ArrayList<>();
+        opener.set(null, Proxy.newProxyInstance(opener.getType().getClassLoader(),
+                new Class<?>[]{opener.getType()}, (proxy, called, args) -> visits.add((String)args[1])));
+        Class<?> atmClass = atm.getClass();
+        Method shown = atmClass.getMethod("settingsScreensShown", int.class, long.class, String[].class);
+        Method closed = atmClass.getMethod("settingsScreensClosed", int.class, long.class, String[].class);
+        Class<?> activities = Class.forName("[L" + atmClass.getName() + "$ActivityRecord;");
+        Method open = method(atmClass, "start", android.app.IApplicationThread.class, Intent.class,
+                String.class, String.class, IBinder.class, String.class, int.class, activities);
+        Field endpoint = pm.getClass().getDeclaredField("mInstallerService");
+        endpoint.setAccessible(true);
+        Object originalService = endpoint.get(pm);
+        endpoint.set(pm, service);
+        int pid = android.os.Process.myPid();
+        long birth = com.gesher.server.Zygote.startTime(pid);
+        try {
+            for (int outcome : new int[]{PackageInstaller.STATUS_FAILURE_ABORTED,
+                    PackageInstaller.STATUS_FAILURE_BLOCKED, PackageInstaller.STATUS_SUCCESS}) {
+                caller.set(pkg);
+                sourceMode(pm, pkg, android.app.AppOpsManager.MODE_ERRORED);
+                int before = prompts.get(), beforeVisits = visits.size();
+                int id = create(service, pkg, pkg);
+                stage(service, id, apk, "base.apk");
+                AtomicReference<Intent> status = new AtomicReference<>();
+                service.openSession(id).commit(receiver(status), false);
+                jobs.remove(0).run();
+                until(() -> status.get() != null, "Missing pending Android install action");
+                Intent pending = status.getAndSet(null);
+                Intent action = pending.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+                require(pending.getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                            == PackageInstaller.STATUS_PENDING_USER_ACTION
+                        && pending.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) == id
+                        && action != null && PackageInstaller.ACTION_CONFIRM_INSTALL.equals(action.getAction())
+                        && action.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) == id
+                        && visits.size() == beforeVisits && prompts.get() == before,
+                        "Installer did not deliver a sealed user action before showing consent");
+                require(pm.getActivityInfo(action.getComponent(), 0, 0) != null
+                        && pm.resolveIntent(action, null, 0, 0).activityInfo != null,
+                        "PackageInstaller confirmation cannot be resolved");
+                Intent missingToken = new Intent(PackageInstaller.ACTION_CONFIRM_INSTALL)
+                        .setComponent(action.getComponent()).putExtra(PackageInstaller.EXTRA_SESSION_ID, id);
+                require(open.invoke(atm, null, missingToken, null, pkg, null, null, -1, null)
+                            .equals(android.app.ActivityManager.START_INTENT_NOT_RESOLVED),
+                        "An intent without the issued confirmation was admitted");
+                caller.set("foreign.application");
+                rejected(() -> open.invoke(atm, null, action, null, pkg, null, null, -1, null),
+                        SecurityException.class);
+                caller.set(pkg);
+                require(open.invoke(atm, null, action, null, pkg, null, null, -1, null)
+                            .equals(android.app.ActivityManager.START_SUCCESS)
+                        && visits.size() == beforeVisits + 1,
+                        "Valid continuation did not open the install-source settings");
+                require(open.invoke(atm, null, action, null, pkg, null, null, -1, null)
+                            .equals(android.app.ActivityManager.START_CANCELED),
+                        "A replay opened a second confirmation window");
+                String[] tokens = {visits.get(beforeVisits)};
+                require(shown.invoke(atm, pid, birth, tokens).equals(1), "Install-source visit did not bind to the host");
+                if (outcome != PackageInstaller.STATUS_FAILURE_ABORTED) {
+                    sourceMode(pm, pkg, android.app.AppOpsManager.MODE_ALLOWED);
+                    allow.set(true);
+                }
+                if (outcome == PackageInstaller.STATUS_FAILURE_BLOCKED) {
+                    duringConsent.set(() -> {
+                        try { sourceMode(pm, pkg, android.app.AppOpsManager.MODE_ERRORED); }
+                        catch (Exception e) { throw new AssertionError(e); }
+                    });
+                }
+                require(closed.invoke(atm, pid, birth, tokens).equals(1), "Owner host close was not accepted");
+                if (outcome != PackageInstaller.STATUS_FAILURE_ABORTED) {
+                    until(() -> !jobs.isEmpty(), "Granted source did not resume install");
+                    jobs.remove(0).run();
+                }
+                until(() -> status.get() != null, "Missing terminal Android install status");
+                require(status.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99) == outcome,
+                        "Incorrect terminal install status: " + status.get());
+                require(prompts.get() == before + (outcome == PackageInstaller.STATUS_FAILURE_ABORTED ? 0 : 1),
+                        "Windows consent was shown before Android authorization or repeated");
+                require(open.invoke(atm, null, action, null, pkg, null, null, -1, null)
+                            .equals(android.app.ActivityManager.START_INTENT_NOT_RESOLVED),
+                        "A retired confirmation remained launchable");
+            }
+        } finally {
+            endpoint.set(pm, originalService);
+            opener.set(null, original);
+        }
+    }
+
     private static void installSource(IPackageInstaller service, IPackageManager pm,
             File fixtures, String pkg, Object backend, Class<?> installerClass,
             AtomicReference<String> caller, List<Runnable> jobs, AtomicReference<Intent> result)
@@ -330,6 +449,7 @@ public final class PackageInstallerSessionTest {
         rejected(() -> pm.getInstallerPackageName("fixture.missing"), IllegalArgumentException.class);
 
         caller.set(pkg);
+        sourceMode((com.gesher.server.PackageManagerService) pm, pkg, android.app.AppOpsManager.MODE_ALLOWED);
         PackageInstaller.SessionParams params =
                 new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         params.setAppPackageName(pkg);
@@ -357,6 +477,7 @@ public final class PackageInstallerSessionTest {
                 "Installer certificates were taken from new target code instead of the initiating snapshot");
 
         // An identical session reinstall still updates provenance, with no new APK generation.
+        sourceMode((com.gesher.server.PackageManagerService) pm, pkg, android.app.AppOpsManager.MODE_ALLOWED);
         id = service.createSession(params, pkg, null, 0);
         com.gesher.server.ApkPackage currentCode = ((com.gesher.server.PackageManagerService)pm).get(pkg);
         String currentPath = currentCode.apkPath;
@@ -440,7 +561,7 @@ public final class PackageInstallerSessionTest {
         AtomicReference<Boolean> allow = new AtomicReference<>(false);
         AtomicInteger prompts = new AtomicInteger();
         AtomicReference<Runnable> duringConsent = new AtomicReference<>();
-        List<Runnable> jobs = new ArrayList<>();
+        List<Runnable> jobs = Collections.synchronizedList(new ArrayList<>());
         Object consent = Proxy.newProxyInstance(consentClass.getClassLoader(), new Class<?>[]{consentClass},
                 (proxy, called, values) -> {
                     require(pkg.equals(values[1]), "Consent did not describe verified package");
@@ -513,6 +634,7 @@ public final class PackageInstallerSessionTest {
             byte[] actual = new android.os.ParcelFileDescriptor.AutoCloseInputStream(read).readAllBytes();
             require(Arrays.equals(actual, Files.readAllBytes(apk.toPath())), "FileBridge corrupted staged APK bytes");
         }
+        sourceMode((com.gesher.server.PackageManagerService) pm, pkg, android.app.AppOpsManager.MODE_ALLOWED);
         AtomicReference<Intent> result = new AtomicReference<>();
         held.commit(receiver(result), false);
         require(result.get() == null && jobs.size() == 1, "Commit did not run asynchronously");
@@ -613,6 +735,8 @@ public final class PackageInstallerSessionTest {
                 pm, apkClass, pmClass, caller, allow, prompts, jobs, result);
         installSource(service, (IPackageManager)pm, new File(args[0]), pkg, backend, installerClass,
                 caller, jobs, result);
+        installSourceContinuation(service, (com.gesher.server.PackageManagerService)pm,
+                atm, pkg, new File(args[0], "rotated.apk"), caller, allow, prompts, duringConsent, jobs);
         System.out.println("PackageInstallerSessionTest all passed: " + checks + " checks");
     }
 }

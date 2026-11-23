@@ -99,12 +99,27 @@ final class SpecialAccess {
         return pkg;
     }
 
-    /** Whether Settings would show the switch: the app requests the permission. */
+    /** Android permits pre-O installers to request confirmation without the manifest permission. */
+    static boolean installSourceEligible(ApkPackage pkg) {
+        return pkg.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O
+                || pkg.parsed.getRequestedPermissions().contains(Manifest.permission.REQUEST_INSTALL_PACKAGES);
+    }
+
+    /** A legacy source appears after it requests an install or the user has set its mode. */
+    private static boolean shows(PackageManagerService pm, ApkPackage pkg, Kind kind) {
+        if (kind.op != AppOpsManager.OP_REQUEST_INSTALL_PACKAGES) return declares(pkg, kind);
+        return declares(pkg, kind) || (installSourceEligible(pkg)
+                && (pkg.parsed.getRequestedPermissions().contains(kind.permission)
+                    || pm.appOps().checkRawMode(kind.op, pkg.uid(), pkg.packageName)
+                            != AppOpsManager.opToDefaultMode(kind.op)
+                    || pm.packageInstallerService().hasSourceConfirmation(pkg)));
+    }
+
+    /** Whether the app's manifest requests the permission for this switch. */
     static boolean declares(ApkPackage pkg, Kind kind) {
-        if (!pkg.parsed.getRequestedPermissions().contains(kind.permission)) return false;
-        // Install requests are an Android O capability (canRequestPackageInstalls).
-        return kind.op != AppOpsManager.OP_REQUEST_INSTALL_PACKAGES
-                || pkg.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.O;
+        return pkg.parsed.getRequestedPermissions().contains(kind.permission)
+                && (kind.op != AppOpsManager.OP_REQUEST_INSTALL_PACKAGES
+                    || pkg.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.O);
     }
 
     /** Whether the mode cannot change the app's answer (an INSTALL_PACKAGES installer). */
@@ -117,7 +132,8 @@ final class SpecialAccess {
     /** What the app's own check answers (Environment, Settings, PackageManager...). */
     private static boolean allowed(PackageManagerService pm, ApkPackage pkg, Kind kind) {
         if (kind.op == AppOpsManager.OP_REQUEST_INSTALL_PACKAGES) {
-            return pm.canRequestPackageInstallsInternal(pkg.packageName);
+            return fixed(pm, pkg, kind) || pm.appOps().checkRawMode(kind.op, pkg.uid(),
+                    pkg.packageName) == AppOpsManager.MODE_ALLOWED;
         }
         int mode = pm.appOps().checkRawMode(kind.op, pkg.uid(), pkg.packageName);
         if (mode == AppOpsManager.MODE_DEFAULT) {
@@ -132,7 +148,7 @@ final class SpecialAccess {
         ApkPackage pkg = installed(pm, packageName);
         List<Entry> entries = new ArrayList<>();
         for (Kind kind : KINDS) {
-            if (declares(pkg, kind)) {
+            if (shows(pm, pkg, kind)) {
                 entries.add(new Entry(kind, allowed(pm, pkg, kind), fixed(pm, pkg, kind)));
             }
         }
@@ -146,7 +162,7 @@ final class SpecialAccess {
     static Entry set(PackageManagerService pm, String packageName, String opName, boolean allow) {
         Kind kind = kind(opName);
         ApkPackage pkg = installed(pm, packageName);
-        if (!declares(pkg, kind)) {
+        if (!shows(pm, pkg, kind)) {
             throw new IllegalArgumentException(packageName + " does not request " + kind.permission);
         }
         if (fixed(pm, pkg, kind)) {
