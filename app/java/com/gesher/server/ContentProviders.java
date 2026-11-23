@@ -56,6 +56,8 @@ final class ContentProviders {
     private final ActivityTaskManagerService mAtm;
     private final SettingsProvider mSettings;
     private final DocumentsStorageProvider mDocumentsStorage;
+    private final CallLogProvider mCallLog;
+    private final ContactsProvider mContacts;
     private final CallerIdentity mCallers;
     private final UriGrants mUriGrants;
 
@@ -132,6 +134,22 @@ final class ContentProviders {
     private final Map<String, Set<ActivityTaskManagerService.ProcessRecord>> mClients = new HashMap<>();
     /** The reference-counted connections, by their Binder (ContentProviderHolder.connection). */
     private final Map<IBinder, Connection> mConnections = new HashMap<>();
+    private volatile ShortcutProcessState.Snapshot mShortcutSnapshot = ShortcutProcessState.Snapshot.EMPTY;
+
+    ShortcutProcessState.Snapshot shortcutSnapshot() { return mShortcutSnapshot; }
+
+    private void publishShortcutStateLocked() {
+        List<ShortcutProcessState.Link> links = new ArrayList<>();
+        for (Connection connection : mConnections.values()) {
+            if (connection.stable == 0 && connection.unstable == 0) continue;
+            ShortcutProcessState.Owner owner = new ShortcutProcessState.Owner(connection.owner,
+                    connection.ownerCode, connection.component, ApkPackage.ComponentKind.PROVIDER);
+            links.add(new ShortcutProcessState.Link(connection.client, connection.clientCode, owner,
+                    0, false, true, () -> true));
+        }
+        mShortcutSnapshot = links.isEmpty() ? ShortcutProcessState.Snapshot.EMPTY
+                : new ShortcutProcessState.Snapshot(List.of(), links);
+    }
 
     /**
      * ContentProviderConnection: one client process's references to one published
@@ -176,11 +194,16 @@ final class ContentProviders {
         mUriGrants = new UriGrants(pm, atm, this);
         mSettings = new SettingsProvider(pm, atm);
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
+        mCallLog = new CallLogProvider(this, mUriGrants);
+        mContacts = new ContactsProvider(this, pm, atm, mUriGrants);
         pm.setHostedProviders(this);
     }
 
+    PackageManagerService packageManager() { return mPm; }
     UriGrants uriGrants() { return mUriGrants; }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
+    CallLogProvider callLog() { return mCallLog; }
+    ContactsProvider contacts() { return mContacts; }
     CallerIdentity callers() { return mCallers; }
 
     SettingsProvider settingsProvider() { return mSettings; }
@@ -333,6 +356,22 @@ final class ContentProviders {
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
         }
+        if (ContactsProviderSupport.CONTACTS_AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Contacts authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mContacts.holder();
+        }
+        if (ContactsProviderSupport.CALL_LOG_AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("CallLog authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mCallLog.holder();
+        }
         final ProviderInfo declared;
         final ApkPackage declaredCode;
         synchronized (mPm) {
@@ -343,6 +382,7 @@ final class ContentProviders {
         if (declaredCode == null) return null;
         ProviderRequest request = new ProviderRequest(declaredCode, declared);
         long deadline = 0;
+        boolean acquired = false;
         synchronized (this) { mRequests.add(request); }
         try {
         while (true) {
@@ -385,7 +425,12 @@ final class ContentProviders {
                     if (counted && caller != null && owner != null && caller != owner) {
                         Connection c = connectionLocked(owner, caller,
                                 published.provider.asBinder(), name, declaredCode, declared.name);
+                        boolean held = c.stable != 0 || c.unstable != 0;
                         if (stable) c.stable++; else c.unstable++;
+                        if (!held) {
+                            publishShortcutStateLocked();
+                            acquired = true; // a new dependency edge to observe
+                        }
                         h.connection = c;
                         h.noReleaseNeeded = false;
                         owner.markActive(SystemClock.uptimeMillis());
@@ -447,6 +492,7 @@ final class ContentProviders {
         }
         } finally {
             synchronized (this) { mRequests.remove(request); }
+            if (acquired) mAtm.noteShortcutForeground(null, 0);
         }
     }
 
@@ -529,6 +575,8 @@ final class ContentProviders {
             }
             for (String authority : declared.authority.split(";")) {
                 if (authority.isEmpty() || SettingsProvider.AUTHORITY.equals(authority)
+                        || registeredProvider(authority) != null
+                        || ContactsProviderSupport.isSystemAuthority(authority)
                         || !batch.add(authority)) throw new SecurityException("Invalid published authority");
                 ProviderInfo canonical = declaredProvider(mPm, authority);
                 if (canonical == null || !pkg.packageName.equals(canonical.packageName)
@@ -612,6 +660,7 @@ final class ContentProviders {
         // isSystem resolves the caller through ATM. Never acquire ATM under this monitor.
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
+        boolean alive, changed;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return false;
@@ -621,11 +670,17 @@ final class ContentProviders {
                 SystemServer.log("refContentProvider " + c + ": counts would go below zero ("
                         + stable + ", " + unstable + "); kept at zero");
             }
+            boolean held = c.stable != 0 || c.unstable != 0;
             c.stable = Math.max(0, c.stable + stable);
             c.unstable = Math.max(0, c.unstable + unstable);
+            changed = held != (c.stable != 0 || c.unstable != 0);
+            if (changed) publishShortcutStateLocked();
             c.owner.markActive(SystemClock.uptimeMillis());
-            return !c.owner.exiting && !c.owner.dead;
+            alive = !c.owner.exiting && !c.owner.dead;
         }
+        // Only a held-state flip changes the provider dependency graph.
+        if (changed) mAtm.noteShortcutForeground(null, 0);
+        return alive;
     }
 
     /**
@@ -636,6 +691,7 @@ final class ContentProviders {
     void removeContentProvider(IBinder connection, boolean stable) {
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
+        boolean removed = false;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return;
@@ -646,8 +702,65 @@ final class ContentProviders {
             if (stable) c.stable = Math.max(0, c.stable - 1);
             else c.unstable = Math.max(0, c.unstable - 1);
             c.owner.markActive(SystemClock.uptimeMillis());
-            if (c.stable == 0 && c.unstable == 0) mConnections.remove(c);
+            if (c.stable == 0 && c.unstable == 0) {
+                mConnections.remove(c);
+                publishShortcutStateLocked();
+                removed = true;
+            }
         }
+        if (removed) mAtm.noteShortcutForeground(null, 0);
+    }
+
+    /**
+     * A client observed DeadObjectException before the process death recipient ran.
+     * A report is only evidence: probe the exact published Binder outside all lifecycle
+     * monitors, then recheck the connection, publication and process incarnations.
+     */
+    void unstableProviderDied(IBinder connection) {
+        if (connection == null) throw new NullPointerException("connection is null");
+        if (!(connection instanceof Connection)) {
+            throw new IllegalArgumentException("Not a content provider connection");
+        }
+        int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
+        boolean system = mCallers.isSystem();
+        ActivityTaskManagerService.ProcessRecord caller = system ? null : mAtm.callerProcess(pid);
+        if (!system) mCallers.callerPackage();
+        final Connection reported;
+        synchronized (this) {
+            reported = callerConnectionLocked(connection, system, pid, uid);
+            if (reported == null) return;
+            if (!system && (reported.client != caller || reported.clientCode == null
+                    || mPm.get(reported.client.packageName) != reported.clientCode)) {
+                throw new SecurityException("Provider connection belongs to a retired caller");
+            }
+        }
+
+        // pingBinder can cross a process boundary. Do not let a client kill a live
+        // provider, or hold the service/ATM monitors while awaiting the provider.
+        if (reported.provider.pingBinder()) return;
+
+        // ATM -> providers is the existing provider-retirement lock order. Mark the
+        // authenticated owner dead before releasing either lock so new work cannot
+        // reuse it, without turning an unexpected death into an intentional force-stop.
+        synchronized (mAtm) {
+            synchronized (this) {
+                ContentProviderHolder published = mPublished.get(reported.authority);
+                if (mConnections.get(connection) != reported
+                        || !system && (mAtm.callerProcess(pid) != caller
+                            || caller.exiting || caller.dead
+                            || mPm.get(caller.packageName) != reported.clientCode)
+                        || published == null || published.provider.asBinder() != reported.provider
+                        || mPublishedBy.get(reported.authority) != reported.owner
+                        || mPublishedCode.get(reported.authority) != reported.ownerCode
+                        || mPm.get(reported.owner.packageName) != reported.ownerCode
+                        || mAtm.callerProcess(reported.owner.pid) != reported.owner
+                        || reported.owner.packageCode != reported.ownerCode) return;
+                reported.owner.dead = true;
+            }
+        }
+        long identity = Binder.clearCallingIdentity();
+        try { mAtm.processDied(reported.owner); }
+        finally { Binder.restoreCallingIdentity(identity); }
     }
 
     /** Whether processes of other packages use the process's providers. */
@@ -729,9 +842,15 @@ final class ContentProviders {
                 lost.add(connection);
                 return true;
             });
+            publishShortcutStateLocked();
             // A waiter must re-resolve disabled declarations instead of waiting two minutes.
             notifyAll();
         }
+        notifyLostConnections(lost);
+    }
+
+    /** Connections have already been removed; application callbacks run without locks. */
+    private void notifyLostConnections(List<Connection> lost) {
         for (Connection connection : lost) {
             if (connection.stable > 0) {
                 mAtm.providerDependencyDied(connection.client, connection.clientCode);
@@ -743,24 +862,33 @@ final class ContentProviders {
                 catch (RemoteException ignored) { }
             }
         }
+        mAtm.noteShortcutForeground(null, 0);
     }
 
     /**
      * The process went away: so did the providers it published, and its use of others'.
      * Returns the processes that lost their last client.
      */
-    synchronized List<ActivityTaskManagerService.ProcessRecord> processDied(
+    List<ActivityTaskManagerService.ProcessRecord> processDied(
             ActivityTaskManagerService.ProcessRecord app) {
-        unpublish(app);
-        mConnections.values().removeIf(c -> c.client == app || c.owner == app);
+        List<Connection> lost = new ArrayList<>();
         List<ActivityTaskManagerService.ProcessRecord> unused = new ArrayList<>();
-        for (Map.Entry<String,
-                Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
-            if (e.getValue().remove(app) && e.getValue().isEmpty()) {
-                ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(e.getKey());
-                if (owner != null && !hasClients(owner) && !unused.contains(owner)) unused.add(owner);
+        synchronized (this) {
+            unpublish(app);
+            mConnections.values().removeIf(c -> {
+                if (c.owner == app && c.client != app) lost.add(c);
+                return c.client == app || c.owner == app;
+            });
+            publishShortcutStateLocked();
+            for (Map.Entry<String,
+                    Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
+                if (e.getValue().remove(app) && e.getValue().isEmpty()) {
+                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(e.getKey());
+                    if (owner != null && !hasClients(owner) && !unused.contains(owner)) unused.add(owner);
+                }
             }
         }
+        notifyLostConnections(lost);
         return unused;
     }
 }

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Source inventory, not a semantic compatibility score or a live-app test.
 
-Compare service Default subclasses with the exact supplied framework JAR,
+Compare service Default subclasses with the exact supplied framework/app classes,
 enumerate registered service keys, and record JNI registration/stand-in rows.
-Only javap runs; no Android app or system server is started.
+Class files are parsed without loading them; javap only reads Context constants.
+No Android app or system server is started.
 """
 import argparse
 import collections
@@ -13,6 +14,8 @@ import json
 import pathlib
 import re
 import subprocess
+
+import java_member_inventory as members
 
 
 # Reviewed alternate names in android_runtime.cc, not a heuristic name match.
@@ -56,6 +59,134 @@ def arity(args):
     return result
 
 
+def service_base(name, classes, framework):
+    """Find the actual compiled AIDL ancestor, including indirect subclasses."""
+    seen = set()
+    while name and name != 'java.lang.Object':
+        if name in seen:
+            raise ValueError('cyclic service class hierarchy')
+        seen.add(name)
+        cls = classes.get(name)
+        if cls is None:
+            return None
+        iface, separator, kind = name.rpartition('$')
+        if (separator and kind in ('Default', 'Stub') and name in framework
+                and iface in framework and framework[iface].flags & members.INTERFACE):
+            return iface, kind
+        name = cls.superclass
+    return None
+
+
+def service_surface(name, classes):
+    """Collect public instance descriptors, retaining incomplete hierarchies."""
+    methods, missing, seen, pending = {}, set(), set(), [name]
+    while pending:
+        owner = pending.pop()
+        if owner in seen or owner == 'java.lang.Object':
+            continue
+        seen.add(owner)
+        cls = classes.get(owner)
+        if cls is None:
+            missing.add(owner)
+            continue
+        for method in cls.members.values():
+            if (method.kind == 'method' and method.name not in ('<init>', '<clinit>', 'asBinder')
+                    and method.flags & members.PUBLIC and not method.flags & members.STATIC):
+                methods.setdefault(method.key, method)
+        pending.extend(cls.interfaces)
+        if cls.superclass:
+            pending.append(cls.superclass)
+    return methods, sorted(missing)
+
+
+def compare_services(source_classes, framework, app, declarations=None):
+    """Resolve exact descriptors from bytes, never from Java source spellings.
+
+    Framework classes take precedence over app classes, as on the parent-first
+    service class path. Covariant/generic overrides are represented by the
+    compiler's bridge methods; a name or parameter-count match is insufficient.
+    Missing artifacts or ancestry are unmeasured, not a zero-gap result.
+    """
+    declarations = declarations or {}
+    available = {**(app or {}), **framework}
+    resolver = members.Resolver(available)
+    classes = [dict(item) for item in source_classes]
+    known = {item.get('binary_class') for item in classes}
+    if app is not None:
+        for name in sorted(app):
+            base = service_base(name, available, framework)
+            if base is None or name in known or name == base[0] + '$' + base[1]:
+                continue
+            source = declarations.get(name, {})
+            classes.append({'class': source.get('class', name.rsplit('$', 1)[-1].rsplit('.', 1)[-1]),
+                            'binary_class': name, 'interface': base[0], 'base_kind': base[1],
+                            'source': source.get('source'), 'explicit_methods': [],
+                            'discovery_basis': 'compiled_class_ancestry'})
+    gaps = []
+    for cls in classes:
+        name = cls.get('binary_class')
+        base = service_base(name, available, framework) if name in available else None
+        if base:
+            cls['source_declared_interface'] = cls['interface']
+            cls['interface'], cls['base_kind'] = base
+        default = cls['interface'] + '$Default'
+        cls['jar_interface_available'] = default in framework
+        cls['inherited_default_count'] = None
+        cls['method_resolutions'] = []
+        cls['interface_method_count'] = None
+        if default not in framework:
+            cls['comparison_status'] = 'framework_default_class_unavailable'
+            continue
+        api, missing = service_surface(default, framework)
+        cls['interface_method_count'] = len(api) if not missing else None
+        cls['observed_interface_method_count'] = len(api)
+        cls['unavailable_surface_classes'] = missing
+        if app is None:
+            cls['comparison_status'] = 'app_class_input_not_provided'
+            continue
+        if name not in available:
+            cls['comparison_status'] = 'compiled_service_class_unavailable'
+            continue
+        if not base or base != (cls['interface'], cls['base_kind']):
+            cls['comparison_status'] = 'compiled_service_ancestry_unresolved'
+            continue
+        unresolved, inherited = bool(missing), 0
+        for key, expected in sorted(api.items()):
+            found, unknown = resolver.lookup(name, key)
+            original, original_unknown = resolver.lookup(default, key)
+            row = {'name': expected.name, 'descriptor': expected.descriptor,
+                   'signature': expected.name + expected.descriptor,
+                   'resolved_owners': [owner for owner, _ in found],
+                   'resolved_providers': ['framework' if owner in framework else 'app' for owner, _ in found],
+                   'descriptor_types_not_in_inputs': sorted(members.descriptor_classes(expected.descriptor) - available.keys()),
+                   'signature_match_basis': 'compiled JVM method name and complete descriptor (parameters and return type)'}
+            if unknown or original_unknown or len(found) > 1:
+                row['status'] = 'compiled_method_resolution_unresolved'
+                unresolved = True
+            elif not found:
+                row['status'] = 'compiled_method_unavailable'
+                unresolved = True
+            elif found[0][1].flags & (members.STATIC | members.ABSTRACT) or not found[0][1].flags & members.PUBLIC:
+                row['status'] = 'compiled_method_not_concrete_public_instance'
+                unresolved = True
+            elif cls['base_kind'] == 'Default' and found == original:
+                row['status'] = 'missing_override_inherited_default'
+                inherited += 1
+                gaps.append({'class': cls['class'], 'binary_class': name, 'interface': cls['interface'],
+                             **row, 'source': cls['source'],
+                             'behavior_reference': {'path': 'app/java/com/gesher/server/StandIn.java', 'line': 145}})
+            else:
+                row['status'] = 'compiled_implementation_unverified'
+                row['implementation_location'] = 'declared' if found[0][0] == name else 'inherited'
+                row['compiler_bridge'] = bool(found[0][1].flags & 0x40)
+            cls['method_resolutions'].append(row)
+        cls['observed_inherited_default_count'] = inherited
+        cls['comparison_status'] = 'unresolved_compiled_hierarchy' if unresolved else 'measured_compiled_descriptors'
+        if not unresolved:
+            cls['inherited_default_count'] = inherited
+    return classes, gaps
+
+
 def jni_finding(row):
     """Keep source references distinct from absence and runtime acceptance."""
     found = list(row['local_symbol_references'])
@@ -76,38 +207,27 @@ def jni_finding(row):
     return result
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--framework-jar', type=pathlib.Path, required=True)
-    ap.add_argument('--aosp-dir', type=pathlib.Path, required=True)
-    ap.add_argument('--out', type=pathlib.Path, required=True)
-    args = ap.parse_args()
-    root = pathlib.Path(__file__).resolve().parents[1]
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    refs = {}
-
-    def ref(path, text, offset):
-        path = path.resolve()
-        label = path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
-        # Hash the exact normalized source text used for this row, rather than
-        # re-reading a file another agent may be editing during the audit.
-        digest = hashlib.sha256(text.encode('utf8')).hexdigest()
-        if label in refs and refs[label] != digest:
-            raise RuntimeError('Source changed during audit: ' + label)
-        refs[label] = digest
-        return {'path': label, 'line': text.count('\n', 0, offset) + 1}
-
-    classes = []
+def source_service_classes(root, ref):
+    classes, declarations = [], {}
     method_re = re.compile(r'\b(?:public|protected)\s+(?:(?:static|final|synchronized|native)\s+)*'
                            r'([\w.$<>, ?\[\]]+?)\s+(\w+)\s*\(([^{};]*)\)\s*(?:throws[\w.,\s]+)?\{')
     for path in sorted((root / 'app/java').rglob('*.java')):
         text = path.read_text(encoding='utf8')
         code = mask(text)
+        depth, depths = 0, [0]
+        for char in code:
+            depth += (char == '{') - (char == '}')
+            depths.append(depth)
+        package = re.search(r'\bpackage\s+([\w.]+)\s*;', code)
+        package = package[1] + '.' if package else ''
         imports = {name.rsplit('.', 1)[-1]: name for name in re.findall(r'\bimport\s+([\w.]+);', text)}
         blocks = []
         for m in re.finditer(r'\b(?:class|interface|enum)\s+(\w+)([^{};]*)\{', code):
             blocks.append((m.start(), end_brace(code, m.end() - 1), m))
         for start, finish, decl in blocks:
+            enclosing = [block[2][1] for block in blocks if block[0] < start < block[1]]
+            binary = package + '$'.join([*enclosing, decl[1]])
+            declarations[binary] = {'class': decl[1], 'source': ref(path, text, start)}
             parent = re.search(r'\bextends\s+([\w.]+)\.(Default|Stub)\b', decl[2])
             if not parent:
                 continue
@@ -115,6 +235,10 @@ def main():
             iface = imports.get(iface, iface)
             methods = []
             for method in method_re.finditer(code, decl.end(), finish):
+                # A named-class owner alone is insufficient: anonymous objects
+                # inside a method or initializer have their own method bodies.
+                if depths[method.start()] != depths[decl.end()]:
+                    continue
                 owner = min((b for b in blocks if b[0] <= method.start() < b[1]), key=lambda b: b[1] - b[0])
                 if owner[0] != start:
                     continue
@@ -135,46 +259,55 @@ def main():
                 methods.append({'name': method[2], 'arity': arity(method[3]), 'return_type_source': method[1].strip(),
                                 'status': status, 'source': ref(path, text, method.start()),
                                 'body_sha256': hashlib.sha256(raw_body.encode()).hexdigest()})
-            classes.append({'class': decl[1], 'interface': iface, 'base_kind': parent[2],
+            classes.append({'class': decl[1], 'binary_class': binary,
+                            'interface': iface, 'base_kind': parent[2],
                             'source': ref(path, text, start), 'explicit_methods': methods})
         for inline in re.finditer(r'\bnew\s+([\w.]+)\.Default\s*\(\s*\)', code):
+            # Anonymous overrides have their own compiler-assigned class. They
+            # are discovered through compiled ancestry, not treated as a bare Default.
+            if code[inline.end():].lstrip().startswith('{'):
+                continue
             iface = imports.get(inline[1], inline[1])
             classes.append({'class': '<direct Default instance>', 'interface': iface, 'base_kind': 'Default',
+                            'binary_class': iface + '$Default', 'direct_default_instance': True,
                             'source': ref(path, text, inline.start()), 'explicit_methods': []})
 
-    interfaces = sorted({c['interface'] for c in classes if '.' in c['interface']})
-    command = ['javap', '-public', '-classpath', str(args.framework_jar), *[i + '$Default' for i in interfaces]]
-    inspected = subprocess.run(command, capture_output=True, text=True, encoding='utf8', errors='replace', check=False)
-    (args.out.parent / 'services-default-javap.txt').write_text(inspected.stdout + inspected.stderr, encoding='utf8')
-    current = None
-    defaults = {}
-    for line in inspected.stdout.splitlines():
-        header = re.match(r'public class ([\w.$]+)\$Default\b', line)
-        if header:
-            current = header[1]
-            defaults[current] = []
-        method = re.match(r'\s+public (?:[\w.$<>?,\[\] ]+) ([\w$]+)\(([^)]*)\)', line)
-        if method and current and method[1] != 'asBinder':
-            defaults[current].append({'name': method[1], 'arity': arity(method[2]), 'signature': line.strip()})
-    if not defaults:
-        raise RuntimeError('No Java .class Default interfaces found; an installed DEX JAR is not a javap input')
-    gaps = []
-    for cls in classes:
-        api = defaults.get(cls['interface'])
-        cls['jar_interface_available'] = api is not None
-        cls['interface_method_count'] = len(api) if api is not None else None
-        explicit = {m['name'] for m in cls['explicit_methods']}
-        cls['inherited_default_count'] = 0
-        if api is None or cls['base_kind'] != 'Default':
-            continue
-        for method in api:
-            if method['name'] in explicit:
-                continue
-            cls['inherited_default_count'] += 1
-            gaps.append({'class': cls['class'], 'interface': cls['interface'], **method,
-                         'status': 'missing_override_inherited_default', 'source': cls['source'],
-                         'behavior_reference': {'path': 'app/java/com/gesher/server/StandIn.java', 'line': 145},
-                         'signature_match_basis': 'interface method name absent from explicit class methods'})
+    return classes, declarations
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--framework-jar', type=pathlib.Path, required=True)
+    ap.add_argument('--app-classes', type=pathlib.Path,
+                    help='Built app Java .class ZIP/JAR, not DEX. Without it, service overrides are unmeasured.')
+    ap.add_argument('--aosp-dir', type=pathlib.Path, required=True)
+    ap.add_argument('--out', type=pathlib.Path, required=True)
+    args = ap.parse_args()
+    root = pathlib.Path(__file__).resolve().parents[1]
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    refs = {}
+
+    def ref(path, text, offset):
+        path = path.resolve()
+        label = path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
+        # Hash the exact normalized source text used for this row, rather than
+        # re-reading a file another agent may be editing during the audit.
+        digest = hashlib.sha256(text.encode('utf8')).hexdigest()
+        if label in refs and refs[label] != digest:
+            raise RuntimeError('Source changed during audit: ' + label)
+        refs[label] = digest
+        return {'path': label, 'line': text.count('\n', 0, offset) + 1}
+
+    classes, declarations = source_service_classes(root, ref)
+
+    framework, framework_input = members.archive_members(args.framework_jar, 'sdk', 'framework-classes')
+    framework_input['role'] = 'framework_compile_input'
+    app, app_input = None, {'status': 'input_not_provided'}
+    if args.app_classes is not None:
+        app, app_input = members.archive_members(args.app_classes, 'sdk', 'app-classes')
+        app_input.update(status='class_bytes_inspected', role='app_compile_input', path=str(args.app_classes.resolve()))
+    classes, gaps = compare_services(classes, framework, app, declarations)
+    defaults = {c['interface'] for c in classes if c['jar_interface_available']}
 
     context = subprocess.run(['javap', '-constants', '-classpath', str(args.framework_jar), 'android.content.Context'],
                              capture_output=True, text=True, encoding='utf8', errors='replace')
@@ -326,21 +459,33 @@ def main():
             finding['status'] = 'not_assessed'
             finding['assessment_note'] = 'An expected source anchor is absent in this tree; the descriptive family claim was not re-established.'
         if finding.get('classes'):
-            finding['inherited_default_methods'] = sum(c['inherited_default_count'] for c in classes if c['class'] in finding['classes'])
+            selected = [c for c in classes if c['class'] in finding['classes']]
+            finding['inherited_default_methods'] = (sum(c['inherited_default_count'] for c in selected)
+                if selected and all(c['inherited_default_count'] is not None for c in selected) else None)
 
-    result = {'schema_version': 1, 'date': datetime.datetime.now(datetime.timezone.utc).date().isoformat(), 'aosp_tag': 'android-16.0.0_r4',
+    unmeasured = sum(c['inherited_default_count'] is None for c in classes)
+    result = {'schema_version': 2, 'date': datetime.datetime.now(datetime.timezone.utc).date().isoformat(), 'aosp_tag': 'android-16.0.0_r4',
               'scope': 'JNI registration/stand-ins; app/java Binder Default services; direct Services/SystemServer registry keys. No user apps started.',
-              'framework_jar': {'path': str(args.framework_jar.resolve()), 'sha256': hashlib.sha256(args.framework_jar.read_bytes()).hexdigest()},
+              'framework_jar': {**framework_input, 'path': str(args.framework_jar.resolve())},
+              'app_classes': app_input,
+              'compiled_class_path': {'lookup_order': ['framework-classes', 'app-classes'],
+                  'policy': 'Parent-first compile-input inventory; installed loader/provider selection is not measured.',
+                  'app_classes_shadowed_by_framework': sorted(framework.keys() & (app or {}).keys())},
               'framework_input_kind': 'Existing Java .class compile input; not the installed DEX JAR and not a new framework build receipt.',
               'methodology_limits': ['Source WIP and supplied framework JAR can differ from installed runtime.',
                   'Explicit implementations are unverified; source presence is not semantic coverage.',
-                  'AIDL Default missing-method comparison uses method names, not full overload/type resolution.',
+                  'AIDL methods use compiled JVM names and full descriptors, including compiler bridges and inherited implementations.',
+                  'Compiled app/source correspondence requires a build receipt; input hashes alone do not establish a fresh build.',
+                  'Missing app classes or hierarchy leave counts null; observed rows are a lower bound, not a completed inventory.',
+                  'Descriptor types outside the supplied compile inputs are listed separately; this does not prove runtime absence.',
                   'Textual JNI symbol comparison is a candidate list, not proof every omitted registration is required.',
                   'Fallback JNI rows can be overwritten later and must not be counted as active noops without registration-order review.'],
               'service_classes': classes, 'inherited_default_methods': gaps, 'direct_service_registrations': registrations,
               'context_key_candidates': unregistered_constants, 'jni_upstream_registrations': registration_rows,
               'jni_standin_methods': standins, 'jni_standin_inputs': standin_inputs,
               'generator_sha256': hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+              'parser_source_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                  for p in (pathlib.Path(members.__file__), pathlib.Path(members.base.__file__))},
               'source_text_sha256': refs,
               'source_hash_encoding': 'UTF-8 text with universal newline normalization, exactly as parsed.',
               'generated_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -348,7 +493,11 @@ def main():
               'reviewed_known_gap_families': reviewed,
               'summary': {'service_classes': len(classes), 'interfaces_in_jar': len(defaults),
                           'explicit_service_methods': sum(len(c['explicit_methods']) for c in classes),
-                          'inherited_default_methods': len(gaps), 'direct_service_registrations': len(registrations),
+                          'inherited_default_methods': len(gaps) if app is not None and not unmeasured else None,
+                          'observed_inherited_default_methods': len(gaps),
+                          'unmeasured_service_classes': unmeasured,
+                          'service_comparison_statuses': dict(collections.Counter(c['comparison_status'] for c in classes)),
+                          'direct_service_registrations': len(registrations),
                           'context_key_candidates': len(unregistered_constants),
                           'upstream_jni_registration_rows': len(registration_rows),
                           'jni_registration_statuses': dict(collections.Counter(r['status'] for r in registration_rows)),

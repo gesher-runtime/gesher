@@ -12,7 +12,8 @@
 
 namespace gesher::media {
 
-int RenderFrame(ANativeWindow* window, const VideoFrame& f, std::optional<int64_t> timestamp_ns) {
+int RenderFrame(ANativeWindow* window, const VideoFrame& f, std::optional<int64_t> timestamp_ns,
+                 int video_scaling_mode) {
   constexpr int kRgba8888 = 1, kRgbx8888 = 2;
   const int w = f.visible_width(), h = f.visible_height();
   if (window == nullptr) return android::NO_INIT;
@@ -33,7 +34,7 @@ int RenderFrame(ANativeWindow* window, const VideoFrame& f, std::optional<int64_
   const int64_t post_start = gesher::perf::Now();
   if (timestamp_ns.has_value()) {
     if (auto* surface = QueueSurface::From(window)) {
-      status = surface->UnlockAndPostWithTimestamp(*timestamp_ns);
+      status = surface->UnlockAndPostWithTimestamp(*timestamp_ns, video_scaling_mode);
       post_site.Add(gesher::perf::Now() - post_start);
       return status != 0 ? status : drawable ? android::OK : android::BAD_VALUE;
     }

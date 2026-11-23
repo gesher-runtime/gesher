@@ -30,6 +30,7 @@ struct SurfaceFrame {
   std::vector<uint32_t> pixels;  // RGBA_8888 (R in the low byte)
   int64_t timestamp_ns = 0;
   uint64_t number = 0;
+  int video_scaling_mode = 1;  // MediaCodec scale-to-fit; pixels remain uncropped.
 };
 
 class QueueSurface : public android::Surface {
@@ -55,12 +56,13 @@ class QueueSurface : public android::Surface {
   // the producer's time stamp, and the listener is called. This surface's own
   // producer state (its buffer, requested size and format, a lock) is left
   // alone. False once abandoned.
-  bool PostFrame(int width, int height, int stride, const uint32_t* pixels, int64_t timestamp_ns);
+  bool PostFrame(int width, int height, int stride, const uint32_t* pixels, int64_t timestamp_ns,
+                 int video_scaling_mode = 1);
 
   int lock(ANativeWindow_Buffer* out_buffer, ARect* in_out_dirty) override;
   int unlockAndPost() override;
   // Set a timestamp for this frame alone, preserving the native producer setting.
-  int UnlockAndPostWithTimestamp(int64_t timestamp_ns);
+  int UnlockAndPostWithTimestamp(int64_t timestamp_ns, int video_scaling_mode = 1);
   int query(int what, int* value) const override;
 
  protected:
@@ -80,10 +82,11 @@ class QueueSurface : public android::Surface {
   void Size(int* width, int* height) const;
   void UpdateFrameGeometry();  // with mutex_ held; drops obsolete reusable pixels
   void EnsureBuffer();  // with mutex_ held
-  int UnlockAndPost(std::optional<int64_t> timestamp_ns);
+  int UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
   // Copies buffer_ as the latest frame with mutex_ held. Invoke the returned
   // listener after unlocking, so it can read back the published frame.
-  std::function<void()> PublishLocked(std::optional<int64_t> timestamp_ns);
+  std::function<void()> PublishLocked(std::optional<int64_t> timestamp_ns,
+                                       int video_scaling_mode = 1);
 
   static int HookSetSwapInterval(ANativeWindow* window, int interval);
   static int HookQueueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fence_fd);

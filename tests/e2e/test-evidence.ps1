@@ -87,7 +87,7 @@ try {
   try { New-E2eEvidence $manifest $manifestPath @('fixture.unknown') $directory } catch { $rejected = $_ -match 'Unknown -Only' }
   EvidenceCheck 'unknown selection is rejected instead of creating an empty success' $rejected
 
-  foreach ($scriptName in @('run-e2e.ps1', 'prepare-identity-sdk.ps1')) {
+  foreach ($scriptName in @('run-e2e.ps1', 'window-workload.ps1', 'prepare-identity-sdk.ps1')) {
     $tokens = $null; $parseErrors = $null
     [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $scriptName), [ref]$tokens, [ref]$parseErrors)
     EvidenceCheck "$scriptName parses" ($parseErrors.Count -eq 0)

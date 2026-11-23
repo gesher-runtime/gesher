@@ -48,7 +48,7 @@ def main() -> None:
                                                  cwd=ROOT, capture_output=True, check=True).stdout)
             sources.append(str(source))
         subprocess.run([str(args.java_home / "bin/javac"), "-J-XX:-UsePerfData", "-encoding", "UTF-8", "-cp", classpath,
-                        "-d", str(classes), *sources,
+                        "-sourcepath", str(ROOT / "tests/dex-services"), "-d", str(classes), *sources,
                         str(ROOT / "tests/connectivity-callback/ConnectivityCallbackHost.java"),
                         str(ROOT / "tests/connectivity-callback/ConnectivityServiceSnapshotHost.java"),
                         str(ROOT / "tests/dex-services/gesher/services/ConnectivityCallbackContractTest.java")], check=True)

@@ -3,15 +3,14 @@
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
+$here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
 
 # Set explicit AppUserModelID so Windows taskbar groups under Gesher instead of PowerShell host
 try {
-    $code = '[DllImport("shell32.dll", CharSet=CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string appID);'
-    $type = Add-Type -MemberDefinition $code -Name "Win32ShellGroup" -Namespace "Gesher" -PassThru
-    $type::SetCurrentProcessExplicitAppUserModelID("Gesher.ControlPanel")
+    . (Join-Path $here 'gesher-panel-native.ps1')
+    [Gesher.Win32ShellGroup]::SetCurrentProcessExplicitAppUserModelID("Gesher.ControlPanel")
 } catch { }
 
-$here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
@@ -28,6 +27,8 @@ $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
 $script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
 # Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
+# Gesher's own proxy (ProxySetting.java, docs/network.md): proxy=<every app>, proxy.<package>=<one app>.
+$script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
 $script:PanelInstanceCreated = $false
 $script:PanelInstance = [System.Threading.Mutex]::new($false, 'Local\Gesher.ControlPanel', [ref] $script:PanelInstanceCreated)
@@ -45,7 +46,8 @@ $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
 $script:IsBusy = $false
 $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
 $script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
-$script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; Tick = 0 }
+$script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; PendingFirst = $null; Tick = 0; WasVisible = $false; RecoveryAt = $null }
+$script:MetadataMonitor = $null
 
 # Packages whose tasks are windows of their own (AppWindows.java's file).
 function Get-SeparateWindowApps {
@@ -59,7 +61,7 @@ function Get-SeparateWindowApps {
 
 # Saves whether an app's tasks are windows of their own (from its next start).
 function Set-AppSeparateWindows([string] $pkg, [bool] $separate) {
-    if ($pkg -notmatch '^[A-Za-z0-9_.]+$') { return }
+    if ($pkg -cnotmatch '\A[A-Za-z0-9_.]+\z') { return }
     $lines = [System.Collections.Generic.List[string]]::new()
     if (Test-Path -LiteralPath $script:AppWindowsFile) {
         foreach ($line in Get-Content -LiteralPath $script:AppWindowsFile) {
@@ -75,6 +77,232 @@ function Set-AppSeparateWindows([string] $pkg, [bool] $separate) {
     [IO.File]::WriteAllLines($script:AppWindowsFile, $lines, [Text.UTF8Encoding]::new($false))
 }
 
+# A proxy setting as ProxySetting.parse saves it: 'direct', 'windows' or host:port (an
+# http:// prefix and a trailing slash dropped); $null when it is not one. The port is read
+# as Integer.parseInt reads it (a sign, then decimal digits of any script) so that every
+# setting the runtime accepts is shown and saved unchanged.
+function ConvertTo-ProxyValue([string] $value) {
+    if ($null -eq $value) { return $null }
+    # String.trim: every character up to U+0020.
+    $v = $value.Trim([char[]](0..32))
+    $lower = $v.ToLowerInvariant()
+    # Ordinal, as String.equals: -in and -eq would ignore characters such as a soft hyphen.
+    if ([Array]::IndexOf([string[]]@('direct', 'none', 'off'), $lower) -ge 0) { return 'direct' }
+    if ([Array]::IndexOf([string[]]@('windows', 'default'), $lower) -ge 0) { return 'windows' }
+    if ($lower.StartsWith('http://', [StringComparison]::Ordinal)) { $v = $v.Substring(7) }
+    if ($v.EndsWith('/', [StringComparison]::Ordinal)) { $v = $v.Substring(0, $v.Length - 1) }
+    $colon = $v.LastIndexOf(':')
+    if ($colon -le 0 -or $colon -eq $v.Length - 1) { return $null }
+    $hostName = $v.Substring(0, $colon)
+    if ($hostName -cnotmatch '\A(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.]+\])\z') { return $null }
+    $digits = $v.Substring($colon + 1)
+    $start = 0; $negative = $false
+    if ($digits[0] -eq [char]'+' -or $digits[0] -eq [char]'-') { $negative = $digits[0] -eq [char]'-'; $start = 1 }
+    if ($start -ge $digits.Length) { return $null }
+    [long] $port = 0
+    for ($i = $start; $i -lt $digits.Length; $i++) {
+        if (-not [char]::IsDigit($digits[$i])) { return $null }
+        $port = $port * 10 + [long][char]::GetNumericValue($digits[$i])
+        if ($port -gt 2147483648) { return $null }   # Integer.parseInt overflows
+    }
+    if ($negative) { $port = -$port }
+    if ($port -lt 1 -or $port -gt 65535) { return $null }
+    return $v
+}
+
+# proxy.properties as java.util.Properties.load reads it (ISO 8859-1, logical lines with
+# '\' continuations, '#'/'!' comments, key/value escapes): its natural lines and, for each
+# key/value line, the decoded key and value and the natural lines it spans.
+function Read-ProxyProperties {
+    $result = @{ Lines = [System.Collections.Generic.List[string]]::new(); Entries = [System.Collections.Generic.List[object]]::new(); Malformed = $false }
+    if (-not (Test-Path -LiteralPath $script:ProxyFile)) { return $result }
+    # Every byte as one ISO 8859-1 character, as Properties.load(InputStream): ReadAllText
+    # would drop a UTF-8 byte order mark that Java reads as part of the first key.
+    $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($script:ProxyFile))
+    foreach ($line in [regex]::Split($text, '\r\n|\r|\n')) { $result.Lines.Add($line) }
+    if ($text.Length -gt 0 -and $text[$text.Length - 1] -in [char]"`n", [char]"`r") { $result.Lines.RemoveAt($result.Lines.Count - 1) }
+    $blank = [char[]]@(' ', "`t", "`f")
+    $i = 0
+    while ($i -lt $result.Lines.Count) {
+        $first = $i
+        $logical = $result.Lines[$i].TrimStart($blank)
+        $i++
+        if ($logical.Length -eq 0 -or $logical[0] -in [char]'#', [char]'!') { continue }
+        # A line ending in an odd number of backslashes continues on the next natural line.
+        while (([regex]::Match($logical, '\\*\z').Length % 2) -eq 1) {
+            $logical = $logical.Substring(0, $logical.Length - 1)
+            if ($i -ge $result.Lines.Count) { break }
+            $logical += $result.Lines[$i].TrimStart($blank)
+            $i++
+        }
+        $keyEnd = 0; $escaped = $false
+        while ($keyEnd -lt $logical.Length) {
+            $c = $logical[$keyEnd]
+            if (-not $escaped -and ($c -in [char]'=', [char]':', [char]' ', [char]"`t", [char]"`f")) { break }
+            $escaped = (-not $escaped) -and $c -eq [char]'\'
+            $keyEnd++
+        }
+        $valueStart = $keyEnd
+        while ($valueStart -lt $logical.Length -and $logical[$valueStart] -in $blank) { $valueStart++ }
+        if ($valueStart -lt $logical.Length -and $logical[$valueStart] -in [char]'=', [char]':') { $valueStart++ }
+        while ($valueStart -lt $logical.Length -and $logical[$valueStart] -in $blank) { $valueStart++ }
+        # Properties.load throws on a \u escape without four hex digits (IllegalArgumentException):
+        # ProxySetting.load then has no settings at all, and save does not replace the file.
+        foreach ($escape in [regex]::Matches($logical, '\\(u[0-9A-Fa-f]{4}|.)')) {
+            if ($escape.Groups[1].Value -ceq 'u') { $result.Malformed = $true }
+        }
+        $result.Entries.Add([pscustomobject]@{
+            Key = ConvertFrom-PropertiesEscapes $logical.Substring(0, $keyEnd)
+            Value = ConvertFrom-PropertiesEscapes $logical.Substring($valueStart)
+            First = $first; Count = $i - $first
+        })
+    }
+    return $result
+}
+
+function ConvertFrom-PropertiesEscapes([string] $text) {
+    return [regex]::Replace($text, '\\(u[0-9A-Fa-f]{4}|.)', {
+        param($m)
+        $e = $m.Groups[1].Value
+        switch -CaseSensitive ($e) {
+            't' { return "`t" }
+            'n' { return "`n" }
+            'r' { return "`r" }
+            'f' { return "`f" }
+            default {
+                if ($e.Length -eq 5) { return [string][char][Convert]::ToInt32($e.Substring(1), 16) }
+                return $e
+            }
+        }
+    })
+}
+
+# A value as java.util.Properties.store writes it.
+function ConvertTo-PropertiesValue([string] $text) {
+    $out = [Text.StringBuilder]::new()
+    for ($i = 0; $i -lt $text.Length; $i++) {
+        $c = $text[$i]
+        switch -CaseSensitive ([string]$c) {
+            '\' { [void]$out.Append('\\'); continue }
+            "`t" { [void]$out.Append('\t'); continue }
+            "`n" { [void]$out.Append('\n'); continue }
+            "`r" { [void]$out.Append('\r'); continue }
+            "`f" { [void]$out.Append('\f'); continue }
+            default {
+                if ($c -eq [char]' ' -and $i -eq 0) { [void]$out.Append('\ ') }
+                elseif ($c -in [char]'=', [char]':', [char]'#', [char]'!') { [void]$out.Append('\').Append($c) }
+                elseif ([int]$c -lt 0x20 -or [int]$c -gt 0x7E) { [void]$out.Append(('\u{0:X4}' -f [int]$c)) }
+                else { [void]$out.Append($c) }
+            }
+        }
+    }
+    return $out.ToString()
+}
+
+# The saved settings: key 'proxy' (every app) or 'proxy.<package>' -> 'direct', 'windows' or
+# host:port. As with Properties, the last line of a key wins; then ProxySetting.parse. None
+# when the file is not in Properties form, as ProxySetting.load.
+function Get-ProxySettings {
+    $settings = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    $raw = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    $file = Read-ProxyProperties
+    if ($file.Malformed) { return ,$settings }
+    foreach ($entry in $file.Entries) {
+        if ($entry.Key -ceq 'proxy' -or $entry.Key.StartsWith('proxy.', [StringComparison]::Ordinal)) { $raw[$entry.Key] = $entry.Value }
+    }
+    foreach ($key in $raw.Keys) {
+        $value = ConvertTo-ProxyValue $raw[$key]
+        if ($value) { $settings[$key] = $value }
+    }
+    return ,$settings
+}
+
+# Saves the proxy of every app ($pkg empty) or of one package, as ProxySetting.save does:
+# 'windows' for every app removes the setting; $value $null removes a package's own setting
+# (it uses every app's again). App processes started from now on use it.
+function Set-ProxySetting([string] $pkg, [string] $value) {
+    if ($pkg -and $pkg -cnotmatch '\A[A-Za-z0-9_.]+\z') { throw "Invalid package: $pkg" }
+    if ($null -ne $value -and $value -ne '') {
+        $value = ConvertTo-ProxyValue $value
+        if (-not $value) { throw 'Invalid proxy setting' }
+    } else { $value = $null }
+    $key = if ($pkg) { "proxy.$pkg" } else { 'proxy' }
+    if (-not $pkg -and $value -eq 'windows') { $value = $null }
+    $file = Read-ProxyProperties
+    # As ProxySetting.save: a file Properties.load cannot read is not replaced.
+    if ($file.Malformed) { throw "${script:ProxyFile}: Malformed \uxxxx encoding." }
+    $drop = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($entry in $file.Entries) {
+        if ($entry.Key -ceq $key) { for ($n = 0; $n -lt $entry.Count; $n++) { [void]$drop.Add($entry.First + $n) } }
+    }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if (-not (Test-Path -LiteralPath $script:ProxyFile)) {
+        $lines.Add('#Gesher''s proxy: gesher-app proxy [PACKAGE] host:port|direct|windows')
+    }
+    for ($n = 0; $n -lt $file.Lines.Count; $n++) { if (-not $drop.Contains($n)) { $lines.Add($file.Lines[$n]) } }
+    if ($value) {
+        # A last line ending in an odd number of backslashes would continue into the new one.
+        if ($lines.Count -gt 0 -and ([regex]::Match($lines[$lines.Count - 1], '\\*\z').Length % 2) -eq 1) { $lines.Add('') }
+        $lines.Add($key + '=' + (ConvertTo-PropertiesValue $value))
+    }
+    $directory = Split-Path -Parent $script:ProxyFile
+    if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+    [IO.File]::WriteAllLines($script:ProxyFile, $lines, [Text.Encoding]::GetEncoding(28591))
+}
+
+# A saved setting as the panel shows it.
+function Get-ProxyDisplayText([string] $value) {
+    switch ($value) {
+        'direct' { return Get-GesherText 'cp_proxy_mode_direct' }
+        'windows' { return Get-GesherText 'cp_proxy_mode_windows' }
+        default { return $value }
+    }
+}
+
+# Fills a mode ComboBox and its address TextBox for a saved value ($null: the package
+# uses every app's setting, with -WithInherit; every app's Windows' settings otherwise).
+function Initialize-ProxyEditor($combo, $address, [string] $value, [switch] $WithInherit) {
+    $combo.Items.Clear()
+    $modes = [System.Collections.Generic.List[object]]::new()
+    if ($WithInherit) { $modes.Add(@('inherit', (Get-GesherText 'cp_proxy_mode_inherit'))) }
+    $modes.Add(@('windows', (Get-GesherText 'cp_proxy_mode_windows')))
+    $modes.Add(@('direct', (Get-GesherText 'cp_proxy_mode_direct')))
+    $modes.Add(@('server', (Get-GesherText 'cp_proxy_mode_server')))
+    foreach ($mode in $modes) {
+        $item = [System.Windows.Controls.ComboBoxItem]::new()
+        $item.Tag = $mode[0]
+        $item.Content = $mode[1]
+        [void]$combo.Items.Add($item)
+    }
+    $selected = if (-not $value) { if ($WithInherit) { 'inherit' } else { 'windows' } }
+        elseif ($value -eq 'direct' -or $value -eq 'windows') { $value } else { 'server' }
+    $address.Text = if ($selected -eq 'server') { $value } else { '' }
+    foreach ($item in $combo.Items) { if ($item.Tag -eq $selected) { $combo.SelectedItem = $item } }
+    $address.IsEnabled = ($selected -eq 'server')
+    $combo.Add_SelectionChanged({
+        param($sender, $e)
+        $isServer = ($sender.SelectedItem -and $sender.SelectedItem.Tag -eq 'server')
+        $address.IsEnabled = $isServer
+        if ($isServer) { [void]$address.Focus() }
+    }.GetNewClosure())
+}
+
+# The editor's setting: @{ Valid; Value } (Value $null = every app's setting for a package).
+function Read-ProxyEditor($combo, $address) {
+    $mode = if ($combo.SelectedItem) { [string]$combo.SelectedItem.Tag } else { 'windows' }
+    switch ($mode) {
+        'inherit' { return @{ Valid = $true; Value = $null } }
+        'server' {
+            $value = ConvertTo-ProxyValue $address.Text
+            if (-not $value -or $value -eq 'direct' -or $value -eq 'windows') {
+                return @{ Valid = $false; Value = $null; Text = [string]$address.Text }
+            }
+            return @{ Valid = $true; Value = $value }
+        }
+        default { return @{ Valid = $true; Value = $mode } }
+    }
+}
+
 # Helper to query device running state
 function Get-DeviceStatus {
     # The ready file can outlive a crashed device, so the recorded system_server PID must be alive.
@@ -88,15 +316,21 @@ function Get-DeviceStatus {
         $serverId = 0
         if ([int]::TryParse($text.Trim(), [ref] $serverId)) {
             $p = Get-Process -Id $serverId -ErrorAction SilentlyContinue
-            if ($p) { return $true }
+            if ($p) {
+                try {
+                    if ($script:MetadataMonitor) { $script:MetadataMonitor.SetProcess($serverId) }
+                } catch { } finally { $p.Dispose() }
+                return $true
+            }
         }
     }
+    try { if ($script:MetadataMonitor) { $script:MetadataMonitor.SetProcess(0) } } catch { }
     return $false
 }
 
 # Cheap change detection: length and write time of the files the dashboard derives its state from.
-# Polled on the UI thread instead of FileSystemWatcher, so no event crosses threads or runspaces and
-# no directory handle is held open inside the device's data directory.
+# Notifications normally trigger refresh. These UI-thread stamps recover missed events only
+# while the panel is visible; native/.NET callbacks never execute PowerShell off the dispatcher.
 function Get-FileStamp([string] $path) {
     try {
         $info = [System.IO.FileInfo]::new($path)
@@ -111,12 +345,78 @@ function Get-StateStamp {
         Get-FileStamp (Join-Path $root 'data/system/packages.list')
         Get-FileStamp (Join-Path $root 'microg.enabled')
         Get-FileStamp (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
+        Get-FileStamp $script:AppWindowsFile
+        Get-FileStamp $script:ProxyFile
     ) -join '|')
 }
 
 # Shortcut labels and icons are written after packages.list, so they are tracked separately.
 function Get-AppFilesStamp {
     return (@($script:ViewState.AppFiles | ForEach-Object { Get-FileStamp $_ }) -join '|')
+}
+
+function Test-PanelMetadataVisible {
+    return $window.IsVisible -and $window.WindowState -ne 'Minimized'
+}
+
+function Request-PanelMetadataRefresh {
+    # Called on the WPF dispatcher, including notifications marshalled by the monitor.
+    $now = [DateTime]::UtcNow
+    if (-not $script:LiveState.PendingFirst) { $script:LiveState.PendingFirst = $now }
+    $script:LiveState.PendingSince = $now
+}
+
+function Update-PanelMetadataWatch {
+    if (-not $script:MetadataMonitor) { return }
+    $paths = @(
+        (Join-Path $root 'data/system/gesher-device.ready')
+        (Join-Path $root 'data/system/packages.list')
+        (Join-Path $root 'microg.enabled')
+        (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
+        $script:AppWindowsFile
+        $script:ProxyFile
+    ) + @($script:ViewState.AppFiles)
+    $script:MetadataMonitor.SetFiles($root, [string[]]$paths)
+}
+
+function Invoke-PanelMetadataVisibilityChanged {
+    if (-not (Test-PanelMetadataVisible)) {
+        $script:LiveState.WasVisible = $false
+        return
+    }
+    # Restore resynchronizes even if the watcher overflowed or a directory was replaced.
+    $script:LiveState.WasVisible = $false
+    Request-PanelMetadataRefresh
+}
+
+function Invoke-PanelMetadataActivated {
+    try {
+        Invoke-PanelMetadataVisibilityChanged
+        if (-not $script:IsBusy -and (Test-PanelMetadataVisible)) {
+            $script:LiveState.WasVisible = $true
+            Refresh-Dashboard
+        }
+    } catch { }
+}
+
+function Initialize-PanelMetadata {
+    try {
+        $context = [System.Windows.Threading.DispatcherSynchronizationContext]::new($window.Dispatcher,
+            [System.Windows.Threading.DispatcherPriority]::Background)
+        $script:MetadataMonitor = [Gesher.PanelChangeMonitor]::new($context)
+        $script:MetadataMonitor.add_Changed({ try { Request-PanelMetadataRefresh } catch { } })
+    } catch { $script:MetadataMonitor = $null }
+    $window.Add_StateChanged({ Invoke-PanelMetadataVisibilityChanged })
+    $window.Add_IsVisibleChanged({ Invoke-PanelMetadataVisibilityChanged })
+    $window.Add_Activated({ Invoke-PanelMetadataActivated })
+    $window.Add_Closed({ Close-PanelMetadata })
+}
+
+function Close-PanelMetadata {
+    if ($script:MetadataMonitor) {
+        $script:MetadataMonitor.Dispose()
+        $script:MetadataMonitor = $null
+    }
 }
 
 # Helper to query microG enabled state
@@ -142,6 +442,9 @@ function Get-InstalledApps {
 
         $label = $pkg
         $iconPath = $null
+        # Keep declarations even when unavailable: a later icon creation must
+        # trigger observation/recovery without another shortcut rewrite.
+        $iconCandidates = [System.Collections.Generic.List[string]]::new()
         $propFile = Join-Path $root "data/data/$pkg/gesher-shell/shortcut.properties"
         if (Test-Path -LiteralPath $propFile) {
             foreach ($propLine in Get-Content -LiteralPath $propFile) {
@@ -151,7 +454,10 @@ function Get-InstalledApps {
                 }
                 if ($propLine -match '^\s*icon\s*=\s*(.*)$') {
                     $iconCandidate = $Matches[1].Trim() -replace '\\\\', '\' -replace '\\:', ':'
-                    if (Test-Path -LiteralPath $iconCandidate) { $iconPath = $iconCandidate }
+                    if (-not [string]::IsNullOrWhiteSpace($iconCandidate)) {
+                        $iconCandidates.Add($iconCandidate)
+                        if (Test-Path -LiteralPath $iconCandidate) { $iconPath = $iconCandidate }
+                    }
                 }
             }
         }
@@ -160,10 +466,16 @@ function Get-InstalledApps {
             if (Test-Path -LiteralPath $candidate) { $iconPath = $candidate }
         }
 
+        # As a launcher's app list, "Launch" only for a package with a MAIN/LAUNCHER activity:
+        # AppShell records one without (com.gesher.camera's capture activity, for example).
+        $launchable = -not (Test-Path -LiteralPath (Join-Path $root "data/data/$pkg/gesher-shell/no-launcher-activity"))
+
         $apps.Add([PSCustomObject]@{
             Package = $pkg
             Label = $label
             IconPath = $iconPath
+            Launchable = $launchable
+            IconCandidates = $iconCandidates.ToArray()
         })
     }
     return $apps
@@ -355,7 +667,8 @@ function Get-InstalledApps {
                         <TextBlock Text="$(Get-GesherText 'cp_apps_title')" FontSize="16" FontWeight="Bold" Foreground="#101828"/>
                         <TextBlock Text="$(Get-GesherText 'cp_drag_drop_hint')" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Name="BtnProxyAll" Content="$(Get-GesherText 'cp_btn_proxy_all')" ToolTip="$(Get-GesherText 'cp_proxy_desc')" Margin="0,0,8,0"/>
                         <Button Name="BtnInstallApk" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_install_apk')"/>
                     </StackPanel>
                 </Grid>
@@ -389,10 +702,12 @@ function Get-InstalledApps {
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,12,0">
                                             <TextBlock Text="{Binding Label}" FontSize="14" FontWeight="SemiBold" Foreground="#101828"/>
                                             <TextBlock Text="{Binding Package}" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
+                                            <TextBlock Text="{Binding ProxyText}" Visibility="{Binding ProxyVisibility}" FontSize="12" Foreground="#175CD3" Margin="0,2,0,0"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                             <CheckBox Content="$(Get-GesherText 'cp_separate_windows')" ToolTip="$(Get-GesherText 'cp_separate_windows_tip')" IsChecked="{Binding SeparateWindows, Mode=OneWay}" Tag="{Binding Package}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                            <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Margin="0,0,8,0"/>
+                                            <Button Content="$(Get-GesherText 'cp_btn_proxy')" ToolTip="$(Get-GesherText 'cp_btn_proxy_tip')" Tag="{Binding Package}" Margin="0,0,8,0"/>
+                                            <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Visibility="{Binding LaunchVisibility}" Margin="0,0,8,0"/>
                                             <Button Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_uninstall')" Tag="{Binding Package}"/>
                                         </StackPanel>
                                     </Grid>
@@ -465,6 +780,7 @@ $statusMessage = $window.FindName('StatusMessage')
 $activityBar = $window.FindName('ActivityBar')
 $servicesCards = $window.FindName('ServicesCards')
 $applicationsSection = $window.FindName('ApplicationsSection')
+$btnProxyAll = $window.FindName('BtnProxyAll')
 $updateVersionText = $window.FindName('UpdateVersionText')
 $updateStatusText = $window.FindName('UpdateStatusText')
 $automaticUpdateChecks = $window.FindName('AutomaticUpdateChecks')
@@ -592,17 +908,21 @@ function Update-AppsView($installed) {
     [void]$watched.Add($icoFile)
     $signature = @(foreach ($app in $installed) {
         $shell = Join-Path $root "data/data/$($app.Package)/gesher-shell"
-        foreach ($path in @((Join-Path $shell 'shortcut.properties'), (Join-Path $shell 'icon.ico'), $app.IconPath)) {
+        $paths = @((Join-Path $shell 'shortcut.properties'), (Join-Path $shell 'icon.ico'), (Join-Path $shell 'no-launcher-activity'), $app.IconPath)
+        if ($app.PSObject.Properties['IconCandidates']) { $paths += @($app.IconCandidates) }
+        foreach ($path in $paths) {
             if ($path -and $watched.Add([string]$path)) { $appFiles.Add([string]$path) }
         }
         if ($app.IconPath -and -not $iconStamps.ContainsKey($app.IconPath)) {
             $iconStamps[$app.IconPath] = Get-FileStamp $app.IconPath
         }
-        "$($app.Package)`t$($app.Label)`t$($app.IconPath)`t$(if ($app.IconPath) { $iconStamps[$app.IconPath] })"
+        "$($app.Package)`t$($app.Label)`t$($app.IconPath)`t$(if ($app.IconPath) { $iconStamps[$app.IconPath] })`t$($app.Launchable)"
     }) -join "`n"
     $signature += "`n$($iconStamps[$icoFile])"
     $separateApps = Get-SeparateWindowApps
     $signature += "`n" + (@($separateApps | Sort-Object) -join ',')
+    $proxySettings = Get-ProxySettings
+    $signature += "`n" + (@($proxySettings.Keys | Sort-Object | ForEach-Object { "$_=$($proxySettings[$_])" }) -join ',')
     $script:ViewState.AppFiles = $appFiles.ToArray()
     if ($script:ViewState.AppsSignature -ceq $signature) { return }
 
@@ -616,11 +936,18 @@ function Update-AppsView($installed) {
                 $imgSource = Get-PanelAppIcon $resolvedIco $iconStamps[$resolvedIco] $icons
             } catch { }
         }
+        $appProxy = $null
+        $proxyText = if ($proxySettings.TryGetValue("proxy.$($app.Package)", [ref] $appProxy)) {
+            Get-GesherText 'cp_proxy_app_value' @((Get-ProxyDisplayText $appProxy))
+        } else { '' }
         $items.Add([PSCustomObject]@{
             Package = $app.Package
             Label = $app.Label
             IconImage = $imgSource
             SeparateWindows = $separateApps.Contains([string]$app.Package)
+            LaunchVisibility = if ($app.Launchable) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+            ProxyText = $proxyText
+            ProxyVisibility = if ($proxyText) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
         })
     }
     $appsList.ItemsSource = $items
@@ -631,20 +958,26 @@ function Update-AppsView($installed) {
 
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
 function Refresh-Dashboard {
-    # Stamps are taken before reading so a change made during the read is still noticed next tick.
+    $generation = if ($script:MetadataMonitor) { $script:MetadataMonitor.Generation } else { 0 }
+    # Stamps precede reads so notifications or visible recovery notice a change during the read.
     $stateStamp = Get-StateStamp
     $appsStamp = Get-AppFilesStamp
     # A transient read/render failure must leave a retry pending even when the files have
     # stopped changing. Commit the observed stamps only after the whole refresh succeeds.
-    if (-not $script:LiveState.PendingSince) { $script:LiveState.PendingSince = [DateTime]::UtcNow }
+    if (-not $script:LiveState.PendingSince) { Request-PanelMetadataRefresh }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
+    Update-PanelMetadataWatch
     $script:LiveState.Stamp = $stateStamp
     $script:LiveState.AppsStamp = $appsStamp
-    $script:LiveState.PendingSince = $null
+    $script:LiveState.RecoveryAt = [DateTime]::UtcNow.AddMilliseconds($script:LiveRefreshRecoveryMs)
+    # Do not acknowledge an event arriving during the read or a watch replacement gap.
+    if ($script:MetadataMonitor -and $script:MetadataMonitor.Generation -ne $generation) {
+        Request-PanelMetadataRefresh
+    } else { $script:LiveState.PendingSince = $null; $script:LiveState.PendingFirst = $null }
 }
 
 # Always release the action guard: a transient refresh failure is retried by the timer.
@@ -652,39 +985,50 @@ function Complete-DashboardAction {
     try { Refresh-Dashboard } finally { Set-Busy $false }
 }
 
-# Live refresh, driven by one DispatcherTimer on the UI thread (500 ms):
-# - every tick: compare the state-file stamp; a change is applied once it has been stable for one
-#   tick (>= 400 ms debounce), so a burst of writes from install/start/stop causes one refresh;
-# - every 4th tick (2 s): re-check the system_server PID (a crash leaves the ready file behind)
-#   and the per-app shortcut/icon files, which are written after packages.list;
-# - nothing happens while an action is busy; the action's own final refresh covers that period.
+# The shared UI heartbeat still services activation, actions and update progress.
+# Metadata uses debounced notifications plus visible-only missed-event recovery.
+# A hidden/minimized view does no periodic file/PID/icon scans, even when marked dirty.
 $script:LiveRefreshIntervalMs = 500
 $script:LiveRefreshDebounceMs = 400
-$script:LiveRefreshSlowEvery = 4
+$script:LiveRefreshMaximumDelayMs = 2000
+$script:LiveRefreshRecoveryMs = 5000
 
 function Invoke-LiveRefreshTick {
     $live = $script:LiveState
     $live.Tick++
+    if (-not (Test-PanelMetadataVisible)) { $live.WasVisible = $false; return }
     if ($script:IsBusy) { return }
-    $now = [DateTime]::UtcNow
-    $stamp = Get-StateStamp
-    if ($stamp -ne $live.Stamp) {
-        $live.Stamp = $stamp
-        $live.PendingSince = $now
+    if (-not $live.WasVisible) {
+        $live.WasVisible = $true
+        Refresh-Dashboard
         return
     }
-    if (($live.Tick % $script:LiveRefreshSlowEvery) -eq 0) {
-        Update-DeviceView (Get-DeviceStatus)
+    $now = [DateTime]::UtcNow
+    if (-not $live.RecoveryAt -or $now -ge $live.RecoveryAt) {
+        $live.RecoveryAt = $now.AddMilliseconds($script:LiveRefreshRecoveryMs)
+        $stamp = Get-StateStamp
         $appsStamp = Get-AppFilesStamp
-        if ($appsStamp -ne $live.AppsStamp) {
-            $live.AppsStamp = $appsStamp
-            if (-not $live.PendingSince) { $live.PendingSince = $now }
-            return
+        Update-DeviceView (Get-DeviceStatus)
+        if (($stamp -ne $live.Stamp -or $appsStamp -ne $live.AppsStamp) -and -not $live.PendingSince) {
+            Request-PanelMetadataRefresh
         }
+        if ($script:MetadataMonitor -and -not $script:MetadataMonitor.Healthy) { Update-PanelMetadataWatch }
     }
-    if ($live.PendingSince -and ($now - $live.PendingSince).TotalMilliseconds -ge $script:LiveRefreshDebounceMs) {
+    if ($live.PendingSince -and (($now - $live.PendingSince).TotalMilliseconds -ge $script:LiveRefreshDebounceMs -or
+            ($live.PendingFirst -and ($now - $live.PendingFirst).TotalMilliseconds -ge $script:LiveRefreshMaximumDelayMs))) {
         Refresh-Dashboard
     }
+}
+
+function Invoke-PanelHeartbeat {
+    if ($script:ActionState.Closed) { return }
+    try { Complete-PanelAction } catch { }
+    try { Invoke-PanelRequest } catch { }
+    try { Invoke-PanelUpdateTick } catch {
+        Set-PanelUpdateStatus 'cp_update_check_failed' @() $_.Exception.Message
+        Update-PanelUpdateView
+    }
+    try { Invoke-LiveRefreshTick } catch { }
 }
 
 # Takes the system server's request (one line: a package, or empty for the panel itself).
@@ -1539,11 +1883,11 @@ function New-PanelActionWorker([string] $operation, $request) {
                     }
                     'Store' {
                         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore.apk'
+                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore-4.8.4.apk'
                         if (-not (Test-Path -LiteralPath $storeApk)) {
                             $temporary = [IO.Path]::GetTempFileName()
                             try {
-                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
+                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
                                 Move-Item -LiteralPath $temporary -Destination $storeApk -Force
                             } finally {
                                 if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
@@ -1842,6 +2186,118 @@ $script:OnAppUninstall = {
     }
 }
 
+# The proxy of every app ($pkg empty) or of one app (proxy.<package>, over every app's
+# setting); app processes started from now on use it. True when it was saved.
+function Show-ProxyDialog([string] $pkg = '', [string] $label = $pkg) {
+    [xml]$dialogXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="460" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        FlowDirection="$flowDirection"
+        FontFamily="Segoe UI, Tahoma, Arial"
+        Background="#FFFFFF">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#D0D5DD"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="#344054"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Border Padding="22">
+        <StackPanel>
+            <TextBlock Name="DialogHeading" FontSize="15" FontWeight="Bold" Foreground="#101828" TextWrapping="Wrap"/>
+            <TextBlock Name="DialogPackage" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
+            <TextBlock Name="DialogDetail" FontSize="12" Foreground="#475467" TextWrapping="Wrap" Margin="0,10,0,14"/>
+            <StackPanel Orientation="Horizontal">
+                <ComboBox Name="DialogProxyMode" Width="190" Padding="8,7" VerticalContentAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox Name="DialogProxyAddress" Width="170" Padding="6,7" VerticalContentAlignment="Center" FlowDirection="LeftToRight"/>
+            </StackPanel>
+            <TextBlock Name="DialogError" FontSize="12" Foreground="#B42318" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                <Button Name="BtnCancel" IsCancel="True" MinWidth="85" Margin="0,0,8,0"/>
+                <Button Name="BtnSave" IsDefault="True" MinWidth="85" Background="#1570EF" BorderBrush="#1570EF" Foreground="#FFFFFF"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>
+"@
+    $dialog = [System.Windows.Markup.XamlReader]::Load([System.Xml.XmlNodeReader]::new($dialogXaml))
+    $heading = if ($pkg) { Get-GesherText 'cp_proxy_app_title' @($label) } else { Get-GesherText 'cp_btn_proxy_all' }
+    $dialog.Title = $heading
+    $dialog.FindName('DialogHeading').Text = $heading
+    $packageText = $dialog.FindName('DialogPackage')
+    if ($pkg -and $label -ne $pkg) { $packageText.Text = $pkg } else { $packageText.Visibility = [System.Windows.Visibility]::Collapsed }
+    $dialog.FindName('DialogDetail').Text = if ($pkg) { Get-GesherText 'cp_proxy_app_desc' } else { Get-GesherText 'cp_proxy_desc' }
+    $dialog.FindName('BtnCancel').Content = Get-GesherText 'cp_update_cancel'
+    $dialog.FindName('BtnSave').Content = Get-GesherText 'cp_proxy_save'
+    $mode = $dialog.FindName('DialogProxyMode')
+    $address = $dialog.FindName('DialogProxyAddress')
+    $address.ToolTip = Get-GesherText 'cp_proxy_address_hint'
+    $current = $null
+    [void](Get-ProxySettings).TryGetValue($(if ($pkg) { "proxy.$pkg" } else { 'proxy' }), [ref] $current)
+    Initialize-ProxyEditor $mode $address $current -WithInherit:([bool]$pkg)
+    $dialog.Owner = $window
+    if ($window.Icon) { $dialog.Icon = $window.Icon }
+    $state = @{ Saved = $false }
+    $dialog.FindName('BtnSave').Add_Click({
+        $choice = Read-ProxyEditor $mode $address
+        $errorText = $dialog.FindName('DialogError')
+        if (-not $choice.Valid) {
+            $errorText.Text = Get-GesherText 'cp_proxy_invalid' @($choice.Text)
+            $errorText.Visibility = [System.Windows.Visibility]::Visible
+            [void]$address.Focus()
+            return
+        }
+        try {
+            Set-ProxySetting $pkg $choice.Value
+            $state.Saved = $true
+            $dialog.Close()
+        } catch {
+            $errorText.Text = Get-GesherText 'cp_proxy_save_failed' @($_.Exception.Message)
+            $errorText.Visibility = [System.Windows.Visibility]::Visible
+        }
+    })
+    $dialog.ShowDialog() | Out-Null
+    return $state.Saved
+}
+
+$script:OnAppProxy = {
+    param($pkg)
+    if ($script:IsBusy) { return }
+    $item = $appsList.ItemsSource | Where-Object { $_.Package -eq $pkg } | Select-Object -First 1
+    $label = if ($item -and $item.Label) { $item.Label } else { $pkg }
+    if (Show-ProxyDialog -pkg $pkg -label $label) {
+        Refresh-Dashboard
+        $statusMessage.Text = Get-GesherText 'cp_proxy_saved'
+    }
+}
+
+$btnProxyAll.Add_Click({
+    if ($script:IsBusy) { return }
+    if (Show-ProxyDialog) { $statusMessage.Text = Get-GesherText 'cp_proxy_saved' }
+})
+
 # Attach click events through visual tree dispatcher
 $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
     param($sender, $e)
@@ -1857,6 +2313,8 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
             & $script:OnAppLaunch $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_uninstall')) {
             & $script:OnAppUninstall $pkg
+        } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_proxy')) {
+            & $script:OnAppProxy $pkg
         }
     }
 })
@@ -1865,18 +2323,8 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
 # Handler failures (e.g. a file mid-rewrite) are dropped; the next tick or activation retries.
 $script:LiveTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $script:LiveTimer.Interval = [TimeSpan]::FromMilliseconds($script:LiveRefreshIntervalMs)
-$script:LiveTimer.Add_Tick({
-    try { Complete-PanelAction } catch { }
-    try { Invoke-LiveRefreshTick } catch { }
-    try { Invoke-PanelRequest } catch { }
-    try { Invoke-PanelUpdateTick } catch {
-        Set-PanelUpdateStatus 'cp_update_check_failed' @() $_.Exception.Message
-        Update-PanelUpdateView
-    }
-})
-$window.Add_Activated({
-    try { if (-not $script:IsBusy) { Refresh-Dashboard } } catch { }
-})
+$script:LiveTimer.Add_Tick({ Invoke-PanelHeartbeat })
+Initialize-PanelMetadata
 $window.Add_Closing({
     param($sender, $event)
     if (-not (Test-PanelActionClose)) { $event.Cancel = $true; return }
@@ -1906,6 +2354,7 @@ $script:LiveTimer.Start()
 try { $window.ShowDialog() | Out-Null }
 finally {
     $script:LiveTimer.Stop()
+    Close-PanelMetadata
     Close-PanelUpdates
     # The window is already closed. Drain the cooperatively cancelled, bounded
     # request here so the worker can delete partial files before its runspace ends.

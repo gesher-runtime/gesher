@@ -155,6 +155,12 @@ add_executable(timerfd_windows_test tests/native/timerfd_windows_test.cc)
 target_compile_options(timerfd_windows_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(timerfd_windows_test PRIVATE gesher_posix)
 
+# Synthetic clipboard-denial actor; built before the timed Windows fixture.
+# The installer lists its production executables explicitly and excludes this.
+add_executable(clipboard_foreground tests/windows/clipboard/foreground_helper.cc)
+target_compile_options(clipboard_foreground PRIVATE -Wall -Wextra -Werror)
+target_link_options(clipboard_foreground PRIVATE -municode)
+target_link_libraries(clipboard_foreground PRIVATE user32)
 add_executable(file_flags_ofd_test tests/native/file_flags_ofd_test.cc)
 target_compile_options(file_flags_ofd_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(file_flags_ofd_test PRIVATE gesher_posix)
@@ -241,6 +247,11 @@ target_link_libraries(art_shim_test PRIVATE gesher_bionic gesher_elf)
 add_executable(bionic_ftruncate_test tests/native/bionic_ftruncate_test.cc)
 target_compile_options(bionic_ftruncate_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(bionic_ftruncate_test PRIVATE gesher_bionic gesher_elf)
+
+# creat and creat64 through the actual Bionic exports (issue #320).
+add_executable(bionic_creat_test tests/native/bionic_creat_test.cc)
+target_compile_options(bionic_creat_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(bionic_creat_test PRIVATE gesher_bionic gesher_elf)
 
 # Real Bionic stream locks and wide I/O through the exported FILE APIs.
 add_executable(bionic_stdio_contract_test tests/native/bionic_stdio_contract_test.cc)

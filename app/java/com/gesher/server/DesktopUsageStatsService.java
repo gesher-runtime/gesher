@@ -123,17 +123,18 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     }
 
     private UsageEvents events(long begin, long end, Set<String> packages, int[] types) {
-        ActivityUsageHistory.Snapshot snapshot = mHistory.eventSnapshot();
-        begin = Math.max(begin, snapshot.until() - ActivityUsageHistory.RETENTION);
-        List<UsageEvents.Event> result = new ArrayList<>();
+        int states = 0;
+        for (ActivityUsageHistory.State state : ActivityUsageHistory.State.values()) {
+            int type = eventType(state);
+            if (type != UsageEvents.Event.NONE && matchesType(types, type)) {
+                states |= 1 << state.ordinal();
+            }
+        }
+        ActivityUsageHistory.Snapshot snapshot = mHistory.eventSnapshot(begin, end, packages, states);
+        List<UsageEvents.Event> result = new ArrayList<>(snapshot.events().size());
         TreeSet<String> strings = new TreeSet<>();
         for (ActivityUsageHistory.Event entry : snapshot.events()) {
             int type = eventType(entry.state());
-            if (type == UsageEvents.Event.NONE || entry.time() < begin || entry.time() >= end
-                    || !packages.isEmpty() && !packages.contains(entry.pkg())
-                    || !matchesType(types, type)) {
-                continue;
-            }
             UsageEvents.Event event = new UsageEvents.Event();
             event.mPackage = entry.pkg();
             event.mClass = entry.cls();

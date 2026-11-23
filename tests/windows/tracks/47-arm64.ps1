@@ -109,7 +109,8 @@ Check 'arm64: System.load of an arm64-v8a .so; JNI both ways, Call*MethodV, nest
   A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-jni.dex"), 'gesher.Arm64Jni',
     (NoDrive (Resolve-Path "$Dir/jni_test_arm64.so").Path))
-} @('JNI_OnLoad ran: ok', 'Arm64Jni all passed')
+} @('JNI_OnLoad ran: ok', 'GetEnv guest boundary: all passed',
+    'GetEnv attach/detach: all passed', 'Arm64Jni all passed')
 
 # arm64-v8a ELF executables (the exec track's launcher, ADR 0035): the exec
 # test program built for arm64 (arm64.yml, $Dir/arm64-exec) runs in

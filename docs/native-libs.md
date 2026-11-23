@@ -665,7 +665,20 @@ see "After that" for what is left._
   the loader's vectored handler.
 - **JNI** ([0017](decisions/0017-native-libs-jni-bridge.md)): `@CriticalNative`
   natives in an app library pass the entry stub untouched, but that is not
-  tested. JVMTI environments from `GetEnv` are not wrapped. `dlsym` results
+  tested. `GetEnv` bridges only the existing JNI `0x0001xxxx` version family;
+  the host VM validates individual versions, including older JNI versions.
+  JVMTI, ART tooling interfaces and all other families (including later
+  standard JNI versions such as JNI 9) return `JNI_EVERSION` and null output
+  before any host call. JVMTI remains unimplemented: successful host
+  [`GetEnv`](https://docs.oracle.com/en/java/javase/24/docs/specs/jvmti.html#environments)
+  calls create environments requiring disposal, and their host tables are
+  not guest-callable. This uses the
+  [unsupported-version contract](https://docs.oracle.com/en/java/javase/21/docs/specs/jni/invocation.html#getenv),
+  without advertising a tooling capability. `tools/test_jni_getenv_boundary.py`
+  tests the exact production body against an accepting host; `--source-ref`
+  retains identical assertions for a negative control. The guest checks run
+  in Windows tracks 40 and 47; the host fixture is not ART/ARM execution.
+  `dlsym` results
   other than `JNI_OnLoad`/`JNI_OnUnload`/`Java_*` are raw System V
   addresses. No linker namespaces: all app libraries share one global scope.
   `dlclose` (class loader unloading) runs fini functions but never unmaps.
