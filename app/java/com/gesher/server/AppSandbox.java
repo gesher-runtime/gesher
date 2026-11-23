@@ -106,6 +106,11 @@ final class AppSandbox {
             throw new IllegalStateException("AppContainer profile " + container + " for "
                     + packageName + ": Win32 error " + error);
         }
+        int propertyError = Zygote.nativeGrantPropertyAreaRead(container);
+        if (propertyError != 0) {
+            throw new IllegalStateException("AppContainer property area for " + packageName
+                    + ": Win32 error " + propertyError);
+        }
         // dalvikvm.exe's own directory: a Windows path already (GetModuleFileNameW).
         String exeDir = exeDirectory();
         if (exeDir != null) {

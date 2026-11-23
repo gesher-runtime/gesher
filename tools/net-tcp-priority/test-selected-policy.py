@@ -274,21 +274,36 @@ OFD_QUALIFICATION_SHA256 = 'd1c7f34eb189879e7e68e104448f93830172af1d132439ba5f79
 PROPERTY_REVISION_SHA256 = 'fc2e4d97ee02d1f32e49aeccd648ee386cd44debf9092b4eef48b0c7e2f1499a'
 PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
 PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
+# Recover the exact earlier property revision before replaying its qualification.
+# Supporting read-only AppContainer readers leaves the earlier receipt pinned.
+APPCONTAINER_PROPERTY_PATCH_SHA256 = '3da6f46e88a0845264a3ae077ec3a3654a24edece8b8880154961c17ddd6b1df'
+APPCONTAINER_PROPERTY_SOURCE_SHA256 = {
+ 'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
+ 'compat/posix/src/system_properties.cc': '561b60eb0bf874438ba65fa8e3b9d5a8bcf3af67589c5a46105c0375fb1bb42b',
+}
 def preceding_logging_property_source():
  path='compat/posix/src/system_properties.cc'
- source=(ROOT/path).read_bytes()
- assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
  header='compat/posix/include/gesher/system_properties.h'
- assert hashlib.sha256((ROOT/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
+ latest=(ROOT/'tools/net-tcp-priority/qualified/appcontainer-property-source.patch').read_bytes()
+ assert hashlib.sha256(latest).hexdigest()==APPCONTAINER_PROPERTY_PATCH_SHA256,'AppContainer property transition changed'
+ assert [line.decode().split(' b/',1)[1] for line in latest.splitlines() if line.startswith(b'diff --git ')]==[header,path]
  patch=(ROOT/'tools/net-tcp-priority/qualified/native13-property-source.patch').read_bytes()
  assert hashlib.sha256(patch).hexdigest()==PROPERTY_REVISION_PATCH_SHA256,'property revision transition changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
  with tempfile.TemporaryDirectory(prefix='gesher-property-qualification-') as temporary:
   work=Path(temporary)
-  (work/path).parent.mkdir(parents=True)
-  (work/path).write_bytes(source)
-  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
-  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for current,digest in APPCONTAINER_PROPERTY_SOURCE_SHA256.items():
+   source=(ROOT/current).read_bytes()
+   assert hashlib.sha256(source).hexdigest()==digest,current
+   (work/current).parent.mkdir(parents=True,exist_ok=True)
+   (work/current).write_bytes(source)
+  reverse=['git','-c','core.autocrlf=false','apply','--reverse','--unidiff-zero']
+  subprocess.run([*reverse,'--check','-'],input=latest,cwd=work,check=True,capture_output=True)
+  subprocess.run([*reverse,'-'],input=latest,cwd=work,check=True,capture_output=True)
+  assert hashlib.sha256((work/path).read_bytes()).hexdigest()==PROPERTY_REVISION_SHA256,path
+  assert hashlib.sha256((work/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
+  subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
   return (work/path).read_bytes()
 # Bionic's independently reviewed memmem search changes only this include and
 # complete wrapper. Restore those exact bytes before applying the UNCHANGED

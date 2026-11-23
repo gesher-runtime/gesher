@@ -34,6 +34,7 @@ public final class Zygote {
             boolean inherit);
     static native int nativeGrantToCapability(String path, String capability, int access,
             boolean inherit);
+    static native int nativeGrantPropertyAreaRead(String container);
     static native int nativeDeleteAppContainer(String container);
     private static native int nativeRestartWithUid(int uid);
     static native long nativeStartTime(int pid);

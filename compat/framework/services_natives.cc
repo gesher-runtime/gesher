@@ -29,6 +29,8 @@
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
 #include <cstdio>
+#include <mutex>
+#include <gesher/system_properties.h>
 
 #include "core_jni_helpers.h"
 #include "services_zygote.h"
@@ -195,6 +197,18 @@ static jint Zygote_grantToCapability(JNIEnv* env, jclass, jstring path, jstring 
         inherit == JNI_TRUE));
 }
 
+static jint Zygote_grantPropertyAreaRead(JNIEnv* env, jclass, jstring name) {
+    // Package launches can overlap. Grant performs a DACL read/modify/write on
+    // this shared file, so serializing the grants preserves every package ACE.
+    static std::mutex grants;
+    std::lock_guard lock(grants);
+    std::wstring path = gesher::properties::ReadOnlyAreaPath();
+    if (path.empty()) return 2;  // ERROR_FILE_NOT_FOUND
+    constexpr uint32_t kRead = 0x00120089;  // FILE_GENERIC_READ
+    return static_cast<jint>(gesher::zygote::GrantToAppContainer(
+        std::u16string(path.begin(), path.end()), ZygoteString(env, name), kRead, false));
+}
+
 static jint Zygote_deleteAppContainer(JNIEnv* env, jclass, jstring name) {
     return static_cast<jint>(gesher::zygote::DeleteAppContainer(ZygoteString(env, name)));
 }
@@ -282,6 +296,7 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_grantToAppContainer)},
     {"nativeGrantToCapability", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
      GESHER_JNI(Zygote_grantToCapability)},
+    {"nativeGrantPropertyAreaRead", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_grantPropertyAreaRead)},
     {"nativeDeleteAppContainer", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_deleteAppContainer)},
     {"nativeRestartWithUid", "(I)I", GESHER_JNI(Zygote_restartWithUid)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},

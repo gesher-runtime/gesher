@@ -19,6 +19,9 @@ struct WaitTimeout { int64_t seconds; int64_t nanoseconds; };
 // One area per device boot (GESHER_BINDER), or inherited single-process
 // session. Calling this before spawning a child publishes the session name.
 bool Initialize();
+// Initialize the broker's current area and return the exact file to grant
+// the guest read access to. A contained process cannot prepare a grant.
+std::wstring ReadOnlyAreaPath();
 bool Get(const std::string& name, std::string* value, uint32_t* serial = nullptr);
 // A process-local area identity plus its published generation. Area identities
 // remain valid for the process lifetime. An empty identity must not be cached.

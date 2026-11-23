@@ -188,11 +188,6 @@ public final class GesherAppProcess {
         com.gesher.net.WindowsProxy.installInProcess();
 
         withoutSystemFonts();
-        // No vsync source yet (DisplayEventReceiver's natives are stand-ins that never
-        // deliver one): Choreographer times its frames with messages instead, as with
-        // debug.choreographer.vsync=false. Without frames, the sync barrier a window's
-        // first traversal posts would hold every lifecycle message back.
-        android.os.SystemProperties.set("debug.choreographer.vsync", "false");
         if (!com.gesher.app.window.WindowMode.HEADLESS.equals(windowMode)) {
             // The process's windows are Win32 windows it creates and draws itself: the window
             // session is in this process (WindowManagerGlobal's), and its surfaces take the
