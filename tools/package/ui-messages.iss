@@ -11,7 +11,12 @@ en.setup_aurora=Install App Store (Aurora Store)
 en.setup_control_panel=Gesher Control Center
 en.setup_installing_webview2=Installing Microsoft Edge WebView2...
 en.setup_configuring_microg=Setting up Google Play services and applications...
-en.setup_download_skipped=Setup could not download these components and will continue without them:%n%n%1%nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).
+en.setup_install_type_title=Installation Type
+en.setup_install_type_desc=Choose how you want to install Gesher.
+en.setup_install_standard=Standard installation (recommended for this computer)
+en.setup_install_standard_desc=Installs into your user profile, registers .apk associations, and adds Start menu shortcuts.
+en.setup_install_portable=Portable installation (for USB flash drives or standalone folder)
+en.setup_install_portable_desc=Extracts Gesher as a self-contained portable application. Does not modify the Windows registry or Start menu.
 he.setup_webview=התקנת Microsoft Edge WebView2 (נדרש להצגת תוכן אינטרנט ביישומי Android)
 he.setup_readme=גשר — מידע והוראות
 he.setup_apk=יישום Android (גשר)
@@ -23,7 +28,12 @@ he.setup_aurora=התקנת חנות אפליקציות (Aurora Store)
 he.setup_control_panel=לוח הבקרה של גשר
 he.setup_installing_webview2=מתקין את Microsoft Edge WebView2...
 he.setup_configuring_microg=מגדיר שירותי Google Play ויישומים...
-he.setup_download_skipped=לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:%n%n%1%nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר).
+he.setup_install_type_title=סוג התקנה
+he.setup_install_type_desc=בחר כיצד ברצונך להתקין את גשר.
+he.setup_install_standard=התקנה רגילה (מומלץ למחשב זה)
+he.setup_install_standard_desc=מתקין לפרופיל המשתמש, משייך קובצי .apk ומוסיף קיצורי דרך לתפריט התחל.
+he.setup_install_portable=התקנה ניידת (לדיסק-און-קי או תיקייה עצמאית)
+he.setup_install_portable_desc=מחלץ את גשר כיישום נייד ועצמאי. אינו משנה את רישום המערכת (Registry) ולא מוסיף קיצורים לתפריט התחל.
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userprograms}\Gesher Apps"

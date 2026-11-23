@@ -3,6 +3,29 @@
 # version invalidates the cache once per upgrade, including equal-size files
 # with identical timestamps. Ordinary launches do not read large ICU/font files.
 
+function Get-GesherProfileRoot {
+    param(
+        [Parameter(Mandatory = $false)][string] $InstallDirectory = ''
+    )
+    if ($env:GESHER_PROFILE -and (Test-Path -LiteralPath $env:GESHER_PROFILE)) {
+        return [IO.Path]::GetFullPath($env:GESHER_PROFILE)
+    }
+    if ($InstallDirectory) {
+        $parentData = Join-Path $InstallDirectory '..\Data'
+        $parentMarker = Join-Path $InstallDirectory '..\portable.marker'
+        if ((Test-Path -LiteralPath $parentData) -or (Test-Path -LiteralPath $parentMarker)) {
+            return [IO.Path]::GetFullPath($parentData)
+        }
+        $hereData = Join-Path $InstallDirectory 'Data'
+        $hereMarker = Join-Path $InstallDirectory 'portable.marker'
+        if ((Test-Path -LiteralPath $hereData) -or (Test-Path -LiteralPath $hereMarker)) {
+            return [IO.Path]::GetFullPath($hereData)
+        }
+    }
+    $appData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData\Local' }
+    return [IO.Path]::GetFullPath((Join-Path $appData 'Gesher'))
+}
+
 function New-GesherRuntimeSync {
     param(
         [Parameter(Mandatory = $true)][string] $InstallDirectory,

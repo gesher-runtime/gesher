@@ -50,7 +50,6 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
-#include "../windows/host_dialog_theme.h"
 
 #include <algorithm>
 #include <cstring>
@@ -131,6 +130,41 @@ bool IsFile(const std::wstring& path) {
   return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+bool IsDirectory(const std::wstring& path) {
+  DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+std::wstring GetDataDirectory(const std::wstring& here) {
+  std::wstring env_data = Env(L"ANDROID_DATA");
+  if (!env_data.empty()) {
+    if (env_data.size() >= 7 && (env_data[0] == L'/' || env_data[0] == L'\\') &&
+        (env_data.substr(1, 4) == L"mnt/" || env_data.substr(1, 4) == L"mnt\\")) {
+      wchar_t drive = env_data[5];
+      env_data = std::wstring(1, drive) + L":" + env_data.substr(6);
+    }
+    for (wchar_t& c : env_data) {
+      if (c == L'/') c = L'\\';
+    }
+    return env_data;
+  }
+  std::wstring env_profile = Env(L"GESHER_PROFILE");
+  if (!env_profile.empty()) {
+    for (wchar_t& c : env_profile) {
+      if (c == L'/') c = L'\\';
+    }
+    return env_profile + L"\\data";
+  }
+  if (IsFile(here + L"\\portable.marker") || IsDirectory(here + L"\\Data")) {
+    return here + L"\\Data\\data";
+  }
+  std::wstring parent = Directory(here.c_str());
+  if (IsFile(parent + L"\\portable.marker") || IsDirectory(parent + L"\\Data")) {
+    return parent + L"\\Data\\data";
+  }
+  return Env(L"LOCALAPPDATA") + L"\\Gesher\\data";
+}
+
 // A new empty file in the user's temp directory for the launcher's failure
 // (kErrorFileEnv), or empty.
 std::wstring NewErrorFile() {
@@ -172,9 +206,9 @@ void ShowLaunchFailure(const std::wstring& reason) {
   const size_t at = text.find(L"{0}");
   if (at != std::wstring::npos) text.replace(at, 3, reason);
   else text = reason;
-  GesherHostPrompt(GesherUiText(language, "brand"), text.c_str(),
-                   GesherUiText(language, "cp_dialog_ok"), nullptr,
-                   GesherUiRtl(language), nullptr);
+  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
+  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
+  MessageBoxW(nullptr, text.c_str(), GesherUiText(language, "brand"), flags);
 }
 
 // A failing app starts this short-lived host process rather than waiting inside
@@ -199,9 +233,9 @@ int ShowAppCrash(int argc, LPWSTR* argv) {
     else if (pattern.compare(i, 3, L"{2}") == 0) { message += argv[5]; i += 3; }
     else message += pattern[i++];
   }
-  GesherHostPrompt(GesherUiText(language, "brand"), message.c_str(),
-                   GesherUiText(language, "cp_dialog_ok"), nullptr,
-                   GesherUiRtl(language), nullptr);
+  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
+  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
+  MessageBoxW(nullptr, message.c_str(), GesherUiText(language, "brand"), flags);
   return 0;
 }
 
@@ -403,7 +437,7 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
   }
   if (!shown) return false;
 
-  const std::wstring data = Env(L"LOCALAPPDATA") + L"\\Gesher\\data";
+  const std::wstring data = GetDataDirectory(here);
   std::wstring package, apk_icon;
   if (IsFile(target)) {
     wchar_t full[MAX_PATH * 4];
@@ -429,9 +463,21 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     if (IsFile(shell + L"\\icon.ico")) splash->icon = shell + L"\\icon.ico";
   }
   if (splash->icon.empty() && !apk_icon.empty() && IsFile(apk_icon)) splash->icon = apk_icon;
-  if (splash->icon.empty()) splash->icon = here + L"\\gesher.ico";
+  if (splash->icon.empty()) {
+    if (IsFile(here + L"\\gesher.ico")) {
+      splash->icon = here + L"\\gesher.ico";
+    } else if (IsFile(Directory(here.c_str()) + L"\\gesher.ico")) {
+      splash->icon = Directory(here.c_str()) + L"\\gesher.ico";
+    } else if (IsFile(here + L"\\App\\gesher.ico")) {
+      splash->icon = here + L"\\App\\gesher.ico";
+    }
+  }
   if (splash->label.empty()) splash->label = GesherUiText(GesherUiCurrentLanguage(), "brand");
   return true;
+}
+
+bool IsAppLaunch(const std::wstring& here, Splash* splash) {
+  return SplashFor(here, splash);
 }
 
 // shell32's SHGetPropertyStoreForWindow, looked up when first used.
@@ -544,10 +590,7 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     HDC dc = BeginPaint(hwnd, &ps);
     RECT client;
     GetClientRect(hwnd, &client);
-    // Match the Control Center's light surface and semantic text hierarchy.
-    const bool high_contrast = GesherHostHighContrast() != FALSE;
-    FillRect(dc, &client, high_contrast ? GetSysColorBrush(COLOR_WINDOW)
-        : static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+    FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
     const int w = client.right, h = client.bottom;
     const int size = std::min(kIconSize, w / 2);
     const int top = std::max(16, h * 2 / 5 - size / 2);
@@ -556,12 +599,12 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ old = SelectObject(dc, g_splash->title_font);
-    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_WINDOWTEXT) : RGB(16, 24, 40));
+    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
     RECT label = {16, top + size + 24, w - 16, top + size + 24 + 64};
     DrawTextW(dc, g_splash->label.c_str(), -1, &label,
               DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
     SelectObject(dc, g_splash->text_font);
-    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_GRAYTEXT) : RGB(102, 112, 133));
+    SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
     RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
     const auto language = GesherUiCurrentLanguage();
     DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
@@ -630,7 +673,6 @@ HWND ShowSplash(Splash* splash) {
   HWND hwnd = CreateWindowExW(ex_style, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
                               nullptr, instance, nullptr);
   if (hwnd == nullptr) return nullptr;
-  GesherHostApplyCaption(hwnd);
   // Before it is shown: its taskbar button is the app's (the shortcut's icon).
   if (!splash->app_id.empty()) SetWindowAppUserModelId(hwnd, splash->app_id);
   if (splash->big != nullptr) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(splash->big));
@@ -765,11 +807,14 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid, bo
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+  bool default_to_control_panel = false;
   {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv != nullptr) {
-      if (argc > 1 && wcscmp(argv[1], L"--app-crash") == 0) {
+      if (argc <= 1) {
+        default_to_control_panel = true;
+      } else if (argc > 1 && wcscmp(argv[1], L"--app-crash") == 0) {
         int result = ShowAppCrash(argc, argv);
         LocalFree(argv);
         return result;
@@ -782,13 +827,22 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   if (n == 0 || n >= sizeof(self) / sizeof(self[0])) return 1;
   const std::wstring here = Directory(self);
 
+  std::wstring script = here + L"\\gesher-app.ps1";
+  if (!IsFile(script)) {
+    std::wstring app_script = here + L"\\App\\gesher-app.ps1";
+    if (IsFile(app_script)) {
+      script = app_script;
+    }
+  }
+
   wchar_t system[MAX_PATH];
   UINT s = GetSystemDirectoryW(system, MAX_PATH);
   std::wstring powershell = (s > 0 && s < MAX_PATH ? std::wstring(system) : L"C:\\Windows\\System32") +
                             L"\\WindowsPowerShell\\v1.0\\powershell.exe";
+  std::wstring command_args = default_to_control_panel ? L"control-panel" : Arguments(GetCommandLineW());
   std::wstring command = L"\"" + powershell +
                          L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
-                         here + L"\\gesher-app.ps1\" " + Arguments(GetCommandLineW());
+                         script + L"\" " + command_args;
 
   AllowSetForegroundWindow(ASFW_ANY);
 
@@ -812,7 +866,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   // The splash's view of it: gesher-app's own --detach / --wait (the launcher's
   // last one wins) over the environment.
   bool detached = Env(kDetachEnv) == L"1";
-  bool control_panel = false;
+  bool control_panel = default_to_control_panel;
   {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);

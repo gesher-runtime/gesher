@@ -27,7 +27,7 @@ VersionInfoProductVersion={#AppVersion}
 VersionInfoProductTextVersion={#AppVersion}
 AppPublisher=Gesher
 DefaultDirName={localappdata}\Programs\Gesher
-DisableDirPage=yes
+DisableDirPage=no
 DefaultGroupName=Gesher
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -55,10 +55,8 @@ ShowLanguageDialog=no
 UsePreviousLanguage=no
 
 [Languages]
-; InfoBeforeFile: the security notice (docs/sandbox.md), shown before installing:
-; Android apps run with the user's Windows permissions, not in a sandbox.
-Name: "en"; MessagesFile: "compiler:Default.isl"; InfoBeforeFile: "security-notice.txt"
-Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"; InfoBeforeFile: "security-notice.he.txt"
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"
 
 #include "ui-messages.iss"
 
@@ -138,7 +136,6 @@ Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app-microg.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-control-panel.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "gesher-panel-native.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-update.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-runtime-files.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-ui.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -169,12 +166,12 @@ Name: "microgupdate"; Description: "{cm:setup_microg_update}"; Check: MicrogOutd
 Name: "aurora"; Description: "{cm:setup_aurora}"; Flags: unchecked
 
 [Icons]
-Name: "{autoprograms}\{cm:setup_control_panel}"; Filename: "{app}\gesher-launch.exe"; Parameters: "control-panel"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
-Name: "{autoprograms}\{cm:setup_readme}"; Filename: "{app}\README.txt"
+Name: "{autoprograms}\{cm:setup_control_panel}"; Filename: "{app}\gesher-launch.exe"; Parameters: "control-panel"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"; Check: not IsPortableInstall
+Name: "{autoprograms}\{cm:setup_readme}"; Filename: "{app}\README.txt"; Check: not IsPortableInstall
 
 [InstallDelete]
-Type: files; Name: "{autoprograms}\Gesher Hello.lnk"
-Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"
+Type: files; Name: "{autoprograms}\Gesher Hello.lnk"; Check: not IsPortableInstall
+Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"; Check: not IsPortableInstall
 
 [Registry]
 ; The `.apk` association, per user (HKCU\Software\Classes). Gesher.Apk opens
@@ -182,40 +179,40 @@ Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"
 ; becomes the default only when no other ProgID owns `.apk` (ApkUnclaimed), and
 ; never touches Explorer's UserChoice. The uninstaller removes `.apk`'s default
 ; only while it still names Gesher.Apk (CurUninstallStepChanged).
-Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
-Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_apk}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: (not IsPortableInstall) and ApkUnclaimed
+Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_apk}"; Flags: uninsdeletekey; Check: not IsPortableInstall
 ; The APKs Explorer opens go to the recent list of Gesher.Installer, not of every
 ; app whose shortcut runs gesher-launch.exe (each app's taskbar jump list).
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"; Check: not IsPortableInstall
 ; Each APK's icon comes from Gesher's icon handler (DefaultIcon %1): its app's
 ; for an APK Gesher installed, gesher.ico for any other.
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; ValueType: string; ValueName: ""; ValueData: "Gesher APK icon handler"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher_shellext.dll"
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; ValueType: string; ValueName: ""; ValueData: "Gesher APK icon handler"; Flags: uninsdeletekey; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher_shellext.dll"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"; Check: not IsPortableInstall
 ; gesher-launch.exe: no console window flashes (compat/shell/gesher_launch.cc).
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""; Check: not IsPortableInstall
 ; Split APK bundles (.xapk, .apks: base.apk with its config.*.apk), the same way
 ; as `.apk`, including per-file icons drawn from the base APK and resource splits.
-Root: HKCU; Subkey: "Software\Classes\.xapk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.xapk')
-Root: HKCU; Subkey: "Software\Classes\.xapk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\.apks"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.apks')
-Root: HKCU; Subkey: "Software\Classes\.apks\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_bundle}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\.xapk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: (not IsPortableInstall) and BundleUnclaimed('.xapk')
+Root: HKCU; Subkey: "Software\Classes\.xapk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\.apks"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: (not IsPortableInstall) and BundleUnclaimed('.apks')
+Root: HKCU; Subkey: "Software\Classes\.apks\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_bundle}"; Flags: uninsdeletekey; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""; Check: not IsPortableInstall
 ; Gesher's toast activator (ADR 0051): the CustomActivator of every app's
 ; AppUserModelID. A click on an app's toast when no Gesher device runs makes COM
 ; start `gesher-app toast-activated`, which starts the device and hands it the
 ; click (the notification's intent is sent).
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}"; ValueType: string; ValueName: ""; ValueData: "Gesher toast activator"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" toast-activated"
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}"; ValueType: string; ValueName: ""; ValueData: "Gesher toast activator"; Flags: uninsdeletekey; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" toast-activated"; Check: not IsPortableInstall
 
 [UninstallRun]
 ; The Gesher device (binderd, servicemanager, the system server and app
@@ -241,6 +238,37 @@ const
   ApkKey = 'Software\Classes\.apk';
   ApkProgId = 'Gesher.Apk';
   BundleProgId = 'Gesher.Xapk';
+
+var
+  InstallTypePage: TInputOptionWizardPage;
+
+function IsPortableInstall(): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/PORTABLE') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  if InstallTypePage <> nil then
+    Result := (InstallTypePage.SelectedValueIndex = 1)
+  else
+    Result := False;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  if PageID = wpSelectDir then
+    Result := not IsPortableInstall()
+  else if (PageID = wpSelectTasks) and IsPortableInstall() then
+    Result := True
+  else
+    Result := False;
+end;
 
 // True when `.apk` has no default ProgID, or Gesher's: HKCR is the merged
 // per-user and per-machine view, so another app's machine-wide association
@@ -331,8 +359,30 @@ begin
 end;
 
 procedure InitializeWizard();
+var
+  I: Integer;
 begin
   DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
+
+  InstallTypePage := CreateInputOptionPage(
+    wpWelcome,
+    CustomMessage('setup_install_type_title'),
+    CustomMessage('setup_install_type_desc'),
+    '',
+    True,
+    False
+  );
+  InstallTypePage.Add(CustomMessage('setup_install_standard') + #13#10 + '   ' + CustomMessage('setup_install_standard_desc'));
+  InstallTypePage.Add(CustomMessage('setup_install_portable') + #13#10 + '   ' + CustomMessage('setup_install_portable_desc'));
+  InstallTypePage.SelectedValueIndex := 0;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/PORTABLE') = 0 then
+    begin
+      InstallTypePage.SelectedValueIndex := 1;
+      Break;
+    end;
+  end;
 end;
 
 var
@@ -352,128 +402,79 @@ begin
   end;
 end;
 
-var
-  // Optional downloads that failed in an interactive run: the user was told, and
-  // the post-install step skips them instead of fetching the same URL again.
-  WebView2Skipped, MicrogSkipped, AuroraSkipped: Boolean;
-
-// Downloads one file into {tmp} unless it is already there; a failure is logged
-// and returns False. DownloadPage.Download stops at the first failed file, so each
-// optional component gets its own call and one blocked URL does not stop the rest.
-function DownloadOptional(const Url, FileName: String; var Cancelled, Failed: Boolean;
-  var Error: String): Boolean;
-begin
-  Result := FileExists(ExpandConstant('{tmp}\' + FileName));
-  if Result or Cancelled then
-    Exit;
-  DownloadPage.Clear;
-  DownloadPage.Add(Url, FileName, '');
-  try
-    DownloadPage.Download;
-    Result := True;
-  except
-    if DownloadPage.AbortedByUser then
-    begin
-      Log('Download cancelled by user.');
-      Cancelled := True;
-    end
-    else
-    begin
-      Log('Optional download of ' + FileName + ' failed: ' + GetExceptionMessage);
-      Failed := True;
-      if Error = '' then
-        Error := GetExceptionMessage;
-    end;
-  end;
-end;
-
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  Cancelled, Failed: Boolean;
-  Error, Skipped: String;
+  DownloadsNeeded: Integer;
 begin
   Result := True;
-  if CurPageID <> wpReady then
-    Exit;
-  WebView2Skipped := False;
-  MicrogSkipped := False;
-  AuroraSkipped := False;
-  if not ((WizardIsTaskSelected('webview2') and not FileExists(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'))) or
-          (MicrogSelected() and not (FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) and
-                                     FileExists(ExpandConstant('{tmp}\com.android.vending.apk')) and
-                                     FileExists(ExpandConstant('{tmp}\com.google.android.gsf.apk')))) or
-          (WizardIsTaskSelected('aurora') and not FileExists(ExpandConstant('{tmp}\AuroraStore.apk')))) then
-    Exit;
-
-  Cancelled := False;
-  Error := '';
-  Skipped := '';
-  DownloadPage.Show;
-  try
-    if WizardIsTaskSelected('webview2') then
+  if (CurPageID = wpReady) and not IsPortableInstall() then
+  begin
+    DownloadPage.Clear;
+    DownloadsNeeded := 0;
+    if WizardIsTaskSelected('webview2') and not FileExists(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe')) then
     begin
-      Failed := False;
-      DownloadOptional('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
-        'MicrosoftEdgeWebview2Setup.exe', Cancelled, Failed, Error);
-      if Failed then
-      begin
-        WebView2Skipped := True;
-        Skipped := Skipped + '  - Microsoft Edge WebView2' + #13#10;
-      end;
+      DownloadPage.Add('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
+        'MicrosoftEdgeWebview2Setup.exe', '');
+      DownloadsNeeded := DownloadsNeeded + 1;
     end;
     if MicrogSelected() then
     begin
-      // The three microG APKs are one component: the rest are not fetched once one fails.
-      Failed := False;
-      if DownloadOptional('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
-           'com.google.android.gms.apk', Cancelled, Failed, Error) then
-        if DownloadOptional('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
-             'com.android.vending.apk', Cancelled, Failed, Error) then
-          DownloadOptional('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
-            'com.google.android.gsf.apk', Cancelled, Failed, Error);
-      if Failed then
+      if not FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) then
       begin
-        MicrogSkipped := True;
-        Skipped := Skipped + '  - microG' + #13#10;
+        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
+          'com.google.android.gms.apk', '');
+        DownloadsNeeded := DownloadsNeeded + 1;
+      end;
+      if not FileExists(ExpandConstant('{tmp}\com.android.vending.apk')) then
+      begin
+        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
+          'com.android.vending.apk', '');
+        DownloadsNeeded := DownloadsNeeded + 1;
+      end;
+      if not FileExists(ExpandConstant('{tmp}\com.google.android.gsf.apk')) then
+      begin
+        DownloadPage.Add('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
+          'com.google.android.gsf.apk', '');
+        DownloadsNeeded := DownloadsNeeded + 1;
       end;
     end;
-    if WizardIsTaskSelected('aurora') then
+    if WizardIsTaskSelected('aurora') and not FileExists(ExpandConstant('{tmp}\AuroraStore.apk')) then
     begin
-      Failed := False;
-      DownloadOptional('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk',
-        'AuroraStore.apk', Cancelled, Failed, Error);
-      if Failed then
-      begin
-        AuroraSkipped := True;
-        Skipped := Skipped + '  - Aurora Store' + #13#10;
-      end;
+      DownloadPage.Add('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
+        'AuroraStore.apk', '');
+      DownloadsNeeded := DownloadsNeeded + 1;
     end;
-  finally
-    DownloadPage.Hide;
-  end;
 
-  if Cancelled then
-  begin
-    WebView2Skipped := False;
-    MicrogSkipped := False;
-    AuroraSkipped := False;
-    Result := False;
-  end
-  else if Skipped <> '' then
-  begin
-    if WizardSilent() then
+    if DownloadsNeeded > 0 then
     begin
-      // A silent update (the microG update is on by default) goes on as before:
-      // each post-install step retries or skips its own download.
-      WebView2Skipped := False;
-      MicrogSkipped := False;
-      AuroraSkipped := False;
-    end
-    else
-      // Setup goes on without the components it could not download (a filtered
-      // or offline network): only those are skipped, and the user is told which.
-      MsgBox(FmtMessage(CustomMessage('setup_download_skipped'), [Skipped, Error]),
-        mbInformation, MB_OK);
+      DownloadPage.Show;
+      try
+        try
+          DownloadPage.Download;
+          Result := True;
+        except
+          if DownloadPage.AbortedByUser then
+          begin
+            Log('Download cancelled by user.');
+            Result := False;
+          end
+          else if WizardSilent() then
+          begin
+            // A silent update (the microG update is on by default) goes on
+            // without the optional downloads: each step retries or skips its own.
+            Log('Optional download failed: ' + GetExceptionMessage);
+            Result := True;
+          end
+          else
+          begin
+            SuppressibleMsgBox(AddPeriod(GetExceptionMessage), mbCriticalError, MB_OK, IDOK);
+            Result := False;
+          end;
+        end;
+      finally
+        DownloadPage.Hide;
+      end;
+    end;
   end;
 end;
 
@@ -562,12 +563,9 @@ begin
   TmpDir := ExpandConstant('{tmp}');
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
             ExpandConstant('{app}\gesher-app-microg.ps1') + '"';
-  if MicrogSelected() and not MicrogSkipped then
+  if MicrogSelected() then
   begin
-    // All three APKs, or none: a silent run goes on after a partial download.
-    if FileExists(TmpDir + '\com.google.android.gms.apk') and
-       FileExists(TmpDir + '\com.android.vending.apk') and
-       FileExists(TmpDir + '\com.google.android.gsf.apk') then
+    if FileExists(TmpDir + '\com.google.android.gms.apk') then
       Params := Params + ' -GmsCoreApk "' + TmpDir + '\com.google.android.gms.apk"' +
                          ' -CompanionApk "' + TmpDir + '\com.android.vending.apk"' +
                          ' -GsfProxyApk "' + TmpDir + '\com.google.android.gsf.apk"' +
@@ -578,7 +576,7 @@ begin
   else
     Params := Params + ' -StoreOnly';
 
-  if WizardIsTaskSelected('aurora') and not AuroraSkipped then
+  if WizardIsTaskSelected('aurora') then
   begin
     if FileExists(TmpDir + '\AuroraStore.apk') then
       Params := Params + ' -InstallStore -StoreApk "' + TmpDir + '\AuroraStore.apk"'
@@ -594,22 +592,42 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  Path, Dir: String;
+  Path, Dir, MarkerPath, DataPath, LaunchPath, GesherExePath, UninstKey: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    if WizardIsTaskSelected('webview2') and not WebView2Skipped then
-      InstallWebView2();
-    if (MicrogSelected() and not MicrogSkipped) or
-       (WizardIsTaskSelected('aurora') and not AuroraSkipped) then
-      InstallMicrogAndStore();
-    Path := PathEntries();
-    Dir := ExpandConstant('{app}');
-    if not HasEntry(Path, Dir) then
+    if not IsPortableInstall() then
     begin
-      if (Path <> '') and (Copy(Path, Length(Path), 1) <> ';') then
-        Path := Path + ';';
-      RegWriteExpandStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path + Dir);
+      if WizardIsTaskSelected('webview2') then
+        InstallWebView2();
+      if MicrogSelected() or WizardIsTaskSelected('aurora') then
+        InstallMicrogAndStore();
+      Path := PathEntries();
+      Dir := ExpandConstant('{app}');
+      if not HasEntry(Path, Dir) then
+      begin
+        if (Path <> '') and (Copy(Path, Length(Path), 1) <> ';') then
+          Path := Path + ';';
+        RegWriteExpandStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path + Dir);
+      end;
+    end
+    else
+    begin
+      Dir := ExpandConstant('{app}');
+      MarkerPath := Dir + '\portable.marker';
+      SaveStringToFile(MarkerPath, '', False);
+      DataPath := Dir + '\Data';
+      ForceDirectories(DataPath);
+      LaunchPath := Dir + '\gesher-launch.exe';
+      GesherExePath := Dir + '\Gesher.exe';
+      if FileExists(LaunchPath) then
+        CopyFile(LaunchPath, GesherExePath, False);
+
+      // Remove any uninstall registry key created by Inno Setup so it remains zero-footprint
+      UninstKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6A1F3C2E-5B7D-4E8A-9C0F-1D2E3F4A5B6C}_is1';
+      RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, UninstKey);
+      DeleteFile(Dir + '\unins000.exe');
+      DeleteFile(Dir + '\unins000.dat');
     end;
   end;
 end;

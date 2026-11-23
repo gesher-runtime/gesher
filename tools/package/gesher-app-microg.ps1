@@ -10,7 +10,7 @@ param(
     [switch] $AutoDownload,
     [switch] $InstallStore,
     [switch] $StoreOnly,
-    [string] $ProfileRoot = (Join-Path $env:LOCALAPPDATA 'Gesher'),
+    [string] $ProfileRoot = '',
     [string] $RuntimeDir = $PSScriptRoot,
     [switch] $Disable,
     [switch] $Remove
@@ -18,8 +18,22 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
-$ProfileRoot = [IO.Path]::GetFullPath($ProfileRoot)
 $RuntimeDir = if ($RuntimeDir) { [IO.Path]::GetFullPath($RuntimeDir) } else { $scriptRoot }
+$runtimeFilesHelper = Join-Path $RuntimeDir 'gesher-runtime-files.ps1'
+if (-not (Test-Path -LiteralPath $runtimeFilesHelper -PathType Leaf)) {
+    $runtimeFilesHelper = Join-Path $scriptRoot 'gesher-runtime-files.ps1'
+}
+if (Test-Path -LiteralPath $runtimeFilesHelper -PathType Leaf) {
+    . $runtimeFilesHelper
+}
+if (-not $ProfileRoot) {
+    if (Get-Command Get-GesherProfileRoot -ErrorAction SilentlyContinue) {
+        $ProfileRoot = Get-GesherProfileRoot $RuntimeDir
+    } else {
+        $ProfileRoot = Join-Path $env:LOCALAPPDATA 'Gesher'
+    }
+}
+$ProfileRoot = [IO.Path]::GetFullPath($ProfileRoot)
 $marker = Join-Path $ProfileRoot 'microg.enabled'
 $packages = 'com.google.android.gms', 'com.android.vending', 'com.google.android.gsf'
 function Initialize-MicrogDefaults([string] $ProfileRoot) {
@@ -48,16 +62,10 @@ function Install-AuroraStore {
         $storeTarget = if ($StoreApk -and (Test-Path -LiteralPath $StoreApk)) {
             $StoreApk
         } else {
-            $tmp = Join-Path $env:TEMP "AuroraStore-4.8.4.apk"
+            $tmp = Join-Path $env:TEMP "AuroraStore.apk"
             if (-not (Test-Path $tmp)) {
                 Write-Host "Downloading Aurora Store..."
-                $partial = "$tmp.partial"
-                try {
-                    Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk" -OutFile $partial -UseBasicParsing
-                    Move-Item -LiteralPath $partial -Destination $tmp -Force
-                } finally {
-                    if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
-                }
+                Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk" -OutFile $tmp -UseBasicParsing
             }
             $tmp
         }

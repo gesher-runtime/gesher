@@ -108,6 +108,20 @@ final class Installer {
         return root;
     }
 
+    static String resolveCodePath(String codePath) {
+        if (codePath == null || codePath.isEmpty()) return codePath;
+        File current = new File(codePath);
+        if (current.isDirectory()) return codePath;
+        try {
+            File fallback = new File(codeRoot(), current.getName());
+            if (fallback.isDirectory()) {
+                return fallback.getPath();
+            }
+        } catch (Throwable ignored) {
+        }
+        return codePath;
+    }
+
     private static Map<String, Entry> readRegistry() throws IOException {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
@@ -116,7 +130,8 @@ final class Installer {
             String[] fields = line.split("\t", -1);
             if (fields.length < 4 || line.startsWith("#")) continue;
             try {
-                entries.put(fields[0], new Entry(fields[0], fields[1],
+                String codePath = resolveCodePath(fields[1]);
+                entries.put(fields[0], new Entry(fields[0], codePath,
                         Long.parseLong(fields[2]), Long.parseLong(fields[3]),
                         readInstallSource(fields)));
             } catch (NumberFormatException e) {

@@ -84,30 +84,6 @@
       "en": "Don't allow",
       "he": "לא לאפשר"
     },
-    "exact_alarm_title": {
-      "en": "Alarms and reminders",
-      "he": "התראות ותזכורות"
-    },
-    "exact_alarm_allow": {
-      "en": "Allow alarms and reminders",
-      "he": "לאפשר התראות ותזכורות"
-    },
-    "exact_alarm_detail": {
-      "en": "Allow this app to schedule alarms and reminders at precise times. Turning this off stops the app and cancels its exact alarms.",
-      "he": "הרשאה לתזמן התראות ותזכורות בזמנים מדויקים. ביטול ההרשאה מפסיק את היישום ומבטל את ההתראות המדויקות שלו."
-    },
-    "exact_alarm_empty": {
-      "en": "No installed apps need this special access.",
-      "he": "אין יישומים מותקנים הזקוקים לגישה מיוחדת זו."
-    },
-    "exact_alarm_close": {
-      "en": "Close",
-      "he": "סגירה"
-    },
-    "exact_alarm_apply": {
-      "en": "Apply",
-      "he": "החלה"
-    },
     "permission_prefix": {
       "en": "Allow the Android application ",
       "he": "לאפשר ליישום Android ‏"
@@ -404,9 +380,29 @@
       "en": "Setting up Google Play services and applications...",
       "he": "מגדיר שירותי Google Play ויישומים..."
     },
-    "setup_download_skipped": {
-      "en": "Setup could not download these components and will continue without them:\n\n%1\nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).",
-      "he": "לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:\n\n%1\nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר)."
+    "setup_install_type_title": {
+      "en": "Installation Type",
+      "he": "סוג התקנה"
+    },
+    "setup_install_type_desc": {
+      "en": "Choose how you want to install Gesher.",
+      "he": "בחר כיצד ברצונך להתקין את גשר."
+    },
+    "setup_install_standard": {
+      "en": "Standard installation (recommended for this computer)",
+      "he": "התקנה רגילה (מומלץ למחשב זה)"
+    },
+    "setup_install_standard_desc": {
+      "en": "Installs into your user profile, registers .apk associations, and adds Start menu shortcuts.",
+      "he": "מתקין לפרופיל המשתמש, משייך קובצי .apk ומוסיף קיצורי דרך לתפריט התחל."
+    },
+    "setup_install_portable": {
+      "en": "Portable installation (for USB flash drives or standalone folder)",
+      "he": "התקנה ניידת (לדיסק-און-קי או תיקייה עצמאית)"
+    },
+    "setup_install_portable_desc": {
+      "en": "Extracts Gesher as a self-contained portable application. Does not modify the Windows registry or Start menu.",
+      "he": "מחלץ את גשר כיישום נייד ועצמאי. אינו משנה את רישום המערכת (Registry) ולא מוסיף קיצורים לתפריט התחל."
     },
     "cp_title": {
       "en": "Gesher Control Center",
@@ -515,70 +511,6 @@
     "cp_separate_windows_tip": {
       "en": "Each task of the app opens in a window of its own, instead of one window for the app. Applies from the app's next start.",
       "he": "כל משימה של האפליקציה נפתחת בחלון משלה, במקום חלון אחד לאפליקציה. חל מההפעלה הבאה של האפליקציה."
-    },
-    "cp_proxy_desc": {
-      "en": "Gesher's own HTTP proxy for every app, instead of Windows' proxy settings. Each app can have its own with its Proxy button. It applies to app processes started from now on: close a running app completely and start it again, or stop and start the device (reopening a window can keep the app's process and its previous proxy). It covers the HTTP clients that use the system proxy; WebView pages keep Windows' settings.",
-      "he": "פרוקסי HTTP של גשר לכל היישומים, במקום הגדרות הפרוקסי של Windows. לכל יישום אפשר לקבוע פרוקסי משלו בכפתור 'פרוקסי' שלו. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש, או לכבות ולהפעיל את המערכת (פתיחה מחדש של חלון יכולה להשאיר את תהליך היישום עם הפרוקסי הקודם). חל על לקוחות HTTP שמשתמשים בפרוקסי המערכת; דפי WebView ממשיכים לפי הגדרות Windows."
-    },
-    "cp_proxy_mode_inherit": {
-      "en": "Same as every app",
-      "he": "כמו כל היישומים"
-    },
-    "cp_proxy_mode_windows": {
-      "en": "Windows' settings",
-      "he": "הגדרות Windows"
-    },
-    "cp_proxy_mode_direct": {
-      "en": "No proxy (direct)",
-      "he": "ללא פרוקסי (ישיר)"
-    },
-    "cp_proxy_mode_server": {
-      "en": "Proxy server",
-      "he": "שרת פרוקסי"
-    },
-    "cp_proxy_address_hint": {
-      "en": "Proxy server address: host:port, for example 127.0.0.1:8080",
-      "he": "כתובת שרת הפרוקסי: כתובת:פורט, למשל 127.0.0.1:8080"
-    },
-    "cp_proxy_save": {
-      "en": "Save",
-      "he": "שמירה"
-    },
-    "cp_proxy_saved": {
-      "en": "Proxy saved. It applies to app processes started from now on: close a running app completely and start it again.",
-      "he": "הפרוקסי נשמר. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש."
-    },
-    "cp_proxy_invalid": {
-      "en": "⁨{0}⁩ is not a proxy server address. Enter host:port, for example 127.0.0.1:8080.",
-      "he": "⁨{0}⁩ אינה כתובת של שרת פרוקסי. יש להזין כתובת:פורט, למשל 127.0.0.1:8080."
-    },
-    "cp_proxy_save_failed": {
-      "en": "Failed to save the proxy: {0}",
-      "he": "שמירת הפרוקסי נכשלה: {0}"
-    },
-    "cp_btn_proxy": {
-      "en": "Proxy",
-      "he": "פרוקסי"
-    },
-    "cp_btn_proxy_tip": {
-      "en": "This app's own proxy",
-      "he": "פרוקסי משלו ליישום הזה"
-    },
-    "cp_btn_proxy_all": {
-      "en": "Proxy for every app",
-      "he": "פרוקסי לכל היישומים"
-    },
-    "cp_proxy_app_title": {
-      "en": "Proxy for ⁨{0}⁩",
-      "he": "פרוקסי עבור ⁨{0}⁩"
-    },
-    "cp_proxy_app_desc": {
-      "en": "This app's own proxy, instead of the setting of every app. It applies when a new process of the app starts: close the app completely and start it again (reopening its window can keep its process and its previous proxy). WebView pages keep Windows' settings.",
-      "he": "פרוקסי משלו ליישום הזה, במקום ההגדרה של כל היישומים. חל כשמתחיל תהליך חדש של היישום: יש לסגור את היישום לגמרי ולהפעיל אותו מחדש (פתיחה מחדש של החלון יכולה להשאיר את התהליך עם הפרוקסי הקודם). דפי WebView ממשיכים לפי הגדרות Windows."
-    },
-    "cp_proxy_app_value": {
-      "en": "Proxy: {0}",
-      "he": "פרוקסי: {0}"
     },
     "windows_separate_saved": {
       "en": "{0}: each task in a window of its own, from the app's next start",

@@ -13,7 +13,9 @@ try {
 
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Get-GesherProfileRoot $here
+$env:GESHER_PROFILE = $root
 $script:UpdateDirectory = Join-Path $root 'updates'
 
 # One Control Center. A second start (the Start menu again, or an app's "App info", which
