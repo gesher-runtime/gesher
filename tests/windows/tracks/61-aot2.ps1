@@ -22,12 +22,14 @@ $aotBcpApp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'
 
 # Runs a program with a time limit; returns exit code, output (stdout + stderr)
 # and the time it took.
-function Aot2Run([string] $Exe, [string[]] $Arguments, [hashtable] $Env = @{}, [int] $Seconds = 300) {
+function Aot2Run([string] $Exe, [string[]] $Arguments, [hashtable] $Env = @{}, [int] $Seconds = 300, [switch] $Utf8) {
   $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
   foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
+  # gesher-base writes ART's log lines as UTF-8, whatever the console's code page.
+  if ($Utf8) { $psi.StandardOutputEncoding = $psi.StandardErrorEncoding = [Text.UTF8Encoding]::new($false) }
   foreach ($k in $Env.Keys) { $psi.Environment[$k] = $Env[$k] }
   $watch = [Diagnostics.Stopwatch]::StartNew()
   $p = [Diagnostics.Process]::Start($psi)
@@ -73,14 +75,14 @@ function Aot2Fail([string] $Name, [string] $Out, [int] $Last = 60) {
 }
 
 # dex2oat for an app, as Dexopt.compile runs it (com.gesher.server).
-function Aot2Dex2oat([string] $Apk, [string] $Odex, [string] $Filter, [string[]] $Extra = @()) {
+function Aot2Dex2oat([string] $Apk, [string] $Odex, [string] $Filter, [string[]] $Extra = @(), [switch] $Utf8) {
   New-Item -ItemType Directory -Force (Split-Path $Odex) | Out-Null
   $a = @("--dex-file=$(NoDrive $Apk)", "--dex-location=$(NoDrive $Apk)", "--oat-file=$(NoDrive $Odex)",
     '--instruction-set=x86_64', "--compiler-filter=$Filter", '--class-loader-context=PCL[]',
     "--boot-image=$(NoDrive "$root/system")/framework/boot.art:$(NoDrive "$root/system")/framework/*",
     '--runtime-arg', "-Xbootclasspath:$aotBcpApp", '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx512m',
     '--runtime-arg', '-XX:LargeObjectSpace=map', '--no-watch-dog', '-j4') + $Extra
-  Aot2Run "$Dir/dex2oat.exe" $a @{} 600
+  Aot2Run "$Dir/dex2oat.exe" $a @{} 600 -Utf8:$Utf8
 }
 
 function Aot2Size([string] $Path) { if (Test-Path $Path) { (Get-Item $Path).Length } else { 0 } }
@@ -226,13 +228,23 @@ if ($verifyOk) {
 # code path under a Windows user's profile (for a Hebrew user name, in its long form):
 # dex2oat and profman must read their UTF-16 arguments as gesher-base's UTF-8 paths,
 # not in the active code page, which made every install-time compile fail for such users.
+# Each check also requires the tool's own log line to hold the exact path, so that
+# the UTF-16 -> UTF-8 conversion is what is checked. A runner whose ANSI code page is
+# UTF-8 (65001) gives a narrow main() UTF-8 too: there these checks pass also without
+# the tools' wmain (compat/art/art_tool_main.cc), so they cannot catch its loss.
+$acp = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage' -ErrorAction SilentlyContinue).ACP
+if ($acp -eq '65001') {
+  Write-Host 'INFO  aot2: the ANSI code page is UTF-8 (65001): the non-ASCII path checks below cannot tell a narrow main() from the tools'' wmain'
+}
 $unicodeDir = Join-Path $aotRoot ("unicode " + [string]::new([char[]](0x05e9, 0x05dc, 0x05d5, 0x05dd)) + " " + [string]::new([char[]](0x0418, 0x0432, 0x0430, 0x043d)))
 New-Item -ItemType Directory -Force $unicodeDir | Out-Null
 $unicodeApk = Join-Path $unicodeDir 'base.apk'
 Copy-Item -LiteralPath "$Dir/lifecycle.apk" -Destination $unicodeApk
 $unicodeOdex = Join-Path $unicodeDir 'oat/x86_64/base.odex'
-$r = Aot2Dex2oat $unicodeApk $unicodeOdex 'verify' @('--compilation-reason=install')
-if ($r.Exit -eq 0 -and (Test-Path -LiteralPath $unicodeOdex) -and (Test-Path -LiteralPath ($unicodeOdex -replace '\.odex$', '.vdex'))) {
+$r = Aot2Dex2oat $unicodeApk $unicodeOdex 'verify' @('--compilation-reason=install') -Utf8
+# dex2oat logs its command line (dex2oat.cc, "I dex2oat.exe: ... --dex-file=...").
+if ($r.Exit -eq 0 -and $r.Out.Contains("--dex-file=$(NoDrive $unicodeApk)") -and
+    (Test-Path -LiteralPath $unicodeOdex) -and (Test-Path -LiteralPath ($unicodeOdex -replace '\.odex$', '.vdex'))) {
   Write-Host "PASS  aot2: dex2oat compiles an APK whose path has Hebrew and Cyrillic names (verify, $(Aot2Size $unicodeOdex) bytes of .odex)"
 } else {
   Aot2Fail 'dex2oat with a non-ASCII APK path' $r.Out
@@ -247,6 +259,15 @@ if ($pm.Exit -eq 7) {
   Write-Host 'PASS  aot2: profman reads an APK whose path has Hebrew and Cyrillic names (empty profiles: exit 7)'
 } else {
   Aot2Fail "profman with a non-ASCII APK path (exit $($pm.Exit), expected 7)" $pm.Out
+}
+# profman's error for a missing APK names the path it was given, as it received it.
+$unicodeMissing = Join-Path $unicodeDir 'missing.apk'
+$pm = Aot2Run "$Dir/profman.exe" @("--profile-file=$(NoDrive $unicodeCur)", "--reference-profile-file=$(NoDrive $unicodeRef)",
+  "--apk=$(NoDrive $unicodeMissing)", "--dex-location=$(NoDrive $unicodeMissing)", '--force-merge-and-analyze') -Utf8
+if ($pm.Exit -eq 4 -and $pm.Out.Contains("Unable to open '$(NoDrive $unicodeMissing)'")) {
+  Write-Host 'PASS  aot2: profman receives a non-ASCII path exactly (its error for a missing APK names it)'
+} else {
+  Aot2Fail "profman's error for a missing non-ASCII APK path (exit $($pm.Exit), expected 4 naming the path)" $pm.Out
 }
 Remove-Item -LiteralPath $unicodeDir -Recurse -Force -ErrorAction SilentlyContinue
 

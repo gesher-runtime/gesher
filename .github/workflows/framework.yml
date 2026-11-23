@@ -417,6 +417,9 @@ jobs:
           python3 tools/test_uia_cache.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_dexopt_failure_output.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_apk_signing.py --apksig-jar "$APKSIG_JAR"
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_role_manager_contracts.py --framework-classes out/framework/classes --app-classes out/app/gesher-app-classes.jar

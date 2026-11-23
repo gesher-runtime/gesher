@@ -436,7 +436,8 @@ final class Dexopt {
         try {
             pid = Zygote.spawn(cmd.toString(), List.of(), log.getPath(), false);
         } catch (RuntimeException e) {
-            SystemServer.log("dexopt: " + e.getMessage());
+            // No process, so no output of its own: the Win32 error says why.
+            SystemServer.log("dexopt: " + tool + " not started: " + e.getMessage());
             return -1;
         }
         long deadline = SystemClock.uptimeMillis() + TOOL_TIMEOUT_MS;
@@ -446,14 +447,14 @@ final class Dexopt {
                 // profman's exit codes are results (ProfmanResult), not only failures.
                 boolean result = tool.equals("profman") && (code == 1 || code == 2 || code == 7);
                 if (code != 0 && !result) {
-                    logOutput(tool, code, log, outputStart);
+                    logOutput(tool + " exit code " + code, pid, log, outputStart);
                 }
                 return code;
             }
             if (SystemClock.uptimeMillis() > deadline) {
                 Zygote.kill(pid);
-                SystemServer.log("dexopt: " + tool + " took more than " + TOOL_TIMEOUT_MS / 1000
-                        + " s; stopped");
+                logOutput(tool + " took more than " + TOOL_TIMEOUT_MS / 1000 + " s; stopped",
+                        pid, log, outputStart);
                 return -2;
             }
             SystemClock.sleep(50);
@@ -468,9 +469,11 @@ final class Dexopt {
 
     /**
      * A failed tool's diagnostics in system_server.log as well as in dexopt.log, which a
-     * report may leave out: what it wrote from {@code start} on in {@code log}.
+     * report may leave out: what process {@code pid} wrote from {@code start} on in
+     * {@code log}. Other dexopt runs (background profman beside an install's dex2oat) may
+     * append to the same file meanwhile; their lines carry their own pids.
      */
-    private static void logOutput(String tool, int code, File log, long start) {
+    private static void logOutput(String what, int pid, File log, long start) {
         String output;
         try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(log, "r")) {
             long end = f.length();
@@ -480,42 +483,62 @@ final class Dexopt {
             f.readFully(bytes);
             output = new String(bytes, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            SystemServer.log("dexopt: " + tool + " exit code " + code + "; its output in "
-                    + log + " is unreadable: " + e);
+            SystemServer.log("dexopt: " + what + "; its output in " + log + " is unreadable: " + e);
             return;
         }
-        List<String> lines = failureLines(output);
-        StringBuilder sb = new StringBuilder("dexopt: ").append(tool).append(" exit code ")
-                .append(code).append(lines.isEmpty() ? "; no output" : "; its output:");
+        List<String> lines = failureLines(output, pid);
+        StringBuilder sb = new StringBuilder("dexopt: ").append(what)
+                .append(lines.isEmpty() ? "; no output" : "; its output:");
         for (String line : lines) sb.append("\n  ").append(line);
         SystemServer.log(sb.toString());
     }
 
+    /** Messages that name a failure's cause, preferred over other error lines. */
+    private static final java.util.regex.Pattern CAUSE = java.util.regex.Pattern.compile(
+            "Failed to|Skipping non-existent|Unable to open|Could not open|No such file"
+            + "|Permission denied|Not enough space");
+    /** At most this many of the chosen lines are cause lines; the first errors fill the rest. */
+    private static final int CAUSE_LINES = 4;
+
     /**
-     * The lines of a failed tool's output that say why: its first errors (ART's E and F
-     * lines; the first is usually the cause, the rest of a usage error is the usage text)
-     * with the warnings just before them (dex2oat's "Skipping non-existent dex file"), or
-     * else its last lines. At most {@link #OUTPUT_LINES}, each cut to
+     * The lines of process {@code pid}'s failed run, in {@code output}, that say why. ART's
+     * log lines carry their process's pid: only {@code pid}'s count. Of them, the lines
+     * that name a cause (dex2oat's "Skipping non-existent dex file" and "Failed to create
+     * oat file", profman's "Unable to open"), then its first errors (ART's E and F lines;
+     * the first of a usage error is its cause, the rest the usage text), in their order;
+     * with neither, its last lines. Output without ART's format (a crash message, a usage
+     * error's last line) cannot be told from another process's, and is used only when
+     * {@code pid} wrote no ART lines. At most {@link #OUTPUT_LINES}, each cut to
      * {@link #OUTPUT_LINE_CHARS} characters.
      */
-    static List<String> failureLines(String output) {
-        List<String> all = new ArrayList<>();
-        int firstError = -1;
+    static List<String> failureLines(String output, int pid) {
+        List<String> own = new ArrayList<>();
+        List<String> unattributed = new ArrayList<>();
+        String self = String.valueOf(pid);
         for (String line : output.split("\r?\n")) {
             String l = line.trim();
-            if (l.isEmpty()) continue;
-            if (firstError < 0 && isError(l)) firstError = all.size();
-            all.add(l);
-        }
-        List<String> chosen = new ArrayList<>();
-        if (firstError >= 0) {
-            int from = firstError;
-            while (from > 0 && firstError - from < 2 && severity(all.get(from - 1)) == 'W') from--;
-            for (int i = from; i < all.size() && chosen.size() < OUTPUT_LINES; i++) {
-                if (i < firstError || isError(all.get(i))) chosen.add(all.get(i));
+            if (l.isEmpty() || l.startsWith("$ ")) continue;  // another run's command line
+            java.util.regex.Matcher m = LOG_LINE.matcher(l);
+            if (!m.lookingAt()) {
+                unattributed.add(l);
+            } else if (m.group(1).equals(self)) {
+                own.add(l);
             }
-        } else {
-            chosen.addAll(all.subList(Math.max(0, all.size() - OUTPUT_LINES), all.size()));
+        }
+        List<Integer> picked = new ArrayList<>();
+        for (int i = 0; i < own.size() && picked.size() < CAUSE_LINES; i++) {
+            char c = severity(own.get(i));
+            if ((c == 'W' || c == 'E' || c == 'F') && CAUSE.matcher(own.get(i)).find()) picked.add(i);
+        }
+        for (int i = 0; i < own.size() && picked.size() < OUTPUT_LINES; i++) {
+            if (isError(own.get(i)) && !picked.contains(i)) picked.add(i);
+        }
+        java.util.Collections.sort(picked);
+        List<String> chosen = new ArrayList<>();
+        for (int i : picked) chosen.add(own.get(i));
+        if (chosen.isEmpty()) {
+            List<String> from = own.isEmpty() ? unattributed : own;
+            chosen.addAll(from.subList(Math.max(0, from.size() - OUTPUT_LINES), from.size()));
         }
         List<String> result = new ArrayList<>();
         for (String l : chosen) {
@@ -532,11 +555,12 @@ final class Dexopt {
     /** An ART log line's severity ('W', 'E', 'F'...): "MM-DD HH:MM:SS.mmm pid tid E tag: ...". */
     private static char severity(String line) {
         java.util.regex.Matcher m = LOG_LINE.matcher(line);
-        return m.lookingAt() ? m.group(1).charAt(0) : ' ';
+        return m.lookingAt() ? m.group(2).charAt(0) : ' ';
     }
 
+    /** An ART log line's start: "MM-DD HH:MM:SS.mmm pid tid S ", pid group 1, severity 2. */
     private static final java.util.regex.Pattern LOG_LINE =
-            java.util.regex.Pattern.compile("\\d\\d-\\d\\d \\S+\\s+\\d+\\s+\\d+ ([VDIWEF]) ");
+            java.util.regex.Pattern.compile("\\d\\d-\\d\\d \\S+\\s+(\\d+)\\s+\\d+ ([VDIWEF]) ");
 
     /** What dex2oat needs of this runtime's options: its boot image and boot class path. */
     private static final class Vm {
