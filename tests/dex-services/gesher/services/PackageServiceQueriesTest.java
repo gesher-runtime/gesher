@@ -30,6 +30,136 @@ public final class PackageServiceQueriesTest {
         checks++;
     }
 
+    /**
+     * The reported system features follow what backs them (docs/system-features.md):
+     * the production list matches the probes this process can make, and the helpers claim
+     * a feature only for the hardware or runtime that implements it.
+     */
+    private static void checkSystemFeatures(PackageManagerService service) {
+        List<FeatureInfo> list = service.getSystemAvailableFeatures().getList();
+        // CI runs this class without libandroid_runtime (no property natives); through
+        // ServiceFixtureRunner it has them. Each expectation follows what this process has.
+        Boolean lowRam;
+        int expectedGles;
+        try {
+            expectedGles = android.os.SystemProperties.getInt(
+                    "ro.opengles.version", FeatureInfo.GL_ES_VERSION_UNDEFINED);
+            lowRam = android.app.ActivityManager.isLowRamDeviceStatic();
+        } catch (LinkageError e) {
+            expectedGles = FeatureInfo.GL_ES_VERSION_UNDEFINED;
+            lowRam = null;
+        }
+        int unnamed = 0;
+        for (FeatureInfo feature : list) {
+            if (feature.name != null) {
+                require(service.hasSystemFeature(feature.name, feature.version),
+                        "Listed feature " + feature.name + " is not reported by hasSystemFeature");
+                continue;
+            }
+            unnamed++;
+            require(feature.reqGlEsVersion == PackageManagerService.glEsVersion()
+                            && feature.reqGlEsVersion == expectedGles,
+                    "OpenGL ES entry does not carry ro.opengles.version");
+        }
+        require(unnamed == 1, "Available features need exactly one OpenGL ES entry, got " + unnamed);
+        // ApplicationSharedMemory's cache takes the same list, the unnamed entry included.
+        new android.content.pm.SystemFeaturesCache(list);
+
+        require(service.hasSystemFeature(PackageManager.FEATURE_RAM_NORMAL, 0)
+                                == Boolean.FALSE.equals(lowRam)
+                        && service.hasSystemFeature(PackageManager.FEATURE_RAM_LOW, 0)
+                                == Boolean.TRUE.equals(lowRam),
+                "RAM features disagree with ActivityManager.isLowRamDevice (" + lowRam + ")");
+
+        String webView;
+        String webViewError;
+        try {
+            webView = com.gesher.app.webview.WebView2Host.runtimeVersion();
+            webViewError = webView == null ? com.gesher.app.webview.WebView2Host.runtimeError() : null;
+        } catch (LinkageError e) {
+            webView = null;
+            webViewError = String.valueOf(e);
+        }
+        if (webViewError != null) System.out.println("system features: no WebView2: " + webViewError);
+        require(service.hasSystemFeature(PackageManager.FEATURE_WEBVIEW, 0) == (webView != null),
+                "WebView feature disagrees with the WebView2 Runtime (" + webView + ")");
+
+        int[] hardware;
+        try {
+            hardware = com.gesher.server.WindowsHost.hardwareSummary();
+        } catch (LinkageError e) {
+            hardware = null;
+        }
+        int contacts = hardware != null ? hardware[0] : 0;
+        boolean audio = hardware != null && hardware[1] > 0;
+        boolean ethernet = hardware != null && hardware[2] > 0;
+        require(service.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH, 0)
+                                == (contacts >= 2)
+                        && service.hasSystemFeature(
+                                PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_DISTINCT, 0)
+                                == (contacts >= 2)
+                        && service.hasSystemFeature(
+                                PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_JAZZHAND, 0)
+                                == (contacts >= 5),
+                "Multitouch features disagree with the touch digitizer's " + contacts + " contacts");
+        require(service.hasSystemFeature(PackageManager.FEATURE_AUDIO_OUTPUT, 0) == audio,
+                "Audio output feature disagrees with the render endpoints");
+        require(service.hasSystemFeature(PackageManager.FEATURE_ETHERNET, 0) == ethernet,
+                "Ethernet feature disagrees with the wired Ethernet interfaces");
+        System.out.println("system features: " + list.size() + " entries, GLES 0x"
+                + Integer.toHexString(PackageManagerService.glEsVersion()) + ", webview "
+                + webView + ", hardware " + Arrays.toString(hardware));
+
+        // Never claimed: no backend implements them (docs/system-features.md).
+        for (String absent : new String[] {
+                PackageManager.FEATURE_OPENGLES_EXTENSION_PACK,
+                PackageManager.FEATURE_VULKAN_HARDWARE_LEVEL,
+                PackageManager.FEATURE_VULKAN_HARDWARE_VERSION,
+                PackageManager.FEATURE_PC,
+                PackageManager.FEATURE_INPUT_METHODS,
+                PackageManager.FEATURE_HOME_SCREEN,
+                PackageManager.FEATURE_PICTURE_IN_PICTURE,
+                PackageManager.FEATURE_AUDIO_LOW_LATENCY,
+                PackageManager.FEATURE_CAMERA_AUTOFOCUS,
+                PackageManager.FEATURE_CAMERA_FRONT,
+                PackageManager.FEATURE_CAMERA_FLASH,
+                PackageManager.FEATURE_USB_HOST,
+                PackageManager.FEATURE_NFC,
+                PackageManager.FEATURE_SECURE_LOCK_SCREEN,
+                PackageManager.FEATURE_VERIFIED_BOOT}) {
+            require(!service.hasSystemFeature(absent, 0), "Unimplemented feature claimed: " + absent);
+        }
+
+        android.util.ArrayMap<String, FeatureInfo> f = new android.util.ArrayMap<>();
+        PackageManagerService.addHostHardwareFeatures(f, null);
+        PackageManagerService.addHostHardwareFeatures(f, new int[] {-1, -1, -1});
+        PackageManagerService.addHostHardwareFeatures(f, new int[] {1, 0, 0});
+        require(f.isEmpty(), "Hardware features claimed without hardware: " + f.keySet());
+        PackageManagerService.addHostHardwareFeatures(f, new int[] {2, 1, 1});
+        require(f.containsKey(PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH)
+                        && f.containsKey(PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_DISTINCT)
+                        && !f.containsKey(PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_JAZZHAND)
+                        && f.containsKey(PackageManager.FEATURE_AUDIO_OUTPUT)
+                        && f.containsKey(PackageManager.FEATURE_ETHERNET) && f.size() == 4,
+                "Two-contact digitizer, endpoint and interface: " + f.keySet());
+        f.clear();
+        PackageManagerService.addHostHardwareFeatures(f, new int[] {10, 0, 0});
+        require(f.containsKey(PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_JAZZHAND) && f.size() == 3,
+                "Ten-contact digitizer: " + f.keySet());
+        f.clear();
+        PackageManagerService.addWebViewFeature(f, null);
+        PackageManagerService.addWebViewFeature(f, "");
+        require(f.isEmpty(), "WebView claimed without a WebView2 Runtime");
+        PackageManagerService.addWebViewFeature(f, "131.0.2903.112");
+        require(f.containsKey(PackageManager.FEATURE_WEBVIEW), "WebView omitted with a runtime");
+        f.clear();
+        PackageManagerService.addMemoryFeature(f, true);
+        require(f.containsKey(PackageManager.FEATURE_RAM_LOW) && f.size() == 1, "low-RAM device");
+        f.clear();
+        PackageManagerService.addMemoryFeature(f, false);
+        require(f.containsKey(PackageManager.FEATURE_RAM_NORMAL) && f.size() == 1, "normal-RAM device");
+    }
+
     private static void field(Object target, String name, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
@@ -164,6 +294,7 @@ public final class PackageServiceQueriesTest {
                         && sensors.containsKey(PackageManager.FEATURE_SENSOR_GYROSCOPE)
                         && sensors.containsKey(PackageManager.FEATURE_SENSOR_COMPASS),
                 "Sensor features do not match a gyroscope and a magnetometer");
+        checkSystemFeatures(service);
         require(service.canRequestPackageInstalls("fixture.one", 0),
                 "Package declaring REQUEST_INSTALL_PACKAGES could not request installs");
         PackageImpl installer = (PackageImpl) packages.get("fixture.one").parsed;

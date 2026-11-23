@@ -293,6 +293,15 @@ jint WindowsHost_sessionDisplayState(JNIEnv*, jclass) { return dev::SessionDispl
 
 jint WindowsHost_networkState(JNIEnv*, jclass) { return dev::NetworkState(); }
 
+// {touch contacts, audio render endpoints, wired Ethernet interfaces} (devsvc_hardware.cc).
+jintArray WindowsHost_hardwareSummary(JNIEnv* env, jclass) {
+  jint values[3] = {dev::TouchContacts(), dev::AudioRenderEndpoints(), dev::EthernetInterfaces()};
+  jintArray out = env->NewIntArray(3);
+  if (out == nullptr) return nullptr;
+  env->SetIntArrayRegion(out, 0, 3, values);
+  return out;
+}
+
 jstring WindowsHost_timeZoneKeyName(JNIEnv* env, jclass) {
   std::u16string name = dev::TimeZoneKeyName();
   return name.empty() ? nullptr : JStr(env, name);
@@ -484,6 +493,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeJobIdleMillis", "()J", GESHER_JNI(WindowsHost_jobIdleMillis)},
     {"nativeSessionDisplayState", "()I", GESHER_JNI(WindowsHost_sessionDisplayState)},
     {"nativeNetworkState", "()I", GESHER_JNI(WindowsHost_networkState)},
+    {"nativeHardwareSummary", "()[I", GESHER_JNI(WindowsHost_hardwareSummary)},
     {"nativeTimeZoneKeyName", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_timeZoneKeyName)},
     {"nativeShowToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "ZZ)I",
      GESHER_JNI(WindowsHost_showToast)},
