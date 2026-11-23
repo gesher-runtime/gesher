@@ -56,6 +56,10 @@ struct InterfaceSnapshot {
   std::map<uint32_t, Bytes> links;
   std::map<AddressKey, Bytes> addresses;
 };
+
+uint32_t AddressGroup(uint8_t family) {
+  return family == AF_INET ? RTMGRP_IPV4_IFADDR : RTMGRP_IPV6_IFADDR;
+}
 }  // namespace
 
 struct NetlinkState {
@@ -263,13 +267,15 @@ Bytes LinkMessage(const ws::Interface& iface) {
   return msg;
 }
 
-bool CaptureInterfaces(InterfaceSnapshot* snapshot) {
+bool CaptureInterfaces(uint32_t groups, InterfaceSnapshot* snapshot) {
   std::vector<ws::Interface> interfaces;
   if (!sock::ListNamedInterfaces(&interfaces)) return false;
   for (const auto& iface : interfaces) {
     if (iface.index == 0) continue;
-    snapshot->links.emplace(iface.index, LinkMessage(iface));
+    if ((groups & RTMGRP_LINK) != 0) snapshot->links.emplace(iface.index, LinkMessage(iface));
     for (const auto& entry : iface.addresses) {
+      if ((entry.address.family == ws::Family::kInet && (groups & RTMGRP_IPV4_IFADDR) == 0) ||
+          (entry.address.family == ws::Family::kInet6 && (groups & RTMGRP_IPV6_IFADDR) == 0)) continue;
       AddressKey key{};
       Bytes msg = AddressMessage(iface, entry, &key);
       if (!msg.empty()) snapshot->addresses.emplace(key, std::move(msg));
@@ -349,13 +355,12 @@ void OnInterfacesChanged(void* context) {
     std::lock_guard<std::mutex> lock(state.mu);
     if (state.closed || state.bound_groups == 0) return;
     InterfaceSnapshot next;
-    if (!CaptureInterfaces(&next)) {
+    if (!CaptureInterfaces(state.bound_groups, &next)) {
       if (!state.no_enobufs) state.pending_error = ENOBUFS;
     } else {
       for (const auto& [key, msg] : state.interfaces.addresses) {
         if (!next.addresses.contains(key)) {
-          QueueEvent(state, msg, RTM_DELADDR,
-                     key.family == AF_INET ? RTMGRP_IPV4_IFADDR : RTMGRP_IPV6_IFADDR);
+          QueueEvent(state, msg, RTM_DELADDR, AddressGroup(key.family));
         }
       }
       for (const auto& [index, msg] : state.interfaces.links) {
@@ -370,8 +375,7 @@ void OnInterfacesChanged(void* context) {
       for (const auto& [key, msg] : next.addresses) {
         auto before = state.interfaces.addresses.find(key);
         if (before == state.interfaces.addresses.end() || before->second != msg) {
-          QueueEvent(state, msg, RTM_NEWADDR,
-                     key.family == AF_INET ? RTMGRP_IPV4_IFADDR : RTMGRP_IPV6_IFADDR);
+          QueueEvent(state, msg, RTM_NEWADDR, AddressGroup(key.family));
         }
       }
       state.interfaces = std::move(next);
@@ -410,14 +414,21 @@ int SetGroups(NetlinkState& state, uint32_t groups, WatchesToStop* cleanup) {
     }
   }
 
-  if (state.bound_groups == 0) {
-    InterfaceSnapshot initial;
-    if (!CaptureInterfaces(&initial)) {
-      cleanup->link = link;
-      cleanup->address = address;
+  const uint32_t added = groups & ~state.bound_groups;
+  if (added != 0) {
+    InterfaceSnapshot baseline;
+    if (!CaptureInterfaces(added, &baseline)) {
+      if (link != state.link_watch) cleanup->link = link;
+      if (address != state.address_watch) cleanup->address = address;
       return -1;
     }
-    state.interfaces = std::move(initial);
+    // A joined group starts at today's snapshot. Keep the previous snapshots
+    // for groups that can already have an undelivered IP Helper callback.
+    if ((added & RTMGRP_LINK) != 0) state.interfaces.links = std::move(baseline.links);
+    std::erase_if(state.interfaces.addresses, [added](const auto& entry) {
+      return (AddressGroup(entry.first.family) & added) != 0;
+    });
+    state.interfaces.addresses.merge(baseline.addresses);
   }
   state.bound_groups = groups;
   state.link_watch = (groups & RTMGRP_LINK) != 0 ? link : nullptr;
@@ -442,7 +453,7 @@ int AppendReply(const nlmsghdr& request, const uint8_t* payload, uint32_t pid,
   const uint8_t family = payload[0];
   if (family != AF_UNSPEC && family != AF_INET && family != AF_INET6) return -EAFNOSUPPORT;
   if (!*captured) {
-    if (!CaptureInterfaces(interfaces)) return -errno;
+    if (!CaptureInterfaces(kAddressGroups, interfaces)) return -errno;
     *captured = true;
   }
 
