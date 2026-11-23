@@ -13,7 +13,12 @@
 // "all passed" and exits 0 when every expectation holds.
 #include <windows.h>
 
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
+
 #include <cstdio>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -47,6 +52,32 @@ bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write) {
   return true;
 }
 
+bool EventLoopDescriptors() {
+  const int event = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (event < 0) std::printf("event-loop: eventfd errno=%d\n", errno);
+  const int poller = epoll_create1(EPOLL_CLOEXEC);
+  if (poller < 0) std::printf("event-loop: epoll_create1 errno=%d\n", errno);
+  const int alias = event >= 0 ? dup(event) : -1;
+  if (event >= 0 && alias < 0) std::printf("event-loop: dup errno=%d\n", errno);
+  epoll_event interest{};
+  interest.events = EPOLLIN;
+  interest.data.u64 = 19;
+  epoll_event ready{};
+  eventfd_t value = 0;
+  const char* failure = nullptr;
+  if (event < 0 || poller < 0 || alias < 0) failure = "open";
+  else if (epoll_ctl(poller, EPOLL_CTL_ADD, event, &interest) != 0) failure = "epoll_ctl";
+  else if (eventfd_write(alias, 1) != 0) failure = "eventfd_write";
+  else if (epoll_wait(poller, &ready, 1, 1000) != 1 ||
+           (ready.events & EPOLLIN) == 0 || ready.data.u64 != 19) failure = "epoll_wait";
+  else if (eventfd_read(event, &value) != 0 || value != 1) failure = "eventfd_read";
+  if (failure != nullptr) std::printf("event-loop: %s errno=%d\n", failure, errno);
+  if (alias >= 0) close(alias);
+  if (event >= 0) close(event);
+  if (poller >= 0) close(poller);
+  return failure == nullptr;
+}
+
 // Opens the device's pipe and says hello as (pid, uid). Returns the reply's status,
 // or a description of how the connection failed.
 std::string Hello(const std::wstring& device, uint32_t pid, uint32_t uid) {
@@ -72,6 +103,8 @@ std::string Hello(const std::wstring& device, uint32_t pid, uint32_t uid) {
 // In the container: what it may do. One line per check: "<check> <result>".
 int Child(const std::wstring& device, const std::wstring& canary, DWORD parent) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);  // every line reaches the log, even on a crash
+  close(STDIN_FILENO);
+  std::printf("event-loop %s\n", EventLoopDescriptors() ? "ready" : "failed");
   HANDLE file = CreateFileW(canary.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                             OPEN_EXISTING, 0, nullptr);
   if (file != INVALID_HANDLE_VALUE) {
@@ -246,6 +279,8 @@ int main(int argc, char** argv) {
                                       device, canary, log);
   std::printf("-- contained, with gesherBinderClient:\n%s", admitted.c_str());
   failures += !Expect(admitted, "canary error 5", "the user's file is closed to the container (ERROR_ACCESS_DENIED)");
+  failures += !Expect(admitted, "event-loop ready",
+                      "eventfd, duplicate and epoll work inside the AppContainer after closing stdin");
   failures += !Expect(admitted, "hello-app status 0", "binderd admits the container as an app UID at its own pid");
   failures += !Expect(admitted, "hello-system status -1", "binderd refuses the container's claim of SYSTEM_UID (EPERM)");
   failures += !Expect(admitted, "hello-other-pid status -1", "binderd refuses the container's claim of another pid (EPERM)");

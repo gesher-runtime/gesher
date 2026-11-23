@@ -19,6 +19,7 @@
 #include "services_zygote.h"
 #include "app_container.h"
 #include "../posix/src/binder_wire.h"
+#include "../posix/include/gesher/windows_process_identity.h"
 
 namespace gesher {
 namespace zygote {
@@ -216,6 +217,7 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
     std::u16string cmd = command_line;  // CreateProcessW may write to it
     DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT |
                   EXTENDED_STARTUPINFO_PRESENT;
+    if (sandbox != nullptr) flags |= CREATE_SUSPENDED;
     PROCESS_INFORMATION pi = {};
     BOOL ok = FALSE;
     if (breakaway) {
@@ -231,10 +233,41 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
                           &si.StartupInfo, &pi);
     }
     if (ok) {
+      bool retained = true;
+      process_identity::Process child;
+      if (sandbox != nullptr) {
+        retained = process_identity::ReadLiveProcess(pi.hProcess, &child) &&
+            child.pid == pi.dwProcessId && child.principal.container.Matches(container.sid.value) &&
+            child.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID;
+      }
+      if (retained) {
+        std::lock_guard<std::mutex> guard(g_lock);
+        if (sandbox != nullptr && g_job != nullptr) {
+          BOOL in_job = FALSE;
+          retained = IsProcessInJob(pi.hProcess, g_job, &in_job) &&
+                     (in_job || AssignProcessToJobObject(g_job, pi.hProcess));
+        }
+        if (retained) {
+          result = static_cast<int>(pi.dwProcessId);
+          auto previous = g_children.find(result);
+          if (previous != g_children.end()) {
+            CloseHandle(previous->second);
+            g_children.erase(previous);
+          }
+          g_children.emplace(result, pi.hProcess);
+          if (sandbox != nullptr && ResumeThread(pi.hThread) != 1) {
+            g_children.erase(result);
+            retained = false;
+          }
+        }
+      }
+      if (!retained) {
+        TerminateProcess(pi.hProcess, ERROR_ACCESS_DENIED);
+        WaitForSingleObject(pi.hProcess, 5000);
+        CloseHandle(pi.hProcess);
+        result = -ERROR_ACCESS_DENIED;
+      }
       CloseHandle(pi.hThread);
-      result = static_cast<int>(pi.dwProcessId);
-      std::lock_guard<std::mutex> guard(g_lock);
-      g_children[result] = pi.hProcess;
     } else {
       result = -static_cast<int>(GetLastError());
     }

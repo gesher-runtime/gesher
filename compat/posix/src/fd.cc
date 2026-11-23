@@ -36,6 +36,7 @@
 #include "poll_scratch.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
+#include "startup_null.h"
 
 namespace gesher {
 namespace {
@@ -125,15 +126,77 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
 
 }  // namespace
 
+namespace {
+
+class AppContainerNull {
+ public:
+  AppContainerNull() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return;
+    DWORD contained = 0;
+    DWORD size = 0;
+    const bool queried = GetTokenInformation(token, TokenIsAppContainer, &contained,
+                                             sizeof(contained), &size) != FALSE;
+    CloseHandle(token);
+    if (!queried || contained == 0) return;
+    contained_ = true;
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    GetStartupInfoW(&startup);
+    if ((startup.dwFlags & STARTF_USESTDHANDLES) != 0 && startup.hStdInput != nullptr &&
+        startup.hStdInput != INVALID_HANDLE_VALUE) {
+      handle_ = DuplicateVerifiedNull(startup.hStdInput);
+    }
+  }
+
+  ~AppContainerNull() {
+    if (handle_ != nullptr) CloseHandle(handle_);
+  }
+
+  HANDLE NewPlaceholder() const {
+    if (!contained_) return INVALID_HANDLE_VALUE;
+    HANDLE duplicate;
+    if (handle_ != nullptr && DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(),
+                                              &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      return duplicate;
+    }
+    // Child stdio can be redirected across exec. A closed private pipe
+    // supplies a CRT slot while the descriptor's owner handles all I/O.
+    HANDLE read_end;
+    HANDLE write_end;
+    if (!CreatePipe(&read_end, &write_end, nullptr, 0)) return INVALID_HANDLE_VALUE;
+    CloseHandle(write_end);
+    return read_end;
+  }
+
+ private:
+  bool contained_ = false;
+  HANDLE handle_ = nullptr;
+};
+
+const AppContainerNull app_container_null;
+
+}  // namespace
+
 int ReserveFd() {
   HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                          nullptr, OPEN_EXISTING, 0, nullptr);
-  if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
+  if (h == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    if (error != ERROR_ACCESS_DENIED) return FailWithLastError();
+    h = app_container_null.NewPlaceholder();
+    if (h == INVALID_HANDLE_VALUE) {
+      SetLastError(error);
+      return FailWithLastError();
+    }
+  }
   record_locks::DescriptorGuard descriptor_guard;
   int fd = CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_NOINHERIT));
   if (fd < 0) CloseHandle(h);
-  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
+  else if (RegisterOfd(fd, O_RDWR) < 0 ||
+           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
     int error = errno;
+    ForgetOfd(fd);
     _close(fd);
     return errno = error, -1;
   }
@@ -221,6 +284,7 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
     if (file == INVALID_HANDLE_VALUE) { *result = (errno = EBADF, -1); return true; }
     if (GetFileType(file) != FILE_TYPE_PIPE) return false;
     snapshot = gesher::CaptureDescriptor(fd);
+    if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
   }
   // Validate status and transfer through one capture. Looking the fd up again
   // could select a replacement, and would duplicate every pipe query/pin.

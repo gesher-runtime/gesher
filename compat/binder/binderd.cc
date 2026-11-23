@@ -52,6 +52,7 @@
 #include <linux/android/binder.h>
 
 #include "../posix/src/binder_wire.h"
+#include "../posix/include/gesher/windows_process_identity.h"
 #include "../framework/app_container.h"
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
@@ -1584,27 +1585,10 @@ uint64_t RandomKey() {
 // pipe impersonates the sender of the last message read. A token that cannot be
 // read counts as restricted.
 bool ClientIsRestricted(HANDLE pipe) {
-  if (!ImpersonateNamedPipeClient(pipe)) return true;
-  HANDLE token = nullptr;
-  BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
-  RevertToSelf();
-  if (!opened) return true;
-  DWORD contained = 1, size = 0;
-  bool restricted =
-      !GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &size) ||
-      contained != 0;
-  if (!restricted) {
-    alignas(TOKEN_MANDATORY_LABEL) BYTE label[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
-    if (!GetTokenInformation(token, TokenIntegrityLevel, label, sizeof(label), &size)) {
-      restricted = true;
-    } else {
-      PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(label)->Label.Sid;
-      UCHAR count = *GetSidSubAuthorityCount(sid);
-      restricted = count == 0 || *GetSidSubAuthority(sid, count - 1) < SECURITY_MANDATORY_MEDIUM_RID;
-    }
-  }
-  CloseHandle(token);
-  return restricted;
+  gesher::process_identity::Principal principal;
+  return !gesher::process_identity::ReadPipePrincipal(pipe, &principal) ||
+         principal.container.size != 0 || principal.restricted ||
+         principal.integrity < SECURITY_MANDATORY_MEDIUM_RID;
 }
 
 void ServeProc(HANDLE pipe, In in) {
