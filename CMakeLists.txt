@@ -44,6 +44,22 @@ add_subdirectory(compat/usb_storage)
 # gesher-base: POSIX/Linux interfaces implemented on Win32.
 include(compat/posix/posix.cmake)
 
+add_executable(gesher_usb_block_guest_test
+  tests/exec/usb_block_guest.cc
+  compat/usb_storage/block_channel.cc)
+target_compile_options(gesher_usb_block_guest_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(gesher_usb_block_guest_test PRIVATE gesher_posix)
+
+# Manual read-only QA of an explicitly selected physical USB disk interface.
+add_executable(gesher_usb_block_physical_test EXCLUDE_FROM_ALL
+  tests/exec/usb_block_physical.cc
+  compat/usb_storage/block_channel.cc
+  compat/usb_storage/block_broker_server.cc
+  compat/usb_storage/host_disk.cc)
+target_compile_options(gesher_usb_block_physical_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(gesher_usb_block_physical_test PRIVATE -municode)
+target_link_libraries(gesher_usb_block_physical_test PRIVATE gesher_posix cfgmgr32)
+
 # gesher: the ELF loader for x86-64 Android .so files (Phase 6).
 include(compat/elf/elf.cmake)
 # gesher: the bionic shim the loaded .so files link against (Phase 6).

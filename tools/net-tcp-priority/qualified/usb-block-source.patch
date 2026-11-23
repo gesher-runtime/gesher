@@ -93,28 +93,12 @@ index 348f6938d..1fe122142 100644
 +  if (op == "-f") return S_ISREG(info.st_mode);
 +  if (op == "-s") return info.st_size != 0;
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 3492add71..6bfbf7afc 100644
+index 3492add71..4f44aeb89 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -3,0 +4,2 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/block_broker_client.cc
 +  ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
-@@ -107,0 +110,15 @@ target_compile_options(gesher_posix PRIVATE -Wall -Wextra -Werror)
-+add_executable(gesher_usb_block_guest_test
-+  ${CMAKE_SOURCE_DIR}/tests/exec/usb_block_guest.cc
-+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_channel.cc)
-+target_compile_options(gesher_usb_block_guest_test PRIVATE -Wall -Wextra -Werror)
-+target_link_libraries(gesher_usb_block_guest_test PRIVATE gesher_posix)
-+# Manually select a real USB disk interface. Keep this read-only fixture out of
-+# ordinary builds and automated tests.
-+add_executable(gesher_usb_block_physical_test EXCLUDE_FROM_ALL
-+  ${CMAKE_SOURCE_DIR}/tests/exec/usb_block_physical.cc
-+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_channel.cc
-+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_broker_server.cc
-+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/host_disk.cc)
-+target_compile_options(gesher_usb_block_physical_test PRIVATE -Wall -Wextra -Werror)
-+target_link_options(gesher_usb_block_physical_test PRIVATE -municode)
-+target_link_libraries(gesher_usb_block_physical_test PRIVATE gesher_posix cfgmgr32)
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
 index c001fa738..ebc3e7dcd 100644
 --- a/compat/posix/src/fd.cc
