@@ -304,9 +304,17 @@ public final class Services {
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class,
                 new DeviceServices.TelephonyRegistryService()).asBinder());
-        services.put(Context.TRUST_SERVICE, StandIn.of(
-                android.app.trust.ITrustManager.class,
-                new DeviceServices.TrustService()).asBinder());
+        StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
+                android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
+        services.put(Context.TRUST_SERVICE, trust.asBinder());
+        // auth: BiometricManager and BiometricPrompt (ADR 0091). AOSP registers it on every
+        // device; no biometric sensor, the device credential as trust reports it. No Windows
+        // Hello backend yet (docs/research/windows-hello-native-spec.md): a credential
+        // confirmation ends with BIOMETRIC_ERROR_HW_UNAVAILABLE, never a success.
+        services.put(Context.AUTH_SERVICE, StandIn.of(
+                android.hardware.biometrics.IAuthService.class,
+                new AuthService(new AuthServiceHost(am, atm, pm, trust.asInterface()),
+                        null)).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
                 new DeviceServices.ShortcutService(pm, am.callers())).asBinder());
