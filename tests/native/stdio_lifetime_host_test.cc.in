@@ -1,5 +1,6 @@
 // Exact production state/close/reopen methods; declared Windows host boundaries.
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -32,11 +33,6 @@ void operator delete(void* p, size_t) noexcept { release(p); }
 static void check(const char* name,bool value) {
   ++checks; if(!value){++failures;std::fprintf(stderr,"FAIL %s\n",name);}
 }
-struct StreamLock {
-  explicit StreamLock(FILE*) { ++lock_depth; }
-  ~StreamLock() { --lock_depth; }
-  explicit operator bool() const { return true; }
-};
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
 void ForgetStreamDevice(int,bool) {}
@@ -132,11 +128,23 @@ static FILE* _wfreopen(const wchar_t* path,const wchar_t* mode,FILE* stream){
 }
 static constexpr int INVALID_HANDLE_VALUE = gesher::INVALID_HANDLE_VALUE;
 namespace host {
+struct StreamLock {
+  explicit StreamLock(FILE*) { ++lock_depth; }
+  ~StreamLock() { --lock_depth; }
+  explicit operator bool() const { return true; }
+};
 @PARSE@
 @HOST_CLOSE@
 @HOST_REOPEN@
 }
 namespace shim {
+struct StreamLock {
+  gesher::stdio::BionicState* metadata;
+  explicit StreamLock(FILE* stream) : metadata(gesher::stdio::BionicMetadata(stream, true)) { ++lock_depth; }
+  auto Metadata() const { return metadata; }
+  ~StreamLock() { --lock_depth; }
+  explicit operator bool() const { return metadata != nullptr; }
+};
 #define BIONIC_SYSV
 constexpr int kEINVAL=EINVAL;
 constexpr int kENOMEM=ENOMEM;
@@ -174,7 +182,7 @@ static bool intact(FILE* f){
   return owner->orientation==1 && s.conversion_error && s.pushback==0x1f642 && s.input_state[3]==0x5a;
 }
 static FILE* prepared(){
-  FILE* f=std::tmpfile();if(!f)std::abort();auto& s=*shim::State(f);
+  FILE* f=std::tmpfile();if(!f)std::abort();auto& s=*gesher::stdio::BionicMetadata(f, true);
   gesher::stdio::Orient(f,1);s.conversion_error=true;s.pushback=0x1f642;s.input_state[3]=0x5a;return f;
 }
 static void allocation_contracts() {
@@ -237,7 +245,7 @@ static void allocation_contracts() {
         queries_worked && allocation_attempts == 0 && errno == EDOM && !recorded(f));
 
   check("allocation recovery can orient the same live stream", shim::Fwide(f, 1) > 0);
-  auto* state = shim::State(f);
+  auto* state = gesher::stdio::BionicMetadata(f, true);
   state->conversion_error = true;
   errno = EDOM; allocation_attempts = 0; fail_allocations = true;
   bool existing_worked = false;
@@ -254,7 +262,7 @@ static void allocation_contracts() {
 static void shared_orientation_contracts() {
   FILE* f = std::tmpfile();
   if (!f) std::abort();
-  auto* state = shim::State(f);
+  auto* state = gesher::stdio::BionicMetadata(f, true);
   if (!state) std::abort();
   uint32_t wide[3] = {0xfeed, 0xbeef, 0};
   gesher::stdio::fail_orientation = true;

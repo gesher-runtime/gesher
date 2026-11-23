@@ -32,7 +32,7 @@ def main():
         '@HOST_CLOSE@':section(host,'int gesher_fclose_state(' if modern else 'int fclose(FILE* stream)','// The stream is reopened'),
         '@HOST_REOPEN@':section(host,'FILE* gesher_freopen_state(' if modern else 'FILE* freopen(','char* mkdtemp('),
         '@STATE@':section(guest,'constexpr uint32_t kWeof','using StreamLock'),
-        '@BIONIC_STATE_TYPE@':section((ROOT/'compat/posix/include/gesher/stdio.h').read_text(), 'struct BionicState {', '// The returned pointer'),
+        '@BIONIC_STATE_TYPE@':section((ROOT/'compat/posix/include/gesher/stdio.h').read_text(), 'struct BionicState {', 'class StreamGuard'),
         '@WIDE@':section(guest,'uint32_t BIONIC_SYSV Fgetwc(','int BIONIC_SYSV Fclose('),
         '@BYTE@':section(guest,'int BIONIC_SYSV GetcUnlocked(','[[noreturn]] void StdioFortify('),
         '@UNGETC@':section(guest,'int BIONIC_SYSV Ungetc(','int BIONIC_SYSV Fflush('),

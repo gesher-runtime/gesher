@@ -520,9 +520,6 @@ FILE* F(void* f) {
 // retire it too; a second FILE-address registry could outlive a recycled token.
 constexpr uint32_t kWeof = 0xffffffffu;
 using StreamState = gesher::stdio::BionicState;
-StreamState* State(FILE* stream, bool create = true) {
-  return gesher::stdio::BionicMetadata(stream, create);
-}
 // Locked entry points already hold the shared owner/CRT lock; unlocked entry
 // points must rely on their caller's synchronization instead of acquiring it.
 int Orient(FILE* stream, int mode) { return gesher::stdio::Orient(stream, mode, true); }
@@ -655,7 +652,7 @@ uint32_t BIONIC_SYSV Fgetwc(void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   if (!lock) return kWeof;
-  auto* state = State(stream);
+  auto* state = lock.Metadata();
   if (!state || Orient(stream, 1) == 0) return kWeof;
   return ReadWide(stream, *state);
 }
@@ -664,7 +661,7 @@ uint32_t* BIONIC_SYSV Fgetws(uint32_t* out, int n, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   if (!lock) return nullptr;
-  auto* state = State(stream);
+  auto* state = lock.Metadata();
   if (!state || Orient(stream, 1) == 0) return nullptr;
   if (n <= 0) return errno = kEINVAL, nullptr;
   int count = 0;
@@ -687,7 +684,7 @@ uint32_t BIONIC_SYSV Ungetwc(uint32_t c, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   if (!lock) return kWeof;
-  auto* state = State(stream);
+  auto* state = lock.Metadata();
   if (!state || Orient(stream, 1) == 0) return kWeof;
   if (state->pushback != kWeof) return kWeof;
   state->pushback = c;
@@ -700,7 +697,7 @@ uint32_t BIONIC_SYSV Fputwc(uint32_t c, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   if (!lock) return kWeof;
-  auto* state = State(stream);
+  auto* state = lock.Metadata();
   if (!state || Orient(stream, 1) == 0) return kWeof;
   return WriteWide(stream, *state, c) ? c : kWeof;
 }
@@ -709,7 +706,7 @@ int BIONIC_SYSV Fputws(const uint32_t* ws, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   if (!lock) return -1;
-  auto* state = State(stream);
+  auto* state = lock.Metadata();
   if (!state || Orient(stream, 1) == 0) return -1;
   for (; *ws != 0; ++ws) {
     if (!WriteWide(stream, *state, *ws)) return -1;
@@ -833,8 +830,6 @@ int BIONIC_SYSV Ungetc(int c, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   if (!lock) return EOF;
-  auto* state = State(stream);
-  if (!state) return EOF;
   int result = std::ungetc(c, stream);
   if (result != EOF) Orient(stream, -1);
   return result;
@@ -1174,7 +1169,7 @@ int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList
   if (!lock) return -1;
   StreamState* state = nullptr;
   try {
-    state = State(stream);
+    state = lock.Metadata();
     if (!state || Orient(stream, 1) == 0) return -1;
     struct Target { FILE* stream; StreamState* state; } target{stream, state};
     WideSink sink{&target, [](void* context, uint32_t wc) {

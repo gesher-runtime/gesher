@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <wchar.h>
 
-enum { CHOOSER_LIST = 1001, CHOOSER_ADD = 1002 };
+enum { CHOOSER_LIST = 1001, CHOOSER_ADD = 1002, CHOOSER_BRAND = 1003 };
 typedef struct { DWORD pid; HWND dialog; } Search;
 
 static BOOL CALLBACK FindDialog(HWND window, LPARAM parameter) {
@@ -109,6 +109,11 @@ int wmain(int argc, WCHAR** argv) {
     HWND select_button = GetDlgItem(dialog, IDOK);
     HWND cancel_button = GetDlgItem(dialog, IDCANCEL);
     CHECK(select_button != NULL && cancel_button != NULL);
+    HWND brand = GetDlgItem(dialog, CHOOSER_BRAND);
+    CHECK(brand != NULL && IsWindowVisible(brand));
+    CHECK((GetWindowLongW(list, GWL_STYLE) & WS_BORDER) != 0);
+    CHECK((GetWindowLongW(select_button, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW);
+    CHECK((GetWindowLongW(cancel_button, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW);
     WCHAR locale[32] = {0}, text[128] = {0};
     GetEnvironmentVariableW(L"GESHER_LOCALES", locale, 32);
     BOOL hebrew = wcscmp(locale, L"he-IL") == 0;
@@ -116,6 +121,8 @@ int wmain(int argc, WCHAR** argv) {
     if (intent) CHECK(wcscmp(text, hebrew ? L"\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d9\u05d9\u05e9\u05d5\u05dd" : L"Gesher \u2014 choose an app") == 0);
     else CHECK(wcscmp(text, hebrew ? L"\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : L"Gesher accounts") == 0);
     CHECK(((GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_RTLREADING) != 0) == hebrew);
+    CHECK(GetWindowTextW(brand, text, 128) > 0);
+    CHECK(wcscmp(text, hebrew ? L"\u05d2\u05e9\u05e8" : L"Gesher") == 0);
     CHECK(GetWindowTextW(select_button, text, 128) > 0);
     CHECK(wcscmp(text, hebrew ? L"\u05d1\u05d7\u05d9\u05e8\u05d4" : L"Select") == 0);
     CHECK(GetWindowTextW(cancel_button, text, 128) > 0);

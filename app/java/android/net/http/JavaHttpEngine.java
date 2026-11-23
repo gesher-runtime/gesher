@@ -18,6 +18,7 @@ final class JavaHttpEngine extends HttpEngine {
     private static final URL HTTPS_BASE = transportBase("https://localhost/");
     final String agent;
     final boolean http2Enabled;
+    private final EngineHttpCache cache;
     final ExecutorService io = Executors.newCachedThreadPool(r -> {
         Thread thread = new Thread(r, "Gesher-HttpEngine"); thread.setDaemon(true); return thread;
     });
@@ -25,9 +26,10 @@ final class JavaHttpEngine extends HttpEngine {
     private boolean closed;
     private Network network;
 
-    JavaHttpEngine(String agent, boolean http2Enabled) {
+    JavaHttpEngine(String agent, boolean http2Enabled, EngineHttpCache cache) {
         this.agent = agent;
         this.http2Enabled = http2Enabled;
+        this.cache = cache;
     }
     synchronized void checkOpen() {
         if (closed) throw new IllegalStateException("HttpEngine is shut down");
@@ -38,10 +40,11 @@ final class JavaHttpEngine extends HttpEngine {
         URLConnection connection = openTransport(url, network);
         boolean androidConnection = isAndroidHttpConnection(connection);
         if (androidConnection) configureProtocols(connection);
+        cache.configure((HttpURLConnection) connection, false);
         connection.setRequestProperty("User-Agent", agent);
         // HttpEngine exposes HTTP request properties, not the provider's private
         // protocol setters. Keep a returned connection from changing engine policy.
-        return androidConnection ? new JavaEngineConnection((HttpURLConnection) connection) : connection;
+        return androidConnection ? new JavaEngineConnection(this, (HttpURLConnection) connection) : connection;
     }
     private static URL transportBase(String value) {
         try { return new URL(value); }
@@ -95,7 +98,8 @@ final class JavaHttpEngine extends HttpEngine {
     }
     @Override public synchronized void shutdown() {
         if (!active.isEmpty()) throw new IllegalStateException("Cannot shut down an engine with active requests");
-        closed=true; io.shutdown();
+        if (closed) return;
+        closed=true; io.shutdown(); cache.close();
     }
     synchronized void register(Object request) { checkOpen(); active.add(request); }
     synchronized void release(Object request) { active.remove(request); }
@@ -143,6 +147,7 @@ final class JavaHttpEngine extends HttpEngine {
         final String message;
         final String protocol;
         final Headers headers;
+        final boolean cached;
         volatile long received;
         Response(List<String> chain, HttpURLConnection connection) throws IOException {
             this.chain=Collections.unmodifiableList(new ArrayList<>(chain));
@@ -150,6 +155,7 @@ final class JavaHttpEngine extends HttpEngine {
             protocol = isAndroidHttpConnection(connection)
                     ? Objects.toString(connection.getHeaderField("X-Android-Selected-Protocol"), "http/1.1")
                     : "http/1.1";
+            cached = isAndroidHttpConnection(connection) && EngineHttpCache.wasCached(connection);
             List<Map.Entry<String,String>> values=new ArrayList<>();
             // Android OkHttp starts real fields at zero; other providers put the
             // unnamed status line there. Preserve both layouts without losing a field.
@@ -167,7 +173,7 @@ final class JavaHttpEngine extends HttpEngine {
         @Override public long getReceivedByteCount() { return received; }
         @Override public String getUrl() { return chain.get(chain.size()-1); }
         @Override public List<String> getUrlChain() { return chain; }
-        @Override public boolean wasCached() { return false; }
+        @Override public boolean wasCached() { return cached; }
     }
     private static final class RequestBuilder extends UrlRequest.Builder {
         final JavaHttpEngine engine;
@@ -247,7 +253,19 @@ final class JavaHttpEngine extends HttpEngine {
         volatile InputStream input;
         volatile Response response;
         volatile CompletableFuture<?> pendingUpload;
+        // One read is admitted at a time. The previous reader has finished using
+        // this storage before it publishes READY or invokes an application
+        // callback, including a direct/reentrant callback. Keep capacity across
+        // short reads and retire it only after all admitted workers have left.
+        byte[] readScratch;
         final CompletableFuture<Void> uploadCanceled=new CompletableFuture<>();
+        // Every hop remains owned until its stream is closed. A canceled queued
+        // redirect must not lose the previous hop merely because connection moved.
+        final Map<HttpURLConnection, InputStream> transports=new IdentityHashMap<>();
+        int workers; // Includes admitted work that has not entered the executor yet.
+        boolean cleanupQueued, terminalPublished;
+        HttpException terminalError;
+        boolean terminalCanceled;
         Request(RequestBuilder b) {
             engine=b.engine; callback=b.callback; callbacks=new SerialExecutor(b.executor);
             uploads=b.uploadExecutor==null ? null : new SerialExecutor(b.uploadExecutor);
@@ -279,10 +297,64 @@ final class JavaHttpEngine extends HttpEngine {
             engine.register(this); phase=CONNECTING; work(this::connect);
         }
         private void work(CallbackAction action) {
-            try { engine.io.execute(() -> {
+            synchronized (this) {
                 if (isDone()) return;
-                try { action.run(); } catch (Exception e) { fail(e); }
-            }); } catch (RuntimeException e) { fail(e); }
+                workers++;
+            }
+            try { engine.io.execute(() -> {
+                try { if (!isDone()) action.run(); }
+                catch (Exception e) { fail(e); }
+                finally { workerRetired(); }
+            }); } catch (RuntimeException e) {
+                try { fail(e); } finally { workerRetired(); }
+            }
+        }
+        private void workerRetired() {
+            synchronized (this) { workers--; }
+            queueCleanup();
+        }
+        private void queueCleanup() {
+            synchronized (this) {
+                if (!isDone() || cleanupQueued || terminalPublished) return;
+                cleanupQueued=true;
+            }
+            try { engine.io.execute(this::cleanup); }
+            catch (RejectedExecutionException unavailable) {
+                // Registration normally keeps this executor alive. Even if it is
+                // rejected, retire admitted resources off the application's
+                // callback thread; stream.close may perform a bounded discard.
+                Thread fallback=new Thread(this::cleanup,"Gesher-HttpEngine-cleanup");
+                fallback.setDaemon(true); fallback.start();
+            }
+        }
+        private void cleanup() {
+            List<HttpURLConnection> cancel;
+            synchronized (this) { cancel=new ArrayList<>(transports.keySet()); }
+            for (HttpURLConnection c:cancel) try { c.disconnect(); } catch (RuntimeException ignored) {}
+            Map<HttpURLConnection,InputStream> owned;
+            synchronized (this) {
+                cleanupQueued=false;
+                if (workers!=0 || terminalPublished) return;
+                terminalPublished=true;
+                owned=new IdentityHashMap<>(transports);
+                transports.clear(); connection=null; input=null; readScratch=null;
+            }
+            // A connect may have acquired its provider cancel handle after the
+            // first pass. No production worker remains, so close it again before
+            // closing bodies and releasing the engine-owned cache.
+            for (Map.Entry<HttpURLConnection,InputStream> entry:owned.entrySet()) {
+                try { entry.getKey().disconnect(); } catch (RuntimeException ignored) {}
+                InputStream body=entry.getValue();
+                if (body!=null) try { body.close(); } catch (IOException | RuntimeException ignored) {}
+            }
+            engine.release(this);
+            try { callbacks.execute(() -> {
+                try {
+                    if (terminalCanceled) callback.onCanceled(this,response);
+                    else if (terminalError!=null) callback.onFailed(this,response,terminalError);
+                    else callback.onSucceeded(this,response);
+                } catch (RuntimeException ignored) { /* A terminal callback cannot cause another terminal event. */ }
+            }); } catch (RuntimeException ignored) { /* A rejected executor cannot receive a callback. */ }
         }
         private void dispatch(CallbackAction action) {
             Thread caller=Thread.currentThread();
@@ -298,11 +370,12 @@ final class JavaHttpEngine extends HttpEngine {
             URL target=current;
             HttpURLConnection opened = (HttpURLConnection) openTransport(target, network);
             synchronized (this) {
-                if (isDone()) { opened.disconnect(); return; }
+                transports.put(opened,null);
+                if (isDone()) return;
                 connection=opened;
             }
             opened.setInstanceFollowRedirects(false);
-            opened.setUseCaches(false); // No private engine cache is installed.
+            engine.cache.configure(opened, cacheDisabled);
             opened.setConnectTimeout(30000); opened.setReadTimeout(30000);
             opened.setRequestMethod(method);
             opened.setRequestProperty("User-Agent", engine.agent);
@@ -316,6 +389,8 @@ final class JavaHttpEngine extends HttpEngine {
             chain.add(target.toExternalForm());
             Response info=new Response(chain,opened);
             response=info;
+            InputStream stream=info.code>=400 ? opened.getErrorStream() : opened.getInputStream();
+            synchronized (this) { transports.put(opened,stream); }
             String location=opened.getHeaderField("Location");
             if (location!=null && (info.code==301 || info.code==302 || info.code==303 || info.code==307 || info.code==308)) {
                 URL next=new URL(target,location); checkUrl(next);
@@ -324,9 +399,8 @@ final class JavaHttpEngine extends HttpEngine {
                 dispatch(() -> callback.onRedirectReceived(this,info,next.toExternalForm()));
                 return;
             }
-            InputStream stream=info.code>=400 ? opened.getErrorStream() : opened.getInputStream();
             synchronized (this) {
-                if (isDone()) { if (stream!=null) stream.close(); return; }
+                if (isDone()) return;
                 input=stream==null ? new ByteArrayInputStream(new byte[0]) : stream; phase=READY;
             }
             dispatch(() -> callback.onResponseStarted(this,info));
@@ -344,7 +418,20 @@ final class JavaHttpEngine extends HttpEngine {
                     || h.getKey().equalsIgnoreCase("Cookie") || h.getKey().equalsIgnoreCase("Host"));
             HttpURLConnection old=connection; connection=null;
             work(() -> {
-                if (old!=null) old.disconnect();
+                if (old!=null) {
+                    // The provider must see a completed redirect body before
+                    // cancellation. Otherwise even an empty cacheable 301 is
+                    // aborted instead of committed. OkHttp bounds close/discard
+                    // of an unread body; no redirect body reaches the callback.
+                    InputStream body;
+                    synchronized (this) { body=transports.get(old); }
+                    try { if (body!=null) body.close(); }
+                    catch (IOException ignored) { /* An unread redirect body is not a response requirement. */ }
+                    finally {
+                        old.disconnect();
+                        synchronized (this) { transports.remove(old); }
+                    }
+                }
                 if (sendUpload) rewind();
                 connect();
             });
@@ -361,13 +448,18 @@ final class JavaHttpEngine extends HttpEngine {
             if (phase!=READY) throw new IllegalStateException("Request is not waiting for read()");
             phase=READING;
             work(() -> {
-                byte[] bytes=new byte[Math.min(buffer.remaining(),32768)];
-                int n=input.read(bytes);
+                int capacity=Math.min(buffer.remaining(),32768);
+                byte[] bytes=readScratch;
+                if (bytes==null || bytes.length<capacity) {
+                    int grown=bytes==null ? capacity : Math.max(capacity,Math.min(32768,bytes.length*2));
+                    readScratch=bytes=new byte[grown];
+                }
+                int n=input.read(bytes,0,capacity);
                 if (isDone()) return;
                 if (n<0) { finish(null,false); return; }
                 synchronized (this) {
                     if (isDone()) return;
-                    buffer.put(bytes,0,n); response.received+=n; phase=READY;
+                    buffer.put(bytes,0,n); if (!response.cached) response.received+=n; phase=READY;
                 }
                 dispatch(() -> callback.onReadCompleted(this,response,buffer));
             });
@@ -468,25 +560,13 @@ final class JavaHttpEngine extends HttpEngine {
             finish(error,false);
         }
         private void finish(HttpException error, boolean canceled) {
-            synchronized (this) { if (phase==DONE) return; phase=DONE; }
+            synchronized (this) {
+                if (phase==DONE) return;
+                phase=DONE; terminalError=error; terminalCanceled=canceled;
+            }
             uploadCanceled.completeExceptionally(new CancellationException());
-            // Do not close a stream on the application's callback thread: Android
-            // StrictMode can reject network I/O there, and a read may still block.
-            try { engine.io.execute(() -> {
-                HttpURLConnection c=connection;
-                if (c!=null) c.disconnect();
-                InputStream s=input;
-                if (s!=null) try { s.close(); } catch (IOException ignored) {}
-            }); } catch (RejectedExecutionException ignored) {}
-            engine.release(this);
             closeUploadWhenReady();
-            try { callbacks.execute(() -> {
-                try {
-                    if (canceled) callback.onCanceled(this,response);
-                    else if (error!=null) callback.onFailed(this,response,error);
-                    else callback.onSucceeded(this,response);
-                } catch (RuntimeException ignored) { /* Terminal callbacks cannot cause a second terminal event. */ }
-            }); } catch (RuntimeException ignored) { /* A rejected executor cannot receive a callback. */ }
+            queueCleanup();
         }
     }
 }

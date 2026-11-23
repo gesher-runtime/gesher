@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import tempfile
 
+from test_intent_candidate_index import run_intent_candidates
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -46,6 +48,12 @@ def main() -> None:
         for mode in ("1", "0"):
             env["ANDROID_DATA"] = str(work / ("data-" + mode)); env["GESHER_MICROG_SPOOF"] = mode
             subprocess.run(command, env=env, check=True, timeout=90)
+
+    # The immutable framework recipe already executes this candidate-head entry
+    # point with the real framework/core/app dependencies.
+    if args.source_ref is None:
+        run_intent_candidates(java_home=args.java_home, framework_classes=args.framework_classes,
+                              core_classes=args.core_classes, app_classes=args.app_classes, apksig=args.apksig)
 
 
 if __name__ == "__main__":

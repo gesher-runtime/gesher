@@ -114,13 +114,21 @@ public final class SettingsStoreHost {
     }
     private static void invalidLoad(Path root) throws Exception {
         byte[] valid = expected();
-        Path path = root.resolve("invalid.bin");
+        Path directory = Files.createDirectory(root.resolve("invalid"));
+        Path path = directory.resolve("invalid.bin");
         for (int size = 0; size < valid.length; size++) {
             Files.write(path, Arrays.copyOf(valid, size));
             Map<String, Map<String, String>> tables = defaults();
             SettingsStore store = new SettingsStore(path.toFile(), tables);
             check(tables.equals(defaults()) && store.id("system", "seed") == 0,
                     "A truncated file never publishes partially decoded tables");
+            if (size > 0) {
+                check(!Files.exists(path) && Arrays.equals(Arrays.copyOf(valid, size),
+                        onlyPreserved(directory, "invalid.bin")), "Truncated state is preserved byte for byte");
+                try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+                    for (Path preserved : (Iterable<Path>) files::iterator) Files.delete(preserved);
+                }
+            }
         }
         byte[][] bad = {valid.clone(), Arrays.copyOf(valid, valid.length + 1), valid.clone(), valid.clone(), valid.clone()};
         bad[0][0] = 0;
@@ -133,6 +141,89 @@ public final class SettingsStoreHost {
             new SettingsStore(path.toFile(), tables);
             check(tables.equals(defaults()), "Malformed file leaves defaults intact");
         }
+    }
+    private static byte[] onlyPreserved(Path directory, String name) throws Exception {
+        try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+            Path[] preserved = files.filter(p -> p.getFileName().toString().startsWith(name + ".corrupt-"))
+                    .toArray(Path[]::new);
+            check(preserved.length == 1, "Exactly one preserved copy of unreadable state");
+            return Files.readAllBytes(preserved[0]);
+        }
+    }
+    private static void unreadablePreserved(Path root) throws Exception {
+        // A GST2 store whose version header is damaged loads defaults, but the next
+        // write must not replace the bytes that still hold acknowledged rows.
+        Path directory = Files.createDirectory(root.resolve("unreadable"));
+        Path file = directory.resolve("settings.bin");
+        SettingsStore original = new SettingsStore(file.toFile(), defaults());
+        original.put("secure", "acknowledged", "row", false);
+        original.put("global", "journaled", "row", false);
+        byte[] damaged = Files.readAllBytes(file); damaged[0] ^= 1;
+        Files.write(file, damaged);
+        Map<String, Map<String, String>> tables = defaults();
+        SettingsStore store = new SettingsStore(file.toFile(), tables);
+        check(tables.equals(defaults()), "Undecodable header falls back to defaults");
+        check(Arrays.equals(damaged, onlyPreserved(directory, "settings.bin")),
+                "Undecodable state is moved aside byte for byte before any write");
+        check(store.put("system", "after", "value", false), "Writes continue from defaults");
+        check(Arrays.equals(damaged, onlyPreserved(directory, "settings.bin")),
+                "A later checkpoint does not replace preserved state");
+        Map<String, Map<String, String>> loaded = empty();
+        new SettingsStore(file.toFile(), loaded);
+        check(loaded.equals(tables), "New state reloads after preservation");
+        damaged[0] ^= 1;
+        Files.write(directory.resolve("restored.bin"), damaged);
+        Map<String, Map<String, String>> recovered = empty();
+        new SettingsStore(directory.resolve("restored.bin").toFile(), recovered);
+        check("row".equals(recovered.get("secure").get("acknowledged"))
+                && "row".equals(recovered.get("global").get("journaled")),
+                "Preserved bytes still hold every acknowledged row");
+
+        // A zero-length file holds nothing and needs no preserved copy.
+        Path emptyDirectory = Files.createDirectory(root.resolve("unreadable-empty"));
+        Path emptyFile = Files.write(emptyDirectory.resolve("settings.bin"), new byte[0]);
+        new SettingsStore(emptyFile.toFile(), defaults());
+        try (java.util.stream.Stream<Path> files = Files.list(emptyDirectory)) {
+            check(files.count() == 1, "Empty file is not preserved");
+        }
+
+        // If the file cannot be moved aside, writes are refused rather than overwriting it.
+        Path stuckDirectory = Files.createDirectory(root.resolve("unreadable-stuck"));
+        Path stuck = stuckDirectory.resolve("settings.bin");
+        Files.write(stuck, new byte[] {0, 0, 0, 0, 1, 2, 3});
+        byte[] stuckBytes = Files.readAllBytes(stuck);
+        SettingsIO.reset(); SettingsIO.failReplace = true;
+        Map<String, Map<String, String>> stuckTables = defaults();
+        SettingsStore refused;
+        try { refused = new SettingsStore(stuck.toFile(), stuckTables); }
+        finally { SettingsIO.reset(); }
+        try { refused.put("system", "lost", "value", false); throw new AssertionError("Overwrote unpreserved state"); }
+        catch (IllegalStateException expected) { checks++; }
+        check(stuckTables.equals(defaults()), "Refused write rolls back in-memory state");
+        check(Arrays.equals(stuckBytes, Files.readAllBytes(stuck)), "Unpreserved state is left untouched");
+        try (java.util.stream.Stream<Path> files = Files.list(stuckDirectory)) {
+            check(files.count() == 1, "Failed preservation removes its placeholder");
+        }
+
+        // A valid file that merely cannot be opened is not corrupt: keep it in place.
+        Path lockedDirectory = Files.createDirectory(root.resolve("unreadable-locked"));
+        Path locked = lockedDirectory.resolve("settings.bin");
+        new SettingsStore(locked.toFile(), defaults()).put("secure", "acknowledged", "row", false);
+        byte[] lockedBytes = Files.readAllBytes(locked);
+        SettingsIO.reset(); SettingsIO.failOpen = true;
+        Map<String, Map<String, String>> lockedTables = defaults();
+        SettingsStore unopened;
+        try { unopened = new SettingsStore(locked.toFile(), lockedTables); }
+        finally { SettingsIO.reset(); }
+        try { unopened.put("system", "lost", "value", false); throw new AssertionError("Overwrote unread state"); }
+        catch (IllegalStateException expected) { checks++; }
+        check(Arrays.equals(lockedBytes, Files.readAllBytes(locked)), "Unopened state stays in place unchanged");
+        try (java.util.stream.Stream<Path> files = Files.list(lockedDirectory)) {
+            check(files.count() == 1, "Open failure does not move the file aside");
+        }
+        Map<String, Map<String, String>> reopened = empty();
+        new SettingsStore(locked.toFile(), reopened);
+        check("row".equals(reopened.get("secure").get("acknowledged")), "State loads once the file opens again");
     }
     private static void publicationFailure(Path root) throws Exception {
         Path target = Files.createDirectory(root.resolve("publication-target"));
@@ -475,7 +566,7 @@ public final class SettingsStoreHost {
         Path root = Files.createTempDirectory("gesher-settings-performance-");
         try {
             if (args.length > 0 && args[0].equals("--benchmark-only")) { benchmark(root); return; }
-            format(root); boundaries(root); invalidLoad(root); publicationFailure(root); io(root);
+            format(root); boundaries(root); invalidLoad(root); unreadablePreserved(root); publicationFailure(root); io(root);
             journal(root); tornTail(root); appendFailures(root); checkpointFailure(root); concurrent(root);
             processCrashes(root);
             System.out.println("SettingsStoreHost all passed: " + checks + " checks");
@@ -493,10 +584,10 @@ final class SettingsIO {
     static int writes, reads, syncs, replaces;
     static long written;
     static int failWriteAfter = -1, failSyncAt = -1;
-    static boolean failTruncate, failClose, failReplace, haltAppend, haltCheckpoint;
+    static boolean failTruncate, failClose, failReplace, failOpen, haltAppend, haltCheckpoint;
     static void reset() {
         writes = reads = syncs = replaces = 0; written = 0;
-        failWriteAfter = failSyncAt = -1; failTruncate = failClose = failReplace = false;
+        failWriteAfter = failSyncAt = -1; failTruncate = failClose = failReplace = failOpen = false;
         haltAppend = haltCheckpoint = false;
     }
     static void sync(FileDescriptor descriptor) throws IOException {
@@ -545,7 +636,12 @@ final class CountingFileOutputStream extends FileOutputStream {
     }
 }
 final class CountingFileInputStream extends FileInputStream {
-    CountingFileInputStream(File file) throws IOException { super(file); }
+    CountingFileInputStream(File file) throws IOException { super(open(file)); }
+    // Windows reports access-denied and sharing violations as FileNotFoundException.
+    private static File open(File file) throws IOException {
+        if (SettingsIO.failOpen) throw new java.io.FileNotFoundException(file + " (Access is denied)");
+        return file;
+    }
     public int read() throws IOException { SettingsIO.reads++; return super.read(); }
     public int read(byte[] bytes) throws IOException { return read(bytes, 0, bytes.length); }
     public int read(byte[] bytes, int offset, int length) throws IOException {

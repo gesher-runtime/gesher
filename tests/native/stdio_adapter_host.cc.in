@@ -387,8 +387,12 @@ static void TestBionicOwnerLifetime() {
   if (!stream) std::abort();
   {
     gesher::stdio::StreamGuard lock(stream);
-    auto* state = gesher::stdio::BionicMetadata(stream);
+    auto* state = lock.Metadata();
     check("Bionic metadata belongs to an actual locked stream", lock && state);
+    {
+      std::lock_guard<std::mutex> registry_lock(gesher::stdio::registry->mutex);
+      check("guard metadata remains accessible without a second registry lookup", lock.Metadata() == state);
+    }
     state->conversion_error = true;
     state->pushback = 0x1f642;
     state->input_state[3] = 0x5a;
@@ -397,20 +401,20 @@ static void TestBionicOwnerLifetime() {
   adapter_clearerr(stream);
   {
     gesher::stdio::StreamGuard lock(stream);
-    auto* state = gesher::stdio::BionicMetadata(stream);
+    auto* state = lock.Metadata();
     check("host clearerr clears Bionic error without discarding unread wide state",
           !state->conversion_error && state->pushback == 0x1f642 && state->input_state[3] == 0x5a);
   }
   check("failed seek retains the stream", adapter_fseek(stream, 0, -99) == -1 && errno == EINVAL);
   {
     gesher::stdio::StreamGuard lock(stream);
-    auto* state = gesher::stdio::BionicMetadata(stream);
+    auto* state = lock.Metadata();
     check("failed seek preserves pending Bionic input", state->pushback == 0x1f642 && state->input_state[3] == 0x5a);
   }
   check("successful seek reaches the real file", adapter_fseek(stream, 0, SEEK_SET) == 0);
   {
     gesher::stdio::StreamGuard lock(stream);
-    auto* state = gesher::stdio::BionicMetadata(stream);
+    auto* state = lock.Metadata();
     check("successful seek discards Bionic pushback and partial decoder state",
           state->pushback == 0xffffffffu && state->input_state == std::array<uint8_t, 8>{});
     state->conversion_error = true;
@@ -420,13 +424,13 @@ static void TestBionicOwnerLifetime() {
   check("reinitializing the actual owner succeeds", gesher::stdio::Register(stream, O_RDWR) == 0);
   {
     gesher::stdio::StreamGuard lock(stream);
-    auto* state = gesher::stdio::BionicMetadata(stream);
+    auto* state = lock.Metadata();
     check("reinitialization retires every old Bionic metadata field",
           !state->conversion_error && state->pushback == 0xffffffffu && state->input_state == std::array<uint8_t, 8>{});
   }
   check("host fclose releases its real descriptor", adapter_fclose(stream) == 0 && fcntl(fd, F_GETFD) == -1 && errno == EBADF);
   check("host fclose leaves no Bionic metadata for a recycled token",
-        gesher::stdio::BionicMetadata(stream, false) == nullptr);
+        !gesher::stdio::Find(stream, false));
   unlink(path);
 }
 static void TestCrtLockComposition() {

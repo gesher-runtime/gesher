@@ -66,7 +66,8 @@ fi
 mkdir -p "$work/classes" "$work/dex"
 find "$here" -name '*.java' > "$work/sources.txt"
 printf '%s\n' "$here/../net/HttpEngineDeviceSmoke.java" "$here/../net/Http2DeviceSmoke.java" \
-  "$here/../net/HttpEngineProtocolPolicyTest.java" >> "$work/sources.txt"
+  "$here/../net/HttpEngineProtocolPolicyTest.java" "$here/../net/HttpEngineCacheTest.java" \
+  "$here/../net/HttpEngineConnectionLifetimeTest.java" "$here/../net/HttpEngineReadBufferTest.java" >> "$work/sources.txt"
 native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$classpath" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"

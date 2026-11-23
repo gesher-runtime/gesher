@@ -13,9 +13,6 @@ struct BionicState {
   uint32_t pushback = 0xffffffffu;
   std::array<uint8_t, 8> input_state{};
 };
-// The returned pointer is valid only while holding StreamGuard, or while the
-// application supplies the synchronization required by an unlocked stdio API.
-BionicState* BionicMetadata(FILE* stream, bool create = true);
 class StreamGuard {
  public:
   explicit StreamGuard(FILE* stream);
@@ -23,6 +20,8 @@ class StreamGuard {
   StreamGuard(const StreamGuard&) = delete;
   StreamGuard& operator=(const StreamGuard&) = delete;
   explicit operator bool() const { return token_ != nullptr; }
+  // The acquired token pins the state for the duration of this guard.
+  BionicState* Metadata() const;
  private:
   void Release();
   std::shared_ptr<void> token_;

@@ -487,10 +487,9 @@ int ScanWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
   state->buffer.Orient(1);
   return __real___mingw_vfwscanf(stream, format, arguments);
 }
-BionicState* BionicMetadataLocal(FILE* stream, bool create) {
-  auto state = Find(stream, create);
-  if (!state || !state->live) return nullptr;
-  return &state->bionic;
+BionicState* BionicMetadataLocal(const std::shared_ptr<void>& token) {
+  auto* state = static_cast<State*>(token.get());
+  return state ? &state->bionic : nullptr;
 }
 struct Api {
   std::shared_ptr<void> (*acquire)(FILE*);
@@ -521,7 +520,7 @@ struct Api {
   int (*print_wide)(FILE*, const wchar_t*, va_list);
   int (*scan)(FILE*, const char*, va_list);
   int (*scan_wide)(FILE*, const wchar_t*, va_list);
-  BionicState* (*bionic_metadata)(FILE*, bool);
+  BionicState* (*bionic_metadata)(const std::shared_ptr<void>&);
 };
 const Api* Owner() {
   using Factory = const Api* (*)();
@@ -557,7 +556,7 @@ StreamGuard::StreamGuard(FILE* stream)
     : token_(Owner()->acquire(stream)), cleanup_([](void* raw) { static_cast<StreamGuard*>(raw)->Release(); }, this) {}
 StreamGuard::~StreamGuard() = default;
 void StreamGuard::Release() { Owner()->release(token_); token_.reset(); }
-BionicState* BionicMetadata(FILE* stream, bool create) { return Owner()->bionic_metadata(stream, create); }
+BionicState* StreamGuard::Metadata() const { return Owner()->bionic_metadata(token_); }
 void Lock(FILE* stream) { Owner()->lock(stream); }
 void Unlock(FILE* stream) { Owner()->unlock(stream); }
 int TryLock(FILE* stream) { return Owner()->try_lock(stream); }

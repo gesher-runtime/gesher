@@ -7,19 +7,23 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from import_policy import allowed, controls
+from payload_roles import ROLES
 
 assert os.environ.get('GITHUB_ACTIONS') == 'true'
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == os.environ['GITHUB_SHA']
 def sha(p):
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+fork = None
+if sys.argv[1:] == ['--fork-diagnostic']:
+    import fork_supplier as fork
+    diagnostic = fork.identity.current('compile')
+else:
+    assert not sys.argv[1:], 'Unknown TCP manifest invocation'
 selection = os.environ['TCP_SUPPLIER_ROLE']
 assert selection in ('canonical', 'selected-minimum')
-roles = {'gesher-exec.exe': 'host-bionic-loader', 'net_tcp_priority_probe.exe': 'host-posix-contract', 'gesher_arm64.dll': 'matching-arm64-translator', 'tcp-priority-x86_64': 'ndk-x86_64-contract', 'tcp-priority-arm64-v8a': 'ndk-arm64-contract'}
-roles.update({'net_udp_guarded_probe.exe':'host-posix-guarded-udp', 'net_udp_guarded_fault_probe.exe':'host-posix-guarded-udp-faults',
-    'udp-guarded-x86_64':'ndk-x86_64-guarded-udp', 'udp-guarded-arm64-v8a':'ndk-arm64-guarded-udp',
-    'udp-guarded-fault-x86_64':'ndk-x86_64-guarded-udp-faults', 'udp-guarded-fault-arm64-v8a':'ndk-arm64-guarded-udp-faults',
-    'udp-guarded-linux.txt':'actual-linux-guarded-udp-reference', 'udp-guarded-fault-linux.txt':'actual-linux-guarded-udp-fault-reference'})
+roles = dict(ROLES)
 for name in ('net_udp_guarded_probe.exe','net_udp_guarded_fault_probe.exe'):
     shutil.copyfile(Path('out')/name, Path('tcp-fixture')/name)
 for source, name in [('out/gesher-exec.exe', 'gesher-exec.exe'), ('out/net_tcp_priority_probe.exe', 'net_tcp_priority_probe.exe'), ('out-arm64/gesher_arm64.dll', 'gesher_arm64.dll')]:
@@ -53,7 +57,7 @@ compilers['out']['c_guarded']=dict(configured=c_paths[0],resolved=str(Path(c_pat
 ndk_source = json.loads(Path('tcp-ndk-source.json').read_text())
 compilers['ndk'] = json.loads(Path('tcp-guests-compiler.json').read_text())
 supplier = json.loads(Path('tcp-supplier-receipt.json').read_text())
-expected_supplier = 'canonical-publisher-unmodified-v1' if selection == 'canonical' else 'gesher-winpthreads-selected-minimum-v1'
+expected_supplier = fork.ROLE if fork else ('canonical-publisher-unmodified-v1' if selection == 'canonical' else 'gesher-winpthreads-selected-minimum-v1')
 assert supplier['role'] == expected_supplier and supplier['supplier_selection'] == selection and supplier['producer_job'] == 'compile'
 assert supplier['rebuilt_from_reference_source'] == (selection == 'selected-minimum')
 assert all(supplier['context'][k] == os.environ[k] for k in supplier['context'])
@@ -61,11 +65,14 @@ assert supplier['upstream'] == 'a3d93999ef0521681d45e445c39964a7af0f593f'
 assert supplier['patch_sha256'] is None
 if selection == 'selected-minimum':
     from selected_supplier import check_selected
-    check_selected(supplier, {k:os.environ[k] for k in supplier['context']})
+    if fork:
+        fork.check_supplier(supplier, diagnostic)
+    else:
+        check_selected(supplier, {k:os.environ[k] for k in supplier['context']})
 if selection == 'canonical':
     assert supplier['libraries_before'] == supplier['libraries_after'] and supplier['source_before'] == supplier['source_after']
 selected_compiler = Path(supplier['compiler_root']).resolve(strict=True)
-assert selected_compiler.parent == Path('tcp-canonical-supplier' if selection == 'canonical' else 'tcp-selected-supplier').resolve(strict=True)
+assert selected_compiler.parent == Path(fork.WORKSPACE if fork else ('tcp-canonical-supplier' if selection == 'canonical' else 'tcp-selected-supplier')).resolve(strict=True)
 assert supplier['public_headers_before'] == supplier['public_headers_after']
 assert supplier['compiler_archive']['sha256'] == '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
 for build in ('out', 'out-arm64'):
@@ -184,6 +191,9 @@ for abi,machine in (('x86_64',62),('arm64-v8a',183)):
 outputs = {p.name: dict(role=roles[p.name], sha256=sha(p)) for p in Path('tcp-fixture').iterdir()}
 assert set(outputs) == set(roles)
 manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', supplier_selection=selection, scope='noninline-only', owned_connect_scope='AF_INET-base-chain1-e70f1aa0-ab8b-11cf-8ca3-00805f48a192-TCP', ndk_archive=ndk_source, supplier=supplier, guarded_linux=guarded_linux, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, private_connect_observer=private_observer, compilers=compilers, sources=sources, outputs=outputs)
+if fork:
+    manifest.update(evidence_schema=fork.SCHEMA, diagnostic=diagnostic)
+    fork.check_manifest(manifest, diagnostic)
 Path('tcp-fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print('TCP_PRIORITY_PRODUCER', json.dumps({k: manifest[k] for k in ('source', 'run', 'attempt', 'scope')}))
 for role, details in compilers.items():

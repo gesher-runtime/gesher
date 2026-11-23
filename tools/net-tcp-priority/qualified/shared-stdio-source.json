@@ -1,20 +1,20 @@
 {
   "after_sha256": {
-    "compat/bionic/stdio_bionic.cc": "79cd43d5800b64297beef2f5aa5238a09f44a2d80b65ee0f3a0062798374d9c8",
-    "compat/posix/include/gesher/stdio.h": "8d7455587316e1e37ea87d3971de594d10bd0df6503efbb7748c71e644839353",
+    "compat/bionic/stdio_bionic.cc": "4600f47dcfe09898b8bbc5ac3f030f88414c1c905dee772dc97682612dadc514",
+    "compat/posix/include/gesher/stdio.h": "20e0b97b5333daae70d28bb90190e9e4c4f12921561596bdc94cfee38ee47cd7",
     "compat/posix/include/stdio.h": "f6c4eda0b038078d19877a172476cf817509d957fe2f110f0c5902406691a029",
-    "compat/posix/src/stdio_output.cc": "437ff8960772d27aaa44349b691dec2c9e6493e1b35716c63000d08c8fd4c19f"
+    "compat/posix/src/stdio_output.cc": "ba5beead2a3e8edb71e67a40fc4ea05f4009fbf8967c4fc5d3d5a5cf9c680984"
   },
-  "baseline": "751d82310f7c4c470c098ccebfd5d2d04699a0cd",
-  "baseline_policy_sha256": "2e30041395ec03b831b6a0a844b61a4f2c5dc1d8341d4f328dcecb803408335d",
+  "baseline": "6d7638b789e21cba6270c1dbfabe5091680c4100",
+  "baseline_policy_sha256": "a32bc8e65cf655635c04fb86f1ea23d668d125a79a8fef4732c86055b2985ac0",
   "before_sha256": {
-    "compat/bionic/stdio_bionic.cc": "9fedaef9b3bd5e658a74daa7199dff6d99711bcf1c5aca9204cdb5dd1e8e1777",
+    "compat/bionic/stdio_bionic.cc": "bb8aba18f5794919f0338eb42df7807b89203ffd3371f9e3a53aad40982ecfa1",
     "compat/posix/include/gesher/stdio.h": "981f2e735df34e3ab4ef1086f040cee6fb51a3a80c1f85edccb46865ecea3051",
     "compat/posix/include/stdio.h": "2c269413b37d147d1a6bc9a7b7700a0677d73017a05af98234142c6272f2b9a2",
     "compat/posix/src/stdio_output.cc": "7ed987581cbb4b8449293235d0b0fafa8fd6725b06820a97c23924bff949ba97"
   },
   "feature_head": "de1e43c391275137c7b7b25dc170892684d55b5e",
-  "patch_sha256": "055e0a6f6e8961739143e04363c97f95c4e2ca983bac259477cd531a9910a91a",
+  "patch_sha256": "254f0205eaee8cd9d7262bd11e58a52b2e249104b5b158d06223cf46db69632d",
   "paths": [
     "compat/bionic/stdio_bionic.cc",
     "compat/posix/include/gesher/stdio.h",

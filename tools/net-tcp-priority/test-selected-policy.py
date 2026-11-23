@@ -265,15 +265,15 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '1847217ffc744c9362c264f40d658ab2e7bf31510e0e83d4267bf24ae4640171'
+OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
 # exact bytes before the unchanged OFD and supplier checks run. It neither
 # qualifies Windows execution nor replaces review of the production delta.
-SHARED_STDIO_BASE = '751d82310f7c4c470c098ccebfd5d2d04699a0cd'
+SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
 SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
-SHARED_STDIO_TRANSITION_SHA256 = 'a0eeee901ed4937f340ced17399fa3b3828d2ba73c9ee2ca8bf6357e0d0b38a4'
+SHARED_STDIO_TRANSITION_SHA256 = '6de1e4d1363de0477e9c89aec4ae4b9b16cd1ee5b2bd1c002d626e5e129dd443'
 SHARED_STDIO_PATHS = (
  'compat/bionic/stdio_bionic.cc',
  'compat/posix/include/gesher/stdio.h',
@@ -422,7 +422,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='5724ba64d08b68b8900c1442f6302f3fcadc4ef6b584c52d2055b0bb6c04e441'
+REVIEWED_PATCH_SHA256='5fe00fbb94e27fe5d5b5fe29e035b28f4ab3c3a2ac7fe0318ba3918e325d2433'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH

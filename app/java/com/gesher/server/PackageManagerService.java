@@ -29,6 +29,7 @@ import com.android.internal.pm.pkg.component.ParsedComponent;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     // Candidate metadata only. Enabled state, removal, query flags and fresh Android
     // result objects remain the responsibility of each resolution under this monitor.
     private ProviderAuthorityIndex mProviderAuthorityIndex;
+    private IntentPackageIndex mIntentPackageIndex;
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
@@ -358,11 +360,89 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mPackages.values();
     }
 
+    /** The map is replaced as a whole; package metadata is admitted before publication. */
+    Map<String, ApkPackage> packageSnapshot() { return mPackages; }
+
     /** Called under this monitor, or before the constructor publishes this service. */
     private void publishPackages(Map<String, ApkPackage> packages) {
         mPackages = packages;
-        // Retire references to removed/replaced code even if no provider is queried.
+        // Retire references to removed/replaced code even if no provider or
+        // permission query follows.
         mProviderAuthorityIndex = null;
+        mIntentPackageIndex = null;
+        mPermissions.invalidatePackageIndex();
+    }
+
+    /** Candidates only; callers keep the publication monitor through actual matching. */
+    private synchronized Collection<ApkPackage> intentPackages(Intent intent, ApkPackage.ComponentKind kind) {
+        // Preserve the existing null-intent behavior in the family resolver.
+        if (intent == null) return mPackages.values();
+        ComponentName component = intent.getComponent();
+        String packageName = intent.getPackage();
+        if (component != null) {
+            if (packageName != null && !packageName.equals(component.getPackageName())) return List.of();
+            packageName = component.getPackageName();
+        }
+        if (packageName != null) {
+            ApkPackage owner = mPackages.get(packageName);
+            // Explicit components need no intent filters. Do not build an index
+            // or inspect any unrelated package for either constrained query.
+            return owner == null ? List.of() : List.of(owner);
+        }
+        Map<String, ApkPackage> packages = mPackages;
+        IntentPackageIndex index = mIntentPackageIndex;
+        if (index == null || index.packages != packages) {
+            index = new IntentPackageIndex(packages);
+            mIntentPackageIndex = index;
+        }
+        IntentCandidates candidates = index.families.computeIfAbsent(kind,
+                family -> new IntentCandidates(packages, family));
+        // IntentFilter.match skips action matching when the action is null.
+        // Even a zero-action filter can then match its data/categories.
+        return intent.getAction() == null ? candidates.withFilters
+                : candidates.actions.getOrDefault(intent.getAction(), List.of());
+    }
+
+    /** Each family is built on first use, bounded by the installed declarations. */
+    private static final class IntentPackageIndex {
+        final Map<String, ApkPackage> packages;
+        final Map<ApkPackage.ComponentKind, IntentCandidates> families =
+                new EnumMap<>(ApkPackage.ComponentKind.class);
+        IntentPackageIndex(Map<String, ApkPackage> packages) { this.packages = packages; }
+    }
+
+    private static final class IntentCandidates {
+        final Map<String, List<ApkPackage>> actions;
+        final List<ApkPackage> withFilters;
+
+        IntentCandidates(Map<String, ApkPackage> packages, ApkPackage.ComponentKind kind) {
+            Map<String, List<ApkPackage>> owners = new LinkedHashMap<>();
+            List<ApkPackage> anyAction = new ArrayList<>();
+            for (ApkPackage pkg : packages.values()) {
+                List<? extends ParsedComponent> declarations = switch (kind) {
+                    case ACTIVITY -> pkg.parsed.getActivities();
+                    case SERVICE -> pkg.parsed.getServices();
+                    case RECEIVER -> pkg.parsed.getReceivers();
+                    case PROVIDER -> pkg.parsed.getProviders();
+                };
+                Set<String> seen = new java.util.HashSet<>();
+                boolean hasFilters = false;
+                for (ParsedComponent declaration : declarations) {
+                    for (var info : declaration.getIntents()) {
+                        hasFilters = true;
+                        var filter = info.getIntentFilter();
+                        for (int i = 0; i < filter.countActions(); i++) {
+                            String action = filter.getAction(i);
+                            if (seen.add(action)) owners.computeIfAbsent(action, key -> new ArrayList<>()).add(pkg);
+                        }
+                    }
+                }
+                if (hasFilters) anyAction.add(pkg);
+            }
+            owners.replaceAll((action, values) -> List.copyOf(values));
+            actions = Map.copyOf(owners);
+            withFilters = List.copyOf(anyAction);
+        }
     }
 
     /** All possible owners in installed order; never cache a visibility decision. */
@@ -541,7 +621,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     // batch. These readers do metadata/filter work only, never application callbacks.
     private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.ACTIVITY)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentActivities(intent, resolvedType, flags));
         }
@@ -570,7 +650,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The services {@code intent} resolves to, in every package. */
     synchronized List<ResolveInfo> services(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.SERVICE)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentServices(intent, resolvedType, flags));
         }
@@ -583,7 +663,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The manifest receivers {@code intent} reaches, in every package. */
     synchronized List<ResolveInfo> receivers(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.RECEIVER)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentReceivers(intent, resolvedType, flags));
         }
@@ -639,7 +719,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             long flags, int userId) {
         List<ResolveInfo> result = new ArrayList<>();
         if (intent == null || userId != 0) return new ParceledListSlice<>(result);
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.PROVIDER)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentContentProviders(intent, resolvedType, flags));
         }

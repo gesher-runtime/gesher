@@ -338,14 +338,14 @@ void TestTrampolineReuse() {
   REQUIRE(slot != nullptr && slot != stable);
   const size_t index = g_tramp_by_fn.at(owned);
   const uint32_t expected_svc = Svc(static_cast<uint32_t>(index + 1));
-  REQUIRE(g_tramps[index].va_list_index == 3);
+  REQUIRE(ReadTrampoline(index).va_list_index == 3);
   g_host_pages[reinterpret_cast<uintptr_t>(owned) & ~uintptr_t{0xfff}] = true;
   Env env;
   slot[0] = kRet;  // A guest-installed in-place hook must not survive reuse.
   env.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(slot) == kRet); });
   const unsigned previous_clears = env.jits_[0]->clear_count;
   ApiUnbindHostFunction(owned);
-  REQUIRE(g_tramp_by_fn.count(owned) == 0 && g_tramps[index].host_fn == nullptr);
+  REQUIRE(g_tramp_by_fn.count(owned) == 0 && ReadTrampoline(index).host_fn == nullptr);
   REQUIRE(g_va_functions.count(owned) == 0 && g_host_pages.count(reinterpret_cast<uintptr_t>(owned)) == 0);
   for (size_t i = 0; i < kTrampWords; ++i) REQUIRE(slot[i] == kBrk);
   REQUIRE(BindHost(owned, -1) == slot);
@@ -358,12 +358,12 @@ void TestTrampolineReuse() {
     REQUIRE(BindHost(owned, -1) == slot && g_tramp_by_fn.at(owned) == index);
     REQUIRE(slot[0] == expected_svc && slot[1] == kRet);
     ApiUnbindHostFunction(owned);
-    REQUIRE(g_tramp_by_fn.count(owned) == 0 && g_tramps[index].host_fn == nullptr);
+    REQUIRE(g_tramp_by_fn.count(owned) == 0 && ReadTrampoline(index).host_fn == nullptr);
     for (size_t i = 0; i < kTrampWords; ++i) REQUIRE(slot[i] == kBrk);
   }
   REQUIRE(g_tramp_count.load() == count && AllocationCalls() == calls);
   REQUIRE(g_code_used == used && g_code_pages.size() == pages && g_free_tramps.size() == 1);
-  REQUIRE(BindHost(stable_fn, -1) == stable && g_tramps[g_tramp_by_fn.at(stable_fn)].host_fn == stable_fn);
+  REQUIRE(BindHost(stable_fn, -1) == stable && ReadTrampoline(g_tramp_by_fn.at(stable_fn)).host_fn == stable_fn);
   const uint64_t generation = g_code_generation.load();
   ApiUnbindHostFunction(owned);
   REQUIRE(g_code_generation.load() == generation);
