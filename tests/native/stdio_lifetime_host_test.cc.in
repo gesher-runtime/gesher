@@ -35,6 +35,7 @@ static void check(const char* name,bool value) {
 }
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+#include "uncontained_storage_fixture.h"
 void ForgetStreamDevice(int,bool) {}
 static constexpr int INVALID_HANDLE_VALUE = -1;
 int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }

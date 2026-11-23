@@ -33,6 +33,7 @@ using HANDLE = intptr_t;
 constexpr HANDLE INVALID_HANDLE_VALUE = -1;
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+#include "uncontained_storage_fixture.h"
 enum class Device { kZero, kRandom };
 enum class DescriptorKind { kFile, kZero, kRandom };
 // The complete executable-owned OFD implementation is exercised by the OFD

@@ -55,7 +55,8 @@ def main():
         template=template.replace(marker,value)
     with tempfile.TemporaryDirectory(prefix='gesher-stdio-lifetime-') as folder:
         path=pathlib.Path(folder); source=path/'host.cc';binary=path/'test';source.write_text(template)
-        command=shlex.split(args.cxx)+['-std=c++20','-O1','-g','-Wall','-Wextra','-Werror','-fno-builtin',str(source),'-o',str(binary)]
+        command=shlex.split(args.cxx)+['-std=c++20','-O1','-g','-Wall','-Wextra','-Werror','-fno-builtin',
+                                       '-I',str(ROOT / 'tests/native'),str(source),'-o',str(binary)]
         if args.sanitize:command+=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
         subprocess.run(command,check=True,timeout=120)
         env=dict(os.environ)
