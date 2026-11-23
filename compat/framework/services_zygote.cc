@@ -505,6 +505,7 @@ namespace {
 struct Writer {
   peer::OwnedHandle channel;
   peer::OwnedHandle broker;
+  std::map<std::array<uint8_t, 16>, peer::OwnedHandle> installations;
 };
 
 Writer ReadWriter() {
@@ -515,8 +516,9 @@ Writer ReadWriter() {
       self.principal.container.size != 0 || self.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID) {
     return {};
   }
-  Writer writer{peer::OwnedHandle(launch::DecodeHandle(startup.channel)),
-                peer::OwnedHandle(launch::DecodeHandle(startup.broker))};
+  Writer writer;
+  writer.channel.reset(launch::DecodeHandle(startup.channel));
+  writer.broker.reset(launch::DecodeHandle(startup.broker));
   peer::OwnedHandle job_pipe(launch::DecodeHandle(startup.job_delivery));
   if (!SetHandleInformation(writer.channel.get(), HANDLE_FLAG_INHERIT, 0) ||
       !SetHandleInformation(writer.broker.get(), HANDLE_FLAG_INHERIT, 0) ||
@@ -550,6 +552,25 @@ Writer& Authority() {
   return authority;
 }
 
+bool StopInstallation(Writer& authority, const std::array<uint8_t, 16>& installation) {
+  auto at = authority.installations.find(installation);
+  if (at == authority.installations.end()) return true;
+  HANDLE job = at->second.get();
+  if (!TerminateJobObject(job, 137)) return false;
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  for (;;) {
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION usage{};
+    if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &usage,
+                                   sizeof(usage), nullptr)) return false;
+    if (usage.ActiveProcesses == 0) {
+      authority.installations.erase(at);
+      return true;
+    }
+    if (GetTickCount64() >= deadline) return false;
+    Sleep(2);
+  }
+}
+
 }  // namespace
 
 bool HasProtectedLaunchAuthority() {
@@ -577,12 +598,25 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
                        &query_broker, kPinRights, FALSE, 0)) return -ERROR_ACCESS_DENIED;
   peer::OwnedHandle app_broker(query_broker);
   const BootstrapHandles app_handles{launch::Endpoint::kApplication, nullptr, app_broker.get()};
+  auto job = authority.installations.find(installation);
+  if (job == authority.installations.end()) {
+    peer::OwnedHandle created(CreateLifetimeJob());
+    if (!created) return -static_cast<int>(GetLastError());
+    job = authority.installations.emplace(installation, std::move(created)).first;
+  }
   bool channel_failed = false;
   const Enrollment enrollment{authority.channel.get(), authority.broker.get(),
                               peer::Role::kApplication, uid, installation, &channel_failed};
-  int pid = SpawnImpl(command_line, set, unset, log_path, false, &sandbox, &app_handles, &enrollment);
+  int pid = SpawnImpl(command_line, set, unset, log_path, false, &sandbox, &app_handles,
+                      &enrollment, job->second.get());
   if (channel_failed) authority = {};
   return pid;
+}
+
+bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation) {
+  std::lock_guard<std::mutex> lock(g_bootstrap_lock);
+  auto& authority = Authority();
+  return authority.channel && authority.broker && StopInstallation(authority, installation);
 }
 
 bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bool revoke) {
@@ -597,6 +631,11 @@ bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bo
   bool channel_failed = false;
   bool accepted = SubmitLaunchRequest(authority.channel.get(), request, &channel_failed);
   if (channel_failed) authority = {};
+  if (accepted && revoke && !StopInstallation(authority, installation)) {
+    // A broken sandbox lifetime cannot safely keep serving the old install.
+    authority = {};
+    return false;
+  }
   return accepted;
 }
 

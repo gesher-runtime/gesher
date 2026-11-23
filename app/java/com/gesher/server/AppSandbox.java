@@ -55,6 +55,13 @@ final class AppSandbox {
         return containerName(canonical(new File(Device.dataDir())).getPath(), packageName);
     }
 
+    static String installationContainer(ApkPackage pkg) {
+        if (!enabled()) return null;
+        if (!SystemServer.isProtectedDevice()) return containerName(pkg.packageName);
+        String owner = java.util.UUID.fromString(pkg.enabledStateOwner()).toString();
+        return containerName(pkg.packageName + "\0" + owner);
+    }
+
     /**
      * The canonical form, as the installer builds code directories (a {@code /mnt/<drive>}
      * path or an 8.3 short name names the same directory); the absolute one if the
@@ -100,7 +107,7 @@ final class AppSandbox {
      */
     static int spawn(String commandLine, List<String> env, File logFile, ApkPackage pkg,
             String packageName, boolean internet) {
-        String container = containerName(packageName);
+        String container = installationContainer(pkg);
         int error = Zygote.nativeEnsureAppContainer(container, packageName);
         if (error != 0) {
             throw new IllegalStateException("AppContainer profile " + container + " for "
@@ -159,9 +166,8 @@ final class AppSandbox {
     }
 
     /** The package is uninstalled: its container's profile goes with it. */
-    static void deleteContainer(String packageName) {
-        if (!enabled()) return;
-        String container = containerName(packageName);
+    static void deleteContainer(String packageName, String container) {
+        if (container == null) return;
         int error = Zygote.nativeDeleteAppContainer(container);
         if (error != 0) {
             SystemServer.log("sandbox: deleting AppContainer " + container + " of "

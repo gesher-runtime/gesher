@@ -3847,7 +3847,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     void forceStopPackage(String packageName) {
         List<ProcessRecord> stop = new ArrayList<>();
+        ApkPackage installation;
         synchronized (this) {
+            installation = SystemServer.isProtectedDevice() ? mPm.get(packageName) : null;
             Set<Integer> affectedTasks = new HashSet<>();
             // Force stop removes transient grants both from and to the package,
             // including ownerless grants and packages with no live process.
@@ -3891,6 +3893,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         // Also cancel sticky-service restarts when the old process has died.
         if (mAm != null) mAm.stopServicesForPackage(packageName);
+        if (installation != null) Zygote.stopProtectedInstallation(installation);
         if (stop.isEmpty()) return;
         SystemServer.log("force-stopping " + packageName);
         endProcesses(stop, 5000);

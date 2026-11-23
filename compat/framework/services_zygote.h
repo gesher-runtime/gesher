@@ -50,6 +50,7 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
     const std::vector<std::u16string>& unset, const std::u16string& log_path,
     const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation);
 bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bool revoke);
+bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation);
 bool HasProtectedLaunchAuthority();
 bool PrepareProtectedOperator(int broker_pid, uint64_t birth);
 

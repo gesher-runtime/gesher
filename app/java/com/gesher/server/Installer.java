@@ -781,6 +781,7 @@ final class Installer {
         if (e == null) return false;
         ApkPackage target = mPm.get(packageName);
         if (!ordinaryInstalled(target)) throw new SecurityException("System or nonpersistent package");
+        String container = AppSandbox.installationContainer(target);
         PackageRemovalStorage quarantine = new PackageRemovalStorage(packageName, e.codePath);
         mPm.beginPackageRemoval(target);
         mRemovalActive = true;
@@ -837,7 +838,7 @@ final class Installer {
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);
-        AppSandbox.deleteContainer(packageName);
+        AppSandbox.deleteContainer(packageName, container);
         mPm.packageRemoved(target, this);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;

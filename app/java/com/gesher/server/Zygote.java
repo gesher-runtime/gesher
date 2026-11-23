@@ -39,6 +39,7 @@ public final class Zygote {
             String[] capabilities, int uid, long installHigh, long installLow);
     private static native boolean nativeChangeProtectedInstallation(long installHigh,
             long installLow, boolean revoke);
+    private static native boolean nativeStopProtectedInstallation(long installHigh, long installLow);
     static native int nativeEnsureAppContainer(String container, String displayName);
     static native int nativeGrantToAppContainer(String path, String container, int access,
             boolean inherit);
@@ -143,6 +144,15 @@ public final class Zygote {
         UUID owner = UUID.fromString(pkg.enabledStateOwner());
         return nativeChangeProtectedInstallation(owner.getMostSignificantBits(),
                 owner.getLeastSignificantBits(), revoke);
+    }
+
+    static void stopProtectedInstallation(ApkPackage pkg) {
+        UUID owner = UUID.fromString(pkg.enabledStateOwner());
+        if (!nativeStopProtectedInstallation(owner.getMostSignificantBits(),
+                owner.getLeastSignificantBits())) {
+            throw new IllegalStateException("Could not stop contained processes for "
+                    + pkg.packageName);
+        }
     }
 
     /** The process's creation time, 0 when it does not run. */

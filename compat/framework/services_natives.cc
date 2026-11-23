@@ -225,6 +225,10 @@ static jboolean Zygote_changeProtectedInstallation(JNIEnv*, jclass, jlong high, 
                                                         revoke == JNI_TRUE);
 }
 
+static jboolean Zygote_stopProtectedInstallation(JNIEnv*, jclass, jlong high, jlong low) {
+    return gesher::zygote::StopProtectedInstallation(ZygoteInstallation(high, low));
+}
+
 static jint Zygote_ensureAppContainer(JNIEnv* env, jclass, jstring name, jstring displayName) {
     return static_cast<jint>(gesher::zygote::EnsureAppContainer(ZygoteString(env, name),
                                                                 ZygoteString(env, displayName)));
@@ -347,6 +351,7 @@ static const JNINativeMethod gZygoteMethods[] = {
      "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;IJJ)I",
      GESHER_JNI(Zygote_spawnProtectedApp)},
     {"nativeChangeProtectedInstallation", "(JJZ)Z", GESHER_JNI(Zygote_changeProtectedInstallation)},
+    {"nativeStopProtectedInstallation", "(JJ)Z", GESHER_JNI(Zygote_stopProtectedInstallation)},
     {"nativeEnsureAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_ensureAppContainer)},
     {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
