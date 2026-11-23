@@ -399,7 +399,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # is checked against historical main bytes; the socket ownership and poll
 # checks still compare live code.
 USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
-USB_BLOCK_TRANSITION_SHA256 = '57405da0f6f263a1bbc51c687073ea09f3430d5ddbf1f4b28bab2dd1ff9033cf'
+USB_BLOCK_TRANSITION_SHA256 = '3fa0c779715e291564becbd71d16784969db61c957f24d86ca0e67c9e908724d'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/elf/exec/exec_spawn.cc',
  'compat/elf/exec/gesher_shell.cc',
