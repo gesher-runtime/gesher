@@ -51,6 +51,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     // result objects remain the responsibility of each resolution under this monitor.
     private ProviderAuthorityIndex mProviderAuthorityIndex;
     private IntentPackageIndex mIntentPackageIndex;
+    private VisibilitySnapshot mVisibilitySnapshot; // guarded by this; metadata, never decisions
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
@@ -82,6 +83,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                 || mRemoving.containsKey(original.packageName)) throw new SecurityException("Package removal already pending or changed");
         Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
         next.put(original.packageName, original); mRemoving = next;
+        mVisibilitySnapshot = null;
     }
     void endPackageRemoval(ApkPackage original) {
         boolean restored;
@@ -89,6 +91,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             if (mRemoving.get(original.packageName) != original) return;
             Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
             next.remove(original.packageName); mRemoving = next;
+            mVisibilitySnapshot = null;
             restored = mPermissions.finishPackageRemoval(original);
         }
         if (restored) mPermissions.packageRemovalRestored(original);
@@ -99,6 +102,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         synchronized (this) {
             List<ApkPackage> previous = new ArrayList<>(mRemoving.values());
             mRemoving = new LinkedHashMap<>();
+            mVisibilitySnapshot = null;
             for (ApkPackage original : previous) {
                 if (mPermissions.finishPackageRemoval(original)) restored.add(original);
             }
@@ -370,6 +374,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         // permission query follows.
         mProviderAuthorityIndex = null;
         mIntentPackageIndex = null;
+        mVisibilitySnapshot = null;
         mPermissions.invalidatePackageIndex();
     }
 
@@ -636,12 +641,9 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** Visibility to an installed service, from the already authenticated caller's package. */
     synchronized boolean canSeeInstalledPackage(String source, String target) {
-        Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
-        for (String removing : mRemoving.keySet()) packages.remove(removing);
-        ApkPackage caller = packages.get(source);
+        PackageVisibility visibility = packageVisibility(false);
+        ApkPackage caller = visibility.apk(source);
         if (caller == null) return false;
-        PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
-                this::isProtectedBroadcast);
         // Package admission assigns isolated or authenticated shared identities
         // in both signature-spoofing modes.
         return visibility.canSee(caller.uid(), target);
@@ -1291,22 +1293,62 @@ public final class PackageManagerService extends IPackageManager.Default {
         return visible ? visibility.apk(packageName) : null;
     }
 
-    private PackageVisibility packageVisibility() {
-        Map<String, ApkPackage> packages;
-        boolean browser, gms, vending;
-        synchronized (this) {
-            packages = new LinkedHashMap<>(mPackages);
-            for (String removing : mRemoving.keySet()) packages.remove(removing);
-            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
-                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
-            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
-            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
-                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+    private static final class VisibilitySnapshot {
+        final Map<String, ApkPackage> packages, removing, visible;
+        PackageVisibility publicPackages, installedPackages;
+
+        VisibilitySnapshot(Map<String, ApkPackage> packages, Map<String, ApkPackage> removing) {
+            this.packages = packages;
+            this.removing = removing;
+            if (removing.isEmpty()) visible = packages;
+            else {
+                visible = new LinkedHashMap<>(packages);
+                for (String name : removing.keySet()) visible.remove(name);
+            }
         }
-        return new PackageVisibility(packages, browser, gms, vending,
+    }
+
+    private PackageVisibility packageVisibility() { return packageVisibility(true); }
+
+    /** Reuse admitted metadata only; installer attribution and resource policy stay live. */
+    private PackageVisibility packageVisibility(boolean includeHostDefinitions) {
+        VisibilitySnapshot snapshot;
+        synchronized (this) {
+            snapshot = mVisibilitySnapshot;
+            if (snapshot == null || snapshot.packages != mPackages || snapshot.removing != mRemoving) {
+                mVisibilitySnapshot = snapshot = new VisibilitySnapshot(mPackages, mRemoving);
+            }
+            PackageVisibility cached = includeHostDefinitions
+                    ? snapshot.publicPackages : snapshot.installedPackages;
+            if (cached != null) return cached;
+        }
+        // Keep construction outside this method's monitor as before: the existing
+        // synthetic GMS definition can probe its code path. Callers that already
+        // hold the package monitor retain their original locking behavior.
+        boolean browser = includeHostDefinitions
+                && !snapshot.packages.containsKey(BrowserPackageSupport.PACKAGE)
+                && !snapshot.removing.containsKey(BrowserPackageSupport.PACKAGE);
+        boolean gms = includeHostDefinitions
+                && !snapshot.packages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                && !snapshot.removing.containsKey(GmsPackageSupport.PACKAGE_GMS);
+        boolean vending = includeHostDefinitions
+                && !snapshot.packages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
+                && !snapshot.packages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                && !snapshot.removing.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+        PackageVisibility visibility = new PackageVisibility(snapshot.visible, browser, gms, vending,
                 this::isProtectedBroadcast);
+        synchronized (this) {
+            // A concurrent publication may retire this snapshot during construction.
+            // The captured query stays coherent, but must not retain retired metadata.
+            if (mVisibilitySnapshot == snapshot) {
+                PackageVisibility existing = includeHostDefinitions
+                        ? snapshot.publicPackages : snapshot.installedPackages;
+                if (existing != null) return existing;
+                if (includeHostDefinitions) snapshot.publicPackages = visibility;
+                else snapshot.installedPackages = visibility;
+            }
+        }
+        return visibility;
     }
 
     @Override

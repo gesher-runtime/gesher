@@ -9,6 +9,7 @@ import android.content.pm.InstallSourceInfo;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import android.content.res.Resources;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.IBinder;
@@ -32,12 +33,17 @@ import com.gesher.server.PackageUids;
 import com.gesher.server.StandIn;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import sun.misc.Unsafe;
 
 /** Real PMS/static manifest rules and public manager, with controlled caller identity. */
@@ -75,10 +81,13 @@ public final class PackageVisibilityContractTest {
         result.setTargetSdkVersion(36); result.setEnabled(true); return result;
     }
     private static ApkPackage record(PackageImpl parsed) throws Exception {
+        return record(parsed, PackageUids.uidFor(parsed.getPackageName()));
+    }
+    private static ApkPackage record(PackageImpl parsed, int uid) throws Exception {
         parsed.hideAsFinal();
         ApkPackage result = (ApkPackage)UNSAFE.allocateInstance(ApkPackage.class);
         set(result, "packageName", parsed.getPackageName()); set(result, "parsed", parsed);
-        set(result, "mUid", PackageUids.uidFor(parsed.getPackageName()));
+        set(result, "mUid", uid);
         return result;
     }
     private static ParsedIntentInfoImpl filter(String action) {
@@ -395,11 +404,273 @@ public final class PackageVisibilityContractTest {
         PackageImpl all = parsed(A); permission(all, Manifest.permission.QUERY_ALL_PACKAGES);
         check(serviceQuery(service(record(all), b), A, B), "QUERY_ALL_PACKAGES lost provider visibility");
     }
+
+    private static Method method(Class<?> type, String name, Class<?>... parameters) throws Exception {
+        Method result = type.getDeclaredMethod(name, parameters); result.setAccessible(true); return result;
+    }
+    private static Object invoke(Method method, Object owner, Object... arguments) throws Exception {
+        try { return method.invoke(owner, arguments); }
+        catch (InvocationTargetException failure) {
+            if (failure.getCause() instanceof Exception exception) throw exception;
+            if (failure.getCause() instanceof Error error) throw error;
+            throw failure;
+        }
+    }
+    private static void publish(PackageManagerService pm, Map<String, ApkPackage> packages) throws Exception {
+        synchronized (pm) { invoke(method(PackageManagerService.class, "publishPackages", Map.class), pm, packages); }
+    }
+
+    private static void snapshotLifetimes() throws Exception {
+        ApkPackage source = record(parsed(A)), target = record(parsed(B));
+        PackageImpl queries = parsed(C); queries.addQueriesPackage(B);
+        ApkPackage sibling = record(queries, source.uid());
+        PackageManagerService pm = service(source, target, sibling);
+        PackageManager manager = client(pm);
+        check(manager.canPackageQuery(A, B) && serviceQuery(pm, A, B), "Shared source edge missing");
+        Object snapshot = get(pm, "mVisibilitySnapshot");
+        check(get(snapshot, "publicPackages") != get(snapshot, "installedPackages"),
+                "Public and installed-only definition sets were conflated");
+        for (int i = 0; i < 20; i++) {
+            check(manager.canPackageQuery(A, B) && serviceQuery(pm, A, B), "Snapshot changed a repeated result");
+            check(get(pm, "mVisibilitySnapshot") == snapshot, "Unchanged package state rebuilt visibility");
+        }
+        Method begin = method(PackageManagerService.class, "beginPackageRemoval", ApkPackage.class);
+        Method end = method(PackageManagerService.class, "endPackageRemoval", ApkPackage.class);
+        invoke(begin, pm, sibling);
+        check(get(pm, "mVisibilitySnapshot") == null, "Removal retained a metadata snapshot before another query");
+        check(!manager.canPackageQuery(A, B) && !serviceQuery(pm, A, B), "Pending shared-UID removal retained its edge");
+        invoke(end, pm, sibling);
+        check(get(pm, "mVisibilitySnapshot") == null, "Removal rollback retained the removal snapshot");
+        check(manager.canPackageQuery(A, B) && serviceQuery(pm, A, B), "Removal rollback failed to restore the edge");
+        invoke(begin, pm, sibling);
+        check(!manager.canPackageQuery(A, B), "Second pending removal retained its edge");
+        invoke(method(PackageManagerService.class, "recoveredPackageRemovals"), pm);
+        check(get(pm, "mVisibilitySnapshot") == null, "Recovery retained pending-removal metadata");
+        check(manager.canPackageQuery(A, B) && serviceQuery(pm, A, B), "Recovery failed to restore the edge");
+        ApkPackage replacement = record(parsed(C), source.uid());
+        publish(pm, Map.of(A, source, B, target, C, replacement));
+        check(get(pm, "mVisibilitySnapshot") == null, "Publication retained retired code before another query");
+        check(!manager.canPackageQuery(A, B) && !serviceQuery(pm, A, B), "Replacement kept old manifest edges");
+        publish(pm, Map.of(A, source, B, target, C, record(queries, target.uid())));
+        check(!manager.canPackageQuery(A, B), "Old source app-ID membership survived a new generation");
+
+        // Installer attribution changes independently of package publication.
+        String generation = "3a5fd731-5016-4a62-b846-501288778d86";
+        set(target, "mEnabledOwner", generation);
+        Class<?> attribution = Class.forName("com.gesher.server.PackageInstallSource");
+        Object installedBy = invoke(method(attribution, "decode", String.class), null, B + "," + generation + ",2");
+        snapshot = get(pm, "mVisibilitySnapshot");
+        Method installSource = method(ApkPackage.class, "setInstallSource", attribution);
+        invoke(installSource, source, installedBy);
+        check(manager.canPackageQuery(A, B) && serviceQuery(pm, A, B), "Cached metadata hid fresh installer attribution");
+        check(get(pm, "mVisibilitySnapshot") == snapshot, "Attribution test unexpectedly rebuilt metadata");
+        invoke(installSource, source, (Object)null);
+        check(!manager.canPackageQuery(A, B) && !serviceQuery(pm, A, B), "Cleared installer attribution stayed visible");
+
+        PackageImpl hostQueries = parsed(A); hostQueries.addQueriesPackage("com.gesher.browser");
+        PackageManagerService hosts = service(record(hostQueries));
+        check(query(hosts, A, "com.gesher.browser") && !serviceQuery(hosts, A, "com.gesher.browser"),
+                "Installed-only lookup acquired a public host definition");
+        hosts = service(record(hostQueries));
+        check(!serviceQuery(hosts, A, "com.gesher.browser") && query(hosts, A, "com.gesher.browser"),
+                "Installed-only cache hid a later public host definition");
+
+        PackageImpl receiver = parsed(B); receiver.addReceiver(activity("Receiver", true, filter(ACTION)));
+        PackageImpl observing = parsed(A); observing.addQueriesIntent(new Intent(ACTION));
+        ApkPackage observer = record(observing), unprotected = record(receiver);
+        PackageManagerService broadcasts = service(observer, unprotected);
+        check(query(broadcasts, A, B), "Receiver edge missing before protected-broadcast publication");
+        PackageImpl protectedReceiver = parsed(B);
+        protectedReceiver.addReceiver(activity("Receiver", true, filter(ACTION)));
+        protectedReceiver.addProtectedBroadcast(ACTION);
+        publish(broadcasts, Map.of(A, observer, B, record(protectedReceiver, unprotected.uid())));
+        check(!query(broadcasts, A, B), "Publication retained stale protected-broadcast metadata");
+        publish(broadcasts, Map.of(A, observer, B, unprotected));
+        check(query(broadcasts, A, B), "Retired protected broadcast remained in the snapshot");
+    }
+
+    /** Only the resource catalog boundary is controlled; the actual force-queryable rule runs. */
+    private static final class VisibilityResources extends Resources {
+        boolean all;
+        String[] names;
+        VisibilityResources() { super(null, null, null); }
+        @Override public boolean getBoolean(int id) {
+            if (id != com.android.internal.R.bool.config_forceSystemPackagesQueryable) throw new AssertionError(id);
+            return all;
+        }
+        @Override public String[] getStringArray(int id) {
+            if (id != com.android.internal.R.array.config_forceQueryablePackages) throw new AssertionError(id);
+            return names;
+        }
+    }
+    private static void liveResourcePolicy() throws Exception {
+        ApkPackage source = record(parsed(A)), target = record(parsed(B));
+        set(target, "mSystemAddon", true);
+        PackageManagerService pm = service(source, target);
+        Field system = Resources.class.getDeclaredField("mSystem"); system.setAccessible(true);
+        Object original = system.get(null);
+        VisibilityResources resources = (VisibilityResources)UNSAFE.allocateInstance(VisibilityResources.class);
+        resources.names = new String[0];
+        try {
+            system.set(null, resources);
+            check(!query(pm, A, B), "Unconfigured system addon became queryable");
+            Object snapshot = get(pm, "mVisibilitySnapshot");
+            resources.all = true;
+            check(query(pm, A, B), "Live force-all resource was cached as a denial");
+            resources.all = false; resources.names = new String[]{B};
+            check(query(pm, A, B), "Live named force-queryable resource was ignored");
+            resources.names = new String[0];
+            check(!query(pm, A, B), "Retired resource grant was cached");
+            check(get(pm, "mVisibilitySnapshot") == snapshot, "Resource test unexpectedly rebuilt metadata");
+        } finally { system.set(null, original); }
+    }
+
+    private static void concurrentPublication() throws Exception {
+        PackageImpl first = parsed(A); first.addQueriesPackage(B);
+        PackageImpl second = parsed(A); second.addQueriesPackage(C);
+        ApkPackage a = record(first), b = record(parsed(B)), c = record(parsed(C));
+        ApkPackage replacement = record(second, a.uid());
+        PackageManagerService pm = service(a, b, c);
+        Map<String, ApkPackage> before = Map.of(A, a, B, b, C, c);
+        Map<String, ApkPackage> after = Map.of(A, replacement, B, b, C, c);
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread writer = new Thread(() -> {
+            try { start.await(); for (int i = 0; i < 400; i++) publish(pm, (i & 1) == 0 ? before : after); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        writer.start(); start.countDown();
+        PackageManager manager = client(pm);
+        for (int i = 0; i < 400; i++) {
+            boolean[] result = manager.canPackageQuery(A, new String[]{B, C});
+            check(result.length == 2 && result[0] != result[1], "One query mixed package generations");
+        }
+        writer.join(10_000);
+        check(!writer.isAlive() && failure.get() == null, "Concurrent publication failed: " + failure.get());
+    }
+
+    private static final class BlockingPackage extends PackageImpl {
+        final CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        PackageManagerService owner;
+        volatile boolean block;
+        BlockingPackage(String name) { super(name, "/fixture/base.apk", "/fixture/base.apk", null, false, null); }
+        @Override public List<String> getProtectedBroadcasts() {
+            if (block) {
+                if (Thread.holdsLock(owner)) throw new AssertionError("Public visibility construction held PMS monitor");
+                entered.countDown();
+                try {
+                    if (!release.await(10, TimeUnit.SECONDS)) throw new AssertionError("Publication fixture timed out");
+                } catch (InterruptedException failure) { throw new AssertionError(failure); }
+            }
+            return super.getProtectedBroadcasts();
+        }
+    }
+    private static void publicationDuringConstruction() throws Exception {
+        BlockingPackage original = new BlockingPackage(A);
+        original.setTargetSdkVersion(36); original.addQueriesPackage(B);
+        ApkPackage a = record(original), b = record(parsed(B));
+        PackageManagerService pm = service(a, b);
+        ApkPackage replacement = record(parsed(A), a.uid());
+        PackageManager manager = client(pm);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicReference<Boolean> result = new AtomicReference<>();
+        CountDownLatch published = new CountDownLatch(1);
+        original.owner = pm; original.block = true;
+        Thread reader = new Thread(() -> {
+            try { as(android.os.Process.SYSTEM_UID, () -> result.set(manager.canPackageQuery(A, B))); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        Thread writer = new Thread(() -> {
+            try { publish(pm, Map.of(A, replacement, B, b)); published.countDown(); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        reader.start();
+        try {
+            check(original.entered.await(5, TimeUnit.SECONDS), "Reader never entered snapshot construction: " + failure.get());
+            writer.start();
+            check(published.await(5, TimeUnit.SECONDS), "Snapshot construction blocked package publication");
+            check(get(pm, "mVisibilitySnapshot") == null, "Publication retained in-flight snapshot metadata");
+        } finally {
+            original.block = false; original.release.countDown();
+            reader.join(10_000); if (writer.getState() != Thread.State.NEW) writer.join(10_000);
+        }
+        check(!reader.isAlive() && !writer.isAlive() && failure.get() == null && Boolean.TRUE.equals(result.get()),
+                "Captured query lost coherent old-generation behavior: " + failure.get());
+        check(!manager.canPackageQuery(A, B), "A stale construction was published after its generation retired");
+    }
+
+    private static long metadataReads;
+    private static final class CountedPackage extends PackageImpl {
+        CountedPackage(String name) { super(name, "/fixture/base.apk", "/fixture/base.apk", null, false, null); }
+        @Override public int getTargetSdkVersion() { metadataReads++; return super.getTargetSdkVersion(); }
+        @Override public List<String> getProtectedBroadcasts() { metadataReads++; return super.getProtectedBroadcasts(); }
+    }
+
+    /** Complete public queries over constructed admitted metadata; no matcher is replaced. */
+    public static final class Workload {
+        final PackageManagerService pm;
+        final PackageManager manager;
+        final Map<String, ApkPackage> installed = new LinkedHashMap<>();
+        final Method publish = method(PackageManagerService.class, "publishPackages", Map.class);
+        final String source = "fixture.visibility.work.0";
+        final String[] targets;
+        public final int expectedVisible;
+        final boolean cold;
+        public Workload(int count, String kind, boolean counted) throws Exception {
+            if (count < 2) throw new IllegalArgumentException("At least two package records are required");
+            cold = kind.equals("cold");
+            boolean bulk = kind.equals("bulk"), hidden = kind.equals("hidden") || kind.equals("groups");
+            targets = new String[bulk ? count - 1 : 1];
+            for (int i = 0; i < count; i++) {
+                String name = "fixture.visibility.work." + i;
+                PackageImpl parsed = counted ? new CountedPackage(name) : parsed(name);
+                parsed.setTargetSdkVersion(36); parsed.setEnabled(true);
+                if (i == 0 && !hidden) {
+                    if (bulk) permission(parsed, Manifest.permission.QUERY_ALL_PACKAGES);
+                    else parsed.addQueriesPackage("fixture.visibility.work." + (count - 1));
+                }
+                int uid = kind.equals("groups") ? 20_000 + (i < count / 2 ? 0 : 1) : 20_000 + i;
+                installed.put(name, record(parsed, uid));
+                if (bulk && i != 0) targets[i - 1] = name;
+            }
+            if (!bulk) targets[0] = "fixture.visibility.work." + (count - 1);
+            expectedVisible = hidden ? 0 : targets.length;
+            pm = service(installed.values().toArray(new ApkPackage[0]));
+            manager = client(pm);
+        }
+        public void run(int iterations) throws Exception {
+            long visible = 0;
+            for (int i = 0; i < iterations; i++) {
+                if (cold) synchronized (pm) { invoke(publish, pm, installed); }
+                boolean[] result = manager.canPackageQuery(source, targets);
+                if (result.length != targets.length) throw new AssertionError("Query lost positional results");
+                for (boolean value : result) if (value) visible++;
+            }
+            if (visible != (long)iterations * expectedVisible) throw new AssertionError("Query changed visible results");
+        }
+    }
+    private static void workContracts() throws Exception {
+        for (int count : new int[]{2, 50, 500}) {
+            Workload workload = new Workload(count, "selective", true);
+            metadataReads = 0; workload.run(1);
+            long cold = metadataReads;
+            metadataReads = 0; workload.run(64);
+            check(cold >= count * 2 && metadataReads == 0,
+                    "Repeated query re-read unrelated admitted metadata: " + metadataReads);
+            System.out.println("VISIBILITY_WORK packages=" + count + " queries=64 cold_metadata_reads="
+                    + cold + " warm_metadata_reads=" + metadataReads);
+        }
+    }
+    public static int verifyWork() throws Exception {
+        art = false; checks = 0; workContracts(); return checks;
+    }
     public static int run(boolean onArt) throws Exception {
         art = onArt; checks = 0; shapesAndCallers();
         installSourceVisibility();
         authenticatedServiceVisibility();
         declarations(); components();
+        snapshotLifetimes(); liveResourcePolicy(); concurrentPublication(); publicationDuringConstruction();
+        if (!art) workContracts();
         return checks;
     }
     public static void main(String[] args) throws Exception {

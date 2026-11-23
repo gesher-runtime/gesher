@@ -1,0 +1,1021 @@
+{
+  "baseline_commit": "df3aff782e2d411aad2d07ca39f0b21ee2ddbfe2",
+  "candidate_source_sha256": {
+    "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+    "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+  },
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "runtime": "Eclipse Temurin 21.0.13.1+2, -Xbatch -Xmx256m",
+  "measurement": "complete ApplicationPackageManager.canPackageQuery through production PMS and PackageVisibility; constructed admitted package metadata and existing JNI identity/resource boundaries; no counted metadata getters in timed runs; 7 samples per JVM; 2 JVMs per source; before/after/after/before order",
+  "warmup": "max(100, iterations * 2) complete public queries",
+  "workloads": {
+    "cold_4096": {
+      "before": {
+        "runs": [
+          {
+            "kind": "cold",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              537608177,
+              448608468,
+              467908869,
+              524284649,
+              586148360,
+              434773013,
+              431803725
+            ],
+            "cpu_ns": [
+              520906098,
+              441696113,
+              457187050,
+              445888215,
+              552226898,
+              428969314,
+              426412538
+            ],
+            "allocated_bytes": [
+              559457496,
+              559456000,
+              559456000,
+              559436248,
+              559392000,
+              559392000,
+              559392000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          },
+          {
+            "kind": "cold",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              513052897,
+              475816325,
+              452971799,
+              478840142,
+              413296702,
+              411328280,
+              420297677
+            ],
+            "cpu_ns": [
+              494061730,
+              470116973,
+              438140723,
+              399790747,
+              407469458,
+              403000582,
+              413550314
+            ],
+            "allocated_bytes": [
+              559457496,
+              559456000,
+              559456000,
+              559436248,
+              559392000,
+              559392000,
+              559392000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 460440334.0,
+          "cpu_ns": 439918418.0,
+          "allocated_bytes": 559436248.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "cold",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              374900950,
+              387744315,
+              313531618,
+              385415322,
+              330745791,
+              310519253,
+              326462219
+            ],
+            "cpu_ns": [
+              363877391,
+              353846363,
+              307460765,
+              308054793,
+              319511178,
+              304506582,
+              320387579
+            ],
+            "allocated_bytes": [
+              559377496,
+              559376000,
+              559376000,
+              559396184,
+              559376000,
+              559376000,
+              559376000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          },
+          {
+            "kind": "cold",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              356415048,
+              333986381,
+              313288954,
+              365515207,
+              311045354,
+              260239331,
+              258399603
+            ],
+            "cpu_ns": [
+              344413781,
+              324647545,
+              307623913,
+              298988347,
+              297903364,
+              254779530,
+              253013317
+            ],
+            "allocated_bytes": [
+              559377496,
+              559376000,
+              559376000,
+              559396184,
+              559376000,
+              559376000,
+              559376000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 328604005.0,
+          "cpu_ns": 307839353.0,
+          "allocated_bytes": 559376000.0
+        }
+      }
+    },
+    "selective_4096": {
+      "before": {
+        "runs": [
+          {
+            "kind": "selective",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              454748132,
+              526262010,
+              484067958,
+              514187845,
+              495319001,
+              499682653,
+              424623617
+            ],
+            "cpu_ns": [
+              444795715,
+              511762170,
+              471968645,
+              445647692,
+              478893308,
+              481533004,
+              418675541
+            ],
+            "allocated_bytes": [
+              559433496,
+              559432000,
+              559432000,
+              559399296,
+              559368000,
+              559368000,
+              559368000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          },
+          {
+            "kind": "selective",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              496457312,
+              473987536,
+              489717057,
+              547491083,
+              459952975,
+              467193640,
+              454352343
+            ],
+            "cpu_ns": [
+              481270116,
+              467429144,
+              473301379,
+              464278528,
+              453861974,
+              461165937,
+              442508948
+            ],
+            "allocated_bytes": [
+              559433496,
+              559432000,
+              559432000,
+              559399296,
+              559368000,
+              559368000,
+              559368000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 486892507.5,
+          "cpu_ns": 465853836.0,
+          "allocated_bytes": 559399296.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "selective",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              3292302,
+              2144476,
+              148096,
+              36873575,
+              99922,
+              99913,
+              104236
+            ],
+            "cpu_ns": [
+              307926,
+              346603,
+              148684,
+              563056,
+              100622,
+              100470,
+              104802
+            ],
+            "allocated_bytes": [
+              56904,
+              56000,
+              56000,
+              63296,
+              56000,
+              56000,
+              56000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          },
+          {
+            "kind": "selective",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              2773246,
+              1739895,
+              148746,
+              38629157,
+              99651,
+              99736,
+              103072
+            ],
+            "cpu_ns": [
+              330900,
+              222647,
+              149955,
+              648996,
+              100323,
+              100284,
+              103614
+            ],
+            "allocated_bytes": [
+              56904,
+              56000,
+              56000,
+              63296,
+              56000,
+              56000,
+              56000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 148421.0,
+          "cpu_ns": 149319.5,
+          "allocated_bytes": 56000.0
+        }
+      }
+    },
+    "bulk_4096": {
+      "before": {
+        "runs": [
+          {
+            "kind": "bulk",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 4095,
+            "wall_ns": [
+              604926779,
+              598094052,
+              609733605,
+              625218310,
+              543071087,
+              559058582,
+              597299936
+            ],
+            "cpu_ns": [
+              563089497,
+              590702650,
+              601687682,
+              596558411,
+              537406026,
+              554081400,
+              589413327
+            ],
+            "allocated_bytes": [
+              564186536,
+              563784000,
+              563784000,
+              563777336,
+              563768000,
+              563768000,
+              563768000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          },
+          {
+            "kind": "bulk",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 4095,
+            "wall_ns": [
+              540731253,
+              480718746,
+              526625246,
+              636202861,
+              733583795,
+              574286912,
+              607008245
+            ],
+            "cpu_ns": [
+              481939765,
+              474455333,
+              516786580,
+              596238904,
+              723763969,
+              566742318,
+              598639653
+            ],
+            "allocated_bytes": [
+              564186536,
+              563784000,
+              563784000,
+              563777336,
+              563768000,
+              563768000,
+              563768000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 597696994.0,
+          "cpu_ns": 578077822.5,
+          "allocated_bytes": 563777336.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "bulk",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 4095,
+            "wall_ns": [
+              110959206,
+              95035883,
+              91940767,
+              98358618,
+              93066756,
+              90171961,
+              92008038
+            ],
+            "cpu_ns": [
+              103702478,
+              95034128,
+              90779217,
+              93662038,
+              91568376,
+              90182500,
+              90713627
+            ],
+            "allocated_bytes": [
+              69632152,
+              69632000,
+              69632000,
+              69635176,
+              69632000,
+              69632000,
+              69632000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          },
+          {
+            "kind": "bulk",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 4095,
+            "wall_ns": [
+              156482395,
+              107535965,
+              111638355,
+              109676028,
+              140361587,
+              108336191,
+              115592940
+            ],
+            "cpu_ns": [
+              148096799,
+              107551336,
+              110313575,
+              106656578,
+              138199443,
+              108349282,
+              113615909
+            ],
+            "allocated_bytes": [
+              69632152,
+              69632000,
+              69632000,
+              69635176,
+              69632000,
+              69632000,
+              69632000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 107936078.0,
+          "cpu_ns": 105179528.0,
+          "allocated_bytes": 69632000.0
+        }
+      }
+    },
+    "groups_256": {
+      "before": {
+        "runs": [
+          {
+            "kind": "groups",
+            "packages": 256,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              165897110,
+              190297885,
+              165771806,
+              225439768,
+              169492584,
+              168190156,
+              167228880
+            ],
+            "cpu_ns": [
+              164311663,
+              190308149,
+              159711148,
+              165241245,
+              167652001,
+              168104449,
+              165366922
+            ],
+            "allocated_bytes": [
+              39088744,
+              39088000,
+              39088000,
+              39055296,
+              39024000,
+              39024000,
+              39024000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          },
+          {
+            "kind": "groups",
+            "packages": 256,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              154202082,
+              160701530,
+              158522156,
+              202869513,
+              144733749,
+              140500169,
+              163722898
+            ],
+            "cpu_ns": [
+              152670192,
+              160711136,
+              156351298,
+              147628468,
+              143047982,
+              140486998,
+              158714540
+            ],
+            "allocated_bytes": [
+              39088744,
+              39088000,
+              39088000,
+              39055296,
+              39024000,
+              39024000,
+              39024000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 165834458.0,
+          "cpu_ns": 160211142.0,
+          "allocated_bytes": 39055296.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "groups",
+            "packages": 256,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              114564919,
+              119242040,
+              111336334,
+              235814561,
+              111258675,
+              120339769,
+              108034926
+            ],
+            "cpu_ns": [
+              110939381,
+              119254882,
+              111341039,
+              110309935,
+              111270514,
+              116236329,
+              108042442
+            ],
+            "allocated_bytes": [
+              56152,
+              56000,
+              56000,
+              63296,
+              56000,
+              56000,
+              56000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          },
+          {
+            "kind": "groups",
+            "packages": 256,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              126254824,
+              120761010,
+              123490712,
+              288493122,
+              123813860,
+              130614312,
+              124829616
+            ],
+            "cpu_ns": [
+              121970460,
+              120773517,
+              123502723,
+              125321451,
+              123657440,
+              126913025,
+              122661339
+            ],
+            "allocated_bytes": [
+              56152,
+              56000,
+              56000,
+              63296,
+              56000,
+              56000,
+              56000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 122125861.0,
+          "cpu_ns": 120014199.5,
+          "allocated_bytes": 56000.0
+        }
+      }
+    },
+    "selective_2": {
+      "before": {
+        "runs": [
+          {
+            "kind": "selective",
+            "packages": 2,
+            "iterations": 20000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              31912368,
+              16311724,
+              12143900,
+              12695611,
+              11529048,
+              10648164,
+              11851279
+            ],
+            "cpu_ns": [
+              22976355,
+              14479089,
+              12151265,
+              10837592,
+              11537729,
+              9508247,
+              9992505
+            ],
+            "allocated_bytes": [
+              49760240,
+              49760000,
+              49760000,
+              49760000,
+              49760000,
+              49760000,
+              49760000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          },
+          {
+            "kind": "selective",
+            "packages": 2,
+            "iterations": 20000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              27905940,
+              18686883,
+              13887620,
+              11631667,
+              10449735,
+              11629539,
+              10379714
+            ],
+            "cpu_ns": [
+              21046732,
+              16693743,
+              13894895,
+              10096358,
+              10457635,
+              10275284,
+              9171617
+            ],
+            "allocated_bytes": [
+              49760240,
+              49760000,
+              49760000,
+              49760000,
+              49760000,
+              49760000,
+              49760000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 11997589.5,
+          "cpu_ns": 11187660.5,
+          "allocated_bytes": 49760000.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "selective",
+            "packages": 2,
+            "iterations": 20000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              9339153,
+              2148714,
+              1912550,
+              2057711,
+              2013247,
+              2088733,
+              1926707
+            ],
+            "cpu_ns": [
+              2334853,
+              2154705,
+              1916542,
+              2061794,
+              2017092,
+              2092792,
+              1930339
+            ],
+            "allocated_bytes": [
+              1120240,
+              1120000,
+              1120000,
+              1120000,
+              1120000,
+              1120000,
+              1120000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          },
+          {
+            "kind": "selective",
+            "packages": 2,
+            "iterations": 20000,
+            "visible_per_iteration": 1,
+            "wall_ns": [
+              10007762,
+              1838583,
+              2042504,
+              1845440,
+              1788999,
+              1819366,
+              2095454
+            ],
+            "cpu_ns": [
+              2007038,
+              1841696,
+              2046791,
+              1847766,
+              1790999,
+              1821562,
+              2099177
+            ],
+            "allocated_bytes": [
+              1120240,
+              1120000,
+              1120000,
+              1120000,
+              1120000,
+              1120000,
+              1120000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 2027875.5,
+          "cpu_ns": 2012065.0,
+          "allocated_bytes": 1120000.0
+        }
+      }
+    },
+    "hidden_4096": {
+      "before": {
+        "runs": [
+          {
+            "kind": "hidden",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              391225296,
+              381536082,
+              427468891,
+              478483409,
+              388007479,
+              399253038,
+              396577017
+            ],
+            "cpu_ns": [
+              382805092,
+              376181094,
+              411931715,
+              399801912,
+              382032675,
+              392942903,
+              390399587
+            ],
+            "allocated_bytes": [
+              559505496,
+              559504000,
+              559504000,
+              559408224,
+              559368000,
+              559368000,
+              559368000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          },
+          {
+            "kind": "hidden",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              455838393,
+              849994162,
+              509338518,
+              612925373,
+              442490856,
+              511367571,
+              437609521
+            ],
+            "cpu_ns": [
+              447287078,
+              828073373,
+              489260926,
+              523538455,
+              434831659,
+              503648815,
+              428399731
+            ],
+            "allocated_bytes": [
+              559505496,
+              559504000,
+              559504000,
+              559408224,
+              559368000,
+              559368000,
+              559368000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "73ead381b89f3226dbf4b107ad366eb1973a4188f4a80f399b12be62e9a54d2b",
+              "PackageVisibility": "388607ce4a0d903de24c1d6e97818d7fa3ce34b23e4b92819cf411c8c0c930f7"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 440050188.5,
+          "cpu_ns": 420165723.0,
+          "allocated_bytes": 559408224.0
+        }
+      },
+      "after": {
+        "runs": [
+          {
+            "kind": "hidden",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              3992907,
+              744128,
+              311324,
+              41113468,
+              200292,
+              101705,
+              270929
+            ],
+            "cpu_ns": [
+              564565,
+              322527,
+              312924,
+              531638,
+              201717,
+              103076,
+              272656
+            ],
+            "allocated_bytes": [
+              128904,
+              128000,
+              128000,
+              78056,
+              56000,
+              56000,
+              56000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          },
+          {
+            "kind": "hidden",
+            "packages": 4096,
+            "iterations": 1000,
+            "visible_per_iteration": 0,
+            "wall_ns": [
+              3181099,
+              617699,
+              222671,
+              34697717,
+              101557,
+              144630,
+              105304
+            ],
+            "cpu_ns": [
+              373330,
+              245236,
+              223726,
+              1052331,
+              102199,
+              145699,
+              105866
+            ],
+            "allocated_bytes": [
+              128904,
+              128000,
+              128000,
+              78056,
+              56000,
+              56000,
+              56000
+            ],
+            "production_source_sha256": {
+              "PackageManagerService": "1d0b820622116517906c15d7e7836117d2569228a67074aa48822b3e95f53f76",
+              "PackageVisibility": "9072c7cc60b7c77acbaf170aa2e2c3800381391292bca9f57fd47d32ed1fcbba"
+            }
+          }
+        ],
+        "medians": {
+          "wall_ns": 291126.5,
+          "cpu_ns": 258946.0,
+          "allocated_bytes": 78056.0
+        }
+      }
+    }
+  }
+}
