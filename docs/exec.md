@@ -27,8 +27,11 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
   new working directory, as after the child's `chdir`); a bare name is looked
   up in `PATH` (Windows' `;` list, or a Linux `:` list), with `.exe`, `.com`,
   `.cmd`, `.bat` tried for names without an extension. By the file's contents:
-  - an **ELF x86-64** file runs in `gesher-exec.exe --elf` (below); other ELF
-    machines (arm64) fail with `ENOEXEC`;
+  - an **ELF64 little-endian x86-64 or arm64** file runs in
+    `gesher-exec.exe --elf` (below; arm64 through the translator,
+    [arm64.md](arm64.md)); other ELF machines, and static executables
+    (`ET_EXEC`, which make Linux system calls themselves, ADR 0055), fail with
+    `ENOEXEC`;
   - a **PE** image (`MZ`) runs as itself; a **`.cmd`/`.bat`** through
     `cmd.exe /d /s /c`;
   - **`sh`, `/system/bin/sh`, `/bin/sh`** (also `/system/xbin`, `/vendor/bin`)
