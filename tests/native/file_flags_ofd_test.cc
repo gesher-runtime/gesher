@@ -427,8 +427,32 @@ static void TestInvalidFdHandling() {
   CHECK_EQ(errno, EBADF);
 }
 
+// fsync flushes a regular file through any descriptor, a read-only one too
+// (Linux fsync(2); SoLoader's SysUtil.fsyncRecursive opens each file "r").
+static void TestFsyncReadOnlyDescriptor() {
+  char path[] = "fsync_readonly_XXXXXX";
+  int writer = mkstemp(path);
+  CHECK(writer >= 0);
+  if (writer < 0) return;
+  CHECK_EQ(write(writer, "data", 4), 4);
+  int reader = open(path, O_RDONLY);
+  CHECK(reader >= 0);
+  CHECK_EQ(fsync(reader), 0);
+  CHECK_EQ(fdatasync(reader), 0);
+  CHECK_EQ(fsync(writer), 0);
+  char buffer[4] = {};
+  CHECK_EQ(read(reader, buffer, 4), 4);
+  CHECK(std::memcmp(buffer, "data", 4) == 0);
+  close(reader);
+  close(writer);
+  unlink(path);
+  CHECK_EQ(fsync(reader), -1);
+  CHECK_EQ(errno, EBADF);
+}
+
 int main() {
   std::printf("Running Track N Item N32 File Status Flags & OFD Semantics test...\n");
+  TestFsyncReadOnlyDescriptor();
   TestDupSharesFlags();
   TestFdCloexecNotSharedAcrossDup();
   TestFileOffsetSharedAcrossDup();

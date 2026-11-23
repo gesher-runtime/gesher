@@ -360,6 +360,20 @@ int fsync(int fd) {
   if (GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
     return 0;
   }
+  // Linux fsync flushes the file's data whatever the descriptor's access mode
+  // (an O_RDONLY descriptor included: programs fsync every file of a tree they
+  // wrote by opening each for reading). FlushFileBuffers needs write access:
+  // flush through a second handle to the same file that has it.
+  uint32_t access = 0;
+  if (gesher::record_locks::HandleAccess(h, &access) == 0 && (access & FILE_WRITE_DATA) == 0) {
+    HANDLE writable = ReOpenFile(h, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+    if (writable == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+    const BOOL flushed = FlushFileBuffers(writable);
+    const DWORD error = flushed ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(writable);
+    if (!flushed) return errno = gesher::ErrnoFromWin32(error), -1;
+    return 0;
+  }
   return FlushFileBuffers(h) ? 0 : gesher::FailWithLastError();
 }
 int gesher_ftruncate(int fd, off_t length) {
