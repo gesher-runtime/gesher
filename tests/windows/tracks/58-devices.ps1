@@ -73,6 +73,10 @@ Check 'devices: camera request selection is atomic against cancel and flush' {
   DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
     'gesher.services.CameraRequestRaceTest') 90
 } @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed')
+Check 'devices: camera admission checks live grants and process attribution' {
+  DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+    'gesher.services.CameraPermissionContractTest') 90
+} @('CameraPermissionContractTest: both admission paths, live grants and UID attribution passed')
 Check 'devices: camera callback/request admission bounds real native metadata and blocked consumers' {
   DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
     'gesher.services.CameraCallbackAdmissionTest') 90
@@ -120,7 +124,19 @@ function LocationChecks([string] $Mode, [string] $Out, [int] $Code, [bool] $Pend
 
 $sn = 'devices: sensors: '
 # Sensors without hardware: the runners have none (Windows.Devices.Sensors' GetDefault
-# answers null for each kind), so the list is empty and registering fails cleanly.
+# answers null for each kind). By default Gesher's stationary accelerometer stands in for
+# the missing motion sensors (gravity on Z, CONTRIBUTING.md): the production path.
+function SensorsStationaryCheck([string] $Mode, [string] $Out, [int] $Code) {
+  if ($Out -match 'sensors: (accelerometer: [^\r\n]*)') { $win = $Matches[1] } else { $win = '(not logged)' }
+  DevCheck "devices: sensors ($Mode): no Windows motion sensor here ($win); Gesher's stationary accelerometer by default: the list, gravity-only events on a Handler, flush, unregisterListener" $Out @(
+    ,@("${sn}1 sensors: Gesher Stationary Accelerometer (android.sensor.accelerometer)",
+      "${sn}accelerometer Gesher Stationary Accelerometer, range 78.4532, min delay 10000 us",
+      "${sn}registerListener(accelerometer) true, first event Gesher Stationary Accelerometer 0.00,0.00,9.81 accuracy 3",
+      "${sn}accelerometer events keep coming: 4 more", "${sn}flush: flush Gesher Stationary Accelerometer",
+      "${sn}after unregisterListener (nothing within 500 ms)", "${sn}no light sensor",
+      "${sn}done")) $Code $Mode
+}
+# With GESHER_SENSOR_FALLBACK=0 the list is empty and registering fails cleanly.
 function SensorsEmptyCheck([string] $Mode, [string] $Out, [int] $Code) {
   if ($Out -match 'sensors: (accelerometer: [^\r\n]*)') { $win = $Matches[1] } else { $win = '(not logged)' }
   DevCheck "devices: sensors ($Mode): SystemSensorManager over Windows.Devices.Sensors; no sensors here, an empty list, registerListener false ($win)" $Out @(
@@ -249,12 +265,31 @@ if ($devicesUid -lt 10000 -or $devicesUid -gt 19999) { throw 'Devices fixture di
 Write-Host $permissionSetup
 $devicesIdentity = @{ GESHER_UID = [string]$devicesUid; GESHER_BINDER_UID = [string]$devicesUid }
 
+# The shipped capture app is an ordinary CAMERA-permission client too. This is
+# an explicit test-operator decision for this isolated profile, not a production auto-grant.
+$cameraPermissionSetup = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+  'gesher.services.FixturePermissionSetup', (NoDrive "$Dir/gesher-camera.apk"),
+  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
+if ($LASTEXITCODE -ne 0 -or -not $cameraPermissionSetup.Contains('FixturePermissionSetup persisted grants verified') -or
+    $cameraPermissionSetup -notmatch 'FixturePermissionSetup UID ([0-9]+) package com\.gesher\.camera') {
+  throw "Camera app permission prerequisite failed: $cameraPermissionSetup"
+}
+$cameraUid = [int]$Matches[1]
+if ($cameraUid -lt 10000 -or $cameraUid -gt 19999) { throw 'Camera app did not receive an ordinary application UID' }
+Write-Host $cameraPermissionSetup
+
 # Single process: the services in the app's own process (gesher-app --single-process).
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400 '' $devicesIdentity
 $code = $LASTEXITCODE
 LocationChecks 'single process' $out $code $false
-SensorsEmptyCheck 'single process' $out $code
+SensorsStationaryCheck 'single process' $out $code
 CameraEmptyCheck 'single process' $out $code
+$env:GESHER_SENSOR_FALLBACK = '0'
+$env:GESHER_DEVICES_STEPS = 'sensors'
+$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400 '' $devicesIdentity
+SensorsEmptyCheck 'single process, GESHER_SENSOR_FALLBACK=0' $out $LASTEXITCODE
+Remove-Item Env:GESHER_SENSOR_FALLBACK
+Remove-Item Env:GESHER_DEVICES_STEPS
 $env:GESHER_SENSOR_TEST = '1'
 $env:GESHER_CAMERA_TEST = '1'
 $env:GESHER_DEVICES_STEPS = 'sensors,camera'
@@ -303,6 +338,14 @@ LegacyCameraCheck 'Gesher device' $out $code
 # ACTION_IMAGE_CAPTURE: the device installed Gesher Camera (the PC has a camera: the test
 # one); devices.apk's CaptureTestActivity asks it for a thumbnail and for a photo written
 # to its provider's EXTRA_OUTPUT (Gesher Camera's auto-capture extra takes them).
+$remoteCameraPermission = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+  'gesher.services.FixturePermissionSetup', '--remote', [string]$cameraUid, 'com.gesher.camera',
+  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
+if ($LASTEXITCODE -ne 0 -or -not $remoteCameraPermission.Contains('FixturePermissionSetup live installed grants verified') -or
+    -not $remoteCameraPermission.Contains("FixturePermissionSetup remote UID $cameraUid package com.gesher.camera source ")) {
+  throw "Installed camera app permission prerequisite failed: $remoteCameraPermission"
+}
+Write-Host $remoteCameraPermission
 $capOut = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devices.apk"), '--activity', '.CaptureTestActivity', '--keep-task') 400
 $capCode = $LASTEXITCODE
 $capOut += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)
