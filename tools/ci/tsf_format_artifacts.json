@@ -1,0 +1,7 @@
+[
+  {
+    "name": "tsf-format",
+    "producer": "union-tsf / compile",
+    "destination": "fixture"
+  }
+]

@@ -35,10 +35,14 @@ def main():
             source = work / (name + '.java')
             source.write_bytes(subprocess.check_output(['git', 'show', a.source_ref + ':' + path], cwd=ROOT))
         sources.append(source)
+    # The prepared-image owner is a separate production dependency. Include it
+    # in the overlay even when the supplied runtime predates that owner.
+    sources.append(ROOT / 'app/java/com/gesher/server/NotificationImageStore.java')
     if a.tag_only:
         sources.append(ROOT / 'tests/notification-identity/ToastTagProbe.java')
     else:
         sources.append(ROOT / 'tests/dex-services/com/gesher/server/NotificationIdentityDevice.java')
+        sources.append(ROOT / 'tests/dex-services/com/gesher/server/NotificationPngFixture.java')
         sources.append(ROOT / 'tests/dex-services/com/gesher/server/ToastIdentityDevice.java')
         sources.append(ROOT / 'tests/dex-services/com/gesher/server/NotificationStoreFormatDevice.java')
     subprocess.run([str(a.java_home / 'bin/javac'), '-source', '17', '-target', '17',

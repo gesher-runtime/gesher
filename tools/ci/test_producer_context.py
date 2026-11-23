@@ -53,10 +53,13 @@ class RetainedProducer(unittest.TestCase):
 
     def write_role(self, role):
         member, artifact, producer, nested = proof.ROLES[role]
+        if isinstance(producer, dict):
+            producer = producer['ci']
         self.role = role
         self.item['name'] = artifact
         self.old_job['name'] = self.new_job['name'] = producer
         self.path = self.root / member
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         header = dict(self.original)
         payload = header if nested is None else {nested: header}
         payload.update(role=role, fixture_metadata_only=True)
@@ -64,23 +67,24 @@ class RetainedProducer(unittest.TestCase):
         self.path.write_bytes(self.raw)
 
     def get_json(self, endpoint):
-        self.assertEqual(endpoint, 'repos/owner/repo/actions/runs/9/attempts/1')
+        self.assertEqual(endpoint, f"repos/owner/repo/actions/runs/9/attempts/{self.original['attempt']}")
         return copy.deepcopy(self.run)
 
     def read_jobs(self, context):
-        rows = self.old_jobs if context['attempt'] == '1' else self.new_jobs
+        rows = self.old_jobs if context['attempt'] == self.original['attempt'] else self.new_jobs
         return dict(total_count=len(rows), jobs=copy.deepcopy(rows))
 
     def check_run(self, context):
         self.run_reads.append(copy.deepcopy(context))
-        self.assertEqual(context['attempt'], '2')
-        self.assertEqual(os.environ['GITHUB_RUN_ATTEMPT'], '2')
+        self.assertEqual(context['attempt'], self.consumer['attempt'])
+        self.assertEqual(os.environ['GITHUB_RUN_ATTEMPT'], self.consumer['attempt'])
 
     def download(self, item, destination):
         self.downloads.append(copy.deepcopy(item))
         self.assertEqual(item, self.item)
         destination.mkdir()
         archived = destination / proof.ROLES[self.role][0]
+        archived.parent.mkdir(parents=True, exist_ok=True)
         archived.write_bytes(self.raw)
         if self.archive_mutation is not None:
             self.archive_mutation(archived)
@@ -113,8 +117,40 @@ class RetainedProducer(unittest.TestCase):
         self.assertEqual(self.downloads, [])
         self.assertEqual(self.run_reads, [])
 
+    def test_new_consumer_roles_cannot_skip_archive_proof_by_claiming_current_attempt(self):
+        self.consumer['attempt'] = '1'
+        os.environ['GITHUB_RUN_ATTEMPT'] = '1'
+        for role in proof.ARCHIVE_REQUIRED:
+            with self.subTest(role=role):
+                self.write_role(role)
+                before = len(self.downloads)
+                self.assertEqual(self.verify(), self.original)
+                self.assertEqual(len(self.downloads), before + 1)
+
+    def test_expected_supplier_must_be_the_exact_verified_batch_selection(self):
+        supplier = copy.deepcopy((self.new_job, self.item))
+        self.assertEqual(proof.authenticate(self.path, self.consumer, self.role,
+                                           expected_supplier=supplier), self.original)
+        for index, key, value in ((0, 'id', 101), (0, 'run_attempt', 1),
+                                   (1, 'id', 31), (1, 'digest', 'sha256:' + '5' * 64)):
+            with self.subTest(index=index, field=key):
+                changed = copy.deepcopy(supplier)
+                changed[index][key] = value
+                before = len(self.downloads)
+                with self.assertRaisesRegex(RuntimeError, 'verified batch supplier'):
+                    proof.authenticate(self.path, self.consumer, self.role, expected_supplier=changed)
+                self.assertEqual(len(self.downloads), before)
+
+    def test_duplicate_json_keys_and_constants_fail_before_api(self):
+        for raw in (self.raw.replace(b'"attempt": "1"', b'"attempt": "2", "attempt": "1"'),
+                    self.raw.replace(b'"attempt": "1"', b'"attempt": NaN')):
+            with self.subTest(raw=raw):
+                self.path.write_bytes(raw)
+                self.rejected()
+        self.assertEqual(self.run_reads, [])
+
     def test_nested_context_rejects_extra_keys_on_both_attempt_paths(self):
-        for role in ('native3-common-host-fixture', 'native3-linux-reference'):
+        for role in (name for name, (_, _, _, nested) in proof.ROLES.items() if nested is not None):
             for attempt in ('1', '2'):
                 with self.subTest(role=role, attempt=attempt):
                     self.write_role(role)
@@ -220,6 +256,25 @@ class RetainedProducer(unittest.TestCase):
     def test_local_role_cannot_change_after_its_archive_was_verified(self):
         self.download_mutation = lambda: self.path.write_bytes(b'changed')
         self.rejected()
+
+
+class CurrentContext(unittest.TestCase):
+    def test_pr_merge_checkout_and_head_remain_distinct_without_changing_consumer_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            event = Path(temporary) / 'event.json'
+            event.write_text(json.dumps({'pull_request': {'head': {'sha': 'b' * 40, 'repo': {'id': 8}}}}))
+            env = dict(GITHUB_ACTIONS='true', GITHUB_SHA='a' * 40, GITHUB_RUN_ID='9', GITHUB_RUN_ATTEMPT='3',
+                       GITHUB_REPOSITORY='owner/repo', GITHUB_REPOSITORY_ID='7', GITHUB_WORKFLOW='ci',
+                       GITHUB_EVENT_NAME='pull_request', GITHUB_EVENT_PATH=str(event))
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(proof.receipts.subprocess, 'check_output', return_value='a' * 40 + '\n'):
+                self.assertEqual(proof.current_context(), dict(source='a' * 40, supplier_head='b' * 40,
+                    repository='owner/repo', repository_id='7', head_repository_id='8', run='9',
+                    attempt='3', event='pull_request'))
+                self.assertEqual(os.environ['GITHUB_RUN_ATTEMPT'], '3')
+                os.environ['GITHUB_SHA'] = 'c' * 40
+                with self.assertRaisesRegex(RuntimeError, 'Checkout mismatch'):
+                    proof.current_context()
 
 
 class NativeRoleBranches(unittest.TestCase):
