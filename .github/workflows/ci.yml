@@ -136,6 +136,22 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/test-process-reader-handles.ps1
+      - name: Build native clipboard foreground actor before timed startup
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 tests\windows\clipboard\foreground_helper.cc /Fe:clipboard_foreground.exe user32.lib
+      - name: Native foreground HWND ownership, failure and parent-death cleanup
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: tests/windows/clipboard/ForeignForegroundChecks.ps1 -Executable ./clipboard_foreground.exe
+      - name: Preserve native foreground fixture evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clipboard-foreground-${{ matrix.os }}
+          path: ${{ runner.temp }}/clipboard-foreground-contract-*/**
+          if-no-files-found: warn
       - name: Storage scan coalescing, bounded admission and real filesystem contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -467,6 +483,7 @@ jobs:
           python3 tools/test_webstorage_origin_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
+          python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
           python3 tools/test_uia_snapshot_contracts.py --sanitize
           python3 tools/test_running_tasks_contracts.py
 
@@ -916,7 +933,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@ddd7c79ac8fa4c4dad4b46188c57789db5a95f5d
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@06d175a84affff8914c00151269b0aa2f7f4032a
     with:
       local-runner: false
 
@@ -2127,6 +2144,8 @@ jobs:
             dist/realtime-signals-evidence/**/*.json
             ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
             ${{ runner.temp }}/gesher-root/logs/system_server.log
+            ${{ runner.temp }}/clipboard-foreground-*/*.log
+            ${{ runner.temp }}/clipboard-foreground-*/*.json
           if-no-files-found: error
 
   test:
