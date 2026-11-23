@@ -40,9 +40,14 @@ def main():
     has_indexed_selector = indexed_selector in jni
     has_display_metadata = "bool RetrieverDisplaySize(" in jni
     orientation = ""
+    pixel_include = ""
     if has_indexed_selector:
         selector = section(jni, indexed_selector, "jobject RetrieverBitmapConfig(")
-        orientation = section(jni, "size_t RetrieverPixelIndex(", "jobject CreateRetrieverBitmap(")
+        if "size_t RetrieverPixelIndex(" in jni:
+            orientation = section(jni, "size_t RetrieverPixelIndex(", "jobject CreateRetrieverBitmap(")
+        else:
+            orientation = section(jni, "bool RetrieverDisplaySize(", "jobject CreateRetrieverBitmap(")
+            pixel_include = '#include "compat/media/video/retriever_pixels.h"'
     elif start in jni:
         selector = section(jni, start, "// _getFrameAtTime(timeUs,")
     else:
@@ -58,7 +63,8 @@ def main():
                          ("@FORMAT_ADAPTER@", format_adapter),
                          ("@HAS_DISPLAY_METADATA@", str(int(has_display_metadata))),
                          ("@HAS_INDEXED_SELECTOR@", str(int(has_indexed_selector))),
-                         ("@PRESENTATION_ORIENTATION@", orientation)):
+                         ("@PRESENTATION_ORIENTATION@", orientation),
+                         ("@PIXEL_ORIENTATION_INCLUDE@", pixel_include)):
         if template.count(marker) != 1:
             raise ValueError("host fixture marker changed: " + marker)
         template = template.replace(marker, body)

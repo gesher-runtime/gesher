@@ -194,6 +194,11 @@ manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.env
 if fork:
     manifest.update(evidence_schema=fork.SCHEMA, diagnostic=diagnostic)
     fork.check_manifest(manifest, diagnostic)
+elif os.environ.get('GITHUB_WORKFLOW') == 'ci':
+    assert selection == 'selected-minimum'
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci'))
+    from producer_context import current_context
+    manifest.update(current_context(), role='tcp-selected-minimum')
 Path('tcp-fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print('TCP_PRIORITY_PRODUCER', json.dumps({k: manifest[k] for k in ('source', 'run', 'attempt', 'scope')}))
 for role, details in compilers.items():

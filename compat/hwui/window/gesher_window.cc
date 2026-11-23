@@ -347,7 +347,19 @@ Window* Window::CreatePopup(const std::string& title_utf8, int width, int height
   return Start(window, title_utf8, width, height);
 }
 
+namespace {
+thread_local const char* t_create_failure = nullptr;
+thread_local unsigned long t_create_error = 0;
+}  // namespace
+
+const char* Window::LastCreateFailure(unsigned long* error) {
+  if (error != nullptr) *error = t_create_error;
+  return t_create_failure;
+}
+
 Window* Window::Start(Window* window, const std::string& title_utf8, int width, int height) {
+  t_create_failure = nullptr;
+  t_create_error = 0;
   RegisterClassOnce();
   window->event_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
   {
@@ -368,6 +380,8 @@ Window* Window::Start(Window* window, const std::string& title_utf8, int width, 
       },
       args, 0, &tid);
   if (thread == nullptr) {
+    t_create_failure = "CreateThread";
+    t_create_error = GetLastError();
     delete args;
     delete window;
     return nullptr;
@@ -377,6 +391,8 @@ Window* Window::Start(Window* window, const std::string& title_utf8, int width, 
   std::unique_lock<std::mutex> lock(window->create_mutex_);
   window->create_cv_.wait(lock, [window] { return window->created_; });
   if (window->hwnd_ == nullptr) {
+    t_create_failure = "CreateWindowEx";
+    t_create_error = window->create_error_;
     lock.unlock();
     delete window;
     return nullptr;
@@ -402,6 +418,7 @@ void Window::Run(std::wstring title, int width, int height) {
   HWND hwnd = CreateWindowExW(0, kClassName, title.c_str(), style, x, y, r.right - r.left,
                               r.bottom - r.top, static_cast<HWND>(owner_hwnd_), nullptr,
                               GetModuleHandleW(nullptr), this);
+  const DWORD create_error = hwnd == nullptr ? GetLastError() : 0;
   if (hwnd != nullptr && !popup_) {
     std::wstring id = ProcessAppUserModelId();
     if (!id.empty() && SUCCEEDED(SetWindowAppUserModelId(hwnd, id))) {
@@ -414,6 +431,7 @@ void Window::Run(std::wstring title, int width, int height) {
   {
     std::lock_guard<std::mutex> lock(create_mutex_);
     hwnd_ = hwnd;
+    create_error_ = create_error;
   }
   // CreateWindowEx with CW_USEDEFAULT can clamp an initial top-level window
   // to the desktop work area. The Android display/requested client size must
