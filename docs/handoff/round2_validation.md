@@ -109,6 +109,29 @@ observers and 10,000 duplicate lifecycle events, with no inactive polling.
 No performance comparison against a no-op worker/storage/observer baseline is
 claimed.
 
+### Public WebStorage runtime acceptance
+
+The existing windowing track (`37-webview.ps1`) now launches
+`WebStorageActivity` from `webapp.apk` in a fresh application profile. Its normal
+`WebViewClient` supplies the HTML for two fresh, distinct HTTPS origins; this is
+a page-response fixture, not a network-connectivity claim. Each origin commits
+and closes a real 256 KiB IndexedDB record. Public `WebStorage` usage/quota calls
+must report positive measurements for both origins, including A while B is the
+visible page. After `deleteOrigin(A)`, bounded polling must observe zero usage
+and positive quota before reopening A. An aborted database upgrade then proves
+A's database is absent, while B's complete sentinel and positive measurements
+must remain. Public callbacks are checked for unique delivery and the invoking
+UI thread. Per-call, convergence, page and total deadlines produce explicit
+failures; the existing process runner supplies the outer bound and cleanup.
+
+The unchanged APK build passes with actual Android framework/core classes,
+`aapt2`, D8 and `zipalign`. JavaScript and PowerShell syntax checks pass. Isolated
+PowerShell transcript controls accept a complete result and reject five cases:
+zero baseline usage, missing database-absence proof, lost unrelated data, a
+callback failure after the success marker, and a nonzero process exit. These
+are harness checks only. **The real Windows/ART/WebView2 result is pending the
+successor CI windowing run**; local compilation does not establish that result.
+
 ## Limits
 
 The build uses actual prebuilt Android framework/core classes. The local AOSP

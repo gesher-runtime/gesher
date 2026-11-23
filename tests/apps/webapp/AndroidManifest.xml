@@ -27,5 +27,6 @@
             android:exported="true" />
         <activity android:name=".DarkeningActivity" android:exported="true" />
         <activity android:name=".GeolocationPermissionActivity" android:exported="true" />
+        <activity android:name=".WebStorageActivity" android:exported="true" />
     </application>
 </manifest>

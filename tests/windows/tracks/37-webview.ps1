@@ -336,5 +336,6 @@ try {
   $env:GESHER_LOGS = $savedLogs
   Remove-Item Env:GESHER_SHORTCUTS -ErrorAction SilentlyContinue
 }
+. "$PSScriptRoot/../webview/Storage.ps1"
 . "$PSScriptRoot/../webview/Features.ps1"
 if ($failed -eq $webviewFailedBefore) { Write-Host 'INFO  webview: every check passed' }

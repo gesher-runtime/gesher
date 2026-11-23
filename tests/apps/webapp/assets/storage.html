@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Public WebStorage acceptance</title>
+<p>Real IndexedDB data for the public Android storage APIs.</p>
+<script>
+'use strict';
+const databaseName = 'gesher-public-webstorage';
+const storeName = 'records';
+const payloadBytes = 256 * 1024;
+let running = false;
+
+function payloadByte(index, marker) {
+  return (Math.imul(index ^ (index >>> 8), 31) ^ marker.charCodeAt(index % marker.length)) & 255;
+}
+
+function databaseOperation(operation, marker) {
+  return new Promise((resolve, reject) => {
+    let db = null;
+    let newDatabase = false;
+    let settled = false;
+    const finish = (error, outcome, bytes) => {
+      if (settled) return;
+      settled = true;
+      if (db) db.close();
+      if (error) reject(error);
+      else resolve({outcome, bytes});
+    };
+    const request = indexedDB.open(databaseName, 1);
+    request.onblocked = () => finish(new Error('IndexedDB open blocked'));
+    request.onupgradeneeded = () => {
+      db = request.result;
+      newDatabase = true;
+      if (operation === 'write') db.createObjectStore(storeName);
+      else request.transaction.abort(); // Observe absence without persisting an empty replacement DB.
+    };
+    request.onerror = event => {
+      event.preventDefault();
+      if (operation === 'read' && newDatabase && request.error.name === 'AbortError') finish(null, 'absent', 0);
+      else finish(new Error('IndexedDB open: ' + request.error));
+    };
+    request.onsuccess = () => {
+      db = request.result;
+      if (settled) { db.close(); return; }
+      db.onversionchange = () => db.close();
+      try {
+        if (operation === 'write' && !newDatabase) throw new Error('Fresh origin already had the fixture database');
+        if (!db.objectStoreNames.contains(storeName)) throw new Error('Existing database lacks the expected store');
+        const transaction = db.transaction(storeName, operation === 'write' ? 'readwrite' : 'readonly');
+        let value;
+        transaction.onabort = () => finish(new Error('IndexedDB transaction aborted: ' + transaction.error));
+        transaction.onerror = () => finish(new Error('IndexedDB transaction failed: ' + transaction.error));
+        transaction.oncomplete = () => {
+          try {
+            if (operation === 'read') {
+              if (!value || value.marker !== marker || !(value.payload instanceof Uint8Array)
+                  || value.payload.length !== payloadBytes) throw new Error('Retained sentinel is missing or changed');
+              for (let i = 0; i < value.payload.length; i++) {
+                if (value.payload[i] !== payloadByte(i, marker)) throw new Error('Retained payload changed at byte ' + i);
+              }
+            }
+            finish(null, operation === 'write' ? 'written' : 'present', payloadBytes);
+          } catch (error) { finish(error); }
+        };
+        if (operation === 'write') {
+          const payload = new Uint8Array(payloadBytes);
+          for (let i = 0; i < payload.length; i++) payload[i] = payloadByte(i, marker);
+          transaction.objectStore(storeName).put({marker, payload}, 'sentinel');
+        } else {
+          const read = transaction.objectStore(storeName).get('sentinel');
+          read.onsuccess = () => { value = read.result; };
+        }
+      } catch (error) { finish(error); }
+    };
+  });
+}
+
+async function storageFixture(id, operation, expectedOrigin, marker) {
+  try {
+    if (running) throw new Error('Duplicate page operation');
+    running = true;
+    if (location.origin !== expectedOrigin || !isSecureContext) throw new Error('Wrong or insecure origin: ' + location.origin);
+    if (operation !== 'write' && operation !== 'read') throw new Error('Unknown operation: ' + operation);
+    const result = await databaseOperation(operation, marker);
+    // The transaction has completed (or absence was observed by an aborted upgrade)
+    // and db.close() was called before Java may query usage or delete an origin.
+    StorageResult.result(id, location.origin, result.outcome, result.bytes, 'closed');
+  } catch (error) {
+    StorageResult.result(id, location.origin, 'error', 0, String(error));
+  }
+}
+</script>
