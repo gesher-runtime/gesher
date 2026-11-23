@@ -220,6 +220,9 @@ Check 'media: I420 rows to RGBA give the reference pixel for every Y, U, V and w
 Check 'media: target-sized retriever pixels match the pinned full-image Skia oracle with bounded row storage' {
   & "$Dir/media_retriever_pixels_test.exe"
 } @('filtered crop/rotation, config and bounded row storage passed')
+Check 'media: RGBA conversion preserves every RGB value and actual codec/recorder AVC output' {
+  & "$Dir/media_rgba_i420_test.exe"
+} @('RGBA_ALL_RGB_PASS triples=16777216', 'complete pixels, actual callbacks and real AVC packets passed')
 
 # Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
 # color says which frame it is.
