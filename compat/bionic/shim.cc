@@ -1468,6 +1468,7 @@ SymbolTable& Table() {
     RegisterPosix(*table);
     RegisterSocket(*table);
     RegisterDnsWire(*table);
+    RegisterCxx(*table);
     RegisterSignal(*table);
     RegisterTime(*table);
     RegisterSyscall(*table);

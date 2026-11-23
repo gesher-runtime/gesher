@@ -139,6 +139,8 @@ void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
 void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
 void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
 void RegisterTime(SymbolTable& table);     // time_bionic.cc
+// libstdc++.so: operator new/delete, static-local guards, __cxa_pure_virtual.
+void RegisterCxx(SymbolTable& table);      // cxx_bionic.cc
 // x86-64 Linux numeric timerfd syscalls share the libc exports' implementation.
 bool DispatchTimerfdSyscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                            int64_t* result);
