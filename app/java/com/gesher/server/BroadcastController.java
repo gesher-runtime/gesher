@@ -263,10 +263,12 @@ final class BroadcastController {
                 if (snapshot.getPackage() != null && !snapshot.getPackage().equals(rl.packageName)
                         || !receiverPermissions(rl.packageName, required, excluded, excludedPackages)) continue;
                 ReceiverFilter best = null;
+                String type = resolvedType != null ? resolvedType : snapshot.getType();
                 for (ReceiverFilter filter : rl.filters) {
                     if (registeredAllowed(origin, rl, filter)
-                            && filter.filter.match(snapshot.getAction(), resolvedType != null
-                                    ? resolvedType : snapshot.getType(), snapshot.getScheme(),
+                            && ResolverCandidates.isCandidate(filter.filter, snapshot.getAction(),
+                                    type, snapshot.getScheme())
+                            && filter.filter.match(snapshot.getAction(), type, snapshot.getScheme(),
                                     snapshot.getData(), snapshot.getCategories(), "gesher") >= 0
                             && (best == null || filter.filter.getPriority() > best.filter.getPriority())) best = filter;
                 }
@@ -818,6 +820,7 @@ final class BroadcastController {
         // Registered receivers: implicit broadcasts only.
         List<ReceiverList> registered = new ArrayList<>();
         if (intent.getComponent() == null) {
+            String type = resolvedType != null ? resolvedType : intent.getType();
             synchronized (this) {
                 for (ReceiverList rl : mRegistered.values()) {
                     if (intent.getPackage() != null && !intent.getPackage().equals(rl.packageName)) {
@@ -827,9 +830,11 @@ final class BroadcastController {
                             excludePermissions, excludePackages)) continue;
                     for (ReceiverFilter registeredFilter : rl.filters) {
                         if (!registeredAllowed(sender, rl, registeredFilter)) continue;
-                        if (registeredFilter.filter.match(intent.getAction(), resolvedType != null ? resolvedType
-                                : intent.getType(), intent.getScheme(), intent.getData(),
-                                intent.getCategories(), "gesher") >= 0) {
+                        // Android's receiver resolver offers only indexed filters to match.
+                        if (ResolverCandidates.isCandidate(registeredFilter.filter, intent.getAction(),
+                                type, intent.getScheme())
+                                && registeredFilter.filter.match(intent.getAction(), type,
+                                intent.getScheme(), intent.getData(), intent.getCategories(), "gesher") >= 0) {
                             registered.add(rl);
                             break;
                         }

@@ -88,13 +88,23 @@ final class PermissionCatalog {
     boolean isProtectedBroadcast(String name) {
         load();
         // A failed framework catalog must not authorize an unknown sender.
-        return name != null && (!mFrameworkRead || mProtectedBroadcasts.contains(name));
+        return name != null && (isPlatformPrefix(name) || !mFrameworkRead
+                || mProtectedBroadcasts.contains(name));
     }
 
     /** Positive catalog evidence, for exemptions that must not be granted on load failure. */
     boolean isKnownProtectedBroadcast(String name) {
         load();
-        return mFrameworkRead && name != null && mProtectedBroadcasts.contains(name);
+        return name != null && (isPlatformPrefix(name)
+                || mFrameworkRead && mProtectedBroadcasts.contains(name));
+    }
+
+    /** Android 16 PackageManagerService.isProtectedBroadcast: prefixes outside any manifest. */
+    private static boolean isPlatformPrefix(String name) {
+        return name.startsWith("android.net.netmon.lingerExpired")
+                || name.startsWith("com.android.server.sip.SipWakeupTimer")
+                || name.startsWith("com.android.internal.telephony.data-reconnect")
+                || name.startsWith("android.net.netmon.launchCaptivePortalApp");
     }
 
     Map<String, PermissionInfo> permissions() {
