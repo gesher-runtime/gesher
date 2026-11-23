@@ -172,7 +172,8 @@ public final class BluetoothLeScanner {
                 meta[5] = 0;
                 byte[] data = WindowsBluetooth.nativeScanNext(scan, 200, meta);
                 if (data != null) {
-                    deliver(result(data, meta));
+                    ScanResult report = result(data, meta);
+                    if (report != null) deliver(report);
                 } else if (meta[5] != 0) {
                     Log.w(TAG, "Windows ended the LE scan: " + WindowsBluetooth.hresult((int) meta[5]));
                     failAll(ScanCallback.SCAN_FAILED_INTERNAL_ERROR);
@@ -196,8 +197,9 @@ public final class BluetoothLeScanner {
         boolean connectable = (flags & 1) != 0;
         boolean scanResponse = (flags & 2) != 0;
         boolean legacy = (flags & 4) != 0;
-        byte[] merged;
+        ScanRecord record;
         synchronized (sLock) {
+            if (sThread != Thread.currentThread()) return null;
             sRssi.put(address, (int) meta[2]);
             byte[] adv;
             byte[] response;
@@ -213,13 +215,13 @@ public final class BluetoothLeScanner {
             }
             if (adv == null) adv = new byte[0];
             if (response == null) response = new byte[0];
-            merged = new byte[adv.length + response.length];
+            byte[] merged = new byte[adv.length + response.length];
             System.arraycopy(adv, 0, merged, 0, adv.length);
             System.arraycopy(response, 0, merged, adv.length, response.length);
+            record = ScanRecord.parseFromBytes(merged);
+            BluetoothHost.sawLe(address, record == null ? null : record.getDeviceName());
         }
-        ScanRecord record = ScanRecord.parseFromBytes(merged);
         BluetoothDevice device = BluetoothDevice.createFromHost(address, (int) meta[1]);
-        BluetoothHost.sawLe(address, record == null ? null : record.getDeviceName());
         int eventType = (connectable ? 0x01 : 0) | (scanResponse ? 0x08 : 0) | (legacy ? 0x10 : 0);
         return new ScanResult(device, eventType, BluetoothDevice.PHY_LE_1M, ScanResult.PHY_UNUSED,
                 ScanResult.SID_NOT_PRESENT, (int) meta[3], (int) meta[2],

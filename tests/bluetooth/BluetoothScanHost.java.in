@@ -193,6 +193,11 @@ public final class BluetoothScanHost {
         check(offActive.reports == 0 && offActive.errors == 0 && activeIntent.sends == intentReports
                 && active.reports == 4,
                 "BLE shutdown clears registered and detached scans without reporting failures");
+        Method result = BluetoothLeScanner.class.getDeclaredMethod("result", byte[].class, long[].class);
+        result.setAccessible(true);
+        check(result.invoke(null, new byte[0], new long[6]) == null
+                && BluetoothLeScanner.lastRssi(WindowsBluetooth.address(0)) == null,
+                "an advertisement from a retired watcher changes neither results nor the RSSI cache");
         reset();
         field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
         Callback detached = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
