@@ -135,8 +135,3 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/ofd.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")
-
-add_executable(rooted_storage_probe ${CMAKE_SOURCE_DIR}/tests/sandbox/rooted-storage-probe.cc)
-target_compile_options(rooted_storage_probe PRIVATE -Wall -Wextra -Werror)
-target_link_options(rooted_storage_probe PRIVATE -municode)
-target_link_libraries(rooted_storage_probe PRIVATE gesher_posix)
