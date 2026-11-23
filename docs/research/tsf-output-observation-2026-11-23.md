@@ -53,3 +53,21 @@ The local PowerShell resolver raises `ArgumentNullException` while resolving an 
 Source reconstruction removes only the new source receipt, compilation input and helper invocation from the PowerShell entry and recovers every original byte. Similarly, removing the exact observer additions and replacing the four size-query handle arguments recovers the old controller. The worker, complete `ci.yml`, component workflow, 1,500/3,500/45,000 ms main budgets, 5,000 ms assertions and cleanup budget are unchanged.
 
 The [JSON index](tsf-output-observation-2026-11-23.json) and [evidence archive](data/tsf-output-observation-2026-11-23.tar.gz) retain original failure/success logs, exact source receipts, compilation/error-reporting controls, the rejected local harness runs and source-preservation proof. The archive's `test-host.ps1 -SourceRoot <checkout>` reproduces the Linux compilation/diagnostic boundary only. Actual pending-I/O behavior and full fork acceptance require a genuine manual `ci.yml` dispatch on the published head; no green result is claimed here.
+
+## Full-CI source qualification follow-up
+
+The genuine manual run on published `8d955bd7b6ec85b84fa31f7df685197ddb963276` reached the existing selected-TCP preservation policy. Both [artifact preflight](https://github.com/yom-chadash/gesher/actions/runs/45206220649/job/137819438218) and [the selected native producer](https://github.com/yom-chadash/gesher/actions/runs/45206220649/job/137819439343) rejected `tools/windows4/TsfJobSupervisor.cs`: that policy still required its original controller bytes. The earlier local C#/PowerShell/source checks did not exercise this separate coupled policy. The failure is retained as a real missing source qualification, rather than reclassified as a Windows runtime failure or suppressed.
+
+The follow-up changes only source qualification and its controls. The controller, worker, metadata probe, Windows entry, workflow, deadlines, output caps and original assertions remain byte-identical to the published repair. A separately pinned manifest and exact two-file patch reverse the controller and PowerShell entry to public baseline `3b2eaca95b5ddd9cee3c3db4e430460e512eb355`; every original selected-source comparison then runs on those exact reconstructed bytes. Forward application must reconstruct the current files byte-for-byte. The new metadata probe is independently checked against its exact published `8d955bd7` blob. The original qualified TCP controller copy, OFD receipt, shared-stdio receipt, supplier inputs and approval restrictions are unchanged.
+
+The dedicated negative controls reject changed files, repinned unlisted endpoint bytes, altered deadlines/census capacity, omission of the required real Windows probe, an altered new control source, broadened path lists, a changed baseline or feature identity, modified patch hunks and an invented runtime-approval field. A refreshed endpoint digest alone cannot admit a different controller or erase a required assertion. These are source-policy controls; they do not authorize or substitute for actual Windows execution.
+
+Reproduce this qualification together with the original supplier gates:
+
+```sh
+python3 tools/net-tcp-priority/test-selected-policy.py --selftest
+python3 tools/net-tcp-priority/test-selected-supplier.py
+python3 tools/net-tcp-priority/test-vector-policy.py
+```
+
+The adjacent JSON retains every original field and adds the follow-up receipts separately. The original evidence archive is unchanged; the follow-up archive preserves both actual failing CI logs, the old-policy negative control, exact source transition, current controls and independent review. Full manual CI on the follow-up head, including the real pending-I/O controls and all ordinary Windows tests, remains required.
