@@ -316,6 +316,7 @@ public final class SystemServer {
         // 31 (BinderInternal.setMaxThreads).
         startBinderThreads(TAG, 31);
         if (device != null) device.start();
+        created.usb.startHost();
         if (persistent && GmsSignatureSpoofing.isEnabled()) {
             ApkPackage gms = created.pm.get(GmsPackageSupport.PACKAGE_GMS);
             if (gms != null && gms.hasVerifiedMicrogSigner()) {

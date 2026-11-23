@@ -57,6 +57,12 @@ static bool DrivePath(const char*, std::wstring*) { return false; }
 namespace reserved_names { static void Encode(std::wstring*) {} }
 static void Lengthen(std::wstring*) {}
 
+// The fixture exercises the default namespace without an attached block broker.
+namespace usb_block {
+[[maybe_unused]] constexpr const char* kBlockName = "sdb";
+[[maybe_unused]] static bool Attached() { return false; }
+}
+
 @PRODUCTION@
 @REFERENCE@
 

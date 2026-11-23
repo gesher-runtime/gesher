@@ -39,8 +39,10 @@ final class UsbService extends IUsbManager.Default {
 
     UsbService(CallerIdentity callers, PackageManagerService packages, ActivityManagerService am) {
         mCallers = callers;
-        mHost = new UsbHost(callers, packages, intent -> am.sendBroadcastFor("android", intent, null));
+        mHost = new UsbHost(callers, packages, am);
     }
+
+    void startHost() { mHost.start(); }
 
     private void enforce(String permission) {
         if (!mCallers.isSystem()) {
@@ -117,7 +119,7 @@ final class UsbService extends IUsbManager.Default {
     @Override
     public void setUsbDeviceConnectionHandler(ComponentName handler) {
         requireManageUsb();
-        // No Android USB activity handler.
+        // No privileged fixed-handler override.
     }
 
     // Accessory (device mode) side: no UsbDeviceManager.

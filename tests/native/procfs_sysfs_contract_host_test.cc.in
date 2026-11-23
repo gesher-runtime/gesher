@@ -37,6 +37,9 @@
 #ifndef S_IFLNK
 #define S_IFLNK 0120000
 #endif
+#ifndef S_IFBLK
+#define S_IFBLK 0060000
+#endif
 #ifndef DT_REG
 #define DT_REG 8
 #endif
@@ -45,6 +48,9 @@
 #endif
 #ifndef DT_LNK
 #define DT_LNK 10
+#endif
+#ifndef DT_BLK
+#define DT_BLK 6
 #endif
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001U
@@ -233,6 +239,15 @@ static inline unsigned int getgid() { return 10000; }
 static inline int getppid() { return 1; }
 
 #define close _close
+// This fixture has no authorized block broker. The USB guest fixture covers
+// the separate attached /sys/block and /dev/block paths.
+namespace gesher::usb_block {
+[[maybe_unused]] constexpr const char* kBlockName = "sdb";
+[[maybe_unused]] static bool Attached() { return false; }
+[[maybe_unused]] static bool SysContent(const std::string&, std::string*) { return false; }
+[[maybe_unused]] static int Open(int) { errno = ENOENT; return -1; }
+}
+
 @PROCFS_SOURCE@
 #undef close
 

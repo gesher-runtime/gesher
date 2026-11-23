@@ -4,7 +4,9 @@
  */
 package com.gesher.server;
 
+import android.app.ActivityManager;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.hardware.usb.IUsbSerialReader;
 import android.hardware.usb.UsbConfiguration;
@@ -22,17 +24,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 
 /** Present WinUSB-device inventory and attachment-scoped application permission. */
 final class UsbHost {
     private final CallerIdentity callers;
     private final PackageManagerService packages;
-    private final Consumer<Intent> notify;
+    private final ActivityManagerService activityManager;
+    private final UsbAttachActivities attachActivities;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "usb-host");
         thread.setDaemon(true);
@@ -46,13 +48,23 @@ final class UsbHost {
     private final Map<String, Attachment> byPath = new HashMap<>();
     private final Map<String, Attachment> byName = new HashMap<>();
     private final Set<PermissionRequest> pending = new HashSet<>();
+    private int queuedAttachChoices;
+    private volatile boolean choosingAttachment;
+    private boolean started;
     private int nextAddress;
 
-    UsbHost(CallerIdentity callers, PackageManagerService packages, Consumer<Intent> notify) {
+    UsbHost(CallerIdentity callers, PackageManagerService packages, ActivityManagerService activityManager) {
         this.callers = callers;
         this.packages = packages;
-        this.notify = notify;
-        if (available()) worker.scheduleWithFixedDelay(this::monitor, 0, 1, TimeUnit.SECONDS);
+        this.activityManager = activityManager;
+        attachActivities = new UsbAttachActivities(packages, IntentChooser.HOST);
+    }
+
+    synchronized void start() {
+        if (started || !available()) return;
+        started = true;
+        DeviceWork.add(() -> choosingAttachment ? 0 : Long.MAX_VALUE);
+        worker.scheduleWithFixedDelay(this::monitor, 0, 1, TimeUnit.SECONDS);
     }
 
     private static final class Attachment {
@@ -60,11 +72,20 @@ final class UsbHost {
         final long version;
         final UsbDevice device;
         final Set<ApkPackage> grants = new HashSet<>();
+        final Map<ApkPackage, ComponentName> launching = new HashMap<>();
+        volatile boolean present = true;
 
         Attachment(String path, long version, UsbDevice device) {
             this.path = path;
             this.version = version;
             this.device = device;
+        }
+
+        boolean hasGrant(ApkPackage installation) {
+            if (grants.contains(installation)) return true;
+            ComponentName target = launching.get(installation);
+            return target != null && installation.componentEnabled(
+                    target.getClassName(), ApkPackage.ComponentKind.ACTIVITY);
         }
     }
 
@@ -103,6 +124,7 @@ final class UsbHost {
     }
 
     private void refresh() {
+        if (!started) return;
         String[] paths;
         try {
             paths = nativePaths();
@@ -115,11 +137,12 @@ final class UsbHost {
         while (iterator.hasNext()) {
             Attachment device = iterator.next().getValue();
             if (present.contains(device.path) && nativeVersion(device.path) == device.version) continue;
+            device.present = false;
             iterator.remove();
             byName.remove(device.device.getDeviceName());
-            notify.accept(new Intent(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            activityManager.sendBroadcastFor("android", new Intent(UsbManager.ACTION_USB_DEVICE_DETACHED)
                     .addFlags(Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND)
-                    .putExtra(UsbManager.EXTRA_DEVICE, device.device));
+                    .putExtra(UsbManager.EXTRA_DEVICE, device.device), null);
         }
         for (String path : paths) {
             if (byPath.containsKey(path) || nextAddress >= 999 * 127) continue;
@@ -136,10 +159,60 @@ final class UsbHost {
             Attachment attachment = new Attachment(path, version, device);
             byName.put(name, attachment);
             byPath.put(path, attachment);
-            notify.accept(new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            activityManager.sendBroadcastFor("android", new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
                     .addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
-                    .putExtra(UsbManager.EXTRA_DEVICE, device));
+                    .putExtra(UsbManager.EXTRA_DEVICE, device), null);
+            if (queuedAttachChoices >= 32) continue;
+            queuedAttachChoices++;
+            consent.execute(() -> chooseActivity(attachment));
         }
+    }
+
+    private void chooseActivity(Attachment attachment) {
+        choosingAttachment = true;
+        try {
+            IntentChooser.Option chosen = attachActivities.choose(attachment.device,
+                    () -> stillAttached(attachment));
+            if (chosen == null || !chosen.current(packages, null)) return;
+            synchronized (this) {
+                if (!launchTargetCurrent(attachment, chosen)) return;
+                attachment.launching.put(chosen.code, chosen.component);
+            }
+            boolean launched = false;
+            try {
+                // The activity can open the real device from onCreate. The lifetime callback
+                // runs during publication without acquiring the USB inventory or PM lock.
+                int result = activityManager.startActivityFor("android", chosen.intent, null,
+                        () -> launchTargetCurrent(attachment, chosen));
+                launched = ActivityManager.isStartResultSuccessful(result);
+                if (!launched) {
+                    SystemServer.log("USB activity start failed for " + chosen.component + ": " + result);
+                }
+            } finally {
+                synchronized (this) {
+                    attachment.launching.remove(chosen.code);
+                    if (launched && launchTargetCurrent(attachment, chosen)) {
+                        attachment.grants.add(chosen.code);
+                    }
+                }
+            }
+        } catch (RuntimeException | LinkageError failure) {
+            SystemServer.log("USB activity selection failed: " + failure.getClass().getSimpleName());
+        } finally {
+            choosingAttachment = false;
+            synchronized (this) {
+                queuedAttachChoices--;
+            }
+        }
+    }
+
+    private boolean stillAttached(Attachment attachment) {
+        return attachment.present && nativeVersion(attachment.path) == attachment.version;
+    }
+
+    private boolean launchTargetCurrent(Attachment attachment, IntentChooser.Option chosen) {
+        return stillAttached(attachment) && installed(chosen.code)
+                && chosen.code.componentEnabled(chosen.component.getClassName(), ApkPackage.ComponentKind.ACTIVITY);
     }
 
     private static int uint8(byte[] data, int offset) { return Byte.toUnsignedInt(data[offset]); }
@@ -222,7 +295,7 @@ final class UsbHost {
 
     private Attachment valid(String name) {
         Attachment device = byName.get(name);
-        return device != null && nativeVersion(device.path) == device.version ? device : null;
+        return device != null && stillAttached(device) ? device : null;
     }
 
     private boolean installed(ApkPackage installation) {
@@ -235,7 +308,7 @@ final class UsbHost {
         Attachment device = valid(name);
         if (device == null) return false;
         ApkPackage installation = callers.requireCurrentPackage(packageName);
-        return installed(installation) && device.grants.contains(installation);
+        return installed(installation) && device.hasGrant(installation);
     }
 
     synchronized ParcelFileDescriptor open(String name, String packageName) {
@@ -263,7 +336,10 @@ final class UsbHost {
             UsbService.sendDevicePermission(reply, requested, false);
             return;
         }
-        if (device.grants.contains(installation)) {
+        if (device.hasGrant(installation)) {
+            // A successful explicit permission reply must survive cleanup of a
+            // simultaneous chooser launch that fails to publish an activity.
+            device.grants.add(installation);
             UsbService.sendDevicePermission(reply, device.device, true);
             return;
         }

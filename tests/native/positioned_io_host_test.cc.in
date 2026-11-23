@@ -306,6 +306,14 @@ static int HandleAccess(HANDLE handle, uint32_t* access) {
 }
 }
 }
+// This adapter fixture has ordinary files and no USB block capability. The
+// broker-backed branch has its own Windows guest block fixture.
+namespace gesher::usb_block {
+[[maybe_unused]] static bool Io(const DescriptorSnapshotPtr&, void*, unsigned, bool,
+                                int64_t, int*) { return false; }
+[[maybe_unused]] static bool Seek(const DescriptorSnapshotPtr&, int64_t, int,
+                                  int64_t*) { return false; }
+}
 static int gesher_is_socket(int fd) { struct stat info{}; return fstat(fd, &info) == 0 && S_ISSOCK(info.st_mode); }
 static int gesher_is_device_fd(int fd) {
   gesher::Device device; return gesher::DeviceFromFd(fd, &device);
