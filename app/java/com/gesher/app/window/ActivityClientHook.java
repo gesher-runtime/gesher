@@ -108,6 +108,7 @@ public final class ActivityClientHook implements InvocationHandler {
             data.writeStrongBinder(token);
             server.transact(WINDOWS_DRAWN, data, null, IBinder.FLAG_ONEWAY);
         } catch (RemoteException | RuntimeException e) {
+            sServerBinder = null; // a dead server's binder: look it up again next time
             System.err.println("gesher-app: reporting the first frame of activity " + token
                     + " to the system server: " + e);
         } finally {

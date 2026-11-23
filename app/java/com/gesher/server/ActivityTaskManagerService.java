@@ -5754,10 +5754,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * ActivityRecord.onWindowsDrawn: the first frame of the activity's window was drawn in
      * its process (ActivityClientController#windowsDrawn). A launch waiting for the activity
      * is complete ({@link #waitForStarted}); unlike idle, it stops no activity behind it.
+     * {@code callingPid}: the reporting process, which must still be the record's live
+     * process now (the server's own pid reports for in-process records).
+     *
+     * <p>The report is one way and can be overtaken by the process's death: a process that
+     * draws and dies before the server reads the report fails the launch it was waiting
+     * for (START_CANCELED). That is accepted: the app is gone moments after its first
+     * frame, and a report from a dead process cannot be told apart from a stale one.
      */
-    void activityWindowsDrawn(ActivityRecord r) {
+    void activityWindowsDrawn(ActivityRecord r, int callingPid) {
         synchronized (this) {
-            if (r.drawn || r.state == State.DESTROYED) return;
+            if (r.drawn || r.state == State.DESTROYED || !mActivities.contains(r)) return;
+            if (callingPid != android.os.Process.myPid()) {
+                ProcessRecord caller = processByPid(callingPid);
+                if (caller == null || r.app != caller) return;
+            }
             r.drawn = true;
             notifyAll();
         }

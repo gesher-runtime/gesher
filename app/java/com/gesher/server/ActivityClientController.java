@@ -52,7 +52,12 @@ public final class ActivityClientController extends IActivityClientController.De
     /** The first frame of the Activity's window was drawn, in its own process. */
     void windowsDrawn(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityWindowsDrawn(r);
+        // The owner is checked again under the lock with the caller's pid: a report that
+        // was queued by a process which then died must not mark the record once it is
+        // restarted in a new process.
+        if (r != null && mAtm.requireActivityOwner(r)) {
+            mAtm.activityWindowsDrawn(r, android.os.Binder.getCallingPid());
+        }
     }
 
     @Override

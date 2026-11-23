@@ -242,6 +242,27 @@ public final class HostLaunchReceiptTest {
         windowsDrawnReport(controller,(IBinder)get(early,"token"),com.gesher.app.window.ActivityClientHook.WINDOWS_DRAWN_DESCRIPTOR);
         require(!(Boolean)get(early,"drawn"),"A late first-frame report revived a dead launch");
         synchronized(tasks){records.removeAll(Arrays.asList(busy,headless,early,kept,finishing));processes.remove(process);}
+
+        // 4. A report queued by a process that then died must not mark the record once it
+        // is restarted in a new process; the new process's own report does.
+        Object restarted=make(processType,new Class<?>[]{atm,int.class,IApplicationThread.class},tasks,77320,new AppThread());
+        set(restarted,"packageName",info.packageName);set(restarted,"processName",info.processName);set(restarted,"ready",true);
+        Object again=make(recordType,signature,tasks,info,new Intent(intent),715,Binder.getCallingPid(),"com.gesher.launcher",null,null,-1);
+        set(again,"app",restarted);set(again,"state",Enum.valueOf((Class)state,"RESUMED"));
+        synchronized(tasks){processes.add(restarted);records.add(again);((List<Object>)get(restarted,"activities")).add(again);}
+        Method drawnFrom=method(atm,"activityWindowsDrawn",recordType,int.class);
+        drawnFrom.invoke(tasks,again,77310); // the dead process's pid
+        require(!(Boolean)get(again,"drawn"),"A dead process's late report marked the record restarted in a new process");
+        drawnFrom.invoke(tasks,again,77320);
+        require((Boolean)get(again,"drawn"),"The live owner's first-frame report was not recorded");
+        synchronized(tasks){records.remove(again);processes.remove(restarted);}
+
+        // 5. A failed report drops the cached server binder, to look it up again.
+        Binder dead=new Binder(){ @Override protected boolean onTransact(int c,Parcel d,Parcel r,int f) throws RemoteException {
+            throw new DeadObjectException(); } };
+        serverBinder.set(null,dead);
+        try { com.gesher.app.window.ActivityClientHook.reportWindowsDrawn(new Binder()); }
+        finally { require(serverBinder.get(null)==null,"A dead server binder stayed cached"); serverBinder.set(null,previousServer); }
     }
     @SuppressWarnings({"unchecked","rawtypes"})
     public static void main(String[] args)throws Exception {

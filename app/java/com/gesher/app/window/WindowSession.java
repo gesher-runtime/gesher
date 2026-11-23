@@ -2760,12 +2760,13 @@ public final class WindowSession extends IWindowSession.Stub {
         }
     }
 
-    /** An Activity's own window (its token), not its starting window or a system one. */
+    /**
+     * An Activity's main window (its token, TYPE_BASE_APPLICATION, also for a dialog-themed
+     * or translucent Activity): not a dialog it shows, its starting window or a system one.
+     */
     private static boolean isActivityWindow(WindowManager.LayoutParams attrs) {
         return attrs != null && attrs.token != null
-                && attrs.type >= WindowManager.LayoutParams.FIRST_APPLICATION_WINDOW
-                && attrs.type <= WindowManager.LayoutParams.LAST_APPLICATION_WINDOW
-                && attrs.type != WindowManager.LayoutParams.TYPE_APPLICATION_STARTING;
+                && attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION;
     }
 
     /** {@code [w, h, ARGB...]} as a few ARGB values down the window's first quarter. */
