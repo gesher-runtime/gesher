@@ -412,10 +412,7 @@ public final class Launcher {
             if (state != null) {
                 String name = state.getProperty(Device.STATE_DEVICE);
                 if (Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
-                    if (protectedRequested() && !protectedDevice(state)) {
-                        throw new IllegalStateException("Shut down the current device before"
-                                + " starting a protected device");
-                    }
+                    if (start && protectedRequested()) requireProtectedDevice(state);
                     use(state);
                     log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
                     return state;
@@ -464,9 +461,7 @@ public final class Launcher {
         try {
             Properties state = Device.read(Device.stateFile());
             if (state != null && Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
-                if (!protectedDevice(state)) {
-                    throw new IllegalStateException("The running device has no protected policy owner");
-                }
+                requireProtectedDevice(state);
             } else {
                 if (state != null) {
                     Device.killLeftovers(state);
@@ -517,6 +512,15 @@ public final class Launcher {
 
     private static boolean protectedDevice(Properties state) {
         return "true".equals(state.getProperty(Device.STATE_PROTECTED));
+    }
+
+    private static void requireProtectedDevice(Properties state) {
+        if (!protectedDevice(state)) {
+            // Older servers have no atomic idle-only retirement request. Their
+            // shutdown event can terminate apps, so leave the live device alone.
+            throw new IllegalStateException("A legacy Gesher device is still running. Finish its apps"
+                    + " and let it stop, or run gesher-app shutdown before trying again.");
+        }
     }
 
     private static Properties startDevice(boolean cohostOwner) throws Exception {
