@@ -497,6 +497,8 @@ public class WifiManager {
 
     /** No suggestion store: Android's internal-error status, never a false success. */
     public int addNetworkSuggestions(List<WifiNetworkSuggestion> networkSuggestions) {
+        // Android marshals the list in a ParceledListSlice first: null is a NullPointerException.
+        if (networkSuggestions == null) throw new NullPointerException("networkSuggestions");
         WifiAccess.enforceChange(mContext);
         if (networkSuggestions == null) return STATUS_NETWORK_SUGGESTIONS_SUCCESS;
         return STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL;
@@ -505,6 +507,7 @@ public class WifiManager {
         return removeNetworkSuggestions(networkSuggestions, ACTION_REMOVE_SUGGESTION_DISCONNECT);
     }
     public int removeNetworkSuggestions(List<WifiNetworkSuggestion> networkSuggestions, int action) {
+        if (networkSuggestions == null) throw new NullPointerException("networkSuggestions");
         WifiAccess.enforceChange(mContext);
         if (action != ACTION_REMOVE_SUGGESTION_LINGER && action != ACTION_REMOVE_SUGGESTION_DISCONNECT) {
             return STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
@@ -540,7 +543,7 @@ public class WifiManager {
 
     /** A registration delivered by the service to an app executor. */
     private static final class Remote extends IWindowsWifi.Callback {
-        final Executor executor;
+        volatile Executor executor; // a re-registered scan callback takes the new executor
         final IntConsumer target;
         volatile boolean active = true;
         Remote(Executor executor, IntConsumer target) { this.executor = executor; this.target = target; }
@@ -558,29 +561,49 @@ public class WifiManager {
     }
 
     private void register(int kind, Object key, Executor executor, IntConsumer target) {
-        Remote remote = new Remote(executor, target);
+        // As WifiManager's per-type proxies: a scan callback is registered again with the
+        // new executor; a state or local-only listener that is already registered is
+        // ignored (no service call, so no permission check); a suggestion listener is
+        // registered again (the latest proxy is kept for removal, the earlier one stays
+        // registered). The entry is recorded before the service call and kept if the
+        // service refuses it, as Android's maps do.
+        Remote remote;
+        boolean fresh;
         synchronized (sRemotes) {
-            if (remotes(kind).containsKey(key)) return;
+            Remote existing = remotes(kind).get(key);
+            if (existing != null && (kind == IWindowsWifi.CALLBACK_WIFI_STATE
+                    || kind == IWindowsWifi.CALLBACK_LOCAL_ONLY_FAILURE)) {
+                return;
+            }
+            fresh = existing == null || kind != IWindowsWifi.CALLBACK_SCAN_RESULTS;
+            remote = fresh ? new Remote(executor, target) : existing;
+            remote.executor = executor;
             remotes(kind).put(key, remote);
         }
+        // The service's own ACCESS_WIFI_STATE check (WifiServiceImpl enforceAccessPermission).
+        WifiAccess.enforceAccess(mContext);
         IWindowsWifi service = service();
         if (service == null) return;
         try {
             service.registerCallback(packageName(), attributionTag(), kind, remote);
         } catch (RemoteException e) {
-            synchronized (sRemotes) { remotes(kind).remove(key); }
+            synchronized (sRemotes) { if (fresh && remotes(kind).get(key) == remote) remotes(kind).remove(key); }
             throw e.rethrowFromSystemServer();
-        } catch (RuntimeException e) {
-            synchronized (sRemotes) { remotes(kind).remove(key); }
-            throw e;
         }
     }
 
     private void unregister(int kind, Object key) {
         Remote remote;
-        synchronized (sRemotes) { remote = remotes(kind).remove(key); }
+        synchronized (sRemotes) { remote = remotes(kind).get(key); }
+        // Android ignores an unknown listener without a service call; only a scan callback
+        // always reaches the service (and its permission check).
+        if (remote == null && kind != IWindowsWifi.CALLBACK_SCAN_RESULTS) return;
+        // Scan and state proxies are dropped even when the service call throws.
+        boolean dropFirst = kind == IWindowsWifi.CALLBACK_SCAN_RESULTS || kind == IWindowsWifi.CALLBACK_WIFI_STATE;
+        if (dropFirst) drop(kind, key, remote);
+        WifiAccess.enforceAccess(mContext);
         if (remote == null) return;
-        remote.active = false;
+        if (!dropFirst) drop(kind, key, remote);
         IWindowsWifi service = service();
         if (service == null) return;
         try {
@@ -590,42 +613,43 @@ public class WifiManager {
         }
     }
 
+    private static void drop(int kind, Object key, Remote remote) {
+        if (remote == null) return;
+        remote.active = false;
+        synchronized (sRemotes) { if (remotes(kind).get(key) == remote) remotes(kind).remove(key); }
+    }
+
     /** Fired on every completed real scan, including Windows' own background scans. */
     public void registerScanResultsCallback(Executor executor, ScanResultsCallback callback) {
         if (executor == null) throw new IllegalArgumentException("executor cannot be null");
         if (callback == null) throw new IllegalArgumentException("callback cannot be null");
-        WifiAccess.enforceAccess(mContext);
         register(IWindowsWifi.CALLBACK_SCAN_RESULTS, callback, executor, value -> callback.onScanResultsAvailable());
     }
     public void unregisterScanResultsCallback(ScanResultsCallback callback) {
         if (callback == null) throw new IllegalArgumentException("callback cannot be null");
-        WifiAccess.enforceAccess(mContext);
         unregister(IWindowsWifi.CALLBACK_SCAN_RESULTS, callback);
     }
     /** Called once on registration and on each observed radio state change. */
     public void addWifiStateChangedListener(Executor executor, WifiStateChangedListener listener) {
         Objects.requireNonNull(executor);
         Objects.requireNonNull(listener);
-        WifiAccess.enforceAccess(mContext);
         register(IWindowsWifi.CALLBACK_WIFI_STATE, listener, executor, value -> listener.onWifiStateChanged());
     }
     public void removeWifiStateChangedListener(WifiStateChangedListener listener) {
         Objects.requireNonNull(listener);
-        WifiAccess.enforceAccess(mContext);
         unregister(IWindowsWifi.CALLBACK_WIFI_STATE, listener);
     }
     public void addSuggestionConnectionStatusListener(Executor executor, SuggestionConnectionStatusListener listener) {
         if (listener == null) throw new IllegalArgumentException("Listener cannot be null");
         if (executor == null) throw new IllegalArgumentException("Executor cannot be null");
+        // WifiServiceImpl: ACCESS_WIFI_STATE, then fine location granted.
         WifiAccess.enforceAccess(mContext);
-        // From T, WifiServiceImpl requires ACCESS_FINE_LOCATION declared in the manifest.
         if (!granted(FINE)) throw new SecurityException("UID " + myUid() + " has no location permission");
         // Failures are reported only for suggested-network connection attempts.
         register(IWindowsWifi.CALLBACK_SUGGESTION_CONNECTION, listener, executor, value -> { });
     }
     public void removeSuggestionConnectionStatusListener(SuggestionConnectionStatusListener listener) {
         if (listener == null) throw new IllegalArgumentException("Listener cannot be null");
-        WifiAccess.enforceAccess(mContext);
         unregister(IWindowsWifi.CALLBACK_SUGGESTION_CONNECTION, listener);
     }
     /** Called once on registration with the app's current approval status. */
@@ -633,24 +657,20 @@ public class WifiManager {
             SuggestionUserApprovalStatusListener listener) {
         if (listener == null) throw new NullPointerException("Listener cannot be null");
         if (executor == null) throw new NullPointerException("Executor cannot be null");
-        WifiAccess.enforceAccess(mContext);
         register(IWindowsWifi.CALLBACK_SUGGESTION_APPROVAL, listener, executor, listener::onUserApprovalStatusChange);
     }
     public void removeSuggestionUserApprovalStatusListener(SuggestionUserApprovalStatusListener listener) {
         if (listener == null) throw new IllegalArgumentException("Listener cannot be null");
-        WifiAccess.enforceAccess(mContext);
         unregister(IWindowsWifi.CALLBACK_SUGGESTION_APPROVAL, listener);
     }
     public void addLocalOnlyConnectionFailureListener(Executor executor, LocalOnlyConnectionFailureListener listener) {
         if (listener == null) throw new IllegalArgumentException("Listener cannot be null");
         if (executor == null) throw new IllegalArgumentException("Executor cannot be null");
-        WifiAccess.enforceAccess(mContext);
         // Failures are reported only for this app's network-specifier requests.
         register(IWindowsWifi.CALLBACK_LOCAL_ONLY_FAILURE, listener, executor, value -> { });
     }
     public void removeLocalOnlyConnectionFailureListener(LocalOnlyConnectionFailureListener listener) {
         if (listener == null) throw new IllegalArgumentException("Listener cannot be null");
-        WifiAccess.enforceAccess(mContext);
         unregister(IWindowsWifi.CALLBACK_LOCAL_ONLY_FAILURE, listener);
     }
     /** Gesher has no Wi-Fi subsystem restart; registered callbacks are never invoked. */
@@ -683,8 +703,9 @@ public class WifiManager {
     private void localOnlyHotspot(Executor executor, LocalOnlyHotspotCallback callback) {
         WifiAccess.enforceChange(mContext);
         if (targetSdk() < 33) {
-            if (!granted(FINE) && !granted(COARSE)) {
-                throw new SecurityException("UID " + myUid() + " has no location permission");
+            // WifiPermissionsUtil.enforceLocationPermission: coarse suffices only below Q.
+            if (!granted(FINE) && !(targetSdk() < 29 && granted(COARSE))) {
+                throw new SecurityException("UID " + myUid() + " does not have Coarse/Fine Location permission");
             }
             if (!locationEnabled()) throw new SecurityException("Location mode is not enabled.");
         } else if (!privileged() && !granted(NEARBY)) {
@@ -825,6 +846,9 @@ public class WifiManager {
             throw new IllegalArgumentException("invalid roaming mode: " + roamingMode);
         }
         Objects.requireNonNull(ssid, "ssid cannot be null");
+        // WifiServiceImpl evaluates isAggressiveRoamingModeSupported(), an ACCESS_WIFI_STATE
+        // feature query, before anything else.
+        WifiAccess.enforceAccess(mContext);
         if (roamingMode == ROAMING_MODE_AGGRESSIVE) {
             throw new UnsupportedOperationException("Aggressive roaming mode not supported");
         }

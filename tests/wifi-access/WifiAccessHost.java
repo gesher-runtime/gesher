@@ -428,6 +428,22 @@ public final class WifiAccessHost {
             manager.startLocalOnlyHotspotWithConfiguration(softAp, Runnable::run, hotspotCallback);
             check(hotspot[0] == WifiManager.LocalOnlyHotspotCallback.ERROR_GENERIC, "no SoftAP: generic failure, never started");
             check(!manager.validateSoftApConfiguration(softAp), "no SoftAP configuration is valid");
+            // Before T the hotspot needs location; coarse suffices only for targets below Q.
+            caller.permissions.remove(FINE);
+            caller.info.targetSdkVersion = 30;
+            rejects(SecurityException.class, () -> manager.startLocalOnlyHotspotWithConfiguration(softAp, Runnable::run, hotspotCallback),
+                    "targets 29-32 need fine location for the hotspot");
+            caller.info.targetSdkVersion = 28;
+            // Below Q coarse passes the permission check; this context has location off,
+            // which is the next check.
+            try {
+                manager.startLocalOnlyHotspotWithConfiguration(softAp, Runnable::run, hotspotCallback);
+                check(false, "coarse below Q reached the location-mode check");
+            } catch (SecurityException expected) {
+                check(String.valueOf(expected.getMessage()).contains("Location mode"), "coarse suffices below Q");
+            }
+            caller.info.targetSdkVersion = 36;
+            caller.permissions.add(FINE);
             rejects(IllegalArgumentException.class, () -> manager.addOrUpdatePasspointConfiguration(null),
                     "Passpoint refusal is IllegalArgumentException");
             check(manager.getPasspointConfigurations().isEmpty(), "no Passpoint providers");
@@ -442,6 +458,11 @@ public final class WifiAccessHost {
             rejects(NullPointerException.class, () -> manager.setPerSsidRoamingMode(null, 1), "roaming SSID null");
             rejects(UnsupportedOperationException.class, () -> manager.setPerSsidRoamingMode(
                     WifiSsid.fromUtf8Text("x"), WifiManager.ROAMING_MODE_AGGRESSIVE), "aggressive roaming unsupported");
+            caller.permissions.remove(ACCESS);
+            rejects(SecurityException.class, () -> manager.setPerSsidRoamingMode(
+                    WifiSsid.fromUtf8Text("x"), WifiManager.ROAMING_MODE_AGGRESSIVE),
+                    "the roaming feature query needs ACCESS_WIFI_STATE first");
+            caller.permissions.add(ACCESS);
             rejects(IllegalArgumentException.class, () -> manager.setSendDhcpHostnameRestriction(4), "unknown DHCP flags");
             rejects(SecurityException.class, () -> manager.setSendDhcpHostnameRestriction(1), "DHCP policy is privileged");
             rejects(SecurityException.class, () -> manager.getUsableChannels(1, 1),
@@ -494,6 +515,44 @@ public final class WifiAccessHost {
             rejects(SecurityException.class, () -> manager.addSuggestionConnectionStatusListener(executor, status),
                     "suggestion connection listener needs granted fine location");
             caller.permissions.add(FINE);
+            // ParceledListSlice marshalling fails on a null list before any permission check.
+            caller.permissions.remove(CHANGE);
+            rejects(NullPointerException.class, () -> manager.addNetworkSuggestions(null), "null suggestion list");
+            rejects(NullPointerException.class, () -> manager.removeNetworkSuggestions(null), "null removal list");
+            caller.permissions.add(CHANGE);
+            // Duplicates and unknown removals as Android's per-type listener maps handle them.
+            WifiManager.WifiStateChangedListener once = () -> { };
+            manager.addWifiStateChangedListener(executor, once);
+            int registered = service.callbacks.size();
+            caller.permissions.remove(ACCESS);
+            manager.addWifiStateChangedListener(executor, once);
+            manager.removeLocalOnlyConnectionFailureListener((spec, reason) -> { });
+            manager.removeSuggestionUserApprovalStatusListener(unknownStatus -> { });
+            check(service.callbacks.size() == registered,
+                    "a duplicate state listener and unknown removals make no service call or permission check");
+            rejects(SecurityException.class, () -> manager.unregisterScanResultsCallback(new WifiManager.ScanResultsCallback() {
+                @Override public void onScanResultsAvailable() { }
+            }), "an unknown scan callback still reaches the service's permission check");
+            caller.permissions.add(ACCESS);
+            manager.removeWifiStateChangedListener(once);
+            WifiManager.SuggestionUserApprovalStatusListener twice = approvalStatus -> { };
+            manager.addSuggestionUserApprovalStatusListener(executor, twice);
+            manager.addSuggestionUserApprovalStatusListener(executor, twice);
+            check(service.callbacks.size() == registered + 1, "a repeated approval listener is registered again");
+            manager.removeSuggestionUserApprovalStatusListener(twice);
+            check(service.callbacks.size() == registered, "removal drops the latest approval registration only");
+            List<Runnable> second = new ArrayList<>();
+            int[] scanned = {0};
+            WifiManager.ScanResultsCallback moved = new WifiManager.ScanResultsCallback() {
+                @Override public void onScanResultsAvailable() { scanned[0]++; }
+            };
+            manager.registerScanResultsCallback(executor, moved);
+            manager.registerScanResultsCallback(second::add, moved);
+            queued.clear();
+            service.fire(IWindowsWifi.CALLBACK_SCAN_RESULTS);
+            check(queued.isEmpty() && second.size() == 1, "a re-registered scan callback uses its new executor");
+            manager.unregisterScanResultsCallback(moved);
+            queued.clear();
         } finally {
             if (previousWifi == null) cache.remove(IWindowsWifi.NAME); else cache.put(IWindowsWifi.NAME, previousWifi);
         }

@@ -84,7 +84,9 @@ the Windows observation instead of marking an old list as newly received.
 
 IPv4 address, mask, gateway and DNS information comes from `WindowsNetworks`
 for the same interface. A gateway is not evidence of a DHCP server, and an IP
-address does not establish a lease duration. Unknown DHCP fields remain zero.
+address does not establish a lease duration. Unknown DHCP fields remain zero, and
+`DhcpInfo.netmask` stays 0 as `WifiServiceImpl.getDhcpInfo` leaves it (the prefix is in
+the network's `LinkProperties`).
 The current connection does not create a saved Android profile: network ID
 remains `-1`, and `getConfiguredNetworks()` is empty.
 

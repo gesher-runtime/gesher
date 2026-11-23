@@ -232,7 +232,8 @@ public final class WifiService extends IWindowsWifi.Stub {
         Owner owner = caller(name, null); enforce(owner, ACCESS);
         DhcpInfo data = mBackend.dhcpInfo(); enforce(owner, ACCESS);
         DhcpInfo result = new DhcpInfo();
-        result.ipAddress = data.ipAddress; result.gateway = data.gateway; result.netmask = data.netmask;
+        result.ipAddress = data.ipAddress; result.gateway = data.gateway;
+        // netmask stays 0: WifiServiceImpl.getDhcpInfo never sets it.
         result.dns1 = data.dns1; result.dns2 = data.dns2; result.serverAddress = data.serverAddress;
         result.leaseDuration = data.leaseDuration;
         return result;

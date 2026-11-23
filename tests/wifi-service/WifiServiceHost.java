@@ -132,7 +132,7 @@ public final class WifiServiceHost {
             info.setSSID(WifiSsid.fromBytes("Fixture AP".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             info.setBSSID("02:10:20:30:40:50"); info.setMacAddress("02:21:31:41:51:61");
             info.setRssi(-49); info.setFrequency(5180);
-            dhcp.ipAddress = 0x0101a8c0; dhcp.gateway = 0x0100a8c0;
+            dhcp.ipAddress = 0x0101a8c0; dhcp.gateway = 0x0100a8c0; dhcp.netmask = 0x00ffffff;
             ap.SSID = "Fixture AP"; ap.BSSID = "02:10:20:30:40:50";
             ap.capabilities = "[ESS]"; ap.frequency = 5180; ap.level = -49; ap.timestamp = 123456;
         }
@@ -273,6 +273,7 @@ public final class WifiServiceHost {
                 check("02:10:20:30:40:50".equals(h.wifi.getConnectionInfo(h.owner.name(), "wifi").getBSSID()), "WifiInfo is detached");
                 DhcpInfo dhcp = h.wifi.getDhcpInfo(h.owner.name()); dhcp.ipAddress = 0;
                 check(h.wifi.getDhcpInfo(h.owner.name()).ipAddress == 0x0101a8c0, "DHCP is detached");
+                check(h.wifi.getDhcpInfo(h.owner.name()).netmask == 0, "DHCP netmask stays 0 as WifiServiceImpl leaves it");
                 List<ScanResult> scans = h.wifi.getScanResults(h.owner.name(), "wifi");
                 check(scans.size() == 1 && scans.get(0).timestamp == 123456, "Cached observations retain real timestamps");
                 scans.get(0).SSID = "changed"; scans.clear();
