@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Compile production worker/controller, AndroidX adapters and storage query logic.
+"""Execute production worker-unavailable gates and per-origin storage queries.
 
 Android framework scheduling/content and the native bridge are recording seams.
+Prepared worker interception code is tested separately by explicitly constructing
+and publishing an isolated fixture instance; it is not production support.
 No browser or network is used; Windows WebView2 execution is a separate gate.
 """
 from pathlib import Path
@@ -21,7 +23,7 @@ STUBS = {
 'android/net/Uri.java': '''package android.net; public class Uri { private final String v; private Uri(String v){this.v=v;} public static Uri parse(String v){return new Uri(v);} public String getScheme(){int c=v.indexOf(':');return c<0?null:v.substring(0,c);} public String toString(){return v;} }''',
 'android/content/Context.java': '''package android.content; public class Context { public boolean internet=true; public final ContentResolver resolver=new ContentResolver(); public int checkPermission(String p,int pid,int uid){return internet?0:-1;} public ContentResolver getContentResolver(){return resolver;} }''',
 'android/content/ContentResolver.java': '''package android.content; public class ContentResolver { public int reads; public java.io.InputStream openInputStream(android.net.Uri uri) throws java.io.IOException {reads++;return new java.io.ByteArrayInputStream(new byte[]{7,8});} public String getType(android.net.Uri uri){return "text/plain";} }''',
-'android/app/ActivityThread.java': '''package android.app; public class ActivityThread { public static android.content.Context app; public static android.content.Context currentApplication(){return app;} }''',
+'android/app/ActivityThread.java': '''package android.app; public class ActivityThread { public static int calls; public static android.content.Context app; public static android.content.Context currentApplication(){calls++;return app;} }''',
 'android/webkit/ServiceWorkerController.java': '''package android.webkit; public abstract class ServiceWorkerController { public abstract ServiceWorkerWebSettings getServiceWorkerWebSettings(); public abstract void setServiceWorkerClient(ServiceWorkerClient c); }''',
 'android/webkit/ServiceWorkerClient.java': '''package android.webkit; public abstract class ServiceWorkerClient { public WebResourceResponse shouldInterceptRequest(WebResourceRequest r){return null;} }''',
 'android/webkit/ServiceWorkerWebSettings.java': '''package android.webkit; public abstract class ServiceWorkerWebSettings { public abstract void setCacheMode(int v); public abstract int getCacheMode(); public abstract void setAllowContentAccess(boolean v); public abstract boolean getAllowContentAccess(); public abstract void setAllowFileAccess(boolean v); public abstract boolean getAllowFileAccess(); public abstract void setBlockNetworkLoads(boolean v); public abstract boolean getBlockNetworkLoads(); }''',
@@ -29,17 +31,21 @@ STUBS = {
 'android/webkit/WebResourceRequest.java': '''package android.webkit; public interface WebResourceRequest { android.net.Uri getUrl(); boolean isForMainFrame(); boolean isRedirect(); boolean hasGesture(); String getMethod(); java.util.Map<String,String> getRequestHeaders(); }''',
 'android/webkit/WebResourceResponse.java': '''package android.webkit; public class WebResourceResponse { final String mime,encoding,reason; final int status; final java.util.Map<String,String> headers; final java.io.InputStream data; public WebResourceResponse(String m,String e,java.io.InputStream d){this(m,e,200,"OK",null,d);} public WebResourceResponse(String m,String e,int s,String r,java.util.Map<String,String> h,java.io.InputStream d){mime=m;encoding=e;status=s;reason=r;headers=h;data=d;} public String getMimeType(){return mime;} public String getEncoding(){return encoding;} public int getStatusCode(){return status;} public String getReasonPhrase(){return reason;} public java.util.Map<String,String> getResponseHeaders(){return headers;} public java.io.InputStream getData(){return data;} }''',
 'android/webkit/ValueCallback.java': '''package android.webkit; public interface ValueCallback<T>{void onReceiveValue(T value);}''',
-'com/gesher/app/webview/GesherWebView.java': '''package com.gesher.app.webview; final class GesherWebView { static boolean fail; static void configure(android.content.Context c){if(fail)throw new IllegalStateException("configuration unavailable");} }''',
+'android/webkit/WebStorage.java': '''package android.webkit; public class WebStorage { public void getOrigins(ValueCallback<java.util.Map> c){} public void getUsageForOrigin(String o,ValueCallback<Long> c){} public void getQuotaForOrigin(String o,ValueCallback<Long> c){} public void deleteOrigin(String o){} public void deleteAllData(){} }''',
+'com/gesher/app/webview/GesherWebView.java': '''package com.gesher.app.webview; final class GesherWebView { static boolean fail; static int configurations; static void configure(android.content.Context c){configurations++;if(fail)throw new IllegalStateException("configuration unavailable");} }''',
 'com/gesher/app/webview/FileUrls.java': '''package com.gesher.app.webview; final class FileUrls { static boolean lastAllowed; static String fromWebView2(String v){return v.replace("https://gesher-file.example/","file:///");} static android.webkit.WebResourceResponse load(android.content.Context c,String v,boolean allowed){lastAllowed=allowed;return new android.webkit.WebResourceResponse("text/plain",null,allowed?200:404,allowed?"OK":"Not Found",null,new java.io.ByteArrayInputStream(new byte[0]));} }''',
 'com/gesher/app/webview/WebView2Host.java': '''package com.gesher.app.webview;
 final class WebView2Host {
  interface GlobalCallback {void onResult(int t,int hr,String v);}
  static boolean accepted=true,enable=true; static int hr; static String json="{\\"usage\\":1234,\\"quota\\":99999}";
- static int queries; static String origin;
+ static int queries,enables,threadChecks; static String origin; static boolean webViewThread;
+ static final int DATA_ALL_DOM_STORAGE=32,DATA_FILE_SYSTEMS=1,DATA_INDEXED_DB=2,DATA_LOCAL_STORAGE=4,DATA_WEB_SQL=8,DATA_CACHE_STORAGE=16;
+ static boolean clearOriginData(String o,GlobalCallback cb){return true;}
+ static boolean clearBrowsingData(int flags,GlobalCallback cb){return true;}
  static GlobalCallback pending;
  static boolean queryOriginStorage(String o,GlobalCallback cb){queries++;origin=o;if(!accepted)return false;pending=cb;return true;}
- static boolean enableServiceWorkers(GlobalCallback cb){cb.onResult(2,enable?0:-1,"");return true;}
- static boolean onWebViewThread(){return false;}
+ static boolean enableServiceWorkers(GlobalCallback cb){enables++;cb.onResult(2,enable?0:-1,"");return true;}
+ static boolean onWebViewThread(){threadChecks++;return webViewThread;}
  static final java.util.Map<Long,Result> responses=new java.util.concurrent.ConcurrentHashMap<>();
  record Result(int status,String reason,String headers,byte[] body){}
  static boolean respondToServiceWorker(long id,int s,String r,String h,byte[] b){responses.put(id,new Result(s,r,h,b));return true;}
@@ -66,7 +72,11 @@ public class WorkerContractHost {
  public static void main(String[] args) throws Exception {
   android.content.Context app=new android.content.Context();
   android.app.ActivityThread.app=app;
-  GesherServiceWorkers controller=GesherServiceWorkers.get();
+  // Prepared internals only: production get() is unavailable. No application
+  // path performs this explicit construction/publication used by this fixture.
+  GesherServiceWorkers controller=new GesherServiceWorkers(app);
+  Field instance=GesherServiceWorkers.class.getDeclaredField("sInstance");
+  instance.setAccessible(true);instance.set(null,controller);
   ServiceWorkerWebSettings settings=controller.getServiceWorkerWebSettings();
   check(settings.getCacheMode()==-1,"default cache mode");
   check(settings.getAllowFileAccess()&&settings.getAllowContentAccess(),"Chromium default file/content permission");
@@ -99,7 +109,7 @@ public class WorkerContractHost {
   controller.setServiceWorkerClient(null);settings.setBlockNetworkLoads(false);
   check(GesherServiceWorkers.dispatch(2,"https://example.invalid/a","GET",null),"cleared client accepted");
   check(response(2).status()==0,"null client actually resumes original request");
-  Field instance=GesherServiceWorkers.class.getDeclaredField("sInstance");instance.setAccessible(true);instance.set(null,offline);
+  instance.set(null,offline);
   GesherServiceWorkers.dispatch(3,"https://example.invalid/a","GET",null);
   check(response(3).status()<0,"missing INTERNET is never released to network");instance.set(null,controller);
   offline.setServiceWorkerClient(new ServiceWorkerClient(){public WebResourceResponse shouldInterceptRequest(WebResourceRequest r){return new WebResourceResponse("text/plain",null,new ByteArrayInputStream(new byte[]{6}));}});
@@ -119,7 +129,7 @@ public class WorkerContractHost {
   InvocationHandler settingsHandler=adapter.getServiceWorkerWebSettings();
   Method content=ServiceWorkerWebSettings.class.getMethod("setAllowContentAccess",boolean.class);
   try{settingsHandler.invoke(null,content,new Object[]{false});}catch(Throwable e){throw new AssertionError(e);}
-  check(!settings.getAllowContentAccess(),"AndroidX settings share framework singleton");
+  check(!settings.getAllowContentAccess(),"isolated AndroidX adapter shares its prepared controller");
   SupportLib.Converter converter=new SupportLib.Converter();
   InvocationHandler converted=converter.convertServiceWorkerSettings((Object)settings);
   check(converter.convertServiceWorkerSettings(converted)==settings,"AndroidX settings converter preserves exact object");
@@ -129,9 +139,8 @@ public class WorkerContractHost {
   check(controller.intercept("https://example.invalid/a","GET",null).getData().read()==9,"AndroidX client dispatched");
   adapter.setServiceWorkerClient(null);settings.setBlockNetworkLoads(false);
   check(controller.intercept("https://example.invalid/a","GET",null)==null,"AndroidX null removes client");
-  List<String> features=Arrays.asList(new SupportLib.Factory().getSupportedFeatures());
-  check(features.contains("SERVICE_WORKER_BASIC_USAGE")&&features.contains("SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST"),"working callback features exposed");
-  check(!features.contains("SERVICE_WORKER_CACHE_MODE")&&!features.contains("SERVICE_WORKER_CONTENT_ACCESS")&&!features.contains("SERVICE_WORKER_FILE_ACCESS")&&!features.contains("SERVICE_WORKER_BLOCK_NETWORK_LOADS"),"unsupported backend modes not advertised");
+  instance.set(null,null);
+  check(WebView2Host.enables==0,"prepared fixture never activates a native worker filter");
   final long[] value={-1};final int[] calls={0};
   WebStorageQueries.query("https://storage.invalid",false,v->{value[0]=v;calls[0]++;});
   check(value[0]==-1&&WebView2Host.origin.equals("https://storage.invalid"),"asynchronous native query forwarding");
@@ -146,33 +155,13 @@ public class WorkerContractHost {
   GesherWebView.fail=true;value[0]=-1;WebStorageQueries.query("https://storage.invalid",false,v->value[0]=v);GesherWebView.fail=false;
   check(value[0]==0,"configuration failure still completes once");
   check(android.os.Handler.posts>=4,"callback handed to calling Looper");
-  System.out.println("Service worker and WebStorage production contracts: "+checks+" checks passed");
+  System.out.println("Isolated prepared worker internals and WebStorage query contracts: "+checks+" checks passed");
  }
 }
 '''
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--java-home', required=True, type=Path)
-    parser.add_argument('--core-classes', type=Path, help='Optional actual Android org.json classes')
-    args = parser.parse_args()
-    source = (ROOT / 'app/java/com/gesher/app/webview/SupportLib.java').read_text()
-    fields = source[source.index('    static final String[] FEATURES = {'):source.index('\n    };', source.index('    static final String[] FEATURES = {')) + 7]
-    adapters = '''package com.gesher.app.webview;
-import java.lang.reflect.*;import java.util.concurrent.*;import android.webkit.*;
-public final class SupportLib { private static final String BOUNDARY="org.chromium.support_lib_boundary.";
-''' + fields + '\n' + '\n'.join(method(source, signature) for signature in [
-        'static final class Boundary implements InvocationHandler', 'static Object call(',
-        'public static final class ServiceWorkers', 'public static final class WorkerSettings'])
-    adapters += '\npublic static final class Converter {' + method(source, 'public InvocationHandler convertServiceWorkerSettings(Object settings)') + method(source, 'public Object convertServiceWorkerSettings(InvocationHandler settings)') + '}\n'
-    adapters += '\npublic static final class Factory {' + method(method(source, 'public static final class Factory'), 'public String[] getSupportedFeatures()') + '}\n}'
-    files = dict(STUBS)
-    if args.core_classes: del files['org/json/JSONObject.java']
-    files['com/gesher/app/webview/SupportLib.java'] = adapters
-    for name in ('GesherServiceWorkers.java', 'WebStorageQueries.java'):
-        files['com/gesher/app/webview/' + name] = (ROOT / 'app/java/com/gesher/app/webview' / name).read_text()
-    files['com/gesher/app/webview/WorkerContractHost.java'] = TEST
+def compile_and_run(files, classes, args, expected_failure=None):
     with tempfile.TemporaryDirectory(prefix='gesher-worker-contracts-') as tmp:
         work=Path(tmp)
         for name, text in files.items():
@@ -180,7 +169,89 @@ public final class SupportLib { private static final String BOUNDARY="org.chromi
         classpath = str(work) + (os.pathsep + str(args.core_classes.resolve()) if args.core_classes else '')
         subprocess.run([str(args.java_home/'bin/javac'), '-encoding', 'UTF-8', '-cp', classpath, '-d', str(work),
                         *(str(work/name) for name in files)], check=True,timeout=60)
-        subprocess.run([str(args.java_home/'bin/java'),'-XX:-UsePerfData','-Xmx128m','-cp',classpath,
-                        'com.gesher.app.webview.WorkerContractHost'],check=True,timeout=20)
+        for name in classes:
+            result = subprocess.run([str(args.java_home/'bin/java'),'-XX:-UsePerfData','-Xmx128m','-cp',classpath,
+                        'com.gesher.app.webview.' + name], capture_output=True, text=True, timeout=20)
+            if expected_failure:
+                if result.returncode != 1 or expected_failure not in result.stderr:
+                    raise RuntimeError('Worker gate negative control failed for the wrong reason: '
+                                       + result.stdout + result.stderr)
+                print('Worker gate negative control rejected:', args.negative_control)
+            else:
+                print(result.stdout, end='');print(result.stderr, end='');result.check_returncode()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--java-home', required=True, type=Path)
+    parser.add_argument('--core-classes', type=Path, help='Optional actual Android org.json classes')
+    parser.add_argument('--negative-control', choices=('feature-query', 'controller'),
+                        help='Inject an activation into one actual entry method; require rejection')
+    args = parser.parse_args()
+    source = (ROOT / 'app/java/com/gesher/app/webview/SupportLib.java').read_text()
+    fields = source[source.index('    static final String[] FEATURES = {'):source.index('\n    };', source.index('    static final String[] FEATURES = {')) + 7]
+    factory = method(source, 'public static final class Factory')
+    feature_query = method(factory, 'public String[] getSupportedFeatures()')
+    if args.negative_control == 'feature-query':
+        # A recorded, usable callee makes an accidental lookup observable even
+        # while the real controller is independently unavailable.
+        guard = 'return FEATURES.clone();'
+        if feature_query.count(guard) != 1:
+            raise ValueError('Feature gate changed; update the negative control')
+        feature_query = feature_query.replace(guard, 'GesherServiceWorkers.get();\n' + guard)
+    if args.negative_control != 'controller':
+        feature_files = {
+            'com/gesher/app/webview/SupportLib.java': '''package com.gesher.app.webview;
+import java.util.*;
+final class SupportLib {''' + fields + '\nstatic final class Factory {' + feature_query + '}}',
+            'com/gesher/app/webview/GesherServiceWorkers.java': '''package com.gesher.app.webview;
+// Recording callee, deliberately usable: a downstream throw must not mask a
+// feature query trying to initialize the worker controller.
+final class GesherServiceWorkers {
+ static int lookups; static boolean available=true;
+ static GesherServiceWorkers get(){lookups++;if(!available)throw new UnsupportedOperationException();return new GesherServiceWorkers();}
+}''',
+            'com/gesher/app/webview/WorkerFeaturesHost.java':
+                (ROOT / 'tests/webview/worker_features_host.java.in').read_text(),
+        }
+        compile_and_run(feature_files, ['WorkerFeaturesHost'], args,
+                        'feature query must not initialize workers' if args.negative_control else None)
+        if args.negative_control:
+            return
+    adapters = '''package com.gesher.app.webview;
+import java.lang.reflect.*;import java.util.concurrent.*;import android.webkit.*;
+public final class SupportLib { private static final String BOUNDARY="org.chromium.support_lib_boundary.";
+''' + fields + '\n' + '\n'.join(method(source, signature) for signature in [
+        'static final class Boundary implements InvocationHandler', 'static Object call(',
+        'public static final class ServiceWorkers', 'public static final class WorkerSettings'])
+    adapters += '\npublic static final class Converter {' + method(source, 'public InvocationHandler convertServiceWorkerSettings(Object settings)') + method(source, 'public Object convertServiceWorkerSettings(InvocationHandler settings)') + '}\n'
+    adapters += '\npublic static final class Factory {' + feature_query + method(factory, 'public InvocationHandler getServiceWorkerController()') + '}\n}'
+    files = dict(STUBS)
+    if args.core_classes: del files['org/json/JSONObject.java']
+    files['com/gesher/app/webview/SupportLib.java'] = adapters
+    for name in ('GesherServiceWorkers.java', 'WebStorageQueries.java', 'GesherWebStorage.java'):
+        files['com/gesher/app/webview/' + name] = (ROOT / 'app/java/com/gesher/app/webview' / name).read_text()
+    provider = (ROOT / 'app/java/com/gesher/app/webview/GesherWebViewFactory.java').read_text()
+    files['com/gesher/app/webview/GesherWebViewFactory.java'] = '''package com.gesher.app.webview;
+import android.webkit.*;
+// The two public provider methods are exact production extractions. Unrelated
+// provider construction is omitted; controller/storage behavior is not stubbed.
+final class GesherWebViewFactory {
+ private final Object mLock=new Object();
+ private ServiceWorkerController mServiceWorkers;
+ private GesherWebStorage mStorage;
+''' + method(provider, 'public ServiceWorkerController getServiceWorkerController()') + method(provider, 'public WebStorage getWebStorage()') + '}\n'
+    if args.negative_control == 'controller':
+        path = 'com/gesher/app/webview/GesherServiceWorkers.java'
+        original = method(files[path], 'static GesherServiceWorkers get()')
+        opening = original.index('{') + 1
+        # Keep the unsupported exception: this control catches activation before
+        # failure, rather than merely detecting that a controller was returned.
+        changed = original[:opening] + '\nWebView2Host.enableServiceWorkers((type, hr, value) -> {});' + original[opening:]
+        files[path] = files[path].replace(original, changed)
+    files['com/gesher/app/webview/WorkerGateHost.java'] = (ROOT / 'tests/webview/worker_gate_host.java.in').read_text()
+    files['com/gesher/app/webview/WorkerContractHost.java'] = TEST
+    compile_and_run(files, ['WorkerGateHost'] if args.negative_control else ['WorkerGateHost', 'WorkerContractHost'],
+                    args, 'unavailable controller must not enable a native filter' if args.negative_control else None)
 
 if __name__=='__main__': main()

@@ -1,0 +1,284 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Exact production EnableServiceWorkers, WithCoreWebView and QueryOriginStorage.
+// COM, thread dispatch, controller creation and URL parsing are recording seams.
+// The separate Windows WebStorage fixture executes the real URLMON origin parser.
+// No WebView2 process, network request or native worker filter is actually created.
+#include <cstdint>
+#include <cstdio>
+#include <cwchar>
+#include <functional>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+using HRESULT = int;
+using ULONG = unsigned long;
+using LPCWSTR = const wchar_t*;
+using REFIID = int;
+constexpr HRESULT S_OK = 0, E_FAIL = -1, E_NOINTERFACE = -2;
+constexpr REFIID IID_ICoreWebView2_22 = 22;
+constexpr int COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL = 0;
+constexpr int COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_SERVICE_WORKER = 2;
+#define FAILED(value) ((value) < 0)
+#define SUCCEEDED(value) ((value) >= 0)
+
+int checks, failures;
+void Check(bool condition, const char* description) {
+  ++checks;
+  if (!condition) {
+    ++failures;
+    std::fprintf(stderr, "FAIL: %s\n", description);
+  }
+}
+
+namespace gesher::webview {
+@COM@
+
+int posts, starts, filters, total_filters, live_work, completions;
+bool accept = true, start_pending = false, start_fails = false;
+int32_t completed_type, completed_status;
+int64_t completed_id;
+std::wstring completed_payload;
+constexpr int32_t kGlobalDone = 2, kGlobalStorage = 3;
+
+struct GlobalOperation {
+  GlobalOperation() { ++live_work; }
+  ~GlobalOperation() { --live_work; }
+};
+using GlobalWork = std::shared_ptr<GlobalOperation>;
+struct GlobalCompletion {
+  explicit GlobalCompletion(const GlobalWork& work) : operation(work) {}
+  GlobalWork operation;
+};
+std::vector<std::function<void()>> tasks;
+bool PostGlobal(std::function<void(const GlobalWork&)> fn) {
+  ++posts;
+  if (!accept) return false;
+  GlobalWork work = std::make_shared<GlobalOperation>();
+  tasks.push_back([fn = std::move(fn), work] { fn(work); });
+  return true;
+}
+void Drain() {
+  auto pending = std::move(tasks);
+  tasks.clear();
+  for (auto& task : pending) task();
+}
+void ReportGlobal(int32_t type, int64_t id, int32_t status, const std::wstring& value) {
+  ++completions;
+  completed_type = type;
+  completed_id = id;
+  completed_status = status;
+  completed_payload = value;
+}
+
+// Recording callback ownership: a CDP call retains its completion function.
+struct RecordedCallback {
+  std::function<HRESULT(HRESULT, LPCWSTR)> fn;
+};
+struct CallbackHolder {
+  RecordedCallback callback;
+  RecordedCallback* get() { return &callback; }
+};
+template <class F> CallbackHolder Callback(F fn) { return {{std::move(fn)}}; }
+#define GESHER_CALLBACK(interface_type, ...) Callback(__VA_ARGS__)
+
+struct ICoreWebView2 {
+  struct Call {
+    std::wstring method, parameters;
+    std::function<HRESULT(HRESULT, LPCWSTR)> callback;
+  };
+  ULONG refs = 1;
+  HRESULT result = S_OK;
+  std::vector<Call> calls;
+  ULONG AddRef() { return ++refs; }
+  ULONG Release() { ULONG count = --refs; if (!count) delete this; return count; }
+  HRESULT QueryInterface(REFIID iid, void** out) {
+    *out = nullptr;
+    if (iid != IID_ICoreWebView2_22) return E_NOINTERFACE;
+    *out = this;
+    AddRef();
+    return S_OK;
+  }
+  HRESULT CallDevToolsProtocolMethod(LPCWSTR method, LPCWSTR parameters,
+                                    RecordedCallback* callback) {
+    calls.push_back({method, parameters, callback->fn});
+    return result;
+  }
+  HRESULT AddWebResourceRequestedFilterWithRequestSourceKinds(LPCWSTR pattern,
+      int context, int kind) {
+    Check(std::wstring(pattern) == L"*" && context == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL
+              && kind == COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_SERVICE_WORKER,
+          "historical activation reaches the actual worker-filter boundary");
+    ++filters;
+    ++total_filters;
+    return S_OK;
+  }
+};
+using ICoreWebView2_22 = ICoreWebView2;
+void RecordedWorkerCallback() {}
+auto g_worker_callback = &RecordedWorkerCallback;
+struct NullListener {} g_null_listener;
+struct Impl {
+  bool ready = false, failed = false, destroyed = false, bridge_guarded = true;
+  NullListener* listener = nullptr;
+  Com<ICoreWebView2> webview;
+  std::vector<std::function<void(ICoreWebView2*)>> service_waiting;
+};
+std::set<Impl*> g_live;
+std::shared_ptr<Impl> g_service;
+@WORKER_ENABLED@
+
+void CompleteStart(const std::shared_ptr<Impl>& impl, bool failed) {
+  impl->failed = failed;
+  impl->ready = !failed;
+  if (!failed) impl->webview = Com<ICoreWebView2>(new ICoreWebView2(), false);
+  auto waiting = std::move(impl->service_waiting);
+  impl->service_waiting.clear();
+  for (auto& fn : waiting) fn(impl->webview.get());
+}
+void Start(const std::shared_ptr<Impl>& impl) {
+  ++starts;
+  if (!start_pending) CompleteStart(impl, start_fails);
+}
+
+@WITH_CORE@
+@JSON_STRING@
+
+bool OriginStorageKey(const std::wstring& origin, std::wstring* key) {
+  // This fixture isolates routing. Native URL validation is covered separately
+  // with the real Windows parser, rather than duplicated in this recording seam.
+  if (origin != L"https://first.storage.invalid" &&
+      origin != L"https://second.storage.invalid:8443") return false;
+  *key = origin + L"/";
+  return true;
+}
+class Host {
+ public:
+  static bool EnableServiceWorkers(int64_t callback_id);
+  static bool QueryOriginStorage(const std::wstring& origin, int64_t callback_id);
+};
+@ENABLE@
+@QUERY_STORAGE@
+
+void Reset() {
+  tasks.clear();
+  g_live.clear();
+  g_service.reset();
+  Check(live_work == 0, "previous storage work released its lease");
+  posts = starts = filters = completions = 0;
+  completed_type = completed_status = 0;
+  completed_id = 0;
+  completed_payload.clear();
+  accept = true;
+  start_pending = start_fails = false;
+  g_workers_enabled = false;
+}
+
+void Unavailable() {
+  const int before_posts = posts, before_starts = starts, before_completions = completions;
+  const int before_work = live_work;
+  Impl* before_service = g_service.get();
+  for (int64_t id : {INT64_C(-1), INT64_C(0), INT64_C(1), INT64_MAX}) {
+    Check(!Host::EnableServiceWorkers(id), "native worker entry reports unavailable");
+  }
+  Check(posts == before_posts, "native worker gate schedules no global work");
+  Drain();
+  Check(starts == before_starts && g_service.get() == before_service,
+        "native worker gate creates no service controller");
+  Check(filters == 0 && !g_workers_enabled, "native worker gate installs no worker filter");
+  Check(completions == before_completions && live_work == before_work,
+        "native worker gate creates no callback or operation lease");
+}
+
+void ColdStorage() {
+  Reset();
+  Unavailable();
+  Check(Host::QueryOriginStorage(L"https://first.storage.invalid", 41), "storage works after unavailable worker access");
+  Check(posts == 1 && starts == 0 && live_work == 1, "storage is scheduled independently");
+  Drain();
+  Check(g_service && g_service->ready && starts == 1, "storage starts its normal fallback controller");
+  if (!g_service || !g_service->webview) return;
+  auto* core = g_service->webview.get();
+  Check(core->calls.size() == 1 && core->calls[0].method == L"Storage.getUsageAndQuota"
+            && core->calls[0].parameters == L"{\"origin\":\"https://first.storage.invalid/\"}",
+        "storage dispatch keeps real quota endpoint and first origin");
+  Unavailable();
+  if (core->calls.empty()) return;
+  core->calls[0].callback(S_OK, L"{\"usage\":1234,\"quota\":99999}");
+  Check(completions == 1 && completed_type == kGlobalStorage && completed_id == 41
+            && completed_status == S_OK && completed_payload == L"{\"usage\":1234,\"quota\":99999}",
+        "storage returns unchanged actual usage/quota payload");
+  core->calls[0].callback(S_OK, L"{\"usage\":7}");
+  Check(completions == 1 && live_work == 0, "storage completion is once and releases work");
+  Check(Host::QueryOriginStorage(L"https://second.storage.invalid:8443", 42), "second origin query admitted");
+  Drain();
+  Check(starts == 1 && core->calls.size() == 2
+            && core->calls[1].parameters == L"{\"origin\":\"https://second.storage.invalid:8443/\"}",
+        "independent origin query reuses storage controller");
+  if (core->calls.size() > 1) core->calls[1].callback(S_OK, L"{\"usage\":42,\"quota\":77777}");
+  Check(completions == 2 && completed_id == 42 && live_work == 0, "second actual storage result delivered");
+  Unavailable();
+}
+
+void ExistingPublicStorage() {
+  Reset();
+  auto public_view = std::make_shared<Impl>();
+  public_view->ready = true;
+  public_view->webview = Com<ICoreWebView2>(new ICoreWebView2(), false);
+  g_live.insert(public_view.get());
+  Unavailable();
+  Check(Host::QueryOriginStorage(L"https://first.storage.invalid", 51), "live public WebView storage query admitted");
+  Drain();
+  auto* core = public_view->webview.get();
+  Check(!g_service && starts == 0 && core->calls.size() == 1, "storage uses existing public controller without worker setup");
+  if (!core->calls.empty()) core->calls[0].callback(S_OK, L"{\"usage\":5,\"quota\":10}");
+  Check(completions == 1 && completed_id == 51 && live_work == 0, "public controller returns storage result");
+  Unavailable();
+}
+
+void PendingAndFailedStorage() {
+  Reset();
+  start_pending = true;
+  Check(Host::QueryOriginStorage(L"https://first.storage.invalid", 61), "first pending query admitted");
+  Check(Host::QueryOriginStorage(L"https://second.storage.invalid:8443", 62), "second pending query admitted");
+  Drain();
+  Check(g_service && starts == 1 && g_service->service_waiting.size() == 2 && live_work == 2,
+        "pending storage shares a single controller startup");
+  Unavailable();
+  if (!g_service) return;
+  CompleteStart(g_service, false);
+  auto* core = g_service->webview.get();
+  Check(core && core->calls.size() == 2, "worker rejection does not discard pending storage callbacks");
+  if (core) for (auto& call : core->calls) call.callback(S_OK, L"{\"usage\":3,\"quota\":4}");
+  Check(completions == 2 && live_work == 0, "pending storage completes independently");
+  Unavailable();
+  Reset();
+  start_fails = true;
+  Check(Host::QueryOriginStorage(L"https://first.storage.invalid", 71), "unavailable backend query is admitted");
+  Drain();
+  Check(completions == 1 && completed_status == E_FAIL && completed_payload.empty() && live_work == 0,
+        "failed storage controller still completes with failure");
+  Unavailable();
+  Check(Host::QueryOriginStorage(L"https://first.storage.invalid", 72), "failed controller can finish subsequent query");
+  Drain();
+  Check(completions == 2 && starts == 1 && live_work == 0, "failed controller neither restarts nor leaks storage work");
+  Reset();
+  accept = false;
+  Check(!Host::QueryOriginStorage(L"https://first.storage.invalid", 81), "closing queue rejects storage without fabricated result");
+  Unavailable();
+}
+}  // namespace gesher::webview
+
+int main() {
+  using namespace gesher::webview;
+  Check(!g_workers_enabled, "production starts with worker filtering disabled");
+  ColdStorage();
+  ExistingPublicStorage();
+  PendingAndFailedStorage();
+  Reset();
+  std::printf("Native worker-unavailable and independent storage paths: %d checks, %d failures\n", checks, failures);
+  std::printf("Recorded worker-filter installations: %d\n", total_filters);
+  return failures ? 1 : 0;
+}

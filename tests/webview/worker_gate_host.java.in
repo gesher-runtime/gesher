@@ -1,0 +1,98 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+package com.gesher.app.webview;
+
+import android.webkit.WebStorage;
+import java.lang.reflect.Field;
+
+/** Public entry paths with whole production controller/storage query classes. */
+public final class WorkerGateHost {
+    private static int checks;
+
+    private static void check(boolean condition, String message) {
+        checks++;
+        if (!condition) throw new AssertionError(message);
+    }
+
+    private static void unavailable(Runnable action) {
+        try {
+            action.run();
+            throw new AssertionError("worker controller must remain unavailable");
+        } catch (UnsupportedOperationException expected) {
+            checks++;
+        }
+        check(WebView2Host.enables == 0, "unavailable controller must not enable a native filter");
+    }
+
+    private static void gates(GesherWebViewFactory provider, SupportLib.Factory androidx)
+            throws Exception {
+        int appLookups = android.app.ActivityThread.calls;
+        int configurations = GesherWebView.configurations;
+        unavailable(() -> GesherServiceWorkers.get());
+        unavailable(() -> provider.getServiceWorkerController());
+        unavailable(() -> androidx.getServiceWorkerController());
+        for (String feature : androidx.getSupportedFeatures()) {
+            check(!feature.startsWith("SERVICE_WORKER_"), "worker feature unavailable");
+        }
+        check(android.app.ActivityThread.calls == appLookups, "unavailable routes never inspect application state");
+        check(GesherWebView.configurations == configurations, "unavailable routes never configure WebView");
+        check(WebView2Host.threadChecks == 0, "unavailable routes never enter native startup");
+        Field instance = GesherServiceWorkers.class.getDeclaredField("sInstance");
+        instance.setAccessible(true);
+        check(instance.get(null) == null, "unavailable routes never publish a prepared controller");
+        check(!GesherServiceWorkers.dispatch(91, "https://worker.invalid", "GET", null),
+                "inactive worker callback cannot queue a response");
+        check(WebView2Host.responses.isEmpty(), "inactive worker callback has no native response effect");
+    }
+
+    public static void main(String[] args) throws Exception {
+        GesherWebViewFactory provider = new GesherWebViewFactory();
+        SupportLib.Factory androidx = new SupportLib.Factory();
+        // These are fresh-process checks, before constructing any test-only
+        // prepared controller. Backend success must not make support available.
+        gates(provider, androidx);
+        android.app.ActivityThread.app = new android.content.Context();
+        for (boolean nativeAvailable : new boolean[]{true, false}) {
+            WebView2Host.enable = nativeAvailable;
+            for (boolean onWebViewThread : new boolean[]{true, false}) {
+                WebView2Host.webViewThread = onWebViewThread;
+                GesherWebView.fail = onWebViewThread;
+                gates(provider, androidx);
+            }
+        }
+        GesherWebView.fail = false;
+        WebView2Host.enable = true;
+        WebView2Host.webViewThread = false;
+        WebStorage storage = provider.getWebStorage();
+        check(storage == provider.getWebStorage(), "storage provider remains available and stable");
+        int queries = WebView2Host.queries;
+        long[] value = {-1};
+        int[] delivered = {0};
+        storage.getUsageForOrigin("https://first.storage.invalid", result -> {
+            value[0] = result;
+            delivered[0]++;
+        });
+        check(WebView2Host.queries == queries + 1
+                        && "https://first.storage.invalid".equals(WebView2Host.origin),
+                "public storage usage reaches the real query helper for its origin");
+        check(delivered[0] == 0, "storage awaits actual asynchronous measurement");
+        WebView2Host.GlobalCallback usage = WebView2Host.pending;
+        gates(provider, androidx);
+        usage.onResult(3, 0, "{\"usage\":1234,\"quota\":99999}");
+        check(value[0] == 1234 && delivered[0] == 1, "public usage returns actual measurement once");
+        usage.onResult(3, 0, "{\"usage\":7}");
+        check(delivered[0] == 1, "gating does not break duplicate callback protection");
+        storage.getQuotaForOrigin("https://second.storage.invalid:8443", result -> {
+            value[0] = result;
+            delivered[0]++;
+        });
+        check(WebView2Host.queries == queries + 2
+                        && "https://second.storage.invalid:8443".equals(WebView2Host.origin),
+                "public storage quota keeps its independent origin");
+        WebView2Host.pending.onResult(3, 0, "{\"usage\":42,\"quota\":77777}");
+        check(value[0] == 77777 && delivered[0] == 2, "public quota returns actual quota field");
+        check(GesherWebView.configurations == 2, "only the two storage queries configure WebView");
+        gates(provider, androidx);
+        check(WebView2Host.enables == 0, "storage plus repeated capability/controller requests install no worker filter");
+        System.out.println("Production worker-unavailable and public storage paths: " + checks + " checks passed");
+    }
+}

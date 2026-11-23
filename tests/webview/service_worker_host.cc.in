@@ -1,5 +1,6 @@
-// Exact production worker admission, completion and expiry with recording COM/task seams.
-// No browser, JNI, Windows dispatch loop or network is used.
+// Isolated prepared worker admission, completion and expiry with recording COM/task seams.
+// The production entry points are unavailable; only this fixture enables the
+// prepared internals. No browser, JNI, Windows dispatch loop or network is used.
 #include <cstdint>
 #include <cstdio>
 #include <cwchar>
@@ -122,4 +123,4 @@ void Responses(){
  Reset();
 }
 } // namespace gesher::webview
-int main(){using namespace gesher::webview;Admission();Responses();std::printf("Service-worker native production contracts: %d checks, %d failures\n",checks,failures);return failures?1:0;}
+int main(){using namespace gesher::webview;Admission();Responses();std::printf("Isolated prepared service-worker native internals: %d checks, %d failures\n",checks,failures);return failures?1:0;}

@@ -1,0 +1,36 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Isolated negative control: exact published activation functions from
+// fed039fce16bc669bba2f2d86ecddf99ce02b811, compat/webview/webview_host.cc.
+// Compiled only by the recording host fixture with --negative-control.
+void WithServiceWebView(std::function<void(ICoreWebView2*)> fn) {
+  if (!g_service) {
+    g_service = std::make_shared<Impl>();
+    g_service->listener = &g_null_listener;
+    g_service->service_waiting.push_back(std::move(fn));
+    Start(g_service);
+  } else if (g_service->failed || g_service->destroyed) {
+    fn(nullptr);
+  } else if (g_service->ready) {
+    fn(g_service->webview.get());
+  } else {
+    g_service->service_waiting.push_back(std::move(fn));
+  }
+}
+
+bool Host::EnableServiceWorkers(int64_t callback_id) {
+  return PostGlobal([callback_id](const GlobalWork& operation) {
+    WithServiceWebView([operation, callback_id](ICoreWebView2* wv) {
+      HRESULT hr = E_NOINTERFACE;
+      Com<ICoreWebView2_22> modern;
+      if (wv && g_service && !g_service->failed && g_workers_enabled) hr = S_OK;
+      else if (wv && g_service && g_service->bridge_guarded && !g_service->failed && g_worker_callback &&
+          Com<ICoreWebView2>(wv).As(IID_ICoreWebView2_22, &modern)) {
+        hr = modern->AddWebResourceRequestedFilterWithRequestSourceKinds(
+            L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+            COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_SERVICE_WORKER);
+        if (SUCCEEDED(hr)) g_workers_enabled = true;
+      }
+      ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
+    });
+  });
+}

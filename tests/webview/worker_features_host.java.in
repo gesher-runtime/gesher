@@ -1,0 +1,38 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+package com.gesher.app.webview;
+
+import java.util.Arrays;
+
+/** Exact capability query with a usable recording worker callee. */
+public final class WorkerFeaturesHost {
+    private static int checks;
+
+    private static void check(boolean condition, String message) {
+        checks++;
+        if (!condition) throw new AssertionError(message);
+    }
+
+    public static void main(String[] args) {
+        SupportLib.Factory factory = new SupportLib.Factory();
+        String[] expected = SupportLib.FEATURES.clone();
+        check(Arrays.asList(expected).contains("WEB_MESSAGE_LISTENER"),
+                "unrelated AndroidX feature remains available");
+        for (boolean backendAvailable : new boolean[]{true, false}) {
+            GesherServiceWorkers.available = backendAvailable;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                String[] actual = factory.getSupportedFeatures();
+                check(GesherServiceWorkers.lookups == 0,
+                        "feature query must not initialize workers");
+                check(Arrays.equals(actual, expected), "all existing unrelated capabilities retained");
+                check(actual != SupportLib.FEATURES, "capability result is a defensive copy");
+                for (String feature : actual) {
+                    check(!feature.startsWith("SERVICE_WORKER_"),
+                            "unavailable worker capability not advertised: " + feature);
+                }
+                actual[0] = "SERVICE_WORKER_BASIC_USAGE";
+            }
+        }
+        check(Arrays.equals(SupportLib.FEATURES, expected), "caller cannot mutate capability state");
+        System.out.println("Side-effect-free worker feature query: " + checks + " checks passed");
+    }
+}
