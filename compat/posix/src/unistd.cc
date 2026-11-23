@@ -22,6 +22,7 @@
 #include <string>
 
 #include "internal.h"
+#include "usb_block_internal.h"
 #include "revocable_internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
@@ -350,6 +351,8 @@ int pipe(int fds[2]) { return pipe2(fds, 0); }
 int fsync(int fd) {
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return -1;
+  int block_result;
+  if (gesher::usb_block::Sync(snapshot, &block_result)) return block_result;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE h = snapshot->handle;
@@ -573,6 +576,8 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
     is_device = gesher::DeviceFromFd(fd, &device);
   }
   if (!snapshot) return -1;
+  int block_result;
+  if (gesher::usb_block::Io(snapshot, buf, want, writing, offset, &block_result)) return block_result;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE file = snapshot->handle;
@@ -658,6 +663,8 @@ off_t lseek(int fd, off_t offset, int whence) {
                   gesher::DeviceFromFd(fd, &device);
   }
   if (!snapshot) return -1;
+  int64_t block_result;
+  if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = gesher::FileDescriptionIoFlags(snapshot);
@@ -798,6 +805,10 @@ namespace gesher {
 int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
                               unsigned count, int64_t offset) {
   if (offset < 0) return errno = EINVAL, -1;
+  int block_result;
+  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, offset, &block_result)) {
+    return block_result;
+  }
   FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = FileDescriptionIoFlags(snapshot);

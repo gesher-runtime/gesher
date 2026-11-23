@@ -30,6 +30,7 @@
 #include "descriptor_resources.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "usb_block_internal.h"
 #include "native_fence_internal.h"
 #include "revocable_internal.h"
 #include "pipe_io.h"
@@ -406,6 +407,8 @@ RetiredDescriptor::~RetiredDescriptor() {
   errno = saved;
 }
 int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count) {
+  int block_result;
+  if (usb_block::Io(snapshot, bytes, count, false, -1, &block_result)) return block_result;
   FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = FileDescriptionIoFlags(snapshot);
@@ -422,6 +425,8 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
   return TransferFileHandle(snapshot->handle, bytes, count, false, false);
 }
 int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count) {
+  int block_result;
+  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, -1, &block_result)) return block_result;
   FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = FileDescriptionIoFlags(snapshot);

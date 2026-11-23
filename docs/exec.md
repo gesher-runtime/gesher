@@ -109,7 +109,8 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 - **`Process.destroy()`** now sends SIGTERM (the program's handler runs; a
   program with none is terminated with 143); **`destroyForcibly()`** kills
   (137), through a new `UNIXProcess` native.
-- **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `dd`, `id`, `ps`,
+- **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `dd`, `basename`,
+  `tr`, `id`, `ps`,
   `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, as a bare name or a
   `/system/bin` path; `sh` is the launcher's shell. `su` stays absent (no root),
   getprop/setprop use the shared backend in ADR 0060. Structured logcat and
@@ -118,6 +119,10 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   `dd` copies through Gesher's POSIX file descriptors and supports `if`, `of`,
   `bs`, `skip`, `seek`, `count`, and `conv=notrunc`. Other operands fail
   before opening the output.
+  `basename` accepts a path and optional suffix. `tr` supports byte
+  translation with escapes and ascending ranges. `id -u` prints the
+  process's effective guest UID. The shell uses the runtime's filesystem
+  for globs and file predicates, including virtual paths.
 
 ## Not done / limits
 

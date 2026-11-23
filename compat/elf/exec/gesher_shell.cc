@@ -30,8 +30,10 @@
 
 #include <gesher/reserved_names.h>
 
+#include <dirent.h>
 #include <io.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <windows.h>
 
@@ -1634,6 +1636,14 @@ void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out) {
   }
 }
 
+std::string ShellPath(const Shell& shell, const std::string& path) {
+  if (path.empty() || path.front() == '/' || path.front() == '\\' ||
+      gesher::reserved_names::DriveRoot(path.c_str()) || shell.cwd.empty()) {
+    return path;
+  }
+  return shell.cwd + "/" + path;
+}
+
 // Pathname expansion of one field (text with glob flags). Returns matches, or
 // the field itself if there are none (or no active metacharacter).
 void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
@@ -1687,27 +1697,22 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
         continue;
       }
       std::string dir = base.empty() ? "." : base;
-      std::wstring wdir = WindowsPath(dir, sh->cwd);
-      WIN32_FIND_DATAW fd;
-      HANDLE h = FindFirstFileW((wdir + L"\\*").c_str(), &fd);
-      if (h != INVALID_HANDLE_VALUE) {
-        do {
-          std::string name = Narrow(gesher::reserved_names::Decoded(fd.cFileName));
-          if (name == "." || name == "..") continue;
-          if (!name.empty() && name[0] == '.' &&
-              (comp.empty() || comp[0] != '.'))
-            continue;
-          if (GlobMatch(pat, name)) {
-            if (!last && (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
-              continue;
-            std::string joined =
-                base.empty()
-                    ? name
-                    : (base.back() == '/' ? base + name : base + "/" + name);
-            next.push_back(joined);
-          }
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
+      std::unique_ptr<DIR, decltype(&closedir)> directory(
+          opendir(ShellPath(*sh, dir).c_str()), closedir);
+      if (!directory) continue;
+      while (const dirent* entry = readdir(directory.get())) {
+        std::string name(entry->d_name);
+        if (name == "." || name == "..") continue;
+        if (!name.empty() && name[0] == '.' && comp[0] != '.') continue;
+        if (!GlobMatch(pat, name)) continue;
+        std::string joined = base.empty()
+            ? name : (base.back() == '/' ? base + name : base + "/" + name);
+        if (!last && entry->d_type != DT_DIR) {
+          if (entry->d_type != DT_LNK && entry->d_type != DT_UNKNOWN) continue;
+          struct stat info{};
+          if (stat(ShellPath(*sh, joined).c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) continue;
+        }
+        next.push_back(std::move(joined));
       }
     }
     paths = next;

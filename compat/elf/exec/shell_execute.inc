@@ -288,19 +288,18 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
     DWORD mode;
     return fd >= 0 && fd < 10 && GetConsoleMode(io.fd[fd], &mode);
   }
-  WIN32_FILE_ATTRIBUTE_DATA data;
-  if (!GetFileAttributesExW(WindowsPath(arg, sh->cwd).c_str(),
-                            GetFileExInfoStandard, &data))
-    return false;
-  if (op == "-e" || op == "-r" || op == "-x") return true;
-  if (op == "-d")
-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-  if (op == "-f")
-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+  const std::string path = ShellPath(*sh, arg);
+  struct stat info{};
   if (op == "-L" || op == "-h")
-    return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-  if (op == "-w") return (data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0;
-  if (op == "-s") return data.nFileSizeHigh != 0 || data.nFileSizeLow != 0;
+    return lstat(path.c_str(), &info) == 0 && S_ISLNK(info.st_mode);
+  if (op == "-r") return access(path.c_str(), R_OK) == 0;
+  if (op == "-w") return access(path.c_str(), W_OK) == 0;
+  if (op == "-x") return access(path.c_str(), X_OK) == 0;
+  if (stat(path.c_str(), &info) != 0) return false;
+  if (op == "-e") return true;
+  if (op == "-d") return S_ISDIR(info.st_mode);
+  if (op == "-f") return S_ISREG(info.st_mode);
+  if (op == "-s") return info.st_size != 0;
   return false;
 }
 

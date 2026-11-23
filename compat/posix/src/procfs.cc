@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "internal.h"
+#include "usb_block_internal.h"
 #include "ofd_internal.h"
 #include "revocable_internal.h"
 #include "record_lock_descriptors.h"
@@ -792,6 +793,7 @@ std::string BootId() {
 struct Node {
   unsigned type = kNone;
   std::string file;  // "cmdline", "status", ... ; "timezone"
+  std::string usb_content;
   DWORD tid = 0;
   int fd = -1;
   std::string link;  // "exe", "cwd", "fd"
@@ -810,6 +812,46 @@ void Add(std::vector<procfs::Entry>* entries, const std::string& name, unsigned 
 Node Lookup(const std::wstring& name, bool list) {
   std::vector<std::string> p = Split(name);
   Node n;
+  if (p.size() >= 2 && (p[0] == "dev" || p[0] == "sys") && p[1] == "block") {
+    if (!usb_block::Attached()) return n;
+    if (p.size() == 2) {
+      n.type = kDir;
+      if (list) Add(&n.entries, usb_block::kBlockName, p[0] == "dev" ? DT_BLK : DT_DIR);
+      return n;
+    }
+    if (p[2] != usb_block::kBlockName) return n;
+    if (p[0] == "dev") {
+      if (p.size() == 3) n.type = S_IFBLK;
+      return n;
+    }
+    if (p.size() == 3) {
+      n.type = kDir;
+      if (list) {
+        for (const char* field : {"size", "removable", "ro"}) Add(&n.entries, field, DT_REG);
+        Add(&n.entries, "device", DT_DIR);
+      }
+      return n;
+    }
+    if (p.size() == 4 && p[3] == "device") {
+      n.type = kDir;
+      if (list) {
+        for (const char* field : {"model", "serial"}) {
+          std::string content;
+          if (usb_block::SysContent(field, &content)) Add(&n.entries, field, DT_REG);
+        }
+      }
+      return n;
+    }
+    if ((p.size() == 4 && (p[3] == "size" || p[3] == "removable" || p[3] == "ro")) ||
+        (p.size() == 5 && p[3] == "device" && (p[4] == "model" || p[4] == "serial"))) {
+      std::string content;
+      if (usb_block::SysContent(p.back(), &content)) {
+        n.type = kFile;
+        n.usb_content = std::move(content);
+      }
+    }
+    return n;
+  }
   if (p.size() == 2 && p[0] == "etc" && p[1] == "timezone") {
     n.type = kFile;
     n.file = "timezone";
@@ -932,6 +974,7 @@ Node Lookup(const std::wstring& name, bool list) {
 
 std::string Content(const Node& n) {
   const std::string& f = n.file;
+  if (!n.usb_content.empty()) return n.usb_content;
   if (f == "timezone") return WindowsZoneId();  // no newline: libcore reads it whole
   if (f == "cmdline") return Cmdline();
   if (f == "environ") return Environ();
@@ -1035,6 +1078,7 @@ int Open(const std::wstring& name, int flags) {
   if ((flags & O_PATH) != 0) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW;
   Node n = Lookup(name, false);
   if (n.type == kNone) return errno = (flags & O_CREAT) != 0 ? EACCES : ENOENT, -1;
+  if (n.type == S_IFBLK) return usb_block::Open(flags);
   if (n.type == kLink) {
     if ((flags & O_NOFOLLOW) != 0 && (flags & O_PATH) == 0) return errno = ELOOP, -1;
     // A proc-fd open requests a new open description, with the requested

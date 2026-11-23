@@ -27,9 +27,16 @@ read.
 
 The probe checks the bus type on the same read handle used for the transfer.
 It is a host diagnostic for [#407](https://github.com/gesher-runtime/gesher/issues/407).
-Android USB enumeration, permission handling and transfers through
-`UsbManager` still require integration. CardWake's privileged `/dev/block`
-workflow also requires a guest block device and privileged guest execution.
+The separate `gesher_usb_block_physical_test` target in the main CMake project
+exercises the raw block broker and Gesher's guest paths. Run the built program
+with the selected path from `--list`. It opens a real device read-only and
+compares reads of the first and last logical sectors through the host and
+guest paths. The ordinary CI fixture instead uses a private test-only peer.
+
+WinUSB and USB storage use different Windows drivers and Android interfaces.
+The raw storage path requires an authenticated guest launch that carries the
+holder's broker capability. The standard per-user installation has no such
+privileged launch authority for CardWake's `su` commands.
 
 References
 

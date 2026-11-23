@@ -38,6 +38,7 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "usb_block_internal.h"
 #include "pipe_io.h"
 #include "revocable_internal.h"
 #include "linux_socket.h"
@@ -365,6 +366,8 @@ int ioctl(int fd, unsigned long request, ...) {
   }
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return -1;
+  int block_result;
+  if (gesher::usb_block::Ioctl(snapshot, request, argp, &block_result)) return block_result;
   HANDLE h = snapshot->handle;
   if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
   if (request == FIONBIO && GetFileType(h) == FILE_TYPE_PIPE) {

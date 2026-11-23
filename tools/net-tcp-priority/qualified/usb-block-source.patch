@@ -1,0 +1,230 @@
+diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
+index d693bd9fe..b51c450db 100644
+--- a/compat/elf/exec/exec_spawn.cc
++++ b/compat/elf/exec/exec_spawn.cc
+@@ -92,2 +92,3 @@ std::string ToolName(const std::string& name) {
+-  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
+-                                       "ps",      "pm", "am", "kill",   "sleep", "toybox"};
++  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
++                                       "dd", "basename", "tr", "ps", "pm", "am", "kill",
++                                       "sleep", "toybox"};
+diff --git a/compat/elf/exec/gesher_shell.cc b/compat/elf/exec/gesher_shell.cc
+index 383bc7e3b..507e14054 100644
+--- a/compat/elf/exec/gesher_shell.cc
++++ b/compat/elf/exec/gesher_shell.cc
+@@ -32,0 +33 @@
++#include <dirent.h>
+@@ -34,0 +36 @@
++#include <sys/stat.h>
+@@ -1636,0 +1639,8 @@ void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out) {
++std::string ShellPath(const Shell& shell, const std::string& path) {
++  if (path.empty() || path.front() == '/' || path.front() == '\\' ||
++      gesher::reserved_names::DriveRoot(path.c_str()) || shell.cwd.empty()) {
++    return path;
++  }
++  return shell.cwd + "/" + path;
++}
++
+@@ -1690,21 +1700,16 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
+-      std::wstring wdir = WindowsPath(dir, sh->cwd);
+-      WIN32_FIND_DATAW fd;
+-      HANDLE h = FindFirstFileW((wdir + L"\\*").c_str(), &fd);
+-      if (h != INVALID_HANDLE_VALUE) {
+-        do {
+-          std::string name = Narrow(gesher::reserved_names::Decoded(fd.cFileName));
+-          if (name == "." || name == "..") continue;
+-          if (!name.empty() && name[0] == '.' &&
+-              (comp.empty() || comp[0] != '.'))
+-            continue;
+-          if (GlobMatch(pat, name)) {
+-            if (!last && (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+-              continue;
+-            std::string joined =
+-                base.empty()
+-                    ? name
+-                    : (base.back() == '/' ? base + name : base + "/" + name);
+-            next.push_back(joined);
+-          }
+-        } while (FindNextFileW(h, &fd));
+-        FindClose(h);
++      std::unique_ptr<DIR, decltype(&closedir)> directory(
++          opendir(ShellPath(*sh, dir).c_str()), closedir);
++      if (!directory) continue;
++      while (const dirent* entry = readdir(directory.get())) {
++        std::string name(entry->d_name);
++        if (name == "." || name == "..") continue;
++        if (!name.empty() && name[0] == '.' && comp[0] != '.') continue;
++        if (!GlobMatch(pat, name)) continue;
++        std::string joined = base.empty()
++            ? name : (base.back() == '/' ? base + name : base + "/" + name);
++        if (!last && entry->d_type != DT_DIR) {
++          if (entry->d_type != DT_LNK && entry->d_type != DT_UNKNOWN) continue;
++          struct stat info{};
++          if (stat(ShellPath(*sh, joined).c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) continue;
++        }
++        next.push_back(std::move(joined));
+diff --git a/compat/elf/exec/shell_execute.inc b/compat/elf/exec/shell_execute.inc
+index 348f6938d..1fe122142 100644
+--- a/compat/elf/exec/shell_execute.inc
++++ b/compat/elf/exec/shell_execute.inc
+@@ -291,9 +291,2 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
+-  WIN32_FILE_ATTRIBUTE_DATA data;
+-  if (!GetFileAttributesExW(WindowsPath(arg, sh->cwd).c_str(),
+-                            GetFileExInfoStandard, &data))
+-    return false;
+-  if (op == "-e" || op == "-r" || op == "-x") return true;
+-  if (op == "-d")
+-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+-  if (op == "-f")
+-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
++  const std::string path = ShellPath(*sh, arg);
++  struct stat info{};
+@@ -301,3 +294,9 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
+-    return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+-  if (op == "-w") return (data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0;
+-  if (op == "-s") return data.nFileSizeHigh != 0 || data.nFileSizeLow != 0;
++    return lstat(path.c_str(), &info) == 0 && S_ISLNK(info.st_mode);
++  if (op == "-r") return access(path.c_str(), R_OK) == 0;
++  if (op == "-w") return access(path.c_str(), W_OK) == 0;
++  if (op == "-x") return access(path.c_str(), X_OK) == 0;
++  if (stat(path.c_str(), &info) != 0) return false;
++  if (op == "-e") return true;
++  if (op == "-d") return S_ISDIR(info.st_mode);
++  if (op == "-f") return S_ISREG(info.st_mode);
++  if (op == "-s") return info.st_size != 0;
+diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
+index 3492add71..6bfbf7afc 100644
+--- a/compat/posix/posix.cmake
++++ b/compat/posix/posix.cmake
+@@ -3,0 +4,2 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/block_broker_client.cc
++  ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
+@@ -107,0 +110,15 @@ target_compile_options(gesher_posix PRIVATE -Wall -Wextra -Werror)
++add_executable(gesher_usb_block_guest_test
++  ${CMAKE_SOURCE_DIR}/tests/exec/usb_block_guest.cc
++  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_channel.cc)
++target_compile_options(gesher_usb_block_guest_test PRIVATE -Wall -Wextra -Werror)
++target_link_libraries(gesher_usb_block_guest_test PRIVATE gesher_posix)
++# Manually select a real USB disk interface. Keep this read-only fixture out of
++# ordinary builds and automated tests.
++add_executable(gesher_usb_block_physical_test EXCLUDE_FROM_ALL
++  ${CMAKE_SOURCE_DIR}/tests/exec/usb_block_physical.cc
++  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_channel.cc
++  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_broker_server.cc
++  ${CMAKE_SOURCE_DIR}/compat/usb_storage/host_disk.cc)
++target_compile_options(gesher_usb_block_physical_test PRIVATE -Wall -Wextra -Werror)
++target_link_options(gesher_usb_block_physical_test PRIVATE -municode)
++target_link_libraries(gesher_usb_block_physical_test PRIVATE gesher_posix cfgmgr32)
+diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
+index c001fa738..0b3eb8749 100644
+--- a/compat/posix/src/fd.cc
++++ b/compat/posix/src/fd.cc
+@@ -32,0 +33 @@
++#include "usb_block_internal.h"
+@@ -408,0 +410,2 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
++  int block_result;
++  if (usb_block::Io(snapshot, bytes, count, false, -1, &block_result)) return block_result;
+@@ -424,0 +428,2 @@ int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* byte
++  int block_result;
++  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, -1, &block_result)) return block_result;
+diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
+index a0a55f2a4..a6127946b 100644
+--- a/compat/posix/src/fsops.cc
++++ b/compat/posix/src/fsops.cc
+@@ -27,0 +28 @@
++#include "usb_block_internal.h"
+@@ -295,0 +297,4 @@ int Access(const char* path, int mode, bool follow) {
++      if (type == S_IFBLK) {
++        return (mode & X_OK) != 0 || ((mode & W_OK) != 0 && !gesher::usb_block::Writable())
++            ? (errno = EACCES, -1) : 0;
++      }
+diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
+index 60751adee..9354aa285 100644
+--- a/compat/posix/src/ofd_internal.h
++++ b/compat/posix/src/ofd_internal.h
+@@ -14,0 +15 @@ struct RevocableFileGroup;
++namespace usb_block { struct Description; }
+@@ -42,0 +44 @@ struct OpenFileDescription {
++  std::shared_ptr<usb_block::Description> usb_block;
+diff --git a/compat/posix/src/procfs.cc b/compat/posix/src/procfs.cc
+index ee975dc86..2b1e76f4d 100644
+--- a/compat/posix/src/procfs.cc
++++ b/compat/posix/src/procfs.cc
+@@ -43,0 +44 @@
++#include "usb_block_internal.h"
+@@ -794,0 +796 @@ struct Node {
++  std::string usb_content;
+@@ -812,0 +815,40 @@ Node Lookup(const std::wstring& name, bool list) {
++  if (p.size() >= 2 && (p[0] == "dev" || p[0] == "sys") && p[1] == "block") {
++    if (!usb_block::Attached()) return n;
++    if (p.size() == 2) {
++      n.type = kDir;
++      if (list) Add(&n.entries, usb_block::kBlockName, p[0] == "dev" ? DT_BLK : DT_DIR);
++      return n;
++    }
++    if (p[2] != usb_block::kBlockName) return n;
++    if (p[0] == "dev") {
++      if (p.size() == 3) n.type = S_IFBLK;
++      return n;
++    }
++    if (p.size() == 3) {
++      n.type = kDir;
++      if (list) {
++        for (const char* field : {"size", "removable", "ro"}) Add(&n.entries, field, DT_REG);
++        Add(&n.entries, "device", DT_DIR);
++      }
++      return n;
++    }
++    if (p.size() == 4 && p[3] == "device") {
++      n.type = kDir;
++      if (list) {
++        for (const char* field : {"model", "serial"}) {
++          std::string content;
++          if (usb_block::SysContent(field, &content)) Add(&n.entries, field, DT_REG);
++        }
++      }
++      return n;
++    }
++    if ((p.size() == 4 && (p[3] == "size" || p[3] == "removable" || p[3] == "ro")) ||
++        (p.size() == 5 && p[3] == "device" && (p[4] == "model" || p[4] == "serial"))) {
++      std::string content;
++      if (usb_block::SysContent(p.back(), &content)) {
++        n.type = kFile;
++        n.usb_content = std::move(content);
++      }
++    }
++    return n;
++  }
+@@ -934,0 +977 @@ std::string Content(const Node& n) {
++  if (!n.usb_content.empty()) return n.usb_content;
+@@ -1037,0 +1081 @@ int Open(const std::wstring& name, int flags) {
++  if (n.type == S_IFBLK) return usb_block::Open(flags);
+diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
+index a3bc4dfdd..4d2555d00 100644
+--- a/compat/posix/src/system.cc
++++ b/compat/posix/src/system.cc
+@@ -40,0 +41 @@
++#include "usb_block_internal.h"
+@@ -367,0 +369,2 @@ int ioctl(int fd, unsigned long request, ...) {
++  int block_result;
++  if (gesher::usb_block::Ioctl(snapshot, request, argp, &block_result)) return block_result;
+diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
+index 1f7b51ecc..843a19a89 100644
+--- a/compat/posix/src/unistd.cc
++++ b/compat/posix/src/unistd.cc
+@@ -24,0 +25 @@
++#include "usb_block_internal.h"
+@@ -352,0 +354,2 @@ int fsync(int fd) {
++  int block_result;
++  if (gesher::usb_block::Sync(snapshot, &block_result)) return block_result;
+@@ -575,0 +579,2 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool
++  int block_result;
++  if (gesher::usb_block::Io(snapshot, buf, want, writing, offset, &block_result)) return block_result;
+@@ -660,0 +666,2 @@ off_t lseek(int fd, off_t offset, int whence) {
++  int64_t block_result;
++  if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
+@@ -800,0 +808,4 @@ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void
++  int block_result;
++  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, offset, &block_result)) {
++    return block_result;
++  }

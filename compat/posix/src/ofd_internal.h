@@ -12,6 +12,7 @@
 namespace gesher {
 
 struct RevocableFileGroup;
+namespace usb_block { struct Description; }
 struct OpenFileDescription {
   struct Shared {
     uint64_t magic;
@@ -40,6 +41,7 @@ struct OpenFileDescription {
   HANDLE pipe_mutex = nullptr;
   std::mutex mutex;
   std::shared_ptr<RevocableFileGroup> revocation;
+  std::shared_ptr<usb_block::Description> usb_block;
   ~OpenFileDescription();
   int Flags() const;
   void SetFlags(int flags);

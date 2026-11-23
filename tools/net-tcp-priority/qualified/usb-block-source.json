@@ -1,0 +1,24 @@
+{
+  "after_sha256": {
+    "compat/elf/exec/exec_spawn.cc": "9c1102d318957c41d5895b9d30f8f8b7a9584ce8ce449ba19cffb33a7dfa39ef",
+    "compat/elf/exec/gesher_shell.cc": "369ce381b1d72c3c88cc6058aff91aef273c7d36bf32fbf7b35238f2da284cb5",
+    "compat/elf/exec/shell_execute.inc": "c8dd42b203d84f4278ae8e6253d4d3944b5ca73b9369480c22fd9dc17d52d81b",
+    "compat/posix/posix.cmake": "8cac3051a64a535268aeedc13f2f9be9aab43ba083e0ded23646e0258da0ca7c",
+    "compat/posix/src/fd.cc": "e6fe6704fb18bd24b998edb04b9b2b54b2c5911c6c8a65c5d14ea6ea825dab18",
+    "compat/posix/src/fsops.cc": "55f6a688c6fb1ac98514d3282ca90cf212504343ce9f9c07e809a7f456b1a48f",
+    "compat/posix/src/ofd_internal.h": "8e6c686f7f42d05cb980724cfa600823576d48c46bca37b0054f29018f95ac9b",
+    "compat/posix/src/procfs.cc": "09202bd750893e89684be559c2d380074f35ccbdec4a68627b02df1d1a9a6e56",
+    "compat/posix/src/system.cc": "f02059e491ae9006bed2a8ee49335425975c5c776624aa6a0e0918534be3036e",
+    "compat/posix/src/unistd.cc": "a1e8e136be67d4f3187ef369a2f1341ccc5a0ecb628d61f90af9e5b5429a018c"
+  },
+  "base": "08146b1ea150229313ef14a8fcd99df217a57fb9",
+  "dependencies_sha256": {
+    "compat/posix/include/gesher/usb_block.h": "7a8ccd07ed0f647864abc4eb6636878fc412ca7e8c6d6f90d214a07df190967a",
+    "compat/posix/src/usb_block.cc": "8cabc3c4dac3895155a29b3be38de89df18634ad9e784485ec4f7ee6ffe74052",
+    "compat/posix/src/usb_block_internal.h": "9ee0b45c7667985a90dcf110af5342bb926ef9676ce79b1c99bdfb7512ec5788",
+    "compat/usb_storage/block_broker.h": "3d088db96f596d1874a908bff9f6f470a1122cd03e8dfd5c255def4b505cb872",
+    "compat/usb_storage/block_broker_client.cc": "4a89f88275f3b6701dbbe8431f4e26fce739f3ee595b257914a19c3a4962ee87",
+    "compat/usb_storage/block_broker_client.h": "26042afbf8809e578f023865378724b04da6f26ca3191422c524356c870c04b5"
+  },
+  "patch_sha256": "ce45bb9b5e6abd80cec17a52a170115ca5b9a433857f90353c998cea01de56f7"
+}

@@ -394,6 +394,60 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
         if (!result) waiting_files = true;
 '''),
 )
+
+# Preserve the original OFD evidence while reviewing the USB block device
+# dispatch separately. The reverse patch is checked against the historical
+# main bytes; the socket ownership and poll checks still compare live code.
+USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
+USB_BLOCK_TRANSITION_SHA256 = '872e9f839fe8d61b5a1442de7e235621cbf4486db474c6fdf5af69fbab9f4f32'
+USB_BLOCK_TRANSITION_PATHS = (
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/gesher_shell.cc',
+ 'compat/elf/exec/shell_execute.inc',
+ 'compat/posix/posix.cmake',
+ 'compat/posix/src/fd.cc',
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/ofd_internal.h',
+ 'compat/posix/src/procfs.cc',
+ 'compat/posix/src/system.cc',
+ 'compat/posix/src/unistd.cc',
+)
+
+
+def preceding_usb_block_sources(folder):
+ raw = (folder/'usb-block-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest() == USB_BLOCK_TRANSITION_SHA256, 'USB block source transition changed'
+ transition = json.loads(raw)
+ paths = list(USB_BLOCK_TRANSITION_PATHS)
+ assert set(transition) == {'base', 'patch_sha256', 'after_sha256', 'dependencies_sha256'}
+ assert transition['base'] == USB_BLOCK_BASE
+ assert sorted(transition['after_sha256']) == paths
+ delta = (folder/'usb-block-source.patch').read_bytes()
+ assert hashlib.sha256(delta).hexdigest() == transition['patch_sha256']
+ assert [line for line in delta.splitlines() if line.startswith(b'diff --git ')] == [
+     ('diff --git a/'+path+' b/'+path).encode() for path in paths]
+ for path, digest in transition['dependencies_sha256'].items():
+  assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest() == digest, path
+
+ preceding = {}
+ with tempfile.TemporaryDirectory(prefix='gesher-usb-block-qualification-') as temporary:
+  work = Path(temporary)
+  for path in paths:
+   current = (ROOT/path).read_bytes()
+   assert hashlib.sha256(current).hexdigest() == transition['after_sha256'][path], path
+   (work/path).parent.mkdir(parents=True, exist_ok=True)
+   (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],
+                 input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],
+                 input=delta,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   preceding[path] = (work/path).read_bytes()
+   historical = subprocess.check_output(['git','-C',str(ROOT),'show',USB_BLOCK_BASE+':'+path])
+   assert preceding[path] == historical, path
+ return preceding
+
+
 def preceding_ofd_sources():
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'ofd-stream-source.json').read_bytes()
@@ -406,8 +460,11 @@ def preceding_ofd_sources():
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  shared_stdio=preceding_shared_stdio_sources(qualification)
+ usb_block=preceding_usb_block_sources(folder)
  for path,digest in qualification['source_sha256'].items():
-  actual=shared_stdio[path] if path in shared_stdio else (ROOT/path).read_bytes()
+  if path in shared_stdio: actual=shared_stdio[path]
+  elif path in usb_block: actual=usb_block[path]
+  else: actual=(ROOT/path).read_bytes()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
@@ -415,7 +472,7 @@ def preceding_ofd_sources():
   work=Path(temporary)
   for path in paths:
    (work/path).parent.mkdir(parents=True,exist_ok=True)
-   (work/path).write_bytes((ROOT/path).read_bytes())
+   (work/path).write_bytes(usb_block[path] if path in usb_block else (ROOT/path).read_bytes())
   subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
   subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
   previous={path:(work/path).read_bytes() for path in paths}
@@ -594,6 +651,9 @@ def transition_negative_controls():
   ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
   ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
   ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
+  ('tools/net-tcp-priority/qualified/usb-block-source.patch',b'@@',b'@x'),
+  ('compat/posix/include/gesher/usb_block.h',b'AttachBroker',b'AttachUncheckedBroker'),
+  ('compat/elf/exec/exec_spawn.cc',b'"basename"',b'"not-basename"'),
   ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
   ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
   ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),

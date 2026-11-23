@@ -89,8 +89,9 @@ bool IsShName(const std::string& name) {
 
 // The tool name of a bare name or a /system/bin path, or "".
 std::string ToolName(const std::string& name) {
-  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id", "dd",
-                                       "ps",      "pm", "am", "kill",   "sleep", "toybox"};
+  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
+                                       "dd", "basename", "tr", "ps", "pm", "am", "kill",
+                                       "sleep", "toybox"};
   std::string base = name;
   for (const char* dir : {"/system/bin/", "/system/xbin/", "/bin/"}) {
     if (name.rfind(dir, 0) == 0) {

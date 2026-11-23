@@ -1,6 +1,8 @@
 # gesher-base: the Linux/POSIX interfaces AOSP code expects, on Win32.
 # Headers in include/ shadow or extend mingw's; implementations in src/.
 add_library(gesher_posix STATIC
+  ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/block_broker_client.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/binder.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/crash.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dirent.cc
@@ -105,6 +107,21 @@ target_include_directories(gesher_posix BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR}/
 include_directories(BEFORE ${CMAKE_CURRENT_LIST_DIR}/include)
 link_libraries(gesher_posix)
 target_compile_options(gesher_posix PRIVATE -Wall -Wextra -Werror)
+add_executable(gesher_usb_block_guest_test
+  ${CMAKE_SOURCE_DIR}/tests/exec/usb_block_guest.cc
+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_channel.cc)
+target_compile_options(gesher_usb_block_guest_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(gesher_usb_block_guest_test PRIVATE gesher_posix)
+# Manually select a real USB disk interface. Keep this read-only fixture out of
+# ordinary builds and automated tests.
+add_executable(gesher_usb_block_physical_test EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/exec/usb_block_physical.cc
+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_channel.cc
+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/block_broker_server.cc
+  ${CMAKE_SOURCE_DIR}/compat/usb_storage/host_disk.cc)
+target_compile_options(gesher_usb_block_physical_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(gesher_usb_block_physical_test PRIVATE -municode)
+target_link_libraries(gesher_usb_block_physical_test PRIVATE gesher_posix cfgmgr32)
 # Fence factories convert allocation failure to ENOMEM while retaining pending
 # GPU-event lifetime. Descriptor publication itself uses preallocated slots.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/native_fence.cc PROPERTIES

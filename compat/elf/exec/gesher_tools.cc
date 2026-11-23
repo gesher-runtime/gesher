@@ -15,8 +15,10 @@
 #include <tlhelp32.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <charconv>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -51,7 +53,7 @@ int CatFile(FILE* in) {
   while ((n = std::fread(buf, 1, sizeof(buf), in)) > 0) {
     if (std::fwrite(buf, 1, n, stdout) != n) return 1;
   }
-  return 0;
+  return std::ferror(in) ? 1 : 0;
 }
 
 int Cat(const std::vector<std::string>& args) {
@@ -59,24 +61,23 @@ int Cat(const std::vector<std::string>& args) {
   bool any = false;
   for (const std::string& a : args) {
     if (a == "-" ) {
-      CatFile(stdin);
+      if (CatFile(stdin) != 0) status = 1;
       any = true;
       continue;
     }
     if (!a.empty() && a[0] == '-') continue;  // ignore options
     any = true;
-    FILE* f = _wfopen(WindowsPath(a).c_str(), L"rb");
+    FILE* f = std::fopen(a.c_str(), "rb");
     if (f == nullptr) {
-      std::fprintf(stderr, "cat: %s: No such file or directory\n", a.c_str());
+      std::fprintf(stderr, "cat: %s: %s\n", a.c_str(), std::strerror(errno));
       status = 1;
       continue;
     }
     if (CatFile(f) != 0) status = 1;
     std::fclose(f);
   }
-  if (!any) CatFile(stdin);
-  std::fflush(stdout);
-  return status;
+  if (!any && CatFile(stdin) != 0) status = 1;
+  return std::fflush(stdout) != 0 ? 1 : status;
 }
 
 // --- dd ------------------------------------------------------------------------
@@ -114,7 +115,7 @@ bool DdNumber(std::string_view text, uint64_t* value) {
   return true;
 }
 
-ssize_t DdRead(int fd, void* buffer, size_t length) {
+ssize_t ReadToolBytes(int fd, void* buffer, size_t length) {
   ssize_t n;
   do {
     n = read(fd, buffer, length);
@@ -122,7 +123,7 @@ ssize_t DdRead(int fd, void* buffer, size_t length) {
   return n;
 }
 
-bool DdWrite(int fd, const char* buffer, size_t length) {
+bool WriteToolBytes(int fd, const char* buffer, size_t length) {
   while (length > 0) {
     ssize_t n = write(fd, buffer, length);
     if (n < 0 && errno == EINTR) continue;
@@ -173,7 +174,7 @@ int Dd(const std::vector<std::string>& args) {
     if (errno != ESPIPE) return DdError("input seek");
     uint64_t remaining = skip * block;
     while (remaining != 0) {
-      ssize_t received = DdRead(in.fd, buffer.get(), std::min(block, remaining));
+      ssize_t received = ReadToolBytes(in.fd, buffer.get(), std::min(block, remaining));
       if (received < 0) return DdError("input skip");
       if (received == 0) { errno = EIO; return DdError("input skip"); }
       remaining -= static_cast<uint64_t>(received);
@@ -196,10 +197,10 @@ int Dd(const std::vector<std::string>& args) {
   uint64_t partial = 0;
   uint64_t remaining = count * block;
   while (!limited || remaining != 0) {
-    ssize_t received = DdRead(in.fd, buffer.get(), limited ? std::min(block, remaining) : block);
+    ssize_t received = ReadToolBytes(in.fd, buffer.get(), limited ? std::min(block, remaining) : block);
     if (received < 0) return DdError("read");
     if (received == 0) break;
-    if (!DdWrite(out.fd, buffer.get(), static_cast<size_t>(received))) return DdError("write");
+    if (!WriteToolBytes(out.fd, buffer.get(), static_cast<size_t>(received))) return DdError("write");
     if (limited) remaining -= static_cast<uint64_t>(received);
     if (static_cast<uint64_t>(received) == block) ++full;
     else ++partial;
@@ -211,6 +212,107 @@ int Dd(const std::vector<std::string>& args) {
   std::fprintf(stderr, "%llu+%llu records in\n%llu+%llu records out\n",
                static_cast<unsigned long long>(full), static_cast<unsigned long long>(partial),
                static_cast<unsigned long long>(full), static_cast<unsigned long long>(partial));
+  return 0;
+}
+
+int Basename(const std::vector<std::string>& args) {
+  const bool end_options = !args.empty() && args.front() == "--";
+  const size_t first = end_options ? 1 : 0;
+  if (args.size() <= first || args.size() > first + 2 ||
+      (!end_options && args[first].size() > 1 && args[first].front() == '-')) {
+    std::fprintf(stderr, "usage: basename [--] NAME [SUFFIX]\n");
+    return 1;
+  }
+  std::string_view name(args[first]);
+  const size_t end = name.find_last_not_of('/');
+  if (end == std::string_view::npos && !name.empty()) {
+    name = "/";
+  } else if (end != std::string_view::npos) {
+    name = name.substr(0, end + 1);
+    const size_t separator = name.find_last_of('/');
+    if (separator != std::string_view::npos) name.remove_prefix(separator + 1);
+    if (args.size() == first + 2) {
+      std::string_view suffix(args[first + 1]);
+      if (name.size() > suffix.size() && name.ends_with(suffix)) name.remove_suffix(suffix.size());
+    }
+  }
+  return std::fprintf(stdout, "%.*s\n", static_cast<int>(name.size()), name.data()) < 0 ||
+      std::fflush(stdout) != 0;
+}
+
+// tr supports byte translations, octal/character escapes and ascending ranges.
+// Reject extensions such as character classes and repetition syntax until their
+// behavior can be provided. In particular they must not translate as literals.
+bool TrSet(std::string_view text, std::vector<unsigned char>* values) {
+  bool range = false;
+  while (!text.empty()) {
+    unsigned int byte = static_cast<unsigned char>(text.front());
+    text.remove_prefix(1);
+    if (byte == '-' && !values->empty() && !text.empty() && !range) {
+      range = true;
+      continue;
+    }
+    if (byte == '[' && text.find(']') != std::string_view::npos) return false;
+    if (byte == '\\') {
+      if (text.empty()) return false;
+      byte = static_cast<unsigned char>(text.front());
+      text.remove_prefix(1);
+      switch (byte) {
+        case 'a': byte = '\a'; break;
+        case 'b': byte = '\b'; break;
+        case 'f': byte = '\f'; break;
+        case 'n': byte = '\n'; break;
+        case 'r': byte = '\r'; break;
+        case 't': byte = '\t'; break;
+        case 'v': byte = '\v'; break;
+        default:
+          if (byte >= '0' && byte <= '7') {
+            byte -= '0';
+            for (int i = 0; i < 2 && !text.empty() && text.front() >= '0' && text.front() <= '7'; ++i) {
+              byte = byte * 8 + text.front() - '0';
+              text.remove_prefix(1);
+            }
+            if (byte > UCHAR_MAX) return false;
+          }
+          break;
+      }
+    }
+    if (range) {
+      const unsigned int start = values->back();
+      if (byte < start) return false;
+      for (unsigned int c = start + 1; c <= byte; ++c) values->push_back(static_cast<unsigned char>(c));
+      range = false;
+    } else {
+      values->push_back(static_cast<unsigned char>(byte));
+    }
+  }
+  return true;
+}
+
+int Tr(const std::vector<std::string>& args) {
+  const bool end_options = !args.empty() && args.front() == "--";
+  const size_t first = end_options ? 1 : 0;
+  std::vector<unsigned char> from;
+  std::vector<unsigned char> to;
+  if (args.size() != first + 2 ||
+      (!end_options && args[first].size() > 1 && args[first].front() == '-') ||
+      !TrSet(args[first], &from) || !TrSet(args[first + 1], &to) || to.empty()) {
+    std::fprintf(stderr, "usage: tr [--] SET1 SET2 (byte translation)\n");
+    return 1;
+  }
+  std::array<unsigned char, 256> mapping;
+  for (size_t i = 0; i < mapping.size(); ++i) mapping[i] = static_cast<unsigned char>(i);
+  for (size_t i = 0; i < from.size(); ++i) mapping[from[i]] = to[std::min(i, to.size() - 1)];
+  char bytes[8192];
+  ssize_t count;
+  while ((count = ReadToolBytes(STDIN_FILENO, bytes, sizeof(bytes))) > 0) {
+    for (ssize_t i = 0; i < count; ++i) bytes[i] = static_cast<char>(mapping[static_cast<unsigned char>(bytes[i])]);
+    if (!WriteToolBytes(STDOUT_FILENO, bytes, static_cast<size_t>(count))) break;
+  }
+  if (count != 0) {
+    std::fprintf(stderr, "tr: %s\n", std::strerror(errno));
+    return 1;
+  }
   return 0;
 }
 
@@ -282,8 +384,12 @@ int Ls(const std::vector<std::string>& args) {
 
 // --- id ------------------------------------------------------------------------
 
-int Id(const std::vector<std::string>&) {
-  int uid = std::atoi(EnvOr("GESHER_UID", "10000").c_str());
+int Id(const std::vector<std::string>& args) {
+  if (args.size() == 1 && args.front() == "-u") {
+    return std::fprintf(stdout, "%u\n", static_cast<unsigned>(geteuid())) < 0 ||
+        std::fflush(stdout) != 0;
+  }
+  int uid = static_cast<int>(geteuid());
   std::fprintf(stdout, "uid=%d(u0_a%d) gid=%d(u0_a%d) groups=%d(u0_a%d)\n", uid,
                uid >= 10000 ? uid - 10000 : uid, uid, uid >= 10000 ? uid - 10000 : uid, uid,
                uid >= 10000 ? uid - 10000 : uid);
@@ -528,7 +634,7 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
 int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "toybox") {
     if (args.empty()) {
-      std::fprintf(stdout, "toybox (gesher)\nls cat dd id ps getprop setprop logcat kill sleep pm am\n");
+      std::fprintf(stdout, "toybox (gesher)\nls cat dd basename tr id ps getprop setprop logcat kill sleep pm am\n");
       std::fflush(stdout);
       return 0;
     }
@@ -537,6 +643,8 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "ls") return Ls(args);
   if (name == "cat") return Cat(args);
   if (name == "dd") return Dd(args);
+  if (name == "basename") return Basename(args);
+  if (name == "tr") return Tr(args);
   if (name == "id") return Id(args);
   if (name == "ps") return Ps(args);
   if (name == "getprop") return Getprop(args);

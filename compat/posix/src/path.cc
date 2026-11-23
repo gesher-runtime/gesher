@@ -35,6 +35,7 @@
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
+#include "usb_block_internal.h"
 
 namespace gesher {
 namespace {
@@ -85,7 +86,17 @@ PathKind VirtualKind(std::string_view path, std::wstring* name) {
   // /sys/devices/system/cpu/{possible,present,online}: the CPU lists cpuinfo
   // (XNNPACK, onnxruntime) reads first, served like /proc's files.
   if (root == "sys") {
-    if (NextPart(&path) == "devices" && NextPart(&path) == "system" &&
+    const auto branch = NextPart(&path);
+    if (branch == "block" && usb_block::Attached()) {
+      std::string joined("sys/block");
+      for (auto part = NextPart(&path); !part.empty(); part = NextPart(&path)) {
+        joined += '/';
+        joined += part;
+      }
+      *name = Widen(joined.c_str());
+      return PathKind::kVirtual;
+    }
+    if (branch == "devices" && NextPart(&path) == "system" &&
         NextPart(&path) == "cpu") {
       const auto leaf = NextPart(&path);
       if ((leaf == "possible" || leaf == "present" || leaf == "online") && NextPart(&path).empty()) {
@@ -99,6 +110,18 @@ PathKind VirtualKind(std::string_view path, std::wstring* name) {
   }
   if (root != "dev") return PathKind::kFile;
   const auto leaf = NextPart(&path);
+  if (leaf == "block" && usb_block::Attached()) {
+    const auto device = NextPart(&path);
+    if (device.empty()) {
+      *name = L"dev/block";
+      return PathKind::kVirtual;
+    }
+    if (device == usb_block::kBlockName && NextPart(&path).empty()) {
+      *name = L"dev/block/sdb";
+      return PathKind::kVirtual;
+    }
+    return PathKind::kMissing;
+  }
   if (NextPart(&path).empty()) {
     if (leaf == "null") return PathKind::kNull;
     if (leaf == "zero") return PathKind::kZero;
