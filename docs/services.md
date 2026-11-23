@@ -464,8 +464,12 @@ latest), so the app re-checks after the user decided. `canRequestPackageInstalls
 only about the caller's own package (another app's caller gets SecurityException, as AOSP). Exact alarms (always allowed
 here) and full-screen intents (`canUseFullScreenIntent` is not implemented) have no switch.
 StorageStatsService honours the Usage access op as usage stats do.
-Gesher does not otherwise confine files or overlay windows by these ops: the switch
-records the user's decision, and the app's checks report it.
+Alert window admission uses the caller's installed process identity and Android's
+target-SDK and AppOps rules. A window admitted in a hidden mode stays hidden, including
+its attached children. Changing the alert-window mode updates the existing surfaces
+and their input routes. Offscreen Windows tests run this path with real HWNDs. Windows
+desktop stacking still uses Gesher's existing popup ownership. All files access applies
+to Android's shared volume. Windows documents elsewhere use the system document picker.
 
 `storagestats` (StorageStatsService) measures apps' code, data and cache directories and
 the shared view's media on the host files. Component enabled states, memory info, the SIM

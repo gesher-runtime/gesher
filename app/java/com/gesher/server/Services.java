@@ -118,6 +118,8 @@ public final class Services {
                 StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
                 StandIn.of(IActivityTaskManager.class, atm).asBinder());
+        AlertWindowPolicy alerts = new AlertWindowPolicy(pm, atm);
+        services.put(AlertWindowPolicy.NAME, alerts);
         WindowManagerService wm = new WindowManagerService();
         services.put(Context.WINDOW_SERVICE,
                 StandIn.of(IWindowManager.class, wm).asBinder());
