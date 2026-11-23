@@ -1,6 +1,8 @@
 // Complete production WASAPI implementation. Only class visibility permits
 // injecting the documented IAudioCaptureClient COM boundary; no device opens.
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 @WASAPI@
 class CaptureBoundary final : public IAudioCaptureClient {
  public:
@@ -27,13 +29,25 @@ class ClientBoundary final : public IAudioClient {
  public:
   CaptureBoundary* capture = nullptr;
   HRESULT reset_result = S_OK, start_result = S_OK;
+  HRESULT initialize_result = S_OK, event_handle_result = S_OK;
   bool running = false;
-  int starts = 0, stops = 0, resets = 0;
+  int starts = 0, stops = 0, resets = 0, initializes = 0;
+  DWORD initialize_flags = 0;
+  HANDLE event_handle = nullptr;
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
   ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
   ULONG STDMETHODCALLTYPE Release() override { return 1; }
-  HRESULT STDMETHODCALLTYPE Initialize(AUDCLNT_SHAREMODE, DWORD, REFERENCE_TIME, REFERENCE_TIME,
-                                        const WAVEFORMATEX*, LPCGUID) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE Initialize(AUDCLNT_SHAREMODE mode, DWORD flags, REFERENCE_TIME, REFERENCE_TIME periodicity,
+                                        const WAVEFORMATEX*, LPCGUID) override {
+    ++initializes;
+    initialize_flags = flags;
+    // Shared mode takes no explicit period, with or without event callbacks.
+    if (mode != AUDCLNT_SHAREMODE_SHARED || periodicity != 0) return E_INVALIDARG;
+    // An endpoint that rejects event callbacks rejects the flag, not the stream.
+    if ((flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) != 0 && FAILED(initialize_result)) return initialize_result;
+    return (flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) != 0 ? S_OK : polled_result;
+  }
+  HRESULT polled_result = S_OK;
   HRESULT STDMETHODCALLTYPE GetBufferSize(UINT32*) override { return E_NOTIMPL; }
   HRESULT STDMETHODCALLTYPE GetStreamLatency(REFERENCE_TIME*) override { return E_NOTIMPL; }
   HRESULT STDMETHODCALLTYPE GetCurrentPadding(UINT32*) override { return E_NOTIMPL; }
@@ -55,14 +69,167 @@ class ClientBoundary final : public IAudioClient {
     if (SUCCEEDED(reset_result)) capture->consumed = true;
     return reset_result;
   }
-  HRESULT STDMETHODCALLTYPE SetEventHandle(HANDLE) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE SetEventHandle(HANDLE handle) override {
+    event_handle = handle;
+    return event_handle_result;
+  }
   HRESULT STDMETHODCALLTYPE GetService(REFIID, void**) override { return E_NOTIMPL; }
+};
+class DeviceBoundary final : public IMMDevice {
+ public:
+  ClientBoundary* clients[2] = {nullptr, nullptr};  // what successive Activate calls return
+  int activations = 0;
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
+  ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+  ULONG STDMETHODCALLTYPE Release() override { return 1; }
+  HRESULT STDMETHODCALLTYPE Activate(REFIID, DWORD, PROPVARIANT*, void** result) override {
+    if (activations >= 2 || clients[activations] == nullptr) { ++activations; return E_FAIL; }
+    *result = static_cast<IAudioClient*>(clients[activations++]);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE OpenPropertyStore(DWORD, IPropertyStore**) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE GetId(LPWSTR*) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE GetState(DWORD*) override { return E_NOTIMPL; }
 };
 int checks = 0;
 void Check(bool ok, const char* message) {
   ++checks;
   if (!ok) { std::fprintf(stderr, "FAIL WASAPI capture: %s\n", message); std::exit(1); }
 }
+bool HandleIsOpen(HANDLE handle) {
+  DWORD flags = 0;
+  return handle != nullptr && GetHandleInformation(handle, &flags) != 0;
+}
+double WaitSeconds(gesher::media::WasapiCapture& source, int timeout_ms, bool* result) {
+  const auto begin = std::chrono::steady_clock::now();
+  *result = source.WaitForData(timeout_ms);
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+}
+// The capture thread waits for the endpoint's sample event, and for nothing else but
+// a wake and a safety timeout; an endpoint that rejects event callbacks is polled.
+void Events() {
+  for (const bool loopback : {false, true}) {
+    HANDLE sample = nullptr, stop = nullptr;
+    {
+    ClientBoundary client;
+    DeviceBoundary device;
+    gesher::media::WasapiCapture source;
+    source.device_ = &device; source.client_ = &client; source.loopback_ = loopback;
+    Check(SUCCEEDED(source.InitializeStream()), "event callback initialization succeeds");
+    Check(client.initializes == 1 && device.activations == 0, "an accepting endpoint is initialized once, on its own client");
+    Check((client.initialize_flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) != 0 &&
+              ((client.initialize_flags & AUDCLNT_STREAMFLAGS_LOOPBACK) != 0) == loopback,
+          "event callback flag is added to, not replacing, the loopback flag");
+    Check(source.events_ && source.sample_event_ != nullptr && client.event_handle == source.sample_event_,
+          "the endpoint is given the sample event");
+    bool result = false;
+    SetEvent(source.sample_event_);
+    Check(WaitSeconds(source, 10000, &result) < 1.0 && result, "a sample event ends the wait at once");
+    const double timed = WaitSeconds(source, 40, &result);
+    Check(result && timed >= 0.02 && timed < 5.0, "without any signal the wait ends at its timeout");
+    source.Interrupt();
+    Check(WaitSeconds(source, 10000, &result) < 1.0 && result, "a wake that came before the wait is not lost");
+    double blocked = 100.0;
+    std::thread waiter([&] { bool ignored; blocked = WaitSeconds(source, 10000, &ignored); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    source.Interrupt();
+    waiter.join();
+    Check(blocked >= 0.05 && blocked < 5.0, "Interrupt wakes a waiting thread immediately");
+    {
+      CaptureBoundary capture;
+      client.capture = &capture;
+      source.capture_ = &capture;
+      source.channels_ = 1; source.rate_ = 48000; source.bits_ = 32; source.is_float_ = true;
+      Check(source.Start(), "an event-mode source starts");
+      double stopped = 100.0;
+      std::thread listener([&] { bool ignored; stopped = WaitSeconds(source, 10000, &ignored); });
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      source.Stop();
+      listener.join();
+      Check(stopped >= 0.05 && stopped < 5.0, "Stop wakes a thread waiting for samples immediately");
+      source.capture_ = nullptr;
+    }
+    sample = source.sample_event_;
+    stop = source.stop_event_;
+    Check(HandleIsOpen(sample) && HandleIsOpen(stop), "an event-mode source holds its event handles");
+    source.client_ = nullptr;
+    source.device_ = nullptr;
+    }
+    Check(!HandleIsOpen(sample) && !HandleIsOpen(stop), "destroying the source closes both event handles");
+  }
+  for (int reason = 0; reason < 2; ++reason) {
+    // 0: Initialize rejects event callbacks; 1: SetEventHandle fails
+    ClientBoundary rejected, polled;
+    DeviceBoundary device;
+    device.clients[0] = &polled;
+    if (reason == 0) rejected.initialize_result = E_INVALIDARG;
+    if (reason == 1) rejected.event_handle_result = E_NOTIMPL;
+    gesher::media::WasapiCapture source;
+    source.device_ = &device; source.client_ = &rejected; source.loopback_ = true;
+    Check(SUCCEEDED(source.InitializeStream()), "a rejected event mode falls back to polled initialization");
+    Check(rejected.initializes == 1 && polled.initializes == 1 && device.activations == 1,
+          "the fallback initializes a freshly activated client, not the failed one");
+    Check((polled.initialize_flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) == 0 &&
+              (polled.initialize_flags & AUDCLNT_STREAMFLAGS_LOOPBACK) != 0,
+          "the polled client keeps the loopback flag and has no event flag");
+    Check(source.client_ == &polled && !source.events_ && source.sample_event_ == nullptr && source.stop_event_ == nullptr,
+          "the polled source holds no event handles");
+    bool result = true;
+    Check(WaitSeconds(source, 10000, &result) < 1.0 && !result, "a polled source tells the caller to wait its own period");
+    source.Interrupt();
+    source.Stop();
+    source.client_ = nullptr; source.device_ = nullptr;
+  }
+  {
+    ClientBoundary rejected, polled;
+    rejected.initialize_result = E_INVALIDARG;
+    DeviceBoundary device;
+    device.clients[0] = &polled;
+    gesher::media::WasapiCapture source;
+    source.device_ = &device; source.client_ = &rejected;
+    Check(SUCCEEDED(source.InitializeStream()) && rejected.event_handle == nullptr,
+          "an endpoint that rejects Initialize is never given an event handle");
+    source.client_ = nullptr; source.device_ = nullptr;
+  }
+  {
+    ClientBoundary rejected, polled;
+    rejected.event_handle_result = E_NOTIMPL;
+    DeviceBoundary device;
+    device.clients[0] = &polled;
+    gesher::media::WasapiCapture source;
+    source.device_ = &device; source.client_ = &rejected;
+    Check(SUCCEEDED(source.InitializeStream()) && rejected.event_handle != nullptr,
+          "SetEventHandle was attempted before falling back");
+    Check(!HandleIsOpen(rejected.event_handle), "the sample event given to a refusing endpoint is closed on fallback");
+    source.client_ = nullptr; source.device_ = nullptr;
+  }
+  {
+    // Both modes fail: the polled failure is the one reported, and nothing leaks or dangles.
+    ClientBoundary rejected, polled;
+    rejected.initialize_result = E_INVALIDARG;
+    polled.polled_result = AUDCLNT_E_DEVICE_IN_USE;
+    DeviceBoundary device;
+    device.clients[0] = &polled;
+    gesher::media::WasapiCapture source;
+    source.device_ = &device; source.client_ = &rejected;
+    Check(source.InitializeStream() == AUDCLNT_E_DEVICE_IN_USE, "a failed fallback reports its own failure");
+    Check(!source.events_ && source.sample_event_ == nullptr && source.stop_event_ == nullptr,
+          "a failed initialization holds no event handles");
+    source.client_ = nullptr; source.device_ = nullptr;
+  }
+  {
+    // The endpoint cannot even produce a client for the fallback.
+    ClientBoundary rejected;
+    rejected.initialize_result = E_INVALIDARG;
+    DeviceBoundary device;
+    gesher::media::WasapiCapture source;
+    source.device_ = &device; source.client_ = &rejected;
+    Check(FAILED(source.InitializeStream()) && source.client_ == nullptr && device.activations == 1,
+          "a failed re-activation leaves no stale client for the destructor to release");
+    source.device_ = nullptr;
+  }
+}
+
 int main() {
   for (int kind = 0; kind < 7; ++kind) {
     CaptureBoundary boundary;
@@ -112,5 +279,6 @@ int main() {
     Check(source.Start() && client.starts == 4 && client.resets == 5, "failed start remains stopped and safely retryable");
     source.Stop();
   }
+  Events();
   std::printf("WASAPI capture contracts: %d checks PASS\n", checks);
 }

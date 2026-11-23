@@ -22,6 +22,11 @@ namespace fixture {
 std::atomic<bool> available{true}, start_ok{true}, pull_ok{true}, block_start{false}, start_entered{false};
 std::atomic<int> pulls{0};
 std::atomic<bool> block_pull{false}, pull_entered{false};
+// A source with a data signal of its own (WASAPI's sample event). Its wait ignores
+// the timeout it is given: only a signal or Interrupt() ends it, so a stopped
+// stream that did not wake the capture thread would leave it there for good.
+std::atomic<bool> signalled_source{false}, interrupted{false};
+std::atomic<int> signals{0}, waiting{0}, stops{0}, interrupts{0};
 std::mutex mutex;
 std::condition_variable changed;
 // A blocked backend call checks its gate under `mutex` and then sleeps on
@@ -47,7 +52,21 @@ class ControlledSource : public CaptureSource {
     fixture::changed.wait(lock, [] { return !fixture::block_start.load(); });
     return fixture::start_ok;
   }
-  void Stop() override {}
+  void Stop() override { ++fixture::stops; }
+  bool WaitForData(int) override {
+    if (!fixture::signalled_source) return false;
+    std::unique_lock<std::mutex> lock(fixture::mutex);
+    ++fixture::waiting;
+    fixture::changed.wait(lock, [] { return fixture::signals.load() > 0 || fixture::interrupted.load(); });
+    --fixture::waiting;
+    if (fixture::interrupted) fixture::interrupted = false;
+    else --fixture::signals;
+    return true;
+  }
+  void Interrupt() override {
+    { std::lock_guard<std::mutex> lock(fixture::mutex); fixture::interrupted = true; ++fixture::interrupts; }
+    fixture::changed.notify_all();
+  }
   bool Pull(std::vector<float>* out) override {
     fixture::pull_entered = true;
     {
@@ -158,6 +177,32 @@ int main(int argc, char** argv) {
     Check(Await([&] { return progressed.load(); }), "last owner destruction cannot deadlock engine retirement");
     next.join();
     Check(weak.expired(), "retired worker snapshot releases last stream ownership");
+  } else if (!std::strcmp(test, "event-signal")) {
+    fixture::signalled_source = true;
+    auto stream = Open();
+    Check(stream->Start() == kOk && Await([] { return fixture::waiting.load() == 1; }),
+          "capture thread waits on the source's data signal");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    Check(fixture::pulls == 0, "a signalled source is not pulled on a timer");
+    { std::lock_guard<std::mutex> lock(fixture::mutex); ++fixture::signals; }
+    fixture::changed.notify_all();
+    Check(Await([&] { return stream->Available() >= 8; }), "a data signal pulls and publishes at once");
+    Check(Await([] { return fixture::waiting.load() == 1; }) && fixture::pulls == 1, "one signal, one pull");
+    stream->Release();
+  } else if (!std::strcmp(test, "event-wake")) {
+    for (const bool release : {false, true}) {
+      fixture::signalled_source = true;
+      const int stops = fixture::stops;
+      auto stream = Open();
+      Check(stream->Start() == kOk && Await([] { return fixture::waiting.load() == 1; }),
+            "capture thread blocks on the source's data signal");
+      if (release) stream->Release(); else stream->Stop();
+      Check(Await([&] { return fixture::stops == stops + 1; }),
+            "retiring the last started stream wakes the blocked capture thread, which stops the source");
+      Check(Await([] { return fixture::waiting.load() == 0; }) && fixture::interrupts >= 1,
+            "the wake is the source's Interrupt, not its timeout");
+      if (!release) stream->Release();
+    }
   } else if (!std::strcmp(test, "stale-peer")) {
     auto first = Open(), second = Open();
     Check(first->Start() == kOk && second->Start() == kOk, "two targets start before source publication");
