@@ -157,6 +157,9 @@ public final class PendingIntentContractTest {
             am = (IActivityManager)UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unsafe allocation skips the observer list's field initializer.
+            try { set(am, "mProcessDeathObservers", new ArrayList<>()); }
+            catch (NoSuchFieldException baseline) { }
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
             // Synthetic framework manifest metadata; preserve the real protected
