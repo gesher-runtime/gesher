@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <string>
@@ -450,9 +451,82 @@ static void TestFsyncReadOnlyDescriptor() {
   CHECK_EQ(errno, EBADF);
 }
 
+// A read-only file (mode 0444) cannot be opened for writing on Windows, yet
+// Linux fsync succeeds on it through any descriptor: a file written, made
+// read-only (as Android 14 requires of loaded dex files) and then fsynced.
+static void TestFsyncReadOnlyFile() {
+  char path[] = "fsync_mode0444_XXXXXX";
+  int writer = mkstemp(path);
+  CHECK(writer >= 0);
+  if (writer < 0) return;
+  CHECK_EQ(write(writer, "data", 4), 4);
+  CHECK_EQ(chmod(path, 0444), 0);
+  // The writer, still open, is the file's only writable handle.
+  int reader = open(path, O_RDONLY);
+  CHECK(reader >= 0);
+  CHECK_EQ(fsync(reader), 0);
+  CHECK_EQ(fdatasync(reader), 0);
+  CHECK_EQ(write(writer, "more", 4), 4);
+  close(writer);
+  // No writable descriptor left: the cached data is written back read-only.
+  CHECK_EQ(fsync(reader), 0);
+  CHECK_EQ(fdatasync(reader), 0);
+  // The descriptor stays read-only.
+  CHECK_EQ(write(reader, "x", 1), -1);
+  CHECK_EQ(errno, EBADF);
+  char buffer[8] = {};
+  CHECK_EQ(pread(reader, buffer, 8, 0), 8);
+  CHECK(std::memcmp(buffer, "datamore", 8) == 0);
+  close(reader);
+  CHECK_EQ(chmod(path, 0644), 0);
+  unlink(path);
+
+  char empty[] = "fsync_empty0444_XXXXXX";
+  int created = mkstemp(empty);
+  CHECK(created >= 0);
+  if (created < 0) return;
+  close(created);
+  CHECK_EQ(chmod(empty, 0444), 0);
+  int empty_reader = open(empty, O_RDONLY);
+  CHECK(empty_reader >= 0);
+  CHECK_EQ(fsync(empty_reader), 0);
+  close(empty_reader);
+  CHECK_EQ(chmod(empty, 0644), 0);
+  unlink(empty);
+}
+
+// An O_PATH descriptor is not open for I/O: fsync fails with EBADF, as read
+// and write do (Linux fdget), for a file and a directory alike.
+static void TestFsyncPathDescriptor() {
+  char path[] = "fsync_opath_XXXXXX";
+  int writer = mkstemp(path);
+  CHECK(writer >= 0);
+  if (writer < 0) return;
+  CHECK_EQ(write(writer, "data", 4), 4);
+  close(writer);
+  int file = open(path, O_PATH);
+  CHECK(file >= 0);
+  errno = 0;
+  CHECK_EQ(fsync(file), -1);
+  CHECK_EQ(errno, EBADF);
+  errno = 0;
+  CHECK_EQ(fdatasync(file), -1);
+  CHECK_EQ(errno, EBADF);
+  close(file);
+  unlink(path);
+  int directory = open(".", O_PATH | O_DIRECTORY);
+  CHECK(directory >= 0);
+  errno = 0;
+  CHECK_EQ(fsync(directory), -1);
+  CHECK_EQ(errno, EBADF);
+  close(directory);
+}
+
 int main() {
   std::printf("Running Track N Item N32 File Status Flags & OFD Semantics test...\n");
   TestFsyncReadOnlyDescriptor();
+  TestFsyncReadOnlyFile();
+  TestFsyncPathDescriptor();
   TestDupSharesFlags();
   TestFdCloexecNotSharedAcrossDup();
   TestFileOffsetSharedAcrossDup();
