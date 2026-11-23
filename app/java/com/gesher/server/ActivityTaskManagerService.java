@@ -4472,7 +4472,6 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.dead = true;
             retireAppWindowModeLocked(app.packageName);
             for (ActivityRecord r : new ArrayList<>(app.activities)) {
-                recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 for (ActivityRecord a : mActivities) {
                     if (a.waitingFor == r) {
                         a.waitingFor = null;
@@ -4480,6 +4479,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                 && a.app != null && a.app != app && a.app.ready) released.add(a);
                     }
                 }
+                if (app.spawned && app.ready && !app.exiting && !r.finishing
+                        && r.state == State.INITIALIZING && !r.launchScheduled) {
+                    // The accepted start is still in server history, for example while
+                    // it waits for the old activity's pause. Only its process is gone.
+                    r.app = null;
+                    r.launchGeneration = null;
+                    r.deferredHistory = true;
+                    affectedTasks.add(r.taskId);
+                    continue;
+                }
+                recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
                     r.state = State.DESTROYED;
@@ -4712,7 +4722,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             ProcessRecord app = r.app;
             if (app == null) app = processFor(r.info.packageName,
                     componentProcess(r.info.packageName, r.info.processName));
-            if (app == null) {
+            if (app == null && r.historyEntry) {
                 app = unassignedProcess(r.launchedFromPid);
                 if (app != null) {
                     assignPackage(app, r.info.packageName,

@@ -7,10 +7,12 @@ set(_uapi "${AOSP_DIR}/bionic/libc/kernel/uapi")
 
 # binderd: Win32 only, with the driver's ABI from bionic's uapi header,
 # searched after gesher-base's <linux/*.h>.
-add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc)
+add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
-# The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom.
-target_link_libraries(binderd PRIVATE bcrypt)
+# The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom; the
+# sandboxed pipe's security descriptor (ADR 0090) from app_container.cc.
+target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32)
 
 # servicemanager, as vndservicemanager is built (no VINTF, no perfetto), with
 # libcutils' multiuser.cpp (not in libcutils' Windows set) and a main of its

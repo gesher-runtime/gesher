@@ -586,3 +586,4 @@ the caller's final receiver after garbage collection.
   protect the implemented API/storage paths; they do not isolate hostile code
   running as that same Windows user. Use trusted APKs and test accounts for this
   integration. Personal credentials are not an established supported deployment.
+  Per-app AppContainer isolation is in development ([sandbox.md](sandbox.md)).

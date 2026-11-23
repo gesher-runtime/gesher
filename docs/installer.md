@@ -192,7 +192,13 @@ menu shortcut, as a launcher lists it
   manages rather than `gesher-app install`), gets only that `icon.ico`, from the
   application icon, as Android shows a task's application icon; no shortcut.
   It is written again when the APK is newer; `gesher-app uninstall`, or
-  `gesher-app-microg.ps1 -Remove` for an addon, removes it.
+  `gesher-app-microg.ps1 -Remove` for an addon, removes it. A package with no
+  launcher activity also gets `gesher-shell\no-launcher-activity`, so that the
+  Control Center lists it without "Launch", as a launcher would not show it;
+  the camera app (`com.gesher.camera`, installed by the system server) is
+  recorded the same way. The system server updates the record on package
+  install, at each device start, and when the application or a launcher
+  activity or alias changes its enabled state, including with `GESHER_SHORTCUTS=0`.
 - **`gesher-app launch PACKAGE`** starts an installed package by name (the
   shortcut's command; the device starts if it is not running). `gesher-app
   launch APK` is `gesher-app APK`.
