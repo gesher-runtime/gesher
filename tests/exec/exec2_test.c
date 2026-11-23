@@ -104,6 +104,26 @@ int main(int argc, char** argv) {
     return 99;
   }
 
+  if (argc >= 3 && strcmp(argv[1], "--execl-replace") == 0) {
+    void* libc = dlopen("libc.so", RTLD_NOW);
+    int (*run)(const char*, const char*, ...) = libc ? dlsym(libc, "execl") : NULL;
+    if (!run) {
+      fprintf(stderr, "execl lookup failed: %s\n", dlerror());
+      return 99;
+    }
+    errno = 0;
+    if (run("/system/bin/gesher-execl-missing", "missing", (char*)NULL) != -1 ||
+        errno != ENOENT) {
+      perror("execl missing path");
+      return 99;
+    }
+    // The sentinel and trailing arguments are passed on the stack on both ABIs.
+    run(argv[2], argv[2], "echo", "one", "two", "three", "four",
+        "five", "six", "seven", "eight", (char*)NULL);
+    perror("execl replace");
+    return 99;
+  }
+
   const char* child = argc > 1 ? argv[1] : "libexec2child.so";
 
   // --- system() --------------------------------------------------------------

@@ -218,6 +218,21 @@ int BIONIC_SYSV Execve(const char* path, char* const argv[], char* const envp[])
 int BIONIC_SYSV Execv(const char* path, char* const argv[]) {
   return DoExec(path, argv, nullptr, false);
 }
+// The System V trampoline and the ARM64 bridge both supply the argument list
+// after path and argv[0]. Execv shares path resolution, environment and errors.
+extern "C" int BIONIC_SYSV gesher_bionic_vexecl(const char* path, const char* first,
+                                               SysvVaList* args) {
+  std::vector<char*> argv{const_cast<char*>(first)};
+  while (auto* argument = reinterpret_cast<char*>(NextGp(args))) {
+    argv.push_back(argument);
+  }
+  argv.push_back(nullptr);
+  return Execv(path, argv.data());
+}
+
+extern "C" void gesher_bionic_execl();
+asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execl", "gesher_bionic_vexecl", "16", "%rdx"));
+
 int BIONIC_SYSV Execvp(const char* file, char* const argv[]) {
   return DoExec(file, argv, nullptr, true);
 }
@@ -617,6 +632,8 @@ void RegisterProcess(SymbolTable& t) {
   E("vfork", ForkUnsupported);
   E("execve", Execve);
   E("execv", Execv);
+  E("execl", gesher_bionic_execl);
+  E("__gesher_vexecl", gesher_bionic_vexecl);
   E("execvp", Execvp);
   E("execvpe", Execvpe);
   E("waitpid", Waitpid);

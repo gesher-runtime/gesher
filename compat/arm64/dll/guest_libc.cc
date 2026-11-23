@@ -759,6 +759,7 @@ bool InitGuestLibc() {
   AddPointerVariadicFunction(Host("sscanf"), Host("vsscanf"), 2);
   AddPointerVariadicFunction(Host("fscanf"), Host("vfscanf"), 2);
   AddPointerVariadicFunction(Host("scanf"), Host("vscanf"), 1);
+  AddPointerVariadicFunction(Host("execl"), Host("__gesher_vexecl"), 2);
 
   for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
     std::string entry = std::string("__gesher_arm64_") + name;

@@ -40,6 +40,10 @@ if ($LASTEXITCODE -eq 17) {
   $failed++
 }
 
+Check 'exec2: execl resolves through libc and preserves register and stack arguments' {
+  & "$Dir/gesher-exec.exe" --elf $driver 'libexec2test.so' '--execl-replace' (NoDrive $child)
+} @('one two three four five six seven eight')
+
 # The runtime cannot clone a Windows address space with Linux fork/vfork
 # semantics. Unsupported calls must fail honestly and leave real I/O alone.
 Check 'exec2: fork and vfork report ENOSYS without synthetic children or input' {
