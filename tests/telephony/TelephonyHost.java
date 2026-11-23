@@ -356,6 +356,7 @@ public final class TelephonyHost {
         t.phone.requestCellInfoUpdate(1, null, LEGACY.name, null);
         check(true, "requestCellInfoUpdate returns silently below target S");
         callers.current = STATE;
+        TelephonyHost.callers = callers;
         noModemSweep(t);
         callers.current = STATE;
         equal(t.subscriptions.getActiveSubInfoCountMax(), 0, "No modem slots");
@@ -397,6 +398,8 @@ public final class TelephonyHost {
     }
 
     /** Without a modem: what TelephonyManager/SubscriptionManager answer with no service. */
+    static Fixture callers;
+
     static void noModemSweep(TelephonyService.Endpoints t) throws Exception {
         String n = STATE.name;
         equal(t.phone.getAllCellInfo(n, null), null, "getAllCellInfo: null without the service");
@@ -434,6 +437,27 @@ public final class TelephonyHost {
         Receiver ussd = new Receiver();
         t.phone.handleUssdRequest(1, "*100#", ussd);
         check(ussd.codes.isEmpty(), "USSD is dropped silently without the service");
+        callers.current = PLAIN;
+        for (String value : subInfoGetters(t, PLAIN.name)) {
+            equal(value, null, "No iphonesubinfo: null without a permission check");
+        }
+    }
+
+    /** Every remaining IPhoneSubInfo getter, for one caller. */
+    static List<String> subInfoGetters(TelephonyService.Endpoints t, String n) throws Exception {
+        List<String> values = new ArrayList<>();
+        values.add(t.phoneSubInfo.getGroupIdLevel1ForSubscriber(1, n, null));
+        values.add(t.phoneSubInfo.getGroupIdLevel2ForSubscriber(1, n, null));
+        values.add(t.phoneSubInfo.getLine1AlphaTag(n, null));
+        values.add(t.phoneSubInfo.getVoiceMailNumber(n, null));
+        values.add(t.phoneSubInfo.getVoiceMailAlphaTag(n, null));
+        values.add(t.phoneSubInfo.getDeviceSvn(n, null));
+        values.add(t.phoneSubInfo.getNaiForSubscriber(1, n, null));
+        values.add(t.phoneSubInfo.getMsisdn(n, null));
+        values.add(t.phoneSubInfo.getDeviceId(n));
+        values.add(t.phoneSubInfo.getSubscriberId(n));
+        values.add(t.phoneSubInfo.getIccSerialNumber(n));
+        return values;
     }
 
     static final App NETSTATE = new App("com.example.netstate", 10120, 34, TelephonyService.ACCESS_NETWORK_STATE);
@@ -599,7 +623,40 @@ public final class TelephonyHost {
         denied(() -> t.phone.requestNetworkScan(1, false, null, null, null, PLAIN.name, null),
                 "Network scans need MODIFY_PHONE_STATE");
 
+        // Remaining iphonesubinfo getters: PhoneSubInfoController's checks.
+        callers.current = PLAIN;
+        for (Call call : new Call[] {
+                () -> t.phoneSubInfo.getGroupIdLevel1ForSubscriber(1, PLAIN.name, null),
+                () -> t.phoneSubInfo.getGroupIdLevel2ForSubscriber(1, PLAIN.name, null),
+                () -> t.phoneSubInfo.getLine1AlphaTag(PLAIN.name, null),
+                () -> t.phoneSubInfo.getVoiceMailNumber(PLAIN.name, null),
+                () -> t.phoneSubInfo.getVoiceMailAlphaTag(PLAIN.name, null),
+                () -> t.phoneSubInfo.getDeviceSvn(PLAIN.name, null),
+                () -> t.phoneSubInfo.getNaiForSubscriber(1, PLAIN.name, null),
+                () -> t.phoneSubInfo.getMsisdn(PLAIN.name, null),
+                () -> t.phoneSubInfo.getSubscriberId(PLAIN.name),
+                () -> t.phoneSubInfo.getIccSerialNumber(PLAIN.name),
+                () -> t.phoneSubInfo.getDeviceId(PLAIN.name)}) {
+            denied(call, "iphonesubinfo getter needs its permission");
+        }
+        callers.current = REVOKED;
+        equal(t.phoneSubInfo.getGroupIdLevel1ForSubscriber(1, REVOKED.name, null), null,
+                "GID1: a revoked app op gives null");
+        callers.current = STATE;
+        equal(t.phoneSubInfo.getGroupIdLevel1ForSubscriber(1, STATE.name, null), null,
+                "GID1: Windows does not report it");
+        equal(t.phoneSubInfo.getVoiceMailNumber(STATE.name, null), null, "No voicemail number");
+        denied(() -> t.phoneSubInfo.getNaiForSubscriber(1, STATE.name, null), "NAI is a subscriber identifier");
+        denied(() -> t.phoneSubInfo.getMsisdn(STATE.name, null), "MSISDN needs phone-number access from R");
+        callers.current = NUMBERS;
+        equal(t.phoneSubInfo.getMsisdn(NUMBERS.name, null), "+972501234567", "MSISDN with READ_PHONE_NUMBERS");
+        callers.current = PRIVILEGED;
+        equal(t.phoneSubInfo.getSubscriberId(PRIVILEGED.name), "425010123456789", "Deprecated IMSI overload");
+        equal(t.phoneSubInfo.getIccSerialNumber(PRIVILEGED.name), "8997201000000000001", "Deprecated ICCID overload");
+        equal(t.phoneSubInfo.getDeviceId(PRIVILEGED.name), "356938035643809", "Deprecated device ID overload");
+
         // Emergency numbers: the ECC fallback of EmergencyNumberTracker.
+        callers.current = PLAIN;
         check(t.phone.isEmergencyNumber("112", true) && t.phone.isEmergencyNumber("911", true),
                 "112 and 911 with a SIM");
         check(!t.phone.isEmergencyNumber("000", true) && !t.phone.isEmergencyNumber(null, true)

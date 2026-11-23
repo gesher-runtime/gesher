@@ -1252,6 +1252,133 @@ public final class TelephonyService {
             return getLine1NumberForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
                     callingPackage, callingFeatureId);
         }
+
+        // PhoneSubInfoController's remaining getters, with its permission helpers: the
+        // check first (SecurityException, or null for a revoked app op), then the phone
+        // for the subscription (null without one). Windows' Mobile Broadband API reports
+        // the subscriber ID, ICCID and telephone numbers only; GID1/GID2, the line 1 alpha
+        // tag, the voicemail number and tag, the IMEISV and the NAI are not reported, so
+        // they are null after the check. Without a modem: null, the managers' answer.
+
+        /** callPhoneMethodForSubIdWithReadCheck: checkCallingOrSelfReadPhoneState. */
+        private boolean readCheck(int subId, String callingPackage, String callingFeatureId,
+                String message) {
+            if (!mCellular.present()) return false;
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            return mRules.readPhoneState(c, message) && modemForSub(subId) != null;
+        }
+
+        @Override
+        public String getGroupIdLevel1ForSubscriber(int subId, String callingPackage,
+                String callingFeatureId) {
+            readCheck(subId, callingPackage, callingFeatureId, "getGroupIdLevel1");
+            return null;
+        }
+
+        @Override
+        public String getGroupIdLevel2ForSubscriber(int subId, String callingPackage,
+                String callingFeatureId) {
+            readCheck(subId, callingPackage, callingFeatureId, "getGroupIdLevel2");
+            return null;
+        }
+
+        @Override
+        public String getLine1AlphaTag(String callingPackage, String callingFeatureId) {
+            return getLine1AlphaTagForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                    callingPackage, callingFeatureId);
+        }
+
+        @Override
+        public String getLine1AlphaTagForSubscriber(int subId, String callingPackage,
+                String callingFeatureId) {
+            readCheck(subId, callingPackage, callingFeatureId, "getLine1AlphaTag");
+            return null;
+        }
+
+        @Override
+        public String getVoiceMailNumber(String callingPackage, String callingFeatureId) {
+            return getVoiceMailNumberForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                    callingPackage, callingFeatureId);
+        }
+
+        @Override
+        public String getVoiceMailNumberForSubscriber(int subId, String callingPackage,
+                String callingFeatureId) {
+            readCheck(subId, callingPackage, callingFeatureId, "getVoiceMailNumber");
+            return null;
+        }
+
+        @Override
+        public String getVoiceMailAlphaTag(String callingPackage, String callingFeatureId) {
+            return getVoiceMailAlphaTagForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                    callingPackage, callingFeatureId);
+        }
+
+        @Override
+        public String getVoiceMailAlphaTagForSubscriber(int subId, String callingPackage,
+                String callingFeatureId) {
+            readCheck(subId, callingPackage, callingFeatureId, "getVoiceMailAlphaTag");
+            return null;
+        }
+
+        @Override
+        public String getDeviceSvn(String callingPackage, String callingFeatureId) {
+            return getDeviceSvnUsingSubId(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                    callingPackage, callingFeatureId);
+        }
+
+        @Override
+        public String getDeviceSvnUsingSubId(int subId, String callingPackage,
+                String callingFeatureId) {
+            readCheck(subId, callingPackage, callingFeatureId, "getDeviceSvn");
+            return null;
+        }
+
+        /** The NAI is a subscriber identifier (checkCallingOrSelfReadSubscriberIdentifiers). */
+        @Override
+        public String getNaiForSubscriber(int subId, String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return null;
+            mRules.readIdentifiers(mRules.caller(callingPackage, callingFeatureId), "getNai");
+            return null;
+        }
+
+        /** The MSISDN: checkCallingOrSelfReadPhoneNumber, as for the line 1 number. */
+        @Override
+        public String getMsisdn(String callingPackage, String callingFeatureId) {
+            return getMsisdnForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                    callingPackage, callingFeatureId);
+        }
+
+        @Override
+        public String getMsisdnForSubscriber(int subId, String callingPackage,
+                String callingFeatureId) {
+            if (!mCellular.present()) return null;
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (!mRules.readPhoneNumber(c, "getMsisdn")) return null;
+            return WindowsCellular.number(modemForSub(subId));
+        }
+
+        // The deprecated default-subscription overloads.
+        @Override
+        public String getDeviceId(String callingPackage) {
+            return getDeviceIdWithFeature(callingPackage, null);
+        }
+
+        @Override
+        public String getSubscriberId(String callingPackage) {
+            return getSubscriberIdWithFeature(callingPackage, null);
+        }
+
+        @Override
+        public String getSubscriberIdWithFeature(String callingPackage, String callingFeatureId) {
+            return getSubscriberIdForSubscriber(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID,
+                    callingPackage, callingFeatureId);
+        }
+
+        @Override
+        public String getIccSerialNumber(String callingPackage) {
+            return getIccSerialNumberWithFeature(callingPackage, null);
+        }
     }
 
     // ---------------------------------------------------------------------------------

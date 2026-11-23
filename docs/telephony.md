@@ -154,6 +154,12 @@ leaves a callback unanswered. The answers, with AOSP's permission checks:
   SIM. Gesher ships no emergency number database, so country-specific numbers from it are
   missing.
 - Subscriptions: no subscription groups or opportunistic subscriptions.
+- The remaining `iphonesubinfo` getters apply PhoneSubInfoController's checks before
+  answering: GID1/GID2, line 1 alpha tag, voicemail number and tag and IMEISV need
+  `READ_PHONE_STATE` (null with the app op revoked), the NAI subscriber-identifier access,
+  the MSISDN phone-number access. The Mobile Broadband API reports only the subscriber
+  ID, ICCID and telephone numbers, so the MSISDN is the first telephone number and the
+  others are null after the check.
 
 `TelephonyCallback`/`PhoneStateListener` deliver, for phone 0: service state, signal
 strength(s), data connection state and the (always idle) call state, initially and on
