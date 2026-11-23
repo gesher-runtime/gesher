@@ -33,6 +33,8 @@ done
 # A segment of many pages (64 KiB .bss).
 "$cc" $flags -DGESHER_DLEXT_BSS -Wl,-soname,libdlext_cross.so \
   -o "$out/libdlext_cross.so" "$src/dlext_target.c"
+# Thread-locals with an initialization image (PT_TLS).
+"$cc" $flags -DGESHER_DLEXT_TLS -Wl,-soname,libdlext_tls.so   -o "$out/libdlext_tls.so" "$src/dlext_target.c"
 # Registers a thread_local destructor with its __dso_handle.
 "$cc" $flags -DGESHER_DLEXT_THREAD_DTOR -Wl,-soname,libdlext_tdtor.so \
   -o "$out/libdlext_tdtor.so" "$src/dlext_target.c"

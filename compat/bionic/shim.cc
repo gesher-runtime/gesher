@@ -1161,12 +1161,9 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
   }
   // Already loaded: the same handle, where it is, whatever reservation
   // extinfo offers (bionic finds a loaded library before it maps anything).
-  // A library unloaded from its reservation by a concurrent dlclose is no
-  // longer found, and loads again below (Load takes its reference under the
-  // loader's lock).
   if (gesher::elf::Library* existing = gesher::elf::Find(base)) {
     if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
-    if (gesher::elf::AddReservedReference(existing)) return existing;
+    return existing;
   }
   std::string path = filename;
   std::vector<std::string> dirs = LibraryDirectories();
@@ -1185,7 +1182,6 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
     }
   }
   gesher::elf::LoadOptions options;
-  options.add_reserved_reference = true;
   if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
     options.use_reserved = true;
     options.reserved_addr = ext->reserved_addr;
@@ -1233,20 +1229,11 @@ void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
   }
   return p;
 }
-// dlclose: each dlopen/android_dlopen_ext that returns a library loaded into
-// a caller's reservation takes a reference (gesher::elf::AddReservedReference),
-// and the last dlclose unloads it (ReleaseReservedReference), so the caller
-// can unmap its reservation without leaving a loaded object in it, as with
-// bionic's reference counts. Every other library stays loaded for the life of
-// the process, as before.
-int BIONIC_SYSV DlClose(void* handle) {
-  if (handle == nullptr || IsPlatformLibraryHandle(handle) ||
-      handle == reinterpret_cast<void*>(-1) || handle == reinterpret_cast<void*>(-2)) {
-    return 0;
-  }
-  gesher::elf::ReleaseReservedReference(static_cast<gesher::elf::Library*>(handle));
-  return 0;
-}
+// dlclose: libraries stay loaded for the life of the process, also one loaded
+// into a caller's reservation (android_dlopen_ext). The caller may unmap that
+// reservation after dlclose; the library then leaves every list
+// (gesher::elf::ForgetReservedMappings, from munmap).
+int BIONIC_SYSV DlClose(void*) { return 0; }
 const char* BIONIC_SYSV DlError() {
   if (!t_has_dlerror) return nullptr;
   t_has_dlerror = false;
@@ -1624,11 +1611,6 @@ void InstallBionicShim() {
   Table();
   gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
   gesher::elf::SetUnresolvedHandler(ReportUnresolved);
-  gesher::elf::SetUnloadVeto([](const void* begin, size_t length) -> const char* {
-    return ThreadAtExitPendingIn(begin, length)
-               ? "C++ thread_local destructors it registered have not run yet"
-               : nullptr;
-  });
   gesher::elf::SetRawSyscallHandler(RawSyscallX64);
   InstallSignalHook(false);
 }

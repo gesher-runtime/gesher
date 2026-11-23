@@ -19,8 +19,6 @@
 #include <cstring>
 #include <memory>
 #include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <mutex>
 #include <set>
 #include <string>
@@ -141,19 +139,17 @@ struct Library {
   // length)), each given back PROT_NONE when the load fails or the object is
   // unloaded (GiveBackCallerRanges). Pages between segments are left alone.
   std::vector<std::pair<uint8_t*, size_t>> caller_ranges;
-  // Unloaded from the caller's reservation (ReleaseReservedReference): no longer
-  // listed; the handle stays valid memory but finds nothing.
-  bool retired = false;
-  // dlopen references (AddReservedReference) not yet given back by dlclose.
-  size_t reserved_refs = 0;
-  // Why the object must stay loaded whatever dlclose does, or nullptr: code
-  // outside its DT_NEEDED users holds addresses in it (a relocation of
-  // another object or a global lookup bound to one of its symbols).
-  const char* pinned = nullptr;
-  // dl_iterate_phdr calls in progress that may read its program headers
-  // (under g_pins_mutex), and whether giving its pages back waits for them.
-  size_t iterate_pins = 0;
-  bool give_back_pending = false;
+  // The caller unmapped or mapped over its reservation while it was loaded
+  // (ForgetReservedMappings): no longer listed; the handle stays valid memory
+  // but finds nothing. Read without g_mutex by ForEachLoaded.
+  std::atomic<bool> retired{false};
+  // dl_iterate_phdr callbacks running for it now (ForEachLoaded), which an
+  // unmap of its reservation waits for (ForgetReservedMappings).
+  std::atomic<int> in_callback{0};
+  // A loader-owned copy of a reserved object's TLS initialization image
+  // (TlsModule::init_image points here, not into the mapping), so threads
+  // made after the caller unmapped the reservation still initialize its TLS.
+  std::unique_ptr<uint8_t[]> tls_image_copy;
   bool is_closed = false;
   bool is_closing = false;  // finalizers claimed, still visible until they finish
   bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
@@ -275,20 +271,16 @@ std::vector<Library*>& Loaded() {
 SymbolResolver g_resolver;
 uint64_t g_load_count = 0;  // under g_mutex
 UnresolvedHandler g_unresolved_handler = nullptr;
+// The reserved objects this thread's dl_iterate_phdr callbacks are running
+// for (innermost last): an unmap from inside one does not wait for itself.
+thread_local std::vector<Library*> t_callbacks;
 
-// dl_iterate_phdr pins (Library::iterate_pins) and the objects whose pages
-// wait for them to go (give_back_pending). Taken after g_mutex, never before.
-std::mutex g_pins_mutex;
-std::condition_variable g_pins_cv;
-thread_local int t_iterating = 0;  // this thread's dl_iterate_phdr callbacks in progress
-// Objects loaded into a caller's reservation that are loaded or wait to give
-// their pages back: [base, base + map_size). munmap and MAP_FIXED of the app
-// look here (ForgetReservedMappings) without taking g_mutex.
+// Objects loaded into a caller's reservation and still listed: [base, base +
+// map_size). munmap and MAP_FIXED of the app look here (ForgetReservedMappings)
+// without taking g_mutex.
 std::mutex g_reserved_mutex;
 std::vector<Library*> g_reserved_objects;
 std::atomic<size_t> g_reserved_count{0};
-// Why an object may not be unloaded now (SetUnloadVeto), or nullptr.
-UnloadVeto g_unload_veto = nullptr;
 
 // Opt-in load-time metadata lets a later raw fatal PC be resolved offline.
 // Do not call FindAddress from a fault handler: the interrupted thread may
@@ -533,11 +525,6 @@ ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
   const Library* gl = nullptr;
   const Elf64_Sym* gs = nullptr;
   if (void* a = LookupGlobalLocked(name, &gl, &gs, lib->is_aarch64 ? 1 : 0)) {
-    // Bound outside any DT_NEEDED edge: an object in a caller's reservation
-    // can no longer be unloaded without leaving this binding dangling.
-    if (gl != lib && gl->mapped_by_caller && gl->pinned == nullptr) {
-      const_cast<Library*>(gl)->pinned = "a symbol of it is bound by another object";
-    }
     return {a, gl, gs, true};
   }
   // Siblings and transitive dependencies are prepared together but are not
@@ -547,9 +534,6 @@ ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
       if (candidate->is_aarch64 != lib->is_aarch64) continue;
       const Elf64_Sym* s = FindDefinedSymbol(candidate, name, gh, sh);
       if (s != nullptr && ELF64_ST_BIND(s->st_info) != STB_LOCAL) {
-        if (candidate != lib && candidate->mapped_by_caller && candidate->pinned == nullptr) {
-          candidate->pinned = "a symbol of it is bound by another object";
-        }
         return {SymbolAddress(candidate, s), candidate, s, true};
       }
     }
@@ -1975,6 +1959,22 @@ class LoadTransaction {
     node->state = State::kLinking;
     for (Library* dep : lib->dependencies) if (!Link(dep, error)) return false;
     if (!Relocate(lib, error)) return false;
+    if (lib->tls.present && lib->mapped_by_caller && lib->tls.init_size != 0) {
+      // The caller may unmap its reservation while the library is loaded
+      // (ForgetReservedMappings); its TLS module, which stays registered,
+      // must not initialize new threads from those pages. A loader-owned
+      // copy of the relocated image, aligned as the image is.
+      const size_t align = lib->tls.align > 1 ? lib->tls.align : 1;
+      lib->tls_image_copy.reset(new (std::nothrow) uint8_t[lib->tls.init_size + align]);
+      if (lib->tls_image_copy == nullptr) {
+        Fail(error, lib->name + ": cannot copy its TLS initialization image");
+        return false;
+      }
+      auto at = reinterpret_cast<uintptr_t>(lib->tls_image_copy.get());
+      at = (at + align - 1) & ~(uintptr_t{align} - 1);
+      std::memcpy(reinterpret_cast<void*>(at), lib->tls.init_image, lib->tls.init_size);
+      lib->tls.init_image = reinterpret_cast<const void*>(at);
+    }
     if (lib->tls.present) {
       const bool prepared = lib->is_aarch64
           ? gesher::arm64::TlsPrepare(lib->tls.tp_offset, lib->tls.init_image,
@@ -2003,51 +2003,16 @@ Library* LoadCommon(const char* name, const char* path, const uint8_t* data, siz
   return lib;
 }
 
-// Load's result, with a dlopen reference taken while g_mutex is still held
-// (LoadOptions::add_reserved_reference), so no dlclose can unload it between.
-Library* Referenced(Library* lib, const LoadOptions& options) {
-  if (lib != nullptr && options.add_reserved_reference && lib->mapped_by_caller) {
-    ++lib->reserved_refs;
-  }
-  return lib;
-}
-
 }  // namespace
 
 void SetUnresolvedHandler(UnresolvedHandler handler) { g_unresolved_handler = handler; }
 
 int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
-  std::vector<PhdrInfo> infos;
-  // Objects in a caller's reservation stay mapped until these callbacks are
-  // done: dlclose waits for them before giving the pages back (as bionic's
-  // dl_iterate_phdr holds the loader lock), or this thread gives them back
-  // afterwards if it unloaded one itself.
-  std::vector<Library*> pins;
-  struct Unpin {
-    std::vector<Library*>& pins;
-    ~Unpin() {
-      --t_iterating;
-      std::lock_guard<std::mutex> lock(g_pins_mutex);
-      for (Library* lib : pins) {
-        if (--lib->iterate_pins == 0 && lib->give_back_pending) {
-          lib->give_back_pending = false;
-          GiveBackCallerRanges(lib);
-          ForgetReservedObject(lib);
-        }
-      }
-      g_pins_cv.notify_all();
-    }
-  } unpin{pins};
-  ++t_iterating;
+  std::vector<std::pair<PhdrInfo, const Library*>> infos;
   {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     for (Library* lib : Loaded()) {
       if (lib->is_closed || lib->phdr == nullptr) continue;
-      if (lib->mapped_by_caller) {
-        std::lock_guard<std::mutex> pin_lock(g_pins_mutex);
-        ++lib->iterate_pins;
-        pins.push_back(lib);
-      }
       PhdrInfo info;
       info.addr = reinterpret_cast<uintptr_t>(lib->load_bias);
       info.name = lib->soname.c_str();
@@ -2056,12 +2021,33 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
       info.phnum = lib->phnum;
       info.tls_modid = lib->tls.present ? lib->tls.module_id : 0;
       info.adds = g_load_count;
-      infos.push_back(info);
+      infos.emplace_back(info, lib->mapped_by_caller ? lib : nullptr);
     }
   }
-  // Called without the lock: the callback may itself look symbols up.
-  for (const PhdrInfo& info : infos) {
-    if (int r = fn(info)) return r;
+  // Called without the lock: the callback may itself look symbols up. An
+  // object in a caller's reservation that the caller unmapped since the
+  // snapshot (ForgetReservedMappings marks it retired before the pages go)
+  // is skipped; Library objects are never freed once listed, so the check
+  // itself is safe. One unmapped while a callback is reading it is the app's
+  // own race, as with bionic.
+  for (const auto& entry : infos) {
+    Library* lib = const_cast<Library*>(entry.second);
+    if (lib == nullptr) {
+      if (int r = fn(entry.first)) return r;
+      continue;
+    }
+    // Counted before the check, so ForgetReservedMappings either sees this
+    // callback (and waits for it before the pages go) or this sees retired.
+    lib->in_callback.fetch_add(1);
+    if (lib->retired.load()) {
+      lib->in_callback.fetch_sub(1);
+      continue;
+    }
+    t_callbacks.push_back(lib);
+    const int r = fn(entry.first);
+    t_callbacks.pop_back();
+    lib->in_callback.fetch_sub(1);
+    if (r != 0) return r;
   }
   return 0;
 }
@@ -2119,12 +2105,11 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   std::string name = base ? base + 1 : path;
   {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    if (Library* existing = FindLocked(name)) return Referenced(existing, options);
+    if (Library* existing = FindLocked(name)) return existing;
   }
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
-  return Referenced(LoadCommon(name.c_str(), path, image.data, image.size, image.fd, error, options),
-                    options);
+  return LoadCommon(name.c_str(), path, image.data, image.size, image.fd, error, options);
 }
 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
@@ -2132,11 +2117,9 @@ Library* LoadFromMemory(const char* name, const void* data, size_t size, std::st
   std::lock_guard<std::recursive_mutex> operation(g_mutex);
   {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    if (Library* existing = FindLocked(name)) return Referenced(existing, options);
+    if (Library* existing = FindLocked(name)) return existing;
   }
-  return Referenced(LoadCommon(name, nullptr, static_cast<const uint8_t*>(data), size, -1, error,
-                               options),
-                    options);
+  return LoadCommon(name, nullptr, static_cast<const uint8_t*>(data), size, -1, error, options);
 }
 
 void* Lookup(Library* library, const char* name) {
@@ -2184,14 +2167,7 @@ void* Lookup(Library* library, const char* name) {
 
 void* LookupGlobal(const char* name) {
   std::lock_guard<std::recursive_mutex> lock(g_mutex);
-  const Library* found = nullptr;
-  void* address = LookupGlobalLocked(name, &found, nullptr);
-  // dlsym(RTLD_DEFAULT) and the translator's host lookups hand the address
-  // out with no reference: an object in a caller's reservation stays loaded.
-  if (found != nullptr && found->mapped_by_caller && found->pinned == nullptr) {
-    const_cast<Library*>(found)->pinned = "a global lookup handed out one of its symbols";
-  }
-  return address;
+  return LookupGlobalLocked(name, nullptr, nullptr);
 }
 
 bool IsAarch64(Library* library) { return library != nullptr && library->is_aarch64; }
@@ -2241,8 +2217,13 @@ void Close(Library* library) {
 namespace {
 
 // Takes `library` out of every list: lookups, dl_iterate_phdr, dladdr, the
-// arm64 translator's code ranges, the lazy %fs rewrite. Runs none of its code.
+// arm64 translator's code ranges, the lazy %fs rewrite. Runs none of its
+// code. Its TLS module stays registered, initialized from the loader-owned
+// copy of its image (tls_image_copy). Its unresolved-import stubs and
+// placeholders stay allocated (a few pages; code elsewhere could still hold
+// their addresses).
 void RetireLocked(Library* library) {
+  library->retired = true;  // first: ForEachLoaded's snapshots check it
   auto& loaded = Loaded();
   loaded.erase(std::remove(loaded.begin(), loaded.end(), library), loaded.end());
   if (library->guest_code_registered) {
@@ -2252,105 +2233,13 @@ void RetireLocked(Library* library) {
   library->rewrite_registration.reset();
   // The handle stays valid memory (the app may still hold it) but names
   // nothing: Lookup finds nothing in it, and it is in no list.
-  library->retired = true;
   library->is_closed = true;
   library->symtab = nullptr;
   library->phdr = nullptr;
-}
-
-// Why `library` must stay loaded after its last dlclose, or nullptr.
-const char* UnloadBlockerLocked(Library* library) {
-  if (library->pinned != nullptr) return library->pinned;
-  // TLS other threads may have blocks of.
-  if (library->tls.present) return "it has thread-local storage (PT_TLS)";
-  for (Library* other : Loaded()) {
-    if (other != library &&
-        std::find(other->dependencies.begin(), other->dependencies.end(), library) !=
-            other->dependencies.end()) {
-      return "another loaded object needs it (DT_NEEDED)";
-    }
-  }
-  if (g_unload_veto != nullptr) {
-    if (const char* veto = g_unload_veto(library->base, library->map_size)) return veto;
-  }
-  return nullptr;
+  library->caller_ranges.clear();
 }
 
 }  // namespace
-
-bool AddReservedReference(Library* library) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
-  if (library == nullptr || library->retired) return false;
-  if (library->mapped_by_caller) ++library->reserved_refs;
-  return true;
-}
-
-bool ReleaseReservedReference(Library* library) {
-  {
-    std::lock_guard<std::recursive_mutex> operation(g_mutex);
-    // Only a handle of a loaded object is looked at (dlclose takes any
-    // pointer; a second dlclose of an unloaded one finds nothing).
-    auto& loaded = Loaded();
-    if (library == nullptr || std::find(loaded.begin(), loaded.end(), library) == loaded.end() ||
-        !library->mapped_by_caller || library->reserved_refs == 0) {
-      return false;
-    }
-    if (--library->reserved_refs != 0) return false;
-    // Unloading is conservative: anything that may still use the object
-    // keeps it loaded, which is said once.
-    if (const char* blocker = UnloadBlockerLocked(library)) {
-      std::fprintf(stderr,
-                   "gesher elf: %s: kept loaded after its last dlclose: %s; its reservation "
-                   "must stay mapped\n",
-                   library->name.c_str(), blocker);
-      return false;
-    }
-    Close(library);  // finalizers (DT_FINI_ARRAY: __cxa_finalize of its __dso_handle)
-    // A finalizer may have bound or taken a new reference (dlopen of itself).
-    if (library->reserved_refs != 0 || library->pinned != nullptr) {
-      std::fprintf(stderr, "gesher elf: %s: kept loaded: used again by its finalizers\n",
-                   library->name.c_str());
-      return false;
-    }
-    RetireLocked(library);
-    for (void* stub : library->unresolved_functions) {
-      if (library->is_aarch64) gesher::arm64::UnbindHostFunction(stub);
-    }
-    library->unresolved_functions.clear();
-    for (uint8_t* page : library->unresolved_pages) VirtualFree(page, 0, MEM_RELEASE);
-    library->unresolved_pages.clear();
-    if (library->unresolved_data != nullptr) {
-      {
-        std::lock_guard<std::mutex> lock(g_data_mutex);
-        g_data_owners.erase(std::remove(g_data_owners.begin(), g_data_owners.end(), library),
-                            g_data_owners.end());
-      }
-      VirtualFree(library->unresolved_data, 0, MEM_RELEASE);
-      library->unresolved_data = nullptr;
-    }
-  }
-  // Its pages go back PROT_NONE once no dl_iterate_phdr callback can still
-  // read its program headers. Waited for here, without g_mutex (a callback
-  // may look symbols up), so that when dlclose returns the caller may unmap
-  // its reservation. A callback of this very thread, or one that does not
-  // finish in time (this thread may hold g_mutex in an outer frame, which
-  // such a callback could be waiting for), leaves it to the last callback.
-  std::unique_lock<std::mutex> lock(g_pins_mutex);
-  const bool own_callback = t_iterating > 0 && library->iterate_pins > 0;
-  if (own_callback ||
-      !g_pins_cv.wait_for(lock, std::chrono::seconds(5),
-                          [&] { return library->iterate_pins == 0; })) {
-    library->give_back_pending = true;
-    if (!own_callback) {
-      std::fprintf(stderr, "gesher elf: %s: unloaded; its pages go back PROT_NONE when "
-                   "dl_iterate_phdr callbacks still running finish\n", library->name.c_str());
-    }
-    return true;
-  }
-  GiveBackCallerRanges(library);
-  ForgetReservedObject(library);
-  return true;
-}
 
 void ForgetReservedMappings(const void* addr, size_t length) {
   if (g_reserved_count.load() == 0 || length == 0) return;
@@ -2369,25 +2258,27 @@ void ForgetReservedMappings(const void* addr, size_t length) {
     std::lock_guard<std::recursive_mutex> operation(g_mutex);
     for (Library* lib : hit) {
       if (lib->retired) continue;
-      std::fprintf(stderr,
-                   "gesher elf: %s: the caller unmapped or replaced its reservation while it "
-                   "was loaded; it is no longer looked up (none of its code runs)\n",
-                   lib->name.c_str());
+      if (std::getenv("GESHER_TRACE_DL") != nullptr) {
+        std::fprintf(stderr,
+                     "gesher dl: %s: its reservation was unmapped or mapped over; it is no "
+                     "longer looked up (none of its code runs)\n",
+                     lib->name.c_str());
+      }
       RetireLocked(lib);
+      ForgetReservedObject(lib);
     }
   }
-  // Pages the caller takes back are no longer the loader's to give back.
-  std::lock_guard<std::mutex> lock(g_pins_mutex);
+  // No dl_iterate_phdr callback starts for these objects now; one already
+  // running for one may still read its program headers. As bionic's
+  // dl_iterate_phdr holds the loader lock while dlclose unmaps, the pages go
+  // only once those are done - waited for without g_mutex, since a callback
+  // may look symbols up - except this thread's own callbacks (an unmap from
+  // inside one). No timeout: a callback that waits for this very unmap would
+  // deadlock bionic's dlclose too.
   for (Library* lib : hit) {
-    lib->give_back_pending = false;
-    lib->caller_ranges.clear();
-    ForgetReservedObject(lib);
+    const int own = static_cast<int>(std::count(t_callbacks.begin(), t_callbacks.end(), lib));
+    while (lib->in_callback.load() > own) SwitchToThread();
   }
-}
-
-void SetUnloadVeto(UnloadVeto veto) {
-  std::lock_guard<std::recursive_mutex> lock(g_mutex);
-  g_unload_veto = veto;
 }
 
 bool SetupThreadTls() { return TlsSetupThread(); }

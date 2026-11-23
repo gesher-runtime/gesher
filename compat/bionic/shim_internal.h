@@ -183,10 +183,6 @@ void DeliverPendingSignals();
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();
-// Whether a C++ thread_local destructor registered by the object at
-// [begin, begin + length) (its __dso_handle there) has not run yet on some
-// thread (pthread_bionic.cc): that object must not be unloaded.
-bool ThreadAtExitPendingIn(const void* begin, size_t length);
 // Retains a known live kernel thread object for the signal queue. The caller
 // closes the returned handle; an arbitrary or retired pthread id is ESRCH.
 int PthreadSignalTarget(uint64_t thread, void** handle);

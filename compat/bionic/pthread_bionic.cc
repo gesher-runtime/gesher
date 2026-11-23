@@ -25,7 +25,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -76,22 +75,9 @@ thread_local uint64_t t_key_generations[kKeysMax] = {};
 struct ThreadAtExit {
   void (BIONIC_SYSV* dtor)(void*);
   void* obj;
-  void* dso;  // the registering object's __dso_handle (an address inside it)
 };
 thread_local std::vector<ThreadAtExit>* t_thread_atexit = nullptr;
 thread_local CleanupStack t_cleanups;
-
-// Destructors registered and not yet run, by dso, across all threads: an
-// object with pending ones must not be unloaded (ThreadAtExitPendingIn).
-std::mutex g_thread_atexit_mutex;
-std::map<uintptr_t, size_t> g_thread_atexit_pending;
-
-void ThreadAtExitDone(void* dso) {
-  if (dso == nullptr) return;
-  std::lock_guard<std::mutex> lock(g_thread_atexit_mutex);
-  auto it = g_thread_atexit_pending.find(reinterpret_cast<uintptr_t>(dso));
-  if (it != g_thread_atexit_pending.end() && --it->second == 0) g_thread_atexit_pending.erase(it);
-}
 
 // C++ thread_local destructors, last registered first (as bionic).
 void RunThreadAtExit() {
@@ -100,7 +86,6 @@ void RunThreadAtExit() {
     ThreadAtExit e = t_thread_atexit->back();
     t_thread_atexit->pop_back();
     e.dtor(e.obj);
-    ThreadAtExitDone(e.dso);
   }
   delete t_thread_atexit;
   t_thread_atexit = nullptr;
@@ -1030,13 +1015,9 @@ int BIONIC_SYSV gesher_bionic_pthread_setspecific(bionic_pthread_key_t key, cons
 // C++ thread_local destructors (libc++abi calls this for every thread_local
 // object with a destructor). Run when the thread ends, before its keys.
 int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(void*), void* obj,
-                                                    void* dso) {
+                                                    void* /*dso*/) {
   if (t_thread_atexit == nullptr) t_thread_atexit = new std::vector<ThreadAtExit>();
-  t_thread_atexit->push_back({dtor, obj, dso});
-  if (dso != nullptr) {
-    std::lock_guard<std::mutex> lock(g_thread_atexit_mutex);
-    ++g_thread_atexit_pending[reinterpret_cast<uintptr_t>(dso)];
-  }
+  t_thread_atexit->push_back({dtor, obj});
   ArmHostExit();
   return 0;
 }
@@ -1046,13 +1027,6 @@ int BIONIC_SYSV gesher_bionic_register_atfork(void*, void*, void*, void*) { retu
 }  // extern "C"
 
 uint64_t PthreadSelfId() { return SelfId(); }
-
-bool ThreadAtExitPendingIn(const void* begin, size_t length) {
-  const auto lo = reinterpret_cast<uintptr_t>(begin);
-  std::lock_guard<std::mutex> lock(g_thread_atexit_mutex);
-  auto it = g_thread_atexit_pending.lower_bound(lo);
-  return it != g_thread_atexit_pending.end() && it->first - lo < length;
-}
 
 namespace {
 // g_threads_mutex protects the retained objects through Get/SetThreadDescription.

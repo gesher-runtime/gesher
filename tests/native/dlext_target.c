@@ -13,6 +13,7 @@
 //   GESHER_DLEXT_BSS        a 64 KiB .bss: a segment of many pages.
 //   GESHER_DLEXT_THREAD_DTOR registers a C++-style thread_local destructor
 //                           (__cxa_thread_atexit_impl with its __dso_handle).
+//   GESHER_DLEXT_TLS        initialized thread-locals (PT_TLS with .tdata).
 //   GESHER_DLEXT_USER       libdlext_user.so: calls gesher_dlext_bind_marker,
 //                           which it does not define and has no DT_NEEDED for:
 //                           bound through the global scope to whatever
@@ -43,6 +44,12 @@ static void ThreadDtor(void* flag) { *(volatile int*)flag = 1; }
 int gesher_dlext_thread_dtor(int* flag) {
   return __cxa_thread_atexit_impl(ThreadDtor, flag, &__dso_handle);
 }
+#endif
+
+#if defined(GESHER_DLEXT_TLS)
+__thread int gesher_dlext_tls_value = 5;
+__thread char gesher_dlext_tls_bytes[64] = {1, 2, 3};
+int gesher_dlext_tls_get(void) { return gesher_dlext_tls_value + gesher_dlext_tls_bytes[63]; }
 #endif
 
 #if defined(GESHER_DLEXT_USER)

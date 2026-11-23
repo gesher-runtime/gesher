@@ -174,33 +174,36 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     strict one wins. A load that fails after mapping into the reservation
     maps exactly the ranges it mapped back `PROT_NONE`, as bionic's
     `soinfo_free` does (`Library::caller_ranges`); if that fails it unmaps
-    what of the library is left there and logs it. Only the named library
-    goes there; its dependencies load anywhere.
-  - Unloading a library from its reservation: `dlopen`s of it are counted
-    (the reference is taken under the loader's lock), and the last `dlclose`
-    unloads it (`ReleaseReservedReference`), conservatively. It stays loaded,
-    and a `gesher elf: ... kept loaded after its last dlclose: <reason>` line
-    says so, if anything may still use it: it has `PT_TLS`; another loaded
-    library needs it (`DT_NEEDED`); a relocation of another library was bound
-    to one of its symbols through gesher's flat global scope (no DT_NEEDED
-    edge records that); a global lookup (`dlsym(RTLD_DEFAULT)`, the arm64
-    translator's host lookups) handed out one of its symbols; or a C++
-    `thread_local` destructor it registered (`__cxa_thread_atexit_impl` with
-    its `__dso_handle`) has not run yet. Otherwise its finalizers run, it
-    leaves `dlsym`, `dl_iterate_phdr`, `dladdr`, symbol binding of later
-    loads and the arm64 translator's code ranges, and its pages become
-    `PROT_NONE` again, so the caller can unmap its reservation. `dlclose`
-    waits for `dl_iterate_phdr` callbacks running in other threads before
-    that, as bionic's `dl_iterate_phdr` holds the loader lock: they may read
-    its program headers (a callback of the same thread, or one that does not
-    finish within 5 s, leaves it to the last callback). If the caller unmaps
-    or maps over a reservation holding a library - one kept loaded, or never
-    closed - the library is taken out of every list without running any of
-    its code (`ForgetReservedMappings`, from the shim's `munmap` and
-    `MAP_FIXED` `mmap`). Every other library stays loaded for the life of
-    the process. `GESHER_TRACE_DL` prints the flags, `reserved_addr` and
-    `reserved_size` of each call. Tested from x86-64 and arm64-v8a code, with
-    and without placeholder mappings, by `tests/native/dlext_test.c`.
+    what of the library is left there and logs it. That happens inside the
+    load, under the loader's lock, so no other load (into the same
+    reservation or not) runs in between. Only the named library goes there;
+    its dependencies load anywhere.
+  - A library loaded into a reservation is never unloaded: `dlclose` returns
+    0 and keeps it loaded, as it does every library in gesher (bionic would
+    unload it at its last reference). The caller may still unmap its
+    reservation after `dlclose`, or map over it, as the contract allows: once
+    such a `munmap` or `MAP_FIXED` `mmap` through the shim is certain to take
+    place (valid arguments, and for `MAP_FIXED` a range of one of
+    gesher-base's mappings) - or, failing that, once it succeeded - the
+    library leaves `dlsym`, `dl_iterate_phdr`, `dladdr`, symbol binding of
+    later loads and the arm64 translator's code ranges without running any of
+    its code (`ForgetReservedMappings`). A `munmap` or `mmap` that fails its
+    validation leaves it listed; one that fails natively after that (out of
+    resources) leaves it unlisted but mapped. A `dl_iterate_phdr` in progress
+    skips a library unmapped since its snapshot, and the unmap waits for
+    callbacks already running for that library (they may read its program
+    headers) before the pages go, as bionic's `dl_iterate_phdr` holds the
+    loader lock while `dlclose` unmaps: no timeout, and not for the unmapping
+    thread's own callback; a callback that waits for that very unmap
+    deadlocks, as `dlclose` would on Android. Its `PT_TLS` initialization image is copied into
+    loader memory at load time, so threads created after the unmap still
+    initialize its (still registered) TLS. Its unresolved-import stubs and
+    data placeholders stay allocated (a few pages). Code another library
+    bound to it, or addresses handed out by `dlsym`, point into whatever the
+    caller maps there next, as on Android after an unload. `GESHER_TRACE_DL`
+    prints the flags, `reserved_addr` and `reserved_size` of each call, and
+    each library retired so. Tested from x86-64 and arm64-v8a code, with and
+    without placeholder mappings, by `tests/native/dlext_test.c`.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,

@@ -60,22 +60,18 @@ struct LoadOptions {
   // MAP_FIXED over the caller's mapping. The reservation stays the caller's:
   // what lies beyond the span is left as it was; pages of the span between
   // segments are PROT_NONE (left as the caller mapped them when the segments
-  // are file views, mapped PROT_NONE when they are copied); a failed load or
-  // ReleaseReservedReference maps the pages it used back PROT_NONE instead of
-  // unmapping them. An object that does not fit fails the load (reserved_hint
-  // false) without touching the reservation, or is loaded elsewhere
-  // (reserved_hint true). Only the object named by the load: its
-  // dependencies are loaded anywhere. reserved_addr must be page aligned when
-  // the object fits (only the span is checked against the end of the address
-  // space, not reserved_size), and every page of the span must already be
-  // address space gesher-base tracks (mapped by the caller, or an unmapped
-  // page of one of its reservations); otherwise the load fails before
-  // anything is mapped.
+  // are file views, mapped PROT_NONE when they are copied); a failed load
+  // maps exactly the ranges it mapped back PROT_NONE instead of unmapping
+  // them. An object that does not fit fails the load (reserved_hint false)
+  // without touching the reservation, or is loaded elsewhere (reserved_hint
+  // true). Only the object named by the load: its dependencies are loaded
+  // anywhere. reserved_addr must be page aligned when the object fits (only
+  // the span is checked against the end of the address space, not
+  // reserved_size), and every mapping the load will make must replace pages
+  // of one mapping of the caller's (gesher-base's MAP_FIXED condition);
+  // otherwise the load fails before anything is mapped. The object is never
+  // unloaded; if the caller unmaps the reservation, ForgetReservedMappings.
   bool use_reserved = false;
-  // Take a dlopen reference (AddReservedReference) on the returned object if
-  // it is in a caller's reservation, while the load still holds the loader
-  // lock, so no concurrent dlclose can unload it before the caller has it.
-  bool add_reserved_reference = false;
   void* reserved_addr = nullptr;
   size_t reserved_size = 0;
   bool reserved_hint = false;
@@ -118,35 +114,15 @@ const char* Soname(Library* library);
 // kept (handles may still be held); full unmap is not implemented.
 void Close(Library* library);
 
-// dlopen references to an object loaded into a caller's reservation
-// (LoadOptions::use_reserved), as bionic counts them. AddReservedReference
-// takes one (no-op for other objects); false if `library` was unloaded, so
-// the caller loads it again. ReleaseReservedReference (dlclose) gives one
-// back. The last one unloads the object, conservatively: it stays loaded
-// (and says so on stderr) if anything may still use it - it has PT_TLS,
-// another loaded object needs it (DT_NEEDED), a relocation of another object
-// or a global lookup (dlsym(RTLD_DEFAULT)) was bound to one of its symbols,
-// or the unload veto (SetUnloadVeto) names a reason. Otherwise its finalizers
-// run, it leaves every list (dlsym, dl_iterate_phdr, dladdr, symbol binding
-// of later loads, the arm64 translator's code ranges) and, once no
-// dl_iterate_phdr callback can still read its program headers (waited for),
-// what it used of the reservation is mapped back PROT_NONE, so the caller may
-// then unmap its reservation. The handle stays valid memory but finds
-// nothing. Returns whether it was unloaded.
-bool AddReservedReference(Library* library);
-bool ReleaseReservedReference(Library* library);
-
-// The app unmaps or maps over [addr, addr + length) (munmap, MAP_FIXED): an
-// object loaded into a reservation there - one kept loaded after its last
-// dlclose, or never closed - is gone, and is taken out of every list without
-// running any of its code, so no lookup reads its unmapped tables.
+// The app unmaps or maps over [addr, addr + length) (munmap, MAP_FIXED), which
+// it may do with its reservation after dlclose (android_dlopen_ext): an object
+// loaded into a reservation there is gone, and is taken out of every list
+// (dlsym, dl_iterate_phdr, dladdr, symbol binding of later loads, the arm64
+// translator's code ranges) without running any of its code, so no lookup
+// reads its unmapped tables. Objects are never unloaded otherwise (dlclose
+// keeps every library loaded). The shim calls it once the operation is sure
+// to be carried out (fs_rewrite.cc).
 void ForgetReservedMappings(const void* addr, size_t length);
-
-// Why the object at [begin, begin + length) may not be unloaded now (the
-// bionic shim: C++ thread_local destructors it registered still pending), or
-// nullptr.
-using UnloadVeto = const char* (*)(const void* begin, size_t length);
-void SetUnloadVeto(UnloadVeto veto);
 
 // What dl_iterate_phdr reports for one loaded object.
 struct PhdrInfo {
