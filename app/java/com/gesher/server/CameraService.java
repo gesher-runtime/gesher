@@ -6,8 +6,10 @@ package com.gesher.server;
 
 import android.Manifest;
 import android.app.ActivityThread;
+import android.app.GesherActivityWindow;
+import android.app.WindowConfiguration;
 import android.content.AttributionSourceState;
-import android.content.pm.PackageInfo;
+import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.res.CameraCompatibilityInfo;
 import android.graphics.Rect;
@@ -25,13 +27,20 @@ import android.hardware.camera2.params.StreamConfiguration;
 import android.hardware.camera2.params.StreamConfigurationDuration;
 import android.hardware.camera2.utils.CameraIdAndSessionConfiguration;
 import android.hardware.camera2.utils.ConcurrentCameraIdCombination;
+import android.hardware.display.DisplayManagerGlobal;
+import android.os.Binder;
 import android.os.IBinder;
+import android.os.Process;
 import android.os.ServiceManager;
 import android.os.ServiceSpecificException;
+import android.os.UserHandle;
 import android.util.Range;
 import android.util.Rational;
 import android.util.Size;
 import android.util.SizeF;
+import android.view.Display;
+import android.view.DisplayInfo;
+import android.view.Surface;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -48,8 +57,8 @@ import java.util.Map;
  *
  * <p>Characteristics describe an EXTERNAL-level camera (as Android's USB cameras): fixed
  * focus, auto exposure and white balance only, outputs YUV_420_888, JPEG and PRIVATE at the
- * device's sizes (frames are scaled for other sizes). Opening needs the CAMERA permission in
- * the app's manifest. No torch, no reprocessing, no offline sessions, no extensions.
+ * device's sizes (frames are scaled for other sizes). Opening needs a current CAMERA grant
+ * for the actual application UID. No torch, no reprocessing, no offline sessions, no extensions.
  */
 public final class CameraService extends ICameraService.Default {
     static final String TAG = "camera";
@@ -256,12 +265,14 @@ public final class CameraService extends ICameraService.Default {
                 durations.toArray(new StreamConfigurationDuration[0]));
         m.set(CameraCharacteristics.SCALER_AVAILABLE_STALL_DURATIONS,
                 stalls.toArray(new StreamConfigurationDuration[0]));
+        // A PC's camera faces the user unless configured as rear (maintainer decision,
+        // CONTRIBUTING.md), as the legacy API reports it.
         m.set(CameraCharacteristics.LENS_FACING, d.isRearFacing() ? CameraMetadata.LENS_FACING_BACK
-                : CameraMetadata.LENS_FACING_EXTERNAL);
+                : CameraMetadata.LENS_FACING_FRONT);
         m.set(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL,
                 CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL);
         m.set(CameraCharacteristics.SENSOR_ORIENTATION,
-                sensorOrientation());
+                sensorOrientation(d.isRearFacing()));
         m.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES,
                 new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
         m.set(CameraCharacteristics.REQUEST_PARTIAL_RESULT_COUNT, 1);
@@ -332,12 +343,52 @@ public final class CameraService extends ICameraService.Default {
     static final int CameraDevice_TEMPLATE_PREVIEW = ICameraDeviceUser.TEMPLATE_PREVIEW;
 
     /**
-     * Media Foundation supplies frames in the backend's native coordinates. Keep this
-     * mounting angle independent of an activity's display rotation; clients combine the
-     * sensor angle with that rotation themselves. A rear-role choice does not rotate pixels.
+     * Sensor orientation in degrees (0, 90, 180, 270), relative to the display rotation of
+     * the Activity using the camera (maintainer-approved desktop adaptation, CONTRIBUTING.md).
+     * Media Foundation supplies frames upright for the desktop monitor and Gesher does not
+     * rotate preview buffers for {@code setDisplayOrientation}, while an Android task may be
+     * portrait or landscape. Matching the Activity's own rotation makes Android's standard
+     * formulas give 0 (rear: {@code (o - d + 360) % 360}; front, mirrored:
+     * {@code (360 - (o + d) % 360) % 360}), so apps keep upright, unswapped preview sizes.
+     * Camera2 and the legacy API both pass the camera's own facing (a PC's camera is FRONT
+     * unless configured as rear), so the two APIs and CameraX agree.
+     * Apps that cache the value (CameraX caches CameraCharacteristics per process) keep the
+     * rotation of their first read (docs/devices.md).
      */
-    static int sensorOrientation() {
-        return 0;
+    static int sensorOrientation(boolean rearFacing) {
+        int degrees = displayDegrees();
+        return rearFacing ? degrees : (360 - degrees) % 360;
+    }
+
+    /**
+     * The calling process's own Activity rotation, which its {@code Display.getRotation()}
+     * reports; the system display's (the focused task's) only when the process has no
+     * Activity, as in a service.
+     */
+    private static int displayDegrees() {
+        int rotation = WindowConfiguration.ROTATION_UNDEFINED;
+        try {
+            rotation = GesherActivityWindow.activeDisplayRotation();
+        } catch (Throwable ignored) {
+        }
+        if (rotation == WindowConfiguration.ROTATION_UNDEFINED) {
+            try {
+                DisplayManagerGlobal dm = DisplayManagerGlobal.getInstance();
+                DisplayInfo info = dm != null ? dm.getDisplayInfo(Display.DEFAULT_DISPLAY) : null;
+                if (info != null) rotation = info.rotation;
+            } catch (Throwable ignored) {
+            }
+        }
+        switch (rotation) {
+            case Surface.ROTATION_90:
+                return 90;
+            case Surface.ROTATION_180:
+                return 180;
+            case Surface.ROTATION_270:
+                return 270;
+            default:
+                return 0;
+        }
     }
 
     /** The tags of what {@code m} holds, for the available-keys lists. */
@@ -445,7 +496,7 @@ public final class CameraService extends ICameraService.Default {
             AttributionSourceState clientAttribution, int devicePolicy, boolean sharedMode) {
         WindowsCamera.Device d = device(cameraId);
         String packageName = clientAttribution != null ? clientAttribution.packageName : null;
-        if (!hasCameraPermission(packageName)) {
+        if (!ownsAttribution(clientAttribution) || !hasCameraPermission(packageName)) {
             throw new ServiceSpecificException(ERROR_PERMISSION_DENIED, "package " + packageName
                     + " does not have " + Manifest.permission.CAMERA);
         }
@@ -468,20 +519,34 @@ public final class CameraService extends ICameraService.Default {
         }
     }
 
-    /** What the package's manifest asks for (Gesher grants that; docs/devices.md). */
+    /** This camera service is local to the application process, not a remote cameraserver. */
+    private static boolean ownsAttribution(AttributionSourceState source) {
+        return source != null
+                && (source.uid == USE_CALLING_UID || source.uid == Process.myUid())
+                && (source.pid == USE_CALLING_PID || source.pid == Process.myPid());
+    }
+
+    /**
+     * Query live runtime permission state on every open. Package names are attribution,
+     * not authority: another installed package may be used only when it shares this UID.
+     * Clear an incoming Binder identity because this local call opens the current app's
+     * camera, just as an outgoing call to Android's cameraserver carries the app's UID.
+     */
     static boolean hasCameraPermission(String packageName) {
-        if (packageName == null) return false;
+        if (packageName == null || packageName.isEmpty()) return false;
+        int uid = Process.myUid();
+        int userId = UserHandle.getUserId(uid);
+        long identity = Binder.clearCallingIdentity();
         try {
-            PackageInfo info = ActivityThread.getPackageManager().getPackageInfo(packageName,
-                    PackageManager.GET_PERMISSIONS, 0);
-            if (info == null || info.requestedPermissions == null) return false;
-            for (String p : info.requestedPermissions) {
-                if (Manifest.permission.CAMERA.equals(p)) return true;
-            }
-            return false;
+            IPackageManager packages = ActivityThread.getPackageManager();
+            return packages != null && packages.getPackageUid(packageName, 0, userId) == uid
+                    && packages.checkUidPermission(Manifest.permission.CAMERA, uid)
+                            == PackageManager.PERMISSION_GRANTED;
         } catch (android.os.RemoteException | RuntimeException e) {
             log("checking " + packageName + "'s permissions: " + e);
             return false;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
     }
 }

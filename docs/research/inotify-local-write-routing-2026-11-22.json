@@ -1,0 +1,2632 @@
+{
+  "schema": "gesher.inotify-local-write-study.v1",
+  "date": "2026-11-22",
+  "scope": "N52/T12 local write identity routing only; not a complete inotify or Windows runtime claim",
+  "baseline": "452372561e0a50c63f072a5ae1e7ca5aa81354b8",
+  "sources": {
+    "candidate_sha256": {
+      "compat/posix/src/inotify.cc": "34a1bf5c8db5f1153cef3c667a12279b0ec2073bd30681937d12029350720857",
+      "probes/posix/posix_probe.cc": "47a081a7fc009950f6006ce07adda3498aaddd6717b4300f8dd4507c746ee75d",
+      "tests/native/inotify_write_routing_host.cc.in": "b6c5f9d8cbc67a4198d6e8cb49bd92a67b14f06e815bd588813a619966316d42",
+      "tests/native/inotify_write_routing_test.inc": "2113112511125052d86e99b78fc5f7622088df7ab6014e6e9b90d3d1a5f3f88e",
+      "tests/windows/tracks/21-posix.ps1": "06489551ddfa8e5e6ef70915e375ef620433b666126114f7c9a936d5fce6dacb",
+      "tools/test_inotify_records.py": "9c0d1a530fb3ae011a0bb0c61d39d35d531b4a9faf0ffa660d12896d80f2edf5",
+      "tools/test_inotify_write_routing.py": "898beab1c258b672169591713bb0b3326351c39ce893bd69b1ba93f4a6317d58"
+    },
+    "unchanged_production_sha256": {
+      "compat/posix/src/fd.cc": "e6cb83d3c295dd92f5f279fb6707b5721aafda8b8c2bb5d953f29b83e14adcda",
+      "compat/posix/src/unistd.cc": "9621754bd7168b30d2b4c3bbe34af21ebe9a8ada42622ec0d3d2707bd0ce7bc7",
+      "compat/posix/include/gesher/reserved_names.h": "a01b5a282a470d39735eb7f0546fd39983c0e68d03291bbaf14306568b951dd6"
+    },
+    "baseline_inotify_sha256": "afcc848db4ffc1e6e5a7cbee3c2284fe7dcfeb0e5c0e7c23a7e2ec93a949c99f"
+  },
+  "contract_sources": [
+    {
+      "path": "include/linux/fsnotify.h",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/include/linux/fsnotify.h",
+      "sha256": "1d4f23c7e93d6b57c715c10c26431fbaf87f27ea31946ba2760f7193f56bfb5a"
+    },
+    {
+      "path": "fs/notify/inotify/inotify_fsnotify.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/notify/inotify/inotify_fsnotify.c",
+      "sha256": "3dc836dc11ebd4608b25275248d25ad7ae754601b6b75a522ea58b2ff50d35b5"
+    }
+  ],
+  "validation": {
+    "maintained_gate": {
+      "command": "ASAN_OPTIONS=detect_leaks=0 python3 tools/test_inotify_records.py --sanitize",
+      "native_record_checks": 10,
+      "linux_public_checks": 62,
+      "production_host_checks": 244,
+      "failures": 0,
+      "log": "native-r6-routing-final-asan.log"
+    },
+    "unchanged_baseline_control": {
+      "scope": "Same common functional corpus compiled from the unchanged baseline; candidate-specific index invariants are absent",
+      "host_checks": 139,
+      "expected_failures": 11,
+      "failure_labels": [
+        "FAIL routing cross-directory inode notification (errno=17)",
+        "FAIL routing mask-add retains modify (errno=17)",
+        "FAIL routing replacement descriptor receives publication (errno=17)",
+        "FAIL routing oneshot inode event (errno=17)",
+        "FAIL routing oneshot retires after event (errno=17)",
+        "FAIL routing oneshot no longer removable (errno=0)",
+        "FAIL routing oneshot replacement receives event (errno=0)",
+        "FAIL routing cross-directory alias still observed after rename (errno=0)",
+        "FAIL routing file receives nameless inode event (errno=0)",
+        "FAIL routing one write reaches both observers (errno=9)",
+        "FAIL routing known inode write does not require a name (errno=11)"
+      ],
+      "log": "native-r6-routing-baseline-final.log"
+    },
+    "cross_compile": {
+      "toolchain": "LLVM-MinGW 20261006 UCRT Ubuntu22.04 x86_64 publisher archive",
+      "archive_sha256": "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4",
+      "targets": [
+        "x86_64-w64-mingw32",
+        "aarch64-w64-mingw32"
+      ],
+      "whole_translation_units": [
+        "compat/posix/src/inotify.cc",
+        "probes/posix/posix_probe.cc"
+      ],
+      "warnings_as_errors": true,
+      "result": "pass",
+      "log": "native-r6-cross.log"
+    },
+    "powershell_parse": {
+      "tool": "PowerShell7.4.22",
+      "archive_sha256": "9de443bef974f219c98a33b0f4096aace7f30b42188f37a1b14c5da7e82c8a6a",
+      "path": "tests/windows/tracks/21-posix.ps1",
+      "result": "pass",
+      "log": "native-r6-pwsh.log"
+    },
+    "preservation": {
+      "command": "python3 tools/net-tcp-priority/test-selected-policy.py --selftest",
+      "negative_controls": 20,
+      "result": "pass",
+      "log": "native-r6-policy.log",
+      "authority_and_pins": "unchanged"
+    },
+    "independent_review": {
+      "production_sha256": "34a1bf5c8db5f1153cef3c667a12279b0ec2073bd30681937d12029350720857",
+      "scope_verdict": "compliant",
+      "actionable_blockers": [],
+      "executed_linux_checks": 62,
+      "executed_production_checks": 236,
+      "sanitizers": [
+        "ASan",
+        "UBSan"
+      ],
+      "final_eight_checks": "Source-only review of explicit final-unlink completion adapter, not a Linux DELETE_SELF timing differential",
+      "log": "java-review-native-r6-inotify-no-lsan.log"
+    }
+  },
+  "logs": {
+    "native-r6-routing-final-asan.log": {
+      "sha256": "bb2030132ae7d4de6e0ef8eb0db6db320a799ec3287d81856506ed513dcc0ad0",
+      "bytes": 2562
+    },
+    "native-r6-routing-baseline-final.log": {
+      "sha256": "9ccc63b6bd8086e057f815c8adae4833205a49cf2507ab4c79777d7b628f7977",
+      "bytes": 2189
+    },
+    "native-r6-cross.log": {
+      "sha256": "9e4ef6dbdf250401d1bb55fd214b08410bdeac84a07807c44fdeecdc2bb2127f",
+      "bytes": 422
+    },
+    "native-r6-pwsh.log": {
+      "sha256": "dfe8ed61f0c57dd2d6413e5a1f60a994e12e2cee70aae9b963e51ba1557e71c9",
+      "bytes": 31
+    },
+    "native-r6-policy.log": {
+      "sha256": "1e8e093b258efc42e4234ab8aa794e848e73bebbfa9d0650a295d6e725440e2e",
+      "bytes": 794
+    },
+    "java-review-native-r6-inotify-no-lsan.log": {
+      "sha256": "dca649d8d6f1aba3edaaba7c299925595fc0ebd30699466b31313e260488f8a6",
+      "bytes": 1693
+    }
+  },
+  "measured_work": {
+    "order": "ABBA repeated twice, A=baseline, B=candidate",
+    "base": "452372561e0a50c63f072a5ae1e7ca5aa81354b8",
+    "generated_source_hashes": {
+      "baseline": "8472906940129850bb26004a63cccff26d7b8f770bae281f75ec16769377a3a0",
+      "candidate": "bbde2a39a6c0f8cb32c34565812a5ac596e55fbe7643b5ffed9fe02b6fbd6209"
+    },
+    "runs": [
+      {
+        "role": "baseline",
+        "order": 0,
+        "layout": {
+          "instance_bytes": 256,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 60
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 9907029
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 19,
+            "bytes": 67277,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 45379
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 12051110
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131357,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 20561
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537776128,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 12880260
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4306160,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 4307471
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537722880,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 80931749
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131361,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 64,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 23966
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537792512,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 86016963
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 19456,
+            "bytes": 68907344,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 57358085
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 1153925400
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131369,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1024,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 266602
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537825280,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1198058222
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1024,
+            "bytes": 4305584,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 4451413
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 78738234
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 90746263
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=256 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=60\nMEASURE routing unmatched: watches=0 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=9907029\nMEASURE routing setup: watches=1 calls=1 allocations=19 bytes=67277 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=45379\nMEASURE routing unmatched: watches=1 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=0 elapsed_ns=12051110\nMEASURE routing cold-matched: watches=1 calls=1 allocations=5 bytes=131357 paths=1 identities=1 comparisons=1 issues=0 wakes=1 elapsed_ns=20561\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=16384 bytes=537776128 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=4096 elapsed_ns=12880260\nMEASURE routing setup: watches=64 calls=64 allocations=1216 bytes=4306160 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=4307471\nMEASURE routing unmatched: watches=64 calls=4096 allocations=12288 bytes=537722880 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=0 elapsed_ns=80931749\nMEASURE routing cold-matched: watches=64 calls=1 allocations=5 bytes=131361 paths=1 identities=1 comparisons=64 issues=0 wakes=1 elapsed_ns=23966\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=16384 bytes=537792512 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=4096 elapsed_ns=86016963\nMEASURE routing setup: watches=1024 calls=1024 allocations=19456 bytes=68907344 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=57358085\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=0 elapsed_ns=1153925400\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=5 bytes=131369 paths=1 identities=1 comparisons=1024 issues=0 wakes=1 elapsed_ns=266602\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=16384 bytes=537825280 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=4096 elapsed_ns=1198058222\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1024 bytes=4305584 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=4451413\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=262144 issues=0 wakes=0 elapsed_ns=78738234\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=262144 issues=0 wakes=4096 elapsed_ns=90746263\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "e0d745c081023d91dc3ef186c8f96d15482252184bb80643b865e58ff5eccbb6",
+        "binary_sha256": "2c60393f9d15c3f976a2f0fab84867276e0cc11edaf18e1ebd94f80131ce8e94"
+      },
+      {
+        "role": "candidate",
+        "order": 1,
+        "layout": {
+          "instance_bytes": 408,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 50
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 72810
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 20,
+            "bytes": 67333,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 149786
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 756651
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 10225
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1014560
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1280,
+            "bytes": 4309744,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 4380546
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 684752
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 1342
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 887288
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 20480,
+            "bytes": 68964688,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 66875747
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 690080
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 2894
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1156775
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4327304,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 470,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 878735
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 40960,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 22618208
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 45056,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 24183909
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=408 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=50\nMEASURE routing unmatched: watches=0 calls=4096 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=72810\nMEASURE routing setup: watches=1 calls=1 allocations=20 bytes=67333 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=149786\nMEASURE routing unmatched: watches=1 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=756651\nMEASURE routing cold-matched: watches=1 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=10225\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=1014560\nMEASURE routing setup: watches=64 calls=64 allocations=1280 bytes=4309744 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=4380546\nMEASURE routing unmatched: watches=64 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=684752\nMEASURE routing cold-matched: watches=64 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=1342\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=887288\nMEASURE routing setup: watches=1024 calls=1024 allocations=20480 bytes=68964688 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=66875747\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=690080\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=2894\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=1156775\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1216 bytes=4327304 paths=64 identities=64 comparisons=470 issues=64 wakes=0 elapsed_ns=878735\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=40960 issues=0 wakes=0 elapsed_ns=22618208\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=45056 issues=0 wakes=4096 elapsed_ns=24183909\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "91182d9f9051caa053232837e14fc4eab06197eb942548dae0d646cd7f117ec2",
+        "binary_sha256": "ef9a229bffe28544015c0e031e92d5c31220cc5630044feace05f47053a4b4ab"
+      },
+      {
+        "role": "candidate",
+        "order": 2,
+        "layout": {
+          "instance_bytes": 408,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 60
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 72820
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 20,
+            "bytes": 67333,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 50015
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 675479
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 7882
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 803391
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1280,
+            "bytes": 4309744,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 2315291
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 685123
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 1593
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 833607
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 20480,
+            "bytes": 68964688,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 88982152
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 749921
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 3135
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1169113
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4327304,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 470,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 970424
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 40960,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 20409266
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 45056,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 24365152
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=408 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=60\nMEASURE routing unmatched: watches=0 calls=4096 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=72820\nMEASURE routing setup: watches=1 calls=1 allocations=20 bytes=67333 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=50015\nMEASURE routing unmatched: watches=1 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=675479\nMEASURE routing cold-matched: watches=1 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=7882\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=803391\nMEASURE routing setup: watches=64 calls=64 allocations=1280 bytes=4309744 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=2315291\nMEASURE routing unmatched: watches=64 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=685123\nMEASURE routing cold-matched: watches=64 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=1593\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=833607\nMEASURE routing setup: watches=1024 calls=1024 allocations=20480 bytes=68964688 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=88982152\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=749921\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=3135\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=1169113\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1216 bytes=4327304 paths=64 identities=64 comparisons=470 issues=64 wakes=0 elapsed_ns=970424\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=40960 issues=0 wakes=0 elapsed_ns=20409266\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=45056 issues=0 wakes=4096 elapsed_ns=24365152\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "7d32d47c2f4c06b2cd0de113b56c74b9c0b7c7cba6a195e806fe1816ee6da178",
+        "binary_sha256": "ef9a229bffe28544015c0e031e92d5c31220cc5630044feace05f47053a4b4ab"
+      },
+      {
+        "role": "baseline",
+        "order": 3,
+        "layout": {
+          "instance_bytes": 256,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 50
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 10161313
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 19,
+            "bytes": 67277,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 28483
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 12028439
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131357,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 17726
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537776128,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 11919014
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4306160,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 2407530
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537722880,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 86093487
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131361,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 64,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 22905
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537792512,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 80422575
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 19456,
+            "bytes": 68907344,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 36099397
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 1251944971
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131369,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1024,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 1109161
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537825280,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1245549521
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1024,
+            "bytes": 4305584,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 10772857
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 80554321
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 91936455
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=256 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=50\nMEASURE routing unmatched: watches=0 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=10161313\nMEASURE routing setup: watches=1 calls=1 allocations=19 bytes=67277 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=28483\nMEASURE routing unmatched: watches=1 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=0 elapsed_ns=12028439\nMEASURE routing cold-matched: watches=1 calls=1 allocations=5 bytes=131357 paths=1 identities=1 comparisons=1 issues=0 wakes=1 elapsed_ns=17726\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=16384 bytes=537776128 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=4096 elapsed_ns=11919014\nMEASURE routing setup: watches=64 calls=64 allocations=1216 bytes=4306160 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=2407530\nMEASURE routing unmatched: watches=64 calls=4096 allocations=12288 bytes=537722880 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=0 elapsed_ns=86093487\nMEASURE routing cold-matched: watches=64 calls=1 allocations=5 bytes=131361 paths=1 identities=1 comparisons=64 issues=0 wakes=1 elapsed_ns=22905\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=16384 bytes=537792512 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=4096 elapsed_ns=80422575\nMEASURE routing setup: watches=1024 calls=1024 allocations=19456 bytes=68907344 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=36099397\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=0 elapsed_ns=1251944971\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=5 bytes=131369 paths=1 identities=1 comparisons=1024 issues=0 wakes=1 elapsed_ns=1109161\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=16384 bytes=537825280 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=4096 elapsed_ns=1245549521\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1024 bytes=4305584 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=10772857\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=262144 issues=0 wakes=0 elapsed_ns=80554321\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=262144 issues=0 wakes=4096 elapsed_ns=91936455\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "b982e5504143e2b8f74399c9c99864ed5b3fde55ea992fb1037488705cd56dcf",
+        "binary_sha256": "2c60393f9d15c3f976a2f0fab84867276e0cc11edaf18e1ebd94f80131ce8e94"
+      },
+      {
+        "role": "baseline",
+        "order": 4,
+        "layout": {
+          "instance_bytes": 256,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 70
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 10376639
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 19,
+            "bytes": 67277,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 144418
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 11920466
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131357,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 21682
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537776128,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 12304172
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4306160,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 26861089
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537722880,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 79696649
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131361,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 64,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 23665
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537792512,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 81854721
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 19456,
+            "bytes": 68907344,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 115485875
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 1138274152
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131369,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1024,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 564090
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537825280,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1266154453
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1024,
+            "bytes": 4305584,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 41630735
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 81780631
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 97194603
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=256 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=70\nMEASURE routing unmatched: watches=0 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=10376639\nMEASURE routing setup: watches=1 calls=1 allocations=19 bytes=67277 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=144418\nMEASURE routing unmatched: watches=1 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=0 elapsed_ns=11920466\nMEASURE routing cold-matched: watches=1 calls=1 allocations=5 bytes=131357 paths=1 identities=1 comparisons=1 issues=0 wakes=1 elapsed_ns=21682\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=16384 bytes=537776128 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=4096 elapsed_ns=12304172\nMEASURE routing setup: watches=64 calls=64 allocations=1216 bytes=4306160 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=26861089\nMEASURE routing unmatched: watches=64 calls=4096 allocations=12288 bytes=537722880 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=0 elapsed_ns=79696649\nMEASURE routing cold-matched: watches=64 calls=1 allocations=5 bytes=131361 paths=1 identities=1 comparisons=64 issues=0 wakes=1 elapsed_ns=23665\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=16384 bytes=537792512 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=4096 elapsed_ns=81854721\nMEASURE routing setup: watches=1024 calls=1024 allocations=19456 bytes=68907344 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=115485875\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=0 elapsed_ns=1138274152\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=5 bytes=131369 paths=1 identities=1 comparisons=1024 issues=0 wakes=1 elapsed_ns=564090\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=16384 bytes=537825280 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=4096 elapsed_ns=1266154453\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1024 bytes=4305584 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=41630735\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=262144 issues=0 wakes=0 elapsed_ns=81780631\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=262144 issues=0 wakes=4096 elapsed_ns=97194603\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "0b1256a22200ffe2a48b2e9153675e0d0a44b64e471c32e2929be3948410cc29",
+        "binary_sha256": "2c60393f9d15c3f976a2f0fab84867276e0cc11edaf18e1ebd94f80131ce8e94"
+      },
+      {
+        "role": "candidate",
+        "order": 5,
+        "layout": {
+          "instance_bytes": 408,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 60
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 72800
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 20,
+            "bytes": 67333,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 114633
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 653375
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 7241
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 796011
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1280,
+            "bytes": 4309744,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 19269775
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 698853
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 2474
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 983563
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 20480,
+            "bytes": 68964688,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 119787551
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 729049
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 3095
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1226450
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4327304,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 470,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 1203725
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 40960,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 23094592
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 45056,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 25989327
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=408 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=60\nMEASURE routing unmatched: watches=0 calls=4096 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=72800\nMEASURE routing setup: watches=1 calls=1 allocations=20 bytes=67333 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=114633\nMEASURE routing unmatched: watches=1 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=653375\nMEASURE routing cold-matched: watches=1 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=7241\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=796011\nMEASURE routing setup: watches=64 calls=64 allocations=1280 bytes=4309744 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=19269775\nMEASURE routing unmatched: watches=64 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=698853\nMEASURE routing cold-matched: watches=64 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=2474\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=983563\nMEASURE routing setup: watches=1024 calls=1024 allocations=20480 bytes=68964688 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=119787551\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=729049\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=3095\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=1226450\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1216 bytes=4327304 paths=64 identities=64 comparisons=470 issues=64 wakes=0 elapsed_ns=1203725\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=40960 issues=0 wakes=0 elapsed_ns=23094592\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=45056 issues=0 wakes=4096 elapsed_ns=25989327\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "dd1cb75f1beb202747e9b0fc749fb7bf10baa48fba79be1f957d85aedcd047a8",
+        "binary_sha256": "ef9a229bffe28544015c0e031e92d5c31220cc5630044feace05f47053a4b4ab"
+      },
+      {
+        "role": "candidate",
+        "order": 6,
+        "layout": {
+          "instance_bytes": 408,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 70
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 72329
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 20,
+            "bytes": 67333,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 53210
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 641037
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 6390
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 873247
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1280,
+            "bytes": 4309744,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 2331576
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 728138
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 1612
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 883862
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 20480,
+            "bytes": 68964688,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 55874388
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 694186
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 2,
+            "bytes": 81,
+            "paths": 0,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 2854
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 4096,
+            "bytes": 69632,
+            "paths": 0,
+            "identities": 4096,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1330977
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4327304,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 470,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 1152287
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 40960,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 21045222
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 45056,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 24744290
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=408 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=70\nMEASURE routing unmatched: watches=0 calls=4096 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=72329\nMEASURE routing setup: watches=1 calls=1 allocations=20 bytes=67333 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=53210\nMEASURE routing unmatched: watches=1 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=641037\nMEASURE routing cold-matched: watches=1 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=6390\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=873247\nMEASURE routing setup: watches=64 calls=64 allocations=1280 bytes=4309744 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=2331576\nMEASURE routing unmatched: watches=64 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=728138\nMEASURE routing cold-matched: watches=64 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=1612\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=883862\nMEASURE routing setup: watches=1024 calls=1024 allocations=20480 bytes=68964688 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=55874388\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=0 bytes=0 paths=0 identities=4096 comparisons=0 issues=0 wakes=0 elapsed_ns=694186\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=2 bytes=81 paths=0 identities=1 comparisons=0 issues=0 wakes=1 elapsed_ns=2854\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=4096 bytes=69632 paths=0 identities=4096 comparisons=0 issues=0 wakes=4096 elapsed_ns=1330977\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1216 bytes=4327304 paths=64 identities=64 comparisons=470 issues=64 wakes=0 elapsed_ns=1152287\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=40960 issues=0 wakes=0 elapsed_ns=21045222\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=45056 issues=0 wakes=4096 elapsed_ns=24744290\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "80c27b6d20070ab7d65bdde719b297da36e97f0efde52243905d8f86d7413235",
+        "binary_sha256": "ef9a229bffe28544015c0e031e92d5c31220cc5630044feace05f47053a4b4ab"
+      },
+      {
+        "role": "baseline",
+        "order": 7,
+        "layout": {
+          "instance_bytes": 256,
+          "watch_bytes": 272,
+          "wchar_bytes": 4
+        },
+        "measurements": [
+          {
+            "operation": "setup",
+            "watches": 0,
+            "calls": 0,
+            "allocations": 0,
+            "bytes": 0,
+            "paths": 0,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 80
+          },
+          {
+            "operation": "unmatched",
+            "watches": 0,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 0,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 11276703
+          },
+          {
+            "operation": "setup",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 19,
+            "bytes": 67277,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 0,
+            "issues": 1,
+            "wakes": 0,
+            "elapsed_ns": 30846
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537706496,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 12478114
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131357,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 17987
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537776128,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4096,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 13743653
+          },
+          {
+            "operation": "setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1216,
+            "bytes": 4306160,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 1846224
+          },
+          {
+            "operation": "unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537722880,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 83615225
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 64,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131361,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 64,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 91748
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537792512,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 85170039
+          },
+          {
+            "operation": "setup",
+            "watches": 1024,
+            "calls": 1024,
+            "allocations": 19456,
+            "bytes": 68907344,
+            "paths": 1024,
+            "identities": 1024,
+            "comparisons": 0,
+            "issues": 1024,
+            "wakes": 0,
+            "elapsed_ns": 38864830
+          },
+          {
+            "operation": "unmatched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 1324623956
+          },
+          {
+            "operation": "cold-matched",
+            "watches": 1024,
+            "calls": 1,
+            "allocations": 5,
+            "bytes": 131369,
+            "paths": 1,
+            "identities": 1,
+            "comparisons": 1024,
+            "issues": 0,
+            "wakes": 1,
+            "elapsed_ns": 419934
+          },
+          {
+            "operation": "warm-matched",
+            "watches": 1024,
+            "calls": 4096,
+            "allocations": 16384,
+            "bytes": 537825280,
+            "paths": 4096,
+            "identities": 4096,
+            "comparisons": 4194304,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 1258301173
+          },
+          {
+            "operation": "directory-setup",
+            "watches": 64,
+            "calls": 64,
+            "allocations": 1024,
+            "bytes": 4305584,
+            "paths": 64,
+            "identities": 64,
+            "comparisons": 0,
+            "issues": 64,
+            "wakes": 0,
+            "elapsed_ns": 8815548
+          },
+          {
+            "operation": "directory-unmatched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 12288,
+            "bytes": 537755648,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 0,
+            "elapsed_ns": 84292408
+          },
+          {
+            "operation": "directory-matched",
+            "watches": 64,
+            "calls": 4096,
+            "allocations": 20480,
+            "bytes": 538087424,
+            "paths": 4096,
+            "identities": 0,
+            "comparisons": 262144,
+            "issues": 0,
+            "wakes": 4096,
+            "elapsed_ns": 94571862
+          }
+        ],
+        "stdout": "LAYOUT inotify routing: instance_bytes=256 watch_bytes=272 wchar_bytes=4\nMEASURE routing setup: watches=0 calls=0 allocations=0 bytes=0 paths=0 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=80\nMEASURE routing unmatched: watches=0 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=0 comparisons=0 issues=0 wakes=0 elapsed_ns=11276703\nMEASURE routing setup: watches=1 calls=1 allocations=19 bytes=67277 paths=1 identities=1 comparisons=0 issues=1 wakes=0 elapsed_ns=30846\nMEASURE routing unmatched: watches=1 calls=4096 allocations=12288 bytes=537706496 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=0 elapsed_ns=12478114\nMEASURE routing cold-matched: watches=1 calls=1 allocations=5 bytes=131357 paths=1 identities=1 comparisons=1 issues=0 wakes=1 elapsed_ns=17987\nMEASURE routing warm-matched: watches=1 calls=4096 allocations=16384 bytes=537776128 paths=4096 identities=4096 comparisons=4096 issues=0 wakes=4096 elapsed_ns=13743653\nMEASURE routing setup: watches=64 calls=64 allocations=1216 bytes=4306160 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=1846224\nMEASURE routing unmatched: watches=64 calls=4096 allocations=12288 bytes=537722880 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=0 elapsed_ns=83615225\nMEASURE routing cold-matched: watches=64 calls=1 allocations=5 bytes=131361 paths=1 identities=1 comparisons=64 issues=0 wakes=1 elapsed_ns=91748\nMEASURE routing warm-matched: watches=64 calls=4096 allocations=16384 bytes=537792512 paths=4096 identities=4096 comparisons=262144 issues=0 wakes=4096 elapsed_ns=85170039\nMEASURE routing setup: watches=1024 calls=1024 allocations=19456 bytes=68907344 paths=1024 identities=1024 comparisons=0 issues=1024 wakes=0 elapsed_ns=38864830\nMEASURE routing unmatched: watches=1024 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=0 elapsed_ns=1324623956\nMEASURE routing cold-matched: watches=1024 calls=1 allocations=5 bytes=131369 paths=1 identities=1 comparisons=1024 issues=0 wakes=1 elapsed_ns=419934\nMEASURE routing warm-matched: watches=1024 calls=4096 allocations=16384 bytes=537825280 paths=4096 identities=4096 comparisons=4194304 issues=0 wakes=4096 elapsed_ns=1258301173\nMEASURE routing directory-setup: watches=64 calls=64 allocations=1024 bytes=4305584 paths=64 identities=64 comparisons=0 issues=64 wakes=0 elapsed_ns=8815548\nMEASURE routing directory-unmatched: watches=64 calls=4096 allocations=12288 bytes=537755648 paths=4096 identities=0 comparisons=262144 issues=0 wakes=0 elapsed_ns=84292408\nMEASURE routing directory-matched: watches=64 calls=4096 allocations=20480 bytes=538087424 paths=4096 identities=0 comparisons=262144 issues=0 wakes=4096 elapsed_ns=94571862\ninotify routing production host: 14 checks, 0 failures\n",
+        "log_sha256": "b636593777e3ca0f2760827e097ffdb29354385c847eb474fa9b788ae7c70581",
+        "binary_sha256": "2c60393f9d15c3f976a2f0fab84867276e0cc11edaf18e1ebd94f80131ce8e94"
+      }
+    ],
+    "summary": [
+      {
+        "operation": "setup",
+        "watches": 0,
+        "baseline": {
+          "calls": 0.0,
+          "allocations": 0.0,
+          "bytes": 0.0,
+          "paths": 0.0,
+          "identities": 0.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 65.0
+        },
+        "candidate": {
+          "calls": 0.0,
+          "allocations": 0.0,
+          "bytes": 0.0,
+          "paths": 0.0,
+          "identities": 0.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 60.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 1.0833333333333333
+      },
+      {
+        "operation": "unmatched",
+        "watches": 0,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 12288.0,
+          "bytes": 537706496.0,
+          "paths": 4096.0,
+          "identities": 0.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 10268976.0
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 0.0,
+          "bytes": 0.0,
+          "paths": 0.0,
+          "identities": 0.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 72805.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 141.0476752970263
+      },
+      {
+        "operation": "setup",
+        "watches": 1,
+        "baseline": {
+          "calls": 1.0,
+          "allocations": 19.0,
+          "bytes": 67277.0,
+          "paths": 1.0,
+          "identities": 1.0,
+          "comparisons": 0.0,
+          "issues": 1.0,
+          "wakes": 0.0,
+          "elapsed_ns": 38112.5
+        },
+        "candidate": {
+          "calls": 1.0,
+          "allocations": 20.0,
+          "bytes": 67333.0,
+          "paths": 1.0,
+          "identities": 1.0,
+          "comparisons": 0.0,
+          "issues": 1.0,
+          "wakes": 0.0,
+          "elapsed_ns": 83921.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 0.45414464708090296
+      },
+      {
+        "operation": "unmatched",
+        "watches": 1,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 12288.0,
+          "bytes": 537706496.0,
+          "paths": 4096.0,
+          "identities": 4096.0,
+          "comparisons": 4096.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 12039774.5
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 0.0,
+          "bytes": 0.0,
+          "paths": 0.0,
+          "identities": 4096.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 664427.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 18.120537696391025
+      },
+      {
+        "operation": "cold-matched",
+        "watches": 1,
+        "baseline": {
+          "calls": 1.0,
+          "allocations": 5.0,
+          "bytes": 131357.0,
+          "paths": 1.0,
+          "identities": 1.0,
+          "comparisons": 1.0,
+          "issues": 0.0,
+          "wakes": 1.0,
+          "elapsed_ns": 19274.0
+        },
+        "candidate": {
+          "calls": 1.0,
+          "allocations": 2.0,
+          "bytes": 81.0,
+          "paths": 0.0,
+          "identities": 1.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 1.0,
+          "elapsed_ns": 7561.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 2.5489651524168484
+      },
+      {
+        "operation": "warm-matched",
+        "watches": 1,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 16384.0,
+          "bytes": 537776128.0,
+          "paths": 4096.0,
+          "identities": 4096.0,
+          "comparisons": 4096.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 12592216.0
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 4096.0,
+          "bytes": 69632.0,
+          "paths": 0.0,
+          "identities": 4096.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 838319.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 15.020792800831186
+      },
+      {
+        "operation": "setup",
+        "watches": 64,
+        "baseline": {
+          "calls": 64.0,
+          "allocations": 1216.0,
+          "bytes": 4306160.0,
+          "paths": 64.0,
+          "identities": 64.0,
+          "comparisons": 0.0,
+          "issues": 64.0,
+          "wakes": 0.0,
+          "elapsed_ns": 3357500.5
+        },
+        "candidate": {
+          "calls": 64.0,
+          "allocations": 1280.0,
+          "bytes": 4309744.0,
+          "paths": 64.0,
+          "identities": 64.0,
+          "comparisons": 0.0,
+          "issues": 64.0,
+          "wakes": 0.0,
+          "elapsed_ns": 3356061.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 1.0004289254575527
+      },
+      {
+        "operation": "unmatched",
+        "watches": 64,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 12288.0,
+          "bytes": 537722880.0,
+          "paths": 4096.0,
+          "identities": 4096.0,
+          "comparisons": 262144.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 82273487.0
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 0.0,
+          "bytes": 0.0,
+          "paths": 0.0,
+          "identities": 4096.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 691988.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 118.89438400665908
+      },
+      {
+        "operation": "cold-matched",
+        "watches": 64,
+        "baseline": {
+          "calls": 1.0,
+          "allocations": 5.0,
+          "bytes": 131361.0,
+          "paths": 1.0,
+          "identities": 1.0,
+          "comparisons": 64.0,
+          "issues": 0.0,
+          "wakes": 1.0,
+          "elapsed_ns": 23815.5
+        },
+        "candidate": {
+          "calls": 1.0,
+          "allocations": 2.0,
+          "bytes": 81.0,
+          "paths": 0.0,
+          "identities": 1.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 1.0,
+          "elapsed_ns": 1602.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 14.861466458658347
+      },
+      {
+        "operation": "warm-matched",
+        "watches": 64,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 16384.0,
+          "bytes": 537792512.0,
+          "paths": 4096.0,
+          "identities": 4096.0,
+          "comparisons": 262144.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 83512380.0
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 4096.0,
+          "bytes": 69632.0,
+          "paths": 0.0,
+          "identities": 4096.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 885575.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 94.30300087513763
+      },
+      {
+        "operation": "setup",
+        "watches": 1024,
+        "baseline": {
+          "calls": 1024.0,
+          "allocations": 19456.0,
+          "bytes": 68907344.0,
+          "paths": 1024.0,
+          "identities": 1024.0,
+          "comparisons": 0.0,
+          "issues": 1024.0,
+          "wakes": 0.0,
+          "elapsed_ns": 48111457.5
+        },
+        "candidate": {
+          "calls": 1024.0,
+          "allocations": 20480.0,
+          "bytes": 68964688.0,
+          "paths": 1024.0,
+          "identities": 1024.0,
+          "comparisons": 0.0,
+          "issues": 1024.0,
+          "wakes": 0.0,
+          "elapsed_ns": 77928949.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 0.617375927799463
+      },
+      {
+        "operation": "unmatched",
+        "watches": 1024,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 12288.0,
+          "bytes": 537755648.0,
+          "paths": 4096.0,
+          "identities": 4096.0,
+          "comparisons": 4194304.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 1202935185.5
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 0.0,
+          "bytes": 0.0,
+          "paths": 0.0,
+          "identities": 4096.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 711617.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 1690.4238379466497
+      },
+      {
+        "operation": "cold-matched",
+        "watches": 1024,
+        "baseline": {
+          "calls": 1.0,
+          "allocations": 5.0,
+          "bytes": 131369.0,
+          "paths": 1.0,
+          "identities": 1.0,
+          "comparisons": 1024.0,
+          "issues": 0.0,
+          "wakes": 1.0,
+          "elapsed_ns": 492012.0
+        },
+        "candidate": {
+          "calls": 1.0,
+          "allocations": 2.0,
+          "bytes": 81.0,
+          "paths": 0.0,
+          "identities": 1.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 1.0,
+          "elapsed_ns": 2994.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 164.30522624812156
+      },
+      {
+        "operation": "warm-matched",
+        "watches": 1024,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 16384.0,
+          "bytes": 537825280.0,
+          "paths": 4096.0,
+          "identities": 4096.0,
+          "comparisons": 4194304.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 1251925347.0
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 4096.0,
+          "bytes": 69632.0,
+          "paths": 0.0,
+          "identities": 4096.0,
+          "comparisons": 0.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 1197781.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 1045.2034423640705
+      },
+      {
+        "operation": "directory-setup",
+        "watches": 64,
+        "baseline": {
+          "calls": 64.0,
+          "allocations": 1024.0,
+          "bytes": 4305584.0,
+          "paths": 64.0,
+          "identities": 64.0,
+          "comparisons": 0.0,
+          "issues": 64.0,
+          "wakes": 0.0,
+          "elapsed_ns": 9794202.5
+        },
+        "candidate": {
+          "calls": 64.0,
+          "allocations": 1216.0,
+          "bytes": 4327304.0,
+          "paths": 64.0,
+          "identities": 64.0,
+          "comparisons": 470.0,
+          "issues": 64.0,
+          "wakes": 0.0,
+          "elapsed_ns": 1061355.5
+        },
+        "elapsed_ratio_baseline_to_candidate": 9.228013139800943
+      },
+      {
+        "operation": "directory-unmatched",
+        "watches": 64,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 12288.0,
+          "bytes": 537755648.0,
+          "paths": 4096.0,
+          "identities": 0.0,
+          "comparisons": 262144.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 81167476.0
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 12288.0,
+          "bytes": 537755648.0,
+          "paths": 4096.0,
+          "identities": 0.0,
+          "comparisons": 40960.0,
+          "issues": 0.0,
+          "wakes": 0.0,
+          "elapsed_ns": 21831715.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 3.7178698970740505
+      },
+      {
+        "operation": "directory-matched",
+        "watches": 64,
+        "baseline": {
+          "calls": 4096.0,
+          "allocations": 20480.0,
+          "bytes": 538087424.0,
+          "paths": 4096.0,
+          "identities": 0.0,
+          "comparisons": 262144.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 93254158.5
+        },
+        "candidate": {
+          "calls": 4096.0,
+          "allocations": 20480.0,
+          "bytes": 538087424.0,
+          "paths": 4096.0,
+          "identities": 0.0,
+          "comparisons": 45056.0,
+          "issues": 0.0,
+          "wakes": 4096.0,
+          "elapsed_ns": 24554721.0
+        },
+        "elapsed_ratio_baseline_to_candidate": 3.797809736873003
+      }
+    ],
+    "limits": "Same GCC14.2 -O1 host build, no sanitizers during measurement; real Linux identity/path lookups and declared Windows completion/event/registry adapters. Wall-clock observations on a shared executor, not Windows/application latency or RSS."
+  },
+  "measurement_source_exactness": {
+    "final_generated_candidate_sha256": "bbde2a39a6c0f8cb32c34565812a5ac596e55fbe7643b5ffed9fe02b6fbd6209",
+    "candidate_matches_final_render": true,
+    "baseline_generated_sha256": "8472906940129850bb26004a63cccff26d7b8f770bae281f75ec16769377a3a0",
+    "fixture_sha256": "b6c5f9d8cbc67a4198d6e8cb49bd92a67b14f06e815bd588813a619966316d42",
+    "helper_sha256": "898beab1c258b672169591713bb0b3326351c39ce893bd69b1ba93f4a6317d58"
+  },
+  "bounds_and_costs": {
+    "host_wchar_bytes": 4,
+    "host_instance_bytes": {
+      "baseline": 256,
+      "candidate": 408
+    },
+    "host_watch_bytes": 272,
+    "file_watch_added_allocations": 1,
+    "file_watch_added_host_bytes": 56,
+    "directory64_added_allocations": 192,
+    "directory64_added_host_bytes": 21720,
+    "file1024_setup_median_ns": {
+      "baseline": 48111457.5,
+      "candidate": 77928949.5
+    },
+    "timing_claim": "Shared-executor publication component only; no Windows or whole-application throughput guarantee"
+  },
+  "limits": [
+    "Local LeakSanitizer excluded only because ptrace prevents execution; ASan/UBSan active and CI flags unchanged.",
+    "Whole production inotify and exact TransferFileHandle execute with real Linux files and explicit Win32 events/IOCP/threadpool/registry boundary adapters.",
+    "Production Windows completion worker, UTF-16 native record ABI and Windows/ART runtime were not executed locally.",
+    "Work loop calls actual InotifyNoteWrite on a retained real-file handle, excluding the write syscall and Windows worker; functional corpus separately executes TransferFileHandle plus real write.",
+    "Baseline and candidate preserve the same declared boundary and exact final generated measurement source.",
+    "External writer relocation across directories, OPEN/ACCESS/CLOSE_NOWRITE and existing close-write polling remain outside this leaf."
+  ],
+  "implementation_commit": "914df21f5675b5abb60ad53be5151ec49bbd8730",
+  "composition_pr293": {
+    "kind": "isolated N52 plus PR293 integration; not standalone measurement source",
+    "head": "8e6562a53ba7e9b5f94f47c328e332e121c82138",
+    "tree": "55bf8a55f0dab47d7623d8084567383e2be95f0f",
+    "parents": [
+      "914df21f5675b5abb60ad53be5151ec49bbd8730",
+      "6c97f416d9061c20ae5758fc4bcfed508bc06e5f"
+    ],
+    "incoming_feature": "6c97f416d9061c20ae5758fc4bcfed508bc06e5f",
+    "incoming_feature_tree": "e4c4a4e3a55a5a10b4db32ab155a7d4d9a7d8c58",
+    "no_manual_conflicts": true,
+    "shared_files": [
+      "compat/posix/src/inotify.cc"
+    ],
+    "incoming_exact_disjoint_files": [
+      "compat/posix/src/epoll.cc",
+      "compat/posix/src/event_internal.h",
+      "compat/posix/src/timerfd.cc",
+      "docs/research/readonly-epoll-notifications-2026-11-22.json",
+      "docs/research/readonly-epoll-notifications-2026-11-22.md",
+      "probes/posix/epoll_probe.cc",
+      "tests/native/epoll_eventfd_edges_host.cc.in",
+      "tests/native/epoll_readonly_edge_test.inc",
+      "tests/native/epoll_readonly_edges_host.cc.in",
+      "tests/windows/run-tests.ps1",
+      "tools/test_epoll_readonly_edges.py",
+      "tools/test_host_event_loop_contracts.py"
+    ],
+    "own_exact_disjoint_files": [
+      "docs/research/inotify-local-write-routing-2026-11-22.json",
+      "docs/research/inotify-local-write-routing-2026-11-22.md",
+      "probes/posix/posix_probe.cc",
+      "tests/native/inotify_write_routing_host.cc.in",
+      "tests/native/inotify_write_routing_test.inc",
+      "tests/windows/tracks/21-posix.ps1",
+      "tools/test_inotify_records.py",
+      "tools/test_inotify_write_routing.py"
+    ],
+    "all_other_existing_leaf_blobs_preserved": 4352,
+    "changed_paths": [
+      "compat/posix/src/epoll.cc",
+      "compat/posix/src/event_internal.h",
+      "compat/posix/src/inotify.cc",
+      "compat/posix/src/timerfd.cc",
+      "docs/research/readonly-epoll-notifications-2026-11-22.json",
+      "docs/research/readonly-epoll-notifications-2026-11-22.md",
+      "probes/posix/epoll_probe.cc",
+      "tests/native/epoll_eventfd_edges_host.cc.in",
+      "tests/native/epoll_readonly_edge_test.inc",
+      "tests/native/epoll_readonly_edges_host.cc.in",
+      "tests/windows/run-tests.ps1",
+      "tools/test_epoll_readonly_edges.py",
+      "tools/test_host_event_loop_contracts.py"
+    ],
+    "combined_inotify_sha256": "fc72941a3d264ac1fcb0fdefd394149b423e6bc99067c6d09ef47af0540148c3",
+    "validation": {
+      "maintained_inotify_records": {
+        "original_record_checks": 10,
+        "linux_checks": 62,
+        "production_checks": 244,
+        "failures": 0
+      },
+      "readonly_edges": {
+        "linux_checks": 137,
+        "production_checks": 535,
+        "failures": 0,
+        "periodic_work": {
+          "periods": 10000,
+          "callbacks": 1,
+          "arms": 1,
+          "ticks": 10000
+        },
+        "unread_waits": {
+          "timerfd": 10000,
+          "inotify": 10000,
+          "repeated_deliveries": 0
+        }
+      },
+      "sanitizers": [
+        "ASan",
+        "UBSan"
+      ],
+      "local_lsan": "disabled only for ptrace limitation",
+      "cross_compile": {
+        "whole_source": "compat/posix/src/inotify.cc",
+        "targets": [
+          "x86_64-w64-mingw32",
+          "aarch64-w64-mingw32"
+        ],
+        "result": "pass",
+        "warnings_as_errors": true
+      },
+      "original_preservation_negative_controls": 20,
+      "windows_runtime": "not executed"
+    },
+    "logs": {
+      "native-r6-r4-routing-asan.log": {
+        "sha256": "daec8e49cf11d377b82043262a1e523d11b0732192c3efa0308e697bbf205b19",
+        "bytes": 2563
+      },
+      "native-r6-r4-readonly-asan.log": {
+        "sha256": "1f4283a6ce5c96840606ed045e5b53a78b753a56c9a9bc91a351d67def2958ce",
+        "bytes": 799
+      },
+      "native-r6-r4-cross.log": {
+        "sha256": "5bdea7984b875deda9850abc7e382d40dc386d14f62e3b64004c5d88485b5ed6",
+        "bytes": 177
+      },
+      "native-r6-r4-policy.log": {
+        "sha256": "1e8e093b258efc42e4234ab8aa794e848e73bebbfa9d0650a295d6e725440e2e",
+        "bytes": 794
+      }
+    },
+    "limits": "Separate integration evidence at this exact combined tree; standalone ABBA measurements and source hashes remain attached to the original standalone implementation."
+  }
+}
