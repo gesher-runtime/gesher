@@ -157,7 +157,9 @@ authoring environment):
   NotConfiguredForUser 2, DisabledByPolicy 3, DeviceBusy 4.
 - Desktop apps verify through `IUserConsentVerifierInterop::RequestVerificationForWindowAsync(
   HWND appWindow, HSTRING message, REFIID riid, void** asyncOperation)`
-  (`userconsentverifierinterop.h`; the page lists Windows build 22000 as the minimum),
+  (`userconsentverifierinterop.h`, IID `39E050C3-4E74-441A-8DC0-B81104DF949C`; the docs
+  page lists build 22000 as the minimum, the SDK header guards it with
+  `NTDDI_WIN10_RS3`),
   an `IAsyncOperation<UserConsentVerificationResult>`: Verified 0, DeviceNotPresent 1,
   NotConfiguredForUser 2, DisabledByPolicy 3, DeviceBusy 4, RetriesExhausted 5
   ("after 10 attempts"), Canceled 6.
@@ -172,7 +174,8 @@ authoring environment):
   prompts the user; the key type is fixed.
 - Not verified here (stated for maintainers to check): the NCrypt "Microsoft Passport
   Key Storage Provider" key properties, whether WinBio can attribute a Hello
-  verification to a biometric, and `RequestVerificationForWindowAsync` on Windows 10.
+  verification to a biometric, `RequestVerificationForWindowAsync` on Windows 10, from an
+  MTA thread, and with a window of another process as owner.
 
 ## Decision
 
