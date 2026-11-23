@@ -83,8 +83,13 @@ final class WifiConnections {
     // waits for the Wi-Fi thread (WifiThreadRunner.call); test boundary only.
     static volatile long removeWaitMs = 4_000;
     static final long RETRY_MIN_MS = 5_000, RETRY_MAX_MS = 300_000;
-    private static final String REQUEST_PREFIX = WlanProfiles.PREFIX + "r-";
-    private static final String SUGGESTION_PREFIX = WlanProfiles.PREFIX + "s-";
+    // Generated profile names carry this device's tag (its $ANDROID_DATA key, as the
+    // device's Windows objects do, ADR 0026), so two Gesher devices of one Windows user
+    // never delete or adopt each other's profiles.
+    static final String DEVICE_TAG = Device.profileTag();
+    private static final String OWN_PREFIX = WlanProfiles.PREFIX + DEVICE_TAG + "-";
+    private static final String REQUEST_PREFIX = OWN_PREFIX + "r-";
+    private static final String SUGGESTION_PREFIX = OWN_PREFIX + "s-";
 
     private final WifiService mService;
     private final WifiService.Backend mBackend;
@@ -136,6 +141,10 @@ final class WifiConnections {
     private final Map<String, Long> mLingering = new HashMap<>(); // removed profile -> nanoTime it goes
     private long mRetryMs;
     private java.util.concurrent.ScheduledFuture<?> mRetryTimer; // guarded by mLock
+    // The primary interface's connection as the last WLAN connection event observed it;
+    // guarded by mLock.
+    private String mObserved;
+    private int mObservedOn;
     // At most one queued pass each: a burst of WLAN events or adds does not pile up tasks.
     private final java.util.concurrent.atomic.AtomicBoolean mConnectionPassQueued =
             new java.util.concurrent.atomic.AtomicBoolean();
@@ -158,6 +167,9 @@ final class WifiConnections {
         } catch (RuntimeException unavailable) {
             // No package events (a host fixture without them): pruning on use still applies.
         }
+        // The first pass deletes what an earlier run of this device left, without waiting
+        // for a WLAN event.
+        queueReconcile();
     }
 
     // ---- WifiNetworkSpecifier requests -----------------------------------------------
@@ -828,7 +840,7 @@ final class WifiConnections {
         int primary = mBackend.primaryInterface();
         // Windows first, then the model: a profile stored after this listing is not in it,
         // and one stored before it was recorded in the model before it was stored.
-        Map<Integer, List<String>> listed = mBackend.interfaceProfiles(WlanProfiles.PREFIX);
+        Map<Integer, List<String>> listed = mBackend.interfaceProfiles(OWN_PREFIX);
         boolean unknown = listed == null;
         Map<Integer, List<String>> delete = new LinkedHashMap<>();
         Map<String, String> store = new LinkedHashMap<>();
@@ -885,12 +897,13 @@ final class WifiConnections {
                 // The model changed: the queued pass recomputes before anything more is stored.
                 if (mGeneration != generation) { changed = true; break; }
             }
+            // Cached before the store: Windows may join it (a connection event) before the
+            // store call returns.
+            synchronized (mLock) { mInstalled.put(item.getKey(), item.getValue()); }
             boolean stored = mBackend.storeProfile(primary, item.getValue(), item.getKey());
             // A failed store leaves Windows' state unknown: stored again by a later pass,
             // or deleted by one if no longer wanted.
-            synchronized (mLock) {
-                if (stored) mInstalled.put(item.getKey(), item.getValue()); else mInstalled.remove(item.getKey());
-            }
+            if (!stored) synchronized (mLock) { mInstalled.remove(item.getKey()); }
             if (!stored) {
                 SystemServer.log("Wi-Fi suggestion profile could not be stored");
                 failed = true;
@@ -949,12 +962,12 @@ final class WifiConnections {
     }
 
     /**
-     * Names Gesher generates: random request profiles and suggestion digests. Only
+     * Names this device generates: random request profiles and suggestion digests. Only
      * per-user profiles with exactly these names are ever deleted; any other profile,
-     * including the user's own, is never touched.
+     * including the user's own and another Gesher device's, is never touched.
      */
-    private static final java.util.regex.Pattern OWN_PROFILE =
-            java.util.regex.Pattern.compile("Gesher-(r-[0-9a-f]{16}|s-[0-9a-f]{24})");
+    private static final java.util.regex.Pattern OWN_PROFILE = java.util.regex.Pattern.compile(
+            java.util.regex.Pattern.quote(OWN_PREFIX) + "(r-[0-9a-f]{16}|s-[0-9a-f]{24})");
 
     private static String profileName(String packageName, WifiNetworkSuggestion suggestion) {
         return SUGGESTION_PREFIX + digest(packageName, suggestion);
@@ -975,9 +988,14 @@ final class WifiConnections {
         }
     }
 
-    /** The suggestion of this app whose Windows profile is {@code profile}, if installed. */
-    private WifiNetworkSuggestion ownerLocked(String packageName, Apps app, String profile) {
-        if (profile == null || !profile.startsWith(SUGGESTION_PREFIX)) return null;
+    /**
+     * The approved, unblocked suggestion of this app whose profile this run stored on
+     * {@code ifIndex} and Windows is connected to as {@code profile}; null otherwise (a
+     * leftover with the same name, an app not approved, a blocked network).
+     */
+    private WifiNetworkSuggestion joinedLocked(String packageName, Apps app, String profile, int ifIndex) {
+        if (profile == null || !app.approved || !profile.startsWith(SUGGESTION_PREFIX) || mBlocked.containsKey(profile)
+                || mInstalledOn != ifIndex || !mInstalled.containsKey(profile)) return null;
         for (WifiNetworkSuggestion suggestion : app.suggestions) {
             if (profileName(packageName, suggestion).equals(profile)) return suggestion;
         }
@@ -1053,27 +1071,38 @@ final class WifiConnections {
     }
 
     /**
-     * The caller's suggestions are captured when the call is made; on the profile thread,
-     * in order with the passes of the app's later adds and removals (as Android runs both
-     * on its Wi-Fi thread), the current connection is read and, if it is one of them,
-     * blocked and left. The caller never waits for Windows (WifiServiceImpl posts it).
+     * The block is decided when the call is made, without a WLAN read on the caller's
+     * thread: if the connection the last WLAN connection event observed is one of the
+     * caller's suggestions, it is blocked at once, so a removal or add the app makes
+     * next applies after it, as on Android, where both run in order on the Wi-Fi thread
+     * and the block outlives the suggestion. Windows is changed on the profile thread
+     * without the caller waiting (WifiServiceImpl posts it): the network is left if it is
+     * still connected. If no event has reported the connection yet, the profile thread
+     * reads it and blocks it then.
      */
     void disallowCurrent(WifiService.Owner owner, BlockingOption option) {
         String packageName = owner.name();
         long seconds = Math.max(1, option.getBlockingTimeSeconds());
         Set<String> owned = new java.util.HashSet<>();
+        String blocked = null;
         synchronized (mLock) {
             Apps app = mSuggestions.get(packageName);
             if (app == null) return;
             for (WifiNetworkSuggestion suggestion : app.suggestions) owned.add(profileName(packageName, suggestion));
+            if (mObserved != null && owned.contains(mObserved)) {
+                blocked = mObserved;
+                block(blocked, seconds);
+            }
         }
         if (owned.isEmpty()) return;
+        String decided = blocked;
         try {
             mProfiles.execute(() -> {
                 try {
-                    disallowNow(owned, seconds);
+                    disallowNow(owned, decided, seconds);
                 } catch (RuntimeException failed) {
                     SystemServer.log("Wi-Fi network not disallowed: " + failed);
+                    scheduleRetry();
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException stopped) {
@@ -1081,32 +1110,38 @@ final class WifiConnections {
         }
     }
 
-    /** Profile thread: blocks and leaves the current network if it is one of {@code owned}. */
-    private void disallowNow(Set<String> owned, long seconds) {
-        if (mBackend.wifiState() != WifiManager.WIFI_STATE_ENABLED) return;
+    /** Every pass leaves a blocked profile off Windows until the block expires. Holds mLock. */
+    private void block(String profile, long seconds) {
+        mBlocked.put(profile, System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds));
+        mGeneration++;
+        try { mTimers.schedule(this::queueReconcile, seconds, TimeUnit.SECONDS); }
+        catch (java.util.concurrent.RejectedExecutionException stopped) { }
+    }
+
+    /** Profile thread: leaves the blocked network (deciding it now if the call could not). */
+    private void disallowNow(Set<String> owned, String blocked, long seconds) {
         int ifIndex = mBackend.primaryInterface();
-        String current = ifIndex <= 0 ? null : mBackend.currentProfile(ifIndex);
-        if (current == null || !owned.contains(current)) return;
-        synchronized (mLock) {
-            // Every pass leaves a blocked profile off Windows until the block expires.
-            mBlocked.put(current, System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds));
-            mGeneration++;
+        String current = ifIndex <= 0 || mBackend.wifiState() != WifiManager.WIFI_STATE_ENABLED
+                ? null : mBackend.currentProfile(ifIndex);
+        if (blocked == null) {
+            if (current == null || !owned.contains(current)) return;
+            blocked = current;
+            synchronized (mLock) { block(blocked, seconds); }
         }
         // Windows has no per-BSSID block list: removing the profile for the blocking
         // period disconnects and prevents auto-join for the whole network, then it returns.
-        if (mBackend.disconnect(ifIndex, current, null)) {
+        if (blocked.equals(current) && mBackend.disconnect(ifIndex, current, null)) {
             synchronized (mLock) { if (mInstalledOn == ifIndex) mInstalled.remove(current); }
         }
         reconcile();
-        try { mTimers.schedule(this::queueReconcile, seconds, TimeUnit.SECONDS); }
-        catch (java.util.concurrent.RejectedExecutionException stopped) { }
     }
 
     /** Post-connection broadcast for an app-interaction suggestion Windows joined. */
     private void suggestionConnectionChanged() {
         int ifIndex = mBackend.primaryInterface();
+        String current = ifIndex <= 0 ? null : mBackend.currentProfile(ifIndex);
+        synchronized (mLock) { mObserved = current; mObservedOn = ifIndex; }
         if (ifIndex <= 0) return;
-        String current = mBackend.currentProfile(ifIndex);
         String owner = null;
         WifiNetworkSuggestion joined = null;
         synchronized (mLock) {
@@ -1115,7 +1150,7 @@ final class WifiConnections {
                 Apps app = entry.getValue();
                 String previous = app.lastConnected;
                 app.lastConnected = null;
-                WifiNetworkSuggestion suggestion = ownerLocked(entry.getKey(), app, current);
+                WifiNetworkSuggestion suggestion = joinedLocked(entry.getKey(), app, current, ifIndex);
                 if (suggestion == null) continue;
                 app.lastConnected = current;
                 if (!current.equals(previous) && suggestion.isAppInteractionRequired) {

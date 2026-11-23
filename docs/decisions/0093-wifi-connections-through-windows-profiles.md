@@ -24,7 +24,9 @@ Gesher has no Android supplicant; it can only ask Windows to connect.
 
 - Gesher implements both contracts with Windows WLAN profiles, written with
   `WlanSetProfile` as **per-user** profiles (`WLAN_PROFILE_USER`, no elevation)
-  named `Gesher-...`, and connects with `WlanConnect`.
+  named `Gesher-<device>-...`, where `<device>` is derived from the device's
+  `$ANDROID_DATA` key (ADR 0026), so devices of one Windows user keep apart, and
+  connects with `WlanConnect`.
 - A specifier request uses a temporary **manual** profile pinned to the chosen
   BSSID, so Windows never joins it on its own; it is deleted, and the interface's
   previous profile reconnected, when the request ends. This is Android's

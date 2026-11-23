@@ -109,7 +109,8 @@ IPv4 address).
   networks only when the request names the approved BSSID, other security types by
   SSID and type. Approvals are kept for the system server's lifetime (Android
   persists them), at most 50 per app.
-- The join uses a per-user, manual-mode Windows profile named `Gesher-r-<random>`,
+- The join uses a per-user, manual-mode Windows profile named
+  `Gesher-<device>-r-<random>` (`<device>`: see "Profile names" below),
   pinned to the chosen access point's BSSID, so Windows never joins it on its own.
   Failures map to Android's codes: association rejection/timeout `ASSOCIATION`,
   security failures `AUTHENTICATION` (not retried), not visible `NOT_FOUND`, no
@@ -155,7 +156,7 @@ IPv4 address).
   unquoted hex form); both reach Windows as hex bytes.
 - The first add of an app asks the user (host consent dialog, off the Binder
   thread). Until answered the status is `PENDING`. Allow: `APPROVED_BY_USER`, and
-  each suggestion becomes a per-user Windows profile `Gesher-s-<hash>` whose
+  each suggestion becomes a per-user Windows profile `Gesher-<device>-s-<hash>` whose
   connection mode follows `isInitialAutojoinEnabled`; Windows then joins it by its
   own network selection when it sees it. Windows adds a new profile at the top of the
   preference list; the suggestion is moved to the bottom, below every network the
@@ -177,8 +178,8 @@ IPv4 address).
 - Windows profiles follow the suggestion store through one profile thread. Each pass
   converges from Windows' own state: it reads the per-user profile list of every WLAN
   interface Windows lists at that moment (radio on or off), and deletes each profile
-  with exactly a Gesher-generated name (`Gesher-s-` plus 24 hex digits for suggestions,
-  `Gesher-r-` plus 16 for requests) that is not wanted there. A suggestion profile is
+  with exactly a name this device generates that is not wanted there. A suggestion
+  profile is
   wanted only on the primary interface (while no radio is on, the last primary one),
   only while its suggestion is approved and not blocked, or during its linger period;
   a request profile only while its request is active. Missing or changed suggestion
@@ -195,16 +196,28 @@ IPv4 address).
   Windows could not read, or a store or deletion it refused, is retried with backoff
   (5 s doubling to 5 min) and on the next WLAN event; a pass with nothing unknown or
   failed ends the retry. A WLAN service that cannot enumerate interfaces at all also
-  counts as unknown.
-- When Windows joins an app-interaction suggestion, the app receives the explicit
-  `ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION` broadcast with
+  counts as unknown, so a machine whose WLAN service is stopped or absent retries a
+  pass at most every 5 min while it runs. The system server queues a first pass when
+  it starts, so its device's leftovers go without waiting for a WLAN event.
+- Profile names: `Gesher-<device>-s-` plus 24 hex digits (a digest of the package and
+  network) for suggestions, `Gesher-<device>-r-` plus 16 random hex digits for
+  requests, where `<device>` is eight hex digits derived from `$ANDROID_DATA`, the key
+  the device's Windows objects use (ADR 0026). Two Gesher devices of one Windows user
+  (an installed one and a test device next to it) therefore never delete or adopt each
+  other's profiles; only exact names of this device are ever deleted.
+- When Windows joins an app-interaction suggestion of an approved app, through a
+  profile this run stored on that interface and that is not blocked, the app receives
+  the explicit `ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION` broadcast with
   `EXTRA_NETWORK_SUGGESTION`, if location is on, it holds fine location and its
   fine-location app op is allowed (`enforceCanAccessScanResults`).
-- `disallowCurrentSuggestedNetwork` takes the app's suggestions when called and
-  returns at once (Android posts it to the Wi-Fi thread). On the profile thread, in
-  order with the passes of the app's later adds and removals as on Android, the current
-  connection is read; if it is one of those suggestions, Windows leaves it and its
-  profile is removed for the blocking period; every profile pass honours the block
+- `disallowCurrentSuggestedNetwork` returns at once (Android posts it to the Wi-Fi
+  thread) and reads nothing from Windows on the caller's thread. If the connection the
+  last WLAN connection event reported is one of the app's suggestions, it is blocked
+  when the call is made, so the app's next removal or add applies after it and the
+  block outlives the suggestion, as on Android. The profile thread then makes Windows
+  leave that network if it is still connected, and the profile is removed for the
+  blocking period. (If no event has reported the connection yet, the profile thread
+  reads it and blocks it then.) Every profile pass honours the block
   until it expires, then the profile returns. Windows has no BSSID block list,
   so the whole network is blocked even when `BlockingOption` asks for the BSSID only.
 - An uninstalled app's suggestions and approvals are dropped as soon as the
