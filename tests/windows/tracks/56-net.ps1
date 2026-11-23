@@ -54,6 +54,10 @@ function NetDex([string] $Name, [string[]] $Arguments, [int] $Seconds = 300, [ha
 
 $cacerts = Join-Path $root 'system/etc/security/cacerts'
 
+Check 'net: NETLINK_ROUTE dumps, subscription registration and app restrictions' {
+  & "$Dir/netlink_route_test.exe"
+} @('netlink_route_test all passed')
+
 # On this machine: DNS, TCP and UDP on loopback, NIO, HTTP through OkHttp, BigInteger
 # (NativeBN), the JCA providers (Conscrypt, BouncyCastle) and the default SSLContext.
 $null = NetDex 'sockets, DNS, NIO, HTTP and crypto on this machine' @('local')

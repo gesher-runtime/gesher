@@ -27,6 +27,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/native_fence.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/misc.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/netdb.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/netlink.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/network_dns.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/ofd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/path.cc
