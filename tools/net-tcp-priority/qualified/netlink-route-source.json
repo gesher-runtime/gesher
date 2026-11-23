@@ -1,5 +1,5 @@
 {
-  "patch_sha256": "09589e53bbe3133014100f0f32e0a8a318d2c35d7cf18b2377f1462159f0a906",
+  "patch_sha256": "d475bb3540c841bf377b2ba15759ac442994c55b42ab1d7b31fd6dd4bfbeccf5",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/posix/posix.cmake",
@@ -13,10 +13,10 @@
   ],
   "source_sha256": {
     "CMakeLists.txt": "8431cd31ae8af2c944c41c9e815f9dbc4e74a94b60a1b52e63f2fc483570b38c",
-    "compat/binder/binderd.cc": "55261a26285cf8be2d915004e57bd3e06ab1ad76cb91f6627d96be1fe10aa315",
+    "compat/binder/binderd.cc": "1ada6f3441c67d4fb76c0849cad5122ec7b2a528c86d7609e2671a75fb221b4a",
     "compat/binder/launch_channel.h": "313ecbed7856ec5c32a9788f4aef84174471bacb3b30a830a39b8977567f3505",
     "compat/elf/exec/exec.cmake": "8fa490c8269c49f642d90db90d66d9eca5ff5813d53357b0284ce70f7b0ab9c9",
-    "compat/framework/services_zygote.cc": "9cee8555ee0327ccac3f63c47950ee0968db90b405d9df3844b735c1e2d85aaa",
+    "compat/framework/services_zygote.cc": "05afd30d0cf222bb01a21ab3fe76ac38e72a2847b8e3842c4daf2f8e0ce84a0f",
     "compat/posix/include/gesher/binder_endpoint.h": "3d861b97b9305b51445b1ab8bc50bf90d9e6afc2748abab9ba72e690e78dda97",
     "compat/posix/include/linux/if_addr.h": "6e735d5e49ffb6a675082aa629d36d3253bb9560860190b31dd71064c7ea846a",
     "compat/posix/include/linux/netlink.h": "4e80fc69b2240554db920581280148b954e0719bf649103b5baf504a03f14f3a",

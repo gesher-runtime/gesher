@@ -334,19 +334,39 @@ public final class ClipboardService extends IClipboard.Default
         return new String[] {text.toString(), anyHtml ? html.toString() : null};
     }
 
-    private static byte[] extractImage(ClipData clip) {
+    private java.io.InputStream openImage(File file) throws IOException {
+        if (!SystemServer.isProtectedDevice() || mCallers.isSystem()) {
+            return file.isFile() && file.length() > 0 && file.length() <= MAX_IMAGE_BYTES
+                    ? new java.io.FileInputStream(file) : null;
+        }
+        int pid = mCallers.callerPid();
+        long birth = mAtm.authenticatedStartTime(pid, mCallers.callerUid());
+        if (birth <= 0) return null;
+        int fd = Zygote.nativeOpenProtectedChildFile(pid, birth, Zygote.windowsPath(file.getPath()));
+        if (fd < 0) return null;
+        android.os.ParcelFileDescriptor descriptor = android.os.ParcelFileDescriptor.adoptFd(fd);
+        long size = descriptor.getStatSize();
+        if (size <= 0 || size > MAX_IMAGE_BYTES) {
+            descriptor.close();
+            return null;
+        }
+        return new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+    }
+
+    private byte[] extractImage(ClipData clip) {
         for (int i = 0; i < clip.getItemCount(); i++) {
             android.net.Uri uri = clip.getItemAt(i).getUri();
             // A content URI is a provider capability, never a server-local filesystem path.
             if (uri == null || !"file".equals(uri.getScheme())
                     || (uri.getAuthority() != null && !uri.getAuthority().isEmpty()) || uri.getPath() == null) continue;
             File file = new File(uri.getPath());
-            if (!file.isAbsolute() || !file.isFile() || file.length() <= 0 || file.length() > MAX_IMAGE_BYTES) continue;
+            if (!file.isAbsolute()) continue;
             String name = file.getName().toLowerCase(java.util.Locale.ROOT);
             // The native bridge accepts BMP/DIB bytes; encoded PNG/JPEG/etc. are not DIB data.
             if (!name.endsWith(".bmp")) continue;
-            try (java.io.InputStream input = new java.io.FileInputStream(file);
+            try (java.io.InputStream input = openImage(file);
                     java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+                if (input == null) continue;
                 byte[] buffer = new byte[8192];
                 int count;
                 while ((count = input.read(buffer)) != -1) {

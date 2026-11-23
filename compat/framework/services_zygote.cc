@@ -1522,6 +1522,48 @@ int64_t ChildStartTime(int pid) {
   return (static_cast<int64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
 }
 
+void* OpenProtectedChildFile(int pid, int64_t birth, const std::u16string& path) {
+  if (pid <= 0 || birth <= 0 || path.empty()) return nullptr;
+  peer::OwnedHandle child;
+  {
+    std::lock_guard<std::mutex> lock(g_lock);
+    const auto found = g_children.find(pid);
+    HANDLE retained = nullptr;
+    if (found == g_children.end() ||
+        !DuplicateHandle(GetCurrentProcess(), found->second, GetCurrentProcess(),
+                         &retained, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) return nullptr;
+    child.reset(retained);
+  }
+  process_identity::Process process;
+  if (!process_identity::ReadLiveProcess(child.get(), &process) ||
+      process.pid != static_cast<DWORD>(pid) || process.birth != static_cast<uint64_t>(birth) ||
+      process.principal.container.size == 0) return nullptr;
+  HANDLE raw_token = nullptr;
+  if (!OpenProcessToken(child.get(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw_token)) return nullptr;
+  peer::OwnedHandle token(raw_token);
+  HANDLE impersonation = nullptr;
+  if (!DuplicateTokenEx(token.get(), TOKEN_QUERY | TOKEN_IMPERSONATE, nullptr,
+                        SecurityImpersonation, TokenImpersonation, &impersonation)) return nullptr;
+  peer::OwnedHandle caller(impersonation);
+
+  HANDLE previous_token = nullptr;
+  if (!OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &previous_token) &&
+      GetLastError() != ERROR_NO_TOKEN) return nullptr;
+  peer::OwnedHandle previous(previous_token);
+  if (!SetThreadToken(nullptr, caller.get())) return nullptr;
+  peer::OwnedHandle file(CreateFileW(W(path), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (!SetThreadToken(nullptr, previous.get())) {
+    TerminateProcess(GetCurrentProcess(), ERROR_ACCESS_DENIED);
+    return nullptr;
+  }
+  BY_HANDLE_FILE_INFORMATION attributes{};
+  return file.get() != INVALID_HANDLE_VALUE && GetFileType(file.get()) == FILE_TYPE_DISK &&
+      GetFileInformationByHandle(file.get(), &attributes) &&
+      (attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ? file.release() : nullptr;
+}
+
 bool KillChild(int pid, int64_t start_time) {
   if (pid <= 0 || start_time <= 0) return false;
   // ExitCode cannot close this handle and Spawn cannot replace this map entry

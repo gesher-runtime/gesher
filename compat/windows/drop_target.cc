@@ -7,7 +7,11 @@
 
 #include <jni.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
+#include <gesher/binder_endpoint.h>
+#include <shlobj.h>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -111,6 +115,134 @@ void DispatchDragToSession(HWND hwnd, int action, float x, float y,
   }
 }
 
+// A packaged protected drop consumes the source's OLE content stream. The
+// AppContainer never asks a medium-integrity process to open the CF_HDROP path.
+// Keep the resulting seekable files for the receiving window's drag-access lifetime.
+struct GesherDropTarget::DropFiles {
+  std::wstring root;
+  std::vector<std::wstring> directories;
+  std::vector<std::wstring> paths;
+  std::vector<HANDLE> retained;
+
+  ~DropFiles() {
+    for (HANDLE file : retained) CloseHandle(file);
+    for (const auto& directory : directories) RemoveDirectoryW(directory.c_str());
+    if (!root.empty()) RemoveDirectoryW(root.c_str());
+  }
+
+  bool Copy(IDataObject* source, const std::vector<std::wstring>& names) {
+    std::vector<std::wstring> file_names;
+    for (const auto& path : names) {
+      const auto separator = path.find_last_of(L"/\\");
+      file_names.push_back(separator == std::wstring::npos ? path : path.substr(separator + 1));
+    }
+    if (!MatchesDescriptors(source, file_names)) return false;
+    wchar_t temp[MAX_PATH]{}, suffix[40]{};
+    const DWORD length = GetTempPathW(ARRAYSIZE(temp), temp);
+    GUID id{};
+    if (!length || length >= ARRAYSIZE(temp) || FAILED(CoCreateGuid(&id)) ||
+        !StringFromGUID2(id, suffix, ARRAYSIZE(suffix))) return false;
+    std::wstring root_path = std::wstring(temp, length) + L"GesherDrop" + suffix;
+    if (!CreateDirectoryW(root_path.c_str(), nullptr)) return false;
+    root = std::move(root_path);
+    const auto format = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"FileContents"));
+    if (!format) return false;
+    for (size_t i = 0; i < names.size(); ++i) {
+      const auto& name = file_names[i];
+      if (name.empty() || name == L"." || name == L".." ||
+          name.find_first_of(L"<>:\"/\\|?*") != std::wstring::npos ||
+          name.back() == L'.' || name.back() == L' ') return false;
+      const std::wstring directory = root + L"\\" + std::to_wstring(i);
+      if (!CreateDirectoryW(directory.c_str(), nullptr)) return false;
+      directories.push_back(directory);
+      FORMATETC request{format, nullptr, DVASPECT_CONTENT, static_cast<LONG>(i), TYMED_ISTREAM};
+      STGMEDIUM content{};
+      if (FAILED(source->GetData(&request, &content))) return false;
+      const bool copied = content.tymed == TYMED_ISTREAM && content.pstm &&
+                          CopyStream(content.pstm, directory + L"\\" + name);
+      ReleaseStgMedium(&content);
+      if (!copied) return false;
+    }
+    return !paths.empty();
+  }
+
+ private:
+  static bool MatchesDescriptors(IDataObject* source, const std::vector<std::wstring>& names) {
+    // FileContents indices refer to FileGroupDescriptorW, so check that they
+    // correspond to the files Windows offered via CF_HDROP.
+    const auto format = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"FileGroupDescriptorW"));
+    if (!format) return false;
+    FORMATETC request{format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (FAILED(source->GetData(&request, &medium))) return false;
+    bool matches = false;
+    if (medium.tymed == TYMED_HGLOBAL) {
+      constexpr size_t header = offsetof(FILEGROUPDESCRIPTORW, fgd);
+      const size_t bytes = GlobalSize(medium.hGlobal);
+      const auto* group = static_cast<const FILEGROUPDESCRIPTORW*>(GlobalLock(medium.hGlobal));
+      if (group && bytes >= header && group->cItems == names.size() &&
+          group->cItems <= (bytes - header) / sizeof(FILEDESCRIPTORW)) {
+        matches = true;
+        for (size_t i = 0; i < names.size(); ++i) {
+          const FILEDESCRIPTORW& file = group->fgd[i];
+          const auto* end = std::find(std::begin(file.cFileName), std::end(file.cFileName), L'\0');
+          const auto name_length = end - file.cFileName;
+          if (end == std::end(file.cFileName) ||
+              ((file.dwFlags & FD_ATTRIBUTES) && (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) ||
+              CompareStringOrdinal(file.cFileName, static_cast<int>(name_length), names[i].c_str(),
+                                   -1, TRUE) != CSTR_EQUAL) {
+            matches = false;
+            break;
+          }
+        }
+      }
+      if (group) GlobalUnlock(medium.hGlobal);
+    }
+    ReleaseStgMedium(&medium);
+    return matches;
+  }
+
+  bool CopyStream(IStream* source, const std::wstring& path) {
+    STATSTG metadata{};
+    if (FAILED(source->Stat(&metadata, STATFLAG_NONAME))) return false;
+    ULARGE_INTEGER remaining{};
+    if (!GetDiskFreeSpaceExW(root.c_str(), &remaining, nullptr, nullptr) ||
+        metadata.cbSize.QuadPart > remaining.QuadPart) return false;
+    // The OS closes these handles even when the guest is terminated. Android
+    // can reopen the file while this window presents it, with delete sharing.
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE | DELETE,
+                              FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                              CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    if (GetFileType(file) != FILE_TYPE_DISK) {
+      CloseHandle(file);
+      return false;
+    }
+    paths.push_back(path);
+    bool copied = true;
+    std::array<BYTE, 64 * 1024> buffer{};
+    uint64_t bytes = metadata.cbSize.QuadPart;
+    while (bytes > 0) {
+      const ULONG size = static_cast<ULONG>(std::min<uint64_t>(bytes, buffer.size()));
+      ULONG got = 0;
+      DWORD written = 0;
+      if (FAILED(source->Read(buffer.data(), size, &got)) || got == 0 || got > size ||
+          !WriteFile(file, buffer.data(), got, &written, nullptr) || written != got) {
+        copied = false;
+        break;
+      }
+      bytes -= written;
+    }
+    if (copied && (metadata.mtime.dwLowDateTime || metadata.mtime.dwHighDateTime)) {
+      SetFileTime(file, nullptr, nullptr, &metadata.mtime);
+    }
+    if (copied) retained.push_back(file);
+    else CloseHandle(file);
+    return copied;
+  }
+};
+
 GesherDropTarget::GesherDropTarget(HWND hwnd) : hwnd_(hwnd) {}
 
 GesherDropTarget::~GesherDropTarget() = default;
@@ -212,34 +344,56 @@ STDMETHODIMP GesherDropTarget::DragLeave() {
   return S_OK;
 }
 
-void GesherDropTarget::ExtractAndDispatchDrop(IDataObject* pDataObj, POINT client_pt) {
-  if (pDataObj == nullptr) return;
+// A path already accessible to this AppContainer needs no additional
+// authorization or copy, including a directory in the package's own data.
+bool CanReadDropPaths(const std::vector<std::wstring>& paths) {
+  for (const auto& path : paths) {
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    const bool disk = GetFileType(handle) == FILE_TYPE_DISK;
+    CloseHandle(handle);
+    if (!disk) return false;
+  }
+  return true;
+}
+
+bool GesherDropTarget::ExtractAndDispatchDrop(IDataObject* pDataObj, POINT client_pt) {
+  if (pDataObj == nullptr) return false;
 
   FORMATETC fmt_hdrop = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
   if (pDataObj->QueryGetData(&fmt_hdrop) == S_OK) {
     STGMEDIUM medium = {};
     if (SUCCEEDED(pDataObj->GetData(&fmt_hdrop, &medium))) {
-      HDROP hdrop = static_cast<HDROP>(GlobalLock(medium.hGlobal));
+      std::vector<std::wstring> files;
+      HDROP hdrop = medium.tymed == TYMED_HGLOBAL ? static_cast<HDROP>(GlobalLock(medium.hGlobal)) : nullptr;
       if (hdrop != nullptr) {
-        UINT count = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
-        std::vector<std::wstring> files;
+        const UINT count = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
         files.reserve(count);
         for (UINT i = 0; i < count; i++) {
-          UINT len = DragQueryFileW(hdrop, i, nullptr, 0);
-          if (len > 0) {
-            std::wstring path(len, L'\0');
-            DragQueryFileW(hdrop, i, path.data(), len + 1);
-            files.push_back(std::move(path));
-          }
+          const UINT len = DragQueryFileW(hdrop, i, nullptr, 0);
+          if (!len) break;
+          std::wstring path(len + 1, L'\0');
+          if (DragQueryFileW(hdrop, i, path.data(), len + 1) != len) break;
+          path.resize(len);
+          files.push_back(std::move(path));
         }
         GlobalUnlock(medium.hGlobal);
-        DispatchDragToSession(hwnd_, kActionDrop,
-                              static_cast<float>(client_pt.x),
-                              static_cast<float>(client_pt.y),
-                              &files, L"");
+        if (files.size() != count) files.clear();
       }
       ReleaseStgMedium(&medium);
-      return;
+      if (files.empty()) return false;
+      const auto* dropped = &files;
+      if (binder_endpoint::Current().IsGuest() && !CanReadDropPaths(files)) {
+        auto drop = std::make_unique<DropFiles>();
+        if (!drop->Copy(pDataObj, files)) return false;
+        dropped = &drop->paths;
+        file_drops_.push_back(std::move(drop));
+      }
+      DispatchDragToSession(hwnd_, kActionDrop, static_cast<float>(client_pt.x),
+                            static_cast<float>(client_pt.y), dropped, L"");
+      return true;
     }
   }
 
@@ -260,7 +414,7 @@ void GesherDropTarget::ExtractAndDispatchDrop(IDataObject* pDataObj, POINT clien
                               nullptr, text);
       }
       ReleaseStgMedium(&medium);
-      return;
+      return p != nullptr;
     }
   }
 
@@ -283,9 +437,10 @@ void GesherDropTarget::ExtractAndDispatchDrop(IDataObject* pDataObj, POINT clien
                               nullptr, text);
       }
       ReleaseStgMedium(&medium);
-      return;
+      return p != nullptr;
     }
   }
+  return false;
 }
 
 STDMETHODIMP GesherDropTarget::Drop(IDataObject* pDataObj, DWORD, POINTL pt,
@@ -300,14 +455,14 @@ STDMETHODIMP GesherDropTarget::Drop(IDataObject* pDataObj, DWORD, POINTL pt,
   POINT client_pt = {pt.x, pt.y};
   ScreenToClient(hwnd_, &client_pt);
 
-  ExtractAndDispatchDrop(pDataObj, client_pt);
+  const bool received = ExtractAndDispatchDrop(pDataObj, client_pt);
   DispatchDragToSession(hwnd_, kActionDragEnded,
                         static_cast<float>(client_pt.x),
                         static_cast<float>(client_pt.y),
                         nullptr, L"");
 
   format_supported_ = false;
-  *pdwEffect = DROPEFFECT_COPY;
+  *pdwEffect = received ? DROPEFFECT_COPY : DROPEFFECT_NONE;
   return S_OK;
 }
 

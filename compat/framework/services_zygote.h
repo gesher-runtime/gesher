@@ -120,6 +120,9 @@ int64_t StartTime(int pid);
 
 // Creation identity from the original retained Spawn handle, or 0 if unavailable.
 int64_t ChildStartTime(int pid);
+// Returns an owned, readable regular-file handle or nullptr. The filesystem
+// access is checked using the exact live child AppContainer token.
+void* OpenProtectedChildFile(int pid, int64_t birth, const std::u16string& path);
 
 // A spawned process's exit code: 259 (STILL_ACTIVE) while it runs, -1 when
 // this process did not start it or does not know.

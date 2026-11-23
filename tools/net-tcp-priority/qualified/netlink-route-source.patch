@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index e700c8545..a3c34d196 100644
+index 2487e68f4..7ed0854a8 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -76,0 +77 @@ bool g_record_only = false;
@@ -66,13 +66,13 @@ index e700c8545..a3c34d196 100644
 @@ -1874 +1889 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
 -  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
 +  if (ReplyRecordLock(pipe, error, result)) WaitForClient(pipe, false);
-@@ -1989 +2004 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
+@@ -1995 +2010 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
 -  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
 +  if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
-@@ -2081 +2096 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
+@@ -2087 +2102 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
 -  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
 +  if (!ReplyRecordLock(pipe, 0) || !WaitForClient(pipe, true)) return;
-@@ -2517,0 +2533,2 @@ void Serve(HANDLE pipe) {
+@@ -2523,0 +2539,2 @@ void Serve(HANDLE pipe) {
 +        } else if (op == wire::kNetlinkInspection) {
 +          ServeNetlinkInspection(pipe, in);
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
