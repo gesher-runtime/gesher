@@ -417,7 +417,7 @@ index c97b8f175..7784f6716 100644
 +void AddBionicSymbol(const char* soname, const char* name, void* address);
 +
 diff --git a/compat/bionic/shim.cc b/compat/bionic/shim.cc
-index 9387904e0..3c9d11a89 100644
+index 9387904..5f44c49 100644
 --- a/compat/bionic/shim.cc
 +++ b/compat/bionic/shim.cc
 @@ -1024,15 +1024 @@ thread_local bool t_has_dlerror = false;
@@ -507,7 +507,7 @@ index 9387904e0..3c9d11a89 100644
 +    name_space = extinfo->library_namespace;
 +    if (name_space == nullptr) {
 +      t_dlerror = "android_dlopen_ext: USE_NAMESPACE requires a namespace";
-@@ -1074,13 +1086 @@ void* DlOpenImpl(const char* filename) {
+@@ -1074,13 +1086,7 @@ void* DlOpenImpl(const char* filename) {
 -  gesher::elf::LoadOptions options;
 -  std::string dir = DirOf(path);
 -  if (!dir.empty()) options.search_paths.push_back(dir);
@@ -522,17 +522,17 @@ index 9387904e0..3c9d11a89 100644
 -  }
 -  return lib;
 +  return DlOpenImpl(filename, flags, caller, name_space);
-@@ -1088,4 +1088,10 @@ void* DlOpenImpl(const char* filename) {
--// dlsym: the shim's own symbols stand in for the libraries it implements, as
--// bionic's search reaches libc.so & co. through a library's dependencies.
--void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
--  void* p = nullptr;
++}
 +
 +__attribute__((noinline)) void* BIONIC_SYSV AndroidDlopenExt(
 +    const char* filename, int flags, const BionicDlextinfo* extinfo) {
 +  return LoaderAndroidDlopenExt(filename, flags, extinfo,
 +                                __builtin_extract_return_addr(__builtin_return_address(0)));
-+}
+@@ -1088,4 +1094,4 @@ void* DlOpenImpl(const char* filename) {
+-// dlsym: the shim's own symbols stand in for the libraries it implements, as
+-// bionic's search reaches libc.so & co. through a library's dependencies.
+-void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
+-  void* p = nullptr;
 +
 +// dlsym: providers and ELF objects share the common namespace/dependency walk.
 +// There is no aggregate shim fallback after an ordinary scoped lookup fails.
@@ -715,7 +715,7 @@ index 9387904e0..3c9d11a89 100644
 +    state->aggregate["__loader_dlsym"] = reinterpret_cast<void*>(&LoaderDlsym);
 +    state->aggregate["__loader_dlvsym"] = reinterpret_cast<void*>(&LoaderDlvsym);
 +    return state;
-@@ -1475 +1564,93 @@ SymbolTable& Table() {
+@@ -1475 +1564,103 @@ SymbolTable& Table() {
 -  return *t;
 +  return *registry;
 +}
@@ -765,11 +765,9 @@ index 9387904e0..3c9d11a89 100644
 +      {"libGLESv3.so", Visibility::kNdkPublic,
 +       {"liblog.so", "libdl.so", "libEGL.so", "libc.so", "libm.so"}},
 +      {"libjnigraphics.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
-+      {"libOpenSLES.so", Visibility::kNdkPublic,
-+       {"liblog.so", "libnativewindow.so", "libc.so", "libm.so", "libdl.so"}},
++      {"libOpenSLES.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
 +      {"libaaudio.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
-+      {"libmediandk.so", Visibility::kNdkPublic,
-+       {"liblog.so", "libnativewindow.so", "libc.so", "libm.so", "libdl.so"}},
++      {"libmediandk.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
 +      {"libnativehelper.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
 +      {"libart.so", Visibility::kPrivate, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
 +  };
@@ -796,6 +794,18 @@ index 9387904e0..3c9d11a89 100644
 +        return std::vector<std::string>{"liblog.so", "libc.so", "libm.so", "libdl.so"};
 +      };
 +    }
++    if (options.soname == "libOpenSLES.so" || options.soname == "libmediandk.so") {
++      // The native executable and DRM probe link audio/file implementations,
++      // without the graphics provider. Keep the full Android dependency graph
++      // when the VM's framework asset implementation is linked, as for libandroid.
++      options.dependency_snapshot = [dependencies = options.dependencies]() {
++        auto result = dependencies;
++        if (LookupOwnedSymbol("libandroid.so", "AAssetManager_open") != nullptr) {
++          result.insert(result.begin() + 1, "libnativewindow.so");
++        }
++        return result;
++      };
++    }
 +    options.path_aliases.push_back(std::string("/system/lib64/") + definition.soname);
 +    if (options.soname == "libc.so" || options.soname == "libm.so" || options.soname == "libdl.so") {
 +      options.path_aliases.push_back("/apex/com.android.runtime/lib64/bionic/" + options.soname);
@@ -810,7 +820,7 @@ index 9387904e0..3c9d11a89 100644
 +      std::abort();
 +    }
 +  }
-@@ -1480,3 +1661,5 @@ void* LookupBionicSymbol(const char* name) {
+@@ -1480,3 +1671,5 @@ void* LookupBionicSymbol(const char* name) {
 -  auto& table = Table();
 -  auto it = table.find(name);
 -  return it != table.end() ? it->second : nullptr;
@@ -819,7 +829,7 @@ index 9387904e0..3c9d11a89 100644
 +  std::lock_guard<std::mutex> lock(registry.mutex);
 +  auto it = registry.aggregate.find(name);
 +  return it != registry.aggregate.end() ? it->second : nullptr;
-@@ -1485 +1668,14 @@ void* LookupBionicSymbol(const char* name) {
+@@ -1485 +1678,14 @@ void* LookupBionicSymbol(const char* name) {
 -void AddBionicSymbol(const char* name, void* address) { Table()[name] = address; }
 +void AddBionicSymbol(const char* name, void* address) {
 +  if (name == nullptr) return;
@@ -835,7 +845,7 @@ index 9387904e0..3c9d11a89 100644
 +  registry.libraries[soname][name] = address;
 +  registry.aggregate[name] = address;
 +}
-@@ -1488,5 +1684,9 @@ void InstallBionicShim() {
+@@ -1488,5 +1694,9 @@ void InstallBionicShim() {
 -  Table();
 -  gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
 -  gesher::elf::SetUnresolvedHandler(ReportUnresolved);

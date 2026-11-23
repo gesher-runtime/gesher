@@ -66,7 +66,7 @@ $mfAppVm = @("-Xbootclasspath:$mfAppBcp", "-Ximage:$(NoDrive "$root/system")/fra
 foreach ($abi in @(@{ Name = 'x86_64'; Apk = 'mediaformatapp-x86_64.apk' },
                     @{ Name = 'arm64-v8a'; Apk = 'mediaformatapp-arm64.apk' })) {
   $native = Join-Path $mfDir $abi.Name
-  $dvm = InvokeMediaFormat "$mfHost/dalvikvm.exe" ($mfCoreVm + @('-cp',
+  $dvm = InvokeMediaFormat "$mfHost/dalvikvm.exe" ($mfCoreVm + @("-Djava.library.path=$(NoDrive $native)", '-cp',
     (NoDrive "$mfDir/mediaformat-tests.dex"), 'gesher.MediaFormatTest',
     (NoDrive "$native/libmediaformat_test.so")))
   CheckMediaFormat $abi.Name 'dalvikvm JNI' $dvm @('media4 format caller: JNI')

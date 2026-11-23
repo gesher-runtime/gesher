@@ -125,7 +125,7 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
     $native = "$mxDir/$($abi.Name)"
     $caller = 'JNI'
     if ($mode -eq 'core JNI') {
-      $result = InvokeMuxer "$Dir/dalvikvm.exe" ($mxCore + @('-cp', (NoDrive "$mxDir/mediamuxer-tests.dex"),
+      $result = InvokeMuxer "$Dir/dalvikvm.exe" ($mxCore + @("-Djava.library.path=$(NoDrive $native)", '-cp', (NoDrive "$mxDir/mediamuxer-tests.dex"),
         'gesher.MediaMuxerTest', (NoDrive (Resolve-Path "$native/libmediamuxer_test.so").Path))) $environment
     } elseif ($mode -eq 'standalone ELF') {
       $environment['LD_LIBRARY_PATH'] = NoDrive $native

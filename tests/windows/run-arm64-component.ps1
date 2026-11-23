@@ -44,7 +44,7 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
 . "$PSScriptRoot/tracks/75-arm64-fpsr.ps1"
 Check 'arm64 component: original JNI primitive/mixed V plus independent copied lists through actual ART' {
   A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-    '-Xint','-Xusejit:false','-cp',(NoDrive "$Dir/arm64-jni.dex"),'gesher.Arm64Jni',(NoDrive "$Dir/jni_test_arm64.so"))
+    '-Xint','-Xusejit:false',"-Djava.library.path=$(NoDrive $Dir)",'-cp',(NoDrive "$Dir/arm64-jni.dex"),'gesher.Arm64Jni',(NoDrive "$Dir/jni_test_arm64.so"))
 } @('Arm64Jni all passed','CallStaticIntMethodV independent va_copy','CallStaticObjectMethodV independent va_copy')
 foreach ($record in $arm64FpcrEvidence) {
   if ($record.Exit -ne 0 -or $record.Report -notmatch 'native2 varargs: ok; literal/few/many GP/FP; ordered shared overflow; va_copy; nested/thread; wide and binary128 source; gzvprintf retry') {

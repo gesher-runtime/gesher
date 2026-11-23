@@ -132,7 +132,7 @@ Check 'arm64: guest ABI (TLS, stack protector, setjmp, stat, epoll, syscall, ato
 # va_list forms, nesting, and a guest pthread attached to the VM.
 Check 'arm64: System.load of an arm64-v8a .so; JNI both ways, Call*MethodV, nesting, an attached guest thread' {
   A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-jni.dex"), 'gesher.Arm64Jni',
+    '-Xint', '-Xusejit:false', "-Djava.library.path=$(NoDrive $Dir)", '-cp', (NoDrive "$Dir/arm64-jni.dex"), 'gesher.Arm64Jni',
     (NoDrive (Resolve-Path "$Dir/jni_test_arm64.so").Path))
 } @('JNI_OnLoad ran: ok', 'GetEnv guest boundary: all passed',
     'GetEnv attach/detach: all passed', 'Arm64Jni all passed')

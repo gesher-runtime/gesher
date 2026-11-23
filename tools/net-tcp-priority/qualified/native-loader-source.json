@@ -3,7 +3,7 @@
     "compat/bionic/extra_bionic.cc": "f6afd252bf88ae9c36fcd117655a3a63297979668f108558f14e0900ddccf982",
     "compat/bionic/extra_bionic.h": "f94af1490da57b3aec407ca27d591ae74ffaa3bba83b83d5061d05d977526d7b",
     "compat/bionic/include/gesher/bionic_shim.h": "09bf290c5c0b842cd73a5be0d498e900d46bbb87226215a52bc80834b23e3340",
-    "compat/bionic/shim.cc": "e4db4af58cb2c4526a236eb7bfb2e80c3b20d382c32df90859aa258676760266",
+    "compat/bionic/shim.cc": "807a826f52845cc8b101f58395de668b4ea0c3236b9170008bfe530c1ab2386c",
     "compat/bionic/shim_internal.h": "69dd64701b4fbe446e59121f2bb5428ab8212d60d2e26eaea6ad6970775880c3",
     "compat/bionic/stdio_bionic.cc": "cb58b2ec48dce00ce04cf0fa3627ec561fd393eac12d0e6080e0189ff175d70f",
     "compat/elf/exec/gesher_exec.cc": "a7dd6a1404b9d438c7ca8be895055495bd72664667fe4c442f214f5c04841f56",
@@ -31,7 +31,7 @@
     "compat/posix/include/gesher/elf_dlopen.h"
   ],
   "feature_head": "1084f49a538187c69534e63e2de63a2890f6515e",
-  "patch_sha256": "e10105b7d80d7004ee4df68551aad251252a45d6db4b614f803e9b63e1921e6b",
+  "patch_sha256": "91233cd38c984fcf2081d7906aaeb8bf88e75d8e24c5021a75e06ec96f8c602b",
   "paths": [
     "compat/bionic/extra_bionic.cc",
     "compat/bionic/extra_bionic.h",

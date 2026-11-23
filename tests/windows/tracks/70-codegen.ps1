@@ -222,7 +222,7 @@ if (Test-Path $jniLib) {
     $fatalEnv = @{ 'GESHER_TRACE_ELF_MAPPINGS' = '0' }
     if ($faultMode -eq 'native') { $fatalEnv['GESHER_TRACE_ELF_MAPPINGS'] = '1' }
     $r = RunDalvikvm @("-Xbootclasspath:$bcp", $image, '-Xint', '-Xusejit:false',
-      '-cp', $codegenDex, 'gesher.FatalContext', (NoDrive (Resolve-Path $jniLib).Path), $faultMode) $fatalEnv 30
+      "-Djava.library.path=$(NoDrive $Dir)", '-cp', $codegenDex, 'gesher.FatalContext', (NoDrive (Resolve-Path $jniLib).Path), $faultMode) $fatalEnv 30
     $registers = $r.Out -match 'rip:\s+0x(?!0{16}\b)[0-9a-fA-F]{16}\b' -and
       $r.Out -match 'rsp:\s+0x(?!0{16}\b)[0-9a-fA-F]{16}\b'
     $module = $faultMode -ne 'host' -or $r.Out -match 'pc module: [^\r\n]+\.dll\+0x[0-9a-fA-F]+'
@@ -259,7 +259,7 @@ if (Test-Path $jniLib) {
   foreach ($name in @($modes.Keys)) {
     if ($name -eq 'interpret-only') { continue }
     $m = $modes[$name]
-    $jniArgs = $m.Args
+    $jniArgs = $m.Args + @("-Djava.library.path=$(NoDrive $Dir)")
     if ($name -eq 'jit') { $jniArgs = $jniArgs + @('-verbose:jit') }
     $r = RunMode $jniArgs @('gesher.JniStubs', (NoDrive (Resolve-Path $jniLib).Path)) $m.Env
     $stubs = @($r.Out -split "`n" | Where-Object { $_ -match 'JIT added .*gesher\.JniTest\.' } |

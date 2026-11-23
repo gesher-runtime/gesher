@@ -55,19 +55,19 @@ struct NoObject<media_status_t(AMediaDrm*, A...)> {
 
 void Register() {
   using gesher::bionic::AddBionicSymbol;
-  AddBionicSymbol("AMediaDrm_isCryptoSchemeSupported",
+  AddBionicSymbol("libmediandk.so", "AMediaDrm_isCryptoSchemeSupported",
                   reinterpret_cast<void*>(&DrmIsCryptoSchemeSupported));
-  AddBionicSymbol("AMediaDrm_createByUUID", reinterpret_cast<void*>(&DrmCreateByUuid));
-  AddBionicSymbol("AMediaDrm_release", reinterpret_cast<void*>(&DrmRelease));
-  AddBionicSymbol("AMediaCrypto_isCryptoSchemeSupported",
+  AddBionicSymbol("libmediandk.so", "AMediaDrm_createByUUID", reinterpret_cast<void*>(&DrmCreateByUuid));
+  AddBionicSymbol("libmediandk.so", "AMediaDrm_release", reinterpret_cast<void*>(&DrmRelease));
+  AddBionicSymbol("libmediandk.so", "AMediaCrypto_isCryptoSchemeSupported",
                   reinterpret_cast<void*>(&CryptoIsCryptoSchemeSupported));
-  AddBionicSymbol("AMediaCrypto_requiresSecureDecoderComponent",
+  AddBionicSymbol("libmediandk.so", "AMediaCrypto_requiresSecureDecoderComponent",
                   reinterpret_cast<void*>(&CryptoRequiresSecureDecoderComponent));
-  AddBionicSymbol("AMediaCrypto_new", reinterpret_cast<void*>(&CryptoNew));
-  AddBionicSymbol("AMediaCrypto_delete", reinterpret_cast<void*>(&CryptoDelete));
+  AddBionicSymbol("libmediandk.so", "AMediaCrypto_new", reinterpret_cast<void*>(&CryptoNew));
+  AddBionicSymbol("libmediandk.so", "AMediaCrypto_delete", reinterpret_cast<void*>(&CryptoDelete));
   // decltype: the prototypes of <media/NdkMediaDrm.h>, never defined here.
 #define NO_OBJECT(name) \
-  AddBionicSymbol(#name, reinterpret_cast<void*>(&NoObject<decltype(name)>::Call))
+  AddBionicSymbol("libmediandk.so", #name, reinterpret_cast<void*>(&NoObject<decltype(name)>::Call))
   NO_OBJECT(AMediaDrm_setOnEventListener);
   NO_OBJECT(AMediaDrm_setOnExpirationUpdateListener);
   NO_OBJECT(AMediaDrm_setOnKeysChangeListener);

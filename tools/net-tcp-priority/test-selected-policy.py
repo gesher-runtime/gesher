@@ -330,7 +330,7 @@ def preceding_memmem_source(actual):
 # is not a substitute for reviewing their Android-visible production behavior.
 NATIVE_LOADER_BASE = 'b88d0083d6ded06365f24181355516f2a1ecfffe'
 NATIVE_LOADER_FEATURE_HEAD = '1084f49a538187c69534e63e2de63a2890f6515e'
-NATIVE_LOADER_TRANSITION_SHA256 = '9adc2aa2078e2a7bd7831f4c3bde82709a9ab747ed1a65770268eb1814bcc52e'
+NATIVE_LOADER_TRANSITION_SHA256 = 'e4b1f0224834b3cff7d01d4d9f4c7e6292db8c1edf59f0deffce9cd8d0857e82'
 NATIVE_LOADER_PROTECTED_PATHS = (
  'compat/bionic/extra_bionic.cc',
  'compat/bionic/shim.cc',

@@ -74,7 +74,8 @@ foreach ($a in $abis) {
   $work = Join-Path $env:RUNNER_TEMP "native2-dvm-$($a.Tag)"
   New-Item -ItemType Directory -Force $work | Out-Null
   $out = N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native2Test',
+    '-Xint', '-Xusejit:false', "-Djava.library.path=$(NoDrive "$n2/$($a.Abi)")",
+    '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native2Test',
     (NoDrive "$n2/$($a.Abi)/libnative2.so"), (NoDrive $work), (NoDrive "$n2/symbols-$($a.Abi).txt")) | Out-String
   $code = $LASTEXITCODE
   $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'dalvikvm'; Exit = $code; Report = $out })

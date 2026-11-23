@@ -685,7 +685,7 @@ struct Guest<F> {
 
 void Register() {
   using gesher::bionic::AddBionicSymbol;
-#define MEDIA_ENTRY(name, ...) AddBionicSymbol(#name, reinterpret_cast<void*>(&Guest<&__VA_ARGS__>::Call))
+#define MEDIA_ENTRY(name, ...) AddBionicSymbol("libmediandk.so", #name, reinterpret_cast<void*>(&Guest<&__VA_ARGS__>::Call))
   MEDIA_ENTRY(AMediaDataSource_new, NewDataSource);
   MEDIA_ENTRY(AMediaDataSource_newUri, NewUri);
   MEDIA_ENTRY(AMediaDataSource_delete, DeleteDataSource);

@@ -130,7 +130,7 @@ $slCoreVm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framewo
 $slAppVm = @("-Xbootclasspath:$slAppBcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'; Label = 'arm64' })) {
   $native = Join-Path $slDir $abi.Name
-  $core = InvokeOpenSl ($slCoreVm + @('-cp', (NoDrive "$slDir/opensl-tests.dex"),
+  $core = InvokeOpenSl ($slCoreVm + @("-Djava.library.path=$(NoDrive $native)", '-cp', (NoDrive "$slDir/opensl-tests.dex"),
     'gesher.OpenSlTest', (NoDrive "$native/libopensl_contracts.so")))
   CheckOpenSl $abi.Name 'core JNI' $false $core @()
   $elf = InvokeOpenSl @('--elf', "$native/opensl-test", 'opensl-test') `

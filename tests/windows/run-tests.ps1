@@ -20,6 +20,8 @@ if ($ListTracks) {
   exit 0
 }
 
+$Dir = (Resolve-Path -LiteralPath $Dir).Path
+
 if ($Web3Observer) {
   $script:web3Observer = (Resolve-Path -LiteralPath $Web3Observer).Path
   . "$PSScriptRoot/web3/Observer.ps1"

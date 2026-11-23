@@ -256,7 +256,7 @@ Check 'bionic shim: shared CRT stream ownership and wide stdio' {
 # System.load takes an absolute path.
 Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java_* and JNIEnv calls into ART' {
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
+    -Xint '-Xusejit:false' "-Djava.library.path=$(NoDrive $Dir)" -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
 } @('JNI_OnLoad ran: ok', 'a native thread that ends attached only warns, as on Android: ok',
     'GetEnv guest boundary: all passed', 'GetEnv attach/detach: all passed',
     'JniTest all passed')

@@ -1606,11 +1606,9 @@ const std::vector<ProviderDefinition>& ProviderDefinitions() {
       {"libGLESv3.so", Visibility::kNdkPublic,
        {"liblog.so", "libdl.so", "libEGL.so", "libc.so", "libm.so"}},
       {"libjnigraphics.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
-      {"libOpenSLES.so", Visibility::kNdkPublic,
-       {"liblog.so", "libnativewindow.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libOpenSLES.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
       {"libaaudio.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
-      {"libmediandk.so", Visibility::kNdkPublic,
-       {"liblog.so", "libnativewindow.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libmediandk.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
       {"libnativehelper.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
       {"libart.so", Visibility::kPrivate, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
   };
@@ -1635,6 +1633,18 @@ void RegisterProviders() {
                                            "libc.so", "libm.so", "libdl.so"};
         }
         return std::vector<std::string>{"liblog.so", "libc.so", "libm.so", "libdl.so"};
+      };
+    }
+    if (options.soname == "libOpenSLES.so" || options.soname == "libmediandk.so") {
+      // The native executable and DRM probe link audio/file implementations,
+      // without the graphics provider. Keep the full Android dependency graph
+      // when the VM's framework asset implementation is linked, as for libandroid.
+      options.dependency_snapshot = [dependencies = options.dependencies]() {
+        auto result = dependencies;
+        if (LookupOwnedSymbol("libandroid.so", "AAssetManager_open") != nullptr) {
+          result.insert(result.begin() + 1, "libnativewindow.so");
+        }
+        return result;
       };
     }
     options.path_aliases.push_back(std::string("/system/lib64/") + definition.soname);
