@@ -2556,8 +2556,6 @@ bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
 void ServeDropWorker(HANDLE pipe, In in) {
   uint32_t version = 0;
   if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
-  const char* enabled = getenv("GESHER_SANDBOX_DROP_HOST");
-  if (enabled == nullptr || strcmp(enabled, "1") != 0) return;
   const auto guest = g_peer_registry->Authenticate(pipe);
   if (!guest || guest->role != peer::Role::kApplication ||
       guest->generation.principal.container.size == 0) return;

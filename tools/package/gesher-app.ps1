@@ -61,9 +61,8 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
-# The authenticated mode applies to installed apps and standalone entry points.
-$protectedRun = $env:GESHER_SANDBOX -eq 'appcontainer-trusted'
-if (-not $protectedRun) { Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue }
+# The packaged launcher admits all app processes through the protected runtime.
+$env:GESHER_SANDBOX = 'appcontainer-trusted'
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
 $here = $scriptRoot
@@ -314,56 +313,13 @@ try {
   # Single process: the app alone, with stand-in services in its own process.
   $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
   if ($DriverArgs -notcontains '--system-server') {
-    if ($protectedRun) {
-      Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-cohost (UserPath $apkFull) @DriverArgs
-      exit $LASTEXITCODE
-    }
-    Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
-    exit $LASTEXITCODE
-  }
-  if ($protectedRun) {
-    $ScopedArgs = @($DriverArgs | Where-Object { $_ -ne '--system-server' })
-    Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-scoped @ScopedArgs (UserPath $apkFull)
+    Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-cohost (UserPath $apkFull) @DriverArgs
     exit $LASTEXITCODE
   }
 
-  # A device of this run only: binderd, servicemanager and the system server with
-  # the APK, then the app in this console's process; the three are stopped when it exits.
-  $logs = Join-Path $root 'logs'
-  New-Item -ItemType Directory -Force $logs | Out-Null
-  # Unique per run, not only per PID: a reused PID must not name an earlier run's device
-  # (its binder pipe, property session and /proc/sys/kernel/random/boot_id).
-  $env:GESHER_BINDER = "gesher-app-$PID-" + [Convert]::ToString([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(), 16)
-  $started = @()
-  try {
-    $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `
-      -RedirectStandardOutput "$logs/run-binderd.out" -RedirectStandardError "$logs/run-binderd.log"
-    # A successful protocol connection to this broker must precede ProcessState.
-    Invoke-Dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
-    if ($LASTEXITCODE -ne 0) { throw ('gesher-app: ' + (Get-GesherText 'binder_failed')) }
-    $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
-      -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
-    $started += Start-Process $dalvikvm -PassThru -NoNewWindow `
-      -ArgumentList ($dvm + 'com.gesher.server.SystemServer', (UserPath $apkFull)) `
-      -RedirectStandardOutput "$logs/run-system_server.out" -RedirectStandardError "$logs/run-system_server.log"
-    # The app process gets no service manager if it starts before servicemanager is the
-    # context manager: wait until the system server has registered its services (90 s).
-    $server = $started[-1]
-    for ($i = 0; $i -lt 900 -and -not $server.HasExited; $i++) {
-      $text = "$(Get-Content -Raw "$logs/run-system_server.log" -ErrorAction SilentlyContinue)$(Get-Content -Raw "$logs/run-system_server.out" -ErrorAction SilentlyContinue)"
-      if ($text.Contains('with servicemanager')) { break }
-      Start-Sleep -Milliseconds 100
-    }
-    Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
-    $code = $LASTEXITCODE
-    if ($code -ne 0) { Write-Host ('gesher-app: ' + (Get-GesherText 'server_logs' @($logs))) }
-  } finally {
-    foreach ($p in $started) {
-      if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    }
-    Remove-Item Env:GESHER_BINDER
-  }
-  exit $code
+  $ScopedArgs = @($DriverArgs | Where-Object { $_ -ne '--system-server' })
+  Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-scoped @ScopedArgs (UserPath $apkFull)
+  exit $LASTEXITCODE
 } finally {
   $env:GESHER_MICROG_SPOOF = $previousMicrogSpoof
   if ($null -eq $previousRearCamera) { Remove-Item Env:GESHER_CAMERA_REAR_ID -ErrorAction SilentlyContinue }

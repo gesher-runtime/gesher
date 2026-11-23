@@ -396,9 +396,9 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = 'b7910272f4e66158c33ffc2787c9415d1fa491ebb5e35bc8667d9e356ecd982c'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = '0411d27b971370362208fc84c5d0155e9e65b3b3e3ac5060d09a9165590f0f97'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
- 'compat/binder/binderd.cc': 'd4df956cb575e3ab3de8aa30ba769f070ab1efb7eb8ae3621048487f693a2517',
+ 'compat/binder/binderd.cc': '2f37f06e5b5a088c59bf3e676bbb3c22b526b11eb891195a083c9dc811ff0f36',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
  'compat/posix/include/gesher/file_description.h': '94ce9ad7806d727977cc2c6f6df9fa289d1ea94b124404aed6c58fb7416a95d9',
  'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
@@ -445,7 +445,7 @@ def preceding_appcontainer_identity_sources(netlink):
   subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
   return {path:(work/path).read_bytes() for path in paths}
 
-NETLINK_QUALIFICATION_SHA256 = '425e8e59dc8e26f327558221bd83798282009e1c3ee29a9496c5fc6dd0a08bc4'
+NETLINK_QUALIFICATION_SHA256 = 'c61ca97d30c35eabf1cffc27b293bd51b86ad0fc7f69f7328c7fa177ef93c0ad'
 
 def preceding_netlink_sources():
  folder=ROOT/'tools/net-tcp-priority/qualified'

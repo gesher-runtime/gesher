@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index 3995dbb31..1927591b5 100644
+index 31669f76e..cd1d89e0b 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -80,0 +81 @@ bool g_record_only = false;
@@ -72,7 +72,7 @@ index 3995dbb31..1927591b5 100644
 @@ -2131 +2146 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
 -  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
 +  if (!ReplyRecordLock(pipe, 0) || !WaitForClient(pipe, true)) return;
-@@ -2653,0 +2669,2 @@ void Serve(HANDLE pipe) {
+@@ -2651,0 +2667,2 @@ void Serve(HANDLE pipe) {
 +        } else if (op == wire::kNetlinkInspection) {
 +          ServeNetlinkInspection(pipe, in);
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake

@@ -1,26 +1,21 @@
 # App isolation (AppContainer)
 
-**By default, Android apps in Gesher run with the Windows user's full token.**
-In that mode Android permissions govern Android APIs. Native app code can also
-use the Windows user's access to files, the network and programs. Treat an
-`.apk` like a downloaded `.exe` and install only apps you trust.
+The packaged launchers run Android app processes in Windows AppContainers.
+Gesher's system server and Windows brokers run under the Windows user account
+to provide authorized Android services and desktop operations.
 
 This document is the implementation map for isolating every package in a
 Windows AppContainer of its own ([ADR 0090](decisions/0090-appcontainer-app-isolation.md),
 issue #314), and the record of what each milestone established.
 
-## Trying the protected launcher
-
-Use the packaged runtime from a build with protected launch support. Set the
-environment variable in the PowerShell session that runs your commands:
+## Launching apps
 
 ```powershell
-$env:GESHER_SANDBOX = 'appcontainer-trusted'
 gesher-app start
 gesher-app my-app.apk
 ```
 
-The same setting applies to `gesher-app my-app.apk --single-process`,
+The same protection applies to `gesher-app my-app.apk --single-process`,
 `gesher-app my-app.apk --system-server`, and `gesher my-program.dex my.Main`.
 For the standalone APK path, `--single-process --data-dir DIR` makes the
 selected data directory available through the protected storage broker.
