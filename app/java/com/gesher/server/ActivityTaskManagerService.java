@@ -822,8 +822,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             creatorInfo = creatorCode != null ? creatorCode.applicationInfo(0) : mPm.getApplicationInfo(creator, 0, 0);
         }
         if (creatorInfo == null) return ActivityManager.START_CANCELED;
+        DocumentPicker.Backend documents = mDocumentDialog;
         IntentChooser request = new IntentChooser(mPm, verifiedCaller, incoming,
-                mAm == null ? null : mAm.mimeResolver(creatorInfo, process));
+                mAm == null ? null : mAm.mimeResolver(creatorInfo, process),
+                documents != null && documents.available());
+        // A document target's system picker is one of the options (IntentChooser.Option
+        // documentPicker); as the only one it auto-launches like any single choice.
         if (request.unsupported || request.options.isEmpty()) return ActivityManager.START_INTENT_NOT_RESOLVED;
         IntentChooser.Dialog dialog = mIntentChooserDialog;
         // Check the actual JNI backend before accepting a chooser that needs UI.
@@ -924,6 +928,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     private int launchIntentChoice(IntentChoice choice, int index, ActivityRecord[] started) {
         IntentChooser.Option option = choice.request.options.get(index);
+        if (option.documentPicker) return launchDocumentChoice(choice, option);
         if (!choice.active() || !option.current(mPm, choice.creator)) return ActivityManager.START_CANCELED;
         Intent launch = IntentChooser.snapshot(option.intent);
         if (choice.newTask) launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -957,6 +962,44 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 }
             }
             return result;
+        } finally { Binder.restoreCallingIdentity(identity); }
+    }
+
+    /**
+     * The chooser's system-picker entry: the original document request goes to the
+     * host picker with the chooser caller's result route, creator and task. The
+     * chooser's NEW_TASK, NO_USER_ACTION and NEW_DOCUMENT flags carry over; a
+     * new-task chooser already returned the caller's RESULT_CANCELED, so the picker
+     * then has no result recipient, as for a chosen activity. Called without ATM,
+     * launch or package locks: the picker initializes its provider transport and
+     * takes only this service's monitor for its own reservation.
+     */
+    private int launchDocumentChoice(IntentChoice choice, IntentChooser.Option option) {
+        if (!choice.active()) return ActivityManager.START_CANCELED;
+        Intent document = IntentChooser.snapshot(option.intent);
+        int forward = choice.request.chooser.getFlags() & (Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_NO_USER_ACTION | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+        if (choice.newTask) forward |= Intent.FLAG_ACTIVITY_NEW_TASK;
+        document.addFlags(forward);
+        boolean newTask = (document.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            int result = withVerifiedCreator(choice.creator, choice::creatorCurrent, choice::active,
+                    () -> startDocumentPicker(null, choice.creator, document, null,
+                            choice.origin == null ? null : choice.origin.token, choice.resultWho,
+                            newTask ? -1 : choice.requestCode, choice.taskId, choice.requiredTask));
+            if (ActivityManager.isStartResultSuccessful(result) && newTask && choice.origin != null
+                    && choice.requestCode >= 0 && !choice.cancelDelivered) {
+                choice.cancelDelivered = true;
+                deliverResult(choice.origin, choice.resultWho, choice.requestCode,
+                        android.app.Activity.RESULT_CANCELED, null);
+            }
+            return result;
+        } catch (IllegalArgumentException invalid) {
+            // IntentChooser offered only a validated request; a late failure cancels
+            // this choice (RESULT_CANCELED through finishIntentChoice), never the start.
+            SystemServer.log("intent chooser: document picker request rejected: " + invalid.getMessage());
+            return ActivityManager.START_CANCELED;
         } finally { Binder.restoreCallingIdentity(identity); }
     }
 
@@ -1055,7 +1098,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             String resolvedType, IBinder originToken, String resultWho, int requestCode, int launchTaskId,
             AppTaskRecord requiredTask) {
         final DocumentPicker.Backend backend = mDocumentDialog;
-        if (!backend.available()) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        if (!DocumentPicker.resolves(intent, resolvedType) || !backend.available()) {
+            return ActivityManager.START_INTENT_NOT_RESOLVED;
+        }
         final ApkPackage creator = mPm.get(creatorName);
         final DocumentPicker.Request request = new DocumentPicker.Request(intent, resolvedType,
                 creator == null ? 36 : creator.parsed.getTargetSdkVersion());
@@ -1126,7 +1171,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     int ownerPid = session.coveredProcess != null ? session.coveredProcess.pid
                             : session.originProcess != null ? session.originProcess.pid
                             : session.process != null ? session.process.pid : 0;
-                    String[] selected = backend.pick(request, ownerPid, session::active);
+                    if (request.rejection != null) {
+                        // Accepted like Android's picker activity, which then cancels.
+                        SystemServer.log("document-picker: request cancelled: " + request.rejection);
+                    }
+                    String[] selected = request.rejection != null ? null
+                            : backend.pick(request, ownerPid, session::active);
                     if (!session.active()) return;
                     result = DocumentPicker.select(request, selected, provider, backend);
                     synchronized (ActivityTaskManagerService.this) {

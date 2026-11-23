@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # authenticate a fork diagnostic run; no canonical authority is granted
 
 env:
   NDK_VERSION: "27.2.12479018"
@@ -54,6 +55,11 @@ jobs:
             tests/apps/net4resolverapp
             tests/e2e
             tools
+
+      - name: Canonical and fork DNS evidence separation controls
+        run: |
+          python3 -m unittest discover -s tools/ci -p test_fork_diagnostic_context.py
+          python3 -m unittest discover -s tools/net-dns -p test_payload.py
 
       - name: Cache publisher-authenticated NDK archive
         id: ndk
@@ -191,7 +197,13 @@ jobs:
         run: python3 tools/net-udp/payload.py compile dist
 
       - name: Build and verify DNS ABI callers and independent references
-        run: python3 tools/net-dns/payload.py build dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DNS_EVIDENCE_MODE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
+        run: |
+          args=()
+          if [[ "$DNS_EVIDENCE_MODE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+          python3 tools/net-dns/payload.py build dist "${args[@]}"
 
       - name: Symbol lists
         run: |

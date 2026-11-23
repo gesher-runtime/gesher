@@ -20,6 +20,10 @@
 //  - ASensorManager: sensors_ndk.cc exposes the shared Windows sensor hub
 //    with per-process access/rate policy and Looper-backed event queues.
 //  - ATrace_*: tracing is off (no-ops; isEnabled is false).
+//  - APerformanceHint_* / AWorkDuration_* / ASessionCreationConfig_*:
+//    performance hint service is unavailable (APerformanceHint_getManager
+//    returns nullptr, APerformanceHint_isFeatureSupported returns false, and
+//    session calls fail with EINVAL/ENOTSUP).
 //  - AStorageManager / AObbScanner: OBB files are scanned with androidfw's
 //    ObbFile; mounting is not supported (the callback reports
 //    AOBB_STATE_ERROR_INTERNAL from another thread, as the platform reports
@@ -65,10 +69,14 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 // libandroid_runtime's (native_window_jni.cpp, android_view_Surface.cpp's
 // ANativeWindow_toSurface: compat/hwui/window/window_jni.cc), Microsoft ABI.
 struct ANativeWindow;
+struct APerformanceHintManager;
+struct APerformanceHintSession;
+struct ASurfaceControl;
 extern "C" ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface);
 extern "C" jobject ANativeWindow_toSurface(JNIEnv* env, ANativeWindow* window);
 
@@ -411,6 +419,125 @@ jobject BIONIC_SYSV WindowToSurface(JNIEnv* env, ANativeWindow* window) {
   return ANativeWindow_toSurface(RealJniEnv(env), window);
 }
 
+// --- APerformanceHint: ADPF backend unavailable ------------------------------------------------
+// Linux Bionic ENOTSUP == EOPNOTSUPP (95); pid_t on Android LP64 is 32-bit int32_t.
+
+struct NdkWorkDuration {
+  int64_t work_period_start_timestamp_nanos = -1;
+  int64_t actual_total_duration_nanos = -1;
+  int64_t actual_cpu_duration_nanos = -1;
+  int64_t actual_gpu_duration_nanos = -1;
+};
+
+struct NdkSessionCreationConfig {
+  std::vector<int32_t> tids;
+  int64_t target_work_duration_nanos = 0;
+  bool prefer_power_efficiency = false;
+  bool graphics_pipeline = false;
+  bool auto_cpu = false;
+  bool auto_gpu = false;
+};
+
+APerformanceHintManager* BIONIC_SYSV PerfHintGetManager() { return nullptr; }
+APerformanceHintSession* BIONIC_SYSV PerfHintCreateSession(APerformanceHintManager*, const int32_t*,
+                                                           size_t, int64_t) {
+  return nullptr;
+}
+int BIONIC_SYSV PerfHintCreateSessionUsingConfig(APerformanceHintManager* manager,
+                                                 NdkSessionCreationConfig* config,
+                                                 APerformanceHintSession** session_out) {
+  if (session_out != nullptr) *session_out = nullptr;
+  return (manager == nullptr || config == nullptr || session_out == nullptr) ? kEINVAL
+                                                                             : kEOPNOTSUPP;
+}
+int64_t BIONIC_SYSV PerfHintGetPreferredUpdateRateNanos(APerformanceHintManager*) { return -1; }
+int BIONIC_SYSV PerfHintGetMaxGraphicsPipelineThreadsCount(APerformanceHintManager*) { return 0; }
+int BIONIC_SYSV PerfHintUpdateTargetWorkDuration(APerformanceHintSession* session,
+                                                 int64_t target_duration_nanos) {
+  return (session == nullptr || target_duration_nanos < 0) ? kEINVAL : kEOPNOTSUPP;
+}
+int BIONIC_SYSV PerfHintReportActualWorkDuration(APerformanceHintSession* session,
+                                                 int64_t actual_duration_nanos) {
+  return (session == nullptr || actual_duration_nanos <= 0) ? kEINVAL : kEOPNOTSUPP;
+}
+void BIONIC_SYSV PerfHintCloseSession(APerformanceHintSession*) {}
+int BIONIC_SYSV PerfHintSetThreads(APerformanceHintSession* session, const int32_t* thread_ids,
+                                   size_t size) {
+  return (session == nullptr || thread_ids == nullptr || size == 0) ? kEINVAL : kEOPNOTSUPP;
+}
+int BIONIC_SYSV PerfHintSetPreferPowerEfficiency(APerformanceHintSession* session, bool) {
+  return session == nullptr ? kEINVAL : kEOPNOTSUPP;
+}
+int BIONIC_SYSV PerfHintReportActualWorkDuration2(APerformanceHintSession* session,
+                                                  NdkWorkDuration* work_duration) {
+  return (session == nullptr || work_duration == nullptr) ? kEINVAL : kEOPNOTSUPP;
+}
+int BIONIC_SYSV PerfHintNotifyWorkloadIncrease(APerformanceHintSession* session, bool, bool,
+                                               const char* identifier) {
+  return (session == nullptr || identifier == nullptr) ? kEINVAL : kEOPNOTSUPP;
+}
+int BIONIC_SYSV PerfHintNotifyWorkloadReset(APerformanceHintSession* session, bool, bool,
+                                            const char* identifier) {
+  return (session == nullptr || identifier == nullptr) ? kEINVAL : kEOPNOTSUPP;
+}
+int BIONIC_SYSV PerfHintNotifyWorkloadSpike(APerformanceHintSession* session, bool, bool,
+                                            const char* identifier) {
+  return (session == nullptr || identifier == nullptr) ? kEINVAL : kEOPNOTSUPP;
+}
+APerformanceHintSession* BIONIC_SYSV PerfHintBorrowSessionFromJava(JNIEnv*, jobject) {
+  return nullptr;
+}
+int BIONIC_SYSV PerfHintSetNativeSurfaces(APerformanceHintSession* session, ANativeWindow**, size_t,
+                                          ASurfaceControl**, size_t) {
+  return session == nullptr ? kEINVAL : kEOPNOTSUPP;
+}
+bool BIONIC_SYSV PerfHintIsFeatureSupported(int32_t) { return false; }
+
+NdkWorkDuration* BIONIC_SYSV WorkDurationCreate() { return new NdkWorkDuration(); }
+void BIONIC_SYSV WorkDurationRelease(NdkWorkDuration* wd) { delete wd; }
+void BIONIC_SYSV WorkDurationSetWorkPeriodStartTimestampNanos(NdkWorkDuration* wd, int64_t v) {
+  if (wd != nullptr) wd->work_period_start_timestamp_nanos = v;
+}
+void BIONIC_SYSV WorkDurationSetActualTotalDurationNanos(NdkWorkDuration* wd, int64_t v) {
+  if (wd != nullptr) wd->actual_total_duration_nanos = v;
+}
+void BIONIC_SYSV WorkDurationSetActualCpuDurationNanos(NdkWorkDuration* wd, int64_t v) {
+  if (wd != nullptr) wd->actual_cpu_duration_nanos = v;
+}
+void BIONIC_SYSV WorkDurationSetActualGpuDurationNanos(NdkWorkDuration* wd, int64_t v) {
+  if (wd != nullptr) wd->actual_gpu_duration_nanos = v;
+}
+
+NdkSessionCreationConfig* BIONIC_SYSV SessionCreationConfigCreate() {
+  return new NdkSessionCreationConfig();
+}
+void BIONIC_SYSV SessionCreationConfigRelease(NdkSessionCreationConfig* cfg) { delete cfg; }
+void BIONIC_SYSV SessionCreationConfigSetTids(NdkSessionCreationConfig* cfg, const int32_t* tids,
+                                              size_t size) {
+  if (cfg != nullptr && tids != nullptr && size > 0) cfg->tids.assign(tids, tids + size);
+}
+void BIONIC_SYSV SessionCreationConfigSetTargetWorkDurationNanos(NdkSessionCreationConfig* cfg,
+                                                                 int64_t v) {
+  if (cfg != nullptr) cfg->target_work_duration_nanos = v;
+}
+void BIONIC_SYSV SessionCreationConfigSetPreferPowerEfficiency(NdkSessionCreationConfig* cfg,
+                                                                bool enabled) {
+  if (cfg != nullptr) cfg->prefer_power_efficiency = enabled;
+}
+void BIONIC_SYSV SessionCreationConfigSetGraphicsPipeline(NdkSessionCreationConfig* cfg,
+                                                          bool enabled) {
+  if (cfg != nullptr) cfg->graphics_pipeline = enabled;
+}
+void BIONIC_SYSV SessionCreationConfigSetNativeSurfaces(NdkSessionCreationConfig*, ANativeWindow**,
+                                                        size_t, ASurfaceControl**, size_t) {}
+void BIONIC_SYSV SessionCreationConfigSetUseAutoTiming(NdkSessionCreationConfig* cfg, bool cpu,
+                                                       bool gpu) {
+  if (cfg != nullptr) {
+    cfg->auto_cpu = cpu;
+    cfg->auto_gpu = gpu;
+  }
+}
+
 // ASurfaceControl_fromJava (API 34): the layer standing for a Java
 // SurfaceControl, by its native object (surface_control.cc keeps the layers;
 // ADR 0089). As on Android, a null or released SurfaceControl is fatal.
@@ -521,6 +648,42 @@ void Register() {
       // Surfaces (the rest of ANativeWindow_*: libandroid_window.cc).
       E("ANativeWindow_fromSurface", WindowFromSurface),
       E("ANativeWindow_toSurface", WindowToSurface),
+      // Performance hints (ADPF): unsupported, manager queries return null.
+      E("APerformanceHint_getManager", PerfHintGetManager),
+      E("APerformanceHint_createSession", PerfHintCreateSession),
+      E("APerformanceHint_createSessionUsingConfig", PerfHintCreateSessionUsingConfig),
+      E("APerformanceHint_getPreferredUpdateRateNanos", PerfHintGetPreferredUpdateRateNanos),
+      E("APerformanceHint_getMaxGraphicsPipelineThreadsCount",
+        PerfHintGetMaxGraphicsPipelineThreadsCount),
+      E("APerformanceHint_updateTargetWorkDuration", PerfHintUpdateTargetWorkDuration),
+      E("APerformanceHint_reportActualWorkDuration", PerfHintReportActualWorkDuration),
+      E("APerformanceHint_closeSession", PerfHintCloseSession),
+      E("APerformanceHint_setThreads", PerfHintSetThreads),
+      E("APerformanceHint_setPreferPowerEfficiency", PerfHintSetPreferPowerEfficiency),
+      E("APerformanceHint_reportActualWorkDuration2", PerfHintReportActualWorkDuration2),
+      E("APerformanceHint_notifyWorkloadIncrease", PerfHintNotifyWorkloadIncrease),
+      E("APerformanceHint_notifyWorkloadReset", PerfHintNotifyWorkloadReset),
+      E("APerformanceHint_notifyWorkloadSpike", PerfHintNotifyWorkloadSpike),
+      E("APerformanceHint_borrowSessionFromJava", PerfHintBorrowSessionFromJava),
+      E("APerformanceHint_setNativeSurfaces", PerfHintSetNativeSurfaces),
+      E("APerformanceHint_isFeatureSupported", PerfHintIsFeatureSupported),
+      E("AWorkDuration_create", WorkDurationCreate),
+      E("AWorkDuration_release", WorkDurationRelease),
+      E("AWorkDuration_setWorkPeriodStartTimestampNanos",
+        WorkDurationSetWorkPeriodStartTimestampNanos),
+      E("AWorkDuration_setActualTotalDurationNanos", WorkDurationSetActualTotalDurationNanos),
+      E("AWorkDuration_setActualCpuDurationNanos", WorkDurationSetActualCpuDurationNanos),
+      E("AWorkDuration_setActualGpuDurationNanos", WorkDurationSetActualGpuDurationNanos),
+      E("ASessionCreationConfig_create", SessionCreationConfigCreate),
+      E("ASessionCreationConfig_release", SessionCreationConfigRelease),
+      E("ASessionCreationConfig_setTids", SessionCreationConfigSetTids),
+      E("ASessionCreationConfig_setTargetWorkDurationNanos",
+        SessionCreationConfigSetTargetWorkDurationNanos),
+      E("ASessionCreationConfig_setPreferPowerEfficiency",
+        SessionCreationConfigSetPreferPowerEfficiency),
+      E("ASessionCreationConfig_setGraphicsPipeline", SessionCreationConfigSetGraphicsPipeline),
+      E("ASessionCreationConfig_setNativeSurfaces", SessionCreationConfigSetNativeSurfaces),
+      E("ASessionCreationConfig_setUseAutoTiming", SessionCreationConfigSetUseAutoTiming),
       // The rest of ASurfaceControl_*: surface_control.cc.
       E("ASurfaceControl_fromJava", SurfaceControlFromJava),
       // ANativeActivity_*: native_activity.cc.

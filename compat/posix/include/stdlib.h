@@ -9,6 +9,11 @@
 extern "C" {
 #endif
 
+// The public POSIX table is separate from UCRT's copied/freeing shadow.
+char*** gesher_environment_slot(void);
+#undef environ
+#define environ (*gesher_environment_slot())
+
 // The Windows CRT's RAND_MAX is 32767; Linux code assumes 2^31-1 (ART
 // static_asserts at least 65535). rand()/srand() are redirected to a
 // generator with the glibc range.

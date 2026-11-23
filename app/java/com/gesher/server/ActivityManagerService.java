@@ -508,6 +508,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
         mProviders.removeContentProvider(connection, stable);
     }
 
+    @Override
+    public void unstableProviderDied(IBinder connection) {
+        mProviders.unstableProviderDied(connection);
+    }
+
     // --- PendingIntents (PendingIntents) ---------------------------------------------------
 
     /** The PendingIntents (stored notifications make theirs again: NotificationStore). */
