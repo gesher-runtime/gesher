@@ -4,6 +4,8 @@
 
 enum { PERMISSION_PACKAGE = 1101, PERMISSION_DETAILS = 1102, PERMISSION_BRAND = 1103,
        PERMISSION_HEADING = 1104 };
+// Keep these values in sync with PermissionRequests.java. Cancellation is not a user denial.
+enum { PERMISSION_DISMISSED = 0, PERMISSION_DENIED = 1, PERMISSION_ALLOWED = 2 };
 
 typedef struct {
   enum GesherUiLanguage language;
@@ -13,7 +15,7 @@ typedef struct {
   HFONT brand_font;
   GesherHostTheme theme;
   GesherHostIcons icons;
-  BOOL allowed;
+  int decision;
 } PermissionDialogState;
 
 static HWND PermissionControl(HWND dialog, DWORD extra, const WCHAR* klass,
@@ -56,7 +58,7 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
         ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | WS_TABSTOP
         | (rtl ? ES_RIGHT : ES_LEFT), PERMISSION_DETAILS, 16, 118, 218, 36);
     HWND deny = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_deny"),
-        BS_OWNERDRAW | WS_TABSTOP, IDCANCEL, 76, 166, 76, 22);
+        BS_OWNERDRAW | WS_TABSTOP, IDNO, 76, 166, 76, 22);
     HWND allow = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_allow"),
         BS_OWNERDRAW | WS_TABSTOP, IDYES, 160, 166, 74, 22);
     if (!brand || !heading || !app || !package || !requested || !details || !deny || !allow) {
@@ -65,7 +67,7 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
     }
     GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
     GesherHostSetFont(brand, &state->brand_font, 110, FW_BOLD);
-    SendMessageW(dialog, DM_SETDEFID, IDCANCEL, 0);
+    SendMessageW(dialog, DM_SETDEFID, IDNO, 0);
     GesherHostSetIcons(dialog, &state->icons);
     // Request foreground once; never keep the consent window permanently topmost.
     if (!SetForegroundWindow(dialog)) {
@@ -84,8 +86,9 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
   if (message == WM_CLOSE) { EndDialog(dialog, IDCANCEL); return TRUE; }
   if (message == WM_COMMAND) {
     int command = LOWORD(wparam);
-    if (command == IDYES || command == IDCANCEL) {
-      state->allowed = command == IDYES;
+    if (command == IDYES || command == IDNO || command == IDCANCEL) {
+      state->decision = command == IDYES ? PERMISSION_ALLOWED
+          : command == IDNO ? PERMISSION_DENIED : PERMISSION_DISMISSED;
       EndDialog(dialog, command);
       return TRUE;
     }
@@ -100,7 +103,7 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
   return GesherHostThemeEvent(dialog, &state->theme, message, wparam, lparam, PERMISSION_BRAND);
 }
 
-static BOOL PermissionDialog(enum GesherUiLanguage language, const WCHAR* package_name, const WCHAR* permissions) {
+static int PermissionDialog(enum GesherUiLanguage language, const WCHAR* package_name, const WCHAR* permissions) {
   PermissionDialogState state = {0};
   state.language = language;
   state.package_name = package_name;
@@ -118,13 +121,12 @@ static BOOL PermissionDialog(enum GesherUiLanguage language, const WCHAR* packag
   SIZE_T title_chars = wcslen(title) + 1;
   const WCHAR font[] = L"Segoe UI";
   if ((SIZE_T)(at - buffer.words) + title_chars + 1 + sizeof(font) / sizeof(font[0])
-      > sizeof(buffer.words) / sizeof(buffer.words[0])) return FALSE;
+      > sizeof(buffer.words) / sizeof(buffer.words[0])) return PERMISSION_DISMISSED;
   for (SIZE_T i = 0; i < title_chars; ++i) *at++ = title[i];
   *at++ = 9;
   for (SIZE_T i = 0; i < sizeof(font) / sizeof(font[0]); ++i) *at++ = font[i];
-  // Failure, Esc, closing and the default button all deny. Only Allow changes state.
   GesherHostLoadIcons(&state.icons);
-  DialogBoxIndirectParamW(GetModuleHandleW(NULL), dialog, NULL, PermissionDialogProc, (LPARAM)&state);
+  INT_PTR result = DialogBoxIndirectParamW(GetModuleHandleW(NULL), dialog, NULL, PermissionDialogProc, (LPARAM)&state);
   GesherHostFreeIcons(&state.icons);
-  return state.allowed;
+  return result == -1 ? PERMISSION_DISMISSED : state.decision;
 }
