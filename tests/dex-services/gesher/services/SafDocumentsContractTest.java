@@ -29,6 +29,7 @@ import sun.misc.Unsafe;
 public final class SafDocumentsContractTest {
     private static FixtureServiceContext.Scope serviceContexts;
     static final String CLIENT="org.gesher.fixture.saf.client", OTHER="org.gesher.fixture.saf.other";
+    public static final String HOST_PROCESS_PACKAGE = "org.gesher.fixture.saf.server";
     static final String AUTH=DocumentsStorageProvider.AUTHORITY;
     static final int UID=10601, OTHER_UID=10602;
     static int PID=911201, OTHER_PID=911202;
@@ -275,7 +276,7 @@ public final class SafDocumentsContractTest {
     static final class Harness{
         final ApkPackage client=code(CLIENT,UID),other=code(OTHER,OTHER_UID);
         final PackageManagerService pm=new PackageManagerService(List.of(client,other,
-                code("org.gesher.fixture.saf.server",android.os.Process.myUid())));
+                code(HOST_PROCESS_PACKAGE,android.os.Process.myUid())));
         final ActivityTaskManagerService atm;final ActivityManagerService am;final Object providers,process;
         final DocumentsStorageProvider provider;final UriGrants grants;final UriGrantsManagerService ugm;
         final AppThread thread=new AppThread();final TestContext context;final IContentProvider transport;
