@@ -471,7 +471,11 @@ Linux's `fib_compute_spec_dst`, `ipi_spec_dst` is the destination for a local
 unicast address, and for a limited, subnet-directed broadcast or multicast
 destination the preferred source address of the route back to the sender
 (`GetBestRoute2`), or an address of the arrival interface for a sender of
-0.0.0.0; the host's addresses and recent choices are cached for a second. A
+0.0.0.0; the host's addresses and recent choices are cached for a second and
+consulted only for a datagram Windows marks broadcast or multicast
+(`MSG_BCAST`, `MSG_MCAST`), so unicast receives take no shared lock. As
+Linux's `do_ip_setsockopt`, the option's value is an `int`, else a byte, and
+an `optlen` of 0 turns it off. A
 control buffer too small for it gets what fits, as `put_cmsg` writes it, and
 `MSG_CTRUNC`. An `AF_UNIX` socketpair rejects the option with `EOPNOTSUPP`;
 `tests/native/udp_pktinfo_test.cc`. `IPV6_RECVPKTINFO` and sending with an
