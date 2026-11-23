@@ -20,6 +20,7 @@ on:
       - 'tools/host-tools-ci.cmake'
       - 'tools/build-boot-jars.sh'
       - 'tools/build-framework-res.sh'
+      - 'config/framework-res-overlay/**'
       - 'tools/make-coremod.sh'
       - 'tools/sparse-bp.sh'
       - 'tools/fetch-aosp.sh'
@@ -306,7 +307,7 @@ jobs:
         with:
           phase: restore
           path: out/framework-res
-          key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock') }}
+          key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock', 'config/framework-res-overlay/**') }}
 
       # aapt2 for framework-res and lifecycle.apk, from Google's build-tools, where
       # tools/build-framework-res.sh looks for it (WORK_DIR); fetched here,
@@ -830,6 +831,15 @@ jobs:
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME"
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control premature-notification
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control skip-eligibility
+
+      - name: Windows cellular telephony services and native Mobile Broadband contracts
+        run: |
+          set -euo pipefail
+          python3 tools/test_telephony.py --java-home "$JAVA_HOME" --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME"
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control leak-capability-strings
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control uninitialize-foreign-apartment
 
       - name: SDK36 WifiInfo Builder, copy and redaction contracts
         run: |

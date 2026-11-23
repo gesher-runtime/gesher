@@ -1158,8 +1158,10 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (touchscreen and faketouch, matching {@link com.gesher.app.DeviceProfile#configuration()},
      * both orientations) whose launcher could host app widgets (apps reach
      * AppWidgetManager only on devices with app_widgets, and phone apps assume it).
-     * Telephony, Wi-Fi and the rest are absent. Sensors follow the ones SensorManager
-     * lists ({@link #addSensorFeatures}). Bluetooth
+     * Wi-Fi is absent. Sensors follow the ones SensorManager lists
+     * ({@link #addSensorFeatures}). Telephony (docs/telephony.md) is there only when
+     * Windows reports a cellular (WWAN) modem at boot: telephony, subscription, radio
+     * access and data, plus GSM for a 3GPP modem; never calling or messaging. Bluetooth
      * (docs/bluetooth.md) is there when the host has a radio: FEATURE_BLUETOOTH with an
      * adapter, FEATURE_BLUETOOTH_LE when Windows reports LE support (apps such as
      * companion apps check it before anything else). Cameras follow the real devices
@@ -1230,6 +1232,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no hardware to report.
         }
+        // Telephony only with a cellular modem Windows reported at boot (docs/telephony.md).
+        TelephonyService.addTelephonyFeatures(FEATURES, TelephonyService.bootSnapshot());
     }
 
     /**
