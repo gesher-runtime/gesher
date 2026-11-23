@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc..3995dbb 100644
+index ee26bfc..31669f7 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -54,0 +55,2 @@
@@ -621,7 +621,7 @@ index ee26bfc..3995dbb 100644
 +                              g_peer_registry->Live(identity)))) {
 @@ -1968,0 +2468 @@ void ServeThread(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -2028,0 +2529,91 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -2028,0 +2529,89 @@ void ServeThread(HANDLE pipe, In in) {
 +bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
 +  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
@@ -637,8 +637,6 @@ index ee26bfc..3995dbb 100644
 +void ServeDropWorker(HANDLE pipe, In in) {
 +  uint32_t version = 0;
 +  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
-+  const char* enabled = getenv("GESHER_SANDBOX_DROP_HOST");
-+  if (enabled == nullptr || strcmp(enabled, "1") != 0) return;
 +  const auto guest = g_peer_registry->Authenticate(pipe);
 +  if (!guest || guest->role != peer::Role::kApplication ||
 +      guest->generation.principal.container.size == 0) return;
@@ -713,10 +711,10 @@ index ee26bfc..3995dbb 100644
 +  settle();
 +}
 +
-@@ -2031 +2622 @@ void Serve(HANDLE pipe) {
+@@ -2031 +2620 @@ void Serve(HANDLE pipe) {
 -  if (ReadMessage(pipe, &msg)) {
 +  if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
-@@ -2035,6 +2626,29 @@ void Serve(HANDLE pipe) {
+@@ -2035,6 +2624,29 @@ void Serve(HANDLE pipe) {
 -      if (op == wire::kHelloProc) {
 -        ServeProc(pipe, in);
 -      } else if (op == wire::kHelloThread) {
@@ -752,7 +750,7 @@ index ee26bfc..3995dbb 100644
 +        } else if (op == wire::kHelloRights) {
 +          ServeRights(pipe, in);
 +        }
-@@ -2052,0 +2667,10 @@ int main(int argc, char** argv) {
+@@ -2052,0 +2665,10 @@ int main(int argc, char** argv) {
 +  launch::Startup bootstrap;
 +  g_record_only = gesher::binder_bootstrap::ReadStartupRecord(&bootstrap) &&
 +      bootstrap.endpoint == launch::Endpoint::kRecordBroker;
@@ -763,12 +761,12 @@ index ee26bfc..3995dbb 100644
 +  if (g_record_only) return EXIT_FAILURE;
 +#endif
 +  const bool protected_launch = g_record_only || launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap);
-@@ -2054 +2678,3 @@ int main(int argc, char** argv) {
+@@ -2054 +2676,3 @@ int main(int argc, char** argv) {
 -  if (argc > 1) {
 +  if (g_record_only) {
 +    device = "standalone record locks";
 +  } else if (argc > 1) {
-@@ -2061,24 +2687,29 @@ int main(int argc, char** argv) {
+@@ -2061,24 +2685,29 @@ int main(int argc, char** argv) {
 -  std::wstring name = wire::kPipePrefix;
 -  for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
 -
@@ -822,7 +820,7 @@ index ee26bfc..3995dbb 100644
 +    if (g_rights_doorbell == nullptr || positions_section == nullptr) {
 +      Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
 +    }
-@@ -2091,2 +2722,28 @@ int main(int argc, char** argv) {
+@@ -2091,2 +2720,28 @@ int main(int argc, char** argv) {
 -  g_sandbox = gesher::appcontainer::Enabled();
 -  if (g_sandbox) {
 +  if (g_record_only) {

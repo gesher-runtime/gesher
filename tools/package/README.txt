@@ -5,13 +5,9 @@ Requirements: Windows 10 or 11, x64. Nothing else needs installing.
 
 Security
 --------
-Android apps are not isolated from Windows. Gesher runs each app as an
-ordinary Windows program, with the permissions of your Windows account.
-Android's permission prompts control what an app can do through Android's
-APIs; they do not stop its code, especially its native code, from reading and
-changing your files, using the network or starting programs. Treat an .apk
-like a downloaded .exe: install only apps you trust, from sources you trust.
-Per-app isolation (Windows AppContainer) is under development and disabled.
+The packaged Gesher launchers run Android app processes in Windows AppContainers.
+Gesher's Windows brokers provide access to authorized devices and desktop operations.
+Android permissions continue to govern Android APIs. Install only apps you trust.
 
 Updating Gesher
 ---------------

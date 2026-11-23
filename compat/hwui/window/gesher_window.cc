@@ -23,6 +23,7 @@
 #include "layered_bitmap.h"
 #include "input_pane.h"
 #include "drop_target.h"
+#include <gesher/binder_endpoint.h>
 #include <gesher/drop_mount.h>
 
 namespace gesher {
@@ -430,8 +431,7 @@ void Window::Run(std::wstring title, int width, int height) {
   std::shared_ptr<gesher::drop_mount::Channel> hosted_drop;
   std::thread hosted_poll;
   if (hwnd != nullptr) {
-    const char* enabled = getenv("GESHER_SANDBOX_DROP_HOST");
-    if (enabled && strcmp(enabled, "1") == 0) hosted_drop = gesher::drop_mount::Channel::Attach(hwnd);
+    if (gesher::binder_endpoint::Current().IsGuest()) hosted_drop = gesher::drop_mount::Channel::Attach(hwnd);
     if (!hosted_drop) {
       gesher::windows::RegisterWindowDropTarget(hwnd);
     } else {

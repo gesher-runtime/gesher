@@ -62,13 +62,9 @@ $ErrorActionPreference = 'Continue'
 $global:LASTEXITCODE = $null
 $vm = Join-Path $here 'dalvikvm.exe'
 $image = "-Ximage:$(NoDrive "$here/framework/boot.art")"
-if ($env:GESHER_SANDBOX -eq 'appcontainer-trusted') {
-  $hostBcp = $bcp + ':' + (NoDrive "$here/framework.jar") + ':' + (NoDrive "$here/gesher-app.jar")
-  $supervisor = @("-Xbootclasspath:$hostBcp", $image, '-Xint', '-Xusejit:false',
-    'com.gesher.server.ContainedDex', "-Xbootclasspath:$bcp", $image, (UserPath $dexFull), $Class)
-  & $vm @supervisor @ProgramArgs
-} else {
-  & $vm "-Xbootclasspath:$bcp" $image -Xint '-Xusejit:false' -cp (UserPath $dexFull) $Class @ProgramArgs
-}
+$hostBcp = $bcp + ':' + (NoDrive "$here/framework.jar") + ':' + (NoDrive "$here/gesher-app.jar")
+$supervisor = @("-Xbootclasspath:$hostBcp", $image, '-Xint', '-Xusejit:false',
+  'com.gesher.server.ContainedDex', "-Xbootclasspath:$bcp", $image, (UserPath $dexFull), $Class)
+& $vm @supervisor @ProgramArgs
 if ($null -eq $global:LASTEXITCODE) { throw "gesher: could not start $(Join-Path $here 'dalvikvm.exe')" }
 exit $LASTEXITCODE
