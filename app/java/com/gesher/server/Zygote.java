@@ -40,8 +40,11 @@ public final class Zygote {
     static native boolean nativeHasProtectedLaunchAuthority(boolean scoped);
     interface CapturePolicy {
         int MICROPHONE = 1;
-        int CAMERA = 2;
-        boolean allowed(int uid, int kind);
+        int CAMERA_START = 2;
+        int CAMERA_CHECK = 3;
+        int CAMERA_FINISH = 4;
+        int CAMERA_RESET = 5;
+        boolean allowed(int uid, int kind, long installationHigh, long installationLow, long session);
     }
 
     static native boolean nativeAttachCapturePermissionPolicy(CapturePolicy policy);

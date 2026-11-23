@@ -25,8 +25,7 @@ using binder_bootstrap::Transfer;
 
 enum class Action : uint32_t { kEnroll = 1, kHandoff, kRetire, kRevokeInstallation,
                               kRestoreInstallation, kAttachJob,
-                              // 7 used a microphone-only UID request.
-                              kAttachTypedCapturePolicy = 8 };
+                              kAttachCaptureSessions = 9 };
 
 struct Request {
   uint32_t magic = 0x474c4152;  // GLAR

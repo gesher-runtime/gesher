@@ -526,11 +526,14 @@ public final class AppOpsService extends IAppOpsService.Default {
                 new AppOpsManager.NoteOpEvent(System.currentTimeMillis(), -1, proxy));
     }
     private void startRunning(Started started) {
+        startRunning(started, eventKey(started.key.uid, started.operationFlags));
+    }
+    private void startRunning(Started started, long stateKey) {
         if (started.running) return;
         started.running = true; started.startTime = SystemClock.elapsedRealtime(); started.wallTime = System.currentTimeMillis();
         History history = mHistory.computeIfAbsent(started.key, ignored -> new History());
         if (history.active++ == 0) notifyActive(started, true);
-        started.stateKey = eventKey(started.key.uid, started.operationFlags);
+        started.stateKey = stateKey;
         history.access.put(started.stateKey, new AppOpsManager.NoteOpEvent(started.wallTime, -1, started.proxy));
         if (started.everStarted) notifyStarted(started.key, MODE_ALLOWED, started.operationFlags,
                 started.attributionFlags, started.chain, START_TYPE_RESUMED);
@@ -560,6 +563,62 @@ public final class AppOpsService extends IAppOpsService.Default {
     }
     private static boolean shouldStart(int mode, boolean startDefault) {
         return mode == MODE_ALLOWED || mode == MODE_DEFAULT && startDefault;
+    }
+
+    // These sessions originate in the trusted Windows camera broker. They also
+    // cover a transient scoped APK which is not published as an installed app.
+    private final Set<Started> mCameraDeliveries = new HashSet<>();
+
+    final class CameraDelivery implements AutoCloseable {
+        private final Started mStarted;
+        private final java.util.function.IntSupplier mPolicy;
+
+        CameraDelivery(Started started, java.util.function.IntSupplier policy) {
+            mStarted = started;
+            mPolicy = policy;
+        }
+
+        boolean check() {
+            int foregroundState = mPolicy.getAsInt();
+            synchronized (mLock) {
+                if (foregroundState >= 0 && mCameraDeliveries.contains(mStarted)) {
+                    return !restricted(OP_CAMERA, mStarted.key.uid, mStarted.key.name, null, false);
+                }
+                close();
+                return false;
+            }
+        }
+
+        @Override public void close() {
+            synchronized (mLock) {
+                if (mCameraDeliveries.remove(mStarted)) stopRunning(mStarted);
+            }
+        }
+    }
+
+    CameraDelivery startCameraDelivery(ApkPackage owner, java.util.function.IntSupplier policy) {
+        int state = policy.getAsInt();
+        OpKey key = new OpKey(OP_CAMERA, owner.uid(), owner.packageName, null, 0);
+        synchronized (mLock) {
+            if (state < 0 || restricted(OP_CAMERA, key.uid, key.name, null, false)) {
+                record(key, false, OP_FLAG_SELF, null);
+                notifyStarted(key, MODE_IGNORED, OP_FLAG_SELF, 0, -1, START_TYPE_FAILED);
+                return null;
+            }
+            Started started = new Started(key, false, 0, -1, OP_FLAG_SELF, null);
+            mCameraDeliveries.add(started);
+            startRunning(started, AppOpsManager.makeKey(state, OP_FLAG_SELF));
+            notifyStarted(key, MODE_ALLOWED, OP_FLAG_SELF, 0, -1, START_TYPE_STARTED);
+            return new CameraDelivery(started, policy);
+        }
+    }
+
+    private void stopCameraDeliveries(String name) {
+        mCameraDeliveries.removeIf(started -> {
+            if (!started.key.name.equals(name)) return false;
+            stopRunning(started);
+            return true;
+        });
     }
     private void refreshRunningOperations() {
         synchronized (mLock) {
@@ -865,6 +924,7 @@ public final class AppOpsService extends IAppOpsService.Default {
                 });
                 if (client.starts.isEmpty()) empty.add(client);
             }
+            stopCameraDeliveries(name);
             mHistory.keySet().removeIf(key -> key.name.equals(name));
         }
         for (Client client : empty) releaseEmpty(client);
@@ -879,6 +939,7 @@ public final class AppOpsService extends IAppOpsService.Default {
         // identity's mode, and an obsolete process cannot keep attributed starts alive.
         List<Client> empty = new ArrayList<>();
         synchronized (mLock) {
+            stopCameraDeliveries(pkg.packageName);
             for (Client client : mClients.values()) {
                 client.starts.entrySet().removeIf(entry -> {
                     Started started = entry.getValue();

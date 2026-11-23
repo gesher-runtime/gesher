@@ -13,6 +13,7 @@ namespace gesher::devices::camera {
 const std::vector<Device>& ListBrokered(std::string* status);
 std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int height, HRESULT* hr);
 void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()>& live,
+                         const std::function<bool()>& start,
                          const std::function<bool()>& authorized, bool slot);
 
 }  // namespace gesher::devices::camera

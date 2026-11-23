@@ -3,19 +3,20 @@
 #pragma once
 
 #include <stdint.h>
+#include <array>
 
 namespace gesher::capture_policy {
 
-enum class Kind : uint32_t { kMicrophone = 1, kCamera = 2 };
+enum class Kind : uint32_t {
+  kMicrophone = 1, kCameraStart, kCameraCheck, kCameraFinish, kCameraReset
+};
 
 struct Request {
   uint32_t uid;
   Kind kind;
+  std::array<uint8_t, 16> installation{};
+  uint64_t session = 0;
 };
-static_assert(sizeof(Request) == 8);
-
-inline bool Valid(Kind kind) {
-  return kind == Kind::kMicrophone || kind == Kind::kCamera;
-}
+static_assert(sizeof(Request) == 32);
 
 }  // namespace gesher::capture_policy

@@ -25,6 +25,7 @@ final class CohostPermissionHost implements AutoCloseable {
     static final int APP_OP_MODE = 5;
 
     private final PermissionPolicy.ScopedOwner mOwner;
+    private final ProtectedCameraPolicy mCamera;
     private final PermissionRequests mRequests;
     private final AppOpsService mAppOps;
     private volatile long mLease;
@@ -37,6 +38,7 @@ final class CohostPermissionHost implements AutoCloseable {
     CohostPermissionHost(PackageManagerService pm, PermissionRequests requests, String apk)
             throws Exception {
         mRequests = requests;
+        mCamera = new ProtectedCameraPolicy(pm);
         mAppOps = pm.appOps();
         mOwner = pm.permissions().openScopedOwner(apk, this::isLive);
     }
@@ -150,6 +152,13 @@ final class CohostPermissionHost implements AutoCloseable {
         long[] foreground = WindowsHost.foregroundProcess();
         return foreground != null && foreground.length == 2
                 && Zygote.nativeCohostMatchesProcess(mLease, foreground[0], foreground[1]);
+    }
+
+    /** The private capture server invokes this for the pinned caller only. */
+    private boolean dispatchCamera(int kind, long session) {
+        return mCamera.scoped(kind, session, mOwner,
+                () -> WindowsHost.sessionLockState() == 0 && isForeground()
+                        ? AppOpsManager.UID_STATE_TOP : -1);
     }
 
     private boolean clipboardReadAllowed(boolean foreground, String tag, boolean checkOnly) {

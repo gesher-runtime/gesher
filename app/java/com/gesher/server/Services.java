@@ -128,17 +128,15 @@ public final class Services {
         ClipboardService clipboard = new ClipboardService(atm, pm);
         Created created = new Created(pm, atm, am, clipboard, services);
         sLast = created;
-        if (SystemServer.isProtectedDevice()
-                && !Zygote.nativeAttachCapturePermissionPolicy((uid, kind) -> {
-                    String permission = switch (kind) {
-                        case Zygote.CapturePolicy.MICROPHONE -> android.Manifest.permission.RECORD_AUDIO;
-                        case Zygote.CapturePolicy.CAMERA -> android.Manifest.permission.CAMERA;
-                        default -> null;
-                    };
-                    return permission != null && pm.checkUidPermission(permission, uid)
-                            == android.content.pm.PackageManager.PERMISSION_GRANTED;
-                })) {
-            SystemServer.log("The protected capture permission channel is unavailable");
+        if (SystemServer.isProtectedDevice()) {
+            ProtectedCameraPolicy camera = new ProtectedCameraPolicy(pm);
+            if (!Zygote.nativeAttachCapturePermissionPolicy((uid, kind, high, low, session) ->
+                    kind == Zygote.CapturePolicy.MICROPHONE
+                        ? pm.checkUidPermission(android.Manifest.permission.RECORD_AUDIO, uid)
+                            == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        : camera.installed(uid, kind, high, low, session, am))) {
+                SystemServer.log("The protected capture permission channel is unavailable");
+            }
         }
         services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
                 new UriGrantsManagerService(pm, atm, am)).asBinder());

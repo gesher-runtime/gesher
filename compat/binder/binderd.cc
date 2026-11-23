@@ -1635,12 +1635,14 @@ std::mutex g_capture_policy_lock;
 peer::OwnedHandle g_capture_policy;
 
 [[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process,
-                                        gesher::capture_policy::Kind kind) {
+                                        gesher::capture_policy::Kind kind,
+                                        uint64_t session = 0) {
+  const bool finish = kind == gesher::capture_policy::Kind::kCameraFinish;
   if (!process || process->role != peer::Role::kApplication ||
-      !g_peer_registry->Live(process)) return false;
+      (!finish && !g_peer_registry->Live(process))) return false;
   std::lock_guard<std::mutex> lock(g_capture_policy_lock);
   if (!g_capture_policy) return false;
-  gesher::capture_policy::Request request{process->uid, kind};
+  gesher::capture_policy::Request request{process->uid, kind, process->installation, session};
   uint32_t allowed = 0;
   const ULONGLONG deadline = GetTickCount64() + 500;
   if (!launch::Transfer(g_capture_policy.get(), &request, sizeof(request), true, deadline) ||
@@ -1648,7 +1650,7 @@ peer::OwnedHandle g_capture_policy;
     g_capture_policy.reset();
     return false;
   }
-  return allowed == 1 && g_peer_registry->Live(process);
+  return allowed == 1 && (finish || g_peer_registry->Live(process));
 }
 
 void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
@@ -1714,7 +1716,7 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
         if (system || g_record_only) accepted = g_peer_registry->AttachJob(std::move(job));
         break;
       }
-      case launch::Action::kAttachTypedCapturePolicy: {
+      case launch::Action::kAttachCaptureSessions: {
         peer::OwnedHandle pipe(launch::DecodeHandle(request.process));
         if ((system || g_record_only) && pipe && GetFileType(pipe.get()) == FILE_TYPE_PIPE) {
           std::lock_guard<std::mutex> lock(g_capture_policy_lock);
@@ -2055,6 +2057,7 @@ void ServeAudioRender(HANDLE pipe, In in) {
 #ifdef GESHER_CAMERA_BROKER_HOST
 std::mutex g_camera_lock;
 std::set<std::pair<DWORD, uint64_t>> g_camera_sessions;
+uint64_t g_camera_next_session = 1;
 
 void ServeCamera(HANDLE pipe, In in) {
   uint32_t version = 0, info_only = 0;
@@ -2063,17 +2066,21 @@ void ServeCamera(HANDLE pipe, In in) {
   const auto process = g_peer_registry->Authenticate(pipe);
   if (!process || process->role != peer::Role::kApplication) return;
   const auto identity = std::pair{process->generation.pid, process->generation.birth};
-  bool slot = false;
+  uint64_t session = 0;
   if (!info_only) {
     std::lock_guard lock(g_camera_lock);
     // CameraService advertises no concurrent camera sessions. Keep a bounded
     // number of readers and buffers even if a guest makes raw requests.
-    if (g_camera_sessions.size() < 16) slot = g_camera_sessions.insert(identity).second;
+    if (g_camera_sessions.size() < 16 && g_camera_next_session &&
+        g_camera_sessions.insert(identity).second) session = g_camera_next_session++;
   }
+  using Kind = gesher::capture_policy::Kind;
   gesher::devices::camera::ServeBrokeredCamera(pipe, info_only != 0,
       [&] { return g_peer_registry->Live(process); },
-      [&] { return CaptureAuthorized(process, gesher::capture_policy::Kind::kCamera); }, slot);
-  if (slot) {
+      [&] { return CaptureAuthorized(process, Kind::kCameraStart, session); },
+      [&] { return CaptureAuthorized(process, Kind::kCameraCheck, session); }, session != 0);
+  if (session) {
+    CaptureAuthorized(process, Kind::kCameraFinish, session);
     std::lock_guard lock(g_camera_lock);
     g_camera_sessions.erase(identity);
   }

@@ -298,17 +298,23 @@ static jboolean Zygote_attachCapturePermissionPolicy(JNIEnv* env, jclass, jobjec
     if (env->GetJavaVM(&vm) != JNI_OK) return JNI_FALSE;
     jclass type = env->GetObjectClass(predicate);
     if (type == nullptr) return JNI_FALSE;
-    const jmethodID method = env->GetMethodID(type, "allowed", "(II)Z");
+    const jmethodID method = env->GetMethodID(type, "allowed", "(IIJJJ)Z");
     env->DeleteLocalRef(type);
     if (method == nullptr) return JNI_FALSE;
     const jobject policy = env->NewGlobalRef(predicate);
     if (policy == nullptr) return JNI_FALSE;
     const bool started = gesher::zygote::RegisterProtectedCapturePolicy(
-        [vm, policy, method](uint32_t uid, gesher::capture_policy::Kind kind) {
+        [vm, policy, method](const gesher::capture_policy::Request& request) {
             JNIEnv* thread = nullptr;
             if (vm->AttachCurrentThread(&thread, nullptr) != JNI_OK) return false;
+            uint64_t high = 0, low = 0;
+            for (unsigned i = 0; i < 8; ++i) {
+                high |= static_cast<uint64_t>(request.installation[i]) << (8 * i);
+                low |= static_cast<uint64_t>(request.installation[8 + i]) << (8 * i);
+            }
             const bool allowed = thread->CallBooleanMethod(
-                policy, method, static_cast<jint>(uid), static_cast<jint>(kind));
+                policy, method, static_cast<jint>(request.uid), static_cast<jint>(request.kind),
+                static_cast<jlong>(high), static_cast<jlong>(low), static_cast<jlong>(request.session));
             const bool failed = thread->ExceptionCheck();
             if (failed) thread->ExceptionClear();
             vm->DetachCurrentThread();
@@ -705,6 +711,8 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
     if (dispatch == nullptr) return 0;
     jmethodID clipboard = env->GetMethodID(type, "dispatchClipboard", "(I[B)[B");
     if (clipboard == nullptr) return 0;
+    jmethodID camera = env->GetMethodID(type, "dispatchCamera", "(IJ)Z");
+    if (camera == nullptr) return 0;
     JavaVM* vm = nullptr;
     if (env->GetJavaVM(&vm) != JNI_OK) {
         jniThrowException(env, "java/lang/IllegalStateException", "Cannot attach host consent");
@@ -803,13 +811,23 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
                 return authority.Start(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
             }, std::move(credentialRoot.canonical), std::move(deviceRoot.canonical),
             std::move(credentialRoot.nt), std::move(deviceRoot.nt), streams, buildPath, frameworkPath,
-            [vm, host, dispatch, uid](uint32_t source_uid, gesher::capture_policy::Kind kind) {
-                if (source_uid != static_cast<uint32_t>(uid)) return false;
+            [vm, host, dispatch, camera, uid](const gesher::capture_policy::Request& request) {
+                using Kind = gesher::capture_policy::Kind;
+                const bool reset = request.kind == Kind::kCameraReset;
+                if (!reset && request.uid != static_cast<uint32_t>(uid)) return false;
+                if (request.kind != Kind::kMicrophone) {
+                    JNIEnv* thread = nullptr;
+                    if (vm->AttachCurrentThread(&thread, nullptr) != JNI_OK) return false;
+                    const bool allowed = thread->CallBooleanMethod(host, camera,
+                        static_cast<jint>(request.kind), static_cast<jlong>(request.session));
+                    const bool failed = thread->ExceptionCheck();
+                    if (failed) thread->ExceptionClear();
+                    vm->DetachCurrentThread();
+                    return allowed && !failed;
+                }
                 std::vector<int32_t> values;
                 return DispatchCohostPermission(vm, host, dispatch, cohost::Operation::kCheck,
-                    {kind == gesher::capture_policy::Kind::kCamera
-                        ? u"android.permission.CAMERA" : u"android.permission.RECORD_AUDIO"},
-                    &values) == ERROR_SUCCESS &&
+                    {u"android.permission.RECORD_AUDIO"}, &values) == ERROR_SUCCESS &&
                     values.size() == 1 && values[0] == 0; // PackageManager.PERMISSION_GRANTED
             }};
         gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),

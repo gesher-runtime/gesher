@@ -6,6 +6,7 @@ package com.gesher.server;
 
 import android.Manifest;
 import android.app.ActivityThread;
+import android.app.AppOpsManager;
 import android.content.AttributionSourceState;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
@@ -48,8 +49,8 @@ import java.util.Map;
  *
  * <p>Characteristics describe an EXTERNAL-level camera (as Android's USB cameras): fixed
  * focus, auto exposure and white balance only, outputs YUV_420_888, JPEG and PRIVATE at the
- * device's sizes (frames are scaled for other sizes). Opening needs the CAMERA permission in
- * the app's manifest. No torch, no reprocessing, no offline sessions, no extensions.
+ * device's sizes (frames are scaled for other sizes). Opening needs the app's live CAMERA grant
+ * and AppOps authorization. No torch, no reprocessing, no offline sessions, no extensions.
  */
 public final class CameraService extends ICameraService.Default {
     static final String TAG = "camera";
@@ -475,9 +476,13 @@ public final class CameraService extends ICameraService.Default {
             IPackageManager pm = ActivityThread.getPackageManager();
             int uid = android.os.Process.myUid();
             int userId = android.os.UserHandle.getUserId(uid);
-            return pm != null && pm.getPackageUid(packageName, 0, userId) == uid
-                    && pm.checkUidPermission(Manifest.permission.CAMERA, uid)
-                            == PackageManager.PERMISSION_GRANTED;
+            if (pm == null || pm.getPackageUid(packageName, 0, userId) != uid
+                    || pm.checkUidPermission(Manifest.permission.CAMERA, uid)
+                            != PackageManager.PERMISSION_GRANTED) return false;
+            android.app.Application app = ActivityThread.currentApplication();
+            AppOpsManager ops = app == null ? null : app.getSystemService(AppOpsManager.class);
+            return ops != null && ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_CAMERA,
+                    uid, packageName) == AppOpsManager.MODE_ALLOWED;
         } catch (android.os.RemoteException | RuntimeException e) {
             log("checking " + packageName + "'s permissions: " + e);
             return false;

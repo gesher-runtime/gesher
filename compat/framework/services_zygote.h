@@ -90,13 +90,13 @@ struct CohostSpec {
   std::array<void*, 3> standard_handles{};
   std::u16string build_prop{};
   std::u16string framework_res{};
-  std::function<bool(uint32_t uid, capture_policy::Kind)> capture_allowed{};
+  std::function<bool(const capture_policy::Request&)> capture_allowed{};
 };
 uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& spec,
                         uint64_t pin, uint32_t uid, const CohostSpec& services, uint32_t* exit_code);
 bool HasProtectedLaunchAuthority(bool scoped = false);
 bool RegisterProtectedCapturePolicy(
-    std::function<bool(uint32_t uid, capture_policy::Kind)> allowed);
+    std::function<bool(const capture_policy::Request&)> allowed);
 bool PrepareProtectedOperator(int broker_pid, uint64_t birth);
 
 // The container's profile for this Windows user, created if it does not exist.

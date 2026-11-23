@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "brokered_camera.h"
 
+#include <algorithm>
 #include "../posix/include/gesher/binder_bootstrap.h"
 #ifndef GESHER_CAMERA_BROKER_HOST
 #include <gesher/binder_endpoint.h>
@@ -133,17 +134,41 @@ bool ServeList(HANDLE pipe, const std::function<bool()>& live) {
   return Acknowledge(pipe, false, deadline);
 }
 
-bool AwaitRead(HANDLE pipe, const std::function<bool()>& keep_capturing) {
-  while (keep_capturing()) {
+bool AwaitCommand(HANDLE pipe, uint8_t expected, const std::function<bool()>& keep_capturing,
+                  ULONGLONG deadline = 0) {
+  while ((!deadline || GetTickCount64() < deadline) && keep_capturing()) {
     DWORD ready = 0;
     if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &ready, nullptr)) return false;
     if (ready) {
       uint8_t command = 0;
-      return Transfer(pipe, command, false, GetTickCount64() + kExchangeMs) && command == kRead;
+      return Transfer(pipe, command, false, GetTickCount64() + kExchangeMs) && command == expected;
     }
     Sleep(50);
   }
   return false;
+}
+
+bool DeliverFrame(HANDLE pipe, uint8_t* frame, DWORD bytes, ULONGLONG deadline,
+                  const std::function<bool()>& keep_capturing) {
+  ULONGLONG next_check = 0;
+  while (bytes) {
+    const ULONGLONG now = GetTickCount64();
+    if (now >= deadline) return false;
+    if (now >= next_check) {
+      if (!keep_capturing()) return false;
+      next_check = GetTickCount64() + 50;
+    }
+    DWORD moved = 0;
+    if (!WriteFile(pipe, frame, std::min<DWORD>(bytes, 65536), &moved, nullptr) &&
+        GetLastError() != ERROR_NO_DATA) return false;
+    if (!moved) {
+      Sleep(1);
+      continue;
+    }
+    frame += moved;
+    bytes -= moved;
+  }
+  return true;
 }
 #endif
 
@@ -208,6 +233,7 @@ std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int heig
 }
 #else
 void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()>& live,
+                         const std::function<bool()>& start,
                          const std::function<bool()>& authorized, bool slot) {
   DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
   if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) || !live()) return;
@@ -225,12 +251,17 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
   const auto admitted = [&] {
     return live() && PeekNamedPipe(pipe, nullptr, 0, nullptr, nullptr, nullptr) && authorized();
   };
-  if (admitted()) {
-    reply.result = slot ? E_INVALIDARG : HRESULT_FROM_WIN32(ERROR_BUSY);
-    if (slot && requested.width > 0 && requested.height > 0 &&
+  if (!slot) {
+    reply.result = HRESULT_FROM_WIN32(ERROR_BUSY);
+  } else if (live()) {
+    reply.result = E_INVALIDARG;
+    if (requested.width > 0 && requested.height > 0 &&
         requested.width <= 32768 && requested.height <= 32768 && !id.empty() &&
         id.find('\0') == std::string::npos && id != "gesher-test") {
-      capture = OpenRevocable(id, requested.width, requested.height, &reply.result, admitted);
+      reply.result = E_ACCESSDENIED;
+      if (start() && admitted()) {
+        capture = OpenRevocable(id, requested.width, requested.height, &reply.result, admitted);
+      }
     }
   }
   DWORD bytes = 0;
@@ -240,21 +271,26 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
     if (!bytes) reply.result = E_UNEXPECTED;
     else if (!admitted()) reply.result = E_ACCESSDENIED;
   }
+  if (FAILED(reply.result)) capture.reset();
   const auto handshake_deadline = GetTickCount64() + kExchangeMs;
-  if (!Transfer(pipe, reply, true, handshake_deadline) ||
-      !Acknowledge(pipe, false, handshake_deadline) ||
-      FAILED(reply.result) || !capture) return;
+  if (!Transfer(pipe, reply, true, handshake_deadline)) return;
+  if (!capture) {
+    Acknowledge(pipe, false, handshake_deadline);
+    return;
+  }
+  if (!AwaitCommand(pipe, kAck, admitted, handshake_deadline)) return;
   std::vector<uint8_t> frame(bytes);
-  while (AwaitRead(pipe, admitted)) {
+  while (AwaitCommand(pipe, kRead, admitted)) {
     HRESULT result = capture->Read(frame.data());
     if (!admitted()) result = E_ACCESSDENIED;
+    if (FAILED(result)) capture.reset();
     const auto frame_deadline = GetTickCount64() + kExchangeMs;
     if (!Transfer(pipe, result, true, frame_deadline)) return;
     if (FAILED(result)) {
       Acknowledge(pipe, false, frame_deadline);
       return;
     }
-    if (!binder_bootstrap::Transfer(pipe, frame.data(), bytes, true, frame_deadline)) return;
+    if (!DeliverFrame(pipe, frame.data(), bytes, frame_deadline, admitted)) return;
   }
 }
 #endif

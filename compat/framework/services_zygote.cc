@@ -192,7 +192,7 @@ class CapturePolicyServer {
   }
 
   bool Start(HANDLE authority, HANDLE broker,
-             std::function<bool(uint32_t, capture_policy::Kind)> allowed) {
+             std::function<bool(const capture_policy::Request&)> allowed) {
     peer::OwnedHandle writer;
     if (!launch::PrivatePipe(&pipe_, &writer, true)) return false;
     stop_.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -205,7 +205,7 @@ class CapturePolicyServer {
     if (!DuplicateHandle(GetCurrentProcess(), writer.get(), broker, &remote,
                          0, FALSE, DUPLICATE_SAME_ACCESS)) return false;
     launch::Request attach;
-    attach.action = launch::Action::kAttachTypedCapturePolicy;
+    attach.action = launch::Action::kAttachCaptureSessions;
     attach.process = launch::EncodeHandle(remote);
     return SubmitLaunchRequest(authority, attach);
   }
@@ -234,14 +234,16 @@ class CapturePolicyServer {
     capture_policy::Request request{};
     while (server.Exchange(&request, sizeof(request), false)) {
       uint32_t allowed = request.uid >= 10000 && request.uid <= 19999 &&
-          capture_policy::Valid(request.kind) && server.allowed_(request.uid, request.kind);
+          request.kind >= capture_policy::Kind::kMicrophone &&
+          request.kind <= capture_policy::Kind::kCameraFinish && server.allowed_(request);
       if (!server.Exchange(&allowed, sizeof(allowed), true)) break;
     }
+    server.allowed_({0, capture_policy::Kind::kCameraReset});
     return 0;
   }
 
   peer::OwnedHandle pipe_, thread_, ready_, stop_;
-  std::function<bool(uint32_t, capture_policy::Kind)> allowed_;
+  std::function<bool(const capture_policy::Request&)> allowed_;
 };
 
 std::mutex g_lock;
@@ -926,7 +928,7 @@ bool StopInstallation(Writer& authority, const std::array<uint8_t, 16>& installa
 }  // namespace
 
 bool RegisterProtectedCapturePolicy(
-    std::function<bool(uint32_t, capture_policy::Kind)> allowed) {
+    std::function<bool(const capture_policy::Request&)> allowed) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& owner = Authority();
   if (!owner.channel || !allowed) return false;
