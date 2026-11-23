@@ -4,6 +4,7 @@
  */
 
 #include "drop_target.h"
+#include "drop_paths.h"
 
 #include <jni.h>
 
@@ -29,17 +30,18 @@ constexpr int kActionDragEnded = 4;
 constexpr int kActionDragEntered = 5;
 constexpr int kActionDragExited = 6;
 
-static JavaVM* g_vm = nullptr;
+static std::atomic<JavaVM*> g_vm{nullptr};
 
 JavaVM* ResolveJavaVM() {
-  if (g_vm != nullptr) return g_vm;
+  if (JavaVM* vm = g_vm.load(std::memory_order_acquire)) return vm;
   HMODULE mod = GetModuleHandleW(nullptr);
   if (mod != nullptr) {
     auto fn = reinterpret_cast<JavaVM* (*)()>(
         GetProcAddress(mod, "_ZN7android14AndroidRuntime9getJavaVMEv"));
     if (fn != nullptr) {
-      g_vm = fn();
-      return g_vm;
+      JavaVM* vm = fn();
+      g_vm.store(vm, std::memory_order_release);
+      return vm;
     }
   }
   return nullptr;
@@ -48,12 +50,12 @@ JavaVM* ResolveJavaVM() {
 }  // namespace
 
 void SetDropTargetJavaVM(JavaVM* vm) {
-  g_vm = vm;
+  g_vm.store(vm, std::memory_order_release);
 }
 
 void DispatchDragToSession(HWND hwnd, int action, float x, float y,
                            const std::vector<std::wstring>* files,
-                           const std::wstring& text) {
+                           const std::wstring& text, bool file_drag, bool hosted) {
   JavaVM* vm = ResolveJavaVM();
   if (vm == nullptr) return;
 
@@ -72,7 +74,7 @@ void DispatchDragToSession(HWND hwnd, int action, float x, float y,
   if (sessionClass != nullptr) {
     jmethodID method = env->GetStaticMethodID(
         sessionClass, "onNativeDragEvent",
-        "(JIFF[Ljava/lang/String;Ljava/lang/String;)V");
+        "(JIFF[Ljava/lang/String;Ljava/lang/String;ZZ)V");
     if (method != nullptr) {
       jobjectArray fileArray = nullptr;
       if (files != nullptr && !files->empty()) {
@@ -98,7 +100,7 @@ void DispatchDragToSession(HWND hwnd, int action, float x, float y,
                                static_cast<jint>(action),
                                static_cast<jfloat>(x),
                                static_cast<jfloat>(y),
-                               fileArray, textStr);
+                               fileArray, textStr, static_cast<jboolean>(file_drag), static_cast<jboolean>(hosted));
 
       if (fileArray != nullptr) env->DeleteLocalRef(fileArray);
       if (textStr != nullptr) env->DeleteLocalRef(textStr);
@@ -363,38 +365,20 @@ bool GesherDropTarget::ExtractAndDispatchDrop(IDataObject* pDataObj, POINT clien
   if (pDataObj == nullptr) return false;
 
   FORMATETC fmt_hdrop = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
-  if (pDataObj->QueryGetData(&fmt_hdrop) == S_OK) {
-    STGMEDIUM medium = {};
-    if (SUCCEEDED(pDataObj->GetData(&fmt_hdrop, &medium))) {
-      std::vector<std::wstring> files;
-      HDROP hdrop = medium.tymed == TYMED_HGLOBAL ? static_cast<HDROP>(GlobalLock(medium.hGlobal)) : nullptr;
-      if (hdrop != nullptr) {
-        const UINT count = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
-        files.reserve(count);
-        for (UINT i = 0; i < count; i++) {
-          const UINT len = DragQueryFileW(hdrop, i, nullptr, 0);
-          if (!len) break;
-          std::wstring path(len + 1, L'\0');
-          if (DragQueryFileW(hdrop, i, path.data(), len + 1) != len) break;
-          path.resize(len);
-          files.push_back(std::move(path));
-        }
-        GlobalUnlock(medium.hGlobal);
-        if (files.size() != count) files.clear();
-      }
-      ReleaseStgMedium(&medium);
-      if (files.empty()) return false;
-      const auto* dropped = &files;
-      if (binder_endpoint::Current().IsGuest() && !CanReadDropPaths(files)) {
-        auto drop = std::make_unique<DropFiles>();
-        if (!drop->Copy(pDataObj, files)) return false;
-        dropped = &drop->paths;
-        file_drops_.push_back(std::move(drop));
-      }
-      DispatchDragToSession(hwnd_, kActionDrop, static_cast<float>(client_pt.x),
-                            static_cast<float>(client_pt.y), dropped, L"");
-      return true;
+  const auto files = pDataObj->QueryGetData(&fmt_hdrop) == S_OK
+      ? ReadDropPaths(pDataObj) : std::nullopt;
+  if (files) {
+    if (files->empty()) return false;
+    const auto* dropped = &*files;
+    if (binder_endpoint::Current().IsGuest() && !CanReadDropPaths(*files)) {
+      auto drop = std::make_unique<DropFiles>();
+      if (!drop->Copy(pDataObj, *files)) return false;
+      dropped = &drop->paths;
+      file_drops_.push_back(std::move(drop));
     }
+    DispatchDragToSession(hwnd_, kActionDrop, static_cast<float>(client_pt.x),
+                          static_cast<float>(client_pt.y), dropped, L"");
+    return true;
   }
 
   FORMATETC fmt_unicode = {CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};

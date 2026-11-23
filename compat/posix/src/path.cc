@@ -29,6 +29,7 @@
 #include "startup_null.h"
 #include "standalone_input.h"
 #include "rooted_storage_client.h"
+#include <gesher/drop_mount.h>
 
 #include <string>
 #include <limits>
@@ -37,6 +38,7 @@
 
 #include "binder_internal.h"
 #include "internal.h"
+#include "ofd_internal.h"
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
 
@@ -161,7 +163,7 @@ DWORD Access(int flags) {
 }
 
 // The CRT fd for a new handle; closes the handle if there is none.
-int FdFromHandle(HANDLE h, int flags) {
+int FdFromHandle(HANDLE h, int flags, const std::wstring* drop_path = nullptr) {
   record_locks::DescriptorGuard descriptor_guard;
   int crt_flags = _O_BINARY |
                   ((flags & O_ACCMODE) == O_RDONLY ? _O_RDONLY : 0) |
@@ -175,6 +177,15 @@ int FdFromHandle(HANDLE h, int flags) {
     int saved = errno;
     _close(fd);
     return errno = saved, -1;
+  }
+  if (drop_path != nullptr) {
+    std::shared_ptr<OpenFileDescription> ofd;
+    if (!LookupOfd(fd, &ofd)) {
+      close(fd);
+      return errno = EIO, -1;
+    }
+    std::lock_guard<std::mutex> guard(ofd->mutex);
+    ofd->drop_path = *drop_path;
   }
   return fd;
 }
@@ -240,7 +251,7 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
       CloseHandle(owned);
       return result;
     }
-    return FdFromHandle(owned, flags);
+    return FdFromHandle(owned, flags, rooted.drop_alias ? &path : nullptr);
   }
   DWORD disposition;
   if ((flags & O_PATH) != 0) {
@@ -341,14 +352,16 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
     *out = path;
     return true;
   }
-  HANDLE h = HandleFromFd(dirfd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
+  const auto descriptor = CaptureDescriptor(dirfd);
+  if (!descriptor) return errno = EBADF, false;
+  HANDLE h = descriptor->handle;
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(h, &info) ||
       (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
     return errno = ENOTDIR, false;
   }
-  auto dir = storage_root::DescriptorPath(h);
+  auto dir = DropDescriptorPath(descriptor);
+  if (dir.empty()) dir = storage_root::DescriptorPath(h);
   if (dir.empty()) {
     DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
     dir.resize(n);
@@ -428,6 +441,12 @@ static int SystemFontPath(const char* path, std::wstring* windows) {
 }
 
 PathKind MapPath(const char* path, std::wstring* windows) {
+
+  if (std::string_view(path).starts_with(drop_mount::kAndroidPrefix) && drop_mount::Enabled()) {
+    *windows = Widen(path);
+    std::replace(windows->begin(), windows->end(), L'/', L'\\');
+    return PathKind::kFile;
+  }
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning. A name with a character Windows
   // reserves (':' and the like) is stored encoded (gesher/reserved_names.h).

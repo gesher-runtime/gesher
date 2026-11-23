@@ -396,32 +396,35 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = '2e5d33f76ea7884ef52412fec2a09068d35330218c34975c4adf8e2b94dc0537'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = 'b7910272f4e66158c33ffc2787c9415d1fa491ebb5e35bc8667d9e356ecd982c'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
- 'compat/binder/binderd.cc': '355893e0db083baad68d4f40baf415aa2feaf49e43ee7cfec355a866e7be8de2',
+ 'compat/binder/binderd.cc': 'd4df956cb575e3ab3de8aa30ba769f070ab1efb7eb8ae3621048487f693a2517',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
+ 'compat/posix/include/gesher/file_description.h': '94ce9ad7806d727977cc2c6f6df9fa289d1ea94b124404aed6c58fb7416a95d9',
  'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
- 'compat/posix/posix.cmake': 'aafaa8d7fe47db48a52890f70d05495e88726ead08becc8297a08fba09423083',
- 'compat/posix/src/binder.cc': '560a618c6dfef782be79cfe0abbe9994ce256b1e6632b7513bcb76f4d1a6d4e4',
- 'compat/posix/src/binder_wire.h': '48787fa9289e8a53a1e500ec654817bf77dd681094d34fd0e5f264c2cec3f7e0',
- 'compat/posix/src/dirent.cc': 'db31cc15b7cc8d8b2ac881a9e4ceee12ba903a9798ce59eaf150e61cc7dcc921',
+ 'compat/posix/posix.cmake': '9329dc43678ee9ed79edc1e871a559833749329a366a3142733d3006a82066f2',
+ 'compat/posix/src/binder.cc': '75f01226fce65a5c954986fe0528769e110a9f70e96009934885a381c5ff4f0a',
+ 'compat/posix/src/binder_wire.h': 'f613f9492b4171c397321f15519ec5b852f2917ad929b6d1e495c1136ddd62d7',
+ 'compat/posix/src/dirent.cc': '22e3bcf261e56a950fe7a1f3e719cfc5153505f2bd7a693eb6da82c71a4efcff',
  'compat/posix/src/errno.cc': 'f2d2e94807fec9abd2e3785994f388538b1dee9abc49a4b2e574cdd594f89238',
  'compat/posix/src/fd.cc': '4f7ab619d769b885e6f54be626567d4df8ec5a2739901b6beba8a2a5548305dc',
- 'compat/posix/src/fsops.cc': '7d62a6eb8078e9054c230c0bd20cf5c5c20b4eddcee6ddfc60501dd89a565b4f',
+ 'compat/posix/src/fsops.cc': '0e07ac571f75aa39273bf5674389e5ddfc0eadd536a772795c655d00c89d0dfa',
  'compat/posix/src/internal.h': '63d4a1383062aee4d6b96bbbbc0ec1c8858ae2af49d4ebabcaaee9b53d32033f',
- 'compat/posix/src/ofd.cc': 'b1d9b541efbd27332d2ea1047f7a98b91101e586b5d04830cf17bfd1ebf4e079',
- 'compat/posix/src/path.cc': '2dbecc9c23cc6ac43b73aa72651020459d54a5a8684258cf86c95d3275301d84',
+ 'compat/posix/src/ofd.cc': 'ce71c6ee99f9c417055eaa8d4eeb2196b74f9d3bdec3f5f46abd6d487f4ec6e1',
+ 'compat/posix/src/ofd_internal.h': 'ec2f2773ebeb78bbdf0fc1a450a3f6e17c565b811196c79f00520597dfc6a1f8',
+ 'compat/posix/src/path.cc': '78abebbd0f39d4b231906c9b14a03f0b30091a5dcad32e571d37365098a57647',
  'compat/posix/src/pipe_io.cc': '6df3e0ab8cae3afc9cf6cebc902c5950a7d612bea2745460cdd1447538e6e23b',
+ 'compat/posix/src/procfs.cc': '4c57dcd3dddd91c603c5a5344eb80ee6cbcc7191fce5d5890448f9b1763a42b5',
  'compat/posix/src/record_lock_descriptors.cc': '3289895673c4f63c98ae1c7434c89cce5700197c5b1401a4cc7f12cb79dcc819',
  'compat/posix/src/record_lock_descriptors.h': '915a45d8232f44ae07d1cfefe9d0b9c128253e6b16cc6f9fef1e185fd52d6e63',
  'compat/posix/src/record_lock_duplicate.cc': '563bc13b88b61ce80de4c3370849c843c316087039e98f12ec278ac0b49cfe4f',
  'compat/posix/src/record_lock_operation.cc': '5a61fd0f2c6dcd3204205cbbc35fb125efea21b155530816d9a0204e974d079f',
  'compat/posix/src/record_lock_operation.h': '90634149c714c0c0f8ac0e7e2af46a91f750981456ff90ac473243e8c661020a',
  'compat/posix/src/sqlite_path.cc': '793968fbd0e9d3002568a6da6f2ae2ec082bdb048d1d32ca3aa3f9496dab87fe',
- 'compat/posix/src/stat.cc': 'e57711eae13d59d556917c3ea536856587a249e216e653ffb6a44cb5c9d0711c',
+ 'compat/posix/src/stat.cc': '5a9fb602ff9bacb8fe8f612ec78c88e89a6da4a64d46db23cffb91cda66ece8e',
  'compat/posix/src/system.cc': 'e9a53915f7b79faecf03eb1d5a90ac93baccd6ae2c7101e64fae4613a09e40c3',
  'compat/posix/src/system_properties.cc': 'bb8b16bfd421ddef655bec8e933ea0196f18f1b697e59d13c6155c5c487b594a',
- 'compat/posix/src/unistd.cc': 'e32b80cc0902e75dd0a9d6ed6b9a90c48b0dd18269697f739b87d0b41c4d6e61',
+ 'compat/posix/src/unistd.cc': '586933c9fbb8199caf5fe4fb562363a9397a8020b291b584ce82f2bbbcf8f0c4',
  'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
 }
 

@@ -84,6 +84,7 @@ Source: "{#BuildDir}\com.android.location.provider.jar"; DestDir: "{app}"; Flags
 Source: "etc\permissions\com.android.location.provider.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "etc\permissions\privapp-permissions-microg.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\gesher-drop-worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; gesher-exec (docs/exec.md): runs an app's ELF executables (ProcessBuilder) next to dalvikvm.
 Source: "{#BuildDir}\gesher-exec.exe"; DestDir: "{app}"; Flags: ignoreversion

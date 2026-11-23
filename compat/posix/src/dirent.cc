@@ -17,6 +17,7 @@
 
 #include "internal.h"
 #include "rooted_storage_client.h"
+#include <gesher/file_description.h>
 #include <gesher/reserved_names.h>
 
 struct gesher_DIR {
@@ -166,19 +167,20 @@ DIR* opendir(const char* name) { return Open(name, -1); }
 
 // The directory open as fd, which the DIR then owns (closedir closes it).
 DIR* fdopendir(int fd) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) {
+  const auto descriptor = gesher::CaptureDescriptor(fd);
+  if (!descriptor) {
     errno = EBADF;
     return nullptr;
   }
+  const HANDLE h = descriptor->handle;
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(h, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
     errno = ENOTDIR;
     return nullptr;
   }
-  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
-    return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
-  }
+  auto scoped = gesher::DropDescriptorPath(descriptor);
+  if (scoped.empty()) scoped = gesher::storage_root::DescriptorPath(h);
+  if (!scoped.empty()) return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
   wchar_t path[32768];
   DWORD n = GetFinalPathNameByHandleW(h, path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0 || n >= 32768) {

@@ -15,6 +15,7 @@ struct Selection {
   int error = 0;
   uint32_t area = rooted_storage_wire::kCredential;
   std::wstring relative;
+  uint64_t drop_alias = 0;
 
   // Failure to classify a path in a contained process also suppresses fallback.
   explicit operator bool() const { return matched || error != 0; }

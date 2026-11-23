@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "rooted_storage_client.h"
+#include <gesher/drop_mount.h>
 
 namespace gesher::storage_root {
 namespace {
@@ -127,6 +128,8 @@ int StatAndroidData(wire::Filesystem* filesystem) {
 }
 
 Selection Lookup(const std::wstring& mapped) {
+  auto drop = drop_mount::Lookup(mapped);
+  if (drop.matched) return {true, drop.error, wire::kCredential, std::move(drop.relative), drop.alias};
   const auto& state = cohost_bootstrap::Current();
   if (!state || state.storage_pipe.empty()) return {};
   struct Root {
@@ -210,6 +213,10 @@ static int OpenKind(wire::Op operation, const Selection& path, uint32_t flags,
 }
 
 int Open(const Selection& path, uint32_t flags, HANDLE* file, bool* created) {
+  if (path.drop_alias) {
+    if (created) *created = false;
+    return drop_mount::Open({true, path.error, path.drop_alias, path.relative}, flags, file);
+  }
   return OpenKind(wire::Op::kOpen, path, flags, file, created);
 }
 
@@ -219,16 +226,19 @@ int OpenBootstrap(wire::Op operation, HANDLE* file) {
 }
 
 int MakeDirectory(const Selection& path) {
+  if (path.drop_alias) return EROFS;
   wire::Reply reply;
   return Call(wire::Op::kMakeDirectory, path, {}, 0, &reply);
 }
 
 int Remove(const Selection& path, bool directory) {
+  if (path.drop_alias) return EROFS;
   wire::Reply reply;
   return Call(wire::Op::kRemove, path, {}, directory ? wire::kDirectory : 0, &reply);
 }
 
 int Rename(const Selection& source, const Selection& target, bool replace) {
+  if (source.drop_alias || target.drop_alias) return EROFS;
   wire::Reply reply;
   return Call(wire::Op::kRename, source, target, replace ? wire::kReplace : 0, &reply);
 }

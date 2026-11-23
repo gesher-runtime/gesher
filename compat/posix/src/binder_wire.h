@@ -138,6 +138,8 @@ enum Op : uint32_t {
   kAudioCapture = 22,
   // Private metadata or capture connection backed by the Windows camera.
   kCamera = 23,
+  // Authenticated worker for Windows file drops.
+  kDropWorker = 24,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

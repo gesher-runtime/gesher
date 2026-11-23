@@ -27,3 +27,15 @@ endif()
 if(TARGET gesher_window)
   target_link_libraries(gesher_window PUBLIC gesher_desktop_compat)
 endif()
+
+# Run OLE in a separate Windows process so its COM access rules never affect ART.
+add_executable(gesher-drop-worker
+  ${_win_compat}/drop_worker_main.cc
+  ${_win_compat}/hosted_drop.cc
+  ${_win_compat}/drop_leases.cc
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/rooted_storage.cc
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/internal.cc)
+target_include_directories(gesher-drop-worker PRIVATE ${CMAKE_SOURCE_DIR}/compat/posix/include)
+target_compile_options(gesher-drop-worker PRIVATE -Wall -Wextra -Werror)
+target_link_options(gesher-drop-worker PRIVATE -municode)
+target_link_libraries(gesher-drop-worker PRIVATE ole32 uuid shell32 user32 advapi32 mincore)
