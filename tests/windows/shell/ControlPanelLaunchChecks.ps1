@@ -13,7 +13,8 @@ $source = [IO.File]::ReadAllText([IO.Path]::GetFullPath($PanelPath))
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Get-FileStamp', 'Get-PanelAppIcon', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'Update-AppsView') {
+foreach ($name in 'Get-FileStamp', 'Get-PanelAppIcon', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'Update-AppsView',
+        'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes', 'Get-ProxySettings', 'Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -35,6 +36,7 @@ $scratchRoot = [IO.Path]::GetFullPath((Join-Path $repo 'out')) + [IO.Path]::Dire
 $scratch = Join-Path $scratchRoot ('gesher-panel-launch-' + [Guid]::NewGuid().ToString('N'))
 $root = $scratch
 $script:AppWindowsFile = Join-Path $root 'system/app-windows.properties'
+$script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 $icoFile = Join-Path $root 'gesher.ico'
 $appsList = [PSCustomObject]@{ ItemsSource = $null }
 $script:ViewState = @{ AppFiles = @(); Icons = @{}; AppsSignature = $null }

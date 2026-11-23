@@ -18,6 +18,7 @@
 #include <vector>
 #include <cerrno>
 #include <cstdlib>
+#include "dns_peer_ports_test.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -394,14 +395,14 @@ struct Peer {
   std::atomic<int> packets{0}, tcp_queries{0};
   std::thread datagrams, streams;
   Peer() {
-    udp = ::socket(AF_INET, SOCK_DGRAM, 0); tcp = ::socket(AF_INET, SOCK_STREAM, 0);
-    sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    Check(::bind(udp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "peer UDP bind");
-    socklen_t size = sizeof(address);
-    Check(::getsockname(udp, reinterpret_cast<sockaddr*>(&address), &size) == 0, "peer port");
-    server_port = ntohs(address.sin_port);
-    Check(::bind(tcp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && ::listen(tcp, 64) == 0,
-          "peer TCP bind/listen");
+    dns_fixture::PeerPorts ports; dns_fixture::PeerPortError error;
+    if (!dns_fixture::ReservePeerPorts(ports, error)) {
+      std::fprintf(stderr, "DNS_PEER_SETUP_FAILURE operation=%s native_error=%d attempts=%d\n",
+                   error.operation, error.code, error.attempts);
+      Check(false, "peer joint UDP/TCP reservation");
+    }
+    udp = std::exchange(ports.udp, dns_fixture::kInvalidSocket);
+    tcp = std::exchange(ports.tcp, dns_fixture::kInvalidSocket); server_port = ports.port;
     datagrams = std::thread([this] { Udp(); }); streams = std::thread([this] { Tcp(); });
   }
   ~Peer() {
@@ -716,10 +717,12 @@ void ServerFallback(Peer& peer) {
 }
 }  // namespace fixture
 
-int main() {
+int main(int argc, char** argv) {
 #ifdef _WIN32
   WSADATA data{}; fixture::Check(WSAStartup(MAKEWORD(2, 2), &data) == 0, "Winsock startup");
 #endif
+  dns_fixture::peer_port_test::Run();
+  if (argc == 2 && std::strcmp(argv[1], "--peer-ports-only") == 0) return 0;
   fixture::Peer peer;
   fixture::Failures(); fixture::Wire(peer);
   for (size_t count : {size_t{1}, size_t{32}, size_t{256}}) fixture::Burst(peer, count);
