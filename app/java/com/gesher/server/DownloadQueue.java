@@ -13,7 +13,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -77,16 +76,25 @@ final class DownloadQueue {
     DownloadQueue(DownloadRequests requests, Environment environment) {
         mRequests = requests;
         mEnvironment = environment;
-        mWorkers = Executors.newFixedThreadPool(PARALLEL, task -> {
-            Thread thread = new Thread(task, "gesher-download");
-            thread.setDaemon(true);
-            return thread;
-        });
-        mTimers = Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(task, "gesher-download-timer");
-            thread.setDaemon(true);
-            return thread;
-        });
+        java.util.concurrent.ThreadPoolExecutor workers = new java.util.concurrent.ThreadPoolExecutor(
+                PARALLEL, PARALLEL, 30, TimeUnit.SECONDS, new java.util.concurrent.LinkedBlockingQueue<>(),
+                task -> {
+                    Thread thread = new Thread(task, "gesher-download");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        workers.allowCoreThreadTimeOut(true);
+        mWorkers = workers;
+        java.util.concurrent.ScheduledThreadPoolExecutor timers =
+                new java.util.concurrent.ScheduledThreadPoolExecutor(1, task -> {
+                    Thread thread = new Thread(task, "gesher-download-timer");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        timers.setRemoveOnCancelPolicy(true);
+        timers.setKeepAliveTime(30, TimeUnit.SECONDS);
+        timers.allowCoreThreadTimeOut(true);
+        mTimers = timers;
     }
 
     /** Boot: everything that was ready, including downloads cut off by a restart, runs. */

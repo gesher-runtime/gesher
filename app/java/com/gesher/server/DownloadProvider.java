@@ -41,8 +41,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * {@code content://downloads}: Android's DownloadManager backend in the system server
@@ -70,11 +68,16 @@ public final class DownloadProvider extends ContentProvider {
     private final File mFilesDir, mCacheDir;
     private final DownloadRequests mRequests;
     private final DownloadQueue mQueue;
-    private final ExecutorService mMaintenance = Executors.newSingleThreadExecutor(task -> {
-        Thread thread = new Thread(task, "gesher-download-maintenance");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final java.util.concurrent.ThreadPoolExecutor mMaintenance =
+            new java.util.concurrent.ThreadPoolExecutor(1, 1, 30, java.util.concurrent.TimeUnit.SECONDS,
+                    new java.util.concurrent.LinkedBlockingQueue<>(), task -> {
+                        Thread thread = new Thread(task, "gesher-download-maintenance");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+    {
+        mMaintenance.allowCoreThreadTimeOut(true);
+    }
     private volatile Handler mCloseHandler;
 
     /** Creates, registers and starts the provider; {@code stateDir} null keeps no state. */
@@ -286,10 +289,18 @@ public final class DownloadProvider extends ContentProvider {
     // ---- the Binder caller -----------------------------------------------------------
 
     private DownloadRequests.Caller caller() {
-        final boolean system = mCallers.isSystem();
-        final int uid = Binder.getCallingUid();
-        final String packageName = system ? "android" : mCallers.callerPackage();
+        // A standalone APK shares this process's PID (gesher-app's own services): its
+        // authenticated application identity takes precedence over server-local
+        // authority, as in SettingsProvider.
+        String authenticated = mCallers.packageForPid(Binder.getCallingPid());
+        final boolean system = authenticated == null && mCallers.isSystem();
+        final String packageName = system ? "android"
+                : authenticated != null ? authenticated : mCallers.callerPackage();
         final ApkPackage pkg = system ? null : mPm.get(packageName);
+        if (!system && (pkg == null || mPm.isRemovalPending(packageName))) {
+            throw new SecurityException("Unrecognized application Binder identity");
+        }
+        final int uid = system ? Binder.getCallingUid() : pkg.uid();
         return new DownloadRequests.Caller() {
             @Override public int uid() { return uid; }
             @Override public String packageName() { return packageName; }
