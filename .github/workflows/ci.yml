@@ -122,6 +122,16 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/clipboard/Publication.ps1
+      - name: Build actual Windows Hello verifier contracts (ADR 0091)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_windows_test.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-windows.exe ole32.lib user32.lib
+      - name: Windows Hello availability and foreground-owner refusal without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\hello-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Hello verifier contracts failed' }
       - name: Exact native reader ownership and handle reuse controls
         if: ${{ !cancelled() }}
         shell: pwsh
