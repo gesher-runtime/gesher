@@ -14,8 +14,8 @@ $reviewed=@{
  'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
  'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
  'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
- 'tools/ci/github_read.py'='997d37c8f6677bb8e1bbfb38d5c87f504b3eb0e4'
- 'tools/ci/github_jobs.py'='f4278108b42329950525fb9fa34b78ae75694915'
+ 'tools/ci/github_read.py'='185256b2664ae3e6225f38f6add8d493731d30aa'
+ 'tools/ci/github_jobs.py'='ae6864eaf1f612317c917a10a2f45e5c8b15ac0c'
 }
 function ExactMap($Value){
  if($Value.Count -ne $reviewed.Count){return $false}
@@ -29,7 +29,7 @@ foreach($entry in $actual.GetEnumerator()){
  $bad=$actual.Clone();$bad[$entry.Key]='0'*40;if(ExactMap $bad){throw 'Changed hash accepted'}
  $bad=$actual.Clone();$bad.Remove($entry.Key);if(ExactMap $bad){throw 'Missing helper accepted'}
 }
-foreach($stale in @(@{P='tools/windows4/TsfJobSupervisor.cs';H='d1cf9319268df1bccf03177e7f8dde52a7f55510'},@{P='tools/windows4/TsfJobWorker.cs';H='08f29f78f56195825d96de2f2f6632bf91133e1e'},@{P='tools/windows4/test-tsf-job-supervisor.ps1';H='91e6946c4ab05a42ffbf6917166193c3dad07872'})){
+foreach($stale in @(@{P='tools/windows4/TsfJobSupervisor.cs';H='d1cf9319268df1bccf03177e7f8dde52a7f55510'},@{P='tools/windows4/TsfJobWorker.cs';H='08f29f78f56195825d96de2f2f6632bf91133e1e'},@{P='tools/windows4/test-tsf-job-supervisor.ps1';H='91e6946c4ab05a42ffbf6917166193c3dad07872'},@{P='tools/ci/github_read.py';H='997d37c8f6677bb8e1bbfb38d5c87f504b3eb0e4'})){
  $bad=$actual.Clone();$bad[$stale.P]=$stale.H;if(ExactMap $bad){throw 'Historical stale helper hash accepted'}
 }
 $bad=$actual.Clone();$bad['tools/unreviewed.cs']='0'*40;if(ExactMap $bad){throw 'Additional helper accepted'}

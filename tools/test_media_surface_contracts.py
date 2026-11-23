@@ -66,8 +66,11 @@ def generate(component: str, ref: str | None) -> str:
             "JNI_SET_SURFACE": "void JNICALL MC_setSurface(",
             "JNI_START": "void JNICALL MC_start(", "JNI_STOP": "void JNICALL MC_stop(",
             "JNI_FLUSH": "void JNICALL MC_flush(",
+            "JNI_VIDEO_SCALING": "void JNICALL MC_setVideoScalingMode(",
         }.items():
             replacements["@" + name + "@"] = method(source, marker)
+        replacements["@SET_VIDEO_SCALING@"] = (method(source, "  bool SetVideoScalingMode(")
+                if "  bool SetVideoScalingMode(" in source else "")
     else:
         source = source_text("compat/media/surface/queue_surface.cc", ref)
         header = source_text("compat/media/surface/queue_surface.h", ref)
@@ -75,6 +78,8 @@ def generate(component: str, ref: str | None) -> str:
         if len(members) != 1:
             raise ValueError("timestamp member boundary changed")
         template = (ROOT / "tests/media/surface_timestamp_host.cc.in").read_text(encoding="utf-8")
+        if "int video_scaling_mode" not in source:
+            template = template.replace(", int video_scaling_mode = 1", "")
         pool_members = pool_classes = ""
         if "class QueueSurface::FramePool {" in source:
             pool_members = ("class FramePool; class RecycledFrame;\n"

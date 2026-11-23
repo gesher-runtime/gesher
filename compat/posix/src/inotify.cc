@@ -146,6 +146,7 @@ struct Inotify {
   std::mutex mutex;
   std::condition_variable changed;
   std::deque<std::string> queue;  // events, in Linux's layout
+  bool overflow_queued = false;  // one loss marker, until ReadInotify removes it
   std::map<int, std::unique_ptr<Watch>> watches;
   int next_wd = 1;
   uint32_t next_cookie = 1;
@@ -172,20 +173,20 @@ struct Inotify {
 
   // Queues an event; called with `mutex` held.
   void Emit(int wd, uint32_t mask, uint32_t cookie, const std::string& name) {
-    size_t len = name.empty() ? 0 : (name.size() + 1 + 15) / 16 * 16;
+    // Overflow precedes ordinary duplicate merging, including a duplicate at
+    // capacity. Keep one marker anywhere in the queue, not just at its tail.
+    const bool overflow = mask == IN_Q_OVERFLOW || queue.size() >= kMaxQueued;
+    if (overflow && overflow_queued) return;
+    size_t len = overflow || name.empty() ? 0 : (name.size() + 1 + 15) / 16 * 16;
     std::string event(sizeof(inotify_event) + len, '\0');
-    inotify_event header = {wd, mask, cookie, static_cast<uint32_t>(len)};
+    inotify_event header = overflow ? inotify_event{-1, IN_Q_OVERFLOW, 0, 0}
+                                   : inotify_event{wd, mask, cookie, static_cast<uint32_t>(len)};
     memcpy(event.data(), &header, sizeof(header));
-    memcpy(event.data() + sizeof(header), name.data(), name.size());
+    if (!overflow) memcpy(event.data() + sizeof(header), name.data(), name.size());
     // Linux merges an event with the identical one before it, if unread.
-    if (!queue.empty() && queue.back() == event) return;
-    if (queue.size() >= kMaxQueued) {
-      inotify_event overflow = {-1, IN_Q_OVERFLOW, 0, 0};
-      std::string o(reinterpret_cast<const char*>(&overflow), sizeof(overflow));
-      if (queue.back() != o) queue.push_back(o);
-      return;
-    }
+    if (!overflow && !queue.empty() && queue.back() == event) return;
     queue.push_back(std::move(event));
+    overflow_queued |= overflow;
     SetReadable(*ready, true);
     changed.notify_all();
   }
@@ -615,6 +616,11 @@ int ReadInotify(Inotify& in, void* buf, unsigned int count) {
   while (!in.queue.empty() && total + in.queue.front().size() <= count) {
     memcpy(static_cast<char*>(buf) + total, in.queue.front().data(), in.queue.front().size());
     total += in.queue.front().size();
+    if (in.overflow_queued) {
+      inotify_event header;
+      memcpy(&header, in.queue.front().data(), sizeof(header));
+      if (header.mask == IN_Q_OVERFLOW) in.overflow_queued = false;
+    }
     in.queue.pop_front();
   }
   if (in.queue.empty()) SetReadable(*in.ready, false);

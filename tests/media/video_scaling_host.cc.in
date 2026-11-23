@@ -1,0 +1,444 @@
+// Complete production QueueSurface, RenderFrame and display methods follow.
+// Only Android, Skia, decoder conversion and Parcel storage are host boundaries.
+@WINDOW_BOUNDARY@
+#include <array>
+#include <atomic>
+#include <climits>
+#include <cmath>
+#include <future>
+#include <thread>
+
+#define HAS_SCALING @HAS_SCALING@
+#define HAS_ANDROID_REFERENCE @HAS_ANDROID_REFERENCE@
+@SURFACE_PRODUCTION@
+using gesher::media::QueueSurface;
+using gesher::media::SurfaceFrame;
+
+namespace android {
+struct VirtualLightRefBase { virtual ~VirtualLightRefBase() = default; };
+constexpr int OK = 0, BAD_VALUE = -EINVAL, NO_INIT = -ENODEV;
+}
+int ANativeWindow_setBuffersGeometry(ANativeWindow* w, int width, int height, int format) {
+  return w->perform(w, NATIVE_WINDOW_SET_BUFFERS_GEOMETRY, width, height, format);
+}
+int ANativeWindow_lock(ANativeWindow* w, ANativeWindow_Buffer* b, ARect* dirty) {
+  return static_cast<android::Surface*>(w)->lock(b, dirty);
+}
+int ANativeWindow_unlockAndPost(ANativeWindow* w) {
+  return static_cast<android::Surface*>(w)->unlockAndPost();
+}
+namespace gesher::media {
+struct VideoFrame {
+  int width, height;
+  std::vector<uint32_t> pixels;
+  int visible_width() const { return width; }
+  int visible_height() const { return height; }
+};
+// Color conversion is unchanged by this patch and covered by codec/reader tests.
+// This boundary supplies recognizable decoded pixels to the actual RenderFrame.
+void I420ToRgba(const VideoFrame& f, uint32_t* out, int stride, int width, int height) {
+  for (int y = 0; y < height; ++y)
+    for (int x = 0; x < width; ++x)
+      out[y * stride + x] = f.pixels[y * f.width + x];
+}
+}
+@RENDER@
+@CROP@
+@IMAGE_BOUNDARY@
+@CACHE@
+
+// Skia boundary records exact source/destination/paint operations. Its simple
+// nearest-pixel readback checks stripe interiors, not Skia's filtering accuracy.
+struct SkRect {
+  float left, top, right, bottom;
+  static SkRect MakeLTRB(float l, float t, float r, float b) { return {l, t, r, b}; }
+  static SkRect MakeIWH(int w, int h) { return {0, 0, float(w), float(h)}; }
+};
+struct SkMatrix { int token = 0; static SkMatrix I() { return {}; } };
+enum class SkBlendMode { kSrcOver, kSrc };
+struct SkColorFilter {};
+using U8CPU = unsigned;
+struct SkPaint {
+  float alpha = 1;
+  SkBlendMode mode = SkBlendMode::kSrcOver;
+  sk_sp<SkColorFilter> filter;
+  void setAlpha(U8CPU a) { alpha = a / 255.f; }
+  void setAlphaf(float a) { alpha = a; }
+  void setBlendMode(SkBlendMode m) { mode = m; }
+  void setColorFilter(sk_sp<SkColorFilter> f) { filter = std::move(f); }
+};
+struct SkRRect {
+  SkRect rect;
+  float radius;
+  static SkRRect MakeRectXY(SkRect r, float x, float) { return {r, x}; }
+};
+enum class SkFilterMode { kLinear };
+struct SkSamplingOptions { explicit SkSamplingOptions(SkFilterMode) {} };
+struct BitmapPixels { int w, h; std::vector<uint32_t> pixels; int changes = 0; };
+struct SkBitmap {
+  std::shared_ptr<BitmapPixels> storage;
+  int width() const { return storage->w; }
+  int height() const { return storage->h; }
+  void notifyPixelsChanged() { ++storage->changes; }
+};
+struct Draw {
+  SkRect src = {}, dst = {};
+  SkPaint paint;
+  int constraint = -1, calls = 0, transform = 0, saves = 0, restores = 0;
+  float radius = 0;
+  std::vector<uint32_t> pixels;
+  const void* source_pixels = nullptr;
+};
+Draw bitmap_draw;
+class SkCanvas {
+ public:
+  enum SrcRectConstraint { kStrict_SrcRectConstraint, kFast_SrcRectConstraint };
+  Draw draw;
+  SkCanvas() = default;
+  explicit SkCanvas(SkBitmap& b) : bitmap_(b.storage) {}
+  void save() { ++draw.saves; }
+  void restore() { ++draw.restores; }
+  void concat(SkMatrix m) { draw.transform = m.token; }
+  void clipRRect(SkRRect r, bool) { draw.radius = r.radius; }
+  void drawImageRect(SkImage* image, SkRect src, SkRect dst, SkSamplingOptions,
+                     const SkPaint* paint, SrcRectConstraint constraint) {
+    draw.src = src; draw.dst = dst; ++draw.calls; draw.constraint = constraint;
+    if (paint) draw.paint = *paint;
+    draw.source_pixels = image->data->pixels;
+    const int w = int(dst.right - dst.left), h = int(dst.bottom - dst.top);
+    draw.pixels.assign(std::max(w, 0) * std::max(h, 0), 0);
+    if (src.right > src.left && src.bottom > src.top) {
+      for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+          int sx = int(src.left + (x + .5f) * (src.right - src.left) / w);
+          int sy = int(src.top + (y + .5f) * (src.bottom - src.top) / h);
+          draw.pixels[y * w + x] = static_cast<const uint32_t*>(image->data->pixels)[sy * image->width() + sx];
+        }
+      }
+    }
+    if (bitmap_) { bitmap_->pixels = draw.pixels; bitmap_draw = draw; }
+  }
+  void drawImageRect(SkImage* image, SkRect dst, SkSamplingOptions options) {
+    drawImageRect(image, SkRect::MakeIWH(image->width(), image->height()), dst,
+                  options, nullptr, kFast_SrcRectConstraint);
+  }
+ private:
+  std::shared_ptr<BitmapPixels> bitmap_;
+};
+struct SkDrawable {
+  virtual ~SkDrawable() = default;
+  void draw(SkCanvas* canvas) { onDraw(canvas); }
+  SkRect bounds() { return onGetBounds(); }
+  virtual SkRect onGetBounds() = 0;
+  virtual void onDraw(SkCanvas*) = 0;
+};
+@SOURCE_RECT@
+@LAYER@
+struct JNIEnv {};
+using jclass = void*;
+using jlong = intptr_t;
+using jboolean = bool;
+constexpr jboolean JNI_FALSE = false, JNI_TRUE = true;
+#define JNICALL
+TextureLayer* LayerOf(jlong ptr) { return reinterpret_cast<TextureLayer*>(ptr); }
+namespace android::bitmap {
+struct Bitmap {
+  SkBitmap bitmap;
+  explicit Bitmap(int w, int h) : bitmap{std::make_shared<BitmapPixels>(BitmapPixels{w, h, {}, 0})} {}
+  void getSkBitmap(SkBitmap* out) { *out = bitmap; }
+};
+Bitmap& toBitmap(jlong ptr) { return *reinterpret_cast<Bitmap*>(ptr); }
+}
+@COPY@
+struct ViewSurface {
+  android::sp<QueueSurface> surface;
+  FrameImages images;
+  std::atomic<uint64_t> traced_frame{0};
+  std::atomic<unsigned> consumes{0};
+};
+bool TraceInvalidation() { return false; }
+@VIEW@
+
+// Parcel boundary stores the optional tail exactly and can fail individual reads.
+using status_t = int;
+constexpr status_t OK = 0, BAD_VALUE = -EINVAL;
+struct Parcel {
+  std::vector<uint8_t> bytes;
+  mutable size_t position = 0;
+  mutable int reads = 0;
+  int fail_read = -1;
+  size_t dataAvail() const { return bytes.size() - position; }
+  status_t readInt32(int32_t* out) const {
+    if (++reads == fail_read || dataAvail() < sizeof(*out)) return BAD_VALUE;
+    std::memcpy(out, bytes.data() + position, sizeof(*out));
+    position += sizeof(*out);
+    return OK;
+  }
+  void writeInt32(int32_t value) {
+    size_t at = bytes.size(); bytes.resize(at + sizeof(value));
+    std::memcpy(bytes.data() + at, &value, sizeof(value));
+  }
+};
+@PARCEL_VERSION@
+@PARCEL_READER@
+void WriteFrameTail(Parcel& data, int video_scaling_mode) {
+@PARCEL_WRITER@
+}
+
+namespace android_reference {
+struct Rect {
+  int left, top, right, bottom;
+  int width() const { return right - left; }
+  int height() const { return bottom - top; }
+};
+#define ALOGV(...) ((void)0)
+@ANDROID_REFERENCE@
+#undef ALOGV
+}
+
+namespace {
+int checks = 0, failures = 0;
+void Check(bool okay, const char* why) {
+  ++checks;
+  if (!okay) { ++failures; if (failures <= 32) std::fprintf(stderr, "FAIL video scaling: %s\n", why); }
+}
+bool RectIs(const SkRect& r, int l, int t, int right, int bottom) {
+  return r.left == l && r.top == t && r.right == right && r.bottom == bottom;
+}
+template<class Frame> int Mode(const Frame& f) {
+  if constexpr (requires { f.video_scaling_mode; }) return f.video_scaling_mode;
+  else return 1;
+}
+template<class Queue> bool Post(Queue* q, int w, int h, int stride, const uint32_t* p, int64_t ts, int mode) {
+  if constexpr (requires { q->PostFrame(w, h, stride, p, ts, mode); })
+    return q->PostFrame(w, h, stride, p, ts, mode);
+  else return q->PostFrame(w, h, stride, p, ts);
+}
+template<class Frame> int Render(ANativeWindow* w, const Frame& f, int64_t ts, int mode) {
+  if constexpr (requires { gesher::media::RenderFrame(w, f, ts, mode); })
+    return gesher::media::RenderFrame(w, f, ts, mode);
+  else return gesher::media::RenderFrame(w, f, ts);
+}
+constexpr uint32_t kRed = 0xff0000ffu, kGreen = 0xff00ff00u, kBlue = 0xffff0000u;
+const std::vector<uint32_t> bars = {
+  kRed, kRed, kGreen, kGreen, kBlue, kBlue,
+  kRed, kRed, kGreen, kGreen, kBlue, kBlue,
+};
+bool Green(const Draw& draw) {
+  return !draw.pixels.empty() && std::all_of(draw.pixels.begin(), draw.pixels.end(),
+                                           [](uint32_t p) { return p == kGreen; });
+}
+
+void QueueAndDisplay() {
+  auto q = android::sp<QueueSurface>::make(8, 8);
+  int notices = 0;
+  q->SetListener([&] { ++notices; Check(q->Latest() != nullptr, "notification sees published frame"); });
+  gesher::media::VideoFrame source{6, 2, bars};
+  Check(Render(q.get(), source, 123, 1) == OK, "actual RenderFrame publishes fit");
+  auto held = q->Latest();
+  Check(held->width == 6 && held->height == 2 && held->timestamp_ns == 123 && Mode(*held) == 1,
+        "render keeps decoded dimensions, timestamp and fit metadata");
+  Check(held->pixels == bars, "all decoded pixels preserved");
+  TextureLayer layer;
+  layer.surface = q; layer.width = 8; layer.height = 8;
+  layer.alpha = 127; layer.transform.token = 83; layer.mode = SkBlendMode::kSrc;
+  layer.filter = std::make_shared<SkColorFilter>();
+  TextureLayerDrawable drawable(&layer);
+  auto view = std::make_shared<ViewSurface>(); view->surface = q;
+  ViewSurfaceDrawable view_drawable(view, 8, 8, 2.f, .25f);
+  SkCanvas texture_fit, surface_fit;
+  drawable.draw(&texture_fit); view_drawable.draw(&surface_fit);
+  Check(RectIs(texture_fit.draw.src, 0, 0, 6, 2) && RectIs(surface_fit.draw.src, 0, 0, 6, 2),
+        "both fit consumers select whole source");
+  Check(texture_fit.draw.pixels.front() == kRed && texture_fit.draw.pixels.back() == kBlue,
+        "fit stretches all bars to destination");
+  Check(Render(q.get(), source, 456, 2) == OK, "actual RenderFrame publishes crop");
+  auto crop_frame = q->Latest();
+  Check(Mode(*crop_frame) == 2 && crop_frame->timestamp_ns == 456 && crop_frame->pixels == bars,
+        "crop is immutable frame metadata, never destructive pixels");
+  Check(held->pixels == bars && held->timestamp_ns == 123 && Mode(*held) == 1,
+        "retained fit frame survives later crop");
+  SkCanvas texture_crop, surface_crop;
+  drawable.draw(&texture_crop); view_drawable.draw(&surface_crop);
+  Check(RectIs(texture_crop.draw.src, 2, 0, 4, 2) && RectIs(surface_crop.draw.src, 2, 0, 4, 2),
+        "both actual display consumers select centered crop");
+  Check(Green(texture_crop.draw) && Green(surface_crop.draw), "crop displays only middle stripe");
+  Check(texture_crop.draw.constraint == SkCanvas::kStrict_SrcRectConstraint &&
+        surface_crop.draw.constraint == SkCanvas::kStrict_SrcRectConstraint,
+        "linear filtering cannot sample outside crop");
+  Check(texture_crop.draw.source_pixels == crop_frame->pixels.data() &&
+        surface_crop.draw.source_pixels == crop_frame->pixels.data(),
+        "display uses original immutable frame pixels without resampling buffer");
+  Check(texture_crop.draw.transform == 83 && texture_crop.draw.paint.mode == SkBlendMode::kSrc &&
+        texture_crop.draw.paint.filter == layer.filter && texture_crop.draw.paint.alpha == 127 / 255.f,
+        "TextureView custom transform, blend, filter and alpha preserved");
+  Check(surface_crop.draw.radius == 2.f && surface_crop.draw.paint.alpha == .25f &&
+        surface_crop.draw.saves == surface_crop.draw.restores,
+        "SurfaceView rounding, alpha and canvas ownership preserved");
+  android::bitmap::Bitmap bitmap(18, 6);
+  Check(HR_copyLayerInto(nullptr, nullptr, 0, reinterpret_cast<jlong>(&layer),
+                         reinterpret_cast<jlong>(&bitmap)) == JNI_TRUE,
+        "TextureView bitmap succeeds");
+  Check(RectIs(bitmap_draw.src, 2, 0, 4, 2) && Green(bitmap_draw),
+        "getBitmap crops for view dimensions, not requested bitmap aspect");
+  Check(bitmap.bitmap.storage->changes == 1, "getBitmap notifies pixel changes once");
+
+  const auto original_pixels = crop_frame->pixels.data();
+  const uint64_t original_number = crop_frame->number;
+  layer.width = 24; layer.height = 8;
+  ViewSurfaceDrawable resized_view(view, 24, 8, 0.f, 1.f);
+  SkCanvas texture_resized, surface_resized;
+  drawable.draw(&texture_resized); resized_view.draw(&surface_resized);
+  Check(RectIs(texture_resized.draw.src, 0, 0, 6, 2) && RectIs(surface_resized.draw.src, 0, 0, 6, 2),
+        "resize changes crop using the same frame");
+  Check(q->Latest()->number == original_number && q->Latest()->pixels.data() == original_pixels,
+        "resize neither queues nor allocates replacement source pixels");
+  Check(texture_resized.draw.pixels.front() == kRed && surface_resized.draw.pixels.back() == kBlue,
+        "resize restores previously cropped bars from unchanged raw source");
+
+  auto replacement = android::sp<QueueSurface>::make(8, 8);
+  Check(Post(replacement.get(), 6, 2, 6, bars.data(), 789, 2), "forwarded crop accepted");
+  layer.surface = replacement; layer.width = layer.height = 8;
+  SkCanvas swapped; drawable.draw(&swapped);
+  Check(Green(swapped.draw), "replacement surface first frame retains its own crop");
+  Check(Post(replacement.get(), 6, 2, 6, bars.data(), 790, 1), "forwarded fit accepted");
+  SkCanvas defaulted; drawable.draw(&defaulted);
+  Check(RectIs(defaulted.draw.src, 0, 0, 6, 2), "mode1 clears previous surface crop");
+  auto current = replacement->Latest();
+  Check(!Post(replacement.get(), 6, 2, 6, bars.data(), 791, 3), "unknown forwarded mode rejected");
+  Check(replacement->Latest() == current, "invalid mode leaves latest frame untouched");
+  replacement->Abandon();
+  Check(!Post(replacement.get(), 6, 2, 6, bars.data(), 792, 2), "abandoned forwarding target rejects crop");
+  SkCanvas detached; drawable.draw(&detached);
+  Check(detached.draw.calls == 0, "abandoned surface never draws stale pixels");
+  Check(HR_copyLayerInto(nullptr, nullptr, 0, reinterpret_cast<jlong>(&layer),
+                        reinterpret_cast<jlong>(&bitmap)) == JNI_FALSE, "abandoned bitmap read fails");
+  Check(notices == 2, "one notification per released frame");
+  q->Abandon();
+  Check(Render(q.get(), source, 999, 2) == android::NO_INIT, "renderer preserves abandoned error");
+  Check(held->pixels == bars && crop_frame->pixels == bars, "retained frames outlive consumer closure");
+}
+
+void ConcurrentMetadata() {
+  auto q = android::sp<QueueSurface>::make(6, 2);
+  std::atomic<bool> complete{false};
+  std::atomic<int> bad{0}, observed{0};
+  std::promise<void> entered;
+  Check(Post(q.get(), 6, 2, 6, bars.data(), 1, 2), "initial concurrent crop frame");
+  std::thread reader([&] {
+    auto first = q->Latest();
+    ++observed;
+    if (!first || Mode(*first) != 2 || first->pixels != bars) ++bad;
+    entered.set_value();
+    while (!complete.load(std::memory_order_acquire)) {
+      auto frame = q->Latest();
+      if (frame) ++observed;
+      if (frame && (Mode(*frame) != 1 + (frame->timestamp_ns & 1) || frame->pixels != bars)) ++bad;
+    }
+    if (Mode(*first) != 2 || first->timestamp_ns != 1 || first->pixels != bars) ++bad;
+  });
+  entered.get_future().wait();
+  for (int i = 0; i < 2000; ++i)
+    Check(Post(q.get(), 6, 2, 6, bars.data(), i, 1 + (i & 1)), "concurrent mode publication");
+  complete.store(true, std::memory_order_release); reader.join();
+  Check(bad == 0 && observed > 0, "pixel, timestamp and scaling metadata are one immutable publication");
+}
+
+void CropGeometry() {
+#if HAS_SCALING
+  using gesher::media::VideoDisplayCrop;
+  struct Case { int w, h, tw, th, l, t, r, b; };
+  const Case cases[] = {
+    {1920, 1080, 1000, 1000, 420, 0, 1500, 1080},
+    {1080, 1920, 1000, 1000, 0, 420, 1080, 1500},
+    {7, 4, 1, 1, 1, 0, 5, 4}, {4, 7, 1, 1, 0, 1, 4, 5},
+    {9, 7, 16, 9, 0, 1, 9, 6}, {7, 9, 9, 16, 1, 0, 6, 9},
+    {6, 2, 3, 1, 0, 0, 6, 2}, {1, 10, 100, 1, 0, 5, 1, 5},
+    {INT_MAX, INT_MAX, 1, 1, 0, 0, INT_MAX, INT_MAX},
+    {INT_MAX, 1, 1, 1, 1073741823, 0, 1073741824, 1},
+  };
+  for (const auto& c : cases) {
+    auto crop = VideoDisplayCrop(c.w, c.h, c.tw, c.th, 2);
+    Check(crop.left == c.l && crop.top == c.t && crop.right == c.r && crop.bottom == c.b,
+          "integer center crop, odd dimensions, degenerate and large dimensions");
+    auto fit = VideoDisplayCrop(c.w, c.h, c.tw, c.th, 1);
+    Check(fit.left == 0 && fit.top == 0 && fit.right == c.w && fit.bottom == c.h,
+          "fit always retains entire valid source");
+  }
+  for (auto c : {Case{0, 4, 8, 8, 0, 0, 0, 0}, Case{4, -1, 8, 8, 0, 0, 0, 0},
+                 Case{0, 0, 0, 0, 0, 0, 0, 0}}) {
+    for (int mode : {1, 2}) {
+      auto crop = VideoDisplayCrop(c.w, c.h, c.tw, c.th, mode);
+      Check(crop.left == 0 && crop.top == 0 && crop.right == 0 && crop.bottom == 0,
+            "invalid source dimensions return empty crop");
+    }
+  }
+  for (auto c : {Case{4, 3, 0, 8, 0, 0, 4, 3}, Case{4, 3, 8, -1, 0, 0, 4, 3},
+                 Case{4, 3, 0, 0, 0, 0, 4, 3}}) {
+    for (int mode : {1, 2}) {
+      auto crop = VideoDisplayCrop(c.w, c.h, c.tw, c.th, mode);
+      Check(crop.left == c.l && crop.top == c.t && crop.right == c.r && crop.bottom == c.b,
+            "unsized display target (e.g. 0x0 TextureView layer) keeps the whole source");
+    }
+  }
+  uint32_t rng = 0x13579bdu;
+  auto side = [&] { rng = rng * 1664525u + 1013904223u; return int(1 + rng % 16384); };
+  for (int i = 0; i < 10000; ++i) {
+    int w = side(), h = side(), tw = side(), th = side();
+    auto crop = VideoDisplayCrop(w, h, tw, th, 2);
+    Check(crop.left >= 0 && crop.top >= 0 && crop.right <= w && crop.bottom <= h &&
+          crop.right >= crop.left && crop.bottom >= crop.top, "random crop stays within source");
+    Check(std::abs(crop.left - (w - crop.right)) <= 1 &&
+          std::abs(crop.top - (h - crop.bottom)) <= 1, "random crop remains centered to one pixel");
+    Check((crop.right - crop.left == w) || (crop.bottom - crop.top == h), "one source axis remains whole");
+#if HAS_ANDROID_REFERENCE
+    auto expected = android_reference::ScaleDownCrop({0, 0, w, h}, tw, th);
+    Check(crop.left == expected.left && crop.top == expected.top && crop.right == expected.right &&
+          crop.bottom == expected.bottom, "exact Android16 primary-source center crop comparison");
+#endif
+  }
+#endif
+}
+
+void ParcelContract() {
+#if HAS_SCALING
+  for (int mode : {1, 2}) {
+    Parcel data; WriteFrameTail(data, mode);
+    Check(data.bytes.size() == (mode == 1 ? 0 : 8), "default mode keeps legacy payload size");
+    int result = 99;
+    Check(ReadFrameVideoScalingMode(data, &result) == OK && result == mode && data.dataAvail() == 0,
+          "actual writer and reader roundtrip per-frame mode");
+  }
+  for (int version : {0, 1, 2, INT_MIN, INT_MAX}) {
+    for (int mode : {-1, 0, 1, 2, 3, INT_MAX}) {
+      Parcel data; data.writeInt32(version); data.writeInt32(mode);
+      int result = 99;
+      const bool valid = version == 1 && (mode == 1 || mode == 2);
+      Check((ReadFrameVideoScalingMode(data, &result) == OK) == valid,
+            "only known version and valid modes accepted");
+      Check(result == (valid ? mode : 1), "failed Parcel read cannot publish partial mode");
+    }
+  }
+  for (size_t size = 1; size <= 32; ++size) {
+    if (size == 8) continue;
+    Parcel data; WriteFrameTail(data, 2); data.bytes.resize(size);
+    int result = 99;
+    Check(ReadFrameVideoScalingMode(data, &result) == BAD_VALUE && result == 1 && data.reads == 0,
+          "truncated or extra Parcel bytes rejected before consuming extension");
+  }
+  for (int failure : {1, 2}) {
+    Parcel data; WriteFrameTail(data, 2); data.fail_read = failure;
+    int result = 99;
+    Check(ReadFrameVideoScalingMode(data, &result) == BAD_VALUE && result == 1,
+          "Parcel integer read failure returns error and default output");
+  }
+#endif
+}
+}
+
+int main() {
+  QueueAndDisplay(); ConcurrentMetadata(); CropGeometry(); ParcelContract();
+  std::printf("video scaling contracts: %d checks, %d failures; Android reference=%d\n",
+              checks, failures, HAS_ANDROID_REFERENCE);
+  return failures != 0;
+}

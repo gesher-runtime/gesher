@@ -49,10 +49,30 @@ Bidirectional reads may be queued from `onStreamReady`, and direct read-only
 buffers are accepted for writes. Gzip headers are decoded after dispatching the
 response-header callback so a duplex peer can wait for that callback's upload.
 
-Each bidirectional stream currently opens a separate HTTP/2 connection; connection
-pooling across streams is not implemented. The adapter copies bounded 32 KiB
-chunks, while AOSP OkHttp also retains its own flow-control buffers and reader
-threads. The current implementation has no high-concurrency throughput benchmark.
+Bidirectional streams reuse eligible HTTP/2 sessions owned by their `HttpEngine`.
+The route includes the exact origin, selected proxy, supplied Network object and
+TLS socket-factory identity. A warm session can multiplex streams; one stream's
+cancellation or peer reset does not close its healthy peers. GOAWAY stops new
+admission while accepted streams drain; a stream that selected a session but had
+not yet sent HEADERS when GOAWAY arrived is admitted once on a fresh session.
+Completed streams, including those with a request body, end without RST_STREAM.
+Actual peer stream limits, including zero, are respected. Concurrent cold
+connections can still open separately.
+
+Completed transports release their leases only after admitted I/O retires.
+Terminal callbacks, including `onCanceled`, are delivered only after the
+stream's I/O workers finish.
+Engine shutdown rejects active requests, then closes all owned connections.
+The pool retains at most five idle sessions, expires them after 60 seconds, and
+uses a single process-wide parked expiry worker. Stream I/O and physical socket
+writes have separate 30-second deadlines; a broken physical connection still
+fails its dependent streams. Each stream keeps its existing bounded 32 KiB
+copies, while AOSP OkHttp owns framing and flow-control storage. As in Cronet,
+a stream's receive window (6 MiB) is smaller than the connection's (16 MiB), so
+one stream whose application stopped reading cannot stall its siblings. The qualified
+loopback corpus covers 16 concurrent warm streams and measured connection/TLS
+handshake reduction, not general high-concurrency throughput. See the
+[session ownership and measurement report](research/http2-sessions-2026-11-22.md).
 
 The transport does not implement QUIC, Brotli or engine-private disk caches.
 Protocol/DNS/cache tuning is advisory and does not install process-global settings;
@@ -66,7 +86,12 @@ Cronet module is not shipped.
 `tools/test_http_engine.py --java-home <JDK>` tests the production adapter over
 real local HTTP sockets in CI. Adding `--okhttp-source <AOSP external/okhttp>`
 compiles the pinned Android 16 framing and Okio sources for host HTTP/2 wire
-tests, including gzip-header ordering and direct-buffer callback contracts.
+tests, including gzip-header ordering, direct-buffer callback contracts, shared
+session cancellation, GOAWAY, TLS/proxy/Network route isolation and real idle
+descriptor retirement. The helper applies this revision's receive-credit and
+window patches to the pinned provider; bounded in-memory contracts verify discard,
+reset and padding accounting and the advertised window geometry, and are also
+mandatory on Windows. The complete framework CI requires that pinned checkout.
 `tests/net/HttpEngineDeviceSmoke.java` and
 `Http2DeviceSmoke.java` also run on Gesher ART in Windows track 94, with an
 independent local HTTP/2 wire peer. `GESHER_HTTP_ENGINE_TRACE=1` logs numeric
@@ -142,7 +167,9 @@ config (`SystemCertificateSource`) read the system CAs from
 
 So a root an administrator, a company or a content filter (NetFree, TLS
 inspection) installed in Windows is trusted by Android apps with no setup.
-A manifest (`.gesher-cacerts`) makes the check cheap when nothing changed; a
+A manifest (`etc/security/.gesher-cacerts`, next to the directory rather than
+in it, so that cacerts holds only certificates, as Conscrypt expects) makes
+the check cheap when nothing changed; a
 named mutex serializes writers; `GESHER_WINDOWS_CERTS=0` leaves Windows'
 stores out; `GESHER_TRACE_CACERTS=1` reports what was written. User CAs
 (`$ANDROID_DATA/misc/keychain`) are Android's, unchanged.
@@ -243,14 +270,22 @@ processes of packages without it; gesher-app applies it in its own process
   return it.
 - **Gesher's own proxy**, over Windows' settings (`com.gesher.net.ProxySetting`): for every
   app or for one package, saved in `<data>/system/proxy.properties` by
-  `gesher-app proxy [PACKAGE] host:port|direct|windows` (no argument shows them; `direct`
+  `gesher-app proxy [PACKAGE] host:port|direct|windows` or in the control panel ("Proxy for
+  every app" above the app list, and each app's "Proxy" button, where "Same as every app"
+  removes the package's own setting) (no argument shows them; `direct`
   is no proxy; `windows` for a package is Windows' settings over every app's setting), or for
   one launch (`gesher-app launch PACKAGE --proxy host:port`). The system server gives an app
   process its setting (the launch's, else the package's, else every app's) as
   `$GESHER_PROXY` when it starts it, with `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for HTTP
   clients that read those (Dart's HttpClient: Flutter apps); `WindowsProxy` then takes it
   instead of Windows' settings (an HTTP proxy server, with localhost, 127.0.0.1 and [::1] left out) and does not
-  follow Windows' changes. A running app keeps its proxy until its process ends.
+  follow Windows' changes. A running app keeps its proxy until its process ends: reopening
+  its window or an Activity can reuse that process, so a changed setting needs the app
+  closed completely (or the device stopped) and started again, as the control panel says.
+  It covers HTTP clients that use the system proxy or those variables. WebView pages are
+  not given it: without the app's own `ProxyController` override (androidx.webkit, ADR
+  0058) the process's WebView2 environment gets no proxy arguments and uses Windows'
+  settings.
 - **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
   sticky query, as BatteryService's battery broadcast) and sends it when the default
   network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,

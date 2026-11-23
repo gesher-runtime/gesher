@@ -18,6 +18,7 @@ final class JavaHttpEngine extends HttpEngine {
     private static final URL HTTPS_BASE = transportBase("https://localhost/");
     final String agent;
     final boolean http2Enabled;
+    final Http2SessionPool http2Sessions = new Http2SessionPool();
     private final EngineHttpCache cache;
     final ExecutorService io = Executors.newCachedThreadPool(r -> {
         Thread thread = new Thread(r, "Gesher-HttpEngine"); thread.setDaemon(true); return thread;
@@ -99,7 +100,7 @@ final class JavaHttpEngine extends HttpEngine {
     @Override public synchronized void shutdown() {
         if (!active.isEmpty()) throw new IllegalStateException("Cannot shut down an engine with active requests");
         if (closed) return;
-        closed=true; io.shutdown(); cache.close();
+        closed=true; http2Sessions.close(); io.shutdown(); cache.close();
     }
     synchronized void register(Object request) { checkOpen(); active.add(request); }
     synchronized void release(Object request) { active.remove(request); }
@@ -253,6 +254,11 @@ final class JavaHttpEngine extends HttpEngine {
         volatile InputStream input;
         volatile Response response;
         volatile CompletableFuture<?> pendingUpload;
+        // One read is admitted at a time. The previous reader has finished using
+        // this storage before it publishes READY or invokes an application
+        // callback, including a direct/reentrant callback. Keep capacity across
+        // short reads and retire it only after all admitted workers have left.
+        byte[] readScratch;
         final CompletableFuture<Void> uploadCanceled=new CompletableFuture<>();
         // Every hop remains owned until its stream is closed. A canceled queued
         // redirect must not lose the previous hop merely because connection moved.
@@ -332,7 +338,7 @@ final class JavaHttpEngine extends HttpEngine {
                 if (workers!=0 || terminalPublished) return;
                 terminalPublished=true;
                 owned=new IdentityHashMap<>(transports);
-                transports.clear(); connection=null; input=null;
+                transports.clear(); connection=null; input=null; readScratch=null;
             }
             // A connect may have acquired its provider cancel handle after the
             // first pass. No production worker remains, so close it again before
@@ -443,8 +449,13 @@ final class JavaHttpEngine extends HttpEngine {
             if (phase!=READY) throw new IllegalStateException("Request is not waiting for read()");
             phase=READING;
             work(() -> {
-                byte[] bytes=new byte[Math.min(buffer.remaining(),32768)];
-                int n=input.read(bytes);
+                int capacity=Math.min(buffer.remaining(),32768);
+                byte[] bytes=readScratch;
+                if (bytes==null || bytes.length<capacity) {
+                    int grown=bytes==null ? capacity : Math.max(capacity,Math.min(32768,bytes.length*2));
+                    readScratch=bytes=new byte[grown];
+                }
+                int n=input.read(bytes,0,capacity);
                 if (isDone()) return;
                 if (n<0) { finish(null,false); return; }
                 synchronized (this) {

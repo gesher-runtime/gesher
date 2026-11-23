@@ -16,7 +16,8 @@ extern "C" {
 // A frame queued to a forwarding surface (RGBA_8888, width pixels a row), on
 // its producer's thread, after the frame is the surface's latest.
 typedef void (*GesherSurfaceFrameFn)(void* context, jlong surface, int width, int height,
-                                     int64_t timestamp_ns, const uint32_t* pixels);
+                                     int64_t timestamp_ns, const uint32_t* pixels,
+                                     int video_scaling_mode);
 typedef void (*GesherSurfaceReleaseFn)(void* context);
 
 // Whether the surface is a QueueSurface (a SurfaceTexture's, a SurfaceView's,
@@ -27,7 +28,7 @@ bool gesher_surface_queue_size(jlong surface, int* width, int* height);
 // Queues a frame from a producer in another process (QueueSurface::PostFrame);
 // false once the surface is abandoned or is not a QueueSurface.
 bool gesher_surface_post(jlong surface, int width, int height, int stride, int64_t timestamp_ns,
-                         const uint32_t* pixels);
+                         const uint32_t* pixels, int video_scaling_mode = 1);
 
 // A new QueueSurface with one strong reference (for a Java Surface's
 // mNativeObject) whose every frame goes to on_frame. `context` is released

@@ -116,6 +116,7 @@ struct ANativeWindow;
 namespace gesher::media {
 // Android status: preserve abandoned-consumer errors for MediaCodec.
 int RenderFrame(ANativeWindow* window, const VideoFrame& f,
-                 std::optional<int64_t> timestamp_ns = std::nullopt);
+                 std::optional<int64_t> timestamp_ns = std::nullopt,
+                 int video_scaling_mode = 1);
 
 }  // namespace gesher::media

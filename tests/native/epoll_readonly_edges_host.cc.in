@@ -1,0 +1,246 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Included by the existing complete-epoll host harness. Only the clock and
+// native timer delivery boundary are controlled here; timerfd.cc is unchanged.
+// Inotify feeds exact production Emit/Read bodies with isolated raw records.
+// Actual Windows directory completion and timer cancellation are separate gates.
+#include <deque>
+#include <limits>
+#include <set>
+#include <sys/inotify.h>
+#include <gesher/timerfd.h>
+#include <gesher/resume.h>
+
+using VOID = void;
+using PVOID = void*;
+using PTP_CALLBACK_INSTANCE = void*;
+#define CALLBACK
+struct ReadonlyNativeTimer;
+using PTP_TIMER = ReadonlyNativeTimer*;
+using ReadonlyCallback = void(*)(PTP_CALLBACK_INSTANCE, PVOID, PTP_TIMER);
+struct ReadonlyNativeTimer {
+  ReadonlyCallback callback;
+  void* context;
+  bool armed = false;
+  int64_t deadline = 0;
+};
+static std::atomic<int64_t> readonly_clock{1000000000};
+static std::set<PTP_TIMER> readonly_timers;
+static uint64_t readonly_callbacks, readonly_arms;
+static PTP_TIMER CreateThreadpoolTimer(ReadonlyCallback callback, void* context, void*) {
+  auto* timer = new ReadonlyNativeTimer{callback, context};
+  readonly_timers.insert(timer);
+  return timer;
+}
+static void SetThreadpoolTimer(PTP_TIMER timer, const FILETIME* due, DWORD period, DWORD) {
+  check("readonly native timer remains one-shot", period == 0);
+  timer->armed = due != nullptr;
+  if (!due) return;
+  ++readonly_arms;
+  uint64_t bits = uint64_t(due->dwHighDateTime) << 32 | due->dwLowDateTime;
+  int64_t ticks;
+  std::memcpy(&ticks, &bits, sizeof(ticks));
+  timer->deadline = ticks < 0 ? readonly_clock.load() - ticks * 100
+                              : (ticks - 116444736000000000LL) * 100;
+}
+static void WaitForThreadpoolTimerCallbacks(PTP_TIMER, int) {
+  // This transport invokes callbacks synchronously in readonly_advance. The
+  // existing timerfd_contracts fixture separately holds real admitted callbacks
+  // across disable/reprogram/final-close and executes the same production core.
+}
+static void CloseThreadpoolTimer(PTP_TIMER timer) { readonly_timers.erase(timer); delete timer; }
+static void GetSystemTimePreciseAsFileTime(FILETIME* out) {
+  uint64_t ticks = readonly_clock.load() / 100 + 116444736000000000LL;
+  *out = {uint32_t(ticks), uint32_t(ticks >> 32)};
+}
+static void readonly_advance(int ms) {
+  readonly_clock += int64_t(ms) * 1000000;
+  for (auto* timer : readonly_timers) {
+    if (!timer->armed || timer->deadline > readonly_clock) continue;
+    timer->armed = false;
+    ++readonly_callbacks;
+    timer->callback(nullptr, timer->context, timer);
+  }
+}
+namespace gesher {
+int64_t MonotonicNanos() { return readonly_clock; }
+int64_t BoottimeNanos() { return readonly_clock; }
+// This corpus creates only MONOTONIC timers. Do not promise a simulated resume
+// subscription; the maintained timer/resume corpus covers those real bodies.
+ResumeSubscription::~ResumeSubscription() = default;
+int ResumeSubscription::Start(void (*)(void*), void*) { return ENOSYS; }
+void ResumeSubscription::Reset() {}
+}
+
+@TIMER_SOURCE@
+
+namespace gesher {
+constexpr size_t kMaxQueued = 16384;
+struct Inotify {
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::shared_ptr<EventFd> ready;
+  std::deque<std::string> queue;
+  bool overflow_queued = false;
+@INOTIFY_EMIT@
+};
+@INOTIFY_READ@
+}
+struct ReadonlyInotify {
+  int fd = -1;
+  ReadonlyInotify() {
+    auto source = std::make_shared<gesher::Inotify>();
+    source->ready = gesher::NewReadiness(true);
+    auto ready = source->ready;
+    fd = gesher::RegisterInotify(std::move(source), std::move(ready));
+  }
+  bool Emit(unsigned id) {
+    auto source = gesher::LookupInotify(fd);
+    if (!source) return false;
+    std::lock_guard<std::mutex> lock(source->mutex);
+    source->Emit(7, IN_CREATE, 0, "event-" + std::to_string(id));
+    return true;
+  }
+  ~ReadonlyInotify() { if (fd >= 0) close(fd); }
+};
+#include "epoll_readonly_edge_test.inc"
+
+static void readonly_timer_work() {
+  int fd = readonly_timer(), ep = epoll_create1(0);
+  check("timer work setup", fd >= 0 && ep >= 0);
+  check("timer work register", readonly_ctl(ep, EPOLL_CTL_ADD, fd, EPOLLIN | EPOLLET, 40));
+  const uint64_t callbacks = readonly_callbacks, arms = readonly_arms;
+  check("timer work arm", readonly_arm(fd, 1, 1));
+  for (int i = 0; i < 10000; ++i) readonly_advance(1);
+  const uint64_t calls = readonly_callbacks - callbacks, scheduled = readonly_arms - arms;
+  check("timer work first expiration delivered", readonly_event(ep, 40));
+  uint64_t ticks = 0;
+  check("timer work accounts all deferred ticks", read(fd, &ticks, sizeof(ticks)) == sizeof(ticks) && ticks == 10000);
+  std::printf("readonly work periodic: periods=10000 callbacks=%llu arms=%llu ticks=%llu\n",
+              static_cast<unsigned long long>(calls), static_cast<unsigned long long>(scheduled),
+              static_cast<unsigned long long>(ticks));
+  check("timer work defers unread callbacks", calls == 1 && scheduled == 1);
+  readonly_advance(1);
+  check("timer work read restarts producer", readonly_event(ep, 40));
+  close(ep); close(fd);
+}
+
+static void readonly_inotify_queue() {
+  ReadonlyInotify inotify;
+  int ep = epoll_create1(0);
+  check("queue edge registration", readonly_ctl(ep, EPOLL_CTL_ADD, inotify.fd, EPOLLIN | EPOLLET, 50));
+  check("queue first record", inotify.Emit(1));
+  check("queue first edge", readonly_event(ep, 50));
+  check("queue duplicate admitted to actual producer", inotify.Emit(1));
+  check("queue coalesced duplicate is not an edge", readonly_empty(ep));
+  for (unsigned i = 2; i <= gesher::kMaxQueued; ++i) inotify.Emit(i);
+  check("queue multiple accepted records coalesce in epoll", readonly_event(ep, 50));
+  check("queue bounded normal records", gesher::LookupInotify(inotify.fd)->queue.size() == gesher::kMaxQueued);
+  check("queue full-tail duplicate reaches actual producer", inotify.Emit(gesher::kMaxQueued));
+  check("queue full-tail duplicate publishes overflow before merging", readonly_event(ep, 50));
+  check("queue duplicate overflow request", inotify.Emit(20001));
+  check("queue coalesced overflow is not an edge", readonly_empty(ep));
+  check("queue bounded including overflow", gesher::LookupInotify(inotify.fd)->queue.size() == gesher::kMaxQueued + 1);
+  // Every named record above is one header plus a 16-byte padded name. Remove
+  // two, append a regular record after the retained overflow, then fill again.
+  constexpr size_t named = sizeof(inotify_event) + 16;
+  char partial[2 * named];
+  check("queue partial read leaves loss marker", read(inotify.fd, partial, sizeof(partial)) == sizeof(partial));
+  check("queue refill after retained overflow", inotify.Emit(20002));
+  check("queue new regular record still publishes", readonly_event(ep, 50));
+  check("queue full with overflow away from tail", gesher::LookupInotify(inotify.fd)->queue.size() == gesher::kMaxQueued);
+  check("queue further overflow request", inotify.Emit(20003));
+  check("queue retained middle overflow suppresses another edge", readonly_empty(ep));
+  check("queue retained middle overflow remains single", gesher::LookupInotify(inotify.fd)->queue.size() == gesher::kMaxQueued);
+  std::vector<char> before_tail((gesher::kMaxQueued - 2) * named + sizeof(inotify_event));
+  check("queue consume through loss marker but retain regular tail", read(inotify.fd, before_tail.data(), before_tail.size()) ==
+        static_cast<int>(before_tail.size()));
+  inotify_event loss{};
+  memcpy(&loss, before_tail.data() + before_tail.size() - sizeof(loss), sizeof(loss));
+  check("queue reports canonical overflow record", loss.wd == -1 && loss.mask == IN_Q_OVERFLOW && loss.cookie == 0 && loss.len == 0);
+  check("queue regular tail remains", gesher::LookupInotify(inotify.fd)->queue.size() == 1);
+  for (unsigned i = 0; i < gesher::kMaxQueued - 1; ++i) inotify.Emit(30000 + i);
+  check("queue refill after consumed marker publishes", readonly_event(ep, 50));
+  check("queue later overflow request", inotify.Emit(50000));
+  check("queue consumed marker permits new overflow", readonly_event(ep, 50));
+  check("queue later marker bounded", gesher::LookupInotify(inotify.fd)->queue.size() == gesher::kMaxQueued + 1);
+  check("queue actual read drains remaining records", readonly_drain(inotify.fd, false) > 0);
+  check("queue drained has no stale edge", readonly_empty(ep));
+  check("queue refill after drain", inotify.Emit(60000));
+  check("queue refill delivers", readonly_event(ep, 50));
+  auto explicit_loss = [&] {
+    auto source = gesher::LookupInotify(inotify.fd);
+    std::lock_guard<std::mutex> lock(source->mutex);
+    source->Emit(-1, IN_Q_OVERFLOW, 0, "");
+  };
+  explicit_loss();
+  check("queue backend loss publishes below capacity", readonly_event(ep, 50));
+  check("queue regular record follows backend loss", inotify.Emit(60001));
+  check("queue regular record after backend loss publishes", readonly_event(ep, 50));
+  explicit_loss();
+  check("queue repeated backend loss retains single non-tail marker", readonly_empty(ep));
+  check("queue repeated backend loss preserves queue", gesher::LookupInotify(inotify.fd)->queue.size() == 3);
+  unsigned before = host_poll_calls;
+  check("queue consumed edge blocks", readonly_empty(ep, 80));
+  check("queue consumed edge avoids readiness spin", host_poll_calls - before <= 2);
+  close(ep);
+}
+
+static void readonly_wait_races() {
+  ReadonlyInotify inotify;
+  int ep = epoll_create1(0);
+  check("race setup", readonly_ctl(ep, EPOLL_CTL_ADD, inotify.fd, EPOLLIN | EPOLLET, 60));
+  struct Publish { ReadonlyInotify* source; unsigned id = 0; bool ok = false; } publish{&inotify};
+  auto produce = [](void* raw) { auto& p = *static_cast<Publish*>(raw); p.ok = p.source->Emit(++p.id); };
+  epoll_event event{};
+  check("race publication after snapshot wakes actual epoll", gesher::EpollWaitWithObserver(ep, &event, 1, 1000, produce, &publish) == 1 &&
+        event.data.u64 == 60 && publish.ok);
+  check("race publication consumed", readonly_empty(ep));
+  check("race unread publication after snapshot wakes without a level transition",
+        gesher::EpollWaitWithObserver(ep, &event, 1, 1000, produce, &publish) == 1 &&
+        event.data.u64 == 60 && publish.ok);
+  check("race unread publication consumed", readonly_empty(ep));
+  struct Snapshot {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool sampled = false, release = false, resumed = false;
+  } snapshot;
+  auto observe = [](void* raw) {
+    auto& state = *static_cast<Snapshot*>(raw);
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.sampled = true;
+    state.changed.notify_all();
+    state.resumed = state.changed.wait_for(lock, std::chrono::seconds(2), [&] { return state.release; });
+  };
+  int result = -2;
+  std::thread waiter([&] { result = gesher::EpollWaitWithObserver(ep, &event, 1, 1000, observe, &snapshot); });
+  {
+    std::unique_lock<std::mutex> lock(snapshot.mutex);
+    check("race waiter reached snapshot", snapshot.changed.wait_for(lock, std::chrono::seconds(2), [&] { return snapshot.sampled; }));
+  }
+  check("race delete cancels consumed source", epoll_ctl(ep, EPOLL_CTL_DEL, inotify.fd, nullptr) == 0);
+  const int retired = inotify.fd;
+  check("race close source", close(inotify.fd) == 0); inotify.fd = -1;
+  int replacement = eventfd(1, EFD_NONBLOCK);
+  check("race actual descriptor slot reused", replacement == retired);
+  check("race replacement registration", readonly_ctl(ep, EPOLL_CTL_ADD, replacement, EPOLLIN, 61));
+  {
+    std::lock_guard<std::mutex> lock(snapshot.mutex);
+    snapshot.release = true;
+    snapshot.changed.notify_all();
+  }
+  waiter.join();
+  check("race waiter reports replacement identity only", snapshot.resumed && result == 1 && event.data.u64 == 61);
+  close(replacement); close(ep);
+}
+
+int main() {
+  test_epoll_readonly_edges();
+  readonly_timer_work();
+  readonly_inotify_queue();
+  for (int i = 0; i < 32; ++i) readonly_wait_races();
+  check("readonly all native timer owners retired", readonly_timers.empty());
+  check("readonly all boundary event handles retired", host_handles == 0);
+  std::printf("readonly edge production host: %d checks, %d failures\n", checked, failed);
+  return failed != 0;
+}
