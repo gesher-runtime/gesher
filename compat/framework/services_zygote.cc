@@ -816,6 +816,12 @@ Writer ReadWriter() {
   attach.action = launch::Action::kAttachJob;
   attach.process = launch::EncodeHandle(broker_job);
   if (!SubmitLaunchRequest(writer.channel.get(), attach)) return {};
+
+  launch::Request enable_netlink;
+  enable_netlink.action = launch::Action::kEnableNetlinkInspection;
+  enable_netlink.pid = self.pid;
+  enable_netlink.birth = self.birth;
+  if (!SubmitLaunchRequest(writer.channel.get(), enable_netlink)) return {};
   {
     std::lock_guard<std::mutex> lock(g_lock);
     if (g_job != nullptr) return {};

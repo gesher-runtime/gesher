@@ -73,10 +73,10 @@ index 74021bb34..01759690d 100644
 +        } else if (op == wire::kNetlinkInspection) {
 +          ServeNetlinkInspection(pipe, in);
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 3492add71..4735799ca 100644
+index 93f84db15..be60c941b 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
-@@ -28,0 +29 @@ add_library(gesher_posix STATIC
+@@ -29,0 +30 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/netlink.cc
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
 index eaa21e5c7..dfd7c9e9d 100644
@@ -263,12 +263,12 @@ index b715fa5c7..035236528 100644
 +// Registers an in-process AF_NETLINK descriptor backed by `netlink`.
 +int RegisterNetlinkSocket(bool nonblocking, int sock_type);
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index a3bc4dfdd..d3ecdccbd 100644
+index 0a7af110a..4cd5bc492 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
-@@ -343,0 +344 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -372,0 +373 @@ int ioctl(int fd, unsigned long request, ...) {
 +    if (state.description->netlink) return errno = EACCES, -1;
-@@ -443 +444,2 @@ int fcntl(int fd, int cmd, ...) {
+@@ -472 +473,2 @@ int fcntl(int fd, int cmd, ...) {
 -              if (!state.description->native_nonblocking_datagram &&
 +              if (!state.description->netlink &&
 +                  !state.description->native_nonblocking_datagram &&
