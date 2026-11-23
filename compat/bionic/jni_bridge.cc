@@ -891,6 +891,64 @@ void Install() {
   });
 }
 
+// The arm64 stand-in's Runtime functions (gesher/art_shim.h): what
+// art::Runtime's do, on this process's Runtime. A pointer that is not the
+// Runtime is reported and left alone.
+void SYSV RuntimeDisableVerifierSysv(void* runtime) {
+  if (gesher_art_runtime_disable_verifier(runtime)) {
+    std::fprintf(stderr, "gesher art: the app disabled ART's verifier (Runtime::DisableVerifier)\n");
+  } else {
+    std::fprintf(stderr, "gesher art: Runtime::DisableVerifier called on %p, not the Runtime: ignored\n",
+                 runtime);
+  }
+}
+int SYSV RuntimeVerificationBit(const void* runtime, int bit, const char* what) {
+  const int state = gesher_art_runtime_verification(runtime);
+  if (state < 0) {
+    std::fprintf(stderr, "gesher art: Runtime::%s called on %p, not the Runtime: false\n", what,
+                 runtime);
+    return 0;
+  }
+  return (state & bit) != 0 ? 1 : 0;
+}
+int SYSV RuntimeIsVerificationEnabledSysv(const void* runtime) {
+  return RuntimeVerificationBit(runtime, 1, "IsVerificationEnabled");
+}
+int SYSV RuntimeIsVerificationSoftFailSysv(const void* runtime) {
+  return RuntimeVerificationBit(runtime, 2, "IsVerificationSoftFail");
+}
+
+// An arm64 shell (NetEase Yidun's libnesec.so): the arm64 stand-in, its
+// Runtime functions bound to the host ones above, and ART's LoadClass calling
+// its LoadClass through a host entry into the translator.
+void LoadArtShimArm64For(const char* path, const std::string& dir) {
+  if (!gesher::arm64::EnsureLoaded()) {
+    std::fprintf(stderr, "gesher art: %s hooks ART by symbol, but arm64 translation is unavailable\n",
+                 path);
+    return;
+  }
+  const std::string version(reinterpret_cast<const char*>(gesher_art_oat_version()), 4);
+  std::string shim, message;
+  void* guest_open_common = nullptr;
+  void* guest = gesher::bionic::LoadArtShimArm64(dir, version, gesher_art_runtime_current(),
+                                                 &guest_open_common, &shim, &message);
+  void* entry = guest != nullptr ? gesher::arm64::HostEntry(guest) : nullptr;
+  void* open_common = guest_open_common != nullptr ? gesher::arm64::HostEntry(guest_open_common)
+                                                   : nullptr;
+  if (entry == nullptr || open_common == nullptr) {
+    std::fprintf(stderr, "gesher art: %s hooks ART by symbol, but no arm64 stand-in libart.so: %s\n",
+                 path, message.c_str());
+    return;
+  }
+  gesher_art_open_common_hook.store(open_common, std::memory_order_release);
+  gesher_art_load_class_hook.store(entry, std::memory_order_release);
+  std::fprintf(stderr,
+               "gesher art: %s hooks ART by symbol: ClassLinker::LoadClass, "
+               "DexFileLoader::OpenCommon and Runtime's verifier controls from an arm64 stand-in "
+               "libart.so (%s)\n",
+               path, shim.c_str());
+}
+
 // ART's own JNIEnv in loaded code (ADR 0086). Ijiami makes Java methods native by
 // writing their ArtMethod (flags and JNI entry) instead of RegisterNatives, so ART
 // calls its functions with its own JNIEnv, not the proxy the NativeEntry stub
@@ -978,64 +1036,6 @@ bool InstallCallerAbiJniTable() {
                "gesher art: ART's JNIEnv table chooses its ABI by caller (a packer calls it "
                "from loaded code)\n");
   return true;
-}
-
-// The arm64 stand-in's Runtime functions (gesher/art_shim.h): what
-// art::Runtime's do, on this process's Runtime. A pointer that is not the
-// Runtime is reported and left alone.
-void SYSV RuntimeDisableVerifierSysv(void* runtime) {
-  if (gesher_art_runtime_disable_verifier(runtime)) {
-    std::fprintf(stderr, "gesher art: the app disabled ART's verifier (Runtime::DisableVerifier)\n");
-  } else {
-    std::fprintf(stderr, "gesher art: Runtime::DisableVerifier called on %p, not the Runtime: ignored\n",
-                 runtime);
-  }
-}
-int SYSV RuntimeVerificationBit(const void* runtime, int bit, const char* what) {
-  const int state = gesher_art_runtime_verification(runtime);
-  if (state < 0) {
-    std::fprintf(stderr, "gesher art: Runtime::%s called on %p, not the Runtime: false\n", what,
-                 runtime);
-    return 0;
-  }
-  return (state & bit) != 0 ? 1 : 0;
-}
-int SYSV RuntimeIsVerificationEnabledSysv(const void* runtime) {
-  return RuntimeVerificationBit(runtime, 1, "IsVerificationEnabled");
-}
-int SYSV RuntimeIsVerificationSoftFailSysv(const void* runtime) {
-  return RuntimeVerificationBit(runtime, 2, "IsVerificationSoftFail");
-}
-
-// An arm64 shell (NetEase Yidun's libnesec.so): the arm64 stand-in, its
-// Runtime functions bound to the host ones above, and ART's LoadClass calling
-// its LoadClass through a host entry into the translator.
-void LoadArtShimArm64For(const char* path, const std::string& dir) {
-  if (!gesher::arm64::EnsureLoaded()) {
-    std::fprintf(stderr, "gesher art: %s hooks ART by symbol, but arm64 translation is unavailable\n",
-                 path);
-    return;
-  }
-  const std::string version(reinterpret_cast<const char*>(gesher_art_oat_version()), 4);
-  std::string shim, message;
-  void* guest_open_common = nullptr;
-  void* guest = gesher::bionic::LoadArtShimArm64(dir, version, gesher_art_runtime_current(),
-                                                 &guest_open_common, &shim, &message);
-  void* entry = guest != nullptr ? gesher::arm64::HostEntry(guest) : nullptr;
-  void* open_common = guest_open_common != nullptr ? gesher::arm64::HostEntry(guest_open_common)
-                                                   : nullptr;
-  if (entry == nullptr || open_common == nullptr) {
-    std::fprintf(stderr, "gesher art: %s hooks ART by symbol, but no arm64 stand-in libart.so: %s\n",
-                 path, message.c_str());
-    return;
-  }
-  gesher_art_open_common_hook.store(open_common, std::memory_order_release);
-  gesher_art_load_class_hook.store(entry, std::memory_order_release);
-  std::fprintf(stderr,
-               "gesher art: %s hooks ART by symbol: ClassLinker::LoadClass, "
-               "DexFileLoader::OpenCommon and Runtime's verifier controls from an arm64 stand-in "
-               "libart.so (%s)\n",
-               path, shim.c_str());
 }
 
 // An app library that is a packer's shell hooking ART by symbol (Ijiami's
