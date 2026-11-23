@@ -136,6 +136,8 @@ enum Op : uint32_t {
   // Open a bounded protected WASAPI render connection. The payload is a
   // version and a UTF-16 label, followed by the audio_render protocol.
   kAudioRender = 21,
+  // Starts a host capture lane or asks for real input endpoint availability.
+  kAudioCapture = 22,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

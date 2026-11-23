@@ -23,7 +23,8 @@ constexpr uint32_t kMaxRenderFrames = 8192;
 constexpr uint32_t kAllowedGroups = (1u << kNumGroups) - 1;
 constexpr ULONGLONG kResponseMs = 100;
 
-struct RenderInfo {
+struct EndpointInfo {
+  uint32_t available = 0;
   uint32_t rate = 0;
   uint32_t channels = 0;
   uint32_t latency_frames = 0;
@@ -49,19 +50,31 @@ void CopyText(char (&destination)[Size], const std::string& source) {
   std::memcpy(destination, source.data(), std::min(Size - 1, source.size()));
 }
 
+bool AwaitInfo(HANDLE pipe, EndpointInfo* info) {
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  uint32_t read = 1;
+  return Transfer(pipe, *info, false, deadline) && Transfer(pipe, read, true, deadline);
+}
+
+bool SendInfo(HANDLE pipe, EndpointInfo& info) {
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  uint32_t read = 0;
+  return Transfer(pipe, info, true, deadline) && Transfer(pipe, read, false, deadline) && read == 1;
+}
+
 class GuestSink final : public Sink {
  public:
   explicit GuestSink(HANDLE pipe) : pipe_(pipe) {}
   ~GuestSink() override { CloseHandle(pipe_); }
 
   bool ReadInfo(std::string* error) {
-    if (!Transfer(pipe_, info_, false, GetTickCount64() + 5000)) {
+    if (!AwaitInfo(pipe_, &info_)) {
       *error = "WASAPI broker: the authenticated endpoint is unavailable";
       return false;
     }
     info_.device_name[sizeof(info_.device_name) - 1] = '\0';
     info_.description[sizeof(info_.description) - 1] = '\0';
-    if (!info_.rate || !info_.channels || info_.channels > kMaxRenderChannels) {
+    if (!info_.available || !info_.rate || !info_.channels || info_.channels > kMaxRenderChannels) {
       *error = info_.description;
       return false;
     }
@@ -98,7 +111,7 @@ class GuestSink final : public Sink {
 
  private:
   HANDLE pipe_;
-  RenderInfo info_{};
+  EndpointInfo info_{};
   std::vector<float> samples_;
 };
 
@@ -170,8 +183,9 @@ void ServeBrokeredAudio(HANDLE pipe, const std::u16string& label, uint32_t owner
   } com;
   std::string error;
   auto sink = OpenWasapiSink(label, &error, owner);
-  RenderInfo info{};
+  EndpointInfo info{};
   if (sink) {
+    info.available = 1;
     info.rate = sink->rate();
     info.channels = sink->channels();
     info.latency_frames = sink->latency_frames();
@@ -181,7 +195,7 @@ void ServeBrokeredAudio(HANDLE pipe, const std::u16string& label, uint32_t owner
   } else {
     CopyText(info.description, error);
   }
-  if (!Transfer(pipe, info, true, GetTickCount64() + 5000) || !sink) return;
+  if (!SendInfo(pipe, info) || !sink) return;
   HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                         TIMER_MODIFY_STATE | SYNCHRONIZE);
   if (!timer) timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
@@ -202,6 +216,162 @@ void ServeBrokeredAudio(HANDLE pipe, const std::u16string& label, uint32_t owner
     }
   }
   CloseHandle(timer);
+}
+
+namespace {
+
+constexpr size_t kCaptureSamples = 1u << 20;
+enum class CaptureAction : uint32_t { kStart = 1, kStop, kPull };
+struct CaptureReply {
+  uint32_t okay = 0;
+  uint32_t samples = 0;
+};
+
+class GuestCapture final : public CaptureSource {
+ public:
+  GuestCapture(HANDLE pipe, EndpointInfo info) : pipe_(pipe), info_(info) {}
+  ~GuestCapture() override { CloseHandle(pipe_); }
+  uint32_t rate() const override { return info_.rate; }
+  uint32_t channels() const override { return info_.channels; }
+  std::string Describe() const override { return info_.description; }
+  std::string DeviceName() const override { return info_.device_name; }
+
+  bool Start() override { return Exchange(CaptureAction::kStart); }
+  void Stop() override { Exchange(CaptureAction::kStop); }
+
+  bool Pull(std::vector<float>* out) override {
+    const ULONGLONG deadline = GetTickCount64() + 1000;
+    CaptureAction action = CaptureAction::kPull;
+    CaptureReply reply;
+    if (!Transfer(pipe_, action, true, deadline) || !Transfer(pipe_, reply, false, deadline) ||
+        !reply.okay || reply.samples > kCaptureSamples || reply.samples % info_.channels != 0) return false;
+    const size_t start = out->size();
+    out->resize(start + reply.samples);
+    if (reply.samples == 0 || binder_bootstrap::Transfer(
+            pipe_, out->data() + start, reply.samples * sizeof(float), false, deadline)) return true;
+    out->resize(start);
+    return false;
+  }
+
+ private:
+  bool Exchange(CaptureAction action) {
+    const ULONGLONG deadline = GetTickCount64() + 1000;
+    CaptureReply reply;
+    return Transfer(pipe_, action, true, deadline) && Transfer(pipe_, reply, false, deadline) &&
+           reply.okay == 1 && reply.samples == 0;
+  }
+
+  HANDLE pipe_;
+  EndpointInfo info_;
+};
+
+}  // namespace
+
+std::unique_ptr<CaptureSource> OpenBrokeredCapture(std::string* error) {
+  HANDLE pipe = binder_endpoint::OpenAudioCapture(false);
+  if (pipe == INVALID_HANDLE_VALUE) {
+    *error = "WASAPI capture broker: the authenticated endpoint is unavailable";
+    return nullptr;
+  }
+  EndpointInfo info;
+  const bool received = AwaitInfo(pipe, &info);
+  info.description[sizeof(info.description) - 1] = '\0';
+  info.device_name[sizeof(info.device_name) - 1] = '\0';
+  if (!received || !info.available || !info.rate || !info.channels) {
+    *error = received ? info.description : "WASAPI capture broker disconnected";
+    CloseHandle(pipe);
+    return nullptr;
+  }
+  return std::make_unique<GuestCapture>(pipe, info);
+}
+
+bool HasBrokeredCaptureEndpoint(std::string* name) {
+  HANDLE pipe = binder_endpoint::OpenAudioCapture(true);
+  if (pipe == INVALID_HANDLE_VALUE) return false;
+  EndpointInfo info;
+  const bool received = AwaitInfo(pipe, &info);
+  CloseHandle(pipe);
+  info.device_name[sizeof(info.device_name) - 1] = '\0';
+  if (!received || !info.available) return false;
+  *name = info.device_name;
+  return true;
+}
+
+void ServeBrokeredCapture(HANDLE pipe, bool info_only, const std::function<bool()>& is_live,
+                          const std::function<bool()>& allowed) {
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr)) return;
+  if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return;
+  struct ComScope {
+    ~ComScope() { CoUninitialize(); }
+  } com;
+  EndpointInfo info;
+  std::string name;
+  if (info_only) {
+    if (is_live() && HasWasapiCaptureEndpoint(&name)) {
+      info.available = 1;
+      CopyText(info.device_name, name);
+    }
+    SendInfo(pipe, info);
+    return;
+  }
+  std::string error;
+  auto source = allowed() ? OpenWasapiCapture(false, &error) : nullptr;
+  if (source) {
+    info.available = 1;
+    info.rate = source->rate();
+    info.channels = source->channels();
+    CopyText(info.device_name, source->DeviceName());
+    CopyText(info.description, source->Describe());
+  } else {
+    CopyText(info.description, error.empty() ? "RECORD_AUDIO permission denied" : error);
+  }
+  if (!SendInfo(pipe, info) || !source) return;
+
+  bool capturing = false;
+  ULONGLONG last_request = GetTickCount64();
+  std::vector<float> samples;
+  while (is_live()) {
+    DWORD bytes = 0;
+    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr)) break;
+    if (bytes < sizeof(CaptureAction)) {
+      // A client that stops polling cannot leave the microphone running.
+      if (capturing && GetTickCount64() - last_request > 1000) break;
+      Sleep(2);
+      continue;
+    }
+    last_request = GetTickCount64();
+    const ULONGLONG deadline = last_request + 1000;
+    CaptureAction action{};
+    if (!Transfer(pipe, action, false, deadline)) break;
+    CaptureReply reply;
+    samples.clear();
+    switch (action) {
+      case CaptureAction::kStart:
+        capturing = allowed() && (capturing || source->Start());
+        reply.okay = capturing;
+        break;
+      case CaptureAction::kStop:
+        if (capturing) source->Stop();
+        capturing = false;
+        reply.okay = 1;
+        break;
+      case CaptureAction::kPull:
+        if (capturing && allowed() && source->Pull(&samples) &&
+            samples.size() <= kCaptureSamples && allowed()) {
+          reply.okay = 1;
+          reply.samples = static_cast<uint32_t>(samples.size());
+        }
+        break;
+      default:
+        break;
+    }
+    if (!Transfer(pipe, reply, true, deadline) ||
+        (reply.samples && !binder_bootstrap::Transfer(pipe, samples.data(),
+             reply.samples * sizeof(float), true, deadline))) break;
+    if (!reply.okay) break;
+  }
+  source->Stop();
 }
 
 }  // namespace gesher::media

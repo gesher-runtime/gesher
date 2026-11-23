@@ -2,6 +2,8 @@
 // (capture.h; docs/media.md "Recording", ADR 0059).
 
 #include "capture.h"
+#include "brokered_audio.h"
+#include <gesher/binder_endpoint.h>
 
 #include <time.h>
 #include <gesher/clocks.h>
@@ -210,7 +212,8 @@ std::unique_ptr<CaptureSource> OpenSource(std::string* error) {
     return nullptr;
 #endif
   }
-  return OpenWasapiCapture(false, error);
+  return binder_endpoint::Current().IsGuest() ? OpenBrokeredCapture(error)
+                                             : OpenWasapiCapture(false, error);
 }
 
 }  // namespace
@@ -265,7 +268,9 @@ class CaptureEngine {
       return result;
     }
     std::string name;
-    if (HasWasapiCaptureEndpoint(&name)) {
+    const bool available = binder_endpoint::Current().IsGuest()
+        ? HasBrokeredCaptureEndpoint(&name) : HasWasapiCaptureEndpoint(&name);
+    if (available) {
       result.device = true;
       result.device_name = name;
       result.description = "WASAPI shared mode capture on " + name;

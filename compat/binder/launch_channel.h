@@ -24,7 +24,8 @@ using binder_bootstrap::ReadStartup;
 using binder_bootstrap::Transfer;
 
 enum class Action : uint32_t { kEnroll = 1, kHandoff, kRetire, kRevokeInstallation,
-                               kRestoreInstallation, kAttachJob, kEnableNetlinkInspection };
+                               kRestoreInstallation, kAttachJob, kEnableNetlinkInspection,
+                               kAttachCapturePolicy };
 
 struct Request {
   uint32_t magic = 0x474c4152;  // GLAR
@@ -39,7 +40,8 @@ struct Request {
   process_identity::Sid container;
 };
 
-inline bool PrivatePipe(binder_peer::OwnedHandle* server, binder_peer::OwnedHandle* writer) {
+inline bool PrivatePipe(binder_peer::OwnedHandle* server, binder_peer::OwnedHandle* writer,
+                        bool overlapped_server = false) {
   std::array<UCHAR, 24> random{};
   using Random = NTSTATUS(WINAPI*)(BCRYPT_ALG_HANDLE, PUCHAR, ULONG, ULONG);
   const HMODULE bcrypt = LoadLibraryExW(L"bcrypt.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -67,15 +69,18 @@ inline bool PrivatePipe(binder_peer::OwnedHandle* server, binder_peer::OwnedHand
   }
   SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
   binder_peer::OwnedHandle pipe(CreateNamedPipeW(
-      name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+      name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE |
+                        (overlapped_server ? FILE_FLAG_OVERLAPPED : 0),
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
       1, 4096, 4096, 0, &attributes));
   LocalFree(descriptor);
   if (pipe.get() == INVALID_HANDLE_VALUE) return false;
   binder_peer::OwnedHandle client(CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
       nullptr, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr));
+  OVERLAPPED connect{};
   if (client.get() == INVALID_HANDLE_VALUE ||
-      (!ConnectNamedPipe(pipe.get(), nullptr) && GetLastError() != ERROR_PIPE_CONNECTED)) {
+      (!ConnectNamedPipe(pipe.get(), overlapped_server ? &connect : nullptr) &&
+       GetLastError() != ERROR_PIPE_CONNECTED)) {
     return false;
   }
   DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;

@@ -1628,6 +1628,25 @@ void ReapRevokedPeers() {
   for (const auto& proc : revoked) ProcRelease(proc.get());
 }
 
+std::mutex g_capture_policy_lock;
+peer::OwnedHandle g_capture_policy;
+
+[[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process) {
+  if (!process || process->role != peer::Role::kApplication ||
+      !g_peer_registry->Live(process)) return false;
+  std::lock_guard<std::mutex> lock(g_capture_policy_lock);
+  if (!g_capture_policy) return false;
+  uint32_t uid = process->uid;
+  uint32_t allowed = 0;
+  const ULONGLONG deadline = GetTickCount64() + 500;
+  if (!launch::Transfer(g_capture_policy.get(), &uid, sizeof(uid), true, deadline) ||
+      !launch::Transfer(g_capture_policy.get(), &allowed, sizeof(allowed), false, deadline)) {
+    g_capture_policy.reset();
+    return false;
+  }
+  return allowed == 1 && g_peer_registry->Live(process);
+}
+
 void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
                           gesher::process_identity::Principal authority) {
   peer::OwnedHandle endpoint_owner(endpoint);
@@ -1698,6 +1717,17 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
         accepted = !g_record_only && device_attached && system &&
             request.pid == system->generation.pid && request.birth == system->generation.birth;
         if (accepted) g_netlink_inspection.store(true, std::memory_order_release);
+        break;
+      }
+      case launch::Action::kAttachCapturePolicy: {
+        peer::OwnedHandle pipe(launch::DecodeHandle(request.process));
+        if ((system || g_record_only) && pipe && GetFileType(pipe.get()) == FILE_TYPE_PIPE) {
+          std::lock_guard<std::mutex> lock(g_capture_policy_lock);
+          if (!g_capture_policy) {
+            g_capture_policy = std::move(pipe);
+            accepted = true;
+          }
+        }
         break;
       }
     }
@@ -1976,6 +2006,27 @@ void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
 
 #ifdef GESHER_AUDIO_RENDER_BROKER
 std::set<std::pair<DWORD, uint64_t>> g_audio_renderers;
+std::set<std::pair<DWORD, uint64_t>> g_audio_capturers;
+
+void ServeAudioCapture(HANDLE pipe, In in) {
+  uint32_t version = 0, info_only = 0;
+  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
+      !in.Get(&info_only) || info_only > 1 || in.p != in.end) return;
+  const auto process = g_peer_registry->Authenticate(pipe);
+  if (!process || process->role != peer::Role::kApplication) return;
+  const auto id = std::pair{process->generation.pid, process->generation.birth};
+  if (!info_only) {
+    std::lock_guard<std::mutex> lock(g_audio_lock);
+    if (!g_audio_capturers.insert(id).second) return;
+  }
+  gesher::media::ServeBrokeredCapture(pipe, info_only != 0,
+      [&] { return g_peer_registry->Live(process); },
+      [&] { return CaptureAuthorized(process); });
+  if (!info_only) {
+    std::lock_guard<std::mutex> lock(g_audio_lock);
+    g_audio_capturers.erase(id);
+  }
+}
 
 void ServeAudioRender(HANDLE pipe, In in) {
   uint32_t version = 0, length = 0;
@@ -2468,6 +2519,8 @@ void Serve(HANDLE pipe) {
 #ifdef GESHER_AUDIO_RENDER_BROKER
       } else if (op == wire::kAudioRender) {
         ServeAudioRender(pipe, in);
+      } else if (op == wire::kAudioCapture) {
+        ServeAudioCapture(pipe, in);
 #endif
 #endif
       } else if (!g_record_only) {
