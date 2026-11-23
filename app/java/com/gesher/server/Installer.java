@@ -24,6 +24,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -732,6 +733,7 @@ final class Installer {
 
     private static File extractBundle(File archive, File directory, List<File> splits) throws IOException {
         File base = null;
+        Path staging = directory.toPath().toAbsolutePath().normalize();
         byte[] buffer = new byte[64 * 1024];
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
             java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
@@ -746,18 +748,22 @@ final class Installer {
                 if (leaf.indexOf('\\') >= 0 || leaf.indexOf(':') >= 0) {
                     throw new IOException("Invalid APK bundle filename: " + leaf);
                 }
-                File out = new File(directory, leaf);
+                Path out = staging.resolve(leaf).normalize();
+                if (!out.startsWith(staging) || !staging.equals(out.getParent())) {
+                    throw new IOException("Invalid APK bundle filename: " + leaf);
+                }
                 try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = Files.newOutputStream(out.toPath(),
+                        OutputStream os = Files.newOutputStream(out,
                                 StandardOpenOption.CREATE_NEW)) {
                     for (int n; (n = in.read(buffer)) > 0; ) os.write(buffer, 0, n);
                 }
                 if (!apk) continue;
-                if (ApkPackage.codeApkLite(out).getSplitName() != null) {
-                    splits.add(out);
+                File extracted = out.toFile();
+                if (!ApkPackage.isBaseApk(extracted)) {
+                    splits.add(extracted);
                 } else {
                     if (base != null) throw new IOException("Multiple base APKs in " + archive);
-                    base = out;
+                    base = extracted;
                 }
             }
         }

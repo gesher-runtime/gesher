@@ -4,6 +4,7 @@
 package com.gesher.app.shell;
 
 import com.gesher.app.PackageBundles;
+import com.gesher.server.ApkPackage;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,36 +35,21 @@ final class IconApks implements AutoCloseable {
         File dir = Files.createTempDirectory("gesher-icon-").toFile();
         try (ZipFile zip = new ZipFile(source)) {
             List<ZipEntry> entries = new ArrayList<>();
-            ZipEntry base = null;
-            ZipEntry candidate = null;
-            int candidates = 0;
             for (java.util.Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements();) {
                 ZipEntry entry = e.nextElement();
                 String leaf = new File(entry.getName()).getName();
                 if (entry.isDirectory() || !leaf.endsWith(".apk")) continue;
                 if (entries.size() >= 512) throw new IOException("too many APKs in " + source);
                 entries.add(entry);
-                if (leaf.equals("base.apk") || leaf.equals("base-master.apk")
-                        || leaf.equals("universal.apk")) {
-                    if (base != null) throw new IOException("ambiguous base APK in " + source);
-                    base = entry;
-                } else if (!leaf.startsWith("split_") && !leaf.startsWith("config.")
-                        && !entry.getName().contains("/")) {
-                    candidate = entry;
-                    candidates++;
-                }
             }
-            if (base == null && candidates == 1) base = candidate;
-            if (base == null) throw new IOException("no unique base APK in " + source);
-            entries.remove(base);
-            entries.add(0, base);
             List<String> paths = new ArrayList<>();
+            String base = null;
             long remaining = 1024L * 1024 * 1024;
             byte[] buffer = new byte[64 * 1024];
-            for (ZipEntry entry : entries) {
+            for (int i = 0; i < entries.size(); i++) {
                 // Generated names also keep archive paths out of the filesystem.
-                File apk = new File(dir, paths.size() + ".apk");
-                try (InputStream in = zip.getInputStream(entry);
+                File apk = new File(dir, i + ".apk");
+                try (InputStream in = zip.getInputStream(entries.get(i));
                         OutputStream out = Files.newOutputStream(apk.toPath())) {
                     int count;
                     while ((count = in.read(buffer)) != -1) {
@@ -72,9 +58,16 @@ final class IconApks implements AutoCloseable {
                         out.write(buffer, 0, count);
                     }
                 }
-                paths.add(apk.getAbsolutePath());
+                if (ApkPackage.isBaseApk(apk)) {
+                    if (base != null) throw new IOException("ambiguous base APK in " + source);
+                    base = apk.getAbsolutePath();
+                } else {
+                    paths.add(apk.getAbsolutePath());
+                }
             }
-            return new IconApks(paths.get(0), paths.toArray(new String[0]), dir);
+            if (base == null) throw new IOException("no unique base APK in " + source);
+            paths.add(0, base);
+            return new IconApks(base, paths.toArray(new String[0]), dir);
         } catch (IOException | RuntimeException e) {
             remove(dir);
             throw e;
