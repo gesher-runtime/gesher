@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <linux/android/binder.h>
+#include <gesher/binder_endpoint.h>
 #include <gesher/file_description.h>
 
 #include "binder_internal.h"
@@ -118,8 +119,13 @@ std::wstring PipeName() {
 HANDLE ConnectPipe(const std::wstring& name) {
   for (int attempt = 0; attempt < 50; ++attempt) {
     HANDLE h = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING,
-                           0, nullptr);
-    if (h != INVALID_HANDLE_VALUE) return h;
+                           SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+      if (binder_endpoint::Current().VerifyPipe(h)) return h;
+      CloseHandle(h);
+      SetLastError(ERROR_ACCESS_DENIED);
+      return INVALID_HANDLE_VALUE;
+    }
     if (GetLastError() != ERROR_PIPE_BUSY) return INVALID_HANDLE_VALUE;
     WaitNamedPipeW(name.c_str(), 100);
   }
@@ -779,7 +785,7 @@ int OpenBinder(int flags) {
   file->proc_pipe = pipe;
   file->non_block = (flags & O_NONBLOCK) != 0;
   Message hello;
-  hello.Put<uint32_t>(wire::kHelloProc);
+  hello.Put<uint32_t>(binder_endpoint::Current().IsOperator() ? wire::kHelloOperator : wire::kHelloProc);
   hello.Put<uint32_t>(wire::kMagic);
   hello.Put<uint32_t>(wire::kVersion);
   hello.Put<uint32_t>(GetCurrentProcessId());

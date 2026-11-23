@@ -195,6 +195,10 @@ static jboolean Zygote_hasProtectedLaunchAuthority(JNIEnv*, jclass) {
     return gesher::zygote::HasProtectedLaunchAuthority();
 }
 
+static jboolean Zygote_prepareProtectedOperator(JNIEnv*, jclass, jint pid, jlong birth) {
+    return birth > 0 && gesher::zygote::PrepareProtectedOperator(pid, static_cast<uint64_t>(birth));
+}
+
 static std::array<uint8_t, 16> ZygoteInstallation(jlong high, jlong low) {
     std::array<uint8_t, 16> id{};
     for (unsigned shift = 0; shift < 64; shift += 8) {
@@ -215,8 +219,10 @@ static jint Zygote_spawnProtectedApp(JNIEnv* env, jclass, jstring commandLine,
         spec, static_cast<uint32_t>(uid), ZygoteInstallation(installHigh, installLow));
 }
 
-static jboolean Zygote_revokeProtectedInstallation(JNIEnv*, jclass, jlong high, jlong low) {
-    return gesher::zygote::RevokeProtectedInstallation(ZygoteInstallation(high, low));
+static jboolean Zygote_changeProtectedInstallation(JNIEnv*, jclass, jlong high, jlong low,
+                                                     jboolean revoke) {
+    return gesher::zygote::ChangeProtectedInstallation(ZygoteInstallation(high, low),
+                                                        revoke == JNI_TRUE);
 }
 
 static jint Zygote_ensureAppContainer(JNIEnv* env, jclass, jstring name, jstring displayName) {
@@ -335,11 +341,12 @@ static const JNINativeMethod gZygoteMethods[] = {
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)[I",
      GESHER_JNI(Zygote_startProtectedDevice)},
     {"nativeHasProtectedLaunchAuthority", "()Z", GESHER_JNI(Zygote_hasProtectedLaunchAuthority)},
+    {"nativePrepareProtectedOperator", "(IJ)Z", GESHER_JNI(Zygote_prepareProtectedOperator)},
     {"nativeSpawnProtectedApp",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"
      "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;IJJ)I",
      GESHER_JNI(Zygote_spawnProtectedApp)},
-    {"nativeRevokeProtectedInstallation", "(JJ)Z", GESHER_JNI(Zygote_revokeProtectedInstallation)},
+    {"nativeChangeProtectedInstallation", "(JJZ)Z", GESHER_JNI(Zygote_changeProtectedInstallation)},
     {"nativeEnsureAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_ensureAppContainer)},
     {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",

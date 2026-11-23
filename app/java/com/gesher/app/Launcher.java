@@ -369,6 +369,10 @@ public final class Launcher {
             if (state != null) {
                 String name = state.getProperty(Device.STATE_DEVICE);
                 if (Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
+                    if (protectedRequested() && !protectedDevice(state)) {
+                        throw new IllegalStateException("Shut down the current device before"
+                                + " starting a protected device");
+                    }
                     use(state);
                     log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
                     return state;
@@ -406,7 +410,19 @@ public final class Launcher {
 
     /** Binder calls of this process go to the device's binderd. */
     private static void use(Properties state) throws Exception {
+        if (protectedDevice(state) && !Zygote.nativePrepareProtectedOperator(
+                Device.pid(state, Device.BINDERD), Device.startTime(state, Device.BINDERD))) {
+            throw new IllegalStateException("Could not verify the protected Binder device");
+        }
         android.system.Os.setenv("GESHER_BINDER", state.getProperty(Device.STATE_DEVICE), true);
+    }
+
+    private static boolean protectedRequested() {
+        return "appcontainer-trusted".equals(System.getenv("GESHER_SANDBOX"));
+    }
+
+    private static boolean protectedDevice(Properties state) {
+        return "true".equals(state.getProperty(Device.STATE_PROTECTED));
     }
 
     private static Properties startDevice() throws Exception {
@@ -440,7 +456,7 @@ public final class Launcher {
         int binderd;
         int servicemanager;
         int server;
-        if ("appcontainer-trusted".equals(System.getenv("GESHER_SANDBOX"))) {
+        if (protectedRequested()) {
             args.add("--protected-launch");
             int[] children = Zygote.startProtectedDevice(name, List.of(binderCommand,
                     managerCommand, Zygote.commandLine(vm, SystemServer.class.getName(), args)),
@@ -448,6 +464,7 @@ public final class Launcher {
             binderd = children[0];
             servicemanager = children[1];
             server = children[2];
+            state.setProperty(Device.STATE_PROTECTED, "true");
             record(state, Device.BINDERD, binderd);
             record(state, Device.SERVICEMANAGER, servicemanager);
         } else {

@@ -8,12 +8,13 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 
 #include "../posix/include/gesher/windows_process_identity.h"
 
 namespace gesher::binder_peer {
 
-enum class Role : uint32_t { kLauncher = 1, kServiceManager, kSystemServer, kApplication };
+enum class Role : uint32_t { kLauncher = 1, kServiceManager, kSystemServer, kApplication, kOperator };
 
 struct HandleCloser {
   void operator()(void* handle) const {
@@ -50,6 +51,7 @@ class Registry {
         std::move(process), generation, role, uid, installation});
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_) return false;
+    if (role == Role::kApplication && revoked_installations_.count(installation)) return false;
     PruneExitedLocked();
     if (peers_.size() >= 4096 || peers_.find(generation.pid) != peers_.end()) return false;
     for (const auto& entry : peers_) {
@@ -71,6 +73,37 @@ class Registry {
     }
     return process_identity::MatchPipeSender(pipe, peer->process.get(), peer->generation) &&
                Live(peer) ? peer : Lease{};
+  }
+
+  // A separate launcher command can attach after the first launcher exits.
+  // Admit only the device owner's exact Windows logon principal as Android shell.
+  // System roles and APK identities continue to require the private launcher.
+  Lease AdmitOperator(HANDLE pipe) {
+    ULONG pid = 0;
+    process_identity::Principal sender;
+    if (!GetNamedPipeClientProcessId(pipe, &pid) ||
+        !process_identity::ReadPipePrincipal(pipe, &sender) || !(sender == authority_)) {
+      return {};
+    }
+    OwnedHandle process(OpenProcess(SYNCHRONIZE | PROCESS_DUP_HANDLE |
+                                    PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+    process_identity::Process generation;
+    if (!process || !process_identity::ReadLiveProcess(process.get(), &generation) ||
+        !process_identity::MatchPipeSender(pipe, process.get(), generation) ||
+        !(generation.principal == authority_)) return {};
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_) return {};
+    PruneExitedLocked();
+    const auto previous = peers_.find(pid);
+    if (previous != peers_.end()) {
+      const auto& peer = previous->second;
+      return (peer->role == Role::kLauncher || peer->role == Role::kOperator) &&
+          peer->generation.birth == generation.birth ? peer : Lease{};
+    }
+    if (peers_.size() >= 4096) return {};
+    Lease admitted(new Peer{std::move(process), generation, Role::kOperator, 2000, {}});
+    peers_.emplace(pid, admitted);
+    return admitted;
   }
 
   bool Live(const Lease& peer) {
@@ -100,8 +133,11 @@ class Registry {
     return true;
   }
 
-  void RevokeInstallation(const std::array<uint8_t, 16>& installation) {
+  bool RevokeInstallation(const std::array<uint8_t, 16>& installation) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || (revoked_installations_.size() >= 32768 &&
+                     !revoked_installations_.count(installation))) return false;
+    revoked_installations_.insert(installation);
     for (auto peer = peers_.begin(); peer != peers_.end();) {
       if (peer->second->role == Role::kApplication && peer->second->installation == installation) {
         peer = peers_.erase(peer);
@@ -109,12 +145,19 @@ class Registry {
         ++peer;
       }
     }
+    return true;
+  }
+
+  bool RestoreInstallation(const std::array<uint8_t, 16>& installation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return active_ && revoked_installations_.erase(installation) != 0;
   }
 
   void CloseAuthority() {
     std::lock_guard<std::mutex> lock(mutex_);
     active_ = false;
     peers_.clear();
+    revoked_installations_.clear();
   }
 
  private:
@@ -140,6 +183,7 @@ class Registry {
       case Role::kServiceManager:
       case Role::kSystemServer: return uid == 1000;
       case Role::kApplication: break;
+      case Role::kOperator: break;  // only AdmitOperator may allocate it
     }
     return false;
   }
@@ -155,6 +199,7 @@ class Registry {
   }
 
   const process_identity::Principal authority_;
+  std::set<std::array<uint8_t, 16>> revoked_installations_;
   std::mutex mutex_;
   std::map<DWORD, Lease> peers_;
   bool active_ = true;

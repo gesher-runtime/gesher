@@ -1,0 +1,103 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include <windows.h>
+
+#include <mutex>
+
+#include "binder_bootstrap.h"
+#include "windows_process_identity.h"
+
+namespace gesher::binder_endpoint {
+
+constexpr DWORD kPinRights = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+
+// Each protected child gets an actual process handle. Keeping it open avoids
+// numeric PID reuse, and verifying every physical pipe protects all Binder and
+// SCM_RIGHTS lanes when an endpoint becomes stale or unavailable.
+class Binding {
+ public:
+  Binding() {
+    binder_bootstrap::Startup startup;
+    if (!binder_bootstrap::ReadStartupRecord(&startup) ||
+        (startup.endpoint != binder_bootstrap::Endpoint::kClient &&
+         startup.endpoint != binder_bootstrap::Endpoint::kSystemServer)) return;
+    required_ = true;
+    HANDLE inherited = binder_bootstrap::DecodeHandle(startup.broker);
+    if (GetProcessId(inherited) == 0) return;
+    if (startup.endpoint == binder_bootstrap::Endpoint::kClient) {
+      if (startup.channel != 0 || startup.job_delivery != 0) return;
+      broker_ = inherited;
+      if (!SetHandleInformation(broker_, HANDLE_FLAG_INHERIT, 0)) {
+        CloseHandle(broker_);
+        broker_ = nullptr;
+      }
+    } else {
+      DuplicateHandle(GetCurrentProcess(), inherited, GetCurrentProcess(),
+                      &broker_, kPinRights, FALSE, 0);
+    }
+  }
+
+  Binding(const Binding&) = delete;
+  Binding& operator=(const Binding&) = delete;
+  ~Binding() {
+    if (broker_ != nullptr) CloseHandle(broker_);
+  }
+
+  bool PrepareOperator(DWORD pid, uint64_t birth) {
+    process_identity::Process caller, peer;
+    if (pid == 0 || birth == 0 ||
+        !process_identity::ReadLiveProcess(GetCurrentProcess(), &caller) ||
+        caller.principal.container.size != 0 || caller.principal.restricted ||
+        caller.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID) return false;
+    HANDLE process = OpenProcess(kPinRights, FALSE, pid);
+    if (!process) return false;
+    if (!process_identity::ReadLiveProcess(process, &peer) || peer.pid != pid || peer.birth != birth ||
+        !(peer.principal == caller.principal)) {
+      CloseHandle(process);
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (broker_ != nullptr) {
+      const bool same = operator_ && GetProcessId(broker_) == pid &&
+          WaitForSingleObject(broker_, 0) == WAIT_TIMEOUT;
+      CloseHandle(process);
+      return same;
+    }
+    if (required_) {
+      CloseHandle(process);
+      return false;
+    }
+    broker_ = process;
+    required_ = operator_ = true;
+    return true;
+  }
+
+  bool VerifyPipe(HANDLE pipe) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!required_) return true;
+    ULONG owner = 0;
+    return broker_ != nullptr && WaitForSingleObject(broker_, 0) == WAIT_TIMEOUT &&
+           GetNamedPipeServerProcessId(pipe, &owner) && owner == GetProcessId(broker_) &&
+           WaitForSingleObject(broker_, 0) == WAIT_TIMEOUT;
+  }
+
+  bool IsOperator() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return operator_;
+  }
+
+ private:
+  std::mutex mutex_;
+  HANDLE broker_ = nullptr;
+  bool required_ = false;
+  bool operator_ = false;
+};
+
+inline Binding& Current() {
+  static Binding binding;
+  return binding;
+}
+
+}  // namespace gesher::binder_endpoint

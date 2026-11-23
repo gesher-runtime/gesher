@@ -784,7 +784,7 @@ final class Installer {
         PackageRemovalStorage quarantine = new PackageRemovalStorage(packageName, e.codePath);
         mPm.beginPackageRemoval(target);
         mRemovalActive = true;
-        boolean committed = false, restored = false;
+        boolean committed = false, restored = false, nativeRevoked = false;
         Attribution metadata = mAttributions.get(packageName);
         try {
             mPm.checkPackageRemoval(packageName);
@@ -797,8 +797,11 @@ final class Installer {
             if (notifications != null) notifications.packageRemoved(packageName);
             // Retire any background start already queued while capabilities were canceled.
             mAtm.forceStopPackage(packageName);
-            if (SystemServer.isProtectedDevice() && !Zygote.revokeProtectedInstallation(target)) {
-                throw new IOException("Could not revoke native process identity for " + packageName);
+            if (SystemServer.isProtectedDevice()) {
+                nativeRevoked = Zygote.changeProtectedInstallation(target, true);
+                if (!nativeRevoked) {
+                    throw new IOException("Could not revoke native process identity for " + packageName);
+                }
             }
             try (PackageUids.Admission identity = PackageUids.prepareRetire(target)) {
                 quarantine.stage();
@@ -814,7 +817,14 @@ final class Installer {
             if (!committed) {
                 mEntries.put(packageName, e);
                 if (metadata != null) mAttributions.put(packageName, metadata);
-                try { quarantine.rollback(); restored = true; }
+                try {
+                    quarantine.rollback();
+                    restored = true;
+                    if (nativeRevoked && !Zygote.changeProtectedInstallation(target, false)) {
+                        failure.addSuppressed(new IOException("Could not restore native process identity"
+                                + " for " + packageName));
+                    }
+                }
                 catch (IOException restore) { failure.addSuppressed(restore); }
             }
             throw failure;

@@ -19,6 +19,7 @@
 #include "services_zygote.h"
 #include "app_container.h"
 #include "../binder/launch_channel.h"
+#include "../posix/include/gesher/binder_endpoint.h"
 #include "../posix/src/binder_wire.h"
 #include "../posix/include/gesher/windows_process_identity.h"
 
@@ -260,14 +261,15 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
     inherited_channel = make_inheritable(bootstrap->channel);
     inherited_broker = make_inheritable(bootstrap->broker);
     inherited_job_delivery = make_inheritable(bootstrap->job_delivery);
-    if (!inherited_channel || (bootstrap->broker != nullptr && !inherited_broker) ||
+    if ((bootstrap->channel != nullptr && !inherited_channel) ||
+        (bootstrap->broker != nullptr && !inherited_broker) ||
         (bootstrap->job_delivery != nullptr && !inherited_job_delivery)) {
       DWORD error = GetLastError();
       CloseHandle(nul);
       CloseHandle(log);
       return -static_cast<int>(error == ERROR_SUCCESS ? ERROR_INVALID_HANDLE : error);
     }
-    handles.push_back(inherited_channel.get());
+    if (inherited_channel) handles.push_back(inherited_channel.get());
     if (inherited_broker) handles.push_back(inherited_broker.get());
     if (inherited_job_delivery) handles.push_back(inherited_job_delivery.get());
     record.endpoint = bootstrap->endpoint;
@@ -443,7 +445,13 @@ std::vector<int> StartProtectedDevice(const std::u16string& device,
     return {};
   }
   const Enrollment manager_role{sender.get(), broker_handle.get(), peer::Role::kServiceManager, 1000};
-  const int manager = SpawnImpl(commands[1], environment, unset, logs[1], true, nullptr, nullptr,
+  HANDLE query_broker = nullptr;
+  constexpr DWORD kPinRights = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+  if (!DuplicateHandle(GetCurrentProcess(), broker_handle.get(), GetCurrentProcess(),
+                       &query_broker, kPinRights, FALSE, 0)) return {};
+  peer::OwnedHandle manager_broker(query_broker);
+  const BootstrapHandles manager_handles{launch::Endpoint::kClient, nullptr, manager_broker.get()};
+  const int manager = SpawnImpl(commands[1], environment, unset, logs[1], true, nullptr, &manager_handles,
                                 &manager_role, lifetime_job.get());
   if (manager <= 0) {
     stop_owned(broker);
@@ -538,6 +546,11 @@ bool HasProtectedLaunchAuthority() {
          WaitForSingleObject(authority.broker.get(), 0) == WAIT_TIMEOUT;
 }
 
+bool PrepareProtectedOperator(int broker_pid, uint64_t birth) {
+  return broker_pid > 0 && binder_endpoint::Current().PrepareOperator(
+      static_cast<DWORD>(broker_pid), birth);
+}
+
 int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std::u16string>& set,
     const std::vector<std::u16string>& unset, const std::u16string& log_path,
     const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation) {
@@ -545,22 +558,28 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
   auto& authority = Authority();
   if (!authority.channel || !authority.broker || uid < 10000 || uid > 19999 ||
       installation == std::array<uint8_t, 16>{}) return -ERROR_ACCESS_DENIED;
+  HANDLE query_broker = nullptr;
+  constexpr DWORD kPinRights = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+  if (!DuplicateHandle(GetCurrentProcess(), authority.broker.get(), GetCurrentProcess(),
+                       &query_broker, kPinRights, FALSE, 0)) return -ERROR_ACCESS_DENIED;
+  peer::OwnedHandle app_broker(query_broker);
+  const BootstrapHandles app_handles{launch::Endpoint::kClient, nullptr, app_broker.get()};
   bool channel_failed = false;
   const Enrollment enrollment{authority.channel.get(), authority.broker.get(),
                               peer::Role::kApplication, uid, installation, &channel_failed};
-  int pid = SpawnImpl(command_line, set, unset, log_path, false, &sandbox, nullptr, &enrollment);
+  int pid = SpawnImpl(command_line, set, unset, log_path, false, &sandbox, &app_handles, &enrollment);
   if (channel_failed) authority = {};
   return pid;
 }
 
-bool RevokeProtectedInstallation(const std::array<uint8_t, 16>& installation) {
+bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bool revoke) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& authority = Authority();
   if (!authority.channel || !authority.broker || installation == std::array<uint8_t, 16>{}) {
     return false;
   }
   launch::Request request;
-  request.action = launch::Action::kRevokeInstallation;
+  request.action = revoke ? launch::Action::kRevokeInstallation : launch::Action::kRestoreInstallation;
   request.installation = installation;
   bool channel_failed = false;
   bool accepted = SubmitLaunchRequest(authority.channel.get(), request, &channel_failed);
@@ -793,7 +812,8 @@ bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms)
   for (;;) {
     if (WaitForSingleObject(broker.value, 0) != WAIT_TIMEOUT) return false;
     pipe.value = CreateFileW(name.c_str(), binder_wire::kPipeClientAccess, 0, nullptr,
-                             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+                             OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT |
+                             SECURITY_IDENTIFICATION, nullptr);
     if (pipe.value != INVALID_HANDLE_VALUE) break;
     DWORD error = GetLastError(), left = remaining();
     if (!left || (error != ERROR_FILE_NOT_FOUND && error != ERROR_PIPE_BUSY)) return false;

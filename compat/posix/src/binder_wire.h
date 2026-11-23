@@ -109,6 +109,9 @@ enum Op : uint32_t {
   // Takes a group back out of its queue (its sendmsg failed) and closes it.
   // -> {token}; <- {status}: -ENOENT if a receiver already took it.
   kRightsCancel = 11,
+  // Same framing as kHelloProc. The protected broker authenticates the
+  // Windows device operator and assigns Android shell; the fields grant no role.
+  kHelloOperator = 12,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

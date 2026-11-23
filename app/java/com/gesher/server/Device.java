@@ -40,6 +40,7 @@ public final class Device {
     }
 
     public static final String STATE_DEVICE = "device";
+    public static final String STATE_PROTECTED = "protected_binder";
     public static final String STATE_SHUTDOWN_EVENT = "shutdown_event";
     public static final String BINDERD = "binderd";
     public static final String SERVICEMANAGER = "servicemanager";

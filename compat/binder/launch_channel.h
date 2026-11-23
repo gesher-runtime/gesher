@@ -12,51 +12,18 @@
 #include <string>
 
 #include "peer_registry.h"
+#include "../posix/include/gesher/binder_bootstrap.h"
 
 namespace gesher::binder_launch {
 
-enum class Endpoint : uint32_t { kBroker = 1, kSystemServer = 2 };
-enum class Action : uint32_t { kEnroll = 1, kHandoff, kRetire, kRevokeInstallation };
+using binder_bootstrap::Endpoint;
+using binder_bootstrap::EncodeHandle;
+using binder_bootstrap::DecodeHandle;
+using binder_bootstrap::Startup;
+using binder_bootstrap::ReadStartup;
 
-inline uint64_t EncodeHandle(HANDLE handle) {
-  return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(handle));
-}
-
-inline HANDLE DecodeHandle(uint64_t value) {
-  return value <= UINTPTR_MAX ? reinterpret_cast<HANDLE>(static_cast<uintptr_t>(value)) : nullptr;
-}
-
-// CreateProcess copies this immediately after the zero CRT descriptor count.
-// The numerical locators only name actual handles in the receiving process.
-struct Startup {
-  uint32_t crt_descriptors = 0;
-  uint32_t magic = 0x474c4155;  // GLAU
-  uint32_t version = 1;
-  Endpoint endpoint{};
-  uint64_t channel = 0;
-  uint64_t broker = 0;
-  uint64_t job_delivery = 0;
-};
-static_assert(sizeof(Startup) == 40);
-
-inline bool ReadStartup(Endpoint endpoint, Startup* result) {
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  GetStartupInfoW(&startup);
-  if (startup.cbReserved2 != sizeof(Startup) || startup.lpReserved2 == nullptr) return false;
-  Startup record;
-  std::memcpy(&record, startup.lpReserved2, sizeof(record));
-  if (record.crt_descriptors != 0 || record.magic != 0x474c4155 || record.version != 1 ||
-      record.endpoint != endpoint || GetFileType(DecodeHandle(record.channel)) != FILE_TYPE_PIPE ||
-      (endpoint == Endpoint::kBroker && (record.broker != 0 || record.job_delivery != 0)) ||
-      (endpoint == Endpoint::kSystemServer &&
-       (GetProcessId(DecodeHandle(record.broker)) == 0 ||
-        GetFileType(DecodeHandle(record.job_delivery)) != FILE_TYPE_PIPE))) {
-    return false;
-  }
-  *result = record;
-  return true;
-}
+enum class Action : uint32_t { kEnroll = 1, kHandoff, kRetire, kRevokeInstallation,
+                               kRestoreInstallation };
 
 struct Request {
   uint32_t magic = 0x474c4152;  // GLAR

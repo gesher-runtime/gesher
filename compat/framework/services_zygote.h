@@ -49,8 +49,9 @@ std::vector<int> StartProtectedDevice(const std::u16string& device,
 int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std::u16string>& set,
     const std::vector<std::u16string>& unset, const std::u16string& log_path,
     const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation);
-bool RevokeProtectedInstallation(const std::array<uint8_t, 16>& installation);
+bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bool revoke);
 bool HasProtectedLaunchAuthority();
+bool PrepareProtectedOperator(int broker_pid, uint64_t birth);
 
 // The container's profile for this Windows user, created if it does not exist.
 uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& display_name);

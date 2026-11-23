@@ -33,11 +33,12 @@ public final class Zygote {
     private static native int[] nativeStartProtectedDevice(String device, String[] commands,
             String[] logs, String[] environment);
     static native boolean nativeHasProtectedLaunchAuthority();
+    public static native boolean nativePrepareProtectedOperator(int brokerPid, long birth);
     private static native int nativeSpawnProtectedApp(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,
             String[] capabilities, int uid, long installHigh, long installLow);
-    private static native boolean nativeRevokeProtectedInstallation(long installHigh,
-            long installLow);
+    private static native boolean nativeChangeProtectedInstallation(long installHigh,
+            long installLow, boolean revoke);
     static native int nativeEnsureAppContainer(String container, String displayName);
     static native int nativeGrantToAppContainer(String path, String container, int access,
             boolean inherit);
@@ -138,10 +139,10 @@ public final class Zygote {
         return pid;
     }
 
-    static boolean revokeProtectedInstallation(ApkPackage pkg) {
+    static boolean changeProtectedInstallation(ApkPackage pkg, boolean revoke) {
         UUID owner = UUID.fromString(pkg.enabledStateOwner());
-        return nativeRevokeProtectedInstallation(owner.getMostSignificantBits(),
-                owner.getLeastSignificantBits());
+        return nativeChangeProtectedInstallation(owner.getMostSignificantBits(),
+                owner.getLeastSignificantBits(), revoke);
     }
 
     /** The process's creation time, 0 when it does not run. */

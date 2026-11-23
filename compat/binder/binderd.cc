@@ -1662,9 +1662,13 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
         break;
       case launch::Action::kRevokeInstallation:
         if (system && request.installation != std::array<uint8_t, 16>{}) {
-          g_peer_registry->RevokeInstallation(request.installation);
-          ReapRevokedPeers();
-          accepted = true;
+          accepted = g_peer_registry->RevokeInstallation(request.installation);
+          if (accepted) ReapRevokedPeers();
+        }
+        break;
+      case launch::Action::kRestoreInstallation:
+        if (system && request.installation != std::array<uint8_t, 16>{}) {
+          accepted = g_peer_registry->RestoreInstallation(request.installation);
         }
         break;
     }
@@ -1676,12 +1680,13 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
   ExitProcess(ERROR_BROKEN_PIPE);
 }
 
-void ServeProc(HANDLE pipe, In in) {
+void ServeProc(HANDLE pipe, In in, bool operator_hello) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
   peer::Registry::Lease identity;
   if (g_peer_registry) {
-    identity = g_peer_registry->Authenticate(pipe);
+    identity = operator_hello ? g_peer_registry->AdmitOperator(pipe)
+                              : g_peer_registry->Authenticate(pipe);
     if (!identity || identity->generation.pid > INT32_MAX) {
       WireReply reply;
       reply.Put<int32_t>(-EPERM);
@@ -1690,6 +1695,8 @@ void ServeProc(HANDLE pipe, In in) {
     }
     pid = identity->generation.pid;
     uid = identity->uid;
+  } else if (operator_hello) {
+    return;
   } else if (g_sandbox && ClientIsRestricted(pipe)) {
     // A first step of kernel-verified identity (ADR 0090, milestone M2 completes it):
     // a restricted process is an app, at its own pid. It cannot claim a system UID
@@ -2130,8 +2137,8 @@ void Serve(HANDLE pipe) {
     In in{msg.data(), msg.data() + msg.size()};
     uint32_t op, magic;
     if (in.Get(&op) && in.Get(&magic) && magic == wire::kMagic) {
-      if (op == wire::kHelloProc) {
-        ServeProc(pipe, in);
+      if (op == wire::kHelloProc || op == wire::kHelloOperator) {
+        ServeProc(pipe, in, op == wire::kHelloOperator);
       } else if (op == wire::kHelloThread) {
         ServeThread(pipe, in);
       } else if (op == wire::kHelloRights) {
