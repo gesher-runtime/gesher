@@ -1,4 +1,4 @@
-// The native media input gate; its Java host supplies the manifest decision.
+// The native media input gate; its Java host supplies the live UID grant decision.
 #pragma once
 
 namespace gesher::media {
