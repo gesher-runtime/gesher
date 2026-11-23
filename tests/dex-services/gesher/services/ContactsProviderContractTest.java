@@ -79,7 +79,7 @@ import sun.misc.Unsafe;
 /**
  * Contract tests for the built-in SQLite-backed {@code content://com.android.contacts}
  * provider, covering complete {@link ContactsContract} v2 schema and views, v1->v2 DB
- * upgrade, strict {@code SQLiteQueryBuilder}, loose {@code phone_lookup} matching and
+ * persistence, strict {@code SQLiteQueryBuilder}, loose {@code phone_lookup} matching and
  * auto-{@code data4}, transactional {@link ContentProvider#applyBatch}, sync-adapter
  * soft/hard deletes, display-name fallback chain, AppOps/URI-grant enforcement, and
  * removal of the legacy {@code content://contacts} authority.
@@ -160,7 +160,7 @@ public final class ContactsProviderContractTest {
             @Override public boolean releaseProvider(IContentProvider p) { return true; }
             @Override public boolean releaseUnstableProvider(IContentProvider p) { return true; }
             @Override public void unstableProviderDied(IContentProvider p) { }
-            @Override public void notifyChange(Uri uri, ContentObserver observer) {
+            @Override public void notifyChange(Uri uri, ContentObserver observer, boolean syncToNetwork) {
                 check(!Thread.holdsLock(provider), "Observer notified under provider lock");
                 check(Binder.getCallingUid() == Process.myUid(), "Observer notification leaked caller UID");
                 notifications.add(uri);
@@ -214,35 +214,69 @@ public final class ContactsProviderContractTest {
                     () -> provider.query(ContactsContract.Data.CONTENT_URI,
                             new String[] { "bogus_col" }, null, null, null));
 
-            // Insert two contacts for sort_key ordering and extended v2 columns
+            // Insert two contacts for sort_key ordering and the public projections.
             ContentValues rc1 = new ContentValues();
             rc1.put(ContactsContract.RawContacts.ACCOUNT_TYPE, "local");
             rc1.put(ContactsContract.RawContacts.ACCOUNT_NAME, "device");
             Uri raw1Uri = provider.insert(ContactsContract.RawContacts.CONTENT_URI, rc1);
             long raw1 = ContentUris.parseId(raw1Uri);
+            Uri rawEntity = Uri.withAppendedPath(raw1Uri, "entity");
+            try (Cursor c = provider.query(rawEntity,
+                    new String[] {"_id", "data_id"}, null, null, null)) {
+                check(c != null && c.getCount() == 1 && c.moveToFirst()
+                        && c.getLong(0) == raw1 && c.isNull(1),
+                        "Raw entity retains a raw contact with no data rows");
+            }
+            Uri unknownDirectory = ContactsContract.Contacts.CONTENT_URI.buildUpon()
+                    .appendQueryParameter(ContactsContract.DIRECTORY_PARAM_KEY, "424242").build();
+            check(provider.query(unknownDirectory, null, null, null, null) == null,
+                    "An absent directory does not return local contacts");
 
             // Display-name fallback chain exercise on raw1:
-            // Phone -> Email -> Organization -> Nickname -> Composed StructuredName -> DisplayName
+            // Email -> Phone -> Organization -> Nickname -> Composed StructuredName -> DisplayName
             ContentValues phoneCv = new ContentValues();
             phoneCv.put(ContactsContract.Data.RAW_CONTACT_ID, raw1);
             phoneCv.put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE);
-            phoneCv.put(ContactsContract.CommonDataKinds.Phone.NUMBER, "+972 50-123-4567");
+            phoneCv.put(ContactsContract.CommonDataKinds.Phone.NUMBER, "+972 50-234-5678");
             phoneCv.put(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE);
             Uri phoneUri = provider.insert(ContactsContract.Data.CONTENT_URI, phoneCv);
             try (Cursor c = provider.query(ContactsContract.Contacts.CONTENT_URI,
                     new String[] { ContactsContract.Contacts.DISPLAY_NAME, ContactsContract.Contacts.DISPLAY_NAME_SOURCE,
                             ContactsContract.Contacts.HAS_PHONE_NUMBER, "sort_key", "phonebook_label" },
                     null, null, null)) {
-                check(c != null && c.moveToFirst() && "+972 50-123-4567".equals(c.getString(0))
+                check(c != null && c.moveToFirst() && "+972 50-234-5678".equals(c.getString(0))
                         && c.getInt(1) == ContactsContract.DisplayNameSources.PHONE
-                        && c.getInt(2) == 1 && "+972 50-123-4567".equals(c.getString(3)),
+                        && c.getInt(2) == 1 && "+972 50-234-5678".equals(c.getString(3)),
                         "Display name falls back to Phone when higher sources absent");
             }
             // Verify auto-populated data4 normalized phone number
             try (Cursor c = provider.query(phoneUri,
                     new String[] { ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER }, null, null, null)) {
-                check(c != null && c.moveToFirst() && "+972501234567".equals(c.getString(0)),
+                check(c != null && c.moveToFirst() && "+972502345678".equals(c.getString(0)),
                         "Auto-computes data4 normalized_number on Phone insert");
+            }
+            try (Cursor c = provider.query(ContactsContract.RawContactsEntity.CONTENT_URI,
+                    new String[] {"_id", "data_id"}, "_id = ?",
+                    new String[] {Long.toString(raw1)}, null)) {
+                check(c != null && c.getCount() == 1 && c.moveToFirst()
+                        && c.getLong(0) == raw1 && c.getLong(1) == ContentUris.parseId(phoneUri),
+                        "Raw contact entities expose distinct raw-contact and data IDs");
+            }
+            ContentValues group = new ContentValues();
+            group.put(ContactsContract.Groups.TITLE, "Test group");
+            long groupId = ContentUris.parseId(provider.insert(ContactsContract.Groups.CONTENT_URI, group));
+            ContentValues member = new ContentValues();
+            member.put(ContactsContract.Data.RAW_CONTACT_ID, raw1);
+            member.put(ContactsContract.Data.MIMETYPE,
+                    ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE);
+            member.put(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID, groupId);
+            provider.insert(ContactsContract.Data.CONTENT_URI, member);
+            try (Cursor c = provider.query(ContactsContract.Groups.CONTENT_SUMMARY_URI,
+                    new String[] {ContactsContract.Groups.SUMMARY_COUNT,
+                            ContactsContract.Groups.SUMMARY_WITH_PHONES},
+                    "_id = ?", new String[] {Long.toString(groupId)}, null)) {
+                check(c != null && c.moveToFirst() && c.getInt(0) == 1 && c.getInt(1) == 1,
+                        "Group summary counts real contact and phone memberships");
             }
 
             ContentValues emailCv = new ContentValues();
@@ -253,9 +287,9 @@ public final class ContactsProviderContractTest {
             try (Cursor c = provider.query(ContactsContract.Contacts.CONTENT_URI,
                     new String[] { ContactsContract.Contacts.DISPLAY_NAME, ContactsContract.Contacts.DISPLAY_NAME_SOURCE },
                     null, null, null)) {
-                check(c != null && c.moveToFirst() && "ada@example.org".equals(c.getString(0))
-                        && c.getInt(1) == ContactsContract.DisplayNameSources.EMAIL,
-                        "Email takes precedence over Phone for display_name");
+                check(c != null && c.moveToFirst() && "+972 50-234-5678".equals(c.getString(0))
+                        && c.getInt(1) == ContactsContract.DisplayNameSources.PHONE,
+                        "Phone takes precedence over Email for display_name");
             }
 
             ContentValues orgCv = new ContentValues();
@@ -268,7 +302,7 @@ public final class ContactsProviderContractTest {
                     null, null, null)) {
                 check(c != null && c.moveToFirst() && "Analytical Engines".equals(c.getString(0))
                         && c.getInt(1) == ContactsContract.DisplayNameSources.ORGANIZATION,
-                        "Organization takes precedence over Email for display_name");
+                        "Organization takes precedence over Phone for display_name");
             }
 
             ContentValues nickCv = new ContentValues();
@@ -323,7 +357,7 @@ public final class ContactsProviderContractTest {
             check(provider.delete(emailUri, null, null) == 1, "Delete Email");
             try (Cursor c = provider.query(ContactsContract.Contacts.CONTENT_URI,
                     new String[] { ContactsContract.Contacts.DISPLAY_NAME }, null, null, null)) {
-                check(c != null && c.moveToFirst() && "+972 50-123-4567".equals(c.getString(0)),
+                check(c != null && c.moveToFirst() && "+972 50-234-5678".equals(c.getString(0)),
                         "Deleting higher sources falls back down to Phone");
             }
 
@@ -339,125 +373,75 @@ public final class ContactsProviderContractTest {
             ContentValues rc2Phone = new ContentValues();
             rc2Phone.put(ContactsContract.Data.RAW_CONTACT_ID, raw2);
             rc2Phone.put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE);
-            rc2Phone.put(ContactsContract.CommonDataKinds.Phone.NUMBER, "050-1234561");
+            rc2Phone.put(ContactsContract.CommonDataKinds.Phone.NUMBER, "050-2345671");
             provider.insert(ContactsContract.Data.CONTENT_URI, rc2Phone);
 
-            // ORDER BY sort_key & extended v2 columns on Contacts & Data
+            // Locale-aware sort and public columns on Contacts and Data.
             try (Cursor c = provider.query(ContactsContract.Contacts.CONTENT_URI,
                     new String[] { ContactsContract.Contacts.DISPLAY_NAME, "sort_key", "photo_file_id",
                             "times_used", "last_time_used", "contact_presence", "contact_status" },
                     null, null, "sort_key ASC")) {
                 check(c != null && c.getCount() == 2 && c.moveToFirst()
-                        && "+972 50-123-4567".equals(c.getString(0))
+                        && "+972 50-234-5678".equals(c.getString(0))
                         && c.moveToNext() && "Zed Smith".equals(c.getString(0)),
-                        "ORDER BY sort_key works across v2 Contacts schema");
+                        "ORDER BY sort_key works across the Contacts schema");
             }
 
-            // phone_lookup loose matching: 0501234567 matches +972 50-123-4567; short "1" does NOT match 050-1234561
+            // phone_lookup loose matching: 0502345678 matches +972 50-234-5678; short "1" does NOT match 050-2345671
             try (Cursor c = provider.query(
-                    Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode("0501234567")),
+                    Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode("0502345678")),
                     new String[] { ContactsContract.PhoneLookup.DISPLAY_NAME,
                             ContactsContract.PhoneLookup.NORMALIZED_NUMBER },
                     null, null, null)) {
                 check(c != null && c.getCount() == 1 && c.moveToFirst()
-                        && "+972501234567".equals(c.getString(1)),
-                        "phone_lookup/0501234567 loosely matches +972 50-123-4567");
+                        && "+972502345678".equals(c.getString(1)),
+                        "phone_lookup/0502345678 loosely matches +972 50-234-5678");
             }
             try (Cursor c = provider.query(
                     Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode("1")),
                     new String[] { ContactsContract.PhoneLookup._ID }, null, null, null)) {
                 check(c != null && c.getCount() == 0,
-                        "phone_lookup/1 must not false-match 050-1234561");
+                        "phone_lookup/1 must not false-match 050-2345671");
             }
         } finally {
             provider.shutdown();
         }
     }
 
-    private static void testV1ToV2UpgradeMigration(File dbDir) throws Exception {
-        File dbFile = new File(dbDir, "contacts-v1.db");
-        try (SQLiteDatabase legacy = SQLiteDatabase.openOrCreateDatabase(dbFile, null)) {
-            legacy.execSQL("CREATE TABLE contacts ("
-                    + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                    + "lookup TEXT, name_raw_contact_id INTEGER, photo_id INTEGER DEFAULT 0,"
-                    + "photo_uri TEXT, photo_thumb_uri TEXT, display_name TEXT,"
-                    + "display_name_alt TEXT, display_name_source INTEGER DEFAULT 0, phonetic_name TEXT,"
-                    + "in_visible_group INTEGER NOT NULL DEFAULT 1, has_phone_number INTEGER NOT NULL DEFAULT 0,"
-                    + "times_contacted INTEGER NOT NULL DEFAULT 0, last_time_contacted INTEGER,"
-                    + "starred INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,"
-                    + "custom_ringtone TEXT, send_to_voicemail INTEGER DEFAULT 0,"
-                    + "contact_last_updated_timestamp INTEGER DEFAULT 0, is_user_profile INTEGER NOT NULL DEFAULT 0);");
-            legacy.execSQL("CREATE TABLE raw_contacts ("
-                    + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                    + "contact_id INTEGER REFERENCES contacts(_id) ON DELETE SET NULL,"
-                    + "account_name TEXT, account_type TEXT, data_set TEXT, sourceid TEXT,"
-                    + "version INTEGER NOT NULL DEFAULT 1, dirty INTEGER NOT NULL DEFAULT 0,"
-                    + "deleted INTEGER NOT NULL DEFAULT 0, aggregation_mode INTEGER NOT NULL DEFAULT 0,"
-                    + "display_name TEXT, display_name_alt TEXT, display_name_source INTEGER DEFAULT 0,"
-                    + "starred INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,"
-                    + "custom_ringtone TEXT, send_to_voicemail INTEGER DEFAULT 0,"
-                    + "times_contacted INTEGER NOT NULL DEFAULT 0, last_time_contacted INTEGER,"
-                    + "sync1 TEXT, sync2 TEXT, sync3 TEXT, sync4 TEXT);");
-            legacy.execSQL("CREATE TABLE mimetypes (_id INTEGER PRIMARY KEY AUTOINCREMENT, mimetype TEXT UNIQUE NOT NULL);");
-            legacy.execSQL("CREATE TABLE data ("
-                    + "_id INTEGER PRIMARY KEY AUTOINCREMENT, raw_contact_id INTEGER NOT NULL,"
-                    + "mimetype_id INTEGER NOT NULL, is_primary INTEGER NOT NULL DEFAULT 0,"
-                    + "is_super_primary INTEGER NOT NULL DEFAULT 0, data_version INTEGER NOT NULL DEFAULT 0,"
-                    + "data1 TEXT, data2 TEXT, data3 TEXT, data4 TEXT, data5 TEXT, data6 TEXT, data7 TEXT,"
-                    + "data8 TEXT, data9 TEXT, data10 TEXT, data11 TEXT, data12 TEXT, data13 TEXT, data14 TEXT,"
-                    + "data15 BLOB, data_sync1 TEXT, data_sync2 TEXT, data_sync3 TEXT, data_sync4 TEXT,"
-                    + "carrier_presence INTEGER NOT NULL DEFAULT 0);");
-            legacy.execSQL("CREATE TABLE groups (_id INTEGER PRIMARY KEY AUTOINCREMENT, account_name TEXT,"
-                    + "account_type TEXT, data_set TEXT, title TEXT, notes TEXT, system_id TEXT,"
-                    + "deleted INTEGER NOT NULL DEFAULT 0, group_visible INTEGER NOT NULL DEFAULT 1,"
-                    + "should_sync INTEGER NOT NULL DEFAULT 1, auto_add INTEGER NOT NULL DEFAULT 0,"
-                    + "favorites INTEGER NOT NULL DEFAULT 0, group_is_read_only INTEGER NOT NULL DEFAULT 0,"
-                    + "sync1 TEXT, sync2 TEXT, sync3 TEXT, sync4 TEXT);");
-            legacy.execSQL("CREATE TABLE deleted_contacts (contact_id INTEGER PRIMARY KEY, contact_deleted_timestamp INTEGER NOT NULL DEFAULT 0);");
-            legacy.execSQL("CREATE TABLE directories (_id INTEGER PRIMARY KEY, packageName TEXT, typeResourceId INTEGER,"
-                    + "displayName TEXT, accountType TEXT, accountName TEXT, exportSupport INTEGER NOT NULL DEFAULT 0,"
-                    + "shortcutSupport INTEGER NOT NULL DEFAULT 2, photoSupport INTEGER NOT NULL DEFAULT 3);");
-            legacy.execSQL("CREATE TABLE settings (account_name TEXT, account_type TEXT, data_set TEXT,"
-                    + "ungrouped_visible INTEGER NOT NULL DEFAULT 0, should_sync INTEGER NOT NULL DEFAULT 1,"
-                    + "any_synced INTEGER NOT NULL DEFAULT 0, ungrouped_count INTEGER NOT NULL DEFAULT 0, ungrouped_with_phones INTEGER NOT NULL DEFAULT 0);");
-            legacy.execSQL("CREATE VIEW view_data AS SELECT data._id AS _id FROM data;");
-
-            legacy.execSQL("INSERT INTO mimetypes(_id, mimetype) VALUES(1, 'vnd.android.cursor.item/name');");
-            legacy.execSQL("INSERT INTO mimetypes(_id, mimetype) VALUES(2, 'vnd.android.cursor.item/phone_v2');");
-            legacy.execSQL("INSERT INTO contacts(_id, lookup, name_raw_contact_id, display_name) VALUES(1, '0r1', 1, 'Migrated Grace');");
-            legacy.execSQL("INSERT INTO raw_contacts(_id, contact_id, display_name) VALUES(1, 1, 'Migrated Grace');");
-            legacy.execSQL("INSERT INTO data(_id, raw_contact_id, mimetype_id, data1) VALUES(1, 1, 1, 'Migrated Grace');");
-            legacy.execSQL("INSERT INTO data(_id, raw_contact_id, mimetype_id, data1) VALUES(2, 1, 2, '050-5551234');");
-            legacy.setVersion(1);
-        }
-
-        ContentProvider provider = newContactsProvider(null, null, dbFile);
+    private static void testFreshSchemaAndPersistence(File dbDir) throws Exception {
+        File dbFile = new File(dbDir, "contacts-reopen.db");
         Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
-        ProviderInfo attachedInfo = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
-        provider.attachInfo(observerRecordingContext(provider, new ArrayList<>()), attachedInfo);
+        ProviderInfo info = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
+        long dataId;
+        ContentProvider initial = newContactsProvider(null, null, dbFile);
+        initial.attachInfo(observerRecordingContext(initial, new ArrayList<>()), info);
         try {
-            try (Cursor c = provider.query(ContactsContract.Contacts.CONTENT_URI,
-                    new String[] { ContactsContract.Contacts.DISPLAY_NAME, "sort_key", "phonebook_label",
-                            "times_used", "photo_file_id" },
-                    null, null, "sort_key ASC")) {
-                check(c != null && c.getCount() == 1 && c.moveToFirst()
-                        && "Migrated Grace".equals(c.getString(0))
-                        && "Migrated Grace".equals(c.getString(1))
-                        && "M".equals(c.getString(2))
-                        && c.getInt(3) == 0,
-                        "v1->v2 Contacts migration preserves rows and backfills sort_key/phonebook_label");
-            }
-            try (Cursor c = provider.query(
-                    Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode("+972505551234")),
-                    new String[] { ContactsContract.PhoneLookup.DISPLAY_NAME, ContactsContract.PhoneLookup.NORMALIZED_NUMBER },
+            Uri raw = initial.insert(ContactsContract.RawContacts.CONTENT_URI, new ContentValues());
+            ContentValues phone = new ContentValues();
+            phone.put(ContactsContract.Data.RAW_CONTACT_ID, ContentUris.parseId(raw));
+            phone.put(ContactsContract.Data.MIMETYPE,
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE);
+            phone.put(ContactsContract.CommonDataKinds.Phone.NUMBER, "+972 50-234-5678");
+            dataId = ContentUris.parseId(initial.insert(ContactsContract.Data.CONTENT_URI, phone));
+        } finally {
+            initial.shutdown();
+        }
+        try (SQLiteDatabase db = SQLiteDatabase.openDatabase(
+                dbFile.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY)) {
+            check(db.getVersion() == 1, "Fresh Contacts schema starts at version 1");
+        }
+        ContentProvider reopened = newContactsProvider(null, null, dbFile);
+        reopened.attachInfo(observerRecordingContext(reopened, new ArrayList<>()), info);
+        try {
+            Uri item = ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI, dataId);
+            try (Cursor c = reopened.query(item,
+                    new String[] {ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER},
                     null, null, null)) {
-                check(c != null && c.getCount() == 1 && c.moveToFirst()
-                        && "Migrated Grace".equals(c.getString(0))
-                        && "0505551234".equals(c.getString(1)),
-                        "v1->v2 upgrade backfills data4 normalized_number and recreates view_phone_lookup");
+                check(c != null && c.moveToFirst() && "+972502345678".equals(c.getString(0)),
+                        "Contacts database preserves normalized data after reopen");
             }
         } finally {
-            provider.shutdown();
+            reopened.shutdown();
         }
     }
 
@@ -528,11 +512,16 @@ public final class ContactsProviderContractTest {
             Uri normalPhoneItem = ContentUris.withAppendedId(
                     ContactsContract.Data.CONTENT_URI, ContentUris.parseId(res[2].uri));
             ContentValues phoneUp = new ContentValues();
-            phoneUp.put(ContactsContract.CommonDataKinds.Phone.NUMBER, "052-0001111");
-            check(provider.update(normalPhoneItem, phoneUp, null, null) == 1, "Normal phone update");
+            phoneUp.put(ContactsContract.CommonDataKinds.Phone.NUMBER, "+972 52-234-1111");
+            String mimeSelection = ContactsContract.Data.RAW_CONTACT_ID + " = ? AND "
+                    + ContactsContract.Data.MIMETYPE + " = ?";
+            String[] phoneArgs = {Long.toString(rawId),
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE};
+            check(provider.update(ContactsContract.Data.CONTENT_URI, phoneUp,
+                    mimeSelection, phoneArgs) == 1, "Data update accepts MIME and raw contact columns");
             try (Cursor c = provider.query(normalPhoneItem,
                     new String[] { ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER }, null, null, null)) {
-                check(c != null && c.moveToFirst() && "0520001111".equals(c.getString(0)),
+                check(c != null && c.moveToFirst() && "+972522341111".equals(c.getString(0)),
                         "Update phone recomputes data4 normalized_number");
             }
             try (Cursor c = provider.query(syncRawUri,
@@ -542,7 +531,24 @@ public final class ContactsProviderContractTest {
                         "Normal edit marks raw_contact dirty=1 and increments version");
             }
 
-            // Normal delete soft-deletes (deleted=1, dirty=1, version++, deleted_contacts row, hidden by default)
+            // Delete through the same public Data projection on a separate local raw contact.
+            Uri local = provider.insert(ContactsContract.RawContacts.CONTENT_URI, new ContentValues());
+            long localId = ContentUris.parseId(local);
+            ContentValues localPhone = new ContentValues(phoneUp);
+            localPhone.put(ContactsContract.Data.RAW_CONTACT_ID, localId);
+            localPhone.put(ContactsContract.Data.MIMETYPE,
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE);
+            provider.insert(ContactsContract.Data.CONTENT_URI, localPhone);
+            check(provider.delete(ContactsContract.Data.CONTENT_URI, mimeSelection,
+                    new String[] {Long.toString(localId), phoneArgs[1]}) == 1,
+                    "Data delete accepts MIME and raw contact columns");
+            check(provider.delete(local, null, null) == 1, "Local raw contact is removed");
+            try (Cursor c = provider.query(syncRawUri, null, "_id = ?",
+                    new String[] {Long.toString(localId)}, null)) {
+                check(c.getCount() == 0, "A local raw contact has no sync tombstone");
+            }
+
+            // Normal delete soft-deletes a raw contact that belongs to an account.
             Uri normalRawItem = ContentUris.withAppendedId(ContactsContract.RawContacts.CONTENT_URI, rawId);
             check(provider.delete(normalRawItem, null, null) == 1, "Normal delete soft-deletes raw_contact");
             try (Cursor c = provider.query(ContactsContract.Contacts.CONTENT_URI, null, null, null, null)) {
@@ -560,7 +566,7 @@ public final class ContactsProviderContractTest {
             }
             try (Cursor c = provider.query(ContactsContract.DeletedContacts.CONTENT_URI,
                     new String[] { ContactsContract.DeletedContacts.CONTACT_ID }, null, null, null)) {
-                check(c != null && c.getCount() == 1, "deleted_contacts records soft-deleted contact_id");
+                check(c != null && c.getCount() == 2, "deleted_contacts records both removed aggregate contacts");
             }
 
             // Sync-adapter delete hard-deletes completely
@@ -907,12 +913,14 @@ public final class ContactsProviderContractTest {
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         String previousData = System.getenv("ANDROID_DATA");
         String previousSpoof = System.getenv("GESHER_MICROG_SPOOF");
-        Path data = Files.createTempDirectory("gesher-contacts-provider-contract-");
+        Path data = previousData == null
+                ? Files.createTempDirectory("gesher-contacts-provider-contract-")
+                : Files.createTempDirectory(Path.of(previousData), "gesher-contacts-provider-contract-");
         try {
             Os.setenv("ANDROID_DATA", data.toString(), true);
             Os.setenv("GESHER_MICROG_SPOOF", "1", true);
             testContactsSchemaViewsStrictAndFallback(data.toFile());
-            testV1ToV2UpgradeMigration(data.toFile());
+            testFreshSchemaAndPersistence(data.toFile());
             testApplyBatchAndSyncAdapterSemantics(data.toFile());
             testSecurityAppOpsUriGrantsAndPackageManager();
             System.out.println("ContactsProviderContractTest all passed: " + sChecks + " checks");

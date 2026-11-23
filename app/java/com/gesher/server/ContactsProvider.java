@@ -16,13 +16,20 @@ import android.content.OperationApplicationException;
 import android.content.UriMatcher;
 import android.content.pm.ProviderInfo;
 import android.database.Cursor;
+import android.database.DatabaseUtils;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteQueryBuilder;
+import android.icu.text.AlphabeticIndex;
 import android.net.Uri;
+import android.os.Binder;
 import android.provider.ContactsContract;
+import android.telephony.PhoneNumberUtils;
+
+import com.gesher.app.locale.SystemLocale;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -30,6 +37,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Built-in SQLite-backed {@code content://com.android.contacts} provider for
@@ -44,6 +52,24 @@ import java.util.Set;
  * split/join heuristics are not implemented.
  */
 final class ContactsProvider extends ContentProvider {
+    private static final Set<String> CONTACT_OPTIONS = Set.of(
+            "starred", "custom_ringtone", "send_to_voicemail");
+    private static final Set<String> RAW_WRITE_COLUMNS = Set.of(
+            "account_name", "account_type", "data_set", "sourceid", "version", "dirty", "deleted",
+            "aggregation_mode", "starred", "pinned", "custom_ringtone", "send_to_voicemail",
+            "sync1", "sync2", "sync3", "sync4");
+    private static final Set<String> DATA_WRITE_COLUMNS = Set.of(
+            "is_primary", "is_super_primary", "is_read_only", "data1", "data2",
+            "data3", "data4", "data5", "data6", "data7", "data8", "data9", "data10", "data11",
+            "data12", "data13", "data14", "data15", "data_sync1", "data_sync2", "data_sync3",
+            "data_sync4", "carrier_presence");
+    private static final Set<String> GROUP_WRITE_COLUMNS = Set.of(
+            "account_name", "account_type", "data_set", "sourceid", "version", "dirty", "title",
+            "title_res", "res_package", "notes", "system_id", "deleted", "group_visible",
+            "should_sync", "auto_add", "favorites", "group_is_read_only", "sync1", "sync2", "sync3",
+            "sync4");
+    private static final Set<String> SETTINGS_WRITE_COLUMNS = Set.of(
+            "account_name", "account_type", "data_set", "ungrouped_visible", "should_sync");
     private static final int CONTACTS = 1;
     private static final int CONTACTS_ID = 2;
     private static final int CONTACTS_FILTER_EMPTY = 3;
@@ -51,10 +77,13 @@ final class ContactsProvider extends ContentProvider {
     private static final int CONTACTS_LOOKUP = 5;
     private static final int CONTACTS_LOOKUP_ID = 6;
     private static final int CONTACTS_DATA = 7;
+    private static final int CONTACTS_ENTITY = 8;
 
     private static final int RAW_CONTACTS = 10;
     private static final int RAW_CONTACTS_ID = 11;
     private static final int RAW_CONTACTS_DATA = 12;
+    private static final int RAW_CONTACT_ENTITY = 13;
+    private static final int RAW_CONTACT_ENTITIES = 14;
 
     private static final int DATA = 20;
     private static final int DATA_ID = 21;
@@ -94,15 +123,20 @@ final class ContactsProvider extends ContentProvider {
     private static final String MIME_POSTAL =
             ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE;
 
-    private static final int DB_VERSION = 2;
+    private static final int DB_VERSION = 1;
+    private static Locale sPhonebookLocale;
+    private static AlphabeticIndex.ImmutableIndex<Void> sPhonebookIndex;
     private static final Uri NOTIFY_URI = ContactsContract.AUTHORITY_URI;
 
     private static final UriMatcher sUriMatcher = new UriMatcher(UriMatcher.NO_MATCH);
     private static final Map<String, String> sContactsProjectionMap;
     private static final Map<String, String> sRawContactsProjectionMap;
     private static final Map<String, String> sDataProjectionMap;
+    private static final Map<String, String> sContactsEntityProjectionMap;
+    private static final Map<String, String> sRawEntityProjectionMap;
     private static final Map<String, String> sPhoneLookupProjectionMap;
     private static final Map<String, String> sGroupsProjectionMap;
+    private static final Map<String, String> sGroupsSummaryProjectionMap;
     private static final Map<String, String> sDeletedContactsProjectionMap;
     private static final Map<String, String> sDirectoriesProjectionMap;
     private static final Map<String, String> sSettingsProjectionMap;
@@ -122,12 +156,13 @@ final class ContactsProvider extends ContentProvider {
         sUriMatcher.addURI(auth, "contacts/lookup/*", CONTACTS_LOOKUP);
         sUriMatcher.addURI(auth, "contacts/lookup/*/#", CONTACTS_LOOKUP_ID);
         sUriMatcher.addURI(auth, "contacts/#/data", CONTACTS_DATA);
-        sUriMatcher.addURI(auth, "contacts/#/entities", CONTACTS_DATA);
+        sUriMatcher.addURI(auth, "contacts/#/entities", CONTACTS_ENTITY);
 
         sUriMatcher.addURI(auth, "raw_contacts", RAW_CONTACTS);
         sUriMatcher.addURI(auth, "raw_contacts/#", RAW_CONTACTS_ID);
         sUriMatcher.addURI(auth, "raw_contacts/#/data", RAW_CONTACTS_DATA);
-        sUriMatcher.addURI(auth, "raw_contacts/#/entity", RAW_CONTACTS_DATA);
+        sUriMatcher.addURI(auth, "raw_contacts/#/entity", RAW_CONTACT_ENTITY);
+        sUriMatcher.addURI(auth, "raw_contact_entities", RAW_CONTACT_ENTITIES);
 
         sUriMatcher.addURI(auth, "data", DATA);
         sUriMatcher.addURI(auth, "data/#", DATA_ID);
@@ -201,6 +236,9 @@ final class ContactsProvider extends ContentProvider {
                 "dirty", "deleted", "name_raw_contact_id",
                 "raw_contact_is_user_profile", "is_user_profile");
 
+        sRawEntityProjectionMap = entityProjection(false);
+        sContactsEntityProjectionMap = entityProjection(true);
+
         sPhoneLookupProjectionMap = identityMap(
                 "_id", "contact_id", "raw_contact_id", "data_id", "lookup",
                 "display_name", "display_name_alt", "sort_key", "sort_key_alt",
@@ -218,6 +256,10 @@ final class ContactsProvider extends ContentProvider {
                 "system_id", "deleted", "group_visible", "should_sync", "auto_add",
                 "favorites", "group_is_read_only", "sync1", "sync2", "sync3",
                 "sync4");
+        Map<String, String> summary = new HashMap<>(sGroupsProjectionMap);
+        summary.put("summ_count", "summ_count");
+        summary.put("summ_phones", "summ_phones");
+        sGroupsSummaryProjectionMap = Collections.unmodifiableMap(summary);
 
         sDeletedContactsProjectionMap = identityMap(
                 "contact_id", "contact_deleted_timestamp");
@@ -233,6 +275,14 @@ final class ContactsProvider extends ContentProvider {
                 "ungrouped_with_phones");
     }
 
+    private static Map<String, String> entityProjection(boolean aggregate) {
+        Set<String> columns = new TreeSet<>(sRawContactsProjectionMap.keySet());
+        columns.addAll(sDataProjectionMap.keySet());
+        if (aggregate) columns.addAll(sContactsProjectionMap.keySet());
+        columns.add("data_id");
+        return identityMap(columns.toArray(new String[0]));
+    }
+
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
     private final UriGrants mGrants;
@@ -244,6 +294,7 @@ final class ContactsProvider extends ContentProvider {
     private Throwable mInitializationFailure;
     private int mBatchDepth;
     private boolean mBatchDirty;
+    private boolean mBatchSyncToNetwork;
 
     ContactsProvider(ContentProviders providers, PackageManagerService pm,
             ActivityTaskManagerService atm, UriGrants grants) {
@@ -365,8 +416,8 @@ final class ContactsProvider extends ContentProvider {
                 + "display_name_alt TEXT,"
                 + "display_name_source INTEGER DEFAULT 0,"
                 + "phonetic_name TEXT,"
-                + "sort_key TEXT,"
-                + "sort_key_alt TEXT,"
+                + "sort_key TEXT COLLATE LOCALIZED,"
+                + "sort_key_alt TEXT COLLATE LOCALIZED,"
                 + "phonebook_label TEXT,"
                 + "phonebook_label_alt TEXT,"
                 + "phonebook_bucket INTEGER DEFAULT 0,"
@@ -406,8 +457,8 @@ final class ContactsProvider extends ContentProvider {
                 + "display_name_alt TEXT,"
                 + "display_name_source INTEGER DEFAULT 0,"
                 + "phonetic_name TEXT,"
-                + "sort_key TEXT,"
-                + "sort_key_alt TEXT,"
+                + "sort_key TEXT COLLATE LOCALIZED,"
+                + "sort_key_alt TEXT COLLATE LOCALIZED,"
                 + "phonebook_label TEXT,"
                 + "phonebook_label_alt TEXT,"
                 + "phonebook_bucket INTEGER DEFAULT 0,"
@@ -493,54 +544,8 @@ final class ContactsProvider extends ContentProvider {
     }
 
     private static void onUpgradeDatabase(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion < 2) {
-            ensureColumns(db, "contacts", new String[][] {
-                    { "photo_file_id", "INTEGER" },
-                    { "sort_key", "TEXT" },
-                    { "sort_key_alt", "TEXT" },
-                    { "phonebook_label", "TEXT" },
-                    { "phonebook_label_alt", "TEXT" },
-                    { "phonebook_bucket", "INTEGER DEFAULT 0" },
-                    { "phonebook_bucket_alt", "INTEGER DEFAULT 0" },
-                    { "in_default_directory", "INTEGER NOT NULL DEFAULT 1" },
-                    { "times_used", "INTEGER NOT NULL DEFAULT 0" },
-                    { "last_time_used", "INTEGER" },
-                    { "contact_presence", "INTEGER" },
-                    { "contact_status", "TEXT" },
-                    { "contact_status_ts", "INTEGER" },
-                    { "contact_status_res_package", "TEXT" },
-                    { "contact_status_label", "INTEGER" },
-                    { "contact_status_icon", "INTEGER" }
-            });
-            ensureColumns(db, "raw_contacts", new String[][] {
-                    { "phonetic_name", "TEXT" },
-                    { "sort_key", "TEXT" },
-                    { "sort_key_alt", "TEXT" },
-                    { "phonebook_label", "TEXT" },
-                    { "phonebook_label_alt", "TEXT" },
-                    { "phonebook_bucket", "INTEGER DEFAULT 0" },
-                    { "phonebook_bucket_alt", "INTEGER DEFAULT 0" },
-                    { "times_used", "INTEGER NOT NULL DEFAULT 0" },
-                    { "last_time_used", "INTEGER" },
-                    { "raw_contact_is_user_profile", "INTEGER NOT NULL DEFAULT 0" }
-            });
-            ensureColumns(db, "data", new String[][] {
-                    { "is_read_only", "INTEGER NOT NULL DEFAULT 0" }
-            });
-            ensureColumns(db, "groups", new String[][] {
-                    { "sourceid", "TEXT" },
-                    { "version", "INTEGER NOT NULL DEFAULT 1" },
-                    { "dirty", "INTEGER NOT NULL DEFAULT 0" },
-                    { "title_res", "INTEGER" },
-                    { "res_package", "TEXT" }
-            });
-            db.execSQL("DROP VIEW IF EXISTS view_contacts;");
-            db.execSQL("DROP VIEW IF EXISTS view_raw_contacts;");
-            db.execSQL("DROP VIEW IF EXISTS view_data;");
-            db.execSQL("DROP VIEW IF EXISTS view_phone_lookup;");
-            createIndexesAndViews(db);
-            backfillV2Metadata(db);
-        }
+        throw new IllegalStateException("No Contacts schema upgrade from " + oldVersion
+                + " to " + newVersion);
     }
 
     private static void createIndexesAndViews(SQLiteDatabase db) {
@@ -549,6 +554,9 @@ final class ContactsProvider extends ContentProvider {
         db.execSQL("CREATE INDEX IF NOT EXISTS raw_contacts_contact_idx ON raw_contacts(contact_id);");
         db.execSQL("CREATE INDEX IF NOT EXISTS data_raw_contact_idx ON data(raw_contact_id);");
         db.execSQL("CREATE INDEX IF NOT EXISTS data_mimetype_idx ON data(mimetype_id);");
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS data_update_version AFTER UPDATE ON data "
+                + "WHEN new.data_version = old.data_version BEGIN "
+                + "UPDATE data SET data_version = data_version + 1 WHERE _id = new._id; END");
 
         db.execSQL("CREATE VIEW IF NOT EXISTS view_contacts AS SELECT "
                 + "_id, lookup, name_raw_contact_id, photo_id, photo_file_id, "
@@ -691,7 +699,7 @@ final class ContactsProvider extends ContentProvider {
                 + "data.data1 AS number,"
                 + "data.data2 AS type,"
                 + "data.data3 AS label,"
-                + "COALESCE(data.data4, data.data1) AS normalized_number,"
+                + "data.data4 AS normalized_number,"
                 + "contacts.photo_id AS photo_id,"
                 + "contacts.photo_file_id AS photo_file_id,"
                 + "contacts.photo_uri AS photo_uri,"
@@ -714,47 +722,51 @@ final class ContactsProvider extends ContentProvider {
                 + "JOIN mimetypes ON data.mimetype_id = mimetypes._id "
                 + "JOIN raw_contacts ON data.raw_contact_id = raw_contacts._id "
                 + "JOIN contacts ON raw_contacts.contact_id = contacts._id "
-                + "WHERE mimetypes.mimetype = '" + MIME_PHONE + "' AND raw_contacts.deleted = 0;");
+                + "WHERE mimetypes.mimetype = '" + MIME_PHONE + "' AND raw_contacts.deleted = 0 "
+                + "AND contacts.is_user_profile = 0;");
+
+        createEntityView(db, "view_contacts_entity", sContactsEntityProjectionMap, true);
+        createEntityView(db, "view_raw_entities", sRawEntityProjectionMap, false);
+        String membership = " FROM view_data member WHERE member.mimetype = '"
+                + ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE
+                + "' AND CAST(member.data1 AS INTEGER) = groups._id AND member.is_user_profile = 0";
+        db.execSQL("CREATE VIEW IF NOT EXISTS view_groups_summary AS SELECT groups.*, "
+                + "(SELECT COUNT(DISTINCT member.contact_id)" + membership + ") AS summ_count, "
+                + "(SELECT COUNT(DISTINCT member.contact_id)" + membership
+                + " AND member.has_phone_number != 0) AS summ_phones FROM groups");
     }
 
-    private static void ensureColumns(SQLiteDatabase db, String table, String[][] additions) {
-        Set<String> cols = existingColumns(db, table);
-        for (String[] col : additions) {
-            if (!cols.contains(col[0])) {
-                db.execSQL("ALTER TABLE " + table + " ADD COLUMN " + col[0] + " " + col[1] + ";");
+    private static void createEntityView(SQLiteDatabase db, String view, Map<String, String> columns,
+            boolean aggregate) {
+        List<String> projections = new ArrayList<>();
+        for (String name : new TreeSet<>(columns.keySet())) {
+            String value;
+            switch (name) {
+                case "_id":
+                    value = aggregate ? "raw.contact_id" : "raw._id";
+                    break;
+                case "raw_contact_id":
+                    value = "raw._id";
+                    break;
+                case "data_id":
+                    value = "data._id";
+                    break;
+                default:
+                    if (aggregate && sContactsProjectionMap.containsKey(name)) {
+                        value = "contact." + name;
+                    } else if (sRawContactsProjectionMap.containsKey(name)) {
+                        value = "raw." + name;
+                    } else {
+                        value = "data." + name;
+                    }
+                    break;
             }
+            projections.add(value + " AS " + name);
         }
-    }
-
-    private static Set<String> existingColumns(SQLiteDatabase db, String table) {
-        Set<String> cols = new HashSet<>();
-        try (Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null)) {
-            int nameIdx = c.getColumnIndex("name");
-            while (c.moveToNext()) {
-                if (nameIdx >= 0) cols.add(c.getString(nameIdx));
-            }
-        }
-        return cols;
-    }
-
-    private static void backfillV2Metadata(SQLiteDatabase db) {
-        long now = System.currentTimeMillis();
-        Set<Long> rawIds = queryIds(db, "SELECT _id FROM raw_contacts", null);
-        // Backfill data4 normalized phone numbers first.
-        try (Cursor c = db.rawQuery(
-                "SELECT data._id, data.data1 FROM data JOIN mimetypes ON data.mimetype_id = mimetypes._id "
-                        + "WHERE mimetypes.mimetype = ? AND data.data1 IS NOT NULL AND data.data4 IS NULL",
-                new String[] { MIME_PHONE })) {
-            while (c.moveToNext()) {
-                String normalized = ContactsProviderSupport.normalizePhoneNumber(c.getString(1));
-                if (normalized != null) {
-                    ContentValues cv = new ContentValues();
-                    cv.put("data4", normalized);
-                    db.update("data", cv, "_id = ?", new String[] { Long.toString(c.getLong(0)) });
-                }
-            }
-        }
-        refreshRawAndParentContacts(db, rawIds, now, false);
+        db.execSQL("CREATE VIEW IF NOT EXISTS " + view + " AS SELECT "
+                + String.join(", ", projections) + " FROM view_raw_contacts raw "
+                + "LEFT JOIN view_data data ON data.raw_contact_id = raw._id "
+                + (aggregate ? "JOIN view_contacts contact ON contact._id = raw.contact_id " : ""));
     }
 
     @Override
@@ -779,6 +791,10 @@ final class ContactsProvider extends ContentProvider {
             case DATA:
             case PROFILE_DATA:
                 return ContactsContract.Data.CONTENT_TYPE;
+            case CONTACTS_ENTITY:
+            case RAW_CONTACT_ENTITY:
+            case RAW_CONTACT_ENTITIES:
+                return ContactsContract.RawContactsEntity.CONTENT_TYPE;
             case DATA_ID:
                 return "vnd.android.cursor.item/data";
             case RAW_CONTACTS:
@@ -827,6 +843,18 @@ final class ContactsProvider extends ContentProvider {
             String sortOrder) {
         ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION, ContactsProviderSupport.READ_CONTACTS);
+        String directory = uri.getQueryParameter(ContactsContract.DIRECTORY_PARAM_KEY);
+        boolean localInvisible = false;
+        if (directory != null) {
+            try {
+                long value = Long.parseLong(directory);
+                if (value != ContactsContract.Directory.DEFAULT
+                        && value != ContactsContract.Directory.LOCAL_INVISIBLE) return null;
+                localInvisible = value == ContactsContract.Directory.LOCAL_INVISIBLE;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
         int match = sUriMatcher.match(uri);
         String limit = ContactsProviderSupport.parseLimit(uri);
         SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
@@ -843,12 +871,12 @@ final class ContactsProvider extends ContentProvider {
             case CONTACTS_FILTER_EMPTY:
                 qb.setTables("view_contacts");
                 qb.setProjectionMap(sContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "is_user_profile = 0");
+                effSelection = scopedSelection(selection, "is_user_profile = 0");
                 break;
             case CONTACTS_ID:
                 qb.setTables("view_contacts");
                 qb.setProjectionMap(sContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "_id = ?");
+                effSelection = scopedSelection(selection, "_id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, Long.toString(ContentUris.parseId(uri)));
                 break;
@@ -856,7 +884,7 @@ final class ContactsProvider extends ContentProvider {
                 String pattern = "%" + uri.getLastPathSegment() + "%";
                 qb.setTables("view_contacts");
                 qb.setProjectionMap(sContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection,
+                effSelection = scopedSelection(selection,
                         "is_user_profile = 0 AND display_name LIKE ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, pattern);
                 break;
@@ -865,7 +893,7 @@ final class ContactsProvider extends ContentProvider {
                 List<String> segments = uri.getPathSegments();
                 qb.setTables("view_contacts");
                 qb.setProjectionMap(sContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "lookup = ?");
+                effSelection = scopedSelection(selection, "lookup = ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, segments.get(2));
                 break;
             }
@@ -873,15 +901,15 @@ final class ContactsProvider extends ContentProvider {
                 List<String> segments = uri.getPathSegments();
                 qb.setTables("view_contacts");
                 qb.setProjectionMap(sContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "(_id = ? OR lookup = ?)");
-                effArgs = ContactsProviderSupport.prependArgs(selectionArgs, segments.get(3), segments.get(2));
+                effSelection = scopedSelection(selection, "lookup = ?");
+                effArgs = ContactsProviderSupport.prependArgs(selectionArgs, segments.get(2));
                 break;
             }
             case CONTACTS_DATA: {
                 List<String> segments = uri.getPathSegments();
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "contact_id = ?");
+                effSelection = scopedSelection(selection, "contact_id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, segments.get(1));
                 break;
             }
@@ -889,13 +917,13 @@ final class ContactsProvider extends ContentProvider {
                 qb.setTables("view_raw_contacts");
                 qb.setProjectionMap(sRawContactsProjectionMap);
                 if (!syncAdapter) {
-                    effSelection = ContactsProviderSupport.combineSelection(selection, "deleted = 0");
+                    effSelection = scopedSelection(selection, "deleted = 0");
                 }
                 break;
             case RAW_CONTACTS_ID:
                 qb.setTables("view_raw_contacts");
                 qb.setProjectionMap(sRawContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection,
+                effSelection = scopedSelection(selection,
                         syncAdapter ? "_id = ?" : "_id = ? AND deleted = 0");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, Long.toString(ContentUris.parseId(uri)));
@@ -904,10 +932,29 @@ final class ContactsProvider extends ContentProvider {
                 List<String> segments = uri.getPathSegments();
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "raw_contact_id = ?");
+                effSelection = scopedSelection(selection, "raw_contact_id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, segments.get(1));
                 break;
             }
+            case CONTACTS_ENTITY:
+                qb.setTables("view_contacts_entity");
+                qb.setProjectionMap(sContactsEntityProjectionMap);
+                qb.appendWhereStandalone("is_user_profile = 0 AND deleted = 0 AND contact_id = ?");
+                effArgs = ContactsProviderSupport.prependArgs(selectionArgs, uri.getPathSegments().get(1));
+                if (sortOrder == null) sortOrder = "raw_contact_id, data_id";
+                break;
+            case RAW_CONTACT_ENTITY:
+            case RAW_CONTACT_ENTITIES:
+                qb.setTables("view_raw_entities");
+                qb.setProjectionMap(sRawEntityProjectionMap);
+                qb.appendWhereStandalone("COALESCE(is_user_profile, 0) = 0");
+                if (!syncAdapter) qb.appendWhereStandalone("deleted = 0");
+                if (match == RAW_CONTACT_ENTITY) {
+                    qb.appendWhereStandalone("raw_contact_id = ?");
+                    effArgs = ContactsProviderSupport.prependArgs(selectionArgs, uri.getPathSegments().get(1));
+                }
+                if (sortOrder == null) sortOrder = "raw_contact_id, data_id";
+                break;
             case DATA:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
@@ -915,7 +962,7 @@ final class ContactsProvider extends ContentProvider {
             case DATA_ID:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "_id = ?");
+                effSelection = scopedSelection(selection, "_id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, Long.toString(ContentUris.parseId(uri)));
                 break;
@@ -923,13 +970,13 @@ final class ContactsProvider extends ContentProvider {
             case PHONES_FILTER_EMPTY:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "mimetype = ?");
+                effSelection = scopedSelection(selection, "mimetype = ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, MIME_PHONE);
                 break;
             case PHONES_ID:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "mimetype = ? AND _id = ?");
+                effSelection = scopedSelection(selection, "mimetype = ? AND _id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, MIME_PHONE, Long.toString(ContentUris.parseId(uri)));
                 break;
@@ -937,7 +984,7 @@ final class ContactsProvider extends ContentProvider {
                 String pattern = "%" + uri.getLastPathSegment() + "%";
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection,
+                effSelection = scopedSelection(selection,
                         "mimetype = ? AND (display_name LIKE ? OR data1 LIKE ? OR data4 LIKE ?)");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, MIME_PHONE, pattern, pattern, pattern);
@@ -947,13 +994,13 @@ final class ContactsProvider extends ContentProvider {
             case EMAILS_FILTER_EMPTY:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "mimetype = ?");
+                effSelection = scopedSelection(selection, "mimetype = ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, MIME_EMAIL);
                 break;
             case EMAILS_ID:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "mimetype = ? AND _id = ?");
+                effSelection = scopedSelection(selection, "mimetype = ? AND _id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, MIME_EMAIL, Long.toString(ContentUris.parseId(uri)));
                 break;
@@ -961,7 +1008,7 @@ final class ContactsProvider extends ContentProvider {
                 String pattern = "%" + uri.getLastPathSegment() + "%";
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection,
+                effSelection = scopedSelection(selection,
                         "mimetype = ? AND (display_name LIKE ? OR data1 LIKE ?)");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, MIME_EMAIL, pattern, pattern);
                 break;
@@ -969,13 +1016,13 @@ final class ContactsProvider extends ContentProvider {
             case POSTALS:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "mimetype = ?");
+                effSelection = scopedSelection(selection, "mimetype = ?");
                 effArgs = ContactsProviderSupport.prependArgs(selectionArgs, MIME_POSTAL);
                 break;
             case POSTALS_ID:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "mimetype = ? AND _id = ?");
+                effSelection = scopedSelection(selection, "mimetype = ? AND _id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, MIME_POSTAL, Long.toString(ContentUris.parseId(uri)));
                 break;
@@ -986,16 +1033,16 @@ final class ContactsProvider extends ContentProvider {
                 break;
             case GROUPS:
             case GROUPS_SUMMARY:
-                qb.setTables("groups");
-                qb.setProjectionMap(sGroupsProjectionMap);
+                qb.setTables(match == GROUPS_SUMMARY ? "view_groups_summary" : "groups");
+                qb.setProjectionMap(match == GROUPS_SUMMARY ? sGroupsSummaryProjectionMap : sGroupsProjectionMap);
                 if (!syncAdapter) {
-                    effSelection = ContactsProviderSupport.combineSelection(selection, "deleted = 0");
+                    effSelection = scopedSelection(selection, "deleted = 0");
                 }
                 break;
             case GROUPS_ID:
                 qb.setTables("groups");
                 qb.setProjectionMap(sGroupsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection,
+                effSelection = scopedSelection(selection,
                         syncAdapter ? "_id = ?" : "_id = ? AND deleted = 0");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, Long.toString(ContentUris.parseId(uri)));
@@ -1011,7 +1058,7 @@ final class ContactsProvider extends ContentProvider {
             case DIRECTORIES_ID:
                 qb.setTables("directories");
                 qb.setProjectionMap(sDirectoriesProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "_id = ?");
+                effSelection = scopedSelection(selection, "_id = ?");
                 effArgs = ContactsProviderSupport.prependArgs(
                         selectionArgs, Long.toString(ContentUris.parseId(uri)));
                 break;
@@ -1022,32 +1069,39 @@ final class ContactsProvider extends ContentProvider {
             case PROFILE:
                 qb.setTables("view_contacts");
                 qb.setProjectionMap(sContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection, "is_user_profile = 1");
+                effSelection = scopedSelection(selection, "is_user_profile = 1");
                 break;
             case PROFILE_RAW_CONTACTS:
                 qb.setTables("view_raw_contacts");
                 qb.setProjectionMap(sRawContactsProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection,
+                effSelection = scopedSelection(selection,
                         (syncAdapter ? "" : "deleted = 0 AND ")
                                 + "contact_id IN (SELECT _id FROM contacts WHERE is_user_profile = 1)");
                 break;
             case PROFILE_DATA:
                 qb.setTables("view_data");
                 qb.setProjectionMap(sDataProjectionMap);
-                effSelection = ContactsProviderSupport.combineSelection(selection,
+                effSelection = scopedSelection(selection,
                         "contact_id IN (SELECT _id FROM contacts WHERE is_user_profile = 1)");
                 break;
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
 
+        String tables = qb.getTables();
+        if (match != PROFILE && match != PROFILE_RAW_CONTACTS && match != PROFILE_DATA
+                && ("view_contacts".equals(tables) || "view_raw_contacts".equals(tables)
+                        || "view_data".equals(tables))) {
+            qb.appendWhereStandalone("COALESCE(is_user_profile, 0) = 0");
+        }
+        if (localInvisible) qb.appendWhereStandalone("0");
         Cursor cursor;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
             if (phoneLookupQuery != null) {
                 List<Long> matchedDataIds = findMatchingPhoneDataIds(db, phoneLookupQuery);
                 String idClause = idInClause("data_id", matchedDataIds);
-                effSelection = ContactsProviderSupport.combineSelection(effSelection, idClause);
+                effSelection = scopedSelection(effSelection, idClause);
             }
             cursor = qb.query(db, projection, effSelection, effArgs,
                     null, null, sortOrder, limit);
@@ -1065,8 +1119,8 @@ final class ContactsProvider extends ContentProvider {
                 long dataId = c.getLong(0);
                 String number = c.getString(1);
                 String normalized = c.getString(2);
-                if (ContactsProviderSupport.phoneNumbersEqualLoose(number, queryNumber)
-                        || ContactsProviderSupport.phoneNumbersEqualLoose(normalized, queryNumber)) {
+                if (PhoneNumberUtils.compareLoosely(number, queryNumber)
+                        || PhoneNumberUtils.compareLoosely(normalized, queryNumber)) {
                     dataIds.add(dataId);
                 }
             }
@@ -1074,12 +1128,18 @@ final class ContactsProvider extends ContentProvider {
         return dataIds;
     }
 
-    private static String idInClause(String column, List<Long> ids) {
+    private static String scopedSelection(String selection, String scope) {
+        return DatabaseUtils.concatenateWhere(scope, selection);
+    }
+
+    private static String idInClause(String column, Collection<Long> ids) {
         if (ids.isEmpty()) return "1 = 0";
         StringBuilder sb = new StringBuilder(column).append(" IN (");
-        for (int i = 0; i < ids.size(); i++) {
-            if (i > 0) sb.append(',');
-            sb.append(ids.get(i));
+        boolean first = true;
+        for (long id : ids) {
+            if (!first) sb.append(',');
+            sb.append(id);
+            first = false;
         }
         sb.append(')');
         return sb.toString();
@@ -1104,10 +1164,14 @@ final class ContactsProvider extends ContentProvider {
         }
         ContentProviderResult[] results;
         boolean shouldNotify = false;
+        boolean shouldSync = false;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
             boolean outermost = (mBatchDepth == 0);
-            if (outermost) mBatchDirty = false;
+            if (outermost) {
+                mBatchDirty = false;
+                mBatchSyncToNetwork = false;
+            }
             mBatchDepth++;
             db.beginTransaction();
             boolean committed = false;
@@ -1122,13 +1186,15 @@ final class ContactsProvider extends ContentProvider {
                     mBatchDepth--;
                     if (outermost) {
                         shouldNotify = committed && mBatchDirty;
+                        shouldSync = mBatchSyncToNetwork;
                         mBatchDirty = false;
+                        mBatchSyncToNetwork = false;
                     }
                 }
             }
         }
         if (shouldNotify) {
-            ContactsProviderSupport.notifyChange(getContext(), NOTIFY_URI);
+            notifyObservers(shouldSync);
         }
         return results;
     }
@@ -1147,6 +1213,7 @@ final class ContactsProvider extends ContentProvider {
                 db.setTransactionSuccessful();
                 if (mBatchDepth > 0) {
                     mBatchDirty = true;
+                    mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
                 } else {
                     notifyNow = true;
                 }
@@ -1155,7 +1222,7 @@ final class ContactsProvider extends ContentProvider {
             }
         }
         if (notifyNow) {
-            ContactsProviderSupport.notifyChange(getContext(), NOTIFY_URI);
+            notifyObservers(!isCallerSyncAdapter(uri));
         }
         return ContentUris.withAppendedId(uri, id);
     }
@@ -1178,6 +1245,7 @@ final class ContactsProvider extends ContentProvider {
                 if (inserted > 0) {
                     if (mBatchDepth > 0) {
                         mBatchDirty = true;
+                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
                     } else {
                         notifyNow = true;
                     }
@@ -1187,7 +1255,7 @@ final class ContactsProvider extends ContentProvider {
             }
         }
         if (notifyNow) {
-            ContactsProviderSupport.notifyChange(getContext(), NOTIFY_URI);
+            notifyObservers(!isCallerSyncAdapter(uri));
         }
         return inserted;
     }
@@ -1200,25 +1268,15 @@ final class ContactsProvider extends ContentProvider {
         switch (match) {
             case RAW_CONTACTS:
             case PROFILE_RAW_CONTACTS: {
-                boolean isProfile = (match == PROFILE_RAW_CONTACTS)
-                        || asInt(copy, "raw_contact_is_user_profile") != 0;
-                long contactId = copy.containsKey("contact_id") && copy.getAsLong("contact_id") != null
-                        ? copy.getAsLong("contact_id") : -1L;
-                if (contactId < 0) {
-                    ContentValues contactValues = new ContentValues();
-                    contactValues.put("contact_last_updated_timestamp", now);
-                    contactValues.put("is_user_profile", isProfile ? 1 : 0);
-                    if (copy.containsKey("display_name")) {
-                        String dn = copy.getAsString("display_name");
-                        contactValues.put("display_name", dn);
-                        applyNameDerivedFields(contactValues, dn, dn, ContactsContract.DisplayNameSources.UNDEFINED);
-                    }
-                    contactId = db.insertOrThrow("contacts", null, contactValues);
-                    copy.put("contact_id", contactId);
-                }
-                if (isProfile) {
-                    copy.put("raw_contact_is_user_profile", 1);
-                }
+                boolean isProfile = match == PROFILE_RAW_CONTACTS;
+                copy.remove("contact_id");
+                requireKeys(copy, RAW_WRITE_COLUMNS);
+                ContentValues contactValues = new ContentValues();
+                contactValues.put("contact_last_updated_timestamp", now);
+                contactValues.put("is_user_profile", isProfile ? 1 : 0);
+                long contactId = db.insertOrThrow("contacts", null, contactValues);
+                copy.put("contact_id", contactId);
+                if (isProfile) copy.put("raw_contact_is_user_profile", 1);
                 if (!syncAdapter && !copy.containsKey("dirty")) {
                     copy.put("dirty", 1);
                 }
@@ -1242,9 +1300,11 @@ final class ContactsProvider extends ContentProvider {
             case POSTALS:
                 return insertDataLocked(db, copy, forcedMime(match), now, syncAdapter);
             case GROUPS:
+                requireKeys(copy, GROUP_WRITE_COLUMNS);
                 if (!syncAdapter && !copy.containsKey("dirty")) copy.put("dirty", 1);
                 return db.insertOrThrow("groups", null, copy);
             case SETTINGS:
+                requireKeys(copy, SETTINGS_WRITE_COLUMNS);
                 db.insertWithOnConflict("settings", null, copy, SQLiteDatabase.CONFLICT_REPLACE);
                 return 1;
             default:
@@ -1256,18 +1316,23 @@ final class ContactsProvider extends ContentProvider {
             long now, boolean syncAdapter) {
         String mimetype = forcedMime != null ? forcedMime : copy.getAsString("mimetype");
         copy.remove("mimetype");
+        Long rawContactId = copy.getAsLong("raw_contact_id");
+        copy.remove("raw_contact_id");
+        requireKeys(copy, DATA_WRITE_COLUMNS);
+        if (rawContactId == null || !hasRemainingRows(db, "raw_contacts",
+                "_id = ? AND deleted = 0 AND raw_contact_is_user_profile = 0", rawContactId)) {
+            throw new IllegalArgumentException("Data insert requires an existing raw contact");
+        }
+        copy.put("raw_contact_id", rawContactId);
         if (mimetype == null || mimetype.isEmpty()) {
             throw new IllegalArgumentException("Data insert requires mimetype");
         }
         if (MIME_PHONE.equals(mimetype)) {
-            maybePopulateNormalizedPhone(copy, null);
+            normalizePhoneValues(copy);
         }
         copy.put("mimetype_id", resolveOrCreateMimetypeId(db, mimetype));
         long id = db.insertOrThrow("data", null, copy);
-        Long rawContactId = copy.getAsLong("raw_contact_id");
-        if (rawContactId != null) {
-            refreshRawAndParentContacts(db, Collections.singleton(rawContactId), now, !syncAdapter);
-        }
+        refreshRawAndParentContacts(db, Collections.singleton(rawContactId), now, !syncAdapter);
         return id;
     }
 
@@ -1287,6 +1352,7 @@ final class ContactsProvider extends ContentProvider {
                 if (count > 0) {
                     if (mBatchDepth > 0) {
                         mBatchDirty = true;
+                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
                     } else {
                         notifyNow = true;
                     }
@@ -1296,7 +1362,7 @@ final class ContactsProvider extends ContentProvider {
             }
         }
         if (notifyNow) {
-            ContactsProviderSupport.notifyChange(getContext(), NOTIFY_URI);
+            notifyObservers(!isCallerSyncAdapter(uri));
         }
         return count;
     }
@@ -1306,37 +1372,28 @@ final class ContactsProvider extends ContentProvider {
         ContentValues copy = values == null ? new ContentValues() : new ContentValues(values);
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
+        String rows = mutationRows(db, match, uri, selection, selectionArgs, syncAdapter);
         switch (match) {
             case CONTACTS:
-            case CONTACTS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                if (match == CONTACTS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            selectionArgs, Long.toString(ContentUris.parseId(uri)));
+            case CONTACTS_ID:
+            case PROFILE: {
+                requireKeys(copy, CONTACT_OPTIONS);
+                if (copy.size() == 0) return 0;
+                String rawRows = "contact_id IN (SELECT _id FROM contacts WHERE " + rows + ")";
+                db.update("raw_contacts", copy, rawRows, null);
+                if (!syncAdapter) {
+                    bumpRawContactsVersionAndDirty(db,
+                            queryIds(db, "SELECT _id FROM raw_contacts WHERE " + rawRows, null));
                 }
                 copy.put("contact_last_updated_timestamp", now);
-                return db.update("contacts", copy, effSel, effArgs);
-            }
-            case PROFILE: {
-                copy.put("contact_last_updated_timestamp", now);
-                return db.update("contacts", copy,
-                        ContactsProviderSupport.combineSelection(selection, "is_user_profile = 1"),
-                        selectionArgs);
+                return db.update("contacts", copy, rows, null);
             }
             case RAW_CONTACTS:
             case RAW_CONTACTS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                if (match == RAW_CONTACTS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            selectionArgs, Long.toString(ContentUris.parseId(uri)));
-                }
-                Set<Long> rawIds = queryIds(db, "SELECT _id FROM raw_contacts"
-                        + (effSel != null ? " WHERE " + effSel : ""), effArgs);
-                int updated = db.update("raw_contacts", copy, effSel, effArgs);
+                requireKeys(copy, RAW_WRITE_COLUMNS);
+                if (copy.size() == 0) return 0;
+                Set<Long> rawIds = queryIds(db, "SELECT _id FROM raw_contacts WHERE " + rows, null);
+                int updated = db.update("raw_contacts", copy, rows, null);
                 if (updated > 0) {
                     if (!syncAdapter && !copy.containsKey("dirty") && !copy.containsKey("version")) {
                         bumpRawContactsVersionAndDirty(db, rawIds);
@@ -1355,34 +1412,15 @@ final class ContactsProvider extends ContentProvider {
             case EMAILS_ID:
             case POSTALS:
             case POSTALS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                String forcedMime = forcedMime(match);
-                if (forcedMime != null) {
-                    effSel = ContactsProviderSupport.combineSelection(
-                            effSel, "mimetype_id = (SELECT _id FROM mimetypes WHERE mimetype = ?)");
-                    effArgs = ContactsProviderSupport.prependArgs(effArgs, forcedMime);
-                }
-                if (match == DATA_ID || match == PHONES_ID || match == EMAILS_ID || match == POSTALS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(effSel, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            effArgs, Long.toString(ContentUris.parseId(uri)));
-                }
-                if (copy.containsKey("mimetype")) {
-                    String newMime = copy.getAsString("mimetype");
-                    copy.remove("mimetype");
-                    if (newMime != null && !newMime.isEmpty()) {
-                        copy.put("mimetype_id", resolveOrCreateMimetypeId(db, newMime));
-                    }
-                }
+                requireKeys(copy, DATA_WRITE_COLUMNS);
+                if (copy.size() == 0) return 0;
                 Set<Long> rawIds = queryIds(db, "SELECT DISTINCT raw_contact_id FROM data"
-                        + (effSel != null ? " WHERE " + effSel : ""), effArgs);
+                        + " WHERE " + rows, null);
                 int updated;
-                if (copy.containsKey("data1") && !copy.containsKey("data4")) {
-                    // Populate data4 per-row only for phone rows cleanly.
-                    updated = updateDataWithPhoneNormalization(db, copy, effSel, effArgs, forcedMime);
+                if (copy.containsKey("data1") || copy.containsKey("data4")) {
+                    updated = updateDataWithPhoneNormalization(db, copy, rows);
                 } else {
-                    updated = db.update("data", copy, effSel, effArgs);
+                    updated = db.update("data", copy, rows, null);
                 }
                 if (updated > 0) {
                     refreshRawAndParentContacts(db, rawIds, now, !syncAdapter);
@@ -1391,35 +1429,102 @@ final class ContactsProvider extends ContentProvider {
             }
             case GROUPS:
             case GROUPS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                if (match == GROUPS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            selectionArgs, Long.toString(ContentUris.parseId(uri)));
-                }
+                requireKeys(copy, GROUP_WRITE_COLUMNS);
+                if (copy.size() == 0) return 0;
                 if (!syncAdapter && !copy.containsKey("dirty")) {
                     copy.put("dirty", 1);
                 }
-                return db.update("groups", copy, effSel, effArgs);
+                return db.update("groups", copy, rows, null);
             }
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
     }
 
-    private int updateDataWithPhoneNormalization(SQLiteDatabase db, ContentValues copy,
-            String selection, String[] args, String forcedMime) {
-        if (MIME_PHONE.equals(forcedMime)) {
-            ContentValues phoneCopy = new ContentValues(copy);
-            maybePopulateNormalizedPhone(phoneCopy, null);
-            return db.update("data", phoneCopy, selection, args);
+    private static void requireKeys(ContentValues values, Set<String> writable) {
+        for (String key : values.keySet()) {
+            if (!writable.contains(key)) throw new IllegalArgumentException("Invalid column " + key);
         }
+    }
+
+    // Resolve only public view columns with untrusted SQL. Subsequent writes use
+    // only IDs read from that view and run in the same transaction.
+    private static String mutationRows(SQLiteDatabase db, int match, Uri uri, String selection,
+            String[] selectionArgs, boolean syncAdapter) {
+        SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
+        qb.setStrict(true);
+        qb.setStrictColumns(true);
+        qb.setStrictGrammar(true);
+        String where = null;
+        boolean item = false;
+        switch (match) {
+            case CONTACTS:
+            case CONTACTS_ID:
+            case PROFILE:
+                qb.setTables("view_contacts");
+                qb.setProjectionMap(sContactsProjectionMap);
+                where = match == PROFILE ? "is_user_profile = 1" : "is_user_profile = 0";
+                item = match == CONTACTS_ID;
+                break;
+            case RAW_CONTACTS:
+            case RAW_CONTACTS_ID:
+                qb.setTables("view_raw_contacts");
+                qb.setProjectionMap(sRawContactsProjectionMap);
+                where = "COALESCE(is_user_profile, 0) = 0";
+                if (!syncAdapter) where += " AND deleted = 0";
+                item = match == RAW_CONTACTS_ID;
+                break;
+            case DATA:
+            case DATA_ID:
+            case PHONES:
+            case PHONES_ID:
+            case EMAILS:
+            case EMAILS_ID:
+            case POSTALS:
+            case POSTALS_ID: {
+                qb.setTables("view_data");
+                qb.setProjectionMap(sDataProjectionMap);
+                where = "is_user_profile = 0";
+                if (!syncAdapter) where += " AND is_read_only = 0";
+                String mime = forcedMime(match);
+                if (mime != null) {
+                    where += " AND mimetype = ?";
+                    selectionArgs = ContactsProviderSupport.prependArgs(selectionArgs, mime);
+                }
+                item = match == DATA_ID || match == PHONES_ID || match == EMAILS_ID
+                        || match == POSTALS_ID;
+                break;
+            }
+            case GROUPS:
+            case GROUPS_ID:
+                qb.setTables("groups");
+                qb.setProjectionMap(sGroupsProjectionMap);
+                if (!syncAdapter) where = "deleted = 0 AND group_is_read_only = 0";
+                item = match == GROUPS_ID;
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown URL " + uri);
+        }
+        if (item) {
+            where = scopedSelection(where, "_id = ?");
+            selectionArgs = ContactsProviderSupport.prependArgs(
+                    selectionArgs, Long.toString(ContentUris.parseId(uri)));
+        }
+        if (where != null) qb.appendWhere(where);
+        Set<Long> ids = new HashSet<>();
+        try (Cursor c = qb.query(db, new String[] { "_id" }, selection, selectionArgs,
+                null, null, null)) {
+            while (c.moveToNext()) ids.add(c.getLong(0));
+        }
+        return idInClause("_id", ids);
+    }
+
+    private int updateDataWithPhoneNormalization(SQLiteDatabase db, ContentValues copy, String rows) {
         String sql = "SELECT _id, (SELECT mimetype FROM mimetypes WHERE mimetypes._id = data.mimetype_id) "
-                + "FROM data" + (selection != null ? " WHERE " + selection : "");
+                + "FROM data WHERE " + rows;
         List<Long> phoneIds = new ArrayList<>();
         List<Long> otherIds = new ArrayList<>();
-        try (Cursor c = db.rawQuery(sql, args)) {
+        try (Cursor c = db.rawQuery(sql, null)) {
             while (c.moveToNext()) {
                 long id = c.getLong(0);
                 if (MIME_PHONE.equals(c.getString(1))) phoneIds.add(id);
@@ -1429,8 +1534,10 @@ final class ContactsProvider extends ContentProvider {
         int total = 0;
         if (!phoneIds.isEmpty()) {
             ContentValues phoneCopy = new ContentValues(copy);
-            maybePopulateNormalizedPhone(phoneCopy, null);
-            total += db.update("data", phoneCopy, idInClause("_id", phoneIds), null);
+            normalizePhoneValues(phoneCopy);
+            if (phoneCopy.size() > 0) {
+                total += db.update("data", phoneCopy, idInClause("_id", phoneIds), null);
+            }
         }
         if (!otherIds.isEmpty()) {
             total += db.update("data", copy, idInClause("_id", otherIds), null);
@@ -1454,6 +1561,7 @@ final class ContactsProvider extends ContentProvider {
                 if (count > 0) {
                     if (mBatchDepth > 0) {
                         mBatchDirty = true;
+                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
                     } else {
                         notifyNow = true;
                     }
@@ -1463,7 +1571,7 @@ final class ContactsProvider extends ContentProvider {
             }
         }
         if (notifyNow) {
-            ContactsProviderSupport.notifyChange(getContext(), NOTIFY_URI);
+            notifyObservers(!isCallerSyncAdapter(uri));
         }
         return count;
     }
@@ -1472,74 +1580,19 @@ final class ContactsProvider extends ContentProvider {
             String[] selectionArgs) {
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
+        String rows = mutationRows(db, match, uri, selection, selectionArgs, syncAdapter);
         switch (match) {
             case CONTACTS:
-            case CONTACTS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                if (match == CONTACTS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            selectionArgs, Long.toString(ContentUris.parseId(uri)));
-                }
-                Set<Long> contactIds = queryIds(db, "SELECT _id FROM contacts"
-                        + (effSel != null ? " WHERE " + effSel : ""), effArgs);
-                if (contactIds.isEmpty()) return 0;
-                if (!syncAdapter) {
-                    int softCount = 0;
-                    for (long cid : contactIds) {
-                        boolean hadRaw = hasRemainingRows(db, "raw_contacts", "contact_id = ?", cid);
-                        int updated = softDeleteRawContacts(db, "contact_id = ? AND deleted = 0",
-                                new String[] { Long.toString(cid) });
-                        if (updated > 0 || !hadRaw) {
-                            if (!hadRaw) {
-                                db.delete("contacts", "_id = ?", new String[] { Long.toString(cid) });
-                            }
-                            softCount++;
-                            recordDeletedContact(db, cid, now);
-                        }
-                    }
-                    return softCount;
-                }
-                for (long cid : contactIds) {
-                    db.delete("raw_contacts", "contact_id = ?", new String[] { Long.toString(cid) });
-                }
-                int deleted = db.delete("contacts", effSel, effArgs);
-                for (long cid : contactIds) {
-                    recordDeletedContact(db, cid, now);
-                }
-                return deleted;
+            case CONTACTS_ID:
+            case PROFILE: {
+                Set<Long> contactIds = queryIds(db, "SELECT _id FROM contacts WHERE " + rows, null);
+                deleteRawContacts(db, idInClause("contact_id", contactIds), syncAdapter, now);
+                return contactIds.size();
             }
             case RAW_CONTACTS:
-            case RAW_CONTACTS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                if (match == RAW_CONTACTS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            selectionArgs, Long.toString(ContentUris.parseId(uri)));
-                }
-                Set<Long> contactIds = queryIds(db, "SELECT DISTINCT contact_id FROM raw_contacts"
-                        + (effSel != null ? " WHERE " + effSel : ""), effArgs);
-                int count;
-                if (!syncAdapter) {
-                    count = softDeleteRawContacts(db, effSel, effArgs);
-                    for (long cid : contactIds) {
-                        if (!hasRemainingRows(db, "raw_contacts", "contact_id = ? AND deleted = 0", cid)) {
-                            recordDeletedContact(db, cid, now);
-                        }
-                    }
-                } else {
-                    count = db.delete("raw_contacts", effSel, effArgs);
-                    for (long cid : contactIds) {
-                        if (!hasRemainingRows(db, "raw_contacts", "contact_id = ?", cid)) {
-                            db.delete("contacts", "_id = ?", new String[] { Long.toString(cid) });
-                            recordDeletedContact(db, cid, now);
-                        }
-                    }
-                }
-                return count;
-            }
+            case RAW_CONTACTS_ID:
+            case PROFILE_RAW_CONTACTS:
+                return deleteRawContacts(db, rows, syncAdapter, now);
             case DATA:
             case DATA_ID:
             case PHONES:
@@ -1547,62 +1600,69 @@ final class ContactsProvider extends ContentProvider {
             case EMAILS:
             case EMAILS_ID:
             case POSTALS:
-            case POSTALS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                String forcedMime = forcedMime(match);
-                if (forcedMime != null) {
-                    effSel = ContactsProviderSupport.combineSelection(
-                            effSel, "mimetype_id = (SELECT _id FROM mimetypes WHERE mimetype = ?)");
-                    effArgs = ContactsProviderSupport.prependArgs(effArgs, forcedMime);
-                }
-                if (match == DATA_ID || match == PHONES_ID || match == EMAILS_ID || match == POSTALS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(effSel, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            effArgs, Long.toString(ContentUris.parseId(uri)));
-                }
-                Set<Long> rawIds = queryIds(db, "SELECT DISTINCT raw_contact_id FROM data"
-                        + (effSel != null ? " WHERE " + effSel : ""), effArgs);
-                int deleted = db.delete("data", effSel, effArgs);
+            case POSTALS_ID:
+            case PROFILE_DATA:
+            case RAW_CONTACTS_DATA:
+            {
+                Set<Long> rawIds = queryIds(db,
+                        "SELECT DISTINCT raw_contact_id FROM data WHERE " + rows, null);
+                int deleted = db.delete("data", rows, null);
                 if (deleted > 0) {
                     refreshRawAndParentContacts(db, rawIds, now, !syncAdapter);
                 }
                 return deleted;
             }
             case GROUPS:
-            case GROUPS_ID: {
-                String effSel = selection;
-                String[] effArgs = selectionArgs;
-                if (match == GROUPS_ID) {
-                    effSel = ContactsProviderSupport.combineSelection(selection, "_id = ?");
-                    effArgs = ContactsProviderSupport.prependArgs(
-                            selectionArgs, Long.toString(ContentUris.parseId(uri)));
-                }
-                if (!syncAdapter) {
-                    db.execSQL("UPDATE groups SET deleted = 1, dirty = 1, version = version + 1"
-                            + (effSel != null ? " WHERE (" + effSel + ") AND deleted = 0"
-                                    : " WHERE deleted = 0"),
-                            effArgs == null ? new Object[0] : effArgs);
-                    return changesCount(db);
-                }
-                return db.delete("groups", effSel, effArgs);
-            }
+            case GROUPS_ID:
+                return deleteLocalOrTombstone(db, "groups", rows, syncAdapter);
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
     }
 
-    private static int softDeleteRawContacts(SQLiteDatabase db, String selection, String[] args) {
-        String where = ContactsProviderSupport.combineSelection(selection, "deleted = 0");
-        db.execSQL("UPDATE raw_contacts SET deleted = 1, dirty = 1, version = version + 1"
-                + (where != null ? " WHERE " + where : ""),
-                args == null ? new Object[0] : args);
-        return changesCount(db);
+    private static int deleteRawContacts(SQLiteDatabase db, String rows, boolean syncAdapter,
+            long now) {
+        Set<Long> contactIds = queryIds(db,
+                "SELECT DISTINCT contact_id FROM raw_contacts WHERE " + rows, null);
+        int count = deleteLocalOrTombstone(db, "raw_contacts", rows, syncAdapter);
+        for (long contactId : contactIds) {
+            if (!hasRemainingRows(db, "raw_contacts", "contact_id = ? AND deleted = 0", contactId)) {
+                db.delete("contacts", "_id = ?", new String[] { Long.toString(contactId) });
+                recordDeletedContact(db, contactId, now);
+            } else {
+                Set<Long> remaining = queryIds(db,
+                        "SELECT _id FROM raw_contacts WHERE contact_id = ? AND deleted = 0",
+                        new String[] { Long.toString(contactId) });
+                refreshRawAndParentContacts(db, remaining, now, false);
+            }
+        }
+        return count;
+    }
+
+    private static int deleteLocalOrTombstone(SQLiteDatabase db, String table, String rows,
+            boolean syncAdapter) {
+        if (syncAdapter) return db.delete(table, rows, null);
+        int hard = db.delete(table, rows + " AND (account_type IS NULL OR account_type = '')", null);
+        db.execSQL("UPDATE " + table + " SET deleted = 1, dirty = 1, version = version + 1"
+                + " WHERE (" + rows + ") AND deleted = 0");
+        return hard + changesCount(db);
     }
 
     private static int changesCount(SQLiteDatabase db) {
         try (Cursor c = db.rawQuery("SELECT changes()", null)) {
             return c.moveToFirst() ? c.getInt(0) : 0;
+        }
+    }
+
+    private void notifyObservers(boolean syncToNetwork) {
+        if (getContext() == null) return;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            getContext().getContentResolver().notifyChange(NOTIFY_URI, null, syncToNetwork);
+        } catch (RuntimeException failure) {
+            SystemServer.log("contacts: observer notification failed: " + failure);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
     }
 
@@ -1619,12 +1679,27 @@ final class ContactsProvider extends ContentProvider {
         }
     }
 
-    private static void maybePopulateNormalizedPhone(ContentValues copy, String fallbackRaw) {
-        if (!copy.containsKey("data4") || copy.getAsString("data4") == null) {
-            String raw = copy.containsKey("data1") ? copy.getAsString("data1") : fallbackRaw;
-            String normalized = ContactsProviderSupport.normalizePhoneNumber(raw);
-            if (normalized != null) copy.put("data4", normalized);
+    private static void normalizePhoneValues(ContentValues values) {
+        if (!values.containsKey("data1")) {
+            values.remove("data4");
+            return;
         }
+        String raw = values.getAsString("data1");
+        String supplied = values.getAsString("data4");
+        String e164 = null;
+        if (raw != null && !raw.isEmpty()) {
+            if (supplied != null && supplied.startsWith("+")) {
+                e164 = PhoneNumberUtils.formatNumberToE164(supplied, "ZZ");
+            }
+            if (e164 == null) {
+                String region = SystemLocale.locales().get(0).getCountry();
+                if (raw.startsWith("+") || !region.isEmpty()) {
+                    e164 = PhoneNumberUtils.formatNumberToE164(raw,
+                            region.isEmpty() ? "ZZ" : region);
+                }
+            }
+        }
+        values.put("data4", e164);
     }
 
     private static String forcedMime(int match) {
@@ -1724,18 +1799,18 @@ final class ContactsProvider extends ContentProvider {
     /**
      * Resolves display name following AOSP precedence:
      * {@code StructuredName} -> {@code Nickname} -> {@code Organization} ->
-     * {@code Email} -> {@code Phone}.
+     * {@code Phone} -> {@code Email}.
      */
     private static NameResolution resolveDisplayNameForRawContact(SQLiteDatabase db, long rawContactId) {
         String[] order = new String[] {
-                MIME_STRUCTURED_NAME, MIME_NICKNAME, MIME_ORGANIZATION, MIME_EMAIL, MIME_PHONE
+                MIME_STRUCTURED_NAME, MIME_NICKNAME, MIME_ORGANIZATION, MIME_PHONE, MIME_EMAIL
         };
         int[] sources = new int[] {
                 ContactsContract.DisplayNameSources.STRUCTURED_NAME,
                 ContactsContract.DisplayNameSources.NICKNAME,
                 ContactsContract.DisplayNameSources.ORGANIZATION,
-                ContactsContract.DisplayNameSources.EMAIL,
-                ContactsContract.DisplayNameSources.PHONE
+                ContactsContract.DisplayNameSources.PHONE,
+                ContactsContract.DisplayNameSources.EMAIL
         };
         for (int i = 0; i < order.length; i++) {
             try (Cursor c = db.rawQuery(
@@ -1774,24 +1849,26 @@ final class ContactsProvider extends ContentProvider {
         target.put("display_name_source", source);
         target.put("sort_key", displayName);
         target.put("sort_key_alt", displayNameAlt);
-        target.put("phonebook_label", phonebookLabel(displayName));
-        target.put("phonebook_label_alt", phonebookLabel(displayNameAlt));
-        target.put("phonebook_bucket", phonebookBucket(displayName));
-        target.put("phonebook_bucket_alt", phonebookBucket(displayNameAlt));
+        AlphabeticIndex.ImmutableIndex<Void> index = phonebookIndex(SystemLocale.locales().get(0));
+        putPhonebookEntry(target, index, displayName, "");
+        putPhonebookEntry(target, index, displayNameAlt, "_alt");
     }
 
-    private static String phonebookLabel(String name) {
-        if (name == null || name.isEmpty()) return "";
-        char c = Character.toUpperCase(name.charAt(0));
-        if (c >= 'A' && c <= 'Z') return String.valueOf(c);
-        return "#";
+    private static synchronized AlphabeticIndex.ImmutableIndex<Void> phonebookIndex(Locale locale) {
+        if (!locale.equals(sPhonebookLocale)) {
+            sPhonebookIndex = new AlphabeticIndex<Void>(locale).addLabels(Locale.ENGLISH)
+                    .buildImmutableIndex();
+            sPhonebookLocale = locale;
+        }
+        return sPhonebookIndex;
     }
 
-    private static int phonebookBucket(String name) {
-        if (name == null || name.isEmpty()) return 0;
-        char c = Character.toUpperCase(name.charAt(0));
-        if (c >= 'A' && c <= 'Z') return 1 + (c - 'A');
-        return 27;
+    private static void putPhonebookEntry(ContentValues values,
+            AlphabeticIndex.ImmutableIndex<Void> index, String name, String suffix) {
+        int bucket = name == null || name.isEmpty() ? 0 : index.getBucketIndex(name);
+        String label = name == null || name.isEmpty() ? "" : index.getBucket(bucket).getLabel();
+        values.put("phonebook_bucket" + suffix, bucket);
+        values.put("phonebook_label" + suffix, label);
     }
 
     private static String trimOrNull(String value) {
