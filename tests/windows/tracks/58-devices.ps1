@@ -73,6 +73,10 @@ Check 'devices: camera request selection is atomic against cancel and flush' {
   DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
     'gesher.services.CameraRequestRaceTest') 90
 } @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed')
+Check 'devices: camera admission checks live grants and process attribution' {
+  DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+    'gesher.services.CameraPermissionContractTest') 90
+} @('CameraPermissionContractTest: both admission paths, live grants and UID attribution passed')
 Check 'devices: camera callback/request admission bounds real native metadata and blocked consumers' {
   DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
     'gesher.services.CameraCallbackAdmissionTest') 90
@@ -261,6 +265,19 @@ if ($devicesUid -lt 10000 -or $devicesUid -gt 19999) { throw 'Devices fixture di
 Write-Host $permissionSetup
 $devicesIdentity = @{ GESHER_UID = [string]$devicesUid; GESHER_BINDER_UID = [string]$devicesUid }
 
+# The shipped capture app is an ordinary CAMERA-permission client too. This is
+# an explicit test-operator decision for this isolated profile, not a production auto-grant.
+$cameraPermissionSetup = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+  'gesher.services.FixturePermissionSetup', (NoDrive "$Dir/gesher-camera.apk"),
+  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
+if ($LASTEXITCODE -ne 0 -or -not $cameraPermissionSetup.Contains('FixturePermissionSetup persisted grants verified') -or
+    $cameraPermissionSetup -notmatch 'FixturePermissionSetup UID ([0-9]+) package com\.gesher\.camera') {
+  throw "Camera app permission prerequisite failed: $cameraPermissionSetup"
+}
+$cameraUid = [int]$Matches[1]
+if ($cameraUid -lt 10000 -or $cameraUid -gt 19999) { throw 'Camera app did not receive an ordinary application UID' }
+Write-Host $cameraPermissionSetup
+
 # Single process: the services in the app's own process (gesher-app --single-process).
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400 '' $devicesIdentity
 $code = $LASTEXITCODE
@@ -321,6 +338,14 @@ LegacyCameraCheck 'Gesher device' $out $code
 # ACTION_IMAGE_CAPTURE: the device installed Gesher Camera (the PC has a camera: the test
 # one); devices.apk's CaptureTestActivity asks it for a thumbnail and for a photo written
 # to its provider's EXTRA_OUTPUT (Gesher Camera's auto-capture extra takes them).
+$remoteCameraPermission = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+  'gesher.services.FixturePermissionSetup', '--remote', [string]$cameraUid, 'com.gesher.camera',
+  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
+if ($LASTEXITCODE -ne 0 -or -not $remoteCameraPermission.Contains('FixturePermissionSetup live installed grants verified') -or
+    -not $remoteCameraPermission.Contains("FixturePermissionSetup remote UID $cameraUid package com.gesher.camera source ")) {
+  throw "Installed camera app permission prerequisite failed: $remoteCameraPermission"
+}
+Write-Host $remoteCameraPermission
 $capOut = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devices.apk"), '--activity', '.CaptureTestActivity', '--keep-task') 400
 $capCode = $LASTEXITCODE
 $capOut += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)

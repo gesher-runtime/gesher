@@ -149,9 +149,13 @@ Windows without them (no location service, no Media Foundation) gets clean
   (`CameraMetadataInfo.metadata`, SENSOR_TIMESTAMP and the 3A states).
   `onDeviceIdle` when nothing is left. A second client of the same camera
   evicts the first (onError DISCONNECTED), as cameraserver does.
-- Permission: `connectDevice` needs `android.permission.CAMERA` in the app's
-  manifest (`IPackageManager.getPackageInfo`), else `ERROR_PERMISSION_DENIED`
-  (a SecurityException in the app).
+- Permission: `connectDevice` checks the current `android.permission.CAMERA`
+  grant through `IPackageManager.checkUidPermission` on every open. Its attribution
+  must identify the local application UID/PID (or the Android calling-identity
+  sentinels), and `getPackageUid` must confirm that the named package belongs to
+  that UID. Same-UID sibling attribution remains valid. Denial produces
+  `ERROR_PERMISSION_DENIED` (a SecurityException in the app), before replacing
+  an existing camera owner. Declaring CAMERA alone is insufficient.
 - Natives: `CameraMetadataNative` over system/media's libcamera_metadata
   (`camera_metadata_jni.cc`; no vendor tags; a Parcel carries the packed
   buffer, in-process only); `CameraDeviceImpl`'s result queue natives answer
@@ -167,7 +171,7 @@ Windows without them (no location service, no Media Foundation) gets clean
   callbacks (NV21 or YV12, callback buffers) and a preview surface with a native
   window; `setPreviewTexture` accepted without frames; `takePicture` (shutter, a
   null raw image, postview, JPEG at the picture size; the preview stops);
-  `autoFocus` succeeds at once; CAMERA in the manifest, else `Fail to connect to
+  `autoFocus` succeeds at once; a current CAMERA grant is required, else `Fail to connect to
   camera service`. Without a camera: `getNumberOfCameras()` 0, `open()` null.
 - `MediaStore.ACTION_IMAGE_CAPTURE`: Gesher Camera (`app/gesher-camera`,
   `gesher-camera.apk` next to dalvikvm.exe; `CameraApp`): the persistent device
@@ -175,7 +179,14 @@ Windows without them (no location service, no Media Foundation) gets clean
   none (so without a camera nothing resolves it, as on a device without one). A
   Camera2 preview in an ImageView with Take photo and Cancel; the JPEG (largest size)
   goes to EXTRA_OUTPUT (RESULT_OK) or comes back as a 160-pixel-wide thumbnail in
-  `data`. `com.gesher.camera.extra.AUTO_CAPTURE_MS` takes it by itself (tests).
+  `data`. It requests ordinary runtime CAMERA consent before starting camera work;
+  refusal returns `RESULT_CANCELED`. `com.gesher.camera.extra.AUTO_CAPTURE_MS`
+  takes it by itself after permission admission (tests).
+- This opening check is one part of [#56/C07](https://github.com/gesher-runtime/gesher/issues/56).
+  It does not complete active-session revocation, AppOps data-delivery ownership,
+  proxy-attribution chains, foreground/privacy policy or hardware qualification.
+  [Admission validation and its boundaries](research/camera-permission-admission-2026-11-22.md)
+  describe the focused evidence.
 - Not there: reprocessing, offline sessions, extensions, torch, high-speed
   sessions, multi-resolution readers, ImageReader surfaces used by other
   producers than the camera (MediaCodec...), preview into SurfaceView or

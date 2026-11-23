@@ -68,15 +68,27 @@ public final class ProxySetting {
         return new File(Device.dataDir(), "system/proxy.properties");
     }
 
-    /** The saved settings ({@code proxy}, {@code proxy.<package>}). */
+    /**
+     * The saved settings ({@code proxy}, {@code proxy.<package>}); none (Windows' settings)
+     * when the file cannot be read or is not in Properties form (a backslash-u escape
+     * without four hex digits), as the control panel shows it.
+     */
     public static Properties load() {
+        try {
+            return read();
+        } catch (IOException | IllegalArgumentException e) {
+            System.out.println("gesher-net: " + file() + ": " + e);
+            return new Properties();
+        }
+    }
+
+    /** The saved settings, or the reason the file cannot be read. */
+    private static Properties read() throws IOException {
         Properties p = new Properties();
         File f = file();
         if (f.isFile()) {
             try (InputStream in = new FileInputStream(f)) {
                 p.load(in);
-            } catch (IOException e) {
-                System.out.println("gesher-net: " + f + ": " + e);
             }
         }
         return p;
@@ -88,7 +100,13 @@ public final class ProxySetting {
      * package over every app's setting), null removes the package's.
      */
     public static synchronized void save(String packageName, String value) throws IOException {
-        Properties p = load();
+        // A file that cannot be read is not replaced: that would lose its other settings.
+        Properties p;
+        try {
+            p = read();
+        } catch (IllegalArgumentException e) {
+            throw new IOException(file() + ": " + e.getMessage(), e);
+        }
         String key = packageName == null ? ALL : ALL + "." + packageName;
         if (value == null || (packageName == null && value.equals(WINDOWS))) {
             p.remove(key);
