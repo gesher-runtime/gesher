@@ -172,7 +172,7 @@ public final class Services {
         // What real apps fetch as they start (docs/e2e.md): without these getSystemService
         // answers null.
         services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
-                new PowerManagerService()).asBinder());
+                new PowerManagerService(am)).asBinder());
         // DeviceIdleManager is also PowerExemptionManager's constructor dependency.
         // Register the real Binder stub in both in-process and system-server modes.
         services.put(Context.DEVICE_IDLE_CONTROLLER, StandIn.of(android.os.IDeviceIdleController.class,

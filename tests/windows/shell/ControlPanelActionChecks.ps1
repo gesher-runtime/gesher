@@ -373,7 +373,7 @@ $ok = [Gesher.PanelActionNative]::GetExitCodeProcess([IntPtr]::Zero, [ref]$code)
     [void](Start-PanelAction 'Uninstall' @{ Package = 'fixture.package'; Label = 'Literal {1} label' }); Drain-Action
     Assert-Action ($script:Messages[0].Message -ceq (Get-GesherText 'cp_uninstall_failed' @('Literal {1} label'))) 'Uninstall failure lost its literal label'
 
-    $store = Join-Path $here 'AuroraStore.apk'
+    $store = Join-Path $here 'AuroraStore-4.8.4.apk'
     foreach ($fail in $true, $false) {
         Reset-Action
         $script:Fixture.DownloadFails = $fail; Save-ActionFixture
