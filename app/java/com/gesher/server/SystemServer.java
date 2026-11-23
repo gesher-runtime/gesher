@@ -357,9 +357,15 @@ public final class SystemServer {
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             // One window for the app's tasks, or one each (ADR 0088).
             env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
-            return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
+            String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk))), env, logFile.getPath(), false);
+                    String.valueOf(targetSdk)));
+            // Experimental (ADR 0090): the package's own AppContainer.
+            if (AppSandbox.enabled()) {
+                return AppSandbox.spawn(command, env, logFile, pkg, packageName,
+                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
+            }
+            return Zygote.spawn(command, env, logFile.getPath(), false);
             }
         });
     }

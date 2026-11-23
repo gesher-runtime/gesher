@@ -61,6 +61,8 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
+# AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
+Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
 $here = $scriptRoot

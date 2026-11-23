@@ -112,7 +112,7 @@ jobs:
         run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
       - name: Build actual app identity restart implementation
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
       - name: Check UID re-entry, inherited I/O, exact exit and parent-death cleanup
         shell: pwsh
         run: |
@@ -935,7 +935,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@fe42fc3d4854141df94cd1e05cfbd10c4a686315
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@92c87bef013c0f1a5423b49b68d9b78079a8acd9
     with:
       local-runner: false
 

@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
+OFD_QUALIFICATION_SHA256 = 'd1c7f34eb189879e7e68e104448f93830172af1d132439ba5f797ead0eefb1a2'
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
