@@ -565,6 +565,7 @@ jobs:
 
       - name: URI grant publication retirement contracts and work
         run: |
+          python3 tools/test_uri_retirement_report.py
           python3 tools/test_uri_retirement.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
