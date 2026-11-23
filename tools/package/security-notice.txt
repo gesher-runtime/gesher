@@ -1,0 +1,17 @@
+﻿Security: Android apps in Gesher are not isolated from Windows
+==============================================================
+
+Gesher runs each Android app as an ordinary Windows program, with the
+permissions of your Windows account.
+
+Android's permission prompts (camera, location, contacts and so on) control
+what an app can do through Android's own interfaces. They do not isolate the
+app from Windows: an app's code - especially its native code - can read and
+change your files, use the network and start programs, as any program you
+install on Windows can.
+
+Treat an .apk like a downloaded .exe: install only apps you trust, from
+sources you trust.
+
+Per-app isolation (Windows AppContainer) is under development and is not
+enabled. Details: https://github.com/gesher-runtime/gesher/blob/main/docs/sandbox.md

@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
+OFD_QUALIFICATION_SHA256 = '9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01'
 # Reverse only the pinned scanner adapter transition before all original OFD
 # checks. This source proof grants no supplier, controller or runtime approval.
 STDIO_SCAN_QUALIFICATION_SHA256='3c08f7f0ea996532377f7d4930ce2d0e84320f3339bd26eed8f7a4b89aad36d0'
