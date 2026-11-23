@@ -1224,7 +1224,7 @@ final class ContactsProvider extends ContentProvider {
                     effSelection = scopedSelection(effSelection, "display_name LIKE ?");
                     effArgs = ContactsProviderSupport.prependArgs(effArgs, "%" + uri.getLastPathSegment() + "%");
                 }
-                defaultOrder = phoneOnly ? "is_super_primary DESC" : "display_name COLLATE LOCALIZED ASC";
+                defaultOrder = phoneOnly ? "is_super_primary DESC" : "sort_key ASC";
                 break;
             }
             case CONTACTS_FREQUENT:
@@ -1388,7 +1388,7 @@ final class ContactsProvider extends ContentProvider {
                     groupBy = "CASE WHEN mimetype = '" + MIME_PHONE + "' AND data4 IS NOT NULL"
                             + " THEN data4 ELSE data1 END, contact_id";
                     defaultOrder = "starred DESC, is_super_primary DESC, in_visible_group DESC, "
-                            + "display_name COLLATE LOCALIZED ASC, contact_id, is_primary DESC";
+                            + "sort_key ASC, contact_id, is_primary DESC";
                     if (uri.getPathSegments().size() > 3) {
                         String filter = uri.getLastPathSegment();
                         ArrayList<String> matches = new ArrayList<>();
