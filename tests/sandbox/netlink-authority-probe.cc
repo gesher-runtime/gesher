@@ -120,19 +120,6 @@ bool CheckInterfaceAddresses(bool expect_link_layer) {
   return saw_ip && saw_link_layer == expect_link_layer;
 }
 
-bool ActivateInspection(HANDLE pipe) {
-  gesher::process_identity::Process self;
-  if (!gesher::process_identity::ReadLiveProcess(GetCurrentProcess(), &self)) return false;
-  channel::Request request;
-  request.action = channel::Action::kEnableNetlinkInspection;
-  request.pid = self.pid;
-  request.birth = self.birth;
-  const auto deadline = GetTickCount64() + 5000;
-  uint32_t status = ERROR_ACCESS_DENIED;
-  return channel::Transfer(pipe, &request, sizeof(request), true, deadline) &&
-         channel::Transfer(pipe, &status, sizeof(status), false, deadline) && status == ERROR_SUCCESS;
-}
-
 int NoAuthority(bool contained) {
   gesher::process_identity::Process self;
   if (!gesher::process_identity::ReadLiveProcess(GetCurrentProcess(), &self) ||
@@ -146,12 +133,12 @@ int NoAuthority(bool contained) {
 
 int SystemServer(const fs::path& directory, const std::u16string& profile) {
   channel::Startup startup;
-  if (!Check(channel::ReadStartup(channel::Endpoint::kSystemServer, &startup) &&
-             zygote::HasProtectedLaunchAuthority(), "protected process admitted")) return 1;
+  if (!Check(channel::ReadStartup(channel::Endpoint::kSystemServer, &startup),
+             "protected process received its bootstrap")) return 1;
   int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
   if (!Check(fd >= 0 && Denied(fd) && CheckInterfaceAddresses(false),
-             "admitted system_server has no grant by default")) return 1;
-  if (!Check(ActivateInspection(channel::DecodeHandle(startup.channel)), "explicit private grant") ||
+             "SystemServer has no grant before verifying its launch authority")) return 1;
+  if (!Check(zygote::HasProtectedLaunchAuthority(), "protected process admitted") ||
       !Check(gesher::binder_endpoint::MayInspectNetlink(), "authenticated grant received")) return 1;
 
   sockaddr_nl local{};

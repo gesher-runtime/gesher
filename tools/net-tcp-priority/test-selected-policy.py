@@ -442,7 +442,7 @@ def preceding_appcontainer_identity_sources(netlink):
   subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
   return {path:(work/path).read_bytes() for path in paths}
 
-NETLINK_QUALIFICATION_SHA256 = '315fdb35fe5d7dc49eefa303d4628eedbc9cbe82731ddf19760842017884b3c3'
+NETLINK_QUALIFICATION_SHA256 = 'af6e63a114b5b3350168fba01dbede3f1aafe6c704b2ea257c4b51d2765fef7c'
 
 def preceding_netlink_sources():
  folder=ROOT/'tools/net-tcp-priority/qualified'
