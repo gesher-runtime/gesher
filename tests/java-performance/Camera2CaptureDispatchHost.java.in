@@ -16,6 +16,8 @@ public final class Camera2CaptureDispatchHost {
     private final CountingMap mStreams = new CountingMap();
     private final ArrayDeque<Frame> frames = new ArrayDeque<>();
     private final String mCameraId = "test";
+    private static final String ATTRIBUTION_TAG = "dispatch-host";
+    private final String mAttributionTag = ATTRIBUTION_TAG;
     private final Device mDevice = new Device();
     private final Callbacks mCallbacks = new Callbacks();
     private WindowsCamera.Capture mCapture;
@@ -118,6 +120,14 @@ public final class Camera2CaptureDispatchHost {
             void close() { event("close:" + width + "x" + height); }
         }
         static Capture open(String device, int width, int height) throws OpenException {
+            if (@REQUIRE_ATTRIBUTION@) throw new AssertionError("camera open lost attribution");
+            return recordOpen(width, height);
+        }
+        static Capture open(String device, int width, int height, String attributionTag) throws OpenException {
+            if (!ATTRIBUTION_TAG.equals(attributionTag)) throw new AssertionError("camera open changed attribution");
+            return recordOpen(width, height);
+        }
+        private static Capture recordOpen(int width, int height) throws OpenException {
             opens++; openWidth = width; openHeight = height;
             event("open:" + width + "x" + height);
             if (openFails) { openFails = false; throw new OpenException(); }

@@ -48,6 +48,7 @@ def main() -> None:
     fixture = (ROOT / 'tests/java-performance/Camera2CaptureDispatchHost.java.in').read_text(encoding='utf-8')
     fixture = fixture.replace('@PRODUCTION@', exact).replace('@SCAN_GATE@', str(not args.measure).lower())
     fixture = fixture.replace('@POST_CAPTURE_ERROR@', '4' if has_capture_failure else '3')
+    fixture = fixture.replace('@REQUIRE_ATTRIBUTION@', str(not args.source_ref).lower())
     with tempfile.TemporaryDirectory(prefix='gesher-camera2-dispatch-') as temporary:
         work = Path(temporary)
         target = work / 'Camera2CaptureDispatchHost.java'
