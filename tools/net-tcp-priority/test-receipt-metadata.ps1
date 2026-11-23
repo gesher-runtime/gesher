@@ -14,10 +14,56 @@ function Parse($Text){
 $ast=Parse $source
 $old=Parse $baseline
 function Condition($Tree,$Message){
- $matches=@($Tree.FindAll({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains("throw '$Message'")},$true))
- if($matches.Count -ne 1){throw "Missing/ambiguous original predicate $Message"}
- $matches[0].Clauses[0].Item1.Extent.Text
+ # A containing workflow branch also includes every nested throw in its extent.
+ # Only the clause that directly owns the sole throw supplies its predicate.
+ $conditions=@(foreach($statement in $Tree.FindAll({param($n) $n -is [Management.Automation.Language.IfStatementAst]},$true)){
+  foreach($clause in $statement.Clauses){
+   $body=@($clause.Item2.Statements)
+   if($body.Count -eq 1 -and $body[0] -is [Management.Automation.Language.ThrowStatementAst] -and
+      $body[0].Extent.Text -ceq "throw '$Message'"){$clause.Item1}
+  }
+ })
+ if($conditions.Count -ne 1){throw "Missing/ambiguous original predicate $Message"}
+ $conditions[0].Extent.Text
 }
+function AssertCondition($Tree,$Expected,$Message){
+ if((Condition $Tree $Message) -cne $Expected){throw "Acceptance predicate changed: $Message"}
+}
+# Exercise the real selector/comparison before extracting any consumer gates.
+# These script fragments contain metadata only and are never executed.
+$selectorMessage='Predicate selector control'
+foreach($sample in @(
+ @{Source='if ($direct) { throw ''Predicate selector control'' }';Expected='$direct'},
+ @{Source='if ($outer) { if ($inner) { throw ''Predicate selector control'' } }';Expected='$inner'},
+ @{Source='if ($first) { throw ''other'' } elseif ($second) { throw ''Predicate selector control'' }';Expected='$second'}
+)){
+ AssertCondition (Parse $sample.Source) $sample.Expected $selectorMessage
+}
+$selectorNegatives=0
+foreach($sample in @(
+ 'if ($missing) { throw ''other'' }',
+ 'if ($changed) { throw ''Changed predicate selector control'' }',
+ 'if ($text) { "throw ''Predicate selector control''" }',
+ 'if ($delegated) { & { throw ''Predicate selector control'' } }',
+ 'if ($first) { ''other'' } else { throw ''Predicate selector control'' }',
+ 'if ($extra) { ''additional statement''; throw ''Predicate selector control'' }',
+ 'if ($one) { throw ''Predicate selector control'' }; if ($two) { throw ''Predicate selector control'' }'
+)){
+ $rejected=$false
+ try{$null=Condition (Parse $sample) $selectorMessage}catch{
+  if($_.Exception.Message -cne "Missing/ambiguous original predicate $selectorMessage"){throw}
+  $rejected=$true
+ }
+ if(-not $rejected){throw 'Missing/ambiguous/nonthrow selector owner accepted'}
+ $selectorNegatives++
+}
+$rejected=$false
+try{AssertCondition (Parse 'if ($outer) { if ($mutated) { throw ''Predicate selector control'' } }') '$inner' $selectorMessage}catch{
+ if($_.Exception.Message -cne "Acceptance predicate changed: $selectorMessage"){throw}
+ $rejected=$true
+}
+if(-not $rejected){throw 'Mutated predicate accepted by immutable comparison'}
+Write-Host "TCP_RECEIPT_SELECTOR_METADATA_PASS direct_nested_elseif=PASS ownership_negatives=$selectorNegatives changed_predicate=rejected native_processes_started=0"
 $producer=Condition $ast 'Producer mismatch'
 foreach($message in @('Producer mismatch','Artifact not unique','Artifact source/run/attempt provenance mismatch')){
  # API head/source repository differ from the target's PR merge checkout.
@@ -25,7 +71,7 @@ foreach($message in @('Producer mismatch','Artifact not unique','Artifact source
  $expected=(Condition $old $message).Replace('$env:GITHUB_SHA','$ciSource.api_head_sha')
  $expected=$expected.Replace('"$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID',
                              '"$($a.workflow_run.head_repository_id)" -cne $ciSource.head_repository_id')
- if((Condition $ast $message) -cne $expected){throw "Acceptance predicate changed: $message"}
+ AssertCondition $ast $expected $message
 }
 . (Join-Path $root 'tools/ci/receipt-diagnostics.ps1')
 $env:GITHUB_REPOSITORY='gesher-runtime/gesher';$env:GITHUB_REPOSITORY_ID='1'
