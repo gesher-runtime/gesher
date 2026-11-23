@@ -25,7 +25,8 @@ namespace gesher::bionic {
 extern const char kArtLoadClassSymbol[];
 
 // Is `path` the native shell of a packer that hooks ART by symbol (its base
-// name: Ijiami's libexec.so, libexecmain.so and their _x86 variants)?
+// name: Ijiami's libexec.so, libexecmain.so and their _x86 variants, NetEase
+// Yidun's libnesec.so)? Which stand-in it gets depends on its machine.
 bool IsArtHookingPacker(const char* path);
 
 // The stand-in libart.so's bytes (an ELF64 x86-64 ET_DYN object: one
@@ -39,5 +40,50 @@ std::string ArtShimImage();
 // failure. *path receives the file's path. Loads it once per process: later
 // calls return the same entry point.
 void* LoadArtShim(const std::string& dir, std::string* path, std::string* error);
+
+// The arm64 stand-in, for a shell that runs translated (NetEase Yidun's
+// arm64-v8a libnesec.so). Besides LoadClass, that shell calls
+// art::Runtime::DisableVerifier() on the Runtime before it opens its dex files
+// from memory (ART then opens them without verifying them, as
+// OatFileManager::OpenDexFilesFromOat does when verification is disabled) and
+// reads OatHeader::kOatVersion. The stand-in exports them too; its Runtime
+// functions forward through GOT slots to the host functions named below, which
+// the bridge registers (compat/bionic/jni_bridge.cc).
+extern const char kArtDisableVerifierSymbol[];
+extern const char kArtIsVerificationEnabledSymbol[];
+extern const char kArtIsVerificationSoftFailSymbol[];
+extern const char kArtOatVersionSymbol[];
+// art::Runtime::instance_, the Runtime pointer the shell calls them on.
+extern const char kArtRuntimeInstanceSymbol[];
+// art::DexFileLoader::OpenCommon (Android 16's, with a DexFileContainer), which
+// the shell hooks so that the dex files it opens from memory are opened where
+// its own buffers are (its LoadClass hook finds a dex file by that address).
+// On a device it is libdexfile.so's, not libart.so's, and the shell looks for
+// it only there (in /proc/self/maps), so a second stand-in, libdexfile.so,
+// exports it. ART calls it through that stand-in's entry below
+// (patches/art/0803): the entry makes the device's call, with the result's
+// storage in X8, so a hook runs as there; the stand-in's own body calls ART's
+// function back through the import named below.
+extern const char kArtOpenCommonSymbol[];
+extern const char kArtOpenCommonEntrySymbol[];
+extern const char kArtShimOpenCommonImport[];
+extern const char kArtShimDisableVerifierImport[];
+extern const char kArtShimIsVerificationEnabledImport[];
+extern const char kArtShimIsVerificationSoftFailImport[];
+
+// Its bytes: an ELF64 AArch64 ET_DYN object, a read-execute PT_LOAD from
+// offset 0 as ArtShimImage's, and a read-write page holding the GOT.
+// `oat_version` is the 4 bytes of OatHeader::kOatVersion it exports.
+std::string ArtShimImageArm64(const std::string& oat_version);
+// The stand-in libdexfile.so: OpenCommon and its entry, as an object of the
+// same form.
+std::string DexFileShimImageArm64();
+
+// As LoadArtShim, for the arm64 stand-in: sets its Runtime::instance_ to
+// `runtime` and returns the guest address of its LoadClass, and in
+// *open_common_entry that of its OpenCommon entry (gesher::arm64::HostEntry
+// gives ART a System V entry to each).
+void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, void* runtime,
+                       void** open_common_entry, std::string* path, std::string* error);
 
 }  // namespace gesher::bionic
