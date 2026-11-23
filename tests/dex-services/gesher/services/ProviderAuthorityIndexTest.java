@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
 package gesher.services;
 
+import android.content.ComponentName;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.Signature;
@@ -217,11 +218,48 @@ public final class ProviderAuthorityIndexTest {
         ProviderInfo three = declared(pm, "three");
         require(three != null && three.name.equals(parsed.getPackageName() + ".Three")
                         && "three".equals(three.authority), "Later provider kept a claimed authority");
-        boolean twoRegistered = false;
+        // A provider left with no authority stays a registered component with a null
+        // authority: queryable by component, enable-able, never resolved by authority.
+        String pkgName = parsed.getPackageName();
+        ProviderInfo two = null;
+        int twoCount = 0;
         for (ProviderInfo info : duplicates.providers(PackageManager.MATCH_DISABLED_COMPONENTS)) {
-            if (info.name.equals(parsed.getPackageName() + ".Two")) twoRegistered = true;
+            if (info.name.equals(pkgName + ".Two")) { two = info; twoCount++; }
         }
-        require(!twoRegistered, "Provider left without an authority was registered");
+        require(two != null && twoCount == 1 && two.authority == null,
+                "Provider left without an authority was not registered with a null authority");
+        ProviderInfo twoInfo = pm.getProviderInfo(new ComponentName(pkgName, pkgName + ".Two"), 0, 0);
+        require(twoInfo != null && twoInfo.authority == null && twoInfo.readPermission != null,
+                "getProviderInfo lost a provider without an authority");
+        require((Boolean)invoke(method(PackageManagerService.class, "hasComponent", ComponentName.class),
+                        pm, new ComponentName(pkgName, pkgName + ".Two")),
+                "setComponentEnabledSetting would reject a provider without an authority");
+        require(pm.resolveContentProvider("same", PackageManager.MATCH_DISABLED_COMPONENTS, 0)
+                        .name.equals(pkgName + ".One"), "Null authority resolved");
+        // getPackageInfo(GET_PROVIDERS) reports the claimed authorities, as AOSP's
+        // rewritten ParsedProvider does, for every declaration.
+        Map<String, String> reported = new LinkedHashMap<>();
+        for (ProviderInfo info : duplicates.packageInfo(PackageManager.GET_PROVIDERS
+                | PackageManager.MATCH_DISABLED_COMPONENTS).providers) {
+            if (!info.name.equals(pkgName + ".Canonical")) reported.put(info.name, info.authority);
+        }
+        Map<String, String> claimedExpected = new LinkedHashMap<>();
+        claimedExpected.put(pkgName + ".Aware", "aware"); claimedExpected.put(pkgName + ".One", "same");
+        claimedExpected.put(pkgName + ".Two", null); claimedExpected.put(pkgName + ".Three", "three");
+        claimedExpected.put(pkgName + ".Four", "taken"); claimedExpected.put(pkgName + ".Five", null);
+        require(claimedExpected.equals(reported), "PackageInfo reported unclaimed authorities: " + reported);
+        // Only the boot-aware declarations: the generated subsequence keeps its claims.
+        ProviderInfo[] aware = duplicates.packageInfo(PackageManager.GET_PROVIDERS
+                | PackageManager.MATCH_DISABLED_COMPONENTS | PackageManager.MATCH_DIRECT_BOOT_AWARE).providers;
+        require(aware.length == 2 && "ignored".equals(aware[0].authority) && "aware".equals(aware[1].authority),
+                "Boot-filtered PackageInfo misassigned claimed authorities");
+        // Claimed once per parsed package (and logged once), not on every query.
+        Field claims = field(ApkPackage.class, "mProviderAuthorities");
+        Object computed = claims.get(duplicates);
+        require(computed != null, "Claims were not cached");
+        declared(pm, "three"); duplicates.providers(0); pm.getProviderInfo(
+                new ComponentName(pkgName, pkgName + ".Two"), 0, 0);
+        require(claims.get(duplicates) == computed, "Claims were recomputed per query");
         require(declared(pm, "taken") == null
                         && pm.resolveContentProvider("taken", PackageManager.MATCH_DISABLED_COMPONENTS, 0)
                                 .name.equals(parsed.getPackageName() + ".Four"),

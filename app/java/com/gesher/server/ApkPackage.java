@@ -34,6 +34,7 @@ import com.android.internal.pm.pkg.component.ParsedActivity;
 import com.android.internal.pm.pkg.component.ParsedComponent;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 import com.android.internal.pm.pkg.component.ParsedMainComponent;
+import com.android.internal.pm.pkg.component.ParsedProvider;
 
 import java.io.File;
 import java.io.IOException;
@@ -91,6 +92,12 @@ public final class ApkPackage {
     private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
     private Boolean mVerifiedMicrogSigner;
+    // The parsed provider declarations' claimed authorities, computed once per parsed
+    // package (see providerAuthorities()).
+    private volatile ProviderClaims mProviderAuthorities;
+
+    /** Per parsed provider declaration, in order: its name, boot awareness and claim. */
+    private record ProviderClaims(String[] names, boolean[] directBootAware, String[] authorities) {}
     private int mUid;
     // Parsing an archive is not package admission. Only the server's identity
     // transaction may attach a stable UID after validating the complete candidate.
@@ -744,7 +751,8 @@ public final class ApkPackage {
         pi.activities = installedComponents(pi.activities, pi.applicationInfo, flags, state);
         pi.receivers = installedComponents(pi.receivers, pi.applicationInfo, flags, state);
         pi.services = installedComponents(pi.services, pi.applicationInfo, flags, state);
-        if (providerQuery) pi.providers = registeredProviders(packageName, pi.providers, flags);
+        claimedAuthorities(pi.providers);
+        if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
         pi.firstInstallTime = mInstallTime;
         pi.lastUpdateTime = mUpdateTime;
@@ -979,37 +987,78 @@ public final class ApkPackage {
         return result;
     }
 
-    private static ProviderInfo[] registeredProviders(String packageName, ProviderInfo[] providers,
-            long flags) {
+    /**
+     * The authorities registration gives each provider declaration, by index in
+     * parsed.getProviders(). ComponentResolver.addProvidersLocked registers every provider
+     * component, then gives each of its authorities to the first provider claiming it and
+     * logs "Skipping provider name ..." for a later one, which keeps only the authorities
+     * still free, or none: it stays a registered component with a null authority (its
+     * ParsedProvider's authority is rewritten, so PackageInfo shows the same). Claimed in
+     * declaration order, before boot-state and enabled-state filtering, and only within
+     * this package: authorities across packages stay ambiguous in ContentProviders.
+     * Computed once, so the warning is logged once per parsed package, as at a scan.
+     */
+    private ProviderClaims providerAuthorities() {
+        ProviderClaims result = mProviderAuthorities;
+        if (result != null) return result;
+        synchronized (this) {
+            if (mProviderAuthorities == null) {
+                List<ParsedProvider> declared = parsed.getProviders();
+                int size = declared.size();
+                ProviderClaims claims = new ProviderClaims(new String[size], new boolean[size],
+                        new String[size]);
+                Set<String> claimed = new HashSet<>();
+                for (int i = 0; i < size; i++) {
+                    ParsedProvider provider = declared.get(i);
+                    claims.names()[i] = provider.getName();
+                    claims.directBootAware()[i] = provider.isDirectBootAware();
+                    String authorities = provider.getAuthority();
+                    if (authorities == null) continue;
+                    StringBuilder kept = new StringBuilder();
+                    for (String authority : authorities.split(";")) {
+                        if (claimed.add(authority)) {
+                            if (kept.length() > 0) kept.append(';');
+                            kept.append(authority);
+                        } else {
+                            android.util.Log.w("PackageManager", "Skipping provider name " + authority
+                                    + " (in package " + packageName + "): name already used by "
+                                    + packageName);
+                        }
+                    }
+                    claims.authorities()[i] = kept.length() == 0 ? null : kept.toString();
+                }
+                mProviderAuthorities = claims;
+            }
+            return mProviderAuthorities;
+        }
+    }
+
+    /** Gives generated provider infos (a filtered, ordered subsequence) their claims. */
+    private void claimedAuthorities(ProviderInfo[] providers) {
+        if (providers == null) return;
+        ProviderClaims claims = providerAuthorities();
+        int j = 0;
+        for (ProviderInfo info : providers) {
+            while (j < claims.names().length && !(claims.names()[j].equals(info.name)
+                    && claims.directBootAware()[j] == info.directBootAware)) {
+                j++;
+            }
+            if (j == claims.names().length) return;  // not generated from these declarations
+            info.authority = claims.authorities()[j++];
+        }
+    }
+
+    /**
+     * The registered providers: the first declaration of each component, including one
+     * left without an authority (ComponentResolver registers the component before its
+     * authorities), filtered by boot state.
+     */
+    private static ProviderInfo[] registeredProviders(ProviderInfo[] providers, long flags) {
         if (providers == null) return null;
         Set<String> components = new HashSet<>();
-        Map<String, String> claimed = new java.util.HashMap<>();
         int count = 0;
         for (ProviderInfo info : providers) {
             if (!components.add(info.name)) continue;
-            // An authority belongs to the first provider of the package that declares
-            // it; a later one keeps only the authorities still free and, left with
-            // none, is not registered (ComponentResolver.addProvidersLocked: "Skipping
-            // provider name ... name already used by ..."). Claimed before boot-state
-            // and enabled-state filtering, as registration is.
-            if (info.authority != null) {
-                StringBuilder kept = new StringBuilder();
-                for (String authority : info.authority.split(";")) {
-                    String owner = claimed.putIfAbsent(authority, info.name);
-                    if (owner == null) {
-                        if (kept.length() > 0) kept.append(';');
-                        kept.append(authority);
-                    } else if (!owner.equals(info.name)) {
-                        android.util.Log.w("PackageManager", "Skipping provider name " + authority + " (in package "
-                                + packageName + "): name already used by " + owner);
-                    }
-                }
-                if (kept.length() == 0) continue;
-                if (!kept.toString().equals(info.authority)) {
-                    info = new ProviderInfo(info);
-                    info.authority = kept.toString();
-                }
-            }
             long bootState = info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
                     : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
             if ((flags & bootState) != 0) providers[count++] = info;

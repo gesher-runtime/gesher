@@ -217,7 +217,8 @@ final class ContentProviders {
     /**
      * Ambiguous declarations never select an attacker simply because it installed first.
      * Within one package there is no ambiguity: ApkPackage.providers gives an authority
-     * only to the package's first provider declaring it, as ComponentResolver does.
+     * only to the package's first provider declaring it, as ComponentResolver does, and
+     * a provider left with none has a null authority, which matches no lookup.
      */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         synchronized (pm) {
@@ -306,6 +307,10 @@ final class ContentProviders {
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
         for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
                 | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+            // A provider whose authorities all went to an earlier one of its package
+            // is a registered component but is not installed (ComponentResolverBase
+            // queryProviders skips a null authority).
+            if (info.authority == null) continue;
             if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
                 result.add(info);
             }
