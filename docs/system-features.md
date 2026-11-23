@@ -43,7 +43,14 @@ the pinned commit (ab6a82e0, `renderer11_utils.cpp` `GetMaximumClientVersion`)
 gives ES 3.0 from feature level 10_1, ES 3.1 from 11_0, and ES 2.0 below 10_1.
 The default display now uses the hardware adapter only when it has an
 `EGL_OPENGL_ES3_BIT_KHR` config. Otherwise it uses WARP, which gives ES 3.0.
-So wherever ANGLE runs, ES 3.0 contexts can be created. CI's ANGLE probes
+So wherever ANGLE runs, ES 3.0 contexts can be created. The cost is on a GPU below
+feature level 10_1 (Direct3D 10.0 hardware, about 2006-2009, such as GeForce 8/9
+and GMA X4500): apps' GL, which ran there as ES 2.0 on the GPU, now runs on WARP,
+the CPU rasterizer, as ES 3.0. hwui is not affected by default (SkiaCpu, and
+`auto` turns WARP down). The alternative, a per-machine `reqGlEsVersion` of 2.0
+there, would keep those GPUs but needs the system server to open a Direct3D
+device at boot to learn the version; reporting ES 3.0 everywhere and serving it
+everywhere keeps one truthful value. CI's ANGLE probes
 create them on hardware and WARP (docs/angle.md).
 
 Not reported:
