@@ -5,6 +5,7 @@ import android.net.Network;
 import java.io.*;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.*;
 import java.util.*;
 import javax.net.ssl.*;
@@ -27,10 +28,25 @@ final class Http2Transport implements Closeable {
     private final Class<?> sourceClass=Class.forName(IO+"Source");
     private final Class<?> sinkClass=Class.forName(IO+"Sink");
     private final Class<?> streamClass=Class.forName(HTTP+"internal.framed.FramedStream");
+    // The reader and serialized writer are independent owners. Never share a
+    // scratch Buffer between them: HTTP/2 can read while a flow-controlled write
+    // is blocked. Fixed methods are resolved once per transport, not per chunk.
+    private final Object readBuffer=bufferClass.getConstructor().newInstance();
+    private final Object writeBuffer=bufferClass.getConstructor().newInstance();
+    private final Method sourceRead=sourceClass.getMethod("read",bufferClass,long.class);
+    private final Method bufferRead=bufferClass.getMethod("read",byte[].class,int.class,int.class);
+    private final Method bufferWrite=bufferClass.getMethod("write",byte[].class,int.class,int.class);
+    private final Method bufferClear=bufferClass.getMethod("clear");
+    private final Method sinkWrite=sinkClass.getMethod("write",bufferClass,long.class);
+    private final Method sinkFlush=sinkClass.getMethod("flush");
+    private final Method sinkClose=sinkClass.getMethod("close");
 
     Http2Transport() throws ReflectiveOperationException {}
     static Object call(Class<?> type, Object target, String name, Class<?>[] signature, Object... args) throws Exception {
-        try { return type.getMethod(name,signature).invoke(target,args); }
+        return invoke(type.getMethod(name,signature),target,args);
+    }
+    private static Object invoke(Method method, Object target, Object... args) throws Exception {
+        try { return method.invoke(target,args); }
         catch (InvocationTargetException e) {
             Throwable cause=e.getCause();
             if (cause instanceof Exception) throw (Exception)cause;
@@ -158,15 +174,15 @@ final class Http2Transport implements Closeable {
     }
     private void initDecodedBody() throws IOException {
         InputStream raw=new InputStream() {
+            private final byte[] one=new byte[1];
             @Override public int read() throws IOException {
-                byte[] one=new byte[1]; int n=read(one,0,1); return n<0 ? -1 : one[0]&255;
+                int n=read(one,0,1); return n<0 ? -1 : one[0]&255;
             }
             @Override public int read(byte[] bytes,int offset,int count) throws IOException {
+                Objects.checkFromIndexSize(offset,count,bytes.length);
                 if (count==0) return 0;
                 try {
-                    byte[] part=readRaw(count);
-                    if (part==null) return -1;
-                    System.arraycopy(part,0,bytes,offset,part.length); return part.length;
+                    return readRaw(bytes,offset,count);
                 } catch (IOException e) { throw e; }
                 catch (Exception e) { throw new IOException("HTTP/2 body read failed",e); }
             }
@@ -181,25 +197,51 @@ final class Http2Transport implements Closeable {
             decodedBody=decoded;
         }
     }
-    private byte[] readRaw(int capacity) throws Exception {
-        Object buffer=bufferClass.getConstructor().newInstance();
-        long n=(Long)call(sourceClass,source,"read",new Class<?>[]{bufferClass,long.class},buffer,(long)capacity);
-        return n<0 ? null : (byte[])call(bufferClass,buffer,"readByteArray",new Class<?>[]{long.class},n);
+    private int readRaw(byte[] bytes,int offset,int count) throws Exception {
+        try {
+            long n=(Long)invoke(sourceRead,source,readBuffer,(long)count);
+            if (n<0) return -1;
+            if (n>count) throw new IOException("HTTP/2 source exceeded read capacity");
+            // Okio Buffer.read may stop at a segment boundary. Drain exactly
+            // the bytes admitted by Source.read without allocating a byte[].
+            int copied=0;
+            while (copied<n) {
+                int part=(Integer)invoke(bufferRead,readBuffer,bytes,offset+copied,(int)n-copied);
+                if (part<=0) throw new EOFException("HTTP/2 buffer ended before source bytes");
+                copied+=part;
+            }
+            return copied;
+        } catch (Exception | Error failure) {
+            // A failing Source can have appended bytes before throwing. Only
+            // this direction's owner clears them; close never races the Buffer.
+            discard(readBuffer,failure);
+            throw failure;
+        }
     }
-    byte[] read(int capacity) throws Exception {
+    int read(byte[] bytes,int offset,int count) throws Exception {
+        Objects.checkFromIndexSize(offset,count,bytes.length);
+        if (count==0) return 0;
         if (decodedBody==null && (responseEncoding.equalsIgnoreCase("gzip")
                 || responseEncoding.equalsIgnoreCase("deflate"))) initDecodedBody();
-        if (decodedBody==null) return readRaw(capacity);
-        byte[] bytes=new byte[capacity]; int n=decodedBody.read(bytes);
-        return n<0 ? null : n==bytes.length ? bytes : Arrays.copyOf(bytes,n);
+        if (decodedBody==null) return readRaw(bytes,offset,count);
+        return decodedBody.read(bytes,offset,count);
     }
-    void write(byte[] bytes) throws Exception {
-        Object buffer=bufferClass.getConstructor().newInstance();
-        call(bufferClass,buffer,"write",new Class<?>[]{byte[].class},(Object)bytes);
-        call(sinkClass,sink,"write",new Class<?>[]{bufferClass,long.class},buffer,(long)bytes.length);
+    void write(byte[] bytes,int offset,int count) throws Exception {
+        Objects.checkFromIndexSize(offset,count,bytes.length);
+        try {
+            invoke(bufferWrite,writeBuffer,bytes,offset,count);
+            invoke(sinkWrite,sink,writeBuffer,(long)count);
+        } catch (Exception | Error failure) {
+            discard(writeBuffer,failure);
+            throw failure;
+        }
+    }
+    private void discard(Object buffer,Throwable failure) {
+        try { invoke(bufferClear,buffer); }
+        catch (Exception | Error cleanup) { failure.addSuppressed(cleanup); }
     }
     void flush(boolean end) throws Exception {
-        if (sink!=null) call(sinkClass,sink,end ? "close" : "flush",new Class<?>[0]);
+        if (sink!=null) invoke(end ? sinkClose : sinkFlush,sink);
     }
     @Override public synchronized void close() throws IOException {
         closed=true;

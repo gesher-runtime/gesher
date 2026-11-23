@@ -190,7 +190,14 @@ public final class BluetoothRequestFixture {
                     pm, queue, radio.proxy());
         }
         ApkPackage install(String name, int target, String... requested) throws Exception {
-            ApkPackage apk = code(name, nextUid++, target, requested); packages.put(name, apk); return apk;
+            ApkPackage apk = code(name, nextUid++, target, requested); packages.put(name, apk); publish(); return apk;
+        }
+        // PackageManagerService publishes a new immutable map for every install,
+        // replacement and removal; its permission indexes follow that publication.
+        // Model the fixture's package changes through the same production method.
+        void publish() throws Exception {
+            var method = PackageManagerService.class.getDeclaredMethod("publishPackages", Map.class);
+            method.setAccessible(true); method.invoke(pm, new LinkedHashMap<>(packages));
         }
         void grant(ApkPackage apk, String permission, boolean granted) {
             decisions.setProperty("uid:" + apk.uid() + ":" + permission, granted ? "granted" : "denied");
@@ -299,8 +306,8 @@ public final class BluetoothRequestFixture {
             stale.request(ENABLE, app.packageName, app, () -> alive[0], results::add);
             switch (retirement) {
                 case "lifetime" -> alive[0] = false;
-                case "removed" -> stale.packages.remove(app.packageName);
-                case "replaced" -> stale.packages.put(app.packageName, code(app.packageName, app.uid(), 36, CONNECT));
+                case "removed" -> { stale.packages.remove(app.packageName); stale.publish(); }
+                case "replaced" -> { stale.packages.put(app.packageName, code(app.packageName, app.uid(), 36, CONNECT)); stale.publish(); }
                 case "removing" -> stale.removing.put(app.packageName, app);
                 case "disabled" -> ((PackageImpl) app.parsed).setEnabled(false);
             }
@@ -644,8 +651,8 @@ public final class BluetoothRequestFixture {
                 case "exiting" -> set(retired.process, "exiting", true);
                 case "dead" -> set(retired.process, "dead", true);
                 case "unready" -> set(retired.process, "ready", false);
-                case "replaced" -> retired.h.packages.put(retired.owner.packageName,
-                        code(retired.owner.packageName, retired.owner.uid(), 36, CONNECT));
+                case "replaced" -> { retired.h.packages.put(retired.owner.packageName,
+                        code(retired.owner.packageName, retired.owner.uid(), 36, CONNECT)); retired.h.publish(); }
                 case "removing" -> retired.h.removing.put(retired.owner.packageName, retired.owner);
                 case "disabled" -> ((PackageImpl) retired.owner.parsed).setEnabled(false);
             }

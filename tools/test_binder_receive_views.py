@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Exercise production Binder delivery with declared pipe and Win32 boundaries.
 
-Uses the actual WriteRead, wire readers, SG validator, mapped allocator, FD
-adoption and guarded publication code. The fixture supplies deterministic pipe,
-process-memory and handle adapters; native Windows broker/ART gates remain
-separate. --source-ref runs exactly the same suite against an earlier source.
+Uses the actual WriteRead, wire readers, SG/FD metadata validators, mapped
+allocator, FD delivery and guarded publication code. The fixture supplies
+deterministic pipe, process-memory and descriptor-ownership adapters; native
+Windows OFD/broker/ART gates remain separate. --source-ref runs the same behavior
+and resource suite against an earlier source, with its declared wire format.
 """
 from __future__ import annotations
 
@@ -41,10 +42,19 @@ def main() -> int:
 
     source = read("compat/posix/src/binder.cc")
     sg = read("compat/posix/src/binder_sg.h")
+    wire = read("compat/posix/src/binder_wire.h")
+    shared_descriptions = b"struct FileDescription {" in wire
+    descriptions = read("compat/posix/src/binder_file_descriptions.h") if shared_descriptions else None
     print("Binder client SHA256 " + hashlib.sha256(source).hexdigest(), flush=True)
     print("Binder SG SHA256 " + hashlib.sha256(sg).hexdigest(), flush=True)
+    print("Binder wire SHA256 " + hashlib.sha256(wire).hexdigest(), flush=True)
+    if descriptions is not None:
+        print("Binder FD descriptions SHA256 " + hashlib.sha256(descriptions).hexdigest(), flush=True)
     text = source.decode("utf-8")
     substitutions = {
+        "@SHARED_DESCRIPTIONS@": str(int(shared_descriptions)),
+        "@SOCKET_DESCRIPTIONS@": str(int(b"kSocketFileDescription" in wire)),
+        "@NATIVE_FENCES@": str(int(b"kNativeFenceFileDescription" in wire)),
         "@PIPE@": section(text, "bool ReadExact(HANDLE pipe,", "std::wstring PipeName() {"),
         "@ALLOCATION@": section(text, "struct Allocation {", "std::mutex files_mutex;"),
         "@FD@": section(text, "template <typename F>\nvoid ForEachFdObject", "// The uid the driver gives"),
@@ -58,7 +68,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="gesher-binder-receive-") as directory:
         work = Path(directory)
         (work / "binder_sg.h").write_bytes(sg)
-        (work / "binder_wire.h").write_bytes(read("compat/posix/src/binder_wire.h"))
+        (work / "binder_wire.h").write_bytes(wire)
+        if descriptions is not None:
+            (work / "binder_file_descriptions.h").write_bytes(descriptions)
         cpp = work / "receive.cc"
         cpp.write_text(fixture, encoding="utf-8")
         binary = work / "receive"

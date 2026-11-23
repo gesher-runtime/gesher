@@ -360,6 +360,10 @@
       "en": "Install Google Play services support (microG)",
       "he": "התקנת תמיכה בשירותי Google Play (microG)"
     },
+    "setup_microg_update": {
+      "en": "Update Google Play services support (microG) to version 0.3.17",
+      "he": "עדכון התמיכה בשירותי Google Play (microG) לגרסה 0.3.17"
+    },
     "setup_aurora": {
       "en": "Install App Store (Aurora Store)",
       "he": "התקנת חנות אפליקציות (Aurora Store)"
@@ -375,6 +379,10 @@
     "setup_configuring_microg": {
       "en": "Setting up Google Play services and applications...",
       "he": "מגדיר שירותי Google Play ויישומים..."
+    },
+    "setup_download_skipped": {
+      "en": "Setup could not download these components and will continue without them:\n\n%1\nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).",
+      "he": "לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:\n\n%1\nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר)."
     },
     "cp_title": {
       "en": "Gesher Control Center",
