@@ -9,13 +9,23 @@
 #include <unistd.h>
 #include <windows.h>
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "internal.h"
+#include "rooted_storage_client.h"
 #include <gesher/reserved_names.h>
 
 struct gesher_DIR {
+  struct RootedScan {
+    alignas(FILE_ID_BOTH_DIR_INFO) unsigned char bytes[16384]{};
+    size_t offset = sizeof(bytes);
+    bool restart = true;
+    bool finished = false;
+  };
   std::wstring path;     // the directory, as MapPath gave it
   std::wstring pattern;  // path\*
   HANDLE find = INVALID_HANDLE_VALUE;
@@ -23,6 +33,7 @@ struct gesher_DIR {
   bool have_data = false;  // `data` holds an entry not yet returned
   long long position = 0;
   bool is_virtual = false;
+  std::unique_ptr<RootedScan> rooted;
   std::vector<gesher::procfs::Entry> entries;  // a virtual directory's
   int fd = -1;  // fdopendir's fd, or dirfd's; closed by closedir
   struct dirent entry;
@@ -33,6 +44,12 @@ namespace {
 bool Start(DIR* dir) {
   dir->position = 0;
   if (dir->is_virtual) return gesher::procfs::List(dir->path, &dir->entries);
+  if (dir->rooted) {
+    dir->rooted->offset = sizeof(dir->rooted->bytes);
+    dir->rooted->restart = true;
+    dir->rooted->finished = false;
+    return true;
+  }
   dir->find = FindFirstFileExW(dir->pattern.c_str(), FindExInfoBasic, &dir->data,
                                FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
   dir->have_data = dir->find != INVALID_HANDLE_VALUE;
@@ -54,6 +71,39 @@ void Fill(struct dirent* e, const std::string& name, unsigned char type, long lo
   e->d_reclen = sizeof(*e);
 }
 
+struct dirent* ReadRooted(DIR* dir) {
+  auto& scan = *dir->rooted;
+  if (scan.finished) return nullptr;
+  if (scan.offset == sizeof(scan.bytes)) {
+    const HANDLE directory = gesher::HandleFromFd(dir->fd);
+    if (directory == INVALID_HANDLE_VALUE) return errno = EBADF, nullptr;
+    const auto format = scan.restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
+    if (!GetFileInformationByHandleEx(directory, format, scan.bytes, sizeof(scan.bytes))) {
+      if (GetLastError() == ERROR_NO_MORE_FILES) scan.finished = true;
+      else gesher::FailWithLastError();
+      return nullptr;
+    }
+    scan.offset = 0;
+    scan.restart = false;
+  }
+  const size_t available = sizeof(scan.bytes) - scan.offset;
+  constexpr size_t kNameStart = offsetof(FILE_ID_BOTH_DIR_INFO, FileName);
+  if (available < kNameStart || scan.offset % alignof(FILE_ID_BOTH_DIR_INFO) != 0) return errno = EIO, nullptr;
+  auto* item = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(scan.bytes + scan.offset);
+  const size_t used = item->NextEntryOffset != 0 ? item->NextEntryOffset : available;
+  if (used > available || used < kNameStart || item->FileNameLength > used - kNameStart ||
+      item->FileNameLength % sizeof(wchar_t) != 0) return errno = EIO, nullptr;
+  scan.offset += used;
+  const std::wstring name(item->FileName, item->FileNameLength / sizeof(wchar_t));
+  const DWORD attrs = item->FileAttributes;
+  const unsigned char type = (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ? DT_LNK :
+      (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 ? DT_DIR : DT_REG;
+  Fill(&dir->entry, gesher::Narrow(gesher::reserved_names::Decoded(name.c_str()).c_str()), type,
+       ++dir->position);
+  if (item->FileId.QuadPart != 0) dir->entry.d_ino = static_cast<uint64_t>(item->FileId.QuadPart);
+  return &dir->entry;
+}
+
 DIR* Open(const char* name, int fd) {
   if (name == nullptr || name[0] == '\0') {
     errno = name == nullptr ? EFAULT : ENOENT;
@@ -68,6 +118,21 @@ DIR* Open(const char* name, int fd) {
     delete dir;
     return nullptr;
   } else {
+    const auto rooted = gesher::storage_root::Lookup(dir->path);
+    if (rooted) {
+      if (rooted.error != 0) {
+        errno = rooted.error;
+        delete dir;
+        return nullptr;
+      }
+      dir->fd = fd >= 0 ? fd : open(name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      if (dir->fd < 0) {
+        delete dir;
+        return nullptr;
+      }
+      dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
+      return dir;
+    }
     DWORD attrs = GetFileAttributesW(dir->path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) {
       gesher::FailWithLastError();
@@ -121,6 +186,7 @@ DIR* fdopendir(int fd) {
 }
 
 struct dirent* readdir(DIR* dir) {
+  if (dir->rooted) return ReadRooted(dir);
   struct dirent* e = &dir->entry;
   if (dir->is_virtual) {
     if (dir->position >= static_cast<long long>(dir->entries.size())) return nullptr;

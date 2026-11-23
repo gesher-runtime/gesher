@@ -8,6 +8,7 @@
 
 #include "internal.h"
 #include "revocable_internal.h"
+#include "rooted_storage_client.h"
 #include "standalone_input.h"
 
 extern "C" int gesher_is_socket(int fd);
@@ -91,6 +92,16 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       // needed to read attributes.
       auto& selected = gesher::standalone_input::Current();
       const bool inherited = selected.Matches(windows);
+      if (!inherited) {
+        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+          HANDLE h;
+          const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+          if (error != 0) return errno = error, -1;
+          const int result = FromHandle(h, buf);
+          CloseHandle(h);
+          return result;
+        }
+      }
       HANDLE h = inherited ? selected.Open(true) : CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING,

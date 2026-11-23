@@ -94,7 +94,8 @@ std::string LinuxPath(const wchar_t* windows);
 // rename, ...): MapPath for kFile, with errno set otherwise: ENOENT for a
 // missing or empty name, `special` for a device or virtual file. Returns false
 // with errno set when there is no file.
-bool DiskPath(const char* path, std::wstring* windows, int special);
+// Only operations with a broker implementation may use allow_broker.
+bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker = false);
 
 // unlink (directory false) and rmdir (true) of a mapped path (path.cc).
 int PosixDelete(const std::wstring& windows, bool directory);

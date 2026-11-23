@@ -43,6 +43,7 @@
 #include "linux_socket.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
+#include "rooted_storage_client.h"
 #include "socket_internal.h"
 
 namespace {
@@ -212,6 +213,18 @@ int statvfs(const char* path, struct statvfs* buf) {
   std::wstring mapped;
   gesher::PathKind kind = gesher::MapPath(path, &mapped);
   if (kind == gesher::PathKind::kMissing) return errno = ENOENT, -1;
+  if (kind == gesher::PathKind::kFile) {
+    if (const auto rooted = gesher::storage_root::Lookup(mapped)) {
+      HANDLE h;
+      const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+      if (error != 0) return errno = error, -1;
+      const int result = StatvfsHandle(h, buf);
+      const int saved_errno = errno;
+      CloseHandle(h);
+      errno = saved_errno;
+      return result;
+    }
+  }
   if (kind != gesher::PathKind::kFile) {
     // Retain the existing backing-volume approximation for virtual paths.
     // This repair does not supply procfs/device filesystem statistics.

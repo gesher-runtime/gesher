@@ -29,6 +29,7 @@
 #include "event_internal.h"
 #include "record_lock_descriptors.h"
 #include "pipe_io.h"
+#include "rooted_storage_client.h"
 
 namespace {
 
@@ -763,8 +764,15 @@ char* realpath(const char* path, char* resolved_path) {
     return nullptr;
   }
   if (kind == gesher::PathKind::kFile) {
-    HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    const auto rooted = gesher::storage_root::Lookup(wpath);
+    HANDLE h;
+    if (rooted) {
+      const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+      if (error != 0) return errno = error, nullptr;
+    } else {
+      h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    }
     if (h == INVALID_HANDLE_VALUE) {
       gesher::FailWithLastError();
       return nullptr;

@@ -28,6 +28,7 @@
 
 #include "startup_null.h"
 #include "standalone_input.h"
+#include "rooted_storage_client.h"
 
 #include <string>
 #include <limits>
@@ -196,6 +197,34 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     }
     HANDLE owned = selected.Open(metadata_only, (flags & O_CLOEXEC) == 0);
     if (owned == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
+    return FdFromHandle(owned, flags);
+  }
+  if (const auto rooted = storage_root::Lookup(path)) {
+    namespace wire = rooted_storage_wire;
+    uint32_t access = wire::kMetadata;
+    if ((flags & O_PATH) == 0) {
+      switch (flags & O_ACCMODE) {
+        case O_RDONLY: access = (flags & O_TRUNC) != 0 ? wire::kReadWrite : wire::kRead; break;
+        case O_WRONLY: access = wire::kWrite; break;
+        default: access = wire::kReadWrite; break;
+      }
+      if ((flags & O_CREAT) != 0) {
+        access |= wire::kCreate;
+        if ((flags & O_EXCL) != 0) access |= wire::kExclusive;
+        if ((mode & 0200) == 0) access |= wire::kReadOnlyCreate;
+      }
+      if ((flags & O_TRUNC) != 0) access |= wire::kTruncate;
+      if ((flags & O_DSYNC) != 0) access |= wire::kWriteThrough;
+    }
+    if ((flags & O_DIRECTORY) != 0) access |= wire::kDirectory;
+    HANDLE owned;
+    const int error = storage_root::Open(rooted, access, &owned);
+    if (error != 0) return errno = error, -1;
+    if ((flags & O_CLOEXEC) == 0 && !SetHandleInformation(owned, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+      const int result = FailWithLastError();
+      CloseHandle(owned);
+      return result;
+    }
     return FdFromHandle(owned, flags);
   }
   DWORD disposition;
@@ -416,11 +445,15 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
   return MapPath(path.c_str(), &windows) == PathKind::kFile ? windows : std::wstring();
 }
 
-bool DiskPath(const char* path, std::wstring* windows, int special) {
+bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker) {
   if (path == nullptr) return errno = EFAULT, false;
   if (path[0] == '\0') return errno = ENOENT, false;
   switch (MapPath(path, windows)) {
     case PathKind::kFile:
+      if (!allow_broker) {
+        const auto rooted = storage_root::Lookup(*windows);
+        if (rooted) return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, false;
+      }
       return true;
     case PathKind::kMissing:
       return errno = ENOENT, false;
@@ -485,6 +518,10 @@ std::string LinuxPath(const wchar_t* windows) {
 // scanner's brief open of a new file is waited out. A symbolic link is
 // removed itself, by unlink, also when it points to a directory.
 int PosixDelete(const std::wstring& windows, bool directory) {
+  if (const auto rooted = storage_root::Lookup(windows)) {
+    const int error = storage_root::Remove(rooted, directory);
+    return error != 0 ? (errno = error, -1) : 0;
+  }
   HANDLE h = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 20; ++attempt) {
     h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
@@ -703,6 +740,14 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
   std::wstring windows;
   switch (gesher::MapPath(resolved.c_str(), &windows)) {
     case PathKind::kFile: {
+      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+        HANDLE h;
+        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadataWrite, &h);
+        if (error != 0) return errno = error, -1;
+        const int result = SetTimes(h, times);
+        CloseTimeHandle(h);
+        return result;
+      }
       HANDLE h = CreateFileW(windows.c_str(), 0,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS |
@@ -753,8 +798,13 @@ int mkdir(const char* path) {
   if (path == nullptr) return errno = EFAULT, -1;
   std::wstring windows;
   switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
-    case PathKind::kFile:
+    case PathKind::kFile: {
+      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+        const int error = gesher::storage_root::MakeDirectory(rooted);
+        return error != 0 ? (errno = error, -1) : 0;
+      }
       return CreateDirectoryW(windows.c_str(), nullptr) ? 0 : gesher::FailWithLastError();
+    }
     case PathKind::kMissing:
       return errno = ENOENT, -1;
     default:
@@ -764,7 +814,7 @@ int mkdir(const char* path) {
 
 int unlink(const char* path) {
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;  // EACCES: /dev and /proc names
+  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;  // EACCES: /dev and /proc names
   return gesher::PosixDelete(windows, false);
 }
 
