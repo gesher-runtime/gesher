@@ -285,6 +285,22 @@ BionicMallinfo BIONIC_SYSV Mallinfo() {
   return info;
 }
 
+// mallopt(3): 1 on success, 0 on error (bionic's malloc.h). M_PURGE and
+// M_PURGE_ALL release the heap's unused memory to the system, which for the
+// CRT's Windows heap is HeapCompact: it coalesces free blocks and decommits
+// the large free ones. The heap's other policies (decay time, caches, memory
+// tags, zero-init) cannot be set from here, so those options fail, as an
+// option the allocator does not support fails on bionic.
+int BIONIC_SYSV Mallopt(int option, int /*value*/) {
+  constexpr int kPurge = -101, kPurgeAll = -104;  // M_PURGE, M_PURGE_ALL
+  if (option != kPurge && option != kPurgeAll) return 0;
+  const HANDLE heap = reinterpret_cast<HANDLE>(_get_heap_handle());
+  SetLastError(ERROR_SUCCESS);
+  // 0 is also the result when the heap has no free block left; only an error
+  // code tells a failure.
+  return HeapCompact(heap, 0) != 0 || GetLastError() == ERROR_SUCCESS ? 1 : 0;
+}
+
 // --- strings and numbers with `long` --------------------------------------
 
 int64_t BIONIC_SYSV Strtol(const char* s, char** end, int base) { return std::strtoll(s, end, base); }
@@ -1250,6 +1266,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("aligned_alloc", AlignedAllocC11);
   ENTRY("malloc_usable_size", MallocUsableSize);
   ENTRY("mallinfo", Mallinfo);
+  ENTRY("mallopt", Mallopt);
   // mem/str.
   SELF(memcpy);
   SELF(memmove);

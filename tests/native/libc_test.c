@@ -121,6 +121,11 @@ static void test_memory(void) {
   check("mallinfo: allocated fit in mapped, the rest is free",
         during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
   free(big);
+  // mallopt: purging unused memory succeeds (1); an option the heap does not
+  // support, or one no allocator knows, fails (0), as malloc.h specifies.
+  check("mallopt(M_PURGE) succeeds", mallopt(M_PURGE, 0) == 1);
+  check("mallopt(M_PURGE_ALL) succeeds", mallopt(M_PURGE_ALL, 0) == 1);
+  check("mallopt(unknown option) fails", mallopt(12345, 0) == 0);
 }
 
 static void test_strings(void) {

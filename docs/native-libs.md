@@ -107,7 +107,9 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   - `shim.cc`: memory (CRT malloc; over-aligned blocks from
     `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them;
     `mallinfo` walks that heap and fills the fields bionic's jemalloc fills:
-    mapped, allocated, free),
+    mapped, allocated, free; `mallopt`'s `M_PURGE`/`M_PURGE_ALL` compact it
+    with `HeapCompact`, and options the Windows heap cannot apply, such as
+    `M_DECAY_TIME`, return 0, bionic's answer for an unsupported option),
     strings, FORTIFY `__*_chk`, ctype, `long`-returning functions widened to
     64 bits (`strtol`, `lseek`, `sysconf`, `lround`...), `__errno` (the CRT's
     errno, which gesher-base keeps in Linux numbering), time (`clock_gettime`
