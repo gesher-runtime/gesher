@@ -282,6 +282,16 @@ static jint Zygote_deleteAppContainer(JNIEnv* env, jclass, jstring name) {
     return static_cast<jint>(gesher::zygote::DeleteAppContainer(ZygoteString(env, name)));
 }
 
+static jint Zygote_openProtectedChildFile(JNIEnv* env, jclass, jint pid, jlong birth, jstring path) {
+    HANDLE file = static_cast<HANDLE>(
+        gesher::zygote::OpenProtectedChildFile(pid, birth, ZygoteString(env, path)));
+    if (!file) return -1;
+    const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(file),
+                                   _O_RDONLY | _O_BINARY | _O_NOINHERIT);
+    if (fd < 0) CloseHandle(file);
+    return fd;
+}
+
 static jboolean Zygote_attachCapturePermissionPolicy(JNIEnv* env, jclass, jobject predicate) {
     if (predicate == nullptr) return JNI_FALSE;
     JavaVM* vm = nullptr;
@@ -812,6 +822,8 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_startProtectedDevice)},
     {"finishScopedStandardStreams", "()V", GESHER_JNI(Zygote_finishScopedStandardStreams)},
     {"nativeHasProtectedLaunchAuthority", "(Z)Z", GESHER_JNI(Zygote_hasProtectedLaunchAuthority)},
+    {"nativeOpenProtectedChildFile", "(IJLjava/lang/String;)I",
+     GESHER_JNI(Zygote_openProtectedChildFile)},
     {"nativeAttachCapturePermissionPolicy", "(Ljava/util/function/IntPredicate;)Z",
      GESHER_JNI(Zygote_attachCapturePermissionPolicy)},
     {"nativePrepareProtectedOperator", "(IJ)Z", GESHER_JNI(Zygote_prepareProtectedOperator)},

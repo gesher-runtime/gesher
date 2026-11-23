@@ -39,6 +39,7 @@ public final class Zygote {
     public static native void finishScopedStandardStreams();
     static native boolean nativeHasProtectedLaunchAuthority(boolean scoped);
     static native boolean nativeAttachCapturePermissionPolicy(java.util.function.IntPredicate allowed);
+    static native int nativeOpenProtectedChildFile(int pid, long birth, String windowsPath);
     public static native boolean nativePrepareProtectedOperator(int brokerPid, long birth);
     private static native int nativeSpawnProtectedApp(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,

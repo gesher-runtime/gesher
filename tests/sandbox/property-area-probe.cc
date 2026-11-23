@@ -101,6 +101,16 @@ int RunBroker(const std::wstring& root) {
              "redirect only the runtime's Local AppData environment")) return 1;
   int pid = gesher::zygote::SpawnInAppContainer(U16(command), {}, {}, U16(log), spec);
   if (!Check(pid > 0, "start real contained guest")) return 1;
+  const int64_t birth = gesher::zygote::ChildStartTime(pid);
+  HANDLE admitted = static_cast<HANDLE>(gesher::zygote::OpenProtectedChildFile(pid, birth, U16(path)));
+  if (!Check(admitted && admitted != INVALID_HANDLE_VALUE,
+             "host opening as the exact child can read its admitted area")) return 1;
+  CloseHandle(admitted);
+  if (!Check(!gesher::zygote::OpenProtectedChildFile(pid, birth, U16(persistent)),
+             "host opening as the exact child cannot read the host-only properties") ||
+      !Check(!gesher::zygote::OpenProtectedChildFile(pid, birth + 1, U16(path)),
+             "another Windows process generation cannot use the child token")) return 1;
+
 
   char output[4096]{};
   auto refresh_log = [&] {

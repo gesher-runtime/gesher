@@ -101,7 +101,7 @@ import java.util.function.Consumer;
  * no process starts one ({@link #startProcess}, ProcessList.startProcessLocked): a new
  * dalvikvm running {@code android.app.GesherAppProcess} for the package ({@link Zygote}: no
  * fork on Windows), which attaches with the start sequence number it was given
- * ({@code ActivityThread.attach} → {@link ActivityManagerService#attachApplication}) and is
+ * ({@code ActivityThread.attach} ג†’ {@link ActivityManagerService#attachApplication}) and is
  * bound to the package ({@code IApplicationThread.bindApplication}). A process may also
  * start by itself and offer itself (gesher-app {@code --system-server}): a start asked by
  * such a process goes to it. The activities start once the process reports
@@ -3478,6 +3478,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return code != null && app.uid == uid && code.uid() == uid
                 && code.packageName.equals(app.packageName) && mPm.get(code.packageName) == code
                 && !mPm.isRemovalPending(code.packageName) ? code : null;
+    }
+
+    /** Windows process generation of the admitted Binder caller. */
+    synchronized long authenticatedStartTime(int pid, int uid) {
+        ApkPackage code = authenticatedPackageCodeForPid(pid, uid);
+        ProcessRecord process = code == null ? null : attachedProcessByPid(pid);
+        return process == null ? 0 : process.nativeStartTime;
     }
 
     /** One-time enrollment in a mode that already permits real self-attachment. */
