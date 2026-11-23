@@ -265,8 +265,10 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
   Anchor* allocated = nullptr;
   if (prepared.ofd) error = Description(state, file, prepared.file, !prepared.query && prepared.input.type != 2,
                                        &owner, &allocated);
+  LinuxFlock output{};
   bool mutated = false;
-  if (!error) error = ApplyOperation(state, owner, prepared, &mutated);
+  if (!error) error = ApplyOperation(state, owner, prepared, &output, &mutated);
+  if (!error && prepared.query) error = CopyQueryResult(output, user_flock);
   if (!error && (changed || mutated || allocated)) error = local->registry.Commit();
   if (error) {
     CancelPending();

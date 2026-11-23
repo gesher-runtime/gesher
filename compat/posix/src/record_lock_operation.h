@@ -20,16 +20,18 @@ struct PreparedOperation {
   LinuxFlock input;
   File file;
   Range range;
-  void* user_flock;
   bool query, ofd;
 };
 
 // Snapshot and validate user memory/ranges/real descriptor rights BEFORE any
 // description-token allocation or registry publication. A blocking caller
 // must retain this snapshot rather than reread mutable user input on retries.
-int PrepareOperation(HANDLE anchor, int command, void* user_flock, PreparedOperation* prepared);
+int PrepareOperation(HANDLE anchor, int command, const void* user_flock, PreparedOperation* prepared);
+// The transaction consumes only values and returns the query result in its own
+// address space. A broker must never dereference a guest process's user buffer.
 int ApplyOperation(RegistryState* state, const Owner& owner,
-                    const PreparedOperation& prepared, bool* mutated);
+                    const PreparedOperation& prepared, LinuxFlock* output, bool* mutated);
+int CopyQueryResult(const LinuxFlock& output, void* user_flock);
 
 // Returns a Linux error number, or0 on success. Caller retains its fd lock,
 // anchor and registry transaction throughout; commits only a successful
