@@ -357,6 +357,8 @@ public final class PackageInstallerSessionTest {
         Class<?> activities = Class.forName("[L" + atmClass.getName() + "$ActivityRecord;");
         Method open = method(atmClass, "start", android.app.IApplicationThread.class, Intent.class,
                 String.class, String.class, IBinder.class, String.class, int.class, activities);
+        Method delegated = method(atmClass, "startActivityForVerifiedCreator", String.class,
+                Intent.class, String.class, java.util.function.BooleanSupplier.class);
         Field endpoint = pm.getClass().getDeclaredField("mInstallerService");
         endpoint.setAccessible(true);
         Object originalService = endpoint.get(pm);
@@ -395,10 +397,18 @@ public final class PackageInstallerSessionTest {
                 caller.set("foreign.application");
                 rejected(() -> open.invoke(atm, null, action, null, pkg, null, null, -1, null),
                         SecurityException.class);
-                caller.set(pkg);
-                require(open.invoke(atm, null, action, null, pkg, null, null, -1, null)
-                            .equals(android.app.ActivityManager.START_SUCCESS)
-                        && visits.size() == beforeVisits + 1,
+                int startResult;
+                if (outcome == PackageInstaller.STATUS_SUCCESS) {
+                    rejected(() -> delegated.invoke(atm, pkg, action, null,
+                            (java.util.function.BooleanSupplier)() -> false), SecurityException.class);
+                    startResult = (Integer)delegated.invoke(atm, pkg, action, null,
+                            (java.util.function.BooleanSupplier)() -> true);
+                    caller.set(pkg);
+                } else {
+                    caller.set(pkg);
+                    startResult = (Integer)open.invoke(atm, null, action, null, pkg, null, null, -1, null);
+                }
+                require(startResult == android.app.ActivityManager.START_SUCCESS && visits.size() == beforeVisits + 1,
                         "Valid continuation did not open the install-source settings");
                 require(open.invoke(atm, null, action, null, pkg, null, null, -1, null)
                             .equals(android.app.ActivityManager.START_CANCELED),
@@ -447,8 +457,8 @@ public final class PackageInstallerSessionTest {
                 && action != null && jobs.isEmpty(),
                 "Preauthorized installer skipped the pending per-install consent");
         Method open = method(service.getClass(), "openConfirmation", Intent.class,
-                IBinder.class, int.class, String.class, int.class);
-        require(open.invoke(service, action, null, android.os.Process.myPid(), null, -1)
+                IBinder.class, int.class, String.class, int.class, com.gesher.server.ApkPackage.class);
+        require(open.invoke(service, action, null, android.os.Process.myPid(), null, -1, null)
                         .equals(android.app.ActivityManager.START_SUCCESS),
                 "Could not launch per-install consent for a preauthorized source");
         until(() -> !jobs.isEmpty(), "Preauthorized confirmation did not resume");

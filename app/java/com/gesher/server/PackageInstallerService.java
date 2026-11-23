@@ -206,14 +206,15 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         return info;
     }
 
-    int openConfirmation(Intent intent, IBinder origin, int callerPid, String resultWho, int requestCode) {
+    int openConfirmation(Intent intent, IBinder origin, int callerPid, String resultWho, int requestCode,
+            ApkPackage verifiedCreator) {
         int sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1);
         Bundle extras = intent.getExtras();
         IBinder token = extras == null ? null : extras.getBinder(CONFIRMATION_TOKEN);
         Session session;
         synchronized (mSessions) { session = mSessions.get(sessionId); }
         if (session == null || token == null) return ActivityManager.START_INTENT_NOT_RESOLVED;
-        return session.openConfirmation(intent, token, origin, callerPid, resultWho, requestCode);
+        return session.openConfirmation(intent, token, origin, callerPid, resultWho, requestCode, verifiedCreator);
     }
 
     boolean hasSourceConfirmation(ApkPackage source) {
@@ -964,9 +965,11 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
 
         private int openConfirmation(Intent intent, IBinder token, IBinder origin, int callerPid,
-                String resultWho, int requestCode) {
-            String actual = caller();
-            if (!owner.equals(actual)) throw new SecurityException("Foreign install confirmation");
+                String resultWho, int requestCode, ApkPackage verifiedCreator) {
+            // A verified Activity PendingIntent acts as its installed creator, not the
+            // process that triggered it. A direct start authenticates its Binder caller.
+            boolean ownsAction = verifiedCreator == null ? owner.equals(caller()) : ownerCode == verifiedCreator;
+            if (!ownsAction) throw new SecurityException("Foreign install confirmation");
             var visit = mAtm.new InstallConfirmationVisit(origin, callerPid, resultWho, requestCode);
             Confirmation pending;
             synchronized (this) {
@@ -992,7 +995,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                             closed -> finishConfirmation(pending,
                                     closed && installSourceMode() == AppOpsManager.MODE_ALLOWED,
                                     false));
-                return open ? ActivityManager.START_SUCCESS : ActivityManager.START_INTENT_NOT_RESOLVED;
+                // A genuine action started even if its host UI could not continue. Finish
+                // its Activity and the install separately, both as cancelled.
+                return ActivityManager.START_SUCCESS;
             } finally {
                 if (!open) finishConfirmation(pending, false, false);
             }

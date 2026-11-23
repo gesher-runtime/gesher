@@ -2914,9 +2914,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         if (PackageInstallerService.isConfirmationIntent(intent)) {
+            if (internalCreator && (delegated == null || !delegated.getAsBoolean())) {
+                return ActivityManager.START_CANCELED;
+            }
             boolean newTask = (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
             return mPm.packageInstallerService().openConfirmation(intent, resultToToken,
-                    originalPid, resultWho, newTask ? -1 : requestCode);
+                    originalPid, resultWho, newTask ? -1 : requestCode,
+                    internalCreator ? originalCallerCode : null);
         }
         if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
             return requestPermissions(caller, callingPackage, intent, resultToToken,
