@@ -242,12 +242,110 @@ resolved; cumulative Windows acceptance is recorded in the PR's exact-commit
 CI checks. LeakSanitizer is disabled
 locally for the tracing limitation described below; ASan/UBSan stay enabled.
 
+### Cumulative Windows results and camera collection readiness
+
+Published head `21e0e02e` was exercised by
+[run 45242201319, attempt 2](https://github.com/gesher-runtime/gesher/actions/runs/45242201319/attempts/2),
+using exact checkout `5d5cc903ecbecc9391573eea3faa9c4140061987` with main
+`08146b1e`. Attempt 1 had stopped the affected Windows jobs at artifact
+admission because the shared installation quota was exhausted. After its
+logged reset, one failed-jobs-only retry retained the successful producers and
+their original evidence; authentication and source-identity checks stayed intact.
+Attempt 2 completed with 70 successful jobs, six conditional skips and four
+failures across the full 80-job inventory. The one direct camera failure below
+caused both Windows aggregates and `ci-required` to fail; all four auxiliary
+workflows passed. This is not a fully green result.
+
+Both actual services shards passed the corrected trusted-local fixture under
+ART, requiring process exit zero and its final all-passed marker. Successful
+fixture stdout is suppressed by the existing runner; its enclosing contract
+check and both complete services shards report success.
+[Windows 2022](https://github.com/gesher-runtime/gesher/actions/runs/45242201319/job/137963990699)
+and [Windows 2025](https://github.com/gesher-runtime/gesher/actions/runs/45242201319/job/137963990690)
+were independently reviewed, then checked by the integrating reviewer.
+
+Both windowing shards also passed the real per-origin WebStorage acceptance:
+
+| Cumulative runtime observation | Windows 2022 | Windows 2025 |
+| --- | ---: | ---: |
+| A baseline usage, bytes | 109,396 | 107,365 |
+| B baseline and preserved usage, bytes | 109,380 | 107,387 |
+| Reported quota per origin, bytes | 96,635,503,410 | 96,635,503,410 |
+| A after deletion | Usage 0; database absent | Usage 0; database absent |
+| B complete payload after deleting A | 262,144 bytes preserved | 262,144 bytes preserved |
+| Public queries / callbacks | 10 / 10, main thread | 10 / 10, main thread |
+
+The runtime versions remained `131.0.2903.86` / `157.0.4341.46`. Both observed
+the old usage before deletion converged to zero, then independently checked
+database absence and the entire unrelated payload. The browser-session probe
+again returned no browser target and established no Fetch or worker capability.
+[Windows 2022](https://github.com/gesher-runtime/gesher/actions/runs/45242201319/job/137963990626)
+and [Windows 2025](https://github.com/gesher-runtime/gesher/actions/runs/45242201319/job/137963990878)
+each finished the complete windowing track with zero failures. W07 and full W08
+remain incomplete.
+
+All captured engine/app audio tones passed on both systems, including AAC tone
+11 at 587.5 Hz (0.810 / 0.815 seconds). This is actual acceptance of the
+cumulative audio source, while the causal limits above still apply.
+[Windows 2022 media](https://github.com/gesher-runtime/gesher/actions/runs/45242201319/job/137963990651)
+passed all 299 checks. [Windows 2025 media](https://github.com/gesher-runtime/gesher/actions/runs/45242201319/job/137963990858)
+passed 298 checks and failed one single-process Camera2 recording check. The
+same Windows 2025 device-mode camera recording passed, as did both Windows
+2022 camera modes.
+
+The failing camera open took 16,355 ms. `endConfigure` waits at most 10,000 ms;
+the old fixture then started its fixed two-second collection window immediately
+after submitting a repeating request. Collection ran from 773.366095300 to
+775.366469000 seconds; the capture loop later logged its end at 779.719474500
+seconds after the 16,355 ms open. That loop-end value is not a separately
+instrumented native-open completion time. No frame had begun or completed.
+The unchanged checks correctly rejected the
+resulting 0.0-second, zero-frame file. Camera, recorder, muxer, fixture and
+PowerShell harness sources are byte-identical between `21e0e02e` and the actual
+CI checkout. The open trace spans the whole native initialization; it does not
+identify a particular Media Foundation substage or establish an improvement in
+startup latency.
+
+The fixture correction `c1624bc8` (reviewed locally as `aefb7cd4`, identical
+tree `7d5c84b0`) preserves recorder-start/repeating-request ordering,
+then awaits a real
+[`onCaptureStarted`](https://developer.android.com/reference/android/hardware/camera2/CameraCaptureSession.CaptureCallback#onCaptureStarted(android.hardware.camera2.CameraCaptureSession,android.hardware.camera2.CaptureRequest,long,long))
+callback for at most ten seconds before the unchanged two-second collection.
+It reports an explicit readiness failure if capture never starts. Session,
+recorder, camera and callback-thread cleanup is still attempted; a secondary
+empty-recording `stop()` error is retained beneath the original failure.
+Decoding is not attempted after a readiness failure. The existing codec,
+frame-count, duration, picture, ordering, close and process-exit gates are
+unchanged. No production camera/recorder code or workflow is changed.
+
+The complete fixture method, callback bodies and cleanup run in the new host
+regression through the existing Camera2 CI entry. Declared camera/API, clock
+and codec boundaries let it exercise a capture delayed by 6.355 seconds and a
+capture that never arrives; latches and callback-thread execution remain real.
+The existing entry passes 1,036 capture-dispatch checks plus 30 readiness/cleanup
+checks. The exact historical `21e0e02e` method fails 18 expected assertions.
+This host fixture verifies readiness ordering and owner cleanup, not encoded
+camera images. The unchanged APK build also passes against real Android
+framework/core inputs, including resource processing, D8 and alignment.
+Both the integrating and independent reviewers approved the exact four-file
+test/tool change; corrected Windows acceptance belongs to its successor's own
+CI result.
+
+An independent timestamp check compiled the unchanged production Recorder and
+MP4 writer translation units with UBSan and the existing explicit host
+input/encoder boundaries. A real 6.355-second wall-clock delay moved the first
+accepted PTS from 51 to 6,355,478 microseconds. Both outputs independently
+demuxed and decoded as 60 H.264 packets/frames, start time 0.000000 and duration
+1.999544 seconds. The single-video-track MP4 normalizes its earliest sample;
+awaiting actual capture before the existing collection window does not require
+relaxing the duration check. This host check does not execute Windows capture.
+
 ## Limits
 
 The build uses actual prebuilt Android framework/core classes. The local AOSP
 Java source inputs needed for the full SOURCE-retention compatibility table are
 absent, so the resulting app is a validation artifact, not a distribution build.
-The framework tests use controlled native identity and acknowledgements; they
+The host framework fixtures use controlled native identity and acknowledgements; they
 do not prove ART, real Binder/Parcel transport, native resource loading or
 Windows presentation. Cross-compilation does not execute WebView2, display
 drivers or physical hardware. Local LeakSanitizer cannot start under this
