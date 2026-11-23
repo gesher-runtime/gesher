@@ -22,7 +22,10 @@ thread that owns the handle drains it, so no JNI runs on Windows' threads. The
 first delivery after registration requests a full re-read, so a change racing
 startup is not lost. Unregistration and close drain callbacks before the state is
 freed; a failed close retains it as the scan path does. When WLAN cannot be opened
-(stopped service), the watcher retries with a 30 s to 5 min backoff. Interface GUIDs are converted to IP interface indices;
+(stopped service), the watcher retries with a 30 s to 5 min backoff. A registration
+silently stops delivering when the WLAN service restarts, so a quiet poll interval
+(30 s) checks that the handle still reaches the service; if not, the watch ends and is
+reopened through the same backoff, which also repeats the census. Interface GUIDs are converted to IP interface indices;
 a request for one `Network` never receives another adapter's SSID, address or
 link state. SSIDs cross the native boundary as their original bytes, so they do
 not depend on a shell's code page or translated command labels. The backend does

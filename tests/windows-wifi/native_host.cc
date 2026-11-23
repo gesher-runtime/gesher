@@ -16,6 +16,7 @@ bool open_failure=false, query_failure=false, bss_failure=false, malformed=false
 bool scan_failure=false, completion=true, precompletion=false, close_failure=false, radio_on=true;
 bool eligible=true, revoke_on_open=false, notify_in_guard=false;
 bool capability_failure=false, pairs_overflow=false, ihv_phy=false;
+bool enum_failure=false; // the WLAN service behind an open handle went away
 bool index_failure=false, delay_after_bss=false, delay_close=false;
 int adapters=1; size_t ie_size=2;
 uint64_t clock=0, filetime=1'000'000'000'000ULL;
@@ -30,6 +31,7 @@ void reset() {
     completion=radio_on=eligible=true;notify_in_guard=false;
     index_failure=delay_after_bss=delay_close=false;
     capability_failure=pairs_overflow=ihv_phy=false;
+    enum_failure=false;
     adapters=1;ie_size=2;clock=0;filetime=1'000'000'000'000ULL;callback=nullptr;context=nullptr;last_context=nullptr;armed.clear();wlan_broken=false;
 }
 void notify(int index,DWORD code=wlan_notification_acm_scan_complete,DWORD source=WLAN_NOTIFICATION_SOURCE_ACM) {
@@ -75,6 +77,7 @@ DWORD WlanCloseHandle(HANDLE,PVOID) {
     fixture::callback=nullptr;fixture::context=nullptr;return ERROR_SUCCESS;
 }
 DWORD WlanEnumInterfaces(HANDLE,PVOID,WLAN_INTERFACE_INFO_LIST** output) {
+    if(fixture::enum_failure)return ERROR_ACCESS_DENIED;
     size_t size=offsetof(WLAN_INTERFACE_INFO_LIST,InterfaceInfo)+fixture::adapters*sizeof(WLAN_INTERFACE_INFO);
     auto* list=static_cast<WLAN_INTERFACE_INFO_LIST*>(calloc(1,size));
     list->dwNumberOfItems=fixture::adapters;
@@ -255,5 +258,9 @@ int main() {
             "Failed close retains the watcher target and disables WLAN use");
     callback=nullptr;context=nullptr;delete static_cast<WatchState*>(last_context);last_context=nullptr;
     check(events==0,"Fixture releases the deliberately retained watcher state");
+    reset();deliveries.clear();stop_after=100;between=[](int delivered){if(delivered==2)fixture::enum_failure=true;};
+    check(Watch(backend,sink,nullptr,1000)==-1 && deliveries.size()==2 && callback==nullptr && closes==1 && events==0
+            && !wlan_broken,"A handle whose WLAN service went away ends the watch for a reopen, releasing everything");
+    between=nullptr;
     std::cout<<"WindowsWifi native boundary all passed: "<<checks<<"\n";
 }

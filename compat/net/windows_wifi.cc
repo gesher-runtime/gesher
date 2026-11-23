@@ -390,8 +390,16 @@ void WINAPI OnWatch(WLAN_NOTIFICATION_DATA* notification, void* context) {
   state->pending.fetch_or(bits);
   SetEvent(state->event);
 }
-// Runs until sink returns false (0) or WLAN cannot be watched (-1). The first
-// delivery follows registration, so a change racing the initial read is not lost.
+// A registration silently stops when the WLAN service restarts or stops; a quiet poll
+// interval therefore confirms the handle still reaches the service.
+bool WatchAlive(Api& api, HANDLE handle) {
+  Memory interfaces(api);
+  return api.interfaces(handle, nullptr, reinterpret_cast<WLAN_INTERFACE_INFO_LIST**>(&interfaces.value))
+      == ERROR_SUCCESS && interfaces.value;
+}
+// Runs until sink returns false (0) or WLAN cannot be watched (-1), including when the
+// service behind the handle went away, so the caller reopens it. The first delivery
+// follows registration, so a change racing the initial read is not lost.
 int Watch(Api& api, bool (*sink)(void*, uint32_t), void* context, DWORD poll_ms) {
   if (!api.ready() || wlan_broken.load()) return -1;
   std::unique_ptr<WatchState> state(new (std::nothrow) WatchState());
@@ -405,7 +413,10 @@ int Watch(Api& api, bool (*sink)(void*, uint32_t), void* context, DWORD poll_ms)
     result = 0;
     bool running = sink(context, kWatchState | kWatchScan | kWatchConnection | kWatchInterfaces);
     while (running) {
-      WaitForSingleObject(state->event, poll_ms);
+      if (WaitForSingleObject(state->event, poll_ms) == WAIT_TIMEOUT && !WatchAlive(api, handle)) {
+        result = -1;
+        break;
+      }
       running = sink(context, state->pending.exchange(0));
     }
     api.notify(handle, WLAN_NOTIFICATION_SOURCE_NONE, FALSE, nullptr, nullptr, nullptr, nullptr);
