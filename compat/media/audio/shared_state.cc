@@ -7,6 +7,7 @@
 #include <gesher/binder_endpoint.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,8 @@ namespace gesher::media {
 using SharedAudioState = audio_state::DeviceState;
 
 namespace {
+
+std::atomic<SharedAudioState*> g_broker_controls{nullptr};
 
 // A device's name for its Windows objects: ANDROID_DATA's Java hashCode, as
 // com.gesher.server.Device names its mutex (here over the variable itself).
@@ -91,7 +94,12 @@ void Bump(SharedAudioState* s) { InterlockedIncrement(&s->generation); }
 
 }  // namespace
 
+void UseBrokerAudioControls(audio_state::DeviceState* controls) {
+  g_broker_controls.store(controls, std::memory_order_release);
+}
+
 static SharedAudioState* State() {
+  if (auto* controls = g_broker_controls.load(std::memory_order_acquire)) return controls;
   static SharedAudioState* state = Open();
   return state;
 }

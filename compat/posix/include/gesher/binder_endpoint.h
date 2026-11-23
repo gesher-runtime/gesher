@@ -135,6 +135,7 @@ audio_state::Activity* OpenAudioPlaybackActivity();
 bool IsAudioPlaybackActive(int stream, int in_past_ms);
 int NewProtectedAudioSession();
 audio_state::DeviceState* OpenAudioDeviceControls(bool writable);
+HANDLE OpenAudioRender(const std::u16string& label);
 int FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* input_and_output);
 // Closes the caller-owned pin after the broker has captured file identity.
 // The pointer is cleared only if the pin was closed.

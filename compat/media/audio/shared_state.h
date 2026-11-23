@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+#include <gesher/audio_device_state.h>
+
 namespace gesher::media {
 
 // Volumes: index in [min, max]; a group plays at Gain(stream).
@@ -37,6 +39,7 @@ uint32_t Generation();
 
 // A stream is playing (in this process) until about `until_ms` (GetTickCount64).
 void PreparePlaybackActivity();
+void UseBrokerAudioControls(audio_state::DeviceState* controls);
 void MarkStreamActive(int stream, uint64_t until_ms);
 bool StreamActive(int stream, int in_past_ms);
 
