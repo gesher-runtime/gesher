@@ -563,6 +563,17 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: URI grant publication retirement contracts and work
+        run: |
+          python3 tools/test_uri_retirement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar" --existing-contracts
+          python3 tools/test_uri_retirement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar" --count-work candidate
+
       - name: Camera runtime permission and attribution admission
         run: |
           python3 tools/test_camera_permission.py --java-home "$JAVA_HOME" \

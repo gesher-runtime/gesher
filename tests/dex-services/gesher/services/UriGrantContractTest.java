@@ -182,6 +182,9 @@ public final class UriGrantContractTest {
                 Constructor<?> policyConstructor = policy.getDeclaredConstructor(PackageManagerService.class);
                 policyConstructor.setAccessible(true);
                 set(pm, "mPermissions", policyConstructor.newInstance(pm));
+                synchronized (pm) {
+                    call(pm, "publishPackages", new Class<?>[]{Map.class}, new LinkedHashMap<>(records));
+                }
             }
             atm = (ActivityTaskManagerService) unsafe.allocateInstance(ActivityTaskManagerService.class);
             set(atm, "mPm", pm);
@@ -323,7 +326,7 @@ public final class UriGrantContractTest {
                     previous.parsed.getRequestedPermissions().toArray(new String[0]));
             Map<String, ApkPackage> current = new LinkedHashMap<>((Map<String, ApkPackage>) field(pm.getClass(), "mPackages").get(pm));
             current.put(name, replacement);
-            synchronized (pm) { set(pm, "mPackages", current); }
+            synchronized (pm) { call(pm, "publishPackages", new Class<?>[]{Map.class}, current); }
             records.put(name, replacement);
         }
     }
