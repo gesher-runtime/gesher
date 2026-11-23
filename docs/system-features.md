@@ -89,7 +89,7 @@ Not reported:
 | `android.hardware.ram.normal` / `.ram.low` | whichever `ActivityManager.isLowRamDevice()` says (`ro.config.low_ram` is unset: normal) | as AOSP's SystemConfig |
 | `android.software.webview` | the WebView2 Runtime is installed | `android.webkit.WebView` on WebView2 (docs/webview.md); without the runtime WebViews stay empty, so it is not claimed |
 | `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass`, `.light` | the matching sensor in the list SensorManager gives apps (Windows.Devices.Sensors' default sensors) | SensorManager over Windows sensors (docs/devices.md) |
-| `android.hardware.wifi` | a WLAN interface in a synchronous `WlanEnumInterfaces` census at boot | WifiManager over wlanapi (docs/wifi.md); no Wi-Fi Direct, Aware, RTT or Passpoint |
+| `android.hardware.wifi` | a WLAN interface in a `WlanEnumInterfaces` census at boot (waited for at most 5 s; a hung WLAN service means no feature) | WifiManager over wlanapi (docs/wifi.md); no Wi-Fi Direct, Aware, RTT or Passpoint |
 | `android.hardware.telephony`, `.telephony.subscription`, `.telephony.radio_access`, `.telephony.data`, `.telephony.gsm` (3GPP only) | a cellular modem the Mobile Broadband API reports at boot | read-only, data-only telephony services (docs/telephony.md) |
 
 ## Not reported

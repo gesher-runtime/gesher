@@ -10,11 +10,15 @@ the user approves (see [Connecting](#connecting)).
 
 ## System feature and capabilities
 
-`PackageManager.FEATURE_WIFI` is declared when a synchronous `WlanEnumInterfaces`
-census, taken when the package manager starts, finds at least one WLAN interface.
-A missing `wlanapi.dll`, a stopped WLAN AutoConfig service (`WlanOpenHandle`
-failure) or zero interfaces leave it out. Wi-Fi Direct, Aware, RTT and Passpoint
-features are never declared.
+`PackageManager.FEATURE_WIFI` is declared when a `WlanEnumInterfaces` census, taken
+when the package manager starts, finds at least one WLAN interface. A missing
+`wlanapi.dll`, a stopped WLAN AutoConfig service (`WlanOpenHandle` failure) or zero
+interfaces leave it out. The census runs on its own thread and boot waits for it at
+most 5 s: a WLAN service that hangs or is still starting leaves `FEATURE_WIFI` out for
+that boot (logged as `WindowsWifi: WLAN census did not finish ...`) instead of
+stalling the system server. Its late result is still used for the capability answers
+below, but system features stay fixed until the next start, as on Android. Wi-Fi
+Direct, Aware, RTT and Passpoint features are never declared.
 
 Capability answers come from the same census, refreshed on WLAN interface
 arrival/removal:
@@ -114,7 +118,13 @@ IPv4 address).
 - Success: `onAvailable` with `Network(100 + ifIndex)`, the real interface's link
   properties, and capabilities with `TRANSPORT_WIFI` and no `INTERNET`. The network
   specifier is absent, as Android redacts the agent's `WifiNetworkAgentSpecifier` to
-  null for apps; SSID and BSSID are only in the location-checked transport info.
+  null for apps; SSID and BSSID are only in the location-checked transport info. The
+  service's availability event to the app's process carries only the interface
+  index, never the joined SSID, BSSID or frequency.
+- A specifier for a hidden network must name its SSID literally
+  (`WifiConfigurationUtil.validateNetworkSpecifier`); a hidden network with an SSID
+  pattern is invalid and gets `onUnavailable` at once. SSIDs shown in the dialogs
+  have control and formatting (e.g. bidi override) characters replaced by spaces.
   Releasing the request, unregistering the callback or the app's death deletes the
   profile and, while the interface is still on it (or on none), disconnects and
   reconnects the interface's previous profile (Android's single-STA behaviour).
@@ -125,12 +135,20 @@ IPv4 address).
 ### Network suggestions
 
 - `addNetworkSuggestions` checks `CHANGE_WIFI_STATE` (exception) and its app op
-  (`ERROR_APP_DISALLOWED`), validates every entry (`ERROR_ADD_INVALID`; carrier or
-  subscription entries `ERROR_ADD_NOT_ALLOWED`) and the per-app limit (1024, 256 on
-  low-RAM devices: `ERROR_ADD_EXCEEDS_MAX_PER_APP`). An equal suggestion replaces
-  the stored one, as on Android 11+. Suggestions Windows profiles cannot express
-  faithfully (enterprise, WEP, WAPI, Passpoint) return `ERROR_ADD_NOT_ALLOWED` rather
-  than being stored and never joined.
+  (`ERROR_APP_DISALLOWED`), validates every entry (`ERROR_ADD_INVALID`), and only then
+  checks what the caller may add: carrier, subscription and carrier-merged entries are
+  `ERROR_ADD_NOT_ALLOWED` (they need carrier privileges), as is the per-app limit
+  (1024, 256 on low-RAM devices: `ERROR_ADD_EXCEEDS_MAX_PER_APP`). An equal suggestion
+  replaces the stored one, as on Android 11+, and its Windows profile is rewritten with
+  the new credentials and auto-join setting (`updateWifiConfigInWcmIfPresent`).
+  Suggestions Windows profiles cannot express faithfully (enterprise, WEP, WAPI,
+  Passpoint) return `ERROR_ADD_NOT_ALLOWED` rather than being stored and never joined.
+- Untrusted (`setUntrusted`), restricted (`setRestricted`), OEM-paid and OEM-private
+  suggestions are also `ERROR_ADD_NOT_ALLOWED`. Android selects them only for a
+  `NetworkRequest` that asks for an untrusted, restricted or OEM network, never as the
+  default network; a Windows auto-connect profile would make them every app's default
+  network, with capabilities they must not have. (Android itself accepts them; this is
+  a documented refusal rather than a silent change of their meaning.)
 - SSIDs may be UTF-8 text or, as `WifiSsid` allows, arbitrary bytes (Android's
   unquoted hex form); both reach Windows as hex bytes.
 - The first add of an app asks the user (host consent dialog, off the Binder
@@ -145,17 +163,25 @@ IPv4 address).
   the status is `REJECTED_BY_USER`, as Android does. Dismiss: still pending, asked
   again on the next add. Listeners get the current status on registration and on
   each change.
-- `removeNetworkSuggestions` returns `ERROR_REMOVE_INVALID` for unknown entries or
-  actions and removes nothing then; an empty list removes all. The profile is
-  deleted at once (`ACTION_REMOVE_SUGGESTION_DISCONNECT`) or after 30 s while it is
-  the current connection (`ACTION_REMOVE_SUGGESTION_LINGER`).
+- `removeNetworkSuggestions` returns `ERROR_REMOVE_INVALID` for null or unknown
+  entries, unknown actions, or an app that never added suggestions (even with an
+  empty list), and removes nothing then; otherwise an empty list removes all. The
+  profile is deleted before the call returns (`ACTION_REMOVE_SUGGESTION_DISCONNECT`)
+  or after 30 s while it is the current connection (`ACTION_REMOVE_SUGGESTION_LINGER`).
+- Windows profiles follow the suggestion store through one profile thread: each pass
+  stores, rewrites or deletes the difference between the profiles the store wants and
+  those on Windows. A removal, uninstall or block made while a pass is talking to
+  Windows waits for the pass after it, so no profile outlives its suggestion. A
+  profile Windows refused to store is not counted as installed: it is retried on the
+  next WLAN connection event and with backoff (5 s doubling to 5 min).
 - When Windows joins an app-interaction suggestion, the app receives the explicit
   `ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION` broadcast with
   `EXTRA_NETWORK_SUGGESTION`, if location is on, it holds fine location and its
   fine-location app op is allowed (`enforceCanAccessScanResults`).
 - `disallowCurrentSuggestedNetwork` disconnects the app's current suggested network
-  and removes its profile for the blocking period (Windows has no BSSID block list,
-  so the whole network is blocked).
+  and removes its profile for the blocking period; every profile pass honours the
+  block until it expires, then the profile returns. Windows has no BSSID block list,
+  so the whole network is blocked even when `BlockingOption` asks for the BSSID only.
 - An uninstalled app's suggestions and approvals are dropped and its profiles
   deleted as soon as the package-removal event arrives. WLAN events and profile
   installations are coalesced: at most one pass of each is queued at a time. The store lives for the system server's lifetime (Android persists it).

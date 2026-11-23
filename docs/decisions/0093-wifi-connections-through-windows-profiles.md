@@ -33,6 +33,11 @@ Gesher has no Android supplicant; it can only ask Windows to connect.
   `isInitialAutojoinEnabled`; Windows' own selection then plays the part of
   Android's auto-join. They are deleted on removal, on "Don't allow", when the app
   is uninstalled, and (as leftovers without an Android owner) after a restart.
+  All suggestion-profile changes run on one thread that reconciles Windows with the
+  suggestion store, so removals and blocks cannot race an in-flight store.
+- Untrusted, restricted, OEM-paid and OEM-private suggestions are refused
+  (`ERROR_ADD_NOT_ALLOWED`): Android never makes them the default network, and an
+  auto-connect Windows profile would.
 - User approval uses Gesher's existing host surfaces: the list dialog of the intent
   chooser for choosing a network, the consent dialog for allowing suggestions.
   Without an interactive desktop nothing is approved and nothing changes.

@@ -42,9 +42,12 @@ public interface IWindowsWifi extends IInterface {
     /** Events of one {@link #requestLocalNetwork} request (the value is NETWORK_*). */
     int CALLBACK_NETWORK_REQUEST = 6;
     int NETWORK_AVAILABLE = 1, NETWORK_UNAVAILABLE = 2, NETWORK_LOST = 3;
-    /** NETWORK_AVAILABLE extras: the joined interface and access point. */
-    String EXTRA_INTERFACE = "interface", EXTRA_SSID = "ssid", EXTRA_BSSID = "bssid",
-            EXTRA_SECURITY = "security", EXTRA_FREQUENCY = "frequency", EXTRA_SPECIFIER = "specifier";
+    /**
+     * NETWORK_AVAILABLE's only extra: the joined interface. The joined SSID/BSSID reach the
+     * app solely through the location-checked WifiInfo; CALLBACK_LOCAL_ONLY_FAILURE carries
+     * the failed request's specifier.
+     */
+    String EXTRA_INTERFACE = "interface", EXTRA_SPECIFIER = "specifier";
 
     int getWifiState(String packageName) throws RemoteException;
     WifiInfo getConnectionInfo(String packageName, String attributionTag) throws RemoteException;

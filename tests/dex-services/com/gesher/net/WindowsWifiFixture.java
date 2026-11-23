@@ -246,6 +246,23 @@ public final class WindowsWifiFixture {
         check(WindowsWifi.parseHardware(null) == null && WindowsWifi.parseHardware("hw\t2\ncap\t1\t1\t1\n") == null
                 && WindowsWifi.parseHardware("hw\t1\ncap\t-1\t0\t0\n") == null
                 && WindowsWifi.parseHardware("hw\t65\n") == null, "Malformed census is not hardware");
+        // A WLAN service that hangs in its census does not hold the caller (boot) past the bound.
+        CountDownLatch hung = new CountDownLatch(1);
+        AtomicInteger reads = new AtomicInteger();
+        WindowsWifi.Census census = new WindowsWifi.Census(() -> {
+            reads.incrementAndGet();
+            try { hung.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return hardware;
+        });
+        long started = System.nanoTime();
+        check(census.get(100) == WindowsWifi.NO_HARDWARE && System.nanoTime() - started < TimeUnit.SECONDS.toNanos(2),
+                "A census past its bound is no hardware, without waiting for Windows");
+        check(census.get(50) == WindowsWifi.NO_HARDWARE && reads.get() == 1, "A hung census is not started twice");
+        hung.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (census.get(50) != hardware && System.nanoTime() < deadline) Thread.sleep(5);
+        check(census.get(0) == hardware && reads.get() == 1, "The late census result is kept for later callers");
+        check(new WindowsWifi.Census(() -> hardware).get(1_000) == hardware, "A prompt census is reported");
         Recorder recorder = new Recorder();
         ((List<WindowsWifi.Events>) get("EVENTS")).add(recorder);
         set("sWatching", true);

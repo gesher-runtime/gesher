@@ -79,6 +79,8 @@ final class WifiConnections {
     static volatile long ipWaitMs = 20_000; // test boundary only
     static final long LINGER_MS = 30_000; // DEFAULT_LINGER_DELAY_MS
     static final int APPROVED_PER_APP = 50; // NUM_OF_ACCESS_POINT_LIMIT_PER_APP
+    static final long PROFILE_WAIT_MS = 30_000;
+    static final long RETRY_MIN_MS = 5_000, RETRY_MAX_MS = 300_000;
     private static final String REQUEST_PREFIX = WlanProfiles.PREFIX + "r-";
     private static final String SUGGESTION_PREFIX = WlanProfiles.PREFIX + "s-";
 
@@ -103,15 +105,32 @@ final class WifiConnections {
                 thread.setDaemon(true);
                 return thread;
             });
+    // Every suggestion-profile change on Windows, and the stale-profile cleanup, runs on
+    // this one thread, so profile operations never interleave.
+    private volatile Thread mProfilesThread;
+    private final ExecutorService mProfiles = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "gesher-wifi-profiles");
+        thread.setDaemon(true);
+        mProfilesThread = thread;
+        return thread;
+    });
     private final Object mLock = new Object();
     private Request mActive; // guarded by mLock: Android serves one specifier request at a time
     private final Map<String, LinkedHashSet<String>> mApproved = new HashMap<>(); // package -> approved APs
     private final Map<String, Apps> mSuggestions = new LinkedHashMap<>(); // package -> suggestions
-    private boolean mCleaned;
+    private long mGeneration; // guarded by mLock: bumped by every suggestion-model change
+    // Suggestion profiles on Windows (name -> stored XML, "" when a store failed), written
+    // only on the profile thread; guarded by mLock.
+    private final Map<String, String> mInstalled = new HashMap<>();
+    private int mInstalledOn; // the interface mInstalled describes
+    private final Map<String, Long> mBlocked = new HashMap<>(); // profile -> nanoTime the block ends
+    private final Map<String, Long> mLingering = new HashMap<>(); // removed profile -> nanoTime it goes
+    private boolean mCleaned, mRetryPending, mRetryScheduled;
+    private long mRetryMs;
     // At most one queued pass each: a burst of WLAN events or adds does not pile up tasks.
     private final java.util.concurrent.atomic.AtomicBoolean mConnectionPassQueued =
             new java.util.concurrent.atomic.AtomicBoolean();
-    private final java.util.concurrent.atomic.AtomicBoolean mInstallPassQueued =
+    private final java.util.concurrent.atomic.AtomicBoolean mReconcileQueued =
             new java.util.concurrent.atomic.AtomicBoolean();
 
     WifiConnections(WifiService service, WifiService.Backend backend, Ui ui) {
@@ -207,6 +226,8 @@ final class WifiConnections {
         int bytes = ssid.getBytes(StandardCharsets.UTF_8).length;
         boolean literal = specifier.ssidPatternMatcher.getType() == PatternMatcher.PATTERN_LITERAL;
         if (bytes > 32 || literal && bytes < 1) return false;
+        // A hidden network is joined by its exact SSID: a pattern cannot name one.
+        if (!literal && specifier.wifiConfiguration.hiddenSSID) return false;
         // A pattern that matches every network (empty prefix and any BSSID) does not
         // request a specific network.
         boolean anySsid = specifier.ssidPatternMatcher.getType() == PatternMatcher.PATTERN_PREFIX && ssid.isEmpty();
@@ -361,7 +382,8 @@ final class WifiConnections {
                 return;
             }
             int index = mUi.choose(request.owner.name(), "Connect to a Wi-Fi device for this app",
-                    new String[] {specifier.ssidPatternMatcher.getPath() + " (hidden network)"}, request::active);
+                    new String[] {printable(specifier.ssidPatternMatcher.getPath()) + " (hidden network)"},
+                    request::active);
             if (index != 0 || !request.active()) {
                 unavailable(request, WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_USER_REJECT, request.active());
                 return;
@@ -440,14 +462,11 @@ final class WifiConnections {
             if (joined != null && !WifiManager.UNKNOWN_SSID.equals(joined)) bssid = joined;
         }
         remember(request.owner.name(), ssid, matches, bssid, security);
+        // Only the interface crosses to the app: ConnectivityService redacts the network
+        // specifier, so the joined SSID and BSSID reach it solely through the
+        // location-checked WifiInfo of the network's capabilities.
         Bundle extras = new Bundle();
         extras.putInt(IWindowsWifi.EXTRA_INTERFACE, request.ifIndex);
-        extras.putByteArray(IWindowsWifi.EXTRA_SSID, ssid);
-        extras.putString(IWindowsWifi.EXTRA_BSSID, bssid);
-        extras.putInt(IWindowsWifi.EXTRA_SECURITY, security);
-        int frequency = 0;
-        for (ScanResult match : matches) if (match.BSSID != null && match.BSSID.equals(bssid)) frequency = match.frequency;
-        extras.putInt(IWindowsWifi.EXTRA_FREQUENCY, frequency);
         synchronized (mLock) {
             if (request.finished || !request.active()) {
                 // Released while connecting: undo outside the lock.
@@ -478,6 +497,9 @@ final class WifiConnections {
                 }
             }
             suggestionConnectionChanged();
+            boolean retry;
+            synchronized (mLock) { retry = mRetryPending; }
+            if (retry) queueReconcile();
         });
     }
 
@@ -512,8 +534,16 @@ final class WifiConnections {
         return new ArrayList<>(best.values());
     }
 
+    /** An SSID as dialog text: control and formatting (e.g. bidi override) characters become spaces. */
+    static String printable(String ssid) {
+        StringBuilder text = new StringBuilder(ssid.length());
+        ssid.codePoints().forEach(c -> text.appendCodePoint(Character.isISOControl(c)
+                || Character.getType(c) == Character.FORMAT ? ' ' : c));
+        return text.toString();
+    }
+
     private static String label(ScanResult scan) {
-        String ssid = new String(scan.getWifiSsid().getBytes(), StandardCharsets.UTF_8).replace('\n', ' ').replace('\0', ' ');
+        String ssid = printable(new String(scan.getWifiSsid().getBytes(), StandardCharsets.UTF_8));
         String band = scan.frequency >= 5925 ? "6 GHz" : scan.frequency >= 4900 ? "5 GHz" : "2.4 GHz";
         return ssid + "  (" + band + ", " + scan.level + " dBm)";
     }
@@ -582,10 +612,15 @@ final class WifiConnections {
     }
 
     // ---- Network suggestions -----------------------------------------------------
+    //
+    // The suggestion model (apps, their suggestions, approval, blocks) changes under mLock.
+    // Windows profiles follow it only on the single profile thread: each pass computes the
+    // profiles the model wants and stores, updates or deletes the difference. A model
+    // change made while a pass talks to Windows queues another pass behind it, and a
+    // removal waits for that pass, so a profile never outlives its suggestion.
 
     private static final class Apps {
         final List<WifiNetworkSuggestion> suggestions = new ArrayList<>();
-        final Map<WifiNetworkSuggestion, String> profiles = new HashMap<>();
         boolean approved, asking;
         String lastConnected;
     }
@@ -629,19 +664,42 @@ final class WifiConnections {
 
     int addSuggestions(WifiService.Owner owner, List<WifiNetworkSuggestion> list) {
         if (list == null || list.isEmpty()) return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
+        // WifiNetworkSuggestionsManager.add: the whole list is validated (ADD_INVALID)
+        // before any suggestion is checked against what the caller may add (ADD_NOT_ALLOWED).
         for (WifiNetworkSuggestion suggestion : list) {
             if (suggestion == null || suggestion.wifiConfiguration == null) {
                 return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID;
             }
             WifiConfiguration config = suggestion.wifiConfiguration;
-            // Carrier and subscription suggestions need carrier privileges.
-            if (config.carrierId != android.telephony.TelephonyManager.UNKNOWN_CARRIER_ID
-                    || config.subscriptionId != android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+            if (WlanProfiles.ssidBytes(config.SSID) == null && suggestion.passpointConfiguration == null) {
+                return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID;
+            }
+            boolean subscription = config.subscriptionId != android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID;
+            // isValidCarrierMergedNetworkSuggestion (user build): a carrier-merged network is
+            // an enterprise or Passpoint network with a subscription.
+            if (config.carrierMerged && (!config.isEnterprise() && suggestion.passpointConfiguration == null
+                    || !subscription && config.getSubscriptionGroup() == null)) {
+                return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID;
+            }
+            if (subscription && config.getSubscriptionGroup() != null) {
+                return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID;
+            }
+        }
+        for (WifiNetworkSuggestion suggestion : list) {
+            WifiConfiguration config = suggestion.wifiConfiguration;
+            // validateCarrierNetworkSuggestions: carrier-merged, carrier and subscription
+            // suggestions need carrier privileges or NETWORK_CARRIER_PROVISIONING.
+            if (config.carrierMerged || config.carrierId != android.telephony.TelephonyManager.UNKNOWN_CARRIER_ID
+                    || config.subscriptionId != android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID
+                    || config.getSubscriptionGroup() != null) {
                 return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_NOT_ALLOWED;
             }
-            byte[] ssid = WlanProfiles.ssidBytes(config.SSID);
-            if (ssid == null && suggestion.passpointConfiguration == null) {
-                return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID;
+            // Untrusted, restricted, OEM-paid and OEM-private networks are selected on Android
+            // only for a NetworkRequest that asks for them, never as the default network. A
+            // Windows auto-connect profile would become every app's default network, so
+            // these are refused rather than joined with capabilities they must not have.
+            if (suggestion.isUntrusted() || suggestion.isRestricted() || config.oemPaid || config.oemPrivate) {
+                return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_NOT_ALLOWED;
             }
             // Enterprise, WEP, WAPI and Passpoint cannot become a faithful Windows profile.
             if (!expressible(suggestion)) return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_NOT_ALLOWED;
@@ -652,6 +710,9 @@ final class WifiConnections {
             Apps app = mSuggestions.get(owner.name());
             boolean created = app == null;
             if (created) app = new Apps();
+            // An equal suggestion (same network) replaces the stored one, with its new
+            // credentials and auto-join setting; the next pass updates its Windows profile
+            // (updateWifiConfigInWcmIfPresent).
             List<WifiNetworkSuggestion> merged = new ArrayList<>(app.suggestions);
             for (WifiNetworkSuggestion suggestion : list) {
                 int existing = merged.indexOf(suggestion);
@@ -661,6 +722,7 @@ final class WifiConnections {
             if (created) mSuggestions.put(owner.name(), app);
             app.suggestions.clear();
             app.suggestions.addAll(merged);
+            mGeneration++;
             ask = !app.approved && !app.asking;
             if (ask) app.asking = true;
         }
@@ -669,19 +731,21 @@ final class WifiConnections {
             String name = owner.name();
             mWorker.execute(() -> askApproval(name));
         } else {
-            queueInstall();
+            queueReconcile();
         }
         return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
     }
 
     private void askApproval(String packageName) {
         int decision = mUi.confirm(packageName, "suggest Wi-Fi networks that Windows may connect to automatically");
-        WifiService.Owner owner = null;
         synchronized (mLock) {
             Apps app = mSuggestions.get(packageName);
             if (app == null) return;
             app.asking = false;
-            if (decision == PermissionRequests.ALLOWED) app.approved = true;
+            if (decision == PermissionRequests.ALLOWED) {
+                app.approved = true;
+                mGeneration++;
+            }
         }
         if (decision == PermissionRequests.DENIED) {
             // "Don't allow": Android ignores the app's CHANGE_WIFI_STATE operation and
@@ -694,42 +758,149 @@ final class WifiConnections {
             removeApp(packageName, true);
         }
         if (decision != PermissionRequests.DISMISSED) approvalChanged(packageName);
-        installApproved();
+        queueReconcile();
     }
 
-    private void queueInstall() {
-        if (!mInstallPassQueued.compareAndSet(false, true)) return;
-        mWorker.execute(() -> {
-            mInstallPassQueued.set(false);
-            installApproved();
-        });
+    /** Queues one profile pass; a pass already queued (not yet started) covers this change too. */
+    private void queueReconcile() {
+        if (!mReconcileQueued.compareAndSet(false, true)) return;
+        try {
+            mProfiles.execute(() -> {
+                mReconcileQueued.set(false);
+                reconcile();
+            });
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            mReconcileQueued.set(false);
+        }
     }
 
-    /** Stores Windows auto-connect profiles for approved apps' suggestions. */
-    private void installApproved() {
+    /** Runs a profile pass and waits for it: Windows follows the model when this returns. */
+    private void reconcileNow() {
+        onProfiles(this::reconcile);
+    }
+
+    /** Runs a task on the profile thread (inline when already on it) and waits for it. */
+    private void onProfiles(Runnable task) {
+        if (Thread.currentThread() == mProfilesThread) {
+            task.run();
+            return;
+        }
+        try {
+            mProfiles.submit(task).get(PROFILE_WAIT_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException
+                | java.util.concurrent.RejectedExecutionException e) {
+            // The pass still runs (or ran) on the profile thread; nothing here depends on it.
+            SystemServer.log("Wi-Fi profile update did not finish: " + e);
+        }
+    }
+
+    private void reconcile() {
+        try {
+            reconcileChecked();
+        } catch (RuntimeException failed) {
+            SystemServer.log("Wi-Fi suggestion profiles not updated: " + failed);
+            scheduleRetry();
+        }
+    }
+
+    /** One pass on the profile thread: stores, updates and deletes until Windows matches the model. */
+    private void reconcileChecked() {
         int ifIndex = mBackend.primaryInterface();
-        cleanup(ifIndex);
-        List<String[]> store = new ArrayList<>();
+        if (ifIndex <= 0) {
+            boolean waiting;
+            synchronized (mLock) { waiting = !desiredLocked(System.nanoTime()).isEmpty(); }
+            if (waiting) scheduleRetry();
+            return;
+        }
+        cleanupNow(ifIndex);
+        Map<String, String> store = new LinkedHashMap<>();
+        List<String> delete = new ArrayList<>();
+        long generation;
         synchronized (mLock) {
-            for (Map.Entry<String, Apps> entry : mSuggestions.entrySet()) {
-                Apps app = entry.getValue();
-                if (!app.approved) continue;
-                for (WifiNetworkSuggestion suggestion : app.suggestions) {
-                    if (app.profiles.containsKey(suggestion)) continue;
-                    String profile = SUGGESTION_PREFIX + digest(entry.getKey(), suggestion);
-                    WifiConfiguration config = suggestion.wifiConfiguration;
-                    String xml = WlanProfiles.xml(profile, WlanProfiles.ssidBytes(config.SSID), config.hiddenSSID,
-                            WlanProfiles.securityType(config), config.preSharedKey, suggestion.isInitialAutoJoinEnabled);
-                    if (xml == null || ifIndex <= 0) continue;
-                    app.profiles.put(suggestion, profile);
-                    store.add(new String[] {xml, profile});
-                }
+            // Profiles are per interface: records of another adapter's profiles do not apply.
+            if (mInstalledOn != ifIndex) { mInstalled.clear(); mInstalledOn = ifIndex; }
+            long now = System.nanoTime();
+            Map<String, String> desired = desiredLocked(now);
+            mLingering.entrySet().removeIf(entry -> desired.containsKey(entry.getKey())
+                    || entry.getValue() - now <= 0);
+            for (String name : mInstalled.keySet()) {
+                if (!desired.containsKey(name) && !mLingering.containsKey(name)) delete.add(name);
+            }
+            for (Map.Entry<String, String> entry : desired.entrySet()) {
+                if (!entry.getValue().equals(mInstalled.get(entry.getKey()))) store.put(entry.getKey(), entry.getValue());
+            }
+            generation = mGeneration;
+        }
+        boolean failed = false, changed = false;
+        for (String name : delete) {
+            // A profile already gone from Windows (e.g. the user deleted it) is removed too.
+            boolean gone = mBackend.storeProfile(ifIndex, null, name)
+                    || !mBackend.profiles(ifIndex, name).contains(name);
+            if (gone) {
+                synchronized (mLock) { mInstalled.remove(name); }
+            } else {
+                failed = true;
             }
         }
-        for (String[] item : store) {
-            if (!mBackend.storeProfile(ifIndex, item[0], item[1])) {
-                SystemServer.log("Wi-Fi suggestion profile could not be stored");
+        for (Map.Entry<String, String> item : store.entrySet()) {
+            synchronized (mLock) {
+                // The model changed: the queued pass recomputes before anything more is stored.
+                if (mGeneration != generation) { changed = true; break; }
             }
+            boolean stored = mBackend.storeProfile(ifIndex, item.getValue(), item.getKey());
+            // A failed store leaves Windows' state unknown: recorded with no content, it is
+            // stored again by a later pass, or deleted if no longer wanted.
+            synchronized (mLock) { mInstalled.put(item.getKey(), stored ? item.getValue() : ""); }
+            if (!stored) {
+                SystemServer.log("Wi-Fi suggestion profile could not be stored");
+                failed = true;
+            }
+        }
+        if (changed) queueReconcile();
+        if (failed) {
+            scheduleRetry();
+        } else {
+            synchronized (mLock) { mRetryPending = false; mRetryMs = 0; }
+        }
+    }
+
+    /** Profile name to XML for every approved, unblocked suggestion. */
+    private Map<String, String> desiredLocked(long now) {
+        mBlocked.values().removeIf(until -> until - now <= 0);
+        Map<String, String> desired = new LinkedHashMap<>();
+        for (Map.Entry<String, Apps> entry : mSuggestions.entrySet()) {
+            if (!entry.getValue().approved) continue;
+            for (WifiNetworkSuggestion suggestion : entry.getValue().suggestions) {
+                String name = profileName(entry.getKey(), suggestion);
+                if (mBlocked.containsKey(name)) continue;
+                WifiConfiguration config = suggestion.wifiConfiguration;
+                String xml = WlanProfiles.xml(name, WlanProfiles.ssidBytes(config.SSID), config.hiddenSSID,
+                        WlanProfiles.securityType(config), config.preSharedKey, suggestion.isInitialAutoJoinEnabled);
+                if (xml != null) desired.put(name, xml);
+            }
+        }
+        return desired;
+    }
+
+    /** A failed pass is retried with backoff, and on the next WLAN connection event. */
+    private void scheduleRetry() {
+        long delay;
+        synchronized (mLock) {
+            mRetryPending = true;
+            if (mRetryScheduled) return;
+            mRetryScheduled = true;
+            mRetryMs = mRetryMs == 0 ? RETRY_MIN_MS : Math.min(RETRY_MAX_MS, mRetryMs * 2);
+            delay = mRetryMs;
+        }
+        try {
+            mTimers.schedule(() -> {
+                synchronized (mLock) { mRetryScheduled = false; }
+                queueReconcile();
+            }, delay, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            synchronized (mLock) { mRetryScheduled = false; }
         }
     }
 
@@ -741,24 +912,29 @@ final class WifiConnections {
      * Profiles from an earlier run (including one a crashed system server left connected)
      * have no Android owner any more: delete them once, as soon as the WLAN interface is
      * known. Only per-user profiles with exactly the names Gesher generates are touched,
-     * never a profile of this run.
+     * never a profile of this run. Runs on the profile thread, before any suggestion
+     * profile of this run is stored.
      */
     void cleanup(int ifIndex) {
         if (ifIndex <= 0) return;
-        synchronized (mLock) {
-            if (mCleaned) return;
-            mCleaned = true;
-        }
+        synchronized (mLock) { if (mCleaned) return; }
+        onProfiles(() -> cleanupNow(ifIndex));
+    }
+
+    private void cleanupNow(int ifIndex) {
+        synchronized (mLock) { if (mCleaned) return; }
         for (String stale : mBackend.profiles(ifIndex, WlanProfiles.PREFIX)) {
             if (!OWN_PROFILE.matcher(stale).matches()) continue;
             synchronized (mLock) {
-                if (mActive != null && stale.equals(mActive.profile)) continue;
-                boolean current = false;
-                for (Apps app : mSuggestions.values()) current |= app.profiles.containsValue(stale);
-                if (current) continue;
+                if (mActive != null && stale.equals(mActive.profile) || mInstalled.containsKey(stale)) continue;
             }
             mBackend.storeProfile(ifIndex, null, stale);
         }
+        synchronized (mLock) { mCleaned = true; }
+    }
+
+    private static String profileName(String packageName, WifiNetworkSuggestion suggestion) {
+        return SUGGESTION_PREFIX + digest(packageName, suggestion);
     }
 
     private static String digest(String packageName, WifiNetworkSuggestion suggestion) {
@@ -776,47 +952,51 @@ final class WifiConnections {
         }
     }
 
-    int removeSuggestions(WifiService.Owner owner, List<WifiNetworkSuggestion> list, int action) {
-        if (list == null) return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
-        List<String> removed = new ArrayList<>();
-        synchronized (mLock) {
-            Apps app = mSuggestions.get(owner.name());
-            if (list.isEmpty()) {
-                if (app == null) return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
-                removed.addAll(app.profiles.values());
-                app.suggestions.clear();
-                app.profiles.clear();
-            } else {
-                if (app == null) return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
-                for (WifiNetworkSuggestion suggestion : list) {
-                    if (suggestion == null || !app.suggestions.contains(suggestion)) {
-                        return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
-                    }
-                }
-                for (WifiNetworkSuggestion suggestion : list) {
-                    app.suggestions.remove(suggestion);
-                    String profile = app.profiles.remove(suggestion);
-                    if (profile != null) removed.add(profile);
-                }
-            }
+    /** The suggestion of this app whose Windows profile is {@code profile}, if installed. */
+    private WifiNetworkSuggestion ownerLocked(String packageName, Apps app, String profile) {
+        if (profile == null || !profile.startsWith(SUGGESTION_PREFIX) || !mInstalled.containsKey(profile)) return null;
+        for (WifiNetworkSuggestion suggestion : app.suggestions) {
+            if (profileName(packageName, suggestion).equals(profile)) return suggestion;
         }
-        deleteProfiles(removed, action == WifiManager.ACTION_REMOVE_SUGGESTION_LINGER);
-        return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
+        return null;
     }
 
-    private void deleteProfiles(List<String> profiles, boolean linger) {
-        int ifIndex = mBackend.primaryInterface();
-        if (ifIndex <= 0) return;
-        String current = mBackend.currentProfile(ifIndex);
-        for (String profile : profiles) {
-            if (linger && profile.equals(current)) {
-                // ACTION_REMOVE_SUGGESTION_LINGER: keep the current connection for the
-                // linger period, then remove it.
-                mTimers.schedule(() -> mBackend.storeProfile(ifIndex, null, profile), LINGER_MS, TimeUnit.MILLISECONDS);
-            } else {
-                mBackend.storeProfile(ifIndex, null, profile);
+    int removeSuggestions(WifiService.Owner owner, List<WifiNetworkSuggestion> list, int action) {
+        if (list == null) return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
+        for (WifiNetworkSuggestion suggestion : list) {
+            if (suggestion == null || suggestion.wifiConfiguration == null) {
+                return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
             }
         }
+        boolean linger = action == WifiManager.ACTION_REMOVE_SUGGESTION_LINGER;
+        int ifIndex = linger ? mBackend.primaryInterface() : 0;
+        String current = ifIndex > 0 ? mBackend.currentProfile(ifIndex) : null;
+        boolean lingering = false;
+        synchronized (mLock) {
+            // An app that never suggested anything has nothing to remove, even with an
+            // empty list (WifiNetworkSuggestionsManager.remove: no PerAppInfo).
+            Apps app = mSuggestions.get(owner.name());
+            if (app == null) return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
+            List<WifiNetworkSuggestion> removed = list.isEmpty() ? new ArrayList<>(app.suggestions) : list;
+            if (!app.suggestions.containsAll(removed)) return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
+            for (WifiNetworkSuggestion suggestion : removed) {
+                String name = profileName(owner.name(), suggestion);
+                // ACTION_REMOVE_SUGGESTION_LINGER: the current connection stays for the
+                // linger period, then its profile goes.
+                if (linger && name.equals(current) && mInstalled.containsKey(name)) {
+                    mLingering.put(name, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(LINGER_MS));
+                    lingering = true;
+                }
+                app.suggestions.remove(suggestion);
+            }
+            mGeneration++;
+        }
+        if (lingering) {
+            try { mTimers.schedule(this::queueReconcile, LINGER_MS, TimeUnit.MILLISECONDS); }
+            catch (java.util.concurrent.RejectedExecutionException stopped) { }
+        }
+        reconcileNow();
+        return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
     }
 
     List<WifiNetworkSuggestion> suggestions(WifiService.Owner owner) {
@@ -827,13 +1007,12 @@ final class WifiConnections {
     }
 
     private void removeApp(String packageName, boolean deleteProfiles) {
-        List<String> profiles = new ArrayList<>();
         synchronized (mLock) {
-            Apps app = mSuggestions.remove(packageName);
-            if (app != null) profiles.addAll(app.profiles.values());
+            mSuggestions.remove(packageName);
             mApproved.remove(packageName);
+            mGeneration++;
         }
-        if (deleteProfiles) deleteProfiles(profiles, false);
+        if (deleteProfiles) reconcileNow();
     }
 
     /** An uninstalled package's suggestions and approvals do not outlive it. */
@@ -848,20 +1027,24 @@ final class WifiConnections {
         if (mBackend.wifiState() != WifiManager.WIFI_STATE_ENABLED) return;
         int ifIndex = mBackend.primaryInterface();
         String current = ifIndex <= 0 ? null : mBackend.currentProfile(ifIndex);
-        WifiNetworkSuggestion suggestion = null;
+        long seconds = Math.max(1, option.getBlockingTimeSeconds());
         synchronized (mLock) {
             Apps app = mSuggestions.get(owner.name());
-            if (app == null || current == null) return;
-            for (Map.Entry<WifiNetworkSuggestion, String> entry : app.profiles.entrySet()) {
-                if (entry.getValue().equals(current)) suggestion = entry.getKey();
-            }
-            if (suggestion == null) return;
-            app.profiles.remove(suggestion);
+            if (app == null || ownerLocked(owner.name(), app, current) == null) return;
+            // Every pass leaves a blocked profile off Windows until the block expires.
+            mBlocked.put(current, System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds));
+            mGeneration++;
         }
         // Windows has no per-BSSID block list: removing the profile for the blocking
         // period disconnects and prevents auto-join for the whole network, then it returns.
-        mBackend.disconnect(ifIndex, current, null);
-        mTimers.schedule(this::installApproved, Math.max(1, option.getBlockingTimeSeconds()), TimeUnit.SECONDS);
+        onProfiles(() -> {
+            if (current.equals(mBackend.currentProfile(ifIndex)) && mBackend.disconnect(ifIndex, current, null)) {
+                synchronized (mLock) { mInstalled.remove(current); }
+            }
+            reconcile();
+        });
+        try { mTimers.schedule(this::queueReconcile, seconds, TimeUnit.SECONDS); }
+        catch (java.util.concurrent.RejectedExecutionException stopped) { }
     }
 
     /** Post-connection broadcast for an app-interaction suggestion Windows joined. */
@@ -877,14 +1060,12 @@ final class WifiConnections {
                 Apps app = entry.getValue();
                 String previous = app.lastConnected;
                 app.lastConnected = null;
-                for (Map.Entry<WifiNetworkSuggestion, String> profile : app.profiles.entrySet()) {
-                    if (profile.getValue().equals(current)) {
-                        app.lastConnected = current;
-                        if (!current.equals(previous) && profile.getKey().isAppInteractionRequired) {
-                            owner = entry.getKey();
-                            joined = profile.getKey();
-                        }
-                    }
+                WifiNetworkSuggestion suggestion = ownerLocked(entry.getKey(), app, current);
+                if (suggestion == null) continue;
+                app.lastConnected = current;
+                if (!current.equals(previous) && suggestion.isAppInteractionRequired) {
+                    owner = entry.getKey();
+                    joined = suggestion;
                 }
             }
         }

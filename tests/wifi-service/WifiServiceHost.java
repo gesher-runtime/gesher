@@ -186,7 +186,16 @@ public final class WifiServiceHost {
             if (remove != null) stored.remove(remove);
             current = restore; return true;
         }
+        // Scripted interleaving and failures of profile stores (synthetic WLAN boundary).
+        volatile Runnable duringStore;
+        final java.util.concurrent.atomic.AtomicInteger failStores = new java.util.concurrent.atomic.AtomicInteger();
         @Override public boolean storeProfile(int ifIndex, String xml, String profile) {
+            Runnable hook = duringStore;
+            if (xml != null && hook != null) { duringStore = null; hook.run(); }
+            if (xml != null && failStores.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+                calls.add("fail " + profile.substring(0, 9));
+                return false;
+            }
             calls.add((xml != null ? "store " : "delete ") + profile.substring(0, 9));
             if (xml != null) { stored.add(profile); lastXml = xml; } else stored.remove(profile);
             return true;
@@ -727,6 +736,8 @@ public final class WifiServiceHost {
             check(first.events.get(0) == com.gesher.net.IWindowsWifi.NETWORK_AVAILABLE
                     && first.available.getInt(com.gesher.net.IWindowsWifi.EXTRA_INTERFACE) == 12,
                     "AVAILABLE names the joined interface");
+            check(first.available.keySet().equals(Set.of(com.gesher.net.IWindowsWifi.EXTRA_INTERFACE)),
+                    "No SSID, BSSID or frequency crosses to the app outside the location-checked WifiInfo");
             check(h.ui.shown.equals(List.of("choose " + h.owner.name())) && h.ui.labels.length == 1
                     && h.ui.labels[0].startsWith("Fixture AP"), "The user chose among real matching networks");
             check(h.radio.calls.contains("connect 12 true")
@@ -858,6 +869,23 @@ public final class WifiServiceHost {
                     && h.radio.calls.size() == calls, "A background app's request never touches Windows");
             // Without a host dialog nothing can be approved.
             h.owner.process.inProcessActivityState = ActivityTaskManagerService.State.RESUMED;
+            // A hidden network named by an SSID pattern (only constructible past the Builder,
+            // e.g. from a crafted Parcel) is invalid: unavailable at once, Windows untouched.
+            android.net.wifi.WifiConfiguration hiddenConfig =
+                    new android.net.wifi.WifiConfiguration(open("Fixture AP").wifiConfiguration);
+            hiddenConfig.hiddenSSID = true;
+            Req hiddenPattern = new Req();
+            int shownBefore = h.ui.shown.size();
+            h.owner.call(() -> h.wifi.requestLocalNetwork(h.owner.name(), "wifi", new android.net.wifi.WifiNetworkSpecifier(
+                    new android.os.PatternMatcher("Fix", android.os.PatternMatcher.PATTERN_PREFIX),
+                    android.util.Pair.create(android.net.MacAddress.ALL_ZEROS_ADDRESS, android.net.MacAddress.ALL_ZEROS_ADDRESS),
+                    ScanResult.UNSPECIFIED, hiddenConfig, new int[0], false), hiddenPattern));
+            await(() -> hiddenPattern.events.size() == 1, "Hidden pattern request completes");
+            check(hiddenPattern.events.get(0) == com.gesher.net.IWindowsWifi.NETWORK_UNAVAILABLE
+                    && h.radio.calls.size() == calls && h.ui.shown.size() == shownBefore,
+                    "A hidden network cannot be requested by pattern");
+            check(WifiConnections.printable("Lab\nAP\u202e\u0000x").equals("Lab AP  x"),
+                    "SSIDs shown in the dialog lose control and bidi-override characters");
             h.ui.available = false;
             Req noUi = new Req();
             h.owner.call(() -> h.wifi.requestLocalNetwork(h.owner.name(), "wifi", new android.net.wifi.WifiNetworkSpecifier
@@ -965,8 +993,11 @@ public final class WifiServiceHost {
             for (int i = 0; i < 500; i++) h.radio.events.onConnectionChanged();
             Thread.sleep(500);
             check(h.radio.profileReads.get() - reads < 50, "A burst of WLAN events runs a bounded number of passes");
-            // Uninstall drops the app's suggestions and Windows profiles at once.
-            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(wpa2))
+            // Uninstall drops the app's suggestions and Windows profiles at once. (The
+            // disallowed network stays blocked for its hour even when suggested again.)
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(wpa2,
+                    new android.net.wifi.WifiNetworkSuggestion.Builder().setSsid("Other AP")
+                            .setWpa2Passphrase("fixture-passphrase").build()))
                     == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion added again"));
             await(() -> h.radio.stored.stream().anyMatch(name -> name.startsWith("Gesher-s-")), "Profile stored again");
             h.pm.packageRemoved(h.owner.code, new Object());
@@ -976,13 +1007,126 @@ public final class WifiServiceHost {
                     "An uninstalled app's suggestions are dropped"));
         }
     }
+    private static long suggestionProfileCount(Radio radio) {
+        return radio.stored.stream().filter(name -> name.startsWith("Gesher-s-")).count();
+    }
+    private static android.net.wifi.WifiNetworkSuggestion.Builder psk(String ssid) {
+        return new android.net.wifi.WifiNetworkSuggestion.Builder().setSsid(ssid).setWpa2Passphrase("fixture-passphrase");
+    }
+    /** Suggestion validation, profile updates, serialization, blocking and retries. */
+    private static void suggestionProfiles() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            // No suggestions at all: even an empty removal is REMOVE_INVALID (no PerAppInfo).
+            h.peer.call(() -> check(h.wifi.removeNetworkSuggestions(h.peer.name(), null, List.of(),
+                    WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID,
+                    "An app without suggestions cannot remove any"));
+            // Networks Android never makes the default network are refused, not auto-joined.
+            android.net.wifi.WifiNetworkSuggestion oemPaid = psk("Paid").build();
+            oemPaid.wifiConfiguration.oemPaid = true;
+            for (android.net.wifi.WifiNetworkSuggestion refused : List.of(psk("Untrusted").setUntrusted(true).build(),
+                    psk("Restricted").setRestricted(true).build(), oemPaid)) {
+                h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(refused))
+                        == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_NOT_ALLOWED,
+                        "Untrusted, restricted and OEM suggestions are ADD_NOT_ALLOWED"));
+            }
+            // The whole list is checked for ADD_INVALID before ADD_NOT_ALLOWED.
+            List<android.net.wifi.WifiNetworkSuggestion> mixed = new ArrayList<>();
+            mixed.add(psk("Restricted").setRestricted(true).build()); mixed.add(null);
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", mixed)
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID, "ADD_INVALID precedes ADD_NOT_ALLOWED"));
+            h.owner.call(() -> check(h.wifi.getNetworkSuggestions(h.owner.name()).isEmpty(), "Refused suggestions are not kept"));
+            check(h.ui.shown.isEmpty() && h.radio.stored.isEmpty(), "Refused suggestions never reach the user or Windows");
+
+            android.net.wifi.WifiNetworkSuggestion home = psk("Fixture AP").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 1, "Approved suggestion becomes a Windows profile");
+            String homeProfile = h.radio.stored.iterator().next();
+            // Re-adding the same network with new credentials or auto-join updates its profile.
+            android.net.wifi.WifiNetworkSuggestion changed = new android.net.wifi.WifiNetworkSuggestion.Builder()
+                    .setSsid("Fixture AP").setWpa2Passphrase("changed-passphrase").build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(changed))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Updated suggestion accepted"));
+            await(() -> h.radio.lastXml.contains("<keyMaterial>changed-passphrase</keyMaterial>"),
+                    "New credentials reach the Windows profile");
+            android.net.wifi.WifiNetworkSuggestion manual = new android.net.wifi.WifiNetworkSuggestion.Builder()
+                    .setSsid("Fixture AP").setWpa2Passphrase("changed-passphrase").setIsInitialAutojoinEnabled(false).build();
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(manual))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Auto-join change accepted"));
+            await(() -> h.radio.lastXml.contains("<connectionMode>manual</connectionMode>"),
+                    "Auto-join off reaches the Windows profile");
+            check(h.radio.stored.equals(Set.of(homeProfile)), "An update replaces the profile, not adds one");
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(home))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Original suggestion restored"));
+            await(() -> h.radio.lastXml.contains("<keyMaterial>fixture-passphrase</keyMaterial>")
+                    && h.radio.lastXml.contains("<connectionMode>auto</connectionMode>"), "Original profile restored");
+
+            // A failed store is not recorded as installed: it is retried, here on the next WLAN event.
+            h.radio.failStores.set(1);
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(psk("Second").build()))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Second suggestion accepted"));
+            await(() -> h.radio.calls.contains("fail Gesher-s-"), "Windows refused the store");
+            check(suggestionProfileCount(h.radio) == 1, "The refused profile is not on Windows");
+            h.radio.events.onConnectionChanged();
+            await(() -> suggestionProfileCount(h.radio) == 2, "The failed store is retried");
+
+            // A removal racing an in-flight store never leaves an orphan auto-join profile.
+            List<Throwable> failures = new java.util.concurrent.CopyOnWriteArrayList<>();
+            Thread[] remover = new Thread[1];
+            android.net.wifi.WifiNetworkSuggestion racing = psk("Racing").build();
+            h.radio.duringStore = () -> {
+                remover[0] = new Thread(() -> {
+                    try {
+                        h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(racing),
+                                WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                                "Racing removal succeeds"));
+                    } catch (Throwable t) { failures.add(t); }
+                });
+                remover[0].start();
+                // The removal has changed the model and waits for the profile thread.
+                long deadline = System.nanoTime() + 5_000_000_000L;
+                while (remover[0].getState() != Thread.State.TIMED_WAITING && remover[0].isAlive()
+                        && System.nanoTime() < deadline) Thread.onSpinWait();
+            };
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(racing))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Racing suggestion accepted"));
+            await(() -> remover[0] != null, "The store reached Windows");
+            remover[0].join(10_000);
+            check(failures.isEmpty() && !remover[0].isAlive(), "The racing removal returned");
+            check(suggestionProfileCount(h.radio) == 2, "The removed suggestion's profile is gone when removal returns");
+            h.owner.call(() -> check(h.wifi.getNetworkSuggestions(h.owner.name()).size() == 2, "Only the racing one was removed"));
+
+            // disallowCurrentSuggestedNetwork: blocked for its period, through later passes.
+            h.radio.current = homeProfile;
+            h.owner.call(() -> h.wifi.disallowCurrentSuggestedNetwork(h.owner.name(),
+                    new android.net.wifi.BlockingOption.Builder(1).build()));
+            check(!h.radio.stored.contains(homeProfile) && h.radio.calls.contains("disconnect true null"),
+                    "The disallowed network is disconnected and its profile removed");
+            await(() -> h.radio.stored.contains(homeProfile), "The profile returns when the block expires");
+            h.radio.current = homeProfile;
+            h.owner.call(() -> h.wifi.disallowCurrentSuggestedNetwork(h.owner.name(),
+                    new android.net.wifi.BlockingOption.Builder(3600).build()));
+            check(!h.radio.stored.contains(homeProfile), "Blocked again");
+            h.owner.call(() -> check(h.wifi.addNetworkSuggestions(h.owner.name(), "wifi", List.of(psk("Third").build()))
+                    == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS, "Another suggestion accepted"));
+            await(() -> suggestionProfileCount(h.radio) == 2, "A later pass runs");
+            h.radio.events.onConnectionChanged();
+            Thread.sleep(200);
+            check(!h.radio.stored.contains(homeProfile), "Later passes honour the block");
+            // Removing everything removes every profile before the call returns.
+            h.owner.call(() -> check(h.wifi.removeNetworkSuggestions(h.owner.name(), null, List.of(),
+                    WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT) == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                    "Remove all"));
+            check(suggestionProfileCount(h.radio) == 0, "No suggestion profile is left");
+        }
+    }
     public static void main(String[] args) throws Exception {
         System.load(args[0]); setOwnUid(Process.SYSTEM_UID);
         android.app.PropertyInvalidatedCache.setTestMode(true);
         android.app.PropertyInvalidatedCache.disableForTestMode();
         field(Class.forName("com.gesher.app.locale.SystemLocale"), "sIs24Hour").set(null, Boolean.TRUE);
         identityAndData(); scanPolicy(); queuedAuthority(); rejectedAdmission(); standalone(); privilegedPolicies(); networkObservations();
-        capabilitiesAndEvents(); specifierRequests(); suggestions();
+        capabilitiesAndEvents(); specifierRequests(); suggestions(); suggestionProfiles();
         System.out.println("WifiServiceHost passed: " + checks + " checks; real permission/AppOps/broadcast Java, radio=fixture");
     }
 }

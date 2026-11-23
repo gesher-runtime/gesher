@@ -473,24 +473,78 @@ public final class WindowsWifi {
     }
 
     public static final Hardware NO_HARDWARE = new Hardware(0, 0, 0, 0);
-    private static final Object HARDWARE_LOCK = new Object();
-    private static Hardware sHardware; // guarded by HARDWARE_LOCK
+    /** How long a caller waits for the first census (the package manager's boot features). */
+    static final long CENSUS_TIMEOUT_MS = 5_000;
 
     /**
-     * The adapter census, read synchronously once (system features are fixed when the
-     * package manager starts) and refreshed on WLAN interface arrival/removal.
-     * No WLAN library, a stopped WLAN service or no adapter all mean no hardware.
+     * The cached adapter census. The first read runs on its own thread and its caller
+     * waits at most a bound: a WLAN service that hangs (or is slow to start) in
+     * WlanOpenHandle/WlanEnumInterfaces must not stall system-server boot. A census not
+     * finished in time reports no hardware to that caller; the late result is still
+     * cached for later callers, and WLAN interface arrival/removal refreshes it.
      */
-    public static Hardware hardware() {
-        synchronized (HARDWARE_LOCK) {
-            if (sHardware == null) sHardware = census();
-            return sHardware;
+    static final class Census {
+        private final java.util.function.Supplier<Hardware> mSource;
+        private Hardware mValue; // guarded by this
+        private Thread mProbe; // guarded by this: the first census, while it runs
+
+        Census(java.util.function.Supplier<Hardware> source) { mSource = source; }
+
+        Hardware get(long timeoutMs) {
+            Thread probe;
+            synchronized (this) {
+                if (mValue != null) return mValue;
+                if (mProbe == null) {
+                    mProbe = new Thread(() -> {
+                        Hardware fresh = null;
+                        try {
+                            fresh = mSource.get();
+                        } finally {
+                            synchronized (this) {
+                                // A refresh that finished meanwhile is newer than this read.
+                                if (mValue == null) mValue = fresh != null ? fresh : NO_HARDWARE;
+                                mProbe = null;
+                            }
+                        }
+                    }, "gesher-wlan-census");
+                    mProbe.setDaemon(true);
+                    mProbe.start();
+                }
+                probe = mProbe;
+            }
+            try {
+                probe.join(Math.max(1, timeoutMs));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            synchronized (this) {
+                if (mValue != null) return mValue;
+            }
+            System.out.println("WindowsWifi: WLAN census did not finish within " + timeoutMs
+                    + " ms; reporting no Wi-Fi hardware");
+            return NO_HARDWARE;
+        }
+
+        void refresh() {
+            Hardware fresh = mSource.get();
+            synchronized (this) { mValue = fresh != null ? fresh : NO_HARDWARE; }
         }
     }
 
+    private static final Census CENSUS = new Census(WindowsWifi::census);
+
+    /**
+     * The adapter census (system features are fixed when the package manager starts),
+     * refreshed on WLAN interface arrival/removal. No WLAN library, a stopped WLAN
+     * service, no adapter, or a census that does not finish in CENSUS_TIMEOUT_MS all
+     * mean no hardware.
+     */
+    public static Hardware hardware() {
+        return CENSUS.get(CENSUS_TIMEOUT_MS);
+    }
+
     private static void refreshHardware() {
-        Hardware fresh = census();
-        synchronized (HARDWARE_LOCK) { sHardware = fresh; }
+        CENSUS.refresh();
     }
 
     private static Hardware census() {

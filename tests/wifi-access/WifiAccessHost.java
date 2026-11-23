@@ -679,11 +679,8 @@ public final class WifiAccessHost {
             rejects(IllegalArgumentException.class, () -> manager.requestNetwork(request, callback, queue),
                     "the same callback cannot be registered twice");
             android.os.Bundle extras = new android.os.Bundle();
+            // The service sends only the interface (WifiServiceHost checks it).
             extras.putInt(IWindowsWifi.EXTRA_INTERFACE, 12);
-            extras.putByteArray(IWindowsWifi.EXTRA_SSID, "Device".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            extras.putString(IWindowsWifi.EXTRA_BSSID, "10:20:30:40:50:60");
-            extras.putInt(IWindowsWifi.EXTRA_SECURITY, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK);
-            extras.putInt(IWindowsWifi.EXTRA_FREQUENCY, 2437);
             wifi.event(IWindowsWifi.NETWORK_AVAILABLE, extras);
             check(callback.events.isEmpty(), "events are delivered on the request's handler");
             queue.drain();

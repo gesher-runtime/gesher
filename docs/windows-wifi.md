@@ -12,7 +12,8 @@ outside the [Android API permission boundary](microg.md); it is not an OS sandbo
 without the optional Wi-Fi DLL can still start Gesher normally.
 
 The backend reads `WlanEnumInterfaces`, `WlanQueryInterface` and
-`WlanGetNetworkBssList`. A synchronous census (`nativeHardware`) reports the
+`WlanGetNetworkBssList`. A census (`nativeHardware`, on its own thread; its first
+caller waits at most 5 s, see docs/wifi.md) reports the
 interface count and, per adapter, `WlanGetInterfaceCapability` PHY types and the
 `wlan_intf_opcode_supported_infrastructure_auth_cipher_pairs` list; IHV-defined
 PHY types and malformed pair lists contribute nothing. One watcher thread
