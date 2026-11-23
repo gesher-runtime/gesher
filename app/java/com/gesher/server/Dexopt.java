@@ -430,6 +430,8 @@ final class Dexopt {
         } catch (IOException e) {
             // no log line
         }
+        // The tool's output starts here in dexopt.log (its stdout and stderr).
+        long outputStart = log.length();
         int pid;
         try {
             pid = Zygote.spawn(cmd.toString(), List.of(), log.getPath(), false);
@@ -440,7 +442,14 @@ final class Dexopt {
         long deadline = SystemClock.uptimeMillis() + TOOL_TIMEOUT_MS;
         while (true) {
             int code = Zygote.exitCode(pid);
-            if (code != Zygote.STILL_ACTIVE) return code;
+            if (code != Zygote.STILL_ACTIVE) {
+                // profman's exit codes are results (ProfmanResult), not only failures.
+                boolean result = tool.equals("profman") && (code == 1 || code == 2 || code == 7);
+                if (code != 0 && !result) {
+                    logOutput(tool, code, log, outputStart);
+                }
+                return code;
+            }
             if (SystemClock.uptimeMillis() > deadline) {
                 Zygote.kill(pid);
                 SystemServer.log("dexopt: " + tool + " took more than " + TOOL_TIMEOUT_MS / 1000
@@ -450,6 +459,84 @@ final class Dexopt {
             SystemClock.sleep(50);
         }
     }
+
+    /** The most of a failed tool's output read back from dexopt.log. */
+    private static final int OUTPUT_READ_LIMIT = 256 * 1024;
+    /** The lines of it that go to system_server.log, and their longest length. */
+    private static final int OUTPUT_LINES = 8;
+    private static final int OUTPUT_LINE_CHARS = 400;
+
+    /**
+     * A failed tool's diagnostics in system_server.log as well as in dexopt.log, which a
+     * report may leave out: what it wrote from {@code start} on in {@code log}.
+     */
+    private static void logOutput(String tool, int code, File log, long start) {
+        String output;
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(log, "r")) {
+            long end = f.length();
+            long from = Math.max(start, end - OUTPUT_READ_LIMIT);
+            byte[] bytes = new byte[(int) Math.max(0, end - from)];
+            f.seek(from);
+            f.readFully(bytes);
+            output = new String(bytes, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            SystemServer.log("dexopt: " + tool + " exit code " + code + "; its output in "
+                    + log + " is unreadable: " + e);
+            return;
+        }
+        List<String> lines = failureLines(output);
+        StringBuilder sb = new StringBuilder("dexopt: ").append(tool).append(" exit code ")
+                .append(code).append(lines.isEmpty() ? "; no output" : "; its output:");
+        for (String line : lines) sb.append("\n  ").append(line);
+        SystemServer.log(sb.toString());
+    }
+
+    /**
+     * The lines of a failed tool's output that say why: its first errors (ART's E and F
+     * lines; the first is usually the cause, the rest of a usage error is the usage text)
+     * with the warnings just before them (dex2oat's "Skipping non-existent dex file"), or
+     * else its last lines. At most {@link #OUTPUT_LINES}, each cut to
+     * {@link #OUTPUT_LINE_CHARS} characters.
+     */
+    static List<String> failureLines(String output) {
+        List<String> all = new ArrayList<>();
+        int firstError = -1;
+        for (String line : output.split("\r?\n")) {
+            String l = line.trim();
+            if (l.isEmpty()) continue;
+            if (firstError < 0 && isError(l)) firstError = all.size();
+            all.add(l);
+        }
+        List<String> chosen = new ArrayList<>();
+        if (firstError >= 0) {
+            int from = firstError;
+            while (from > 0 && firstError - from < 2 && severity(all.get(from - 1)) == 'W') from--;
+            for (int i = from; i < all.size() && chosen.size() < OUTPUT_LINES; i++) {
+                if (i < firstError || isError(all.get(i))) chosen.add(all.get(i));
+            }
+        } else {
+            chosen.addAll(all.subList(Math.max(0, all.size() - OUTPUT_LINES), all.size()));
+        }
+        List<String> result = new ArrayList<>();
+        for (String l : chosen) {
+            result.add(l.length() > OUTPUT_LINE_CHARS ? l.substring(0, OUTPUT_LINE_CHARS) + "..." : l);
+        }
+        return result;
+    }
+
+    private static boolean isError(String line) {
+        char c = severity(line);
+        return c == 'E' || c == 'F';
+    }
+
+    /** An ART log line's severity ('W', 'E', 'F'...): "MM-DD HH:MM:SS.mmm pid tid E tag: ...". */
+    private static char severity(String line) {
+        java.util.regex.Matcher m = LOG_LINE.matcher(line);
+        return m.lookingAt() ? m.group(1).charAt(0) : ' ';
+    }
+
+    private static final java.util.regex.Pattern LOG_LINE =
+            java.util.regex.Pattern.compile("\\d\\d-\\d\\d \\S+\\s+\\d+\\s+\\d+ ([VDIWEF]) ");
 
     /** What dex2oat needs of this runtime's options: its boot image and boot class path. */
     private static final class Vm {

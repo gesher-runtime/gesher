@@ -104,12 +104,19 @@ target_include_directories(art_dex2oat PUBLIC ${_d2o} ${CMAKE_SOURCE_DIR}/compat
 target_link_libraries(art_dex2oat PUBLIC art_compiler)
 
 # --- dex2oat ----------------------------------------------------------------
+# dex2oat and profman take Windows argv as UTF-16 and pass ART UTF-8 (the system
+# server gives them an app's code path, which can be a non-ASCII profile path):
+# their main() is renamed, compat/art/art_tool_main.cc is the wmain, and the
+# link-only -municode selects the MinGW wide entry (as dalvikvm's).
+set_property(SOURCE ${_d2o}/dex2oat.cc APPEND PROPERTY COMPILE_DEFINITIONS
+  main=gesher_art_tool_main)
 add_executable(dex2oat ${_d2o}/dex2oat.cc ${_d2o}/dex2oat_options.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/art_tool_main.cc
   ${CMAKE_SOURCE_DIR}/compat/art/sha1_bcrypt.cc
   ${CMAKE_SOURCE_DIR}/compat/art/disassembler_standin.cc)
 target_link_libraries(dex2oat PRIVATE art_dex2oat bcrypt)
 # A linker map, for tools/symbolize.py (the executable is stripped).
-target_link_options(dex2oat PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dex2oat.map)
+target_link_options(dex2oat PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dex2oat.map -municode)
 
 # --- profman ----------------------------------------------------------------
 # art/profman/Android.bp: profiles from text (the boot image profile,
@@ -117,10 +124,14 @@ target_link_options(dex2oat PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dex2oat.map)
 # reference profile before a speed-profile compile (com.gesher.server.Dexopt;
 # docs/compiled-code.md, ADR 0054). libprofile, libdexfile and libartbase only.
 set(_pm "${_art}/profman")
+set_property(SOURCE ${_pm}/profman.cc APPEND PROPERTY COMPILE_DEFINITIONS
+  main=gesher_art_tool_main)
 add_executable(profman ${_pm}/profman.cc ${_pm}/boot_image_profile.cc
-  ${_pm}/profile_assistant.cc ${_pm}/inline_cache_format_util.cc)
+  ${_pm}/profile_assistant.cc ${_pm}/inline_cache_format_util.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/art_tool_main.cc)
 target_include_directories(profman PRIVATE ${_pm} ${_pm}/include)
 target_link_libraries(profman PRIVATE art_profile)
+target_link_options(profman PRIVATE -municode)
 
 # --- oatdump ---------------------------------------------------------------
 # The pinned host oatdump uses ART's real disassembler and inspects the same

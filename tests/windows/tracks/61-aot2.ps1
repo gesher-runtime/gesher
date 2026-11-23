@@ -222,6 +222,34 @@ if ($verifyOk) {
   Aot2Fail 'dex2oat lifecycle.apk (verify)' $r.Out
 }
 
+# A code path with a non-ASCII name, as the system server passes an installed app's
+# code path under a Windows user's profile (for a Hebrew user name, in its long form):
+# dex2oat and profman must read their UTF-16 arguments as gesher-base's UTF-8 paths,
+# not in the active code page, which made every install-time compile fail for such users.
+$unicodeDir = Join-Path $aotRoot ("unicode " + [string]::new([char[]](0x05e9, 0x05dc, 0x05d5, 0x05dd)) + " " + [string]::new([char[]](0x0418, 0x0432, 0x0430, 0x043d)))
+New-Item -ItemType Directory -Force $unicodeDir | Out-Null
+$unicodeApk = Join-Path $unicodeDir 'base.apk'
+Copy-Item -LiteralPath "$Dir/lifecycle.apk" -Destination $unicodeApk
+$unicodeOdex = Join-Path $unicodeDir 'oat/x86_64/base.odex'
+$r = Aot2Dex2oat $unicodeApk $unicodeOdex 'verify' @('--compilation-reason=install')
+if ($r.Exit -eq 0 -and (Test-Path -LiteralPath $unicodeOdex) -and (Test-Path -LiteralPath ($unicodeOdex -replace '\.odex$', '.vdex'))) {
+  Write-Host "PASS  aot2: dex2oat compiles an APK whose path has Hebrew and Cyrillic names (verify, $(Aot2Size $unicodeOdex) bytes of .odex)"
+} else {
+  Aot2Fail 'dex2oat with a non-ASCII APK path' $r.Out
+}
+$unicodeCur = Join-Path $unicodeDir 'cur.prof'
+$unicodeRef = Join-Path $unicodeDir 'ref.prof'
+foreach ($f in $unicodeCur, $unicodeRef) { Set-Content -NoNewline -LiteralPath $f -Value '' }
+$pm = Aot2Run "$Dir/profman.exe" @("--profile-file=$(NoDrive $unicodeCur)", "--reference-profile-file=$(NoDrive $unicodeRef)",
+  "--apk=$(NoDrive $unicodeApk)", "--dex-location=$(NoDrive $unicodeApk)", '--force-merge-and-analyze')
+# Empty profiles (ProfmanResult 7) once the APK is read; 4 (I/O) when it is not.
+if ($pm.Exit -eq 7) {
+  Write-Host 'PASS  aot2: profman reads an APK whose path has Hebrew and Cyrillic names (empty profiles: exit 7)'
+} else {
+  Aot2Fail "profman with a non-ASCII APK path (exit $($pm.Exit), expected 7)" $pm.Out
+}
+Remove-Item -LiteralPath $unicodeDir -Recurse -Force -ErrorAction SilentlyContinue
+
 if ($verifyOk) {
   $r1 = Aot2Run "$Dir/dalvikvm.exe" $appArgs $logEnv
   $m1 = Aot2Methods $r1.Out
