@@ -412,12 +412,45 @@ public final class WindowsCellular {
         return "";
     }
 
-    /** Android's phone type for the modem's cellular class. */
+    /**
+     * Android's phone type for a present modem: always GSM, as Android 16's
+     * TelephonyManager.getPhoneType()/getCurrentPhoneType() answer (legacy CDMA is gone).
+     */
     static int phoneType(Modem modem) {
-        if (modem == null) return TelephonyManager.PHONE_TYPE_NONE;
-        return modem.cellularClass == CLASS_CDMA ? TelephonyManager.PHONE_TYPE_CDMA
-                : modem.cellularClass == CLASS_GSM ? TelephonyManager.PHONE_TYPE_GSM
-                : TelephonyManager.PHONE_TYPE_NONE;
+        return modem == null ? TelephonyManager.PHONE_TYPE_NONE : TelephonyManager.PHONE_TYPE_GSM;
+    }
+
+    /**
+     * Whether a SIM card is in the modem, as UiccProfile.hasIccCard answers: a card in
+     * any state (ready, locked, blocked, failed or not activated); not for an empty slot,
+     * a missing eSIM profile, a radio that is off or a failed reading.
+     */
+    static boolean cardPresent(Modem modem) {
+        if (modem == null) return false;
+        switch (modem.readyState) {
+            case READY_INITIALIZED:
+            case READY_BAD_SIM:
+            case READY_DEVICE_LOCKED:
+            case READY_DEVICE_BLOCKED:
+            case READY_NOT_ACTIVATED:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * TelephonyDisplayInfo for the data network: LTE carrying a 5G NSA secondary cell is
+     * LTE overridden as NR_NSA, as DisplayInfoController reports it; otherwise no override.
+     */
+    static android.telephony.TelephonyDisplayInfo displayInfo(Modem modem) {
+        int type = dataNetworkType(modem);
+        boolean nsa = type == TelephonyManager.NETWORK_TYPE_LTE
+                && (modem.currentDataClass & DATA_5G_NSA) != 0;
+        return new android.telephony.TelephonyDisplayInfo(type, nsa
+                ? android.telephony.TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA
+                : android.telephony.TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE,
+                modem != null && modem.roaming());
     }
 
     /** The IMEI, for a GSM-class modem whose device ID is one (15 digits). */

@@ -101,10 +101,68 @@ default subscription, so it does not depend on the phone count. `telephony.regis
 (system_server, present on every Android device) keeps its listener permission checks with
 or without a modem.
 
+Without a modem the managers' null-service answers also cover: `getAllCellInfo()` null,
+`getCellLocation()` null (the service returns an empty `CellIdentityGsm`, which the manager
+turns into null; Default's null made the manager throw `NullPointerException`),
+`isDataEnabledForReason()`, `isEmergencyNumber()`, `getEmergencyNumberList()`,
+`isPremiumCapabilityAvailableForPurchase()`, `getNetworkSlicingConfiguration()`,
+`uploadCallComposerPicture()` and `SubscriptionManager.getSubscriptionsInGroup()` throwing
+`IllegalStateException`, `purchasePremiumCapability()` answering `REQUEST_FAILED`, GBA
+`FEATURE_NOT_READY`, `getCardIdForDefaultEuicc()` `UNINITIALIZED_CARD_ID`, no UICC cards,
+no network scan, and USSD and carrier-restriction requests dropped without a callback.
+
+### With a modem: the rest of ITelephony
+
+Every `ITelephony`/`ISub` method that a public `TelephonyManager`/`SubscriptionManager`
+API reaches was checked for an inherited Default answer that contradicts the modem or
+leaves a callback unanswered. The answers, with AOSP's permission checks:
+
+- Phone type: Android 16's `getPhoneType()`/`getCurrentPhoneType()` are GSM for any phone
+  (no `getActivePhoneTypeForSlot` exists any more); `gsm.current.phone-type` says GSM too,
+  also for a CDMA-class modem.
+- SIM card and radio: `hasIccCard()` follows the card (present while ready, locked, blocked,
+  failed or not activated; not for an empty slot or a missing eSIM profile);
+  `DEFAULT_SIM_SLOT_INDEX` is phone 0, as `PhoneFactory.getPhone` treats it;
+  `isRadioOn*` variants agree; `isModemEnabledForSlot(0)` is true;
+  `getCardIdForDefaultEuicc()` is `UNSUPPORTED_CARD_ID` (no eUICC);
+  `getUiccCardsInfo()` lists the one removable card (sanitized for
+  `READ_BASIC_PHONE_STATE`).
+- Mobile data switches: Windows' Mobile Broadband API has no equivalent of Android's user,
+  policy, carrier or thermal data switches (a connection profile's auto-connect mode only
+  decides whether Windows connects by itself). `isDataEnabled()`,
+  `isDataEnabledForReason()` and `isUserDataEnabled()` answer AOSP's default, enabled,
+  while a subscription is active (false without one: no phone for it). This never
+  contradicts `getDataState()`: a connected modem is enabled, and a disconnected one may
+  be. `isDataRoamingEnabled()` answers AOSP's default, off, unless the modem is connected
+  while roaming, which proves roaming allowed.
+- Cell information: Windows reports no cells. `getAllCellInfo()` is an empty list,
+  `getCellLocation()` an empty identity (null `CellLocation`),
+  `requestCellInfoUpdate()` answers `CellInfoCallback.ERROR_MODEM_ERROR` with
+  `CommandException`, as PhoneInterfaceManager answers a radio that does not support the
+  request; all three with LocationAccessPolicy's checks (fine location at every target
+  for `requestCellInfoUpdate`; a soft denial answers an empty list).
+- Callback APIs: USSD needs `CALL_PHONE` and fails with `USSD_RETURN_FAILURE` (USSD APIs
+  not supported); carrier restriction status throws "Not an authorized caller" (no allow
+  list); call composer uploads need the dialer role (none);
+  `purchasePremiumCapability()` answers `FEATURE_NOT_SUPPORTED` (no slicing upsell; the
+  foreground check before it is not modelled); slicing configuration answers
+  `ERROR_MODEM_ERROR` to privileged callers; GBA answers `FEATURE_NOT_SUPPORTED`; network
+  scans need `MODIFY_PHONE_STATE` and return `INVALID_SCAN_ID`.
+- Emergency numbers: EmergencyNumberTracker's fallback when the radio reports none and
+  its database has no entry: "112,911" with a SIM, "112,911,000,08,110,118,119,999" without
+  one, plus libphonenumber's short numbers for the registered network's country without a
+  SIM. Gesher ships no emergency number database, so country-specific numbers from it are
+  missing.
+- Subscriptions: no subscription groups or opportunistic subscriptions.
+
 `TelephonyCallback`/`PhoneStateListener` deliver, for phone 0: service state, signal
 strength(s), data connection state and the (always idle) call state, initially and on
-change; subscription listeners hear SIM changes. Other events are permission-checked as in
-AOSP and then never delivered.
+change; the values TelephonyRegistry gives a new phone listener: data activity
+(`DATA_ACTIVITY_NONE`), cell location (null) and cell info (empty) under its location
+checks, display info (LTE with a 5G NSA cell is overridden as `NR_NSA`), the active data
+subscription, the user mobile data state and the data enabled state, with their changes.
+Subscription listeners hear SIM changes. Other events are permission-checked as in AOSP and
+then never delivered.
 
 Mobile data is the WWAN IP interface, which `ConnectivityService` already reports as a
 `TRANSPORT_CELLULAR` network.
@@ -116,12 +174,10 @@ Mobile data is the WWAN IP interface, which `ConnectivityService` already report
 - SMS/MMS: no `FEATURE_TELEPHONY_MESSAGING`, no `isms` service; `SmsManager` send methods
   throw AOSP's `UnsupportedOperationException("Sms is not supported")`.
 - Carrier configuration, carrier identification (`UNKNOWN_CARRIER_ID`), carrier
-  privileges (`CARRIER_PRIVILEGE_STATUS_NO_ACCESS`), eUICC, IMS, cell info
-  (`getAllCellInfo` null), network scans, IMEISV, `isDataEnabled` (Default false), data
-  activity and `TelephonyDisplayInfo` are not backed by the modem. Without a modem,
-  `requestCellInfoUpdate` follows the manager's null-service path (`IllegalStateException`
-  from target S, a silent return before); with a modem the request is never answered, an
-  open gap until cell info has an implementation or Android's error answer.
+  privileges (`CARRIER_PRIVILEGE_STATUS_NO_ACCESS`), eUICC, IMS, cell information, network
+  scans and selection (`NETWORK_SELECTION_MODE_UNKNOWN`), IMEISV, data activity
+  (`DATA_ACTIVITY_NONE`) and GID1 are not backed by the modem; their answers are listed
+  above.
 - One modem only; a second WWAN interface is ignored.
 - Telephony broadcasts (`ACTION_SIM_CARD_STATE_CHANGED`, service-state and
   default-subscription broadcasts) are not sent.

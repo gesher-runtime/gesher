@@ -36,8 +36,11 @@ machines have a WWAN modem that Windows exposes through the Mobile Broadband API
   permission checks, placeholder values, and the managers' `IllegalStateException` where
   they throw one. `telephony.registry` keeps AOSP's listener permission checks.
 - With a modem, data-only telephony works for state, identifiers and listeners; SMS, voice,
-  carrier configuration and cell info remain unsupported and are documented in
-  docs/telephony.md.
+  carrier configuration and cell info remain unsupported. Every ITelephony/ISub method a
+  public manager API reaches answers consistently with the modem or with AOSP's unsupported
+  answer (no Default answer contradicts the modem or leaves a callback unanswered); the
+  data switches, which Windows does not expose, take AOSP's defaults consistent with the
+  observed connection (docs/telephony.md).
 - framework-res must be rebuilt for the overlay; the framework workflow's cache key
   includes the overlay directory.
 - Validation is host fixtures, a native COM-boundary fixture and an ART no-modem check;

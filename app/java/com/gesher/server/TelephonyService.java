@@ -5,17 +5,34 @@ import android.app.AppOpsManager;
 import android.content.pm.PackageManager;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Messenger;
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
+import android.os.ResultReceiver;
 import android.os.WorkSource;
 import android.sysprop.TelephonyProperties;
+import android.net.Uri;
+import android.telephony.CellIdentity;
+import android.telephony.CellIdentityGsm;
+import android.telephony.CellInfo;
+import android.telephony.IBootstrapAuthenticationCallback;
 import android.telephony.ICellInfoCallback;
+import android.telephony.NetworkScanRequest;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyCallback;
+import android.telephony.TelephonyDisplayInfo;
 import android.telephony.TelephonyManager;
+import android.telephony.TelephonyScanManager;
+import android.telephony.UiccCardInfo;
+import android.telephony.UiccPortInfo;
+import android.telephony.UssdResponse;
+import android.telephony.gba.UaSecurityProtocolIdentifier;
+import com.android.internal.telephony.IIntegerConsumer;
 import com.android.internal.telephony.IOnSubscriptionsChangedListener;
 import com.android.internal.telephony.IPhoneStateListener;
 import com.android.internal.telephony.IPhoneSubInfo;
@@ -64,6 +81,14 @@ public final class TelephonyService {
     static final String FINE = "android.permission.ACCESS_FINE_LOCATION";
     static final String COARSE = "android.permission.ACCESS_COARSE_LOCATION";
     static final String READ_ACTIVE_EMERGENCY_SESSION = "android.permission.READ_ACTIVE_EMERGENCY_SESSION";
+    static final String ACCESS_NETWORK_STATE = "android.permission.ACCESS_NETWORK_STATE";
+    static final String MODIFY_PHONE_STATE = "android.permission.MODIFY_PHONE_STATE";
+    static final String CALL_PHONE = "android.permission.CALL_PHONE";
+    static final String INTERNET = "android.permission.INTERNET";
+    static final String PERFORM_IMS_SINGLE_REGISTRATION =
+            "android.permission.PERFORM_IMS_SINGLE_REGISTRATION";
+    /** The null-service message of most TelephonyManager methods that throw. */
+    static final String TELEPHONY_SERVICE_NULL = "telephony service is null.";
 
     /**
      * Without FEATURE_TELEPHONY, AOSP's PhoneGlobals.onCreate returns before publishing
@@ -472,7 +497,48 @@ public final class TelephonyService {
         boolean anyLocationPermission(Caller c) {
             return c.system() || granted(c, FINE) || granted(c, COARSE);
         }
+
+        boolean anyGranted(Caller c, String... permissions) {
+            for (String permission : permissions) {
+                if (granted(c, permission)) return true;
+            }
+            return false;
+        }
+
+        /**
+         * LocationAccessPolicy.checkLocationPermission (android-16.0.0_r4): the system is
+         * allowed; the location switch off is a soft denial; then fine (if minFine is below
+         * MAX_VALUE) and coarse are checked in that order, each answering ALLOWED for the
+         * permission with its app op allowed, HARD for MODE_ERRORED, SOFT for another mode,
+         * HARD for no permission at a target at or above its minimum, and no answer below it.
+         */
+        Location location(Caller c, int minFine, int minCoarse) {
+            if (c.system()) return Location.ALLOWED;
+            if (!mCallers.locationEnabled()) return Location.DENIED_SOFT;
+            if (minFine < Integer.MAX_VALUE) {
+                Location fine = location(c, FINE, AppOpsManager.OPSTR_FINE_LOCATION, minFine);
+                if (fine != null) return fine;
+            }
+            if (minCoarse < Integer.MAX_VALUE) {
+                Location coarse = location(c, COARSE, AppOpsManager.OPSTR_COARSE_LOCATION, minCoarse);
+                if (coarse != null) return coarse;
+            }
+            return Location.ALLOWED;
+        }
+
+        private Location location(Caller c, String permission, String op, int minSdk) {
+            if (granted(c, permission)) {
+                int mode = mCallers.noteOp(c, op);
+                if (mode == AppOpsManager.MODE_ALLOWED) return Location.ALLOWED;
+                return mode == AppOpsManager.MODE_ERRORED ? Location.DENIED_HARD : Location.DENIED_SOFT;
+            }
+            if (minSdk > Build.VERSION_CODES.CUR_DEVELOPMENT || c.targetSdk() < minSdk) return null;
+            return Location.DENIED_HARD;
+        }
     }
+
+    /** LocationAccessPolicy.LocationPermissionResult. */
+    enum Location { ALLOWED, DENIED_SOFT, DENIED_HARD }
 
     /**
      * ServiceState as a caller may see it: the registered operator is location data
@@ -511,7 +577,30 @@ public final class TelephonyService {
         public int getSimStateForSlotIndex(int slotIndex) {
             if (slotIndex < 0) return TelephonyManager.SIM_STATE_UNKNOWN;
             if (!mCellular.present()) return TelephonyManager.SIM_STATE_ABSENT;
-            return slotIndex == 0 ? mCellular.simState() : TelephonyManager.SIM_STATE_UNKNOWN;
+            return slot(slotIndex) ? mCellular.simState() : TelephonyManager.SIM_STATE_UNKNOWN;
+        }
+
+        /**
+         * Whether a slot index names phone 0: 0 itself, or DEFAULT_SIM_SLOT_INDEX, which is
+         * PhoneFactory.getPhone's DEFAULT_PHONE_INDEX (the default phone).
+         */
+        private boolean slot(int slotIndex) {
+            return mCellular.present() && (slotIndex == 0
+                    || slotIndex == SubscriptionManager.DEFAULT_SIM_SLOT_INDEX);
+        }
+
+        /**
+         * UiccProfile.hasIccCard: a card is in the slot whatever its lock or error state.
+         * Without a phone, false (TelephonyManager's null-service answer too).
+         */
+        @Override
+        public boolean hasIccCardUsingSlotIndex(int slotIndex) {
+            return slot(slotIndex) && WindowsCellular.cardPresent(mCellular.modem());
+        }
+
+        @Override
+        public boolean hasIccCard() {
+            return hasIccCardUsingSlotIndex(0);
         }
 
         /** The registered network's country; "" without a phone or registration. */
@@ -598,6 +687,23 @@ public final class TelephonyService {
         }
 
         @Override
+        public boolean isRadioOn(String callingPackage) {
+            return isRadioOnWithFeature(callingPackage, null);
+        }
+
+        @Override
+        public boolean isRadioOnForSubscriber(int subId, String callingPackage) {
+            return isRadioOnForSubscriberWithFeature(subId, callingPackage, null);
+        }
+
+        @Override
+        public boolean isRadioOnForSubscriberWithFeature(int subId, String callingPackage,
+                String callingFeatureId) {
+            // getPhone(subId) falls back to the default phone, the only one.
+            return isRadioOnWithFeature(callingPackage, callingFeatureId);
+        }
+
+        @Override
         public boolean isRadioOnWithFeature(String callingPackage, String callingFeatureId) {
             if (!mCellular.present()) return false;
             Caller c = mRules.caller(callingPackage, callingFeatureId);
@@ -662,28 +768,387 @@ public final class TelephonyService {
         }
 
         /**
-         * Without a modem, TelephonyManager.requestCellInfoUpdate's null-service path: from
-         * target S (NULL_TELEPHONY_THROW_NO_CB) IllegalStateException, before that a silent
-         * return. The Default implementation would accept the request and never call back.
+         * Always answered. Without a modem, TelephonyManager.requestCellInfoUpdate's
+         * null-service path: from target S (NULL_TELEPHONY_THROW_NO_CB) IllegalStateException,
+         * before that a silent return. With one, see cellInfoUpdate. (Default accepted the
+         * request and never called back.)
          */
         @Override
         public void requestCellInfoUpdate(int subId, ICellInfoCallback cb, String callingPackage,
                 String callingFeatureId) {
-            noPhoneCellInfoUpdate(callingPackage, callingFeatureId);
+            cellInfoUpdate(cb, callingPackage, callingFeatureId);
         }
 
         @Override
         public void requestCellInfoUpdateWithWorkSource(int subId, ICellInfoCallback cb,
                 String callingPackage, String callingFeatureId, WorkSource workSource) {
-            noPhoneCellInfoUpdate(callingPackage, callingFeatureId);
+            cellInfoUpdate(cb, callingPackage, callingFeatureId);
         }
 
-        private void noPhoneCellInfoUpdate(String callingPackage, String callingFeatureId) {
-            // With a modem the request stays unanswered: cell info is not implemented
-            // (docs/telephony.md).
-            if (mCellular.present()) return;
+        /**
+         * With a modem: PhoneInterfaceManager.requestCellInfoUpdateInternal. Fine location is
+         * required at every target (a soft denial answers an empty list); Windows' Mobile
+         * Broadband API reports no cell information, which is the radio failing the
+         * request (RIL REQUEST_NOT_SUPPORTED), answered as EVENT_REQUEST_CELL_INFO_UPDATE_DONE
+         * answers an exception: CellInfoCallback.ERROR_MODEM_ERROR.
+         */
+        private void cellInfoUpdate(ICellInfoCallback cb, String callingPackage,
+                String callingFeatureId) {
             Caller c = mRules.caller(callingPackage, callingFeatureId);
-            if (c.targetSdk() > Build.VERSION_CODES.R) throw new IllegalStateException("Telephony is null");
+            if (!mCellular.present()) {
+                if (c.targetSdk() > Build.VERSION_CODES.R) throw new IllegalStateException("Telephony is null");
+                return;
+            }
+            Location location = mRules.location(c, Build.VERSION_CODES.BASE, Build.VERSION_CODES.BASE);
+            if (location == Location.DENIED_HARD) throw new SecurityException("Not allowed to access cell info");
+            if (cb == null) return;
+            try {
+                if (location == Location.DENIED_SOFT) {
+                    cb.onCellInfo(new ArrayList<CellInfo>());
+                } else {
+                    cb.onError(TelephonyManager.CellInfoCallback.ERROR_MODEM_ERROR,
+                            CELL_INFO_UNSUPPORTED, CELL_INFO_UNSUPPORTED + ": REQUEST_NOT_SUPPORTED");
+                }
+            } catch (RemoteException e) {
+                // Dropped, as PhoneInterfaceManager drops it.
+            }
+        }
+
+        /** The exception class AOSP reports when the radio does not support a request. */
+        static final String CELL_INFO_UNSUPPORTED = "com.android.internal.telephony.CommandException";
+
+        /**
+         * PhoneInterfaceManager.getAllCellInfo: coarse location at every target, fine from Q;
+         * a soft denial and a radio that reports no cells both answer an empty list
+         * (EVENT_GET_ALL_CELL_INFO_DONE replaces a failed request's result with one).
+         * Without a phone, null: the manager's null-service answer.
+         */
+        @Override
+        public List<CellInfo> getAllCellInfo(String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return null;
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (mRules.location(c, Build.VERSION_CODES.Q, Build.VERSION_CODES.BASE) == Location.DENIED_HARD) {
+                throw new SecurityException("Not allowed to access cell info");
+            }
+            return new ArrayList<>();
+        }
+
+        /**
+         * PhoneInterfaceManager.getCellLocation. No cell identity is reported, so the answer
+         * is the empty CellIdentityGsm AOSP gives a soft denial, which TelephonyManager
+         * turns into a null CellLocation. Default's null would make TelephonyManager throw
+         * NullPointerException; without a phone the empty identity gives the manager's
+         * null-service answer (null) as well.
+         */
+        @Override
+        public CellIdentity getCellLocation(String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return new CellIdentityGsm();
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (mRules.location(c, Build.VERSION_CODES.Q, Build.VERSION_CODES.BASE) == Location.DENIED_HARD) {
+                throw new SecurityException("Not allowed to access cell location");
+            }
+            return new CellIdentityGsm();
+        }
+
+        // ---- Data switches (docs/telephony.md, "Mobile data switches"). ----
+
+        /**
+         * Windows' Mobile Broadband API exposes no equivalent of Android's data switches
+         * (user, policy, carrier, thermal): a profile's auto-connect mode only decides
+         * whether Windows connects by itself. With an active subscription Gesher answers
+         * enabled, AOSP's default for every reason (Settings.Global.MOBILE_DATA defaults
+         * to on), which never contradicts getDataState: a connection is possible and is
+         * reported as it is. Without an active subscription there is no phone for it:
+         * false, as PhoneInterfaceManager answers for a subscription without a phone.
+         */
+        boolean dataEnabled(int subId) {
+            return modemForSub(subId) != null;
+        }
+
+        /**
+         * Data roaming: AOSP's default (ro.com.android.dataroaming) is off, and Windows does
+         * not expose its roaming preference; a packet connection observed while roaming
+         * proves it allowed, so only that reading answers true.
+         */
+        boolean dataRoamingEnabled(int subId) {
+            WindowsCellular.Modem modem = modemForSub(subId);
+            return modem != null && modem.roaming()
+                    && WindowsCellular.dataState(modem) == TelephonyManager.DATA_CONNECTED;
+        }
+
+        private void requireAny(Caller c, String method, String... permissions) {
+            if (!mRules.anyGranted(c, permissions)) {
+                throw new SecurityException(method + ": uid " + c.uid() + " has none of "
+                        + String.join(", ", permissions));
+            }
+        }
+
+        @Override
+        public boolean isDataEnabled(int subId) {
+            if (!mCellular.present()) return false;
+            Caller c = mRules.caller(null, null);
+            requireAny(c, "isDataEnabled", ACCESS_NETWORK_STATE, READ_PHONE_STATE,
+                    READ_BASIC_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE);
+            return dataEnabled(subId);
+        }
+
+        @Override
+        public boolean isDataEnabledForReason(int subId, int reason) {
+            // TelephonyManager.isDataEnabledForReason throws this without the service.
+            if (!mCellular.present()) throw new IllegalStateException(TELEPHONY_SERVICE_NULL);
+            Caller c = mRules.caller(null, null);
+            requireAny(c, "isDataEnabledForReason", ACCESS_NETWORK_STATE, READ_BASIC_PHONE_STATE,
+                    READ_PHONE_STATE, MODIFY_PHONE_STATE);
+            return dataEnabled(subId);
+        }
+
+        @Override
+        public boolean isUserDataEnabled(int subId) {
+            if (!mCellular.present()) return false;
+            Caller c = mRules.caller(null, null);
+            requireAny(c, "isUserDataEnabled", READ_BASIC_PHONE_STATE, ACCESS_NETWORK_STATE,
+                    MODIFY_PHONE_STATE);
+            return dataEnabled(subId);
+        }
+
+        @Override
+        public boolean isDataRoamingEnabled(int subId) {
+            if (!mCellular.present()) return false;
+            Caller c = mRules.caller(null, null);
+            requireAny(c, "isDataRoamingEnabled", ACCESS_NETWORK_STATE, READ_BASIC_PHONE_STATE,
+                    READ_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE);
+            return dataRoamingEnabled(subId);
+        }
+
+        /** The logical modem of slot 0 is enabled (Windows has no per-modem disable). */
+        @Override
+        public boolean isModemEnabledForSlot(int slotIndex, String callingPackage,
+                String callingFeatureId) {
+            if (!slot(slotIndex)) return false;
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (!mRules.readNonDangerousPhoneState(c)
+                    && !mRules.readPhoneState(c, "isModemEnabledForSlot")) {
+                throw new SecurityException("Caller has no permission.");
+            }
+            return true;
+        }
+
+        /** No eUICC (FEATURE_TELEPHONY_EUICC is never declared): UNSUPPORTED_CARD_ID. */
+        @Override
+        public int getCardIdForDefaultEuicc(int subId, String callingPackage) {
+            return mCellular.present() ? TelephonyManager.UNSUPPORTED_CARD_ID
+                    : TelephonyManager.UNINITIALIZED_CARD_ID;
+        }
+
+        /**
+         * PhoneInterfaceManager.getUiccCardsInfo: READ_PRIVILEGED_PHONE_STATE gets the
+         * cards; with macro_based_opportunistic_networks (on in bp4a) READ_BASIC_PHONE_STATE
+         * gets sanitized copies; anyone else a SecurityException. One removable, non-eUICC
+         * card in slot 0 while the modem reports one.
+         */
+        @Override
+        public List<UiccCardInfo> getUiccCardsInfo(String callingPackage) {
+            if (!mCellular.present()) return new ArrayList<>();
+            Caller c = mRules.caller(callingPackage, null);
+            boolean privileged = mRules.granted(c, READ_PRIVILEGED_PHONE_STATE);
+            if (!privileged && !mRules.readNonDangerousPhoneState(c)) {
+                throw new SecurityException("Caller does not have permission.");
+            }
+            List<UiccCardInfo> cards = new ArrayList<>();
+            WindowsCellular.Modem modem = mCellular.modem();
+            if (WindowsCellular.cardPresent(modem)) {
+                String iccId = WindowsCellular.iccId(modem);
+                UiccCardInfo card = new UiccCardInfo(false, 0, null, 0, true, false,
+                        List.of(new UiccPortInfo(iccId, 0, 0, modem.simReady())));
+                cards.add(privileged ? card : card.createSensitiveInfoSanitizedCopy(false));
+            }
+            return cards;
+        }
+
+        /**
+         * USSD needs CALL_PHONE; an invalid subscription returns silently; otherwise the
+         * request fails as PhoneInterfaceManager fails it when USSD APIs are not supported:
+         * USSD_RETURN_FAILURE with a UssdResponse carrying the request. Without a phone the
+         * manager drops the request silently (Default).
+         */
+        @Override
+        public void handleUssdRequest(int subId, String ussdRequest, ResultReceiver wrappedCallback) {
+            if (!mCellular.present()) return;
+            requireAny(mRules.caller(null, null), "handleUssdRequest", CALL_PHONE);
+            if (!SubscriptionManager.isValidSubscriptionId(subId) || wrappedCallback == null) return;
+            Bundle data = new Bundle();
+            data.putParcelable(TelephonyManager.USSD_RESPONSE, new UssdResponse(ussdRequest, null));
+            wrappedCallback.send(TelephonyManager.USSD_RETURN_FAILURE, data);
+        }
+
+        /**
+         * Only allow-listed carrier apps may ask (CarrierAllowListInfo); Gesher has no
+         * allow list, so every caller with the permission is "Not an authorized caller".
+         * Without a phone the manager makes no call and no callback (Default).
+         */
+        @Override
+        public void getCarrierRestrictionStatus(IIntegerConsumer callback, String packageName) {
+            if (!mCellular.present()) return;
+            Caller c = mRules.caller(packageName, null);
+            requireAny(c, "getCarrierRestrictionStatus", READ_BASIC_PHONE_STATE, READ_PHONE_STATE);
+            throw new SecurityException("Not an authorized caller");
+        }
+
+        /** Only the dialer role holder may upload; Gesher has no dialer role holder. */
+        @Override
+        public void uploadCallComposerPicture(int subscriptionId, String callingPackage,
+                String contentType, ParcelFileDescriptor fd, ResultReceiver callback) {
+            if (!mCellular.present()) throw new IllegalStateException(NO_TELEPHONY_SERVICE);
+            mRules.caller(callingPackage, null);
+            throw new SecurityException("App must be the dialer role holder to upload a call composer pic");
+        }
+
+        /**
+         * Premium capabilities (network slicing upsell): READ_BASIC_PHONE_STATE and INTERNET,
+         * then SlicePurchaseController's first answer for a device without slicing upsell,
+         * FEATURE_NOT_SUPPORTED. Without a phone, the manager's REQUEST_FAILED.
+         */
+        @Override
+        public void purchasePremiumCapability(int capability, IIntegerConsumer callback, int subId) {
+            int result = TelephonyManager.PURCHASE_PREMIUM_CAPABILITY_RESULT_REQUEST_FAILED;
+            if (mCellular.present()) {
+                Caller c = mRules.caller(null, null);
+                if (!mRules.readNonDangerousPhoneState(c)) {
+                    throw new SecurityException("purchasePremiumCapability requires permission "
+                            + "READ_BASIC_PHONE_STATE.");
+                }
+                if (!mRules.granted(c, INTERNET)) {
+                    throw new SecurityException("purchasePremiumCapability requires permission INTERNET.");
+                }
+                if (mCellular.phoneForSub(subId) == 0) {
+                    result = TelephonyManager.PURCHASE_PREMIUM_CAPABILITY_RESULT_FEATURE_NOT_SUPPORTED;
+                }
+            }
+            try {
+                if (callback != null) callback.accept(result);
+            } catch (RemoteException e) {
+                // The caller is gone.
+            }
+        }
+
+        @Override
+        public boolean isPremiumCapabilityAvailableForPurchase(int capability, int subId) {
+            if (!mCellular.present()) throw new IllegalStateException(TELEPHONY_SERVICE_NULL);
+            if (!mRules.readNonDangerousPhoneState(mRules.caller(null, null))) {
+                throw new SecurityException("isPremiumCapabilityAvailableForPurchase requires "
+                        + "permission READ_BASIC_PHONE_STATE.");
+            }
+            return false;
+        }
+
+        /**
+         * Network slicing configuration needs READ_PRIVILEGED_PHONE_STATE (or carrier
+         * privileges). The modem reports none: the request fails with
+         * NetworkSlicingException.ERROR_MODEM_ERROR. Without a phone the manager throws.
+         */
+        @Override
+        public void getSlicingConfig(ResultReceiver callback) {
+            if (!mCellular.present()) throw new IllegalStateException(TELEPHONY_SERVICE_NULL);
+            requireAny(mRules.caller(null, null), "getSlicingConfig", READ_PRIVILEGED_PHONE_STATE);
+            if (callback != null) {
+                callback.send(TelephonyManager.NetworkSlicingException.ERROR_MODEM_ERROR, null);
+            }
+        }
+
+        /**
+         * GBA needs PERFORM_IMS_SINGLE_REGISTRATION or MODIFY_PHONE_STATE; Gesher has no GBA
+         * service, so permitted requests fail with FEATURE_NOT_SUPPORTED. Without a phone,
+         * the manager's FEATURE_NOT_READY.
+         */
+        @Override
+        public void bootstrapAuthenticationRequest(int subId, int appType, Uri nafUrl,
+                UaSecurityProtocolIdentifier securityProtocol, boolean forceBootStrapping,
+                IBootstrapAuthenticationCallback callback) {
+            int reason = TelephonyManager.GBA_FAILURE_REASON_FEATURE_NOT_READY;
+            if (mCellular.present()) {
+                requireAny(mRules.caller(null, null), "bootstrapAuthenticationRequest",
+                        PERFORM_IMS_SINGLE_REGISTRATION, MODIFY_PHONE_STATE);
+                reason = TelephonyManager.GBA_FAILURE_REASON_FEATURE_NOT_SUPPORTED;
+            }
+            try {
+                if (callback != null) callback.onAuthenticationFailure(0, reason);
+            } catch (RemoteException e) {
+                // The caller is gone.
+            }
+        }
+
+        /**
+         * Network scans need MODIFY_PHONE_STATE or carrier privileges, which applications
+         * cannot hold here. A permitted (system) caller gets INVALID_SCAN_ID, which
+         * TelephonyScanManager reports as no scan: Windows cannot scan for Gesher (a
+         * scan would change the modem's state). Default's 0 was a valid scan ID that
+         * never reported anything.
+         */
+        @Override
+        public int requestNetworkScan(int subId, boolean renounceFineLocationAccess,
+                NetworkScanRequest request, Messenger messenger, IBinder binder,
+                String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) return TelephonyScanManager.INVALID_SCAN_ID;
+            requireAny(mRules.caller(callingPackage, callingFeatureId), "requestNetworkScan",
+                    MODIFY_PHONE_STATE);
+            return TelephonyScanManager.INVALID_SCAN_ID;
+        }
+
+        /**
+         * Emergency numbers as EmergencyNumberTracker knows them when the radio reports none
+         * (Windows' Mobile Broadband API has no emergency number list) and its emergency
+         * number database has no entry (Gesher ships none): the 3GPP TS 22.101 ECC list,
+         * "112,911" with a SIM and "112,911,000,08,110,118,119,999" without one, plus, without
+         * a SIM, libphonenumber's ShortNumberInfo for the last known network country. Without
+         * a phone the managers throw.
+         */
+        static final String ECC_WITH_SIM = "112,911";
+        static final String ECC_WITHOUT_SIM = "112,911,000,08,110,118,119,999";
+
+        private boolean simAbsent() {
+            return !SubscriptionManager.isValidSubscriptionId(mCellular.subId());
+        }
+
+        private List<String> eccList() {
+            return List.of((simAbsent() ? ECC_WITHOUT_SIM : ECC_WITH_SIM).split(","));
+        }
+
+        @Override
+        public Map getEmergencyNumberList(String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) throw new IllegalStateException(TELEPHONY_SERVICE_NULL);
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (!mRules.readPhoneState(c, "getEmergencyNumberList")) {
+                throw new SecurityException("Requires READ_PHONE_STATE permission.");
+            }
+            List<android.telephony.emergency.EmergencyNumber> numbers = new ArrayList<>();
+            for (String number : eccList()) {
+                numbers.add(new android.telephony.emergency.EmergencyNumber(number, "", "",
+                        android.telephony.emergency.EmergencyNumber.EMERGENCY_SERVICE_CATEGORY_UNSPECIFIED,
+                        new ArrayList<String>(), 0,
+                        android.telephony.emergency.EmergencyNumber.EMERGENCY_CALL_ROUTING_UNKNOWN));
+            }
+            Map<Integer, List<android.telephony.emergency.EmergencyNumber>> result = new HashMap<>();
+            result.put(mCellular.subId(), numbers);
+            return result;
+        }
+
+        @Override
+        public boolean isEmergencyNumber(String number, boolean exactMatch) {
+            if (!mCellular.present()) throw new IllegalStateException(TELEPHONY_SERVICE_NULL);
+            if (!exactMatch) {
+                requireAny(mRules.caller(null, null), "isEmergencyNumber(Potential)",
+                        READ_PRIVILEGED_PHONE_STATE);
+            }
+            if (number == null || android.telephony.PhoneNumberUtils.isUriNumber(number)) return false;
+            number = android.telephony.PhoneNumberUtils.extractNetworkPortionAlt(number);
+            if (eccList().contains(number)) return true;
+            if (!simAbsent()) return false;
+            WindowsCellular.Modem modem = mCellular.modem();
+            String iso = modem == null ? "" : WindowsCellular.countryIso(
+                    WindowsCellular.plmn(modem.registeredProviderId));
+            if (iso.isEmpty()) return false;
+            return com.android.i18n.phonenumbers.ShortNumberInfo.getInstance()
+                    .isEmergencyNumber(number, iso.toUpperCase(java.util.Locale.ROOT));
         }
 
         /** No carrier identification database: Android's UNKNOWN_CARRIER_ID. */
@@ -1002,6 +1467,31 @@ public final class TelephonyService {
             return SubscriptionManager.isValidSubscriptionId(subId) && subId == mCellular.subId();
         }
 
+        /**
+         * No subscription belongs to a group. From target T reading a group needs device
+         * identifier access (REQUIRE_DEVICE_IDENTIFIERS_FOR_GROUP_UUID). Without isub,
+         * SubscriptionManager throws IllegalStateException to applications.
+         */
+        @Override
+        public List<SubscriptionInfo> getSubscriptionsInGroup(android.os.ParcelUuid groupUuid,
+                String callingPackage, String callingFeatureId) {
+            if (!mCellular.present()) throw new IllegalStateException(TELEPHONY_SERVICE_NULL);
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (c.targetSdk() >= Build.VERSION_CODES.TIRAMISU
+                    && !mRules.readIdentifiers(c, "getSubscriptionsInGroup")) {
+                throw new SecurityException("Need to have carrier privileges or access to "
+                        + "device identifiers to call getSubscriptionsInGroup");
+            }
+            return Collections.emptyList();
+        }
+
+        /** No opportunistic subscriptions (the manager also turns null into an empty list). */
+        @Override
+        public List<SubscriptionInfo> getOpportunisticSubscriptions(String callingPackage,
+                String callingFeatureId) {
+            return Collections.emptyList();
+        }
+
         private String phoneNumber(int subId, String callingPackage, String callingFeatureId,
                 String message) {
             // SubscriptionManager.getPhoneNumber throws this when the service is null.
@@ -1085,6 +1575,8 @@ public final class TelephonyService {
         private WindowsCellular.Modem mModem;
         private SignalStrength mSignal;
         private int mDataState = -1, mDataType = -1, mSubId;
+        private TelephonyDisplayInfo mDisplayInfo;
+        private boolean mDataEnabled;
 
         private static final class Record {
             IPhoneStateListener callback;
@@ -1103,6 +1595,8 @@ public final class TelephonyService {
             mSignal = cellular.present() ? signal() : null;
             mDataState = WindowsCellular.dataState(cellular.modem());
             mDataType = WindowsCellular.dataNetworkType(cellular.modem());
+            mDisplayInfo = WindowsCellular.displayInfo(mModem);
+            mDataEnabled = cellular.present() && SubscriptionManager.isValidSubscriptionId(mSubId);
             cellular.addListener(this::onModemChanged);
         }
 
@@ -1305,9 +1799,47 @@ public final class TelephonyService {
                 if (r.events.contains(TelephonyCallback.EVENT_SIGNAL_STRENGTHS_CHANGED) && mSignal != null) {
                     r.callback.onSignalStrengthsChanged(new SignalStrength(mSignal));
                 }
+                // TelephonyRegistry's initial values for a phone: no data activity is
+                // reported (DATA_ACTIVITY_NONE, as getDataActivity answers), no cell identity
+                // or cell info (with the same location checks), the display info, the
+                // active data subscription and the data switches (dataEnabled).
+                if (r.events.contains(TelephonyCallback.EVENT_DATA_ACTIVITY_CHANGED)) {
+                    r.callback.onDataActivity(TelephonyManager.DATA_ACTIVITY_NONE);
+                }
+                if (r.events.contains(TelephonyCallback.EVENT_CELL_LOCATION_CHANGED)
+                        && coarse(r, Build.VERSION_CODES.BASE) && fine(r, Build.VERSION_CODES.Q)) {
+                    r.callback.onCellLocationChanged(null);
+                }
+                if (r.events.contains(TelephonyCallback.EVENT_CELL_INFO_CHANGED)
+                        && coarse(r, Build.VERSION_CODES.BASE) && fine(r, Build.VERSION_CODES.Q)) {
+                    r.callback.onCellInfoChanged(new ArrayList<>());
+                }
+                if (r.events.contains(TelephonyCallback.EVENT_DISPLAY_INFO_CHANGED)) {
+                    r.callback.onDisplayInfoChanged(mDisplayInfo);
+                }
+                if (r.events.contains(TelephonyCallback.EVENT_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGED)) {
+                    r.callback.onActiveDataSubIdChanged(mSubId);
+                }
+                if (r.events.contains(TelephonyCallback.EVENT_USER_MOBILE_DATA_STATE_CHANGED)) {
+                    r.callback.onUserMobileDataStateChanged(mDataEnabled);
+                }
+                if (r.events.contains(TelephonyCallback.EVENT_DATA_ENABLED_CHANGED)) {
+                    r.callback.onDataEnabledChanged(mDataEnabled, TelephonyManager.DATA_ENABLED_REASON_USER);
+                }
             } catch (RemoteException | RuntimeException e) {
                 mRecords.remove(r.callback.asBinder());
             }
+        }
+
+        /** TelephonyRegistry.checkFineLocationAccess. */
+        private boolean fine(Record r, int minSdk) {
+            return !r.renounceFine && mRules.location(r.caller, minSdk, minSdk) == Location.ALLOWED;
+        }
+
+        /** TelephonyRegistry.checkCoarseLocationAccess. */
+        private boolean coarse(Record r, int minSdk) {
+            return !r.renounceCoarse
+                    && mRules.location(r.caller, Integer.MAX_VALUE, minSdk) == Location.ALLOWED;
         }
 
         private ServiceState serviceStateFor(Record r) {
@@ -1330,6 +1862,12 @@ public final class TelephonyService {
                 boolean dataChanged = dataState != mDataState || dataType != mDataType;
                 int subId = mCellular.subId();
                 boolean subscriptionsChanged = subId != mSubId;
+                TelephonyDisplayInfo displayInfo = WindowsCellular.displayInfo(modem);
+                boolean displayChanged = !displayInfo.equals(mDisplayInfo);
+                boolean dataEnabled = SubscriptionManager.isValidSubscriptionId(subId);
+                boolean dataEnabledChanged = dataEnabled != mDataEnabled;
+                mDisplayInfo = displayInfo;
+                mDataEnabled = dataEnabled;
                 mServiceState = state;
                 mModem = modem;
                 mSignal = signal;
@@ -1354,6 +1892,20 @@ public final class TelephonyService {
                         }
                         if (dataChanged && r.events.contains(TelephonyCallback.EVENT_DATA_CONNECTION_STATE_CHANGED)) {
                             r.callback.onDataConnectionStateChanged(dataState, dataType);
+                        }
+                        if (displayChanged && r.events.contains(TelephonyCallback.EVENT_DISPLAY_INFO_CHANGED)) {
+                            r.callback.onDisplayInfoChanged(displayInfo);
+                        }
+                        if (subscriptionsChanged
+                                && r.events.contains(TelephonyCallback.EVENT_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGED)) {
+                            r.callback.onActiveDataSubIdChanged(subId);
+                        }
+                        if (dataEnabledChanged
+                                && r.events.contains(TelephonyCallback.EVENT_USER_MOBILE_DATA_STATE_CHANGED)) {
+                            r.callback.onUserMobileDataStateChanged(dataEnabled);
+                        }
+                        if (dataEnabledChanged && r.events.contains(TelephonyCallback.EVENT_DATA_ENABLED_CHANGED)) {
+                            r.callback.onDataEnabledChanged(dataEnabled, TelephonyManager.DATA_ENABLED_REASON_USER);
                         }
                     } catch (RemoteException | RuntimeException e) {
                         mRecords.remove(r.callback.asBinder());

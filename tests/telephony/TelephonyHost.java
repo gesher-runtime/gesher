@@ -188,6 +188,49 @@ public final class TelephonyHost {
         @Override public void onSignalStrengthsChanged(SignalStrength s) { events.add("signal"); signal = s; }
         @Override public void onDataConnectionStateChanged(int state, int type) { events.add("data:" + state + ":" + type); }
         @Override public void onCallStateChanged(int state) { events.add("call:" + state); }
+        android.telephony.TelephonyDisplayInfo display;
+        @Override public void onDisplayInfoChanged(android.telephony.TelephonyDisplayInfo info) {
+            events.add("display"); display = info;
+        }
+        @Override public void onActiveDataSubIdChanged(int subId) { events.add("activeData:" + subId); }
+        @Override public void onDataActivity(int activity) { events.add("activity:" + activity); }
+        @Override public void onUserMobileDataStateChanged(boolean on) { events.add("userData:" + on); }
+        @Override public void onDataEnabledChanged(boolean on, int reason) {
+            events.add("dataEnabled:" + on + ":" + reason);
+        }
+        @Override public void onCellInfoChanged(List<android.telephony.CellInfo> cells) {
+            events.add("cellInfo:" + cells.size());
+        }
+        @Override public void onCellLocationChanged(android.telephony.CellIdentity identity) {
+            events.add("cellLocation:" + identity);
+        }
+    }
+
+    static final class CellInfoCallback extends android.telephony.ICellInfoCallback.Default {
+        final List<String> results = new ArrayList<>();
+        @Override public void onCellInfo(List<android.telephony.CellInfo> state) { results.add("cells:" + state.size()); }
+        @Override public void onError(int code, String exception, String message) {
+            results.add("error:" + code + ":" + exception);
+        }
+    }
+
+    static final class IntResult extends com.android.internal.telephony.IIntegerConsumer.Default {
+        final List<Integer> results = new ArrayList<>();
+        @Override public void accept(int result) { results.add(result); }
+    }
+
+    static final class GbaCallback extends android.telephony.IBootstrapAuthenticationCallback.Default {
+        final List<Integer> reasons = new ArrayList<>();
+        @Override public void onAuthenticationFailure(int token, int reason) { reasons.add(reason); }
+    }
+
+    static final class Receiver extends android.os.ResultReceiver {
+        final List<Integer> codes = new ArrayList<>();
+        final List<android.os.Bundle> data = new ArrayList<>();
+        Receiver() { super(null); }
+        @Override protected void onReceiveResult(int code, android.os.Bundle bundle) {
+            codes.add(code); data.add(bundle);
+        }
     }
 
     static final class SubscriptionsListener extends IOnSubscriptionsChangedListener.Default {
@@ -214,8 +257,9 @@ public final class TelephonyHost {
     static final App PRIVILEGED = new App("com.example.privileged", 10104, 34,
             TelephonyService.READ_PRIVILEGED_PHONE_STATE, TelephonyService.READ_PHONE_STATE);
     static final App BASIC = new App("com.example.basic", 10105, 34, TelephonyService.READ_BASIC_PHONE_STATE);
+    // Android grants coarse location with fine.
     static final App LOCATED = new App("com.example.located", 10106, 34,
-            TelephonyService.READ_PHONE_STATE, TelephonyService.FINE);
+            TelephonyService.READ_PHONE_STATE, TelephonyService.FINE, TelephonyService.COARSE);
     static final App REVOKED = new App("com.example.revoked", 10107, 34, TelephonyService.READ_PHONE_STATE)
             .op(AppOpsManager.OPSTR_READ_PHONE_STATE, AppOpsManager.MODE_IGNORED);
 
@@ -312,6 +356,8 @@ public final class TelephonyHost {
         t.phone.requestCellInfoUpdate(1, null, LEGACY.name, null);
         check(true, "requestCellInfoUpdate returns silently below target S");
         callers.current = STATE;
+        noModemSweep(t);
+        callers.current = STATE;
         equal(t.subscriptions.getActiveSubInfoCountMax(), 0, "No modem slots");
         equal(t.subscriptions.getDefaultSubId(), SubscriptionManager.INVALID_SUBSCRIPTION_ID, "No default");
         equal(t.subscriptions.getActiveSubIdList(true).length, 0, "No active IDs");
@@ -348,6 +394,287 @@ public final class TelephonyHost {
                 null, removed, new int[0], false);
         equal(t.registry.listenerCount(), 0, "LISTEN_NONE removes the record");
         equal(removed.remote.recipients.size(), 0, "and unlinks its death recipient");
+    }
+
+    /** Without a modem: what TelephonyManager/SubscriptionManager answer with no service. */
+    static void noModemSweep(TelephonyService.Endpoints t) throws Exception {
+        String n = STATE.name;
+        equal(t.phone.getAllCellInfo(n, null), null, "getAllCellInfo: null without the service");
+        android.telephony.CellIdentity identity = t.phone.getCellLocation(n, null);
+        check(identity != null && identity.asCellLocation().isEmpty(),
+                "getCellLocation: an empty identity, which the manager turns into null (not an NPE)");
+        throwsType(IllegalStateException.class, () -> t.phone.isDataEnabledForReason(1, 0) ? 1 : 0,
+                "isDataEnabledForReason throws without the service");
+        check(!t.phone.isDataEnabled(1) && !t.phone.isDataRoamingEnabled(1), "Data switches false");
+        check(!t.phone.hasIccCardUsingSlotIndex(0), "No ICC card");
+        check(!t.phone.isModemEnabledForSlot(0, n, null), "No modem enabled");
+        equal(t.phone.getCardIdForDefaultEuicc(1, n), TelephonyManager.UNINITIALIZED_CARD_ID, "UNINITIALIZED_CARD_ID");
+        check(t.phone.getUiccCardsInfo(n).isEmpty(), "No UICC cards");
+        IntResult purchase = new IntResult();
+        t.phone.purchasePremiumCapability(1, purchase, 1);
+        equal(purchase.results, List.of(TelephonyManager.PURCHASE_PREMIUM_CAPABILITY_RESULT_REQUEST_FAILED),
+                "purchasePremiumCapability fails as the manager fails it");
+        throwsType(IllegalStateException.class, () -> t.phone.isPremiumCapabilityAvailableForPurchase(1, 1) ? 1 : 0,
+                "isPremiumCapabilityAvailableForPurchase throws");
+        throwsType(IllegalStateException.class, () -> { t.phone.getSlicingConfig(new Receiver()); return null; },
+                "getNetworkSlicingConfiguration throws");
+        throwsType(IllegalStateException.class, () -> { t.phone.uploadCallComposerPicture(1, n, "image/jpeg",
+                null, new Receiver()); return null; }, "uploadCallComposerPicture throws");
+        GbaCallback gba = new GbaCallback();
+        t.phone.bootstrapAuthenticationRequest(1, 0, null, null, false, gba);
+        equal(gba.reasons, List.of(TelephonyManager.GBA_FAILURE_REASON_FEATURE_NOT_READY), "GBA not ready");
+        equal(t.phone.requestNetworkScan(1, false, null, null, null, n, null),
+                android.telephony.TelephonyScanManager.INVALID_SCAN_ID, "No network scan");
+        throwsType(IllegalStateException.class, () -> t.phone.isEmergencyNumber("112", true) ? 1 : 0,
+                "isEmergencyNumber throws without the service");
+        throwsType(IllegalStateException.class, () -> t.phone.getEmergencyNumberList(n, null),
+                "getEmergencyNumberList throws without the service");
+        throwsType(IllegalStateException.class, () -> t.subscriptions.getSubscriptionsInGroup(
+                new android.os.ParcelUuid(java.util.UUID.randomUUID()), n, null), "getSubscriptionsInGroup throws");
+        Receiver ussd = new Receiver();
+        t.phone.handleUssdRequest(1, "*100#", ussd);
+        check(ussd.codes.isEmpty(), "USSD is dropped silently without the service");
+    }
+
+    static final App NETSTATE = new App("com.example.netstate", 10120, 34, TelephonyService.ACCESS_NETWORK_STATE);
+    static final App COARSE_ONLY = new App("com.example.coarse", 10121, 34, TelephonyService.COARSE);
+    static final App CALLER = new App("com.example.caller", 10122, 34, TelephonyService.CALL_PHONE);
+    static final App UPSELL = new App("com.example.upsell", 10123, 34, TelephonyService.READ_BASIC_PHONE_STATE,
+            TelephonyService.INTERNET);
+    static final App MODIFY = new App("com.example.modify", 10124, 34, TelephonyService.MODIFY_PHONE_STATE);
+    static final App PRECISE = new App("com.example.precise", 10125, 34, TelephonyService.READ_PRECISE_PHONE_STATE);
+
+    /**
+     * With a modem (features declared): every swept ITelephony/ISub answer agrees with the
+     * modem and every callback API answers.
+     */
+    static void modemContracts() throws Exception {
+        Source source = new Source();
+        ModemSpec spec = new ModemSpec();
+        source.set(spec);
+        TelephonyService.Cellular cellular = new TelephonyService.Cellular(source,
+                WindowsCellular.parse(source.text), new Properties());
+        Fixture callers = new Fixture();
+        TelephonyService.Endpoints t = new TelephonyService.Endpoints(cellular, callers);
+
+        // Phone type, SIM card, radio and modem state agree with the modem.
+        equal(WindowsCellular.phoneType(cellular.modem()), TelephonyManager.PHONE_TYPE_GSM, "Phone type GSM");
+        ModemSpec cdmaClass = new ModemSpec();
+        cdmaClass.cellular = WindowsCellular.CLASS_CDMA;
+        Source cdmaSource = new Source();
+        cdmaSource.set(cdmaClass);
+        equal(WindowsCellular.phoneType(WindowsCellular.parse(cdmaSource.text).primary()),
+                TelephonyManager.PHONE_TYPE_GSM, "Android 16 reports GSM for any phone");
+        equal(t.phone.getSimStateForSlotIndex(SubscriptionManager.DEFAULT_SIM_SLOT_INDEX),
+                TelephonyManager.SIM_STATE_LOADED, "The default slot is phone 0's");
+        check(t.phone.hasIccCardUsingSlotIndex(0) && t.phone.hasIccCard()
+                && t.phone.hasIccCardUsingSlotIndex(SubscriptionManager.DEFAULT_SIM_SLOT_INDEX), "ICC card present");
+        check(!t.phone.hasIccCardUsingSlotIndex(1), "No second slot");
+        callers.current = STATE;
+        check(t.phone.isRadioOn(STATE.name) && t.phone.isRadioOnForSubscriber(1, STATE.name)
+                && t.phone.isRadioOnForSubscriberWithFeature(1, STATE.name, null), "isRadioOn variants agree");
+        callers.current = BASIC;
+        check(t.phone.isModemEnabledForSlot(0, BASIC.name, null), "Modem enabled");
+        check(!t.phone.isModemEnabledForSlot(1, BASIC.name, null), "No modem in slot 1");
+        callers.current = PLAIN;
+        denied(() -> t.phone.isModemEnabledForSlot(0, PLAIN.name, null), "isModemEnabledForSlot needs permission");
+        equal(t.phone.getCardIdForDefaultEuicc(1, PLAIN.name), TelephonyManager.UNSUPPORTED_CARD_ID, "No eUICC");
+
+        // UICC cards.
+        denied(() -> t.phone.getUiccCardsInfo(PLAIN.name), "Card info needs permission");
+        callers.current = PRIVILEGED;
+        List<android.telephony.UiccCardInfo> cards = t.phone.getUiccCardsInfo(PRIVILEGED.name);
+        check(cards.size() == 1 && !cards.get(0).isEuicc() && cards.get(0).isRemovable(), "One removable UICC");
+        equal(cards.get(0).getPorts().iterator().next().getIccId(), "8997201000000000001", "Privileged ICCID");
+        callers.current = BASIC;
+        equal(t.phone.getUiccCardsInfo(BASIC.name).get(0).getPorts().iterator().next().getIccId(),
+                "FFFFFFFFFFFFFFFFFFFF", "READ_BASIC_PHONE_STATE gets a sanitized card (ICCID redacted)");
+
+        // Data switches never contradict getDataState.
+        callers.current = PLAIN;
+        denied(() -> t.phone.isDataEnabled(1), "isDataEnabled needs a permission");
+        denied(() -> t.phone.isDataEnabledForReason(1, 0), "isDataEnabledForReason needs a permission");
+        denied(() -> t.phone.isDataRoamingEnabled(1), "isDataRoamingEnabled needs a permission");
+        callers.current = NETSTATE;
+        int[][] states = {{WindowsCellular.REGISTER_HOME, WindowsCellular.ACTIVATION_ACTIVATED},
+                {WindowsCellular.REGISTER_HOME, WindowsCellular.ACTIVATION_DEACTIVATED},
+                {WindowsCellular.REGISTER_ROAMING, WindowsCellular.ACTIVATION_ACTIVATED},
+                {WindowsCellular.REGISTER_ROAMING, WindowsCellular.ACTIVATION_DEACTIVATED},
+                {WindowsCellular.REGISTER_SEARCHING, WindowsCellular.ACTIVATION_NONE}};
+        for (int[] state : states) {
+            spec.register = state[0];
+            spec.activation = state[1];
+            source.set(spec);
+            cellular.refresh();
+            boolean connected = t.phone.getDataStateForSubId(1) == TelephonyManager.DATA_CONNECTED;
+            boolean roaming = state[0] == WindowsCellular.REGISTER_ROAMING;
+            String what = " (register " + state[0] + ", activation " + state[1] + ")";
+            check(t.phone.isDataEnabled(1) && t.phone.isDataEnabledForReason(1,
+                    TelephonyManager.DATA_ENABLED_REASON_USER) && t.phone.isUserDataEnabled(1),
+                    "Data enabled with an active subscription" + what);
+            check(!connected || t.phone.isDataEnabled(1), "Connected implies enabled" + what);
+            equal(t.phone.isDataRoamingEnabled(1), roaming && connected,
+                    "Roaming enabled only when observed connected while roaming" + what);
+        }
+        spec.register = WindowsCellular.REGISTER_HOME;
+        spec.activation = WindowsCellular.ACTIVATION_ACTIVATED;
+        source.set(spec);
+        cellular.refresh();
+
+        // Cell information: AOSP's location rules; Windows reports no cells.
+        callers.current = PLAIN;
+        denied(() -> t.phone.getAllCellInfo(PLAIN.name, null), "getAllCellInfo needs location");
+        denied(() -> t.phone.getCellLocation(PLAIN.name, null), "getCellLocation needs location");
+        denied(() -> { t.phone.requestCellInfoUpdate(1, new CellInfoCallback(), PLAIN.name, null); return null; },
+                "requestCellInfoUpdate needs location");
+        callers.current = COARSE_ONLY;
+        denied(() -> { t.phone.requestCellInfoUpdate(1, new CellInfoCallback(), COARSE_ONLY.name, null); return null; },
+                "requestCellInfoUpdate needs fine location at every target");
+        callers.current = LOCATED;
+        check(t.phone.getAllCellInfo(LOCATED.name, null).isEmpty(), "No cells reported");
+        check(t.phone.getCellLocation(LOCATED.name, null).asCellLocation().isEmpty(), "Empty cell location");
+        CellInfoCallback cb = new CellInfoCallback();
+        t.phone.requestCellInfoUpdate(1, cb, LOCATED.name, null);
+        t.phone.requestCellInfoUpdateWithWorkSource(1, cb, LOCATED.name, null, null);
+        String modemError = "error:" + TelephonyManager.CellInfoCallback.ERROR_MODEM_ERROR + ":"
+                + "com.android.internal.telephony.CommandException";
+        equal(cb.results, List.of(modemError, modemError), "requestCellInfoUpdate answers ERROR_MODEM_ERROR");
+        callers.location = false;
+        CellInfoCallback soft = new CellInfoCallback();
+        t.phone.requestCellInfoUpdate(1, soft, LOCATED.name, null);
+        equal(soft.results, List.of("cells:0"), "Location off: a soft denial answers an empty list");
+        check(t.phone.getAllCellInfo(LOCATED.name, null).isEmpty(), "and getAllCellInfo an empty list");
+        callers.location = true;
+
+        // Callback APIs always answer.
+        callers.current = PLAIN;
+        denied(() -> { t.phone.handleUssdRequest(1, "*100#", new Receiver()); return null; }, "USSD needs CALL_PHONE");
+        callers.current = CALLER;
+        Receiver ussd = new Receiver();
+        t.phone.handleUssdRequest(1, "*100#", ussd);
+        equal(ussd.codes, List.of(TelephonyManager.USSD_RETURN_FAILURE), "USSD fails as unsupported");
+        android.telephony.UssdResponse response = ussd.data.get(0).getParcelable(TelephonyManager.USSD_RESPONSE,
+                android.telephony.UssdResponse.class);
+        equal(response.getUssdRequest(), "*100#", "The failure carries the request");
+        Receiver invalid = new Receiver();
+        t.phone.handleUssdRequest(SubscriptionManager.INVALID_SUBSCRIPTION_ID, "*100#", invalid);
+        check(invalid.codes.isEmpty(), "Invalid subscription: dropped, as AOSP drops it");
+        callers.current = STATE;
+        denied(() -> { t.phone.getCarrierRestrictionStatus(new IntResult(), STATE.name); return null; },
+                "No caller is allow-listed for carrier restriction status");
+        callers.current = PLAIN;
+        denied(() -> { t.phone.getCarrierRestrictionStatus(new IntResult(), PLAIN.name); return null; },
+                "Carrier restriction status needs a permission");
+        denied(() -> { t.phone.uploadCallComposerPicture(1, PLAIN.name, "image/jpeg", null, new Receiver());
+                return null; }, "Only the dialer role holder uploads call composer pictures");
+        callers.current = UPSELL;
+        IntResult purchase = new IntResult();
+        t.phone.purchasePremiumCapability(1, purchase, 1);
+        equal(purchase.results, List.of(TelephonyManager.PURCHASE_PREMIUM_CAPABILITY_RESULT_FEATURE_NOT_SUPPORTED),
+                "No slicing upsell");
+        check(!t.phone.isPremiumCapabilityAvailableForPurchase(1, 1), "Nothing to purchase");
+        callers.current = BASIC;
+        denied(() -> { t.phone.purchasePremiumCapability(1, new IntResult(), 1); return null; },
+                "Purchasing needs INTERNET");
+        callers.current = PLAIN;
+        denied(() -> t.phone.isPremiumCapabilityAvailableForPurchase(1, 1) ? 1 : 0,
+                "isPremiumCapabilityAvailableForPurchase needs READ_BASIC_PHONE_STATE");
+        callers.current = STATE;
+        denied(() -> { t.phone.getSlicingConfig(new Receiver()); return null; }, "Slicing config is privileged");
+        callers.current = PRIVILEGED;
+        Receiver slicing = new Receiver();
+        t.phone.getSlicingConfig(slicing);
+        equal(slicing.codes, List.of(TelephonyManager.NetworkSlicingException.ERROR_MODEM_ERROR),
+                "No slicing configuration from the modem");
+        callers.current = PLAIN;
+        denied(() -> { t.phone.bootstrapAuthenticationRequest(1, 0, null, null, false, new GbaCallback());
+                return null; }, "GBA needs a privileged permission");
+        callers.current = MODIFY;
+        GbaCallback gba = new GbaCallback();
+        t.phone.bootstrapAuthenticationRequest(1, 0, null, null, false, gba);
+        equal(gba.reasons, List.of(TelephonyManager.GBA_FAILURE_REASON_FEATURE_NOT_SUPPORTED), "No GBA");
+        equal(t.phone.requestNetworkScan(1, false, null, null, null, MODIFY.name, null),
+                android.telephony.TelephonyScanManager.INVALID_SCAN_ID, "No network scan");
+        callers.current = PLAIN;
+        denied(() -> t.phone.requestNetworkScan(1, false, null, null, null, PLAIN.name, null),
+                "Network scans need MODIFY_PHONE_STATE");
+
+        // Emergency numbers: the ECC fallback of EmergencyNumberTracker.
+        check(t.phone.isEmergencyNumber("112", true) && t.phone.isEmergencyNumber("911", true),
+                "112 and 911 with a SIM");
+        check(!t.phone.isEmergencyNumber("000", true) && !t.phone.isEmergencyNumber(null, true)
+                && !t.phone.isEmergencyNumber("sip:112@example.com", true), "Only the SIM list");
+        denied(() -> t.phone.isEmergencyNumber("112", false) ? 1 : 0, "Potential matching is privileged");
+        denied(() -> t.phone.getEmergencyNumberList(PLAIN.name, null), "The list needs READ_PHONE_STATE");
+        callers.current = STATE;
+        @SuppressWarnings("unchecked")
+        Map<Integer, List<android.telephony.emergency.EmergencyNumber>> list =
+                (Map<Integer, List<android.telephony.emergency.EmergencyNumber>>) t.phone.getEmergencyNumberList(
+                        STATE.name, null);
+        equal(list.keySet(), Set.of(1), "Keyed by the subscription");
+        equal(list.get(1).size(), 2, "112 and 911");
+        callers.current = PRIVILEGED;
+        check(t.subscriptions.getSubscriptionsInGroup(new android.os.ParcelUuid(java.util.UUID.randomUUID()),
+                PRIVILEGED.name, null).isEmpty(), "No subscription groups");
+        callers.current = STATE;
+        denied(() -> t.subscriptions.getSubscriptionsInGroup(new android.os.ParcelUuid(java.util.UUID.randomUUID()),
+                STATE.name, null), "Groups need identifier access from T");
+        check(t.subscriptions.getOpportunisticSubscriptions(STATE.name, null).isEmpty(), "No opportunistic subscriptions");
+
+        // telephony.registry: the initial values TelephonyRegistry gives a phone listener.
+        callers.current = STATE;
+        Listener listener = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, STATE.name, null,
+                listener, new int[] {TelephonyCallback.EVENT_DISPLAY_INFO_CHANGED,
+                        TelephonyCallback.EVENT_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGED,
+                        TelephonyCallback.EVENT_DATA_ACTIVITY_CHANGED,
+                        TelephonyCallback.EVENT_USER_MOBILE_DATA_STATE_CHANGED}, true);
+        equal(listener.events, List.of("activity:0", "display", "activeData:1", "userData:true"),
+                "Initial data activity, display info, active data subscription and user data state");
+        equal(listener.display.getNetworkType(), TelephonyManager.NETWORK_TYPE_LTE, "Display network type");
+        equal(listener.display.getOverrideNetworkType(),
+                android.telephony.TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE, "No override on plain LTE");
+        callers.current = PRECISE;
+        Listener precise = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, PRECISE.name, null,
+                precise, new int[] {TelephonyCallback.EVENT_DATA_ENABLED_CHANGED}, true);
+        equal(precise.events, List.of("dataEnabled:true:" + TelephonyManager.DATA_ENABLED_REASON_USER),
+                "Initial data enabled state");
+        callers.current = LOCATED;
+        Listener located = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, LOCATED.name, null,
+                located, new int[] {TelephonyCallback.EVENT_CELL_INFO_CHANGED,
+                        TelephonyCallback.EVENT_CELL_LOCATION_CHANGED}, true);
+        equal(located.events, List.of("cellLocation:null", "cellInfo:0"), "Initial cell location and cell info");
+        Listener renounced = new Listener();
+        t.registry.listenWithEventList(true, true, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, LOCATED.name, null,
+                renounced, new int[] {TelephonyCallback.EVENT_CELL_INFO_CHANGED}, true);
+        check(renounced.events.isEmpty(), "Renounced location: no cell info");
+
+        // Changes: 5G NSA, then SIM removal.
+        listener.events.clear();
+        precise.events.clear();
+        spec.dataClass = WindowsCellular.DATA_LTE | WindowsCellular.DATA_5G_NSA;
+        source.set(spec);
+        check(cellular.refresh(), "Data class change observed");
+        equal(listener.events, List.of("display"), "Display info change delivered");
+        equal(listener.display.getOverrideNetworkType(),
+                android.telephony.TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA, "5G NSA is LTE overridden as NR_NSA");
+        listener.events.clear();
+        spec.ready = WindowsCellular.READY_SIM_NOT_INSERTED;
+        spec.imsi = null; spec.iccid = null; spec.number = null; spec.home = null; spec.homeName = null;
+        spec.register = WindowsCellular.REGISTER_SEARCHING;
+        spec.activation = WindowsCellular.ACTIVATION_NONE;
+        source.set(spec);
+        check(cellular.refresh(), "SIM removal observed");
+        check(listener.events.contains("activeData:" + SubscriptionManager.INVALID_SUBSCRIPTION_ID)
+                && listener.events.contains("userData:false"), "Subscription and data state changes delivered");
+        equal(precise.events, List.of("dataEnabled:false:" + TelephonyManager.DATA_ENABLED_REASON_USER),
+                "Data enabled follows the subscription");
+        check(!t.phone.hasIccCardUsingSlotIndex(0), "No card after removal");
+        callers.current = NETSTATE;
+        check(!t.phone.isDataEnabled(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID), "No subscription: data disabled");
+        check(t.phone.isEmergencyNumber("000", true), "Without a SIM the 3GPP no-SIM list applies");
     }
 
     static void modem() throws Exception {
@@ -635,6 +962,7 @@ public final class TelephonyHost {
         translations();
         noModem();
         modem();
+        modemContracts();
         System.out.println("TelephonyHost passed: " + checks + " checks");
     }
 }
