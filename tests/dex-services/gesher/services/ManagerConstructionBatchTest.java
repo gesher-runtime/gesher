@@ -141,8 +141,11 @@ public final class ManagerConstructionBatchTest {
             require(feature.name == null || !feature.name.startsWith("android.hardware.telephony"),
                     "telephony feature without a modem: " + feature.name);
         }
-        require(telephony.getSimState() == TelephonyManager.SIM_STATE_ABSENT,
-                "no-modem SIM state was not ABSENT");
+        // AOSP without telephony: UNKNOWN (ADR 0094), for the default SIM and slot 0 alike.
+        require(telephony.getSimState() == TelephonyManager.SIM_STATE_UNKNOWN
+                        && telephony.getSimState(0) == TelephonyManager.SIM_STATE_UNKNOWN,
+                "no-modem SIM state was not UNKNOWN: " + telephony.getSimState() + "/"
+                        + telephony.getSimState(0));
         require(telephony.getDataState() == TelephonyManager.DATA_DISCONNECTED,
                 "no-modem data state was not DISCONNECTED");
         require(telephony.getSignalStrength() == null, "no-modem signal strength reported");

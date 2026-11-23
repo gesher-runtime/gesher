@@ -33,8 +33,8 @@ machines have a WWAN modem that Windows exposes through the Mobile Broadband API
 - Without a modem, apps see a device without telephony (no features, no phones,
   `PHONE_TYPE_NONE`). `phone`, `iphonesubinfo` and `isub` answer as AOSP's managers do
   when those services do not exist (AOSP publishes them only with `FEATURE_TELEPHONY`): no
-  permission checks, placeholder values, and the managers' `IllegalStateException` where
-  they throw one. `telephony.registry` keeps AOSP's listener permission checks.
+  permission checks, placeholder values (`SIM_STATE_UNKNOWN` included, ADR 0094), and the
+  managers' `IllegalStateException` where they throw one. `telephony.registry` keeps AOSP's listener permission checks.
 - With a modem, data-only telephony works for state, identifiers and listeners; SMS, voice,
   carrier configuration and cell info remain unsupported. Every ITelephony/ISub method a
   public manager API reaches answers consistently with the modem or with AOSP's unsupported

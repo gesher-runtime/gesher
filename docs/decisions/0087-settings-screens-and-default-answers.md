@@ -1,6 +1,8 @@
 # 0087: Android Settings screens, and stand-in answers that were wrong
 
-Status: accepted (see docs/services.md "Settings screens")
+Status: accepted (see docs/services.md "Settings screens"); the SIM state answer
+(SIM_STATE_ABSENT without a modem) is superseded by ADR 0094, which answers UNKNOWN as AOSP
+does on a device without telephony
 
 ## Context
 
