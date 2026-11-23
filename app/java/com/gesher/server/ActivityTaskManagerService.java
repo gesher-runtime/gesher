@@ -437,6 +437,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
+    private boolean mDeviceStopping;
     private final Map<String, Integer> mProtectedStops = new HashMap<>();
     /** How app processes are started; null: they start by themselves and attach. */
     private volatile ProcessStarter mStarter;
@@ -3469,7 +3470,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private boolean pendingCurrent(PendingProcess pending) {
-        return !pending.cancelled && pending.owner != null
+        return !mDeviceStopping && !pending.cancelled && pending.owner != null
                 && mPm.get(pending.packageName) == pending.owner
                 && !mPm.isRemovalPending(pending.packageName)
                 && pending.enabledLifetime != null && pending.enabledLifetime.getAsBoolean();
@@ -3544,7 +3545,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (mPm.get(packageName) != owner || !owner.matchesEnabledApplication(0)
                     || mPm.isRemovalPending(packageName) || !enabledLifetime.getAsBoolean()) return;
-            if (mProtectedStops.containsKey(packageName)) return;
+            if (mDeviceStopping || mProtectedStops.containsKey(packageName)) return;
             if (processFor(packageName, processName) != null || starting(packageName, processName)) return;
             seq = mNextStartSeq++;
             mExitStatus.started(processKey(packageName, processName), seq);
@@ -4164,6 +4165,24 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         endProcesses(all, waitMs);
+    }
+
+    void stopDeviceProcesses() {
+        long stopThrough;
+        synchronized (this) {
+            mDeviceStopping = true;
+            stopThrough = mNextStartSeq - 1;
+        }
+        // A live native descendant can outlast the Java parent. Retire the
+        // ordinary per-install jobs without touching standalone cohost jobs.
+        for (ApkPackage pkg : mPm.packages()) {
+            Zygote.stopProtectedInstallation(pkg, stopThrough);
+        }
+        endAllProcesses(5000);
+    }
+
+    synchronized void resumeDeviceProcesses() {
+        mDeviceStopping = false;
     }
 
     /** Retire one unresponsive broadcast generation, retaining normal service recovery. */

@@ -17,7 +17,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /** Host-only rendezvous for the single policy owner of this Android data root. */
 public final class CohostOwnerService extends Binder {
@@ -26,7 +25,9 @@ public final class CohostOwnerService extends Binder {
     private static final int PROMOTE = IBinder.FIRST_CALL_TRANSACTION;
     private static final int RUN = PROMOTE + 1;
     private final CountDownLatch mPromotion = new CountDownLatch(1);
-    private final AtomicInteger mActive = new AtomicInteger();
+    private int mActive;
+    private boolean mClosing;
+    private volatile Runnable mRepublish;
     private volatile long mLastUse = SystemClock.uptimeMillis();
     private final PackageManagerService mPm;
     private final PermissionRequests mPermissions;
@@ -47,7 +48,16 @@ public final class CohostOwnerService extends Binder {
         return mPromotion.await(1, TimeUnit.SECONDS);
     }
 
-    boolean hasActiveLaunch() { return mActive.get() != 0; }
+    synchronized boolean hasActiveLaunch() { return mActive != 0; }
+
+    synchronized boolean closeIfIdle() {
+        if (mActive != 0) return false;
+        mClosing = true;
+        return true;
+    }
+
+    void setRepublish(Runnable republish) { mRepublish = republish; }
+
     long lastUse() { return mLastUse; }
 
     @Override protected boolean onTransact(int code, Parcel input, Parcel output, int flags)
@@ -61,7 +71,9 @@ public final class CohostOwnerService extends Binder {
         }
         if (code == PROMOTE) {
             input.enforceNoDataAvail();
-            mPromotion.countDown();
+            Runnable republish = mRepublish;
+            if (republish != null) republish.run();
+            else mPromotion.countDown();
             output.writeNoException();
             return true;
         }
@@ -90,7 +102,10 @@ public final class CohostOwnerService extends Binder {
 
     private int run(String apk, String data, String[] options, IBinder owner, int[] streams)
             throws Exception {
-        mActive.incrementAndGet();
+        synchronized (this) {
+            if (mClosing) throw new IllegalStateException("The protected policy owner is stopping");
+            mActive++;
+        }
         try (CohostPermissionHost host = new CohostPermissionHost(mPm, mPermissions, apk)) {
             IBinder.DeathRecipient disconnected = host::cancel;
             owner.linkToDeath(disconnected, 0);
@@ -101,8 +116,10 @@ public final class CohostOwnerService extends Binder {
                 catch (java.util.NoSuchElementException alreadyDisconnected) { }
             }
         } finally {
-            mLastUse = SystemClock.uptimeMillis();
-            mActive.decrementAndGet();
+            synchronized (this) {
+                mLastUse = SystemClock.uptimeMillis();
+                mActive--;
+            }
         }
     }
 

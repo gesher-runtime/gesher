@@ -290,8 +290,9 @@ public final class SystemServer {
             startBinderThreads(TAG, 31);
             DeviceControl.writeReady(Device.cohostOwnerReadyFile());
             while (!cohostControl.awaitPromotion()) {
-                if (idleTimeoutS > 0 && !cohostControl.hasActiveLaunch()
-                        && SystemClock.uptimeMillis() - cohostControl.lastUse() >= idleTimeoutS * 1000) {
+                if (idleTimeoutS > 0
+                        && SystemClock.uptimeMillis() - cohostControl.lastUse() >= idleTimeoutS * 1000
+                        && cohostControl.closeIfIdle()) {
                     return;
                 }
             }
@@ -473,6 +474,7 @@ public final class SystemServer {
         private final long mIdleTimeoutMs;
         private final long mStarted = System.currentTimeMillis();
         private volatile long mLastCall = SystemClock.uptimeMillis();
+        private volatile boolean mParked;
         private boolean mShuttingDown;
 
         DeviceControl(Services.Created services, Installer installer,
@@ -527,14 +529,16 @@ public final class SystemServer {
         void startPersistent() throws Exception {
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
+            if (mCohostControl != null) mCohostControl.setRepublish(this::republish);
             // The launcher waits for this file: the services are registered.
             writeReady(Device.readyFile());
             long event = Zygote.createEvent(Device.shutdownEventName());
             Thread events = new Thread(() -> {
-                while (!Zygote.waitEvent(event, 60_000)) {
-                    // waiting
+                while (true) {
+                    if (Zygote.waitEvent(event, 60_000)) {
+                        shutdown("the shutdown event was set (gesher-app shutdown)");
+                    }
                 }
-                shutdown("the shutdown event was set (gesher-app shutdown)");
             }, "shutdown-event");
             events.setDaemon(true);
             events.start();
@@ -544,6 +548,12 @@ public final class SystemServer {
                         SystemClock.sleep(Math.min(5000, mIdleTimeoutMs));
                         long since = mServices.atm.idleSince();
                         long now = SystemClock.uptimeMillis();
+                        if (mParked) {
+                            if (now - mCohostControl.lastUse() >= mIdleTimeoutMs) {
+                                closeParkedOwner();
+                            }
+                            continue;
+                        }
                         // Scheduled alarms and jobs due within the timeout keep the
                         // device for at most one more timeout (devsvc, DeviceWork).
                         if ((mCohostControl == null || !mCohostControl.hasActiveLaunch())
@@ -552,7 +562,6 @@ public final class SystemServer {
                                 && !DeviceWork.keepsIdleDevice(now - since, mIdleTimeoutMs)) {
                             shutdown("idle: no app in use for " + (mIdleTimeoutMs / 1000)
                                     + " s");
-                            return;
                         }
                     }
                 }, "idle");
@@ -565,6 +574,31 @@ public final class SystemServer {
             if (notifications != null) notifications.startActivator();
             log("the Gesher device is ready (idle timeout "
                     + (mIdleTimeoutMs > 0 ? (mIdleTimeoutMs / 1000) + " s" : "none") + ")");
+        }
+
+        private synchronized void closeParkedOwner() {
+            if (mParked && mCohostControl.closeIfIdle()) System.exit(0);
+        }
+
+        private synchronized void republish() {
+            if (!mParked) return;
+            try {
+                mServices.atm.resumeDeviceProcesses();
+                writeReady(Device.readyFile());
+                touch();
+                mParked = false;
+                mShuttingDown = false;
+            } catch (IOException failure) {
+                throw new IllegalStateException("Cannot publish the protected device", failure);
+            }
+        }
+
+        private synchronized void park(java.util.Properties state) throws IOException {
+            Device.write(Device.cohostOwnerFile(), state);
+            writeReady(Device.cohostOwnerReadyFile());
+            mParked = true;
+            java.nio.file.Files.deleteIfExists(Device.readyFile().toPath());
+            java.nio.file.Files.delete(Device.stateFile().toPath());
         }
 
         @Override
@@ -627,11 +661,27 @@ public final class SystemServer {
             Thread t = new Thread(() -> {
                 SystemClock.sleep(200);
                 log("shutting down: " + reason);
-                mServices.atm.endAllProcesses(5000);
+                boolean stopped = true;
+                try {
+                    if (mCohostControl != null) mServices.atm.stopDeviceProcesses();
+                    else mServices.atm.endAllProcesses(5000);
+                } catch (RuntimeException failure) {
+                    stopped = false;
+                    log("could not stop app processes individually: " + failure);
+                }
                 mServices.atm.flushUsageStats();
                 if (mInstaller != null) {
                     java.util.Properties state = Device.read(Device.stateFile());
                     if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
+                        if (stopped && mCohostControl != null && !mCohostControl.closeIfIdle()) {
+                            try {
+                                park(state);
+                                log("the Gesher device stopped; an independent app is still running");
+                                return;
+                            } catch (IOException failure) {
+                                log("could not park the protected policy owner: " + failure);
+                            }
+                        }
                         Device.stateFile().delete();
                     }
                     Device.readyFile().delete();

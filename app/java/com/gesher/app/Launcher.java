@@ -626,6 +626,14 @@ public final class Launcher {
                 long deadline = SystemClock.uptimeMillis() + 30_000;
                 while (Device.alive(state, Device.SYSTEM_SERVER)
                         && SystemClock.uptimeMillis() < deadline) {
+                    Properties owner = Device.read(Device.cohostOwnerFile());
+                    if (owner != null && !Device.stateFile().exists()
+                            && Device.pid(owner, Device.SYSTEM_SERVER) == Device.pid(state, Device.SYSTEM_SERVER)
+                            && Device.startTime(owner, Device.SYSTEM_SERVER)
+                                    == Device.startTime(state, Device.SYSTEM_SERVER)) {
+                        log(text("device_stopped", name));
+                        return 0;
+                    }
                     SystemClock.sleep(200);
                 }
             }

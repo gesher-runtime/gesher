@@ -139,8 +139,8 @@ function DeviceProcess($state, [string] $name) {
 
 # `gesher-app shutdown`, without starting a runtime: the system server's
 # shutdown event, then whatever is left is ended.
-if ($command -eq 'shutdown') {
-  $state = DeviceState
+if ($command -eq 'shutdown') { $state = DeviceState }
+if ($command -eq 'shutdown' -and (-not $state -or $state['protected_binder'] -ne 'true')) {
   if (-not $state) { Write-Host ('gesher-app: ' + (Get-GesherText 'no_device')); exit 0 }
   $server = DeviceProcess $state 'system_server'
   if ($server) {
