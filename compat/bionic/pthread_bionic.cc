@@ -66,8 +66,8 @@ constexpr int kDestructorPasses = 4;  // PTHREAD_DESTRUCTOR_ITERATIONS
 std::mutex g_keys_mutex;
 void (BIONIC_SYSV* g_key_dtors[kKeysMax])(void*) = {};
 // Zero means unused; a live slot publishes its complete generation in one
-// observation. Reads of a calling thread's value need no process-wide lock.
-// Creation, deletion, assignment and destructor selection remain serialized.
+// observation. Access to a calling thread's value needs no process-wide lock.
+// Creation, deletion and destructor selection remain serialized.
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
 std::atomic<uint64_t> g_key_live_generations[kKeysMax] = {};
 // A reused key slot must not expose another generation's thread-local value.
@@ -1008,12 +1008,12 @@ void* BIONIC_SYSV gesher_bionic_pthread_getspecific(bionic_pthread_key_t key) {
 
 int BIONIC_SYSV gesher_bionic_pthread_setspecific(bionic_pthread_key_t key, const void* value) {
   if (key < 0 || key >= kKeysMax) return kEINVAL;
-  {
-    std::lock_guard<std::mutex> lock(g_keys_mutex);
-    if (g_key_live_generations[key].load(std::memory_order_relaxed) == 0) return kEINVAL;
-    t_key_values[key] = const_cast<void*>(value);
-    t_key_generations[key] = g_key_generations[key];
-  }
+  const uint64_t generation = g_key_live_generations[key].load(std::memory_order_acquire);
+  if (generation == 0) return kEINVAL;
+  // Stamp the observed live generation, even if deletion/reuse overlaps this
+  // assignment. A later read or exit round then rejects the obsolete value.
+  t_key_values[key] = const_cast<void*>(value);
+  t_key_generations[key] = generation;
   if (value != nullptr) ArmHostExit();
   return 0;
 }

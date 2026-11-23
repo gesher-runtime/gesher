@@ -18,6 +18,7 @@
 #include <windows.h>
 
 #include <array>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -317,6 +318,86 @@ void ConcurrentKeyReads() {
   std::puts("Bionic concurrent key read contracts: all passed");
 }
 
+struct KeyWriteState {
+  KeyReadState value;
+  bool retain = false;
+};
+void WriteKeys(KeyWriteState* state) {
+  auto& value = state->value;
+  KeyWait(value.start);
+  errno = EDOM;
+  value.valid = key_set(-1, &value.old_value) == EINVAL &&
+      key_set(INT32_MAX, &value.old_value) == EINVAL;
+  for (int n = 0; n < 4000; ++n) {
+    value.valid &= key_set(value.key, &value.old_value) == 0 &&
+        key_get(value.key) == &value.old_value;
+    value.valid &= key_set(value.key, &value.new_value) == 0 &&
+        key_get(value.key) == &value.new_value;
+    value.valid &= key_set(value.key, nullptr) == 0 && key_get(value.key) == nullptr;
+  }
+  value.valid &= errno == EDOM;
+  if (state->retain)
+    value.valid &= key_set(value.key, &value.new_value) == 0 &&
+        key_get(value.key) == &value.new_value;
+}
+void* SYSV BionicKeyWriter(void* argument) {
+  WriteKeys(static_cast<KeyWriteState*>(argument));
+  return nullptr;
+}
+void* HostKeyWriter(void* argument) {
+  WriteKeys(static_cast<KeyWriteState*>(argument));
+  return nullptr;
+}
+DWORD WINAPI WindowsKeyWriter(void* argument) {
+  WriteKeys(static_cast<KeyWriteState*>(argument));
+  return 0;
+}
+void ConcurrentKeyWrites() {
+  KeyRequire(key_create && key_delete && key_get && key_set, "actual exported setter adapters");
+  for (int kind = 0; kind < 3; ++kind) {
+    for (int count : {1, 2, 8, 32}) for (bool distinct : {false, true}) {
+      const int key_count = distinct ? count : 1;
+      std::array<int32_t, 32> keys{};
+      std::array<KeyWriteState, 32> states;
+      std::array<uint64_t, 32> bionic{};
+      std::array<pthread_t, 32> host{};
+      std::array<HANDLE, 32> windows{};
+      HANDLE start = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      KeyRequire(start != nullptr, "create owned setter barrier");
+      for (int k = 0; k < key_count; ++k)
+        KeyRequire(key_create(&keys[k], NewReadExit) == 0, "create writer key");
+      for (int i = 0; i < count; ++i) {
+        states[i].value.key = keys[distinct ? i : 0];
+        states[i].value.start = start;
+        states[i].retain = (i % 2) == 0;
+        if (kind == 0)
+          KeyRequire(gesher_bionic_pthread_create(&bionic[i], nullptr, BionicKeyWriter, &states[i]) == 0,
+                     "start actual bionic writer");
+        else if (kind == 1)
+          KeyRequire(pthread_create(&host[i], nullptr, HostKeyWriter, &states[i]) == 0,
+                     "start actual winpthreads writer");
+        else {
+          windows[i] = CreateThread(nullptr, 0, WindowsKeyWriter, &states[i], 0, nullptr);
+          KeyRequire(windows[i] != nullptr, "start actual Windows writer");
+        }
+      }
+      KeyRequire(SetEvent(start) != 0, "release real concurrent writers");
+      for (int i = 0; i < count; ++i) {
+        if (kind == 0) KeyRequire(gesher_bionic_pthread_join(bionic[i], nullptr) == 0, "join bionic writer");
+        else if (kind == 1) KeyRequire(pthread_join(host[i], nullptr) == 0, "join host writer");
+        else { KeyWait(windows[i]); CloseHandle(windows[i]); }
+        const auto& value = states[i].value;
+        KeyRequire(value.valid && value.new_calls == int(states[i].retain) &&
+                   value.old_calls == 0 && value.wrong_calls == 0,
+                   "actual concurrent setters retain local values and exact exit ownership");
+      }
+      for (int k = 0; k < key_count; ++k) KeyRequire(key_delete(keys[k]) == 0, "retire completed writer key");
+      CloseHandle(start);
+    }
+  }
+  std::puts("Bionic concurrent key write contracts: all passed");
+}
+
 }  // namespace
 
 int main() {
@@ -356,6 +437,7 @@ int main() {
 
   // Keep the existing ART-before-adapter registration/order probe first.
   ConcurrentKeyReads();
+  ConcurrentKeyWrites();
 
   if (failures != 0) {
     std::printf("bionic_key_exit_test: %d failed\n", failures);

@@ -32,7 +32,7 @@ def run(command, timeout=180):
     return result.stdout
 
 
-def build(args):
+def build(args, measurement_source="tests/native/pthread_key_measurement.cc", measurement_helper=None):
     folder = args.output_dir.resolve()
     folder.mkdir(parents=True, exist_ok=True)
     path = "compat/bionic/pthread_bionic.cc"
@@ -51,7 +51,7 @@ def build(args):
     ])
     lock = "std::lock_guard<std::mutex> lock(g_keys_mutex);"
     lock_sites = body.count(lock)
-    if lock_sites not in (4, 5):
+    if lock_sites not in (3, 4, 5):
         raise ValueError("Production registry lock boundaries changed")
     prefix = '''#include "pthread_key_measurement.h"
 #include "pthread_cleanup.h"
@@ -88,16 +88,18 @@ void KeyMeasureExplicitExit() { RunThreadExit(); }
                          "-I", str(ROOT / "compat/bionic"),
                          "-I", str(ROOT / "compat/arm64/include"),
                          "-I", str(ROOT / "tests/native"), str(generated),
-                         str(ROOT / "tests/native/pthread_key_measurement.cc"),
+                         str(ROOT / measurement_source),
                          "-o", str(folder / name)]
         (folder / (name + "-compile.log")).write_text(run(command))
         receipts.append({"name": name, "command": command, "instrumented": counted,
                          "generated_sha256": digest(generated.read_bytes()),
                          "executable_sha256": digest((folder / name).read_bytes())})
-    inputs = ["tests/native/pthread_key_measurement.cc", "tests/native/pthread_key_measurement.h",
+    inputs = [measurement_source, "tests/native/pthread_key_measurement.h",
               "tools/measure_bionic_key_lookup.py", "tools/test_bionic_key_contracts.py",
               "compat/bionic/shim_internal.h", "compat/bionic/abi_types.h", "compat/bionic/pthread_cleanup.h",
               "compat/arm64/include/gesher/arm64_va_list.h", "compat/arm64/include/gesher/symbol_table.h"]
+    if measurement_helper:
+        inputs.append(measurement_helper)
     manifest = {"source_ref": args.source_ref, "production_sha256": digest(source),
                 "registry_lock_sites": lock_sites,
                 "inputs": {p: digest((ROOT / p).read_bytes()) for p in inputs},
@@ -106,12 +108,13 @@ void KeyMeasureExplicitExit() { RunThreadExit(); }
     print(json.dumps({"built": str(folder), "source_sha256": digest(source), "lock_sites": lock_sites}))
 
 
-def measure(args):
+def measure(args, cases=None, worker_scope="entry through actual TLS destructor; churn writer entry through return"):
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     folders = {"baseline": args.baseline.resolve(), "candidate": args.candidate.resolve()}
-    cases = ["cold-single", "single", "shared8", "distinct8", "distinct32", "churn8",
-             "tiny-lifecycle", "no-read-lifecycle", "mutation-control"]
+    if cases is None:
+        cases = ["cold-single", "single", "shared8", "distinct8", "distinct32", "churn8",
+                 "tiny-lifecycle", "no-read-lifecycle", "mutation-control"]
     report = {"schema": 2, "boundary": "actual key/exit sections; host pthread TLS; supplied Windows ThreadRecord",
               "environment": {"platform": platform.platform(), "cpu_count": os.cpu_count(),
                               "affinity": sorted(os.sched_getaffinity(0)),
@@ -121,7 +124,7 @@ def measure(args):
                          "warmup_samples": [0, 1], "first_stream_per_process": True,
                          "separate_counted_binaries": True, "cases": cases,
                          "fresh_process_per_workload": True,
-                         "worker_cpu_receipts": "entry through actual TLS destructor; churn writer entry through return",
+                         "worker_cpu_receipts": worker_scope,
                          "process_cpu_consistency": "must cover caller thread plus all measured worker CPU"},
               "builds": {name: json.loads((path / "build.json").read_text()) for name, path in folders.items()},
               "processes": [], "counted_processes": []}

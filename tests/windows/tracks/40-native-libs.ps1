@@ -73,6 +73,7 @@ Check 'bionic shim: key destructors detach a thread before ART checks it, on eve
     "ok    bionic keys: a winpthreads thread detaches before ART's key comes round again",
     "ok    bionic keys: a Windows thread detaches before ART's key comes round again",
     'Bionic concurrent key read contracts: all passed',
+    'Bionic concurrent key write contracts: all passed',
     'bionic_key_exit_test all passed')
 
 # %fs without WRFSBASE (ADR 0014): NDK libraries built with the default stack

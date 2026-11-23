@@ -23,6 +23,21 @@ namespace {
 struct ThreadRecord {};
 thread_local ThreadRecord* t_record = nullptr;
 @KEY_HOST_EXIT@
+#ifdef KEY_SET_SNAPSHOT_PROBE
+// Only the separately compiled overlap probe injects this callback immediately
+// after the real setter's generation load. The ordinary suite has no hooks.
+struct SetSnapshotPause {
+  std::promise<void> captured, release;
+};
+thread_local SetSnapshotPause* t_set_snapshot_pause = nullptr;
+void ObserveSetSnapshot() {
+  if (t_set_snapshot_pause == nullptr) return;
+  SetSnapshotPause* pause = t_set_snapshot_pause;
+  t_set_snapshot_pause = nullptr;
+  pause->captured.set_value();
+  pause->release.get_future().wait();
+}
+#endif
 }
 extern "C" {
 @KEY_API@
@@ -312,6 +327,166 @@ static void test_read_progress(bool require_progress) {
   check("pthread keys: retire registry-independence key", gesher_bionic_pthread_key_delete(key) == 0);
 }
 
+struct SetOwner;
+struct SetValue { SetOwner* owner; bool replacement; };
+struct SetOwner {
+  SetValue old{this, false}, fresh{this, true};
+  int old_calls = 0, new_calls = 0, wrong_calls = 0;
+  bool valid = true;
+};
+#ifdef KEY_SET_SNAPSHOT_PROBE
+static void OldSetExit(void* p) { ++static_cast<SetValue*>(p)->owner->old_calls; }
+#endif
+static void NewSetExit(void* p) {
+  auto* value = static_cast<SetValue*>(p);
+  if (value->replacement) ++value->owner->new_calls;
+  else ++value->owner->wrong_calls;
+}
+
+static void test_writers() {
+  for (int count : {1, 2, 8, 32}) for (bool distinct : {false, true}) {
+    const int key_count = distinct ? count : 1;
+    std::array<int32_t, 32> keys{};
+    bool created = true;
+    for (int i = 0; i < key_count; ++i)
+      created &= gesher_bionic_pthread_key_create(&keys[i], NewSetExit) == 0;
+    check("pthread sets: create shared or independent writer keys", created);
+    if (!created) return;
+    std::array<SetOwner, 32> owners;
+    std::array<std::thread, 32> writers;
+    std::barrier start(count + 1);
+    for (int i = 0; i < count; ++i) writers[i] = std::thread([&, i] {
+      auto& owner = owners[i];
+      const auto key = keys[distinct ? i : 0];
+      start.arrive_and_wait();
+      errno = EDOM;
+      for (int n = 0; n < 2000; ++n) {
+        owner.valid &= gesher_bionic_pthread_setspecific(key, &owner.old) == 0 &&
+            gesher_bionic_pthread_getspecific(key) == &owner.old;
+        owner.valid &= gesher_bionic_pthread_setspecific(key, &owner.fresh) == 0 &&
+            gesher_bionic_pthread_getspecific(key) == &owner.fresh;
+        owner.valid &= gesher_bionic_pthread_setspecific(key, nullptr) == 0 &&
+            gesher_bionic_pthread_getspecific(key) == nullptr;
+      }
+      owner.valid &= errno == EDOM &&
+          gesher_bionic_pthread_setspecific(key, &owner.fresh) == 0;
+    });
+    start.arrive_and_wait();
+    for (int i = 0; i < count; ++i) writers[i].join();
+    for (int i = 0; i < count; ++i)
+      check("pthread sets: overwrite/clear stays local and only final value reaches exit",
+            owners[i].valid && owners[i].new_calls == 1 && owners[i].old_calls == 0 &&
+            owners[i].wrong_calls == 0);
+    for (int i = 0; i < key_count; ++i)
+      check("pthread sets: retire completed writer key", gesher_bionic_pthread_key_delete(keys[i]) == 0);
+  }
+}
+
+static void test_set_arming() {
+  int32_t key = -1;
+  check("pthread sets: create arming key", gesher_bionic_pthread_key_create(&key, NewSetExit) == 0);
+  for (bool managed : {false, true}) for (bool leave_value : {false, true}) {
+    SetOwner owner;
+    bool initially_unarmed = false, null_unarmed = false, armed = false;
+    std::thread worker([&] {
+      ThreadRecord record;
+      if (managed) t_record = &record;
+      initially_unarmed = t_host_exit_rounds == -1;
+      errno = EDOM;
+      owner.valid &= gesher_bionic_pthread_setspecific(-1, &owner.fresh) == kEINVAL &&
+          gesher_bionic_pthread_setspecific(kKeysMax, &owner.fresh) == kEINVAL &&
+          gesher_bionic_pthread_setspecific(key, nullptr) == 0;
+      null_unarmed = t_host_exit_rounds == -1;
+      owner.valid &= gesher_bionic_pthread_setspecific(key, &owner.fresh) == 0;
+      armed = managed ? t_host_exit_rounds == -1 :
+          t_host_exit_rounds == 0 && pthread_getspecific(g_host_exit_key) == &t_host_exit_rounds;
+      owner.valid &= gesher_bionic_pthread_getspecific(key) == &owner.fresh;
+      if (!leave_value)
+        owner.valid &= gesher_bionic_pthread_setspecific(key, nullptr) == 0 &&
+            gesher_bionic_pthread_getspecific(key) == nullptr;
+      owner.valid &= errno == EDOM;
+      if (managed) {
+        RunThreadExit();
+        t_record = nullptr;
+      }
+    });
+    worker.join();
+    check("pthread sets: invalid/null assignments do not arm native exit", initially_unarmed && null_unarmed);
+    check("pthread sets: first nonnull assignment preserves real exit arming", owner.valid && armed);
+    check("pthread sets: host or explicit exit observes only retained final value",
+          owner.new_calls == int(leave_value) && owner.old_calls == 0 && owner.wrong_calls == 0);
+  }
+  check("pthread sets: retire arming key", gesher_bionic_pthread_key_delete(key) == 0);
+}
+
+static void test_set_progress(bool require_progress) {
+  int32_t key = -1;
+  check("pthread sets: create registry-independence key", gesher_bionic_pthread_key_create(&key, NewSetExit) == 0);
+  SetOwner owner;
+  std::promise<void> ready, go, returned;
+  auto ready_future = ready.get_future(), go_future = go.get_future(), returned_future = returned.get_future();
+  std::thread writer([&] {
+    ready.set_value();
+    go_future.wait();
+    owner.valid = gesher_bionic_pthread_setspecific(key, &owner.old) == 0 &&
+        gesher_bionic_pthread_getspecific(key) == &owner.old &&
+        gesher_bionic_pthread_setspecific(key, nullptr) == 0 &&
+        gesher_bionic_pthread_getspecific(key) == nullptr &&
+        gesher_bionic_pthread_setspecific(key, &owner.fresh) == 0;
+    returned.set_value();  // Observe setter progress before TLS-exit locking.
+  });
+  ready_future.wait();
+  std::unique_lock<std::mutex> registry(g_keys_mutex);
+  go.set_value();
+  const bool progressed = returned_future.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+  registry.unlock();  // Let the real exit round, or the locked baseline, finish.
+  writer.join();
+  check("pthread sets: registry-independent writes retain actual value and exit", owner.valid && owner.new_calls == 1);
+  if (require_progress) check("pthread sets: local assignment proceeds while key registry is locked", progressed);
+  else std::printf("OBSERVE local assignment while key registry locked: %d\n", int(progressed));
+  check("pthread sets: retire registry-independence key", gesher_bionic_pthread_key_delete(key) == 0);
+}
+
+#ifdef KEY_SET_SNAPSHOT_PROBE
+static void test_set_snapshot() {
+  for (bool replace : {false, true}) {
+    int32_t key = -1;
+    check("pthread sets: create snapshot key", gesher_bionic_pthread_key_create(&key, OldSetExit) == 0);
+    std::array<SetOwner, 2> owners;
+    std::array<SetSnapshotPause, 2> pauses;
+    std::array<std::future<void>, 2> captured;
+    std::array<std::thread, 2> workers;
+    for (int i = 0; i < 2; ++i) {
+      captured[i] = pauses[i].captured.get_future();
+      workers[i] = std::thread([&, i] {
+        t_set_snapshot_pause = &pauses[i];
+        owners[i].valid = gesher_bionic_pthread_setspecific(key, &owners[i].old) == 0;
+        if (i == 0) {
+          owners[i].valid &= gesher_bionic_pthread_getspecific(key) == nullptr;
+          if (replace)
+            owners[i].valid &= gesher_bionic_pthread_setspecific(key, &owners[i].fresh) == 0 &&
+                gesher_bionic_pthread_getspecific(key) == &owners[i].fresh;
+        }  // The other thread exits with its obsolete value still in TLS.
+      });
+    }
+    for (auto& ready : captured) ready.wait();
+    check("pthread sets: delete after both actual generation observations", gesher_bionic_pthread_key_delete(key) == 0);
+    if (replace) {
+      int32_t replacement = -1;
+      check("pthread sets: recreate before paused assignments publish TLS",
+            gesher_bionic_pthread_key_create(&replacement, NewSetExit) == 0 && replacement == key);
+    }
+    for (auto& pause : pauses) pause.release.set_value();
+    for (auto& worker : workers) worker.join();
+    check("pthread sets: overlapping stale set cannot become replacement value",
+          owners[0].valid && owners[1].valid && owners[0].old_calls == 0 &&
+          owners[1].old_calls == 0 && owners[0].new_calls == int(replace) &&
+          owners[1].new_calls == 0 && owners[0].wrong_calls == 0 && owners[1].wrong_calls == 0);
+    if (replace) check("pthread sets: retire snapshot replacement", gesher_bionic_pthread_key_delete(key) == 0);
+  }
+}
+#endif
+
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   if (std::strcmp(argv[1], "public") == 0) test_pthread_key_contracts();
@@ -322,6 +497,13 @@ int main(int argc, char** argv) {
   else if (std::strcmp(argv[1], "readers") == 0) test_readers();
   else if (std::strcmp(argv[1], "read_progress") == 0) test_read_progress(true);
   else if (std::strcmp(argv[1], "observe_read_progress") == 0) test_read_progress(false);
+  else if (std::strcmp(argv[1], "writers") == 0) test_writers();
+  else if (std::strcmp(argv[1], "set_arming") == 0) test_set_arming();
+  else if (std::strcmp(argv[1], "set_progress") == 0) test_set_progress(true);
+  else if (std::strcmp(argv[1], "observe_set_progress") == 0) test_set_progress(false);
+#ifdef KEY_SET_SNAPSHOT_PROBE
+  else if (std::strcmp(argv[1], "set_snapshot") == 0) test_set_snapshot();
+#endif
   else return 2;
   return failures == 0 ? 0 : 1;
 }
