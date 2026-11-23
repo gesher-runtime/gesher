@@ -1870,6 +1870,8 @@ void* MapLoadedMemory(void* addr, size_t len, int prot, int flags, int fd, int64
   const bool enforced = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
   const bool replace = fixed && (flags & MAP_FIXED_NOREPLACE) == 0;
   const bool exec = (prot & PROT_EXEC) != 0;
+  // An object loaded into a reservation there is gone (android_dlopen_ext).
+  if (replace && len != 0) ForgetReservedMappings(addr, len);
   const int type = flags & 0x0f;
   // Delegate these basic invalid requests before synchronizing a copy. The
   // base layer still decides access rights and allocation-time failures.
@@ -1964,6 +1966,8 @@ int SyncLoadedMemory(void* addr, size_t len, int flags) {
 
 int UnmapLoadedMemory(void* addr, size_t len) {
   const auto start = reinterpret_cast<uintptr_t>(addr);
+  // An object loaded into a reservation there is gone (android_dlopen_ext).
+  if (len != 0) ForgetReservedMappings(addr, len);
   if (len == 0 || (start & (kPage - 1)) != 0) return munmap(addr, len);
   if (len > UINTPTR_MAX - start || start + len > UINTPTR_MAX - (kPage - 1)) {
     errno = EINVAL;

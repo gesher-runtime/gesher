@@ -72,6 +72,10 @@ struct LoadOptions {
   // page of one of its reservations); otherwise the load fails before
   // anything is mapped.
   bool use_reserved = false;
+  // Take a dlopen reference (AddReservedReference) on the returned object if
+  // it is in a caller's reservation, while the load still holds the loader
+  // lock, so no concurrent dlclose can unload it before the caller has it.
+  bool add_reserved_reference = false;
   void* reserved_addr = nullptr;
   size_t reserved_size = 0;
   bool reserved_hint = false;
@@ -118,15 +122,31 @@ void Close(Library* library);
 // (LoadOptions::use_reserved), as bionic counts them. AddReservedReference
 // takes one (no-op for other objects); false if `library` was unloaded, so
 // the caller loads it again. ReleaseReservedReference (dlclose) gives one
-// back; the last one unloads the object: its finalizers run, it leaves every
-// list (dlsym, dl_iterate_phdr, dladdr, symbol binding of later loads, the
-// arm64 translator's code ranges) and what it used of the reservation is
-// mapped back PROT_NONE, so the caller may then unmap its reservation. The
-// handle stays valid memory but finds nothing. An object with TLS, or one
-// another loaded object depends on, stays loaded. Returns whether it was
-// unloaded; false for any handle that is not a loaded reserved object.
+// back. The last one unloads the object, conservatively: it stays loaded
+// (and says so on stderr) if anything may still use it - it has PT_TLS,
+// another loaded object needs it (DT_NEEDED), a relocation of another object
+// or a global lookup (dlsym(RTLD_DEFAULT)) was bound to one of its symbols,
+// or the unload veto (SetUnloadVeto) names a reason. Otherwise its finalizers
+// run, it leaves every list (dlsym, dl_iterate_phdr, dladdr, symbol binding
+// of later loads, the arm64 translator's code ranges) and, once no
+// dl_iterate_phdr callback can still read its program headers (waited for),
+// what it used of the reservation is mapped back PROT_NONE, so the caller may
+// then unmap its reservation. The handle stays valid memory but finds
+// nothing. Returns whether it was unloaded.
 bool AddReservedReference(Library* library);
 bool ReleaseReservedReference(Library* library);
+
+// The app unmaps or maps over [addr, addr + length) (munmap, MAP_FIXED): an
+// object loaded into a reservation there - one kept loaded after its last
+// dlclose, or never closed - is gone, and is taken out of every list without
+// running any of its code, so no lookup reads its unmapped tables.
+void ForgetReservedMappings(const void* addr, size_t length);
+
+// Why the object at [begin, begin + length) may not be unloaded now (the
+// bionic shim: C++ thread_local destructors it registered still pending), or
+// nullptr.
+using UnloadVeto = const char* (*)(const void* begin, size_t length);
+void SetUnloadVeto(UnloadVeto veto);
 
 // What dl_iterate_phdr reports for one loaded object.
 struct PhdrInfo {

@@ -16,7 +16,17 @@
 //   - Chrome's pattern: a 0xc000000 reservation whose tail is unmapped after
 //     the load, then the library's code and data used;
 //   - the last dlclose of a reserved library unloads it, so the reservation
-//     can be unmapped and nothing finds the library any more.
+//     can be unmapped and nothing finds the library any more - unless
+//     something may still use it: a binding of another library through the
+//     global scope, a dlsym(RTLD_DEFAULT) result, a pending thread_local
+//     destructor; such a library stays loaded, and unmapping its reservation
+//     takes it out of every list; dl_iterate_phdr callbacks running in other
+//     threads keep its program headers readable until they finish;
+//   - every mapping of a load must replace one mapping of the caller's: a
+//     segment crossing from one of the caller's mappings into another fails
+//     before anything is mapped;
+//   - FORCE_LOAD with a bare name returns the loaded library (bionic finds it
+//     by soname first), with a path it fails (no second copy).
 //
 // The libraries it loads (tests/native/dlext_target.c) are in the search
 // directory the driver passes: gesher_set_search_dir() (elf_load_test) or
@@ -29,6 +39,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <link.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,6 +169,20 @@ static int untouched(const uint8_t* r, size_t size) {
          range_is_taken((uintptr_t)r, (uintptr_t)r + size);
 }
 
+// A reservation of two adjacent mappings, [r, r + first) and [r + first,
+// r + first + second), each made on its own (sizes multiples of 64 KiB).
+static uint8_t* two_mappings(size_t first, size_t second) {
+  void* r = mmap(NULL, first + second, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (r == MAP_FAILED || munmap(r, first + second) != 0) return NULL;
+  uint8_t* p = (uint8_t*)r;
+  if (mmap(p, first, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != p) return NULL;
+  if (mmap(p + first, second, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) !=
+      p + first) {
+    return NULL;
+  }
+  return p;
+}
+
 // A reservation as an app makes one for android_dlopen_ext.
 static uint8_t* reserve(size_t size) {
   void* r = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -252,6 +277,58 @@ static void check_loaded_at(void* h, const char* name, uint8_t* res) {
   check("  dl_iterate_phdr's dlpi_addr is reservation - page_start(min p_vaddr)",
         q.found && q.addr == (uintptr_t)res - min_vaddr);
   check("  its code and data work", h != NULL && answer_of(h) == 42);
+}
+
+// A thread that registers a thread_local destructor of a library, then waits.
+struct dtor_thread {
+  int (*reg)(int*);
+  pthread_mutex_t mu;
+  pthread_cond_t cv;
+  int registered, release, rc;
+  volatile int flag;
+};
+static void* DtorThread(void* arg) {
+  struct dtor_thread* t = (struct dtor_thread*)arg;
+  int rc = t->reg((int*)&t->flag);
+  pthread_mutex_lock(&t->mu);
+  t->rc = rc;
+  t->registered = 1;
+  pthread_cond_broadcast(&t->cv);
+  while (!t->release) pthread_cond_wait(&t->cv, &t->mu);
+  pthread_mutex_unlock(&t->mu);
+  return NULL;
+}
+
+// A thread calling dl_iterate_phdr until told to stop, reading every
+// program header it is given.
+struct iterate_thread {
+  int stop;
+  int iterations;
+  unsigned long sum;
+};
+static int ReadPhdrs(struct dl_phdr_info* info, size_t size, void* data) {
+  (void)size;
+  struct iterate_thread* t = (struct iterate_thread*)data;
+  // The library the other thread loads and closes: read its headers for a
+  // while, so its dlclose falls inside this callback.
+  const char* n = info->dlpi_name ? info->dlpi_name : "";
+  size_t ln = strlen(n);
+  int rounds = ln >= 17 && strcmp(n + ln - 17, "libdlext_churn.so") == 0 ? 20000 : 1;
+  for (int r = 0; r < rounds; ++r) {
+    for (int i = 0; i < info->dlpi_phnum; ++i) {
+      t->sum += ((volatile const ElfW(Phdr)*)info->dlpi_phdr)[i].p_type +
+                ((volatile const ElfW(Phdr)*)info->dlpi_phdr)[i].p_memsz;
+    }
+  }
+  return 0;
+}
+static void* IterateThread(void* arg) {
+  struct iterate_thread* t = (struct iterate_thread*)arg;
+  while (!__atomic_load_n(&t->stop, __ATOMIC_SEQ_CST)) {
+    dl_iterate_phdr(ReadPhdrs, t);
+    ++t->iterations;
+  }
+  return NULL;
 }
 
 static int run(void) {
@@ -366,8 +443,17 @@ static int run(void) {
     check("  and leaves the other reservation untouched", untouched(other, big));
     munmap(other, big);
     again = open_ext("libdlext_a.so", ANDROID_DLEXT_FORCE_LOAD, NULL, 0, error, sizeof(error));
-    check("FORCE_LOAD of a loaded library fails (no second copy), not the first copy",
+    check("FORCE_LOAD of a loaded library by path fails (no second copy), not the first copy",
           again == NULL && strstr(error, "not supported") != NULL);
+    {
+      android_dlextinfo info;
+      memset(&info, 0, sizeof(info));
+      info.flags = ANDROID_DLEXT_FORCE_LOAD;
+      dlerror();
+      again = android_dlopen_ext("libdlext_a.so", RTLD_NOW, &info);
+      check("FORCE_LOAD of a loaded library by bare name returns it (found by soname first)",
+            again == h && h != NULL);
+    }
     again = open_ext("libdlext_a.so", ANDROID_DLEXT_WRITE_RELRO, NULL, 0, error, sizeof(error));
     check("WRITE_RELRO on a loaded library fails, not ignored",
           again == NULL && strstr(error, "not supported") != NULL);
@@ -463,7 +549,7 @@ static int run(void) {
     void* hh = open_ext("libdlext_hole.so", ANDROID_DLEXT_RESERVED_ADDRESS, r, size, error,
                         sizeof(error));
     check("RESERVED_ADDRESS over pages nobody mapped fails before mapping anything",
-          hh == NULL && strstr(error, "is not all mapped") != NULL);
+          hh == NULL && strstr(error, "is not one mapping of the caller's") != NULL);
     check("  the mapped page is untouched", untouched(r, g_page));
     check("  and nothing of the library is left in the rest",
           range_is_unmapped((uintptr_t)r + g_page, (uintptr_t)r + span));
@@ -508,12 +594,13 @@ static int run(void) {
     char path[600];
     path_of(path, sizeof(path), "libdlext_close.so");
     void* h2 = dlopen(path, RTLD_NOW);
-    void* marker = dlsym(RTLD_DEFAULT, "gesher_dlext_close_marker");
+    // Through its handle: a global lookup would keep it loaded (see below).
+    void* marker = h1 ? dlsym(h1, "gesher_dlext_close_marker") : NULL;
     check("a library loaded into a reservation, opened twice",
           h1 != NULL && h2 == h1 && base_of(h1) == r && marker != NULL);
     dlclose(h2);
     check("  the first dlclose keeps it loaded",
-          query("libdlext_close.so").found && dlsym(RTLD_DEFAULT, "gesher_dlext_close_marker") != NULL);
+          query("libdlext_close.so").found && dlsym(h1, "gesher_dlext_close_marker") != NULL);
     dlclose(h1);
     check("  the last dlclose unloads it: dl_iterate_phdr no longer lists it",
           !query("libdlext_close.so").found);
@@ -533,6 +620,193 @@ static int run(void) {
     check("  dlopen loads it again, elsewhere",
           h3 != NULL && answer_of(h3) == 42 &&
               ((uint8_t*)base_of(h3) < r || (uint8_t*)base_of(h3) >= r + big));
+  }
+
+  // --- a binding through the global scope keeps a reserved library loaded ---
+  {
+    uint8_t* r = reserve(big);
+    if (!setup("a 1 MiB reservation", r != NULL)) return failures;
+    void* hb = open_ext("libdlext_bind.so", ANDROID_DLEXT_RESERVED_ADDRESS, r, big, error,
+                        sizeof(error));
+    char path[600];
+    path_of(path, sizeof(path), "libdlext_user.so");
+    void* hu = dlopen(path, RTLD_NOW);
+    int (*call)(void) = hu ? (int (*)(void))dlsym(hu, "gesher_dlext_call_bound") : NULL;
+    if (!setup("libdlext_user.so binds gesher_dlext_bind_marker to the reserved library",
+               hb != NULL && call != NULL && call() == 7)) {
+      return failures;
+    }
+    dlclose(hb);
+    check("a reserved library another library bound to (no DT_NEEDED) stays loaded",
+          query("libdlext_bind.so").found && base_of(hb) == r);
+    check("  and the other library's call into it still works", call() == 7);
+  }
+
+  // --- dlsym(RTLD_DEFAULT) keeps it loaded; unmapping it then retires it ----
+  {
+    uint8_t* r = reserve(big);
+    if (!setup("a 1 MiB reservation", r != NULL)) return failures;
+    void* hd = open_ext("libdlext_default.so", ANDROID_DLEXT_RESERVED_ADDRESS, r, big, error,
+                        sizeof(error));
+    int (*marker)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "gesher_dlext_default_marker");
+    if (!setup("dlsym(RTLD_DEFAULT) finds the reserved library's symbol",
+               hd != NULL && marker != NULL && marker() == 7)) {
+      return failures;
+    }
+    dlclose(hd);
+    check("a reserved library dlsym(RTLD_DEFAULT) handed a symbol of out stays loaded",
+          query("libdlext_default.so").found && marker() == 7);
+    check("  the caller unmaps its reservation anyway", munmap(r, big) == 0);
+    check("  then dl_iterate_phdr no longer lists it", !query("libdlext_default.so").found);
+    check("  and dlsym(RTLD_DEFAULT) no longer finds it",
+          dlsym(RTLD_DEFAULT, "gesher_dlext_default_marker") == NULL);
+    Dl_info info;
+    check("  and dladdr of its old address finds nothing", dladdr((void*)marker, &info) == 0);
+  }
+
+  // --- munmap of a reservation whose library was never closed ---------------
+  {
+    uint8_t* r = reserve(big);
+    if (!setup("a 1 MiB reservation", r != NULL)) return failures;
+    void* hm = open_ext("libdlext_unmap.so", ANDROID_DLEXT_RESERVED_ADDRESS, r, big, error,
+                        sizeof(error));
+    if (!setup("a library loaded into it", hm != NULL && base_of(hm) == r)) return failures;
+    check("munmap of a reservation holding a loaded library", munmap(r, big) == 0);
+    check("  takes the library out of dl_iterate_phdr", !query("libdlext_unmap.so").found);
+    check("  and out of dlsym, by handle and by RTLD_DEFAULT",
+          dlsym(hm, "gesher_dlext_unmap_marker") == NULL &&
+              dlsym(RTLD_DEFAULT, "gesher_dlext_unmap_marker") == NULL);
+  }
+
+  // --- a pending thread_local destructor keeps a reserved library loaded ----
+  {
+    uint8_t* r = reserve(big);
+    if (!setup("a 1 MiB reservation", r != NULL)) return failures;
+    void* ht = open_ext("libdlext_tdtor.so", ANDROID_DLEXT_RESERVED_ADDRESS, r, big, error,
+                        sizeof(error));
+    int (*reg)(int*) = ht ? (int (*)(int*))dlsym(ht, "gesher_dlext_thread_dtor") : NULL;
+    struct dtor_thread t;
+    memset(&t, 0, sizeof(t));
+    t.reg = reg;
+    pthread_mutex_init(&t.mu, NULL);
+    pthread_cond_init(&t.cv, NULL);
+    pthread_t thread;
+    int started = reg != NULL && pthread_create(&thread, NULL, DtorThread, &t) == 0;
+    if (started) {
+      pthread_mutex_lock(&t.mu);
+      while (!t.registered) pthread_cond_wait(&t.cv, &t.mu);
+      pthread_mutex_unlock(&t.mu);
+    }
+    if (!setup("a thread registered a destructor of the reserved library", started && t.rc == 0)) {
+      return failures;
+    }
+    dlclose(ht);
+    check("a reserved library whose thread_local destructor is pending stays loaded",
+          query("libdlext_tdtor.so").found);
+    pthread_mutex_lock(&t.mu);
+    t.release = 1;
+    pthread_cond_broadcast(&t.cv);
+    pthread_mutex_unlock(&t.mu);
+    pthread_join(thread, NULL);
+    check("  the destructor runs when the thread ends", t.flag == 1);
+    char path[600];
+    path_of(path, sizeof(path), "libdlext_tdtor.so");
+    void* again = dlopen(path, RTLD_NOW);
+    dlclose(again);
+    check("  once it ran, the last dlclose unloads the library",
+          again == ht && !query("libdlext_tdtor.so").found && untouched(r, big));
+  }
+
+  // --- dl_iterate_phdr in another thread while libraries come and go --------
+  {
+    struct iterate_thread it;
+    memset(&it, 0, sizeof(it));
+    pthread_t thread;
+    int started = pthread_create(&thread, NULL, IterateThread, &it) == 0;
+    if (!setup("a thread calling dl_iterate_phdr in a loop", started)) return failures;
+    int loads = 0, placed = 0, given_back = 0;
+    for (int i = 0; i < 60; ++i) {
+      uint8_t* r = reserve(big);
+      if (r == NULL) continue;
+      void* hc = open_ext("libdlext_churn.so", ANDROID_DLEXT_RESERVED_ADDRESS, r, big, error,
+                          sizeof(error));
+      if (hc != NULL) {
+        ++loads;
+        if (base_of(hc) == r) ++placed;
+        dlclose(hc);
+        if (!query("libdlext_churn.so").found && untouched(r, big)) ++given_back;
+      }
+      munmap(r, big);
+    }
+    __atomic_store_n(&it.stop, 1, __ATOMIC_SEQ_CST);
+    pthread_join(thread, NULL);
+    char line[200];
+    snprintf(line, sizeof(line),
+             "60 loads into reservations and dlcloses while dl_iterate_phdr runs (%d iterations)",
+             it.iterations);
+    check(line, loads == 60 && placed == 60 && it.iterations > 0);
+    check("  each dlclose returned with the reservation PROT_NONE and the library gone",
+          given_back == 60);
+  }
+
+  // --- the caller's reservation made of two mappings ------------------------
+  {
+    // Two adjacent mappings of the caller's, the boundary 64 KiB in.
+    const size_t first = 0x10000;
+    size_t span = span_of("libdlext_cross.so", NULL);
+    size_t second = (span + 0x10000 + 0xffff) & ~(size_t)0xffff;
+    uint8_t* r = two_mappings(first, second);
+    if (!setup("a reservation of two adjacent mappings", r != NULL && span > first)) {
+      return failures;
+    }
+    // Its last segment (a 64 KiB .bss) starts before the boundary and ends
+    // after it.
+    void* hx = open_ext("libdlext_cross.so", ANDROID_DLEXT_RESERVED_ADDRESS, r, first + second,
+                        error, sizeof(error));
+    check("a segment crossing from one of the caller's mappings into the next fails",
+          hx == NULL && strstr(error, "is not one mapping of the caller's") != NULL);
+    check("  before mapping anything: both mappings untouched, nothing loaded",
+          untouched(r, first + second) && !query("libdlext_cross.so").found);
+    munmap(r, first + second);
+    // Segments on either side of the boundary, none across it: each mapping
+    // of a file-view load replaces pages of one mapping, and it loads; a
+    // copied load is one mapping over the whole span, and fails the same way.
+    span = span_of("libdlext_split.so", NULL);
+    r = two_mappings(first, second);
+    if (!setup("a reservation of two adjacent mappings", r != NULL && span != 0)) {
+      return failures;
+    }
+    uint8_t* at = r + first - 0x6000;
+    void* hs = open_ext("libdlext_split.so", ANDROID_DLEXT_RESERVED_ADDRESS, at,
+                        first + second - (size_t)(at - r), error, sizeof(error));
+    if (hs != NULL) {
+      check("segments on both sides of the boundary, none across it: loaded at the address",
+            base_of(hs) == at && answer_of(hs) == 42 && untouched(r, (size_t)(at - r)));
+    } else {
+      check("segments on both sides of the boundary, copied as one mapping: fails cleanly",
+            strstr(error, "is not one mapping of the caller's") != NULL &&
+                untouched(r, first + second) && !query("libdlext_split.so").found);
+    }
+  }
+
+  // --- a load anywhere with a gap between segments --------------------------
+  {
+    char path[600];
+    path_of(path, sizeof(path), "libdlext_gap2.so");
+    void* hg = dlopen(path, RTLD_NOW);
+    struct phdr_query q = query("libdlext_gap2.so");
+    int gaps = 0, gaps_ok = 1;
+    for (int i = 1; i < q.segs; ++i) {
+      if (q.seg[i][0] <= q.seg[i - 1][1]) continue;
+      ++gaps;
+      if (!range_is_prot_none(q.seg[i - 1][1], q.seg[i][0]) ||
+          !range_is_taken(q.seg[i - 1][1], q.seg[i][0])) {
+        gaps_ok = 0;
+      }
+    }
+    check("dlopen (no reservation) of a library with a gap: it works",
+          hg != NULL && answer_of(hg) == 42);
+    check("  and the pages between its segments are PROT_NONE and mapped", gaps > 0 && gaps_ok);
   }
 
   if (failures == 0) {

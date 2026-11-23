@@ -143,39 +143,62 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     already loaded, rather than being ignored: `WRITE_RELRO`, `USE_RELRO`,
     `USE_LIBRARY_FD` (and `_OFFSET`: the fd is not read),
     `RESERVED_ADDRESS_RECURSIVE` and `USE_NAMESPACE` (no linker namespaces
-    exist here). `FORCE_LOAD` only asks not to reuse a loaded copy: a
-    library not loaded yet loads as usual, a loaded one fails the same way
-    (this loader cannot load a second copy). Otherwise a library already
-    loaded (by soname) is returned where it is, whatever reservation is
-    offered. `RESERVED_ADDRESS` loads the library with its first page at
+    exist here). `FORCE_LOAD` only skips bionic's match of a loaded library
+    by its file: a library not loaded yet loads as usual, a bare name finds a
+    loaded one by soname as bionic does, and a path to a loaded one fails the
+    same way (this loader cannot load a second copy). Otherwise a library
+    already loaded is returned where it is, whatever reservation is offered.
+    `RESERVED_ADDRESS` loads the library with its first page at
     `reserved_addr` (load bias `reserved_addr - page_start(min p_vaddr)`), its
     segments mapped `MAP_FIXED` over the caller's reservation; beyond the
     load span (`page_end(max p_vaddr + p_memsz) - page_start(min p_vaddr)`)
     the reservation is left as it was, and pages of the span between
     segments are `PROT_NONE` (the caller's own with file views; mapped
-    `PROT_NONE` when segments are copied, as without placeholders). If the
-    span exceeds `reserved_size` the call fails with bionic's text
-    (`reserved address space <reserved_size - span> smaller than <span>
-    bytes needed for "<path>"`) without touching the reservation; only the
-    span is checked against the end of the address space. bionic maps over
-    whatever is at `reserved_addr`; gesher-base can only replace address space
-    it tracks, so a span reaching pages nobody mapped (or not mapped through
-    it) fails before anything is mapped (`... is not all mapped by the
-    caller`); pages a `munmap` left inside a reservation still count.
-    `RESERVED_ADDRESS_HINT` loads the same way when the span fits and
-    anywhere when it does not; with `RESERVED_ADDRESS` too, the strict one
-    wins. A load that fails after mapping into the reservation maps exactly
-    the ranges it mapped back `PROT_NONE`, as bionic's `soinfo_free` does
-    (`LoadOptions::reserved_addr`, `Library::caller_ranges`); if that fails
-    it unmaps what of the library is left there and logs it. Only the named
-    library goes there; its dependencies load anywhere. `dlopen`s of such a
-    library are counted, and the last `dlclose` unloads it
-    (`ReleaseReservedReference`): its finalizers run, it leaves `dlsym`,
-    `dl_iterate_phdr`, `dladdr` and the arm64 translator's code ranges, and
-    its pages become `PROT_NONE` again, so the caller can unmap its
-    reservation; one with TLS, or one another loaded library depends on,
-    stays loaded. Every other library still stays loaded for the life of the
-    process. `GESHER_TRACE_DL` prints the flags, `reserved_addr` and
+    `PROT_NONE` when segments are copied, as without placeholders, which
+    loads anywhere also do). If the span exceeds `reserved_size` the call
+    fails with bionic's text (`reserved address space <reserved_size - span>
+    smaller than <span> bytes needed for "<realpath>"`) without touching the
+    reservation; only the span is checked against the end of the address
+    space. bionic maps over whatever is at `reserved_addr`; gesher-base's
+    `MAP_FIXED` replaces only its own mappings, each within one mapping of the
+    caller's (one placeholder group, or one plain anonymous region without
+    placeholders). Every mapping the load will make is checked against
+    exactly that first (`gesher_mmap_fixed_replaces`), so a span reaching
+    address space nobody mapped, or a mapping crossing from one of the
+    caller's mappings into another, fails before anything is mapped (`... is
+    not one mapping of the caller's at [...]`). A reservation made of several
+    mappings works when no single mapping of the load crosses between them:
+    file-view loads map each segment on its own, a copied load maps the
+    whole span at once. `RESERVED_ADDRESS_HINT` loads the same way when the
+    span fits and anywhere when it does not; with `RESERVED_ADDRESS` too, the
+    strict one wins. A load that fails after mapping into the reservation
+    maps exactly the ranges it mapped back `PROT_NONE`, as bionic's
+    `soinfo_free` does (`Library::caller_ranges`); if that fails it unmaps
+    what of the library is left there and logs it. Only the named library
+    goes there; its dependencies load anywhere.
+  - Unloading a library from its reservation: `dlopen`s of it are counted
+    (the reference is taken under the loader's lock), and the last `dlclose`
+    unloads it (`ReleaseReservedReference`), conservatively. It stays loaded,
+    and a `gesher elf: ... kept loaded after its last dlclose: <reason>` line
+    says so, if anything may still use it: it has `PT_TLS`; another loaded
+    library needs it (`DT_NEEDED`); a relocation of another library was bound
+    to one of its symbols through gesher's flat global scope (no DT_NEEDED
+    edge records that); a global lookup (`dlsym(RTLD_DEFAULT)`, the arm64
+    translator's host lookups) handed out one of its symbols; or a C++
+    `thread_local` destructor it registered (`__cxa_thread_atexit_impl` with
+    its `__dso_handle`) has not run yet. Otherwise its finalizers run, it
+    leaves `dlsym`, `dl_iterate_phdr`, `dladdr`, symbol binding of later
+    loads and the arm64 translator's code ranges, and its pages become
+    `PROT_NONE` again, so the caller can unmap its reservation. `dlclose`
+    waits for `dl_iterate_phdr` callbacks running in other threads before
+    that, as bionic's `dl_iterate_phdr` holds the loader lock: they may read
+    its program headers (a callback of the same thread, or one that does not
+    finish within 5 s, leaves it to the last callback). If the caller unmaps
+    or maps over a reservation holding a library - one kept loaded, or never
+    closed - the library is taken out of every list without running any of
+    its code (`ForgetReservedMappings`, from the shim's `munmap` and
+    `MAP_FIXED` `mmap`). Every other library stays loaded for the life of
+    the process. `GESHER_TRACE_DL` prints the flags, `reserved_addr` and
     `reserved_size` of each call. Tested from x86-64 and arm64-v8a code, with
     and without placeholder mappings, by `tests/native/dlext_test.c`.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and

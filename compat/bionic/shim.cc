@@ -1144,22 +1144,28 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
       return DlOpenUnsupported(ext->flags & kDlextUnsupportedFlags);
     }
   }
-  const bool force_load = ext != nullptr && (ext->flags & kDlextForceLoad) != 0;
   if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
-  if (void* platform = PlatformLibraryHandle(filename)) {
-    if (force_load) return DlOpenUnsupported(kDlextForceLoad);
-    return platform;
-  }
   const char* slash = std::strrchr(filename, '/');
   const char* base = slash ? slash + 1 : filename;
+  // FORCE_LOAD only skips bionic's match of an already-loaded library by its
+  // file (inode); a bare name is still found by soname first
+  // (find_loaded_library_by_soname ignores names with a '/'). So with a path,
+  // a library already loaded would be loaded a second time, which this loader
+  // cannot do (one object per name): that fails rather than returning the
+  // first copy. With a bare name the loaded library is returned, as bionic does.
+  const bool force_second_copy =
+      ext != nullptr && (ext->flags & kDlextForceLoad) != 0 && slash != nullptr;
+  if (void* platform = PlatformLibraryHandle(filename)) {
+    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
+    return platform;
+  }
   // Already loaded: the same handle, where it is, whatever reservation
   // extinfo offers (bionic finds a loaded library before it maps anything).
-  // FORCE_LOAD asks for a second copy instead, which this loader cannot make
-  // (one object per name): that fails rather than returning the first copy.
   // A library unloaded from its reservation by a concurrent dlclose is no
-  // longer found, and loads again below.
+  // longer found, and loads again below (Load takes its reference under the
+  // loader's lock).
   if (gesher::elf::Library* existing = gesher::elf::Find(base)) {
-    if (force_load) return DlOpenUnsupported(kDlextForceLoad);
+    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
     if (gesher::elf::AddReservedReference(existing)) return existing;
   }
   std::string path = filename;
@@ -1179,6 +1185,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
     }
   }
   gesher::elf::LoadOptions options;
+  options.add_reserved_reference = true;
   if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
     options.use_reserved = true;
     options.reserved_addr = ext->reserved_addr;
@@ -1197,7 +1204,6 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
   } else if (!dir.empty()) {
     NoteLibraryDirectory(dir);
   }
-  if (lib != nullptr) gesher::elf::AddReservedReference(lib);
   return lib;
 }
 // dlsym: the shim's own symbols stand in for the libraries it implements, as
@@ -1618,6 +1624,11 @@ void InstallBionicShim() {
   Table();
   gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
   gesher::elf::SetUnresolvedHandler(ReportUnresolved);
+  gesher::elf::SetUnloadVeto([](const void* begin, size_t length) -> const char* {
+    return ThreadAtExitPendingIn(begin, length)
+               ? "C++ thread_local destructors it registered have not run yet"
+               : nullptr;
+  });
   gesher::elf::SetRawSyscallHandler(RawSyscallX64);
   InstallSignalHook(false);
 }
