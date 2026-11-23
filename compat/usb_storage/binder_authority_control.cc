@@ -1,0 +1,377 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+
+#include "binder_authority_control.h"
+
+#include <aclapi.h>
+#include <bcrypt.h>
+#include <sddl.h>
+
+#include <cstddef>
+#include <limits>
+#include <mutex>
+#include <new>
+#include <string_view>
+#include <vector>
+
+#include "../binder/protected_bootstrap_wire.h"
+#include "authority_launch.h"
+#include "authority_peer.h"
+
+namespace gesher::usb_storage {
+namespace {
+
+namespace wire = gesher::binder::bootstrap_wire;
+constexpr DWORD kHandshakeWait = 15000;
+constexpr DWORD kTransferRights =
+    PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE | READ_CONTROL;
+
+struct CloseHandleOwner {
+  void operator()(void* handle) const { CloseHandle(handle); }
+};
+struct LocalFreeOwner {
+  void operator()(void* allocation) const { LocalFree(allocation); }
+};
+using Handle = std::unique_ptr<void, CloseHandleOwner>;
+using LocalMemory = std::unique_ptr<void, LocalFreeOwner>;
+
+bool ValidLocator(std::wstring_view path) {
+  constexpr std::wstring_view prefix(wire::kPipePrefix);
+  if (!path.starts_with(prefix) || path.size() != prefix.size() + wire::kLocatorHexDigits) {
+    return false;
+  }
+  for (const wchar_t digit : path.substr(prefix.size())) {
+    if (!((digit >= L'0' && digit <= L'9') || (digit >= L'a' && digit <= L'f'))) return false;
+  }
+  return true;
+}
+
+DWORD ConnectionSecurity(HANDLE process, LocalMemory* descriptor, LocalMemory* package_sid) {
+  HANDLE found = nullptr;
+  if (!OpenProcessToken(process, TOKEN_QUERY, &found)) return GetLastError();
+  Handle token(found);
+  alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
+  alignas(TOKEN_APPCONTAINER_INFORMATION)
+      BYTE container[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE]{};
+  DWORD size = 0;
+  if (!GetTokenInformation(token.get(), TokenUser, user, sizeof(user), &size) ||
+      !GetTokenInformation(token.get(), TokenAppContainerSid, container, sizeof(container), &size)) {
+    return GetLastError();
+  }
+  const PSID owner = reinterpret_cast<const TOKEN_USER*>(user)->User.Sid;
+  const PSID package =
+      reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(container)->TokenAppContainer;
+  if (!owner || !package || !IsValidSid(owner) || !IsValidSid(package) || EqualSid(owner, package)) {
+    return ERROR_INVALID_SID;
+  }
+  package_sid->reset(LocalAlloc(LMEM_FIXED, GetLengthSid(package)));
+  if (!*package_sid) return ERROR_NOT_ENOUGH_MEMORY;
+  if (!CopySid(GetLengthSid(package), package_sid->get(), package)) return GetLastError();
+
+  LPWSTR owner_text = nullptr, package_text = nullptr;
+  if (!ConvertSidToStringSidW(owner, &owner_text)) return GetLastError();
+  const LocalMemory release_owner(owner_text);
+  if (!ConvertSidToStringSidW(package, &package_text)) return GetLastError();
+  const LocalMemory release_package(package_text);
+
+  // Generic write includes FILE_CREATE_PIPE_INSTANCE, so give both token
+  // principals only the byte-stream client rights.
+  static_assert(wire::kPipeClientAccess == 0x0012018b);
+  const std::wstring policy = std::wstring(L"O:SYG:SYD:P(A;;FA;;;SY)(A;;0x12018b;;;") +
+      owner_text + L")(A;;0x12018b;;;" + package_text + L")S:(ML;;NW;;;LW)";
+  PSECURITY_DESCRIPTOR converted = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          policy.c_str(), SDDL_REVISION_1, &converted, nullptr)) return GetLastError();
+  descriptor->reset(converted);
+  return ERROR_SUCCESS;
+}
+
+DWORD WaitIo(HANDLE pipe, OVERLAPPED* pending, HANDLE stop, HANDLE broker,
+             DWORD milliseconds, DWORD* bytes) {
+  const HANDLE waits[] = {stop, broker, pending->hEvent};
+  const DWORD state = WaitForMultipleObjects(3, waits, FALSE, milliseconds);
+  if (state == WAIT_OBJECT_0 + 2) {
+    return GetOverlappedResult(pipe, pending, bytes, FALSE) ? ERROR_SUCCESS : GetLastError();
+  }
+  DWORD error = ERROR_OPERATION_ABORTED;
+  if (state == WAIT_TIMEOUT) error = ERROR_TIMEOUT;
+  if (state == WAIT_FAILED) error = GetLastError();
+  CancelIoEx(pipe, pending);
+  // Cancel must retire the OVERLAPPED and its buffer before we return.
+  GetOverlappedResult(pipe, pending, bytes, TRUE);
+  return error;
+}
+
+}  // namespace
+
+// SCM's default Authenticated Users ACE admits the desktop token but does not
+// satisfy the lowbox access check. The installed service grants its one active
+// verified broker package only enough access to authenticate the SCM peer.
+class BinderServiceQueryGrant {
+ public:
+  explicit BinderServiceQueryGrant(LocalMemory package)
+      : scope_(ExclusiveSlot(), std::try_to_lock), package_(std::move(package)) {}
+  ~BinderServiceQueryGrant() {
+    if (applied_) {
+      std::vector<BYTE> security;
+      PACL dacl = nullptr;
+      if (ReadAcl(&security, &dacl) == ERROR_SUCCESS) {
+        DWORD index = MAXDWORD;
+        if (FindAce(dacl, &index) == ERROR_SUCCESS && index != MAXDWORD &&
+            DeleteAce(dacl, index)) {
+          SetServiceObjectSecurity(service_, DACL_SECURITY_INFORMATION, security.data());
+        }
+      }
+    }
+    if (service_) CloseServiceHandle(service_);
+  }
+
+  DWORD Apply() {
+    if (!scope_.owns_lock()) return ERROR_BUSY;
+    SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!manager) return GetLastError();
+    service_ = OpenServiceW(manager, wire::kAuthorityService,
+                            SERVICE_QUERY_STATUS | READ_CONTROL | WRITE_DAC);
+    const DWORD open_status = service_ ? ERROR_SUCCESS : GetLastError();
+    CloseServiceHandle(manager);
+    if (open_status != ERROR_SUCCESS) return open_status;
+    SERVICE_STATUS_PROCESS state{};
+    DWORD size = 0;
+    if (!QueryServiceStatusEx(service_, SC_STATUS_PROCESS_INFO, reinterpret_cast<BYTE*>(&state),
+                              sizeof(state), &size)) return GetLastError();
+    if (state.dwServiceType != SERVICE_WIN32_OWN_PROCESS || state.dwCurrentState != SERVICE_RUNNING ||
+        state.dwProcessId != GetCurrentProcessId()) return ERROR_ACCESS_DENIED;
+
+    std::vector<BYTE> security;
+    PACL dacl = nullptr;
+    DWORD status = ReadAcl(&security, &dacl);
+    if (status != ERROR_SUCCESS) return status;
+    DWORD index = MAXDWORD;
+    status = FindAce(dacl, &index);
+    if (status != ERROR_SUCCESS) return status;
+    if (index == MAXDWORD) {
+      EXPLICIT_ACCESSW permission{};
+      permission.grfAccessPermissions = kQuery;
+      permission.grfAccessMode = GRANT_ACCESS;
+      permission.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+      permission.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+      permission.Trustee.ptstrName = static_cast<wchar_t*>(package_.get());
+      PACL updated = nullptr;
+      status = SetEntriesInAclW(1, &permission, dacl, &updated);
+      if (status != ERROR_SUCCESS) return status;
+      const LocalMemory release_acl(updated);
+      SECURITY_DESCRIPTOR replacement{};
+      if (!InitializeSecurityDescriptor(&replacement, SECURITY_DESCRIPTOR_REVISION) ||
+          !SetSecurityDescriptorDacl(&replacement, TRUE, updated, FALSE) ||
+          !SetSecurityDescriptorControl(&replacement, SE_DACL_PROTECTED, SE_DACL_PROTECTED) ||
+          !SetServiceObjectSecurity(service_, DACL_SECURITY_INFORMATION, &replacement)) {
+        return GetLastError();
+      }
+    }
+    // A stale exact read-only ACE from a stopped instance may be retired here.
+    applied_ = true;
+    return ERROR_SUCCESS;
+  }
+
+ private:
+  static constexpr DWORD kQuery = SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS;
+  static std::mutex& ExclusiveSlot() {
+    static std::mutex slot;
+    return slot;
+  }
+
+  DWORD ReadAcl(std::vector<BYTE>* security, PACL* dacl) const {
+    DWORD size = 0;
+    if (QueryServiceObjectSecurity(service_, DACL_SECURITY_INFORMATION, nullptr, 0, &size) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0 || size > 64 * 1024) {
+      return ERROR_INVALID_DATA;
+    }
+    security->resize(size);
+    if (!QueryServiceObjectSecurity(
+            service_, DACL_SECURITY_INFORMATION, security->data(), size, &size)) return GetLastError();
+    BOOL present = FALSE, defaulted = FALSE;
+    if (!GetSecurityDescriptorDacl(security->data(), &present, dacl, &defaulted) ||
+        !present || !*dacl || !IsValidAcl(*dacl)) return ERROR_INVALID_ACL;
+    return ERROR_SUCCESS;
+  }
+
+  DWORD FindAce(PACL dacl, DWORD* index) const {
+    for (DWORD i = 0; i < dacl->AceCount; ++i) {
+      void* entry = nullptr;
+      if (!GetAce(dacl, i, &entry)) return GetLastError();
+      const auto* header = static_cast<const ACE_HEADER*>(entry);
+      if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+      auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
+      if (!EqualSid(&ace->SidStart, package_.get())) continue;
+      if (ace->Mask != kQuery || ace->Header.AceFlags != 0 || *index != MAXDWORD) {
+        return ERROR_INVALID_ACL;
+      }
+      *index = i;
+    }
+    return ERROR_SUCCESS;
+  }
+
+  std::unique_lock<std::mutex> scope_;
+  LocalMemory package_;
+  SC_HANDLE service_ = nullptr;
+  bool applied_ = false;
+};
+
+BinderAuthorityControl::~BinderAuthorityControl() {
+  peer_.reset();
+  if (broker_) CloseHandle(broker_);
+}
+
+DWORD BinderAuthorityControl::CreateLocator(std::wstring* locator) {
+  if (!locator || !locator->empty()) return ERROR_INVALID_PARAMETER;
+  constexpr wchar_t hex[] = L"0123456789abcdef";
+  BYTE nonce[wire::kLocatorHexDigits / 2]{};
+  if (BCryptGenRandom(nullptr, nonce, sizeof(nonce), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
+    return ERROR_GEN_FAILURE;
+  }
+  locator->assign(wire::kPipePrefix);
+  for (BYTE value : nonce) {
+    locator->push_back(hex[value >> 4]);
+    locator->push_back(hex[value & 15]);
+  }
+  return ERROR_SUCCESS;
+}
+
+DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker, const std::wstring& locator,
+                                      HANDLE stop, std::unique_ptr<BinderAuthorityControl>* result) {
+  if (!result || *result || !stop || stop == INVALID_HANDLE_VALUE || !ValidLocator(locator)) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  auto control = std::unique_ptr<BinderAuthorityControl>(new (std::nothrow) BinderAuthorityControl);
+  if (!control) return ERROR_NOT_ENOUGH_MEMORY;
+  control->stop_ = stop;
+  HANDLE own = GetCurrentProcess();
+  if (!DuplicateHandle(own, broker.process(), own, &control->broker_,
+                       PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) {
+    return GetLastError();
+  }
+  LocalMemory descriptor, package;
+  DWORD status = ConnectionSecurity(broker.process(), &descriptor, &package);
+  if (status != ERROR_SUCCESS) return status;
+  control->service_query_ =
+      std::unique_ptr<BinderServiceQueryGrant>(new (std::nothrow) BinderServiceQueryGrant(std::move(package)));
+  if (!control->service_query_) return ERROR_NOT_ENOUGH_MEMORY;
+  status = control->service_query_->Apply();
+  if (status != ERROR_SUCCESS) return status;
+  SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
+  status = AuthorityPeer::Create(broker.process(), locator.c_str(), &security, &control->peer_);
+  if (status != ERROR_SUCCESS) return status;
+
+  Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!event) return control->FailClosed(GetLastError());
+  if (WaitForSingleObject(stop, 0) != WAIT_TIMEOUT) return control->FailClosed(ERROR_OPERATION_ABORTED);
+  status = broker.Resume();
+  if (status != ERROR_SUCCESS) return control->FailClosed(status);
+  OVERLAPPED pending{};
+  pending.hEvent = event.get();
+  const HANDLE pipe = control->peer_->pipe();
+  if (!ConnectNamedPipe(pipe, &pending)) {
+    status = GetLastError();
+    if (status == ERROR_IO_PENDING) {
+      DWORD bytes = 0;
+      status = WaitIo(pipe, &pending, stop, control->broker_, kHandshakeWait, &bytes);
+    } else if (status == ERROR_PIPE_CONNECTED) {
+      status = ERROR_SUCCESS;
+    }
+    if (status != ERROR_SUCCESS) return control->FailClosed(status);
+  }
+  wire::Hello hello{};
+  status = control->Transfer(&hello, sizeof(hello), false);
+  if (status != ERROR_SUCCESS) return control->FailClosed(status);
+  if (hello.magic != wire::kMagic || hello.version != wire::kVersion ||
+      hello.operation != wire::Operation::kHello || hello.reserved != 0) {
+    return control->FailClosed(ERROR_INVALID_DATA);
+  }
+  status = control->peer_->Authenticate();
+  if (status != ERROR_SUCCESS) return control->FailClosed(status);
+  status = control->Exchange(static_cast<uint32_t>(wire::Operation::kReady), 0, 0, nullptr);
+  if (status != ERROR_SUCCESS) return control->FailClosed(status);
+  *result = std::move(control);
+  return ERROR_SUCCESS;
+}
+
+DWORD BinderAuthorityControl::Transfer(void* data, DWORD bytes, bool writing) {
+  if (!peer_) return ERROR_INVALID_HANDLE;
+  Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!event) return GetLastError();
+  auto* buffer = static_cast<std::byte*>(data);
+  const HANDLE pipe = peer_->pipe();
+  const ULONGLONG deadline = GetTickCount64() + kHandshakeWait;
+  while (bytes != 0) {
+    if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
+    const ULONGLONG now = GetTickCount64();
+    if (now >= deadline) return ERROR_TIMEOUT;
+    if (!ResetEvent(event.get())) return GetLastError();
+    OVERLAPPED pending{};
+    pending.hEvent = event.get();
+    DWORD count = 0;
+    const BOOL completed = writing ? WriteFile(pipe, buffer, bytes, nullptr, &pending)
+                                   : ReadFile(pipe, buffer, bytes, nullptr, &pending);
+    if (completed) {
+      if (!GetOverlappedResult(pipe, &pending, &count, FALSE)) return GetLastError();
+    } else {
+      DWORD status = GetLastError();
+      if (status != ERROR_IO_PENDING) return status;
+      status = WaitIo(pipe, &pending, stop_, broker_, static_cast<DWORD>(deadline - now), &count);
+      if (status != ERROR_SUCCESS) return status;
+    }
+    if (!count || count > bytes) return ERROR_BROKEN_PIPE;
+    buffer += count;
+    bytes -= count;
+  }
+  return ERROR_SUCCESS;
+}
+
+DWORD BinderAuthorityControl::FailClosed(DWORD status) {
+  peer_.reset();
+  service_query_.reset();
+  // No numeric remote handle can be closed after a send starts. The broker
+  // may already have consumed that value. Retire the exact process instead.
+  if (broker_ && WaitForSingleObject(broker_, 0) == WAIT_TIMEOUT) {
+    TerminateProcess(broker_, ERROR_OPERATION_ABORTED);
+  }
+  return status;
+}
+
+DWORD BinderAuthorityControl::Exchange(uint32_t op, uint64_t id, uint32_t uid, HANDLE remote_handle) {
+  wire::Request request{wire::kMagic, wire::kVersion, static_cast<wire::Operation>(op), uid, id,
+                        reinterpret_cast<uintptr_t>(remote_handle)};
+  DWORD status = Transfer(&request, sizeof(request), true);
+  if (status != ERROR_SUCCESS) return FailClosed(status);
+  wire::Reply reply{};
+  status = Transfer(&reply, sizeof(reply), false);
+  if (status != ERROR_SUCCESS) return FailClosed(status);
+  status = peer_->Authenticate();
+  if (status != ERROR_SUCCESS) return FailClosed(status);
+  if (reply.magic != wire::kMagic || reply.version != wire::kVersion ||
+      reply.reserved != 0 || reply.registration_id != id) return FailClosed(ERROR_INVALID_DATA);
+  return reply.status;
+}
+
+DWORD BinderAuthorityControl::Register(uint64_t id, uint32_t uid, const AuthorityLaunch& process) {
+  if (id == 0 || uid > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  if (!peer_) return ERROR_INVALID_HANDLE;
+  DWORD status = peer_->Authenticate();
+  if (status != ERROR_SUCCESS) return FailClosed(status);
+  HANDLE remote = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), process.process(), broker_, &remote,
+                       kTransferRights, FALSE, 0)) return GetLastError();
+  return Exchange(static_cast<uint32_t>(wire::Operation::kRegister), id, uid, remote);
+}
+
+DWORD BinderAuthorityControl::Revoke(uint64_t id) {
+  if (!id) return ERROR_INVALID_PARAMETER;
+  if (!peer_) return ERROR_INVALID_HANDLE;
+  const DWORD status = peer_->Authenticate();
+  if (status != ERROR_SUCCESS) return FailClosed(status);
+  return Exchange(static_cast<uint32_t>(wire::Operation::kRevoke), id, 0, nullptr);
+}
+
+}  // namespace gesher::usb_storage

@@ -15,3 +15,18 @@ if(MINGW)
 endif()
 add_test(NAME binder_protected_peers COMMAND binder_protected_peers_test)
 set_tests_properties(binder_protected_peers PROPERTIES TIMEOUT 15)
+
+add_executable(binder_protected_bootstrap_test
+  ../../compat/binder/protected_bootstrap.cc
+  ../../compat/binder/protected_peers.cc
+  ../../tests/native/binder_protected_bootstrap_test.cc)
+target_compile_features(binder_protected_bootstrap_test PRIVATE cxx_std_20)
+target_compile_definitions(binder_protected_bootstrap_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX GESHER_BINDER_BOOTSTRAP_FIXTURE)
+target_link_libraries(binder_protected_bootstrap_test PRIVATE advapi32 ole32 shell32 uuid)
+if(MINGW)
+  target_compile_options(binder_protected_bootstrap_test PRIVATE -Wall -Wextra -Werror)
+  target_link_options(binder_protected_bootstrap_test PRIVATE -static)
+endif()
+add_test(NAME binder_protected_bootstrap COMMAND binder_protected_bootstrap_test)
+set_tests_properties(binder_protected_bootstrap PROPERTIES TIMEOUT 15)

@@ -6,6 +6,8 @@
 // disposable Windows test environment with an ordinary desktop user logged on.
 #include "../../compat/framework/app_container.h"
 #include "../../compat/usb_storage/authority_launch.h"
+#include "../../compat/usb_storage/binder_authority_control.h"
+#include "../../compat/binder/protected_bootstrap_wire.h"
 
 #include <sddl.h>
 #include <tlhelp32.h>
@@ -20,6 +22,7 @@
 namespace {
 using gesher::usb_storage::AuthorityLaunch;
 using gesher::usb_storage::AuthorityLaunchSpec;
+using gesher::usb_storage::BinderAuthorityControl;
 
 constexpr DWORD kWait = 10000;
 
@@ -197,6 +200,15 @@ void Positive(const wchar_t* executable, DWORD session) {
 }
 
 void Negative(const wchar_t* executable) {
+  std::wstring first, second;
+  Require(BinderAuthorityControl::CreateLocator(&first) == ERROR_SUCCESS &&
+      BinderAuthorityControl::CreateLocator(&second) == ERROR_SUCCESS &&
+      first != second &&
+      first.starts_with(gesher::binder::bootstrap_wire::kPipePrefix) &&
+      first.size() == std::wstring_view(gesher::binder::bootstrap_wire::kPipePrefix).size() +
+          gesher::binder::bootstrap_wire::kLocatorHexDigits &&
+      BinderAuthorityControl::CreateLocator(&first) == ERROR_INVALID_PARAMETER,
+      "generate distinct private Binder bootstrap locators");
   HANDLE raw = nullptr;
   Require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw),
           "open ordinary test token");
