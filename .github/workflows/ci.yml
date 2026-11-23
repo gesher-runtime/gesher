@@ -276,6 +276,7 @@ jobs:
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_supplier_bundle.py
           python3 -m unittest discover -s tools/ci -p test_producer_context.py
           python3 -m unittest discover -s tools/ci -p test_binder_modes.py
           python3 -m unittest discover -s tools/ci -p test_native2_producer_context.py
@@ -916,8 +917,9 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
-    timeout-minutes: 23
+    # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+    # published hourly reset instead of failing the job.
+    timeout-minutes: 69
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -1928,9 +1930,38 @@ jobs:
           name: e2e-results-${{ matrix.os }}
           path: e2e-results/
 
+  # The fourteen test shards consume the same core supplier batch. Receiving
+  # it once here (run, job and artifact reads plus fourteen archive requests)
+  # and publishing the verified tree as one bundle replaces 14 batch receipts
+  # (20 API requests each) with one bundle receipt per shard (7 requests).
+  # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
+  core-suppliers:
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    runs-on: ubuntu-24.04
+    # Room for a reachable wait on the shared hourly API quota.
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tools/ci
+            tools/surface
+      - name: Verify and stage the complete core supplier batch with its ledger
+        run: python3 tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core --ledger
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-suppliers
+          path: ci-suppliers/core/
+          if-no-files-found: error
+          # Every ledgered file must arrive; consumers reject any difference.
+          include-hidden-files: true
+          retention-days: 7
+
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
     strategy:
       fail-fast: false
       matrix:
@@ -1966,10 +1997,10 @@ jobs:
             tools/fonts
             tools/binder
 
-      - name: Verify and stage the complete core supplier batch
+      - name: Verify and stage the complete core supplier bundle
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
+          python tools/ci/artifact_receipt.py --name core-suppliers --producer core-suppliers --bundle-of tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble windows-x64 artifact
@@ -2497,8 +2528,9 @@ jobs:
   supplier-correlation:
     needs: [source-identity, build, compile]
     runs-on: ubuntu-24.04
-    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
-    timeout-minutes: 25
+    # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+    # published hourly reset instead of failing the job.
+    timeout-minutes: 71
     env:
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
@@ -2574,7 +2606,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job
