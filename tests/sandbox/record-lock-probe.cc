@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <fcntl.h>
 #include <gesher/binder_endpoint.h>
+#include <gesher/cohost_bootstrap.h>
 #include <io.h>
 #include <poll.h>
 #include <share.h>
@@ -18,6 +19,7 @@
 #include <string>
 #include "exec_spawn.h"
 #include "services_zygote.h"
+#include "cohost_permission_server.h"
 
 namespace {
 namespace launch = gesher::zygote;
@@ -345,6 +347,51 @@ int ReadPinnedSource(const fs::path& dir) {
   return 0;
 }
 
+int CohostGuest() {
+  namespace permissions = gesher::cohost_permissions;
+  const auto& scope = gesher::cohost_bootstrap::Current();
+  if (!Check(Lowbox() && scope && scope.storage_pipe.empty() && !scope.permission_pipe.empty(),
+             "actual cohost receives its authenticated permission scope")) return 1;
+  gesher::binder_bootstrap::Startup boot;
+  if (!gesher::binder_bootstrap::ReadStartupRecord(&boot)) return 1;
+  HANDLE mapping = gesher::binder_bootstrap::DecodeHandle(boot.cohost_section);
+  void* mutable_bytes = MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 1);
+  if (mutable_bytes) UnmapViewOfFile(mutable_bytes);
+  if (!Check(!mutable_bytes, "cohost bootstrap section is read-only")) return 1;
+  std::vector<int32_t> permissions_result;
+  if (!Check(permissions::Exchange(permissions::Operation::kCheck,
+                {u"android.permission.INTERNET"}, &permissions_result) == ERROR_SUCCESS &&
+             permissions_result == std::vector<int32_t>{0},
+             "genuine cohost permission check reaches the pinned host")) return 1;
+  return Check(permissions::Exchange(permissions::Operation::kRequest,
+                {u"android.permission.INTERNET", u"com.gesher.test.UNDECLARED"},
+                &permissions_result) == ERROR_SUCCESS &&
+             permissions_result == std::vector<int32_t>{0, -1},
+             "cohost permission reply retains exact request order") ? 0 : 1;
+}
+
+bool CheckCohost(const fs::path& dir, const fs::path& exe) {
+  namespace permissions = gesher::cohost_permissions;
+  uint64_t pin = 0;
+  if (launch::PinStandaloneInput(U16((dir / L"source.bin").native()), &pin) != ERROR_SUCCESS) return false;
+  const auto profile = Profile(dir, L"cohost");
+  const bool supplied = launch::EnsureAppContainer(profile, profile) == ERROR_SUCCESS &&
+      launch::GrantToAppContainer(U16(exe.native()), profile,
+                                  FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, false) == 0;
+  permissions::Server authority([](permissions::Operation /* operation */,
+      const std::vector<std::u16string>& names, std::vector<int32_t>* values) {
+    for (const auto& name : names) values->push_back(name == u"android.permission.INTERNET" ? 0 : -1);
+    return ERROR_SUCCESS;
+  });
+  launch::CohostSpec services{{}, {}, {}, U16(authority.name()),
+      [&](void* process, void* job) { return authority.Start(process, job); }};
+  uint32_t exit = 1;
+  const auto result = supplied ? launch::RunPinnedCohost(Quote(exe) + u" --cohost-guest",
+      {profile, profile, {}}, pin, 11005, services, &exit) : ERROR_ACCESS_DENIED;
+  launch::ReleaseStandaloneInput(pin);
+  return Check(result == ERROR_SUCCESS && exit == 0, "protected host owns a live cohost permission transport");
+}
+
 int ScopedServer(const fs::path& dir) {
   if (!launch::HasProtectedLaunchAuthority()) return 1;
   const fs::path exe(launch::ExePath());
@@ -364,6 +411,7 @@ int ScopedServer(const fs::path& dir) {
       11004, installation, 1, pin);
   launch::ReleaseStandaloneInput(pin);
   if (!Check(guest > 0 && WaitExit(guest), "protected server executes the pinned source admission")) return 1;
+  if (!CheckCohost(dir, exe)) return 1;
   Mark("scoped server ready");
   Sleep(INFINITE);
   return 1;
@@ -372,6 +420,7 @@ int ScopedServer(const fs::path& dir) {
 int ScopedSupervisor(const fs::path& runtime, const fs::path& dir) {
   const auto device = U16(dir.filename().native()) + u"-scoped";
   const auto input_path = dir / L"scoped-input";
+  fs::copy_file(runtime / L"binderd.exe", dir / L"binderd.exe");
   std::ofstream(input_path, std::ios::binary) << "scoped input bytes";
   HANDLE input = CreateFileW(input_path.c_str(), GENERIC_READ, kSharing, nullptr,
                              OPEN_EXISTING, 0, nullptr);
@@ -433,6 +482,7 @@ bool CheckScopedDevice(const fs::path& runtime, const fs::path& dir, const fs::p
           == WAIT_OBJECT_0;
   for (HANDLE process : processes) if (process != nullptr) CloseHandle(process);
   launch::DeleteAppContainer(Profile(dir, L"pinned"));
+  launch::DeleteAppContainer(Profile(dir, L"cohost"));
   return Check(stopped, "scoped device job exits after its exact supervisor dies") &&
       Check(Contains(scope_log, "scoped guest stdout") &&
             !Contains(scope_log, "scoped guest stderr") &&
@@ -448,6 +498,7 @@ int wmain(int argc, wchar_t** argv) {
   if (argc == 3 && std::wstring(argv[1]) == L"--standalone-supervisor") return StandaloneSupervisor(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--scoped-server") return ScopedServer(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--read-pinned-source") return ReadPinnedSource(argv[2]);
+  if (argc == 2 && std::wstring(argv[1]) == L"--cohost-guest") return CohostGuest();
   if (argc == 4 && std::wstring(argv[1]) == L"--scoped-supervisor") return ScopedSupervisor(argv[2], argv[3]);
   if (argc == 2 && std::wstring(argv[1]) == L"--query-inherited-file") return QueryInheritedFile();
   if (argc == 2 && std::wstring(argv[1]) == L"--read-inherited-pipe") return ReadInheritedPipe();

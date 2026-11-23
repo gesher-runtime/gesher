@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <array>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,17 @@ uint32_t ReadStandaloneInput(uint64_t pin, int64_t offset, void* bytes,
                              uint32_t capacity, uint32_t* copied);
 uint32_t RunPinnedContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
                                       uint64_t pin, uint32_t uid, uint32_t* exit_code);
+struct CohostSpec {
+  std::u16string credential;
+  std::u16string device;
+  std::u16string storage_pipe;
+  std::u16string permission_pipe;
+  // Called before resuming the actual AppContainer process. Borrowed native
+  // handles are valid only during the callback unless explicitly duplicated.
+  std::function<uint32_t(void* process, void* job)> start_services;
+};
+uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& spec,
+                        uint64_t pin, uint32_t uid, const CohostSpec& services, uint32_t* exit_code);
 bool HasProtectedLaunchAuthority(bool scoped = false);
 bool PrepareProtectedOperator(int broker_pid, uint64_t birth);
 

@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@
 #include "app_container.h"
 #include "../binder/launch_channel.h"
 #include "../posix/include/gesher/binder_endpoint.h"
+#include "../posix/include/gesher/cohost_bootstrap.h"
 #include "../posix/src/binder_wire.h"
 #include "../posix/include/gesher/windows_process_identity.h"
 
@@ -135,6 +137,12 @@ void WaitWithStandaloneInput(HANDLE process, StandaloneInput& code);
 struct PinnedChildInput {
   peer::OwnedHandle process;
   StandaloneInput source;
+};
+
+struct CohostHandles {
+  peer::OwnedHandle metadata;
+  peer::OwnedHandle host;
+  const CohostSpec* services = nullptr;
 };
 
 DWORD WINAPI ServePinnedChildInput(void* value) {
@@ -1023,16 +1031,17 @@ struct StandaloneRecordBroker {
 };
 
 uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t* exit_code,
-                  const Container* sandbox, uint32_t uid, StandaloneInput* code) {
+                  const Container* sandbox, uint32_t uid, StandaloneInput* code,
+                  const CohostHandles* cohost = nullptr, const StandardHandles* streams = nullptr) {
   std::u16string exe = ExePath();
   if (exe.empty() || command.empty()) return ERROR_INVALID_PARAMETER;
   OwnedHandle input, output, error, device, job, process, thread, broker_pin;
   StandaloneRecordBroker record_broker;
   const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
   OwnedHandle* copies[] = {&input, &output, &error};
-  HANDLE handles[8]{};
+  HANDLE handles[10]{};
   for (size_t i = 0; i < 3; ++i) {
-    HANDLE original = GetStdHandle(kinds[i]);
+    HANDLE original = streams != nullptr ? (*streams)[i].get() : GetStdHandle(kinds[i]);
     if (original == nullptr || original == INVALID_HANDLE_VALUE) {
       SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
       copies[i]->value = CreateFileW(L"NUL", i == 0 ? GENERIC_READ : GENERIC_WRITE,
@@ -1072,6 +1081,12 @@ uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t*
     admission.code_file = launch::EncodeHandle(code->file.get());
     admission.code_channel = launch::EncodeHandle(code->child_requests.get());
     admission.code_name = launch::EncodeHandle(code->name.get());
+  }
+  if (cohost != nullptr) {
+    handles[inherited++] = cohost->metadata.get();
+    handles[inherited++] = cohost->host.get();
+    admission.cohost_section = launch::EncodeHandle(cohost->metadata.get());
+    admission.cohost_host = launch::EncodeHandle(cohost->host.get());
   }
   HandleList attributes;
   DWORD failure = attributes.Initialize(handles, inherited,
@@ -1118,6 +1133,10 @@ uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t*
     std::memcpy(initial.installation.data(), &admitted.birth, sizeof(admitted.birth));
     std::memcpy(initial.installation.data() + sizeof(admitted.birth), &admitted.pid, sizeof(admitted.pid));
     if (!EnrollProcess(initial, process.value, admitted, sandbox->sid.value)) return ERROR_ACCESS_DENIED;
+  }
+  if (cohost != nullptr) {
+    failure = cohost->services->start_services(process.value, job.value);
+    if (failure != ERROR_SUCCESS) return failure;
   }
   // Transfer only the foreground permission Windows actually gives this launcher.
   // Failure leaves the normal OS focus rules in force; it never fabricates focus.
@@ -1218,6 +1237,65 @@ uint32_t RunPinnedContainedStandalone(const std::u16string& command, const AppCo
       {u"GESHER_UID", u"GESHER_BINDER_UID", u"GESHER_BINDER", u"TMPDIR"});
   return Supervise(command, std::move(environment), exit_code, &sandbox, uid,
                    pin == 0 ? nullptr : &source);
+}
+
+namespace {
+DWORD PrepareCohost(const CohostSpec& services, CohostHandles* handles) {
+  if (!services.start_services || (services.storage_pipe.empty() &&
+       (!services.credential.empty() || !services.device.empty())) ||
+      (!services.storage_pipe.empty() &&
+       (services.credential.empty() || services.device.empty())) ||
+      (services.storage_pipe.empty() && services.permission_pipe.empty())) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  using Record = cohost_bootstrap::Metadata;
+  peer::OwnedHandle mapping(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                                0, sizeof(Record), nullptr));
+  if (!mapping) return GetLastError();
+  auto* bytes = MapViewOfFile(mapping.get(), FILE_MAP_WRITE, 0, 0, sizeof(Record));
+  if (bytes == nullptr) return GetLastError();
+  auto* record = new (bytes) Record;
+  const bool stored = cohost_bootstrap::Store(&record->credential, Wide(services.credential)) &&
+      cohost_bootstrap::Store(&record->device, Wide(services.device)) &&
+      cohost_bootstrap::Store(&record->storage_pipe, Wide(services.storage_pipe)) &&
+      cohost_bootstrap::Store(&record->permission_pipe, Wide(services.permission_pipe));
+  UnmapViewOfFile(bytes);
+  if (!stored) return ERROR_FILENAME_EXCED_RANGE;
+  HANDLE metadata = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), mapping.get(), GetCurrentProcess(),
+                       &metadata, FILE_MAP_READ, TRUE, 0)) return GetLastError();
+  handles->metadata.reset(metadata);
+  HANDLE host = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
+                       &host, binder_endpoint::kPinRights, TRUE, 0)) return GetLastError();
+  handles->host.reset(host);
+  handles->services = &services;
+  return ERROR_SUCCESS;
+}
+}  // namespace
+
+uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& spec,
+                        uint64_t pin, uint32_t uid, const CohostSpec& services, uint32_t* exit_code) {
+  if (pin == 0 || uid < 10000 || uid > 19999 || exit_code == nullptr ||
+      !HasProtectedLaunchAuthority()) return ERROR_ACCESS_DENIED;
+  Container sandbox;
+  DWORD failure = PrepareContainer(spec, &sandbox);
+  if (failure != ERROR_SUCCESS) return failure;
+  StandaloneInput input;
+  failure = PreparePinnedSource(pin, &input);
+  if (failure != ERROR_SUCCESS) return failure;
+  CohostHandles bootstrap;
+  failure = PrepareCohost(services, &bootstrap);
+  if (failure != ERROR_SUCCESS) return failure;
+  StandardHandles streams;
+  {
+    std::lock_guard<std::mutex> lock(g_bootstrap_lock);
+    streams = std::move(Authority().stdio);
+  }
+  auto environment = EnvironmentBlock({u"TEMP=" + sandbox.folder, u"TMP=" + sandbox.folder},
+      {u"GESHER_BINDER_UID", u"GESHER_UID", u"TMPDIR"});
+  return Supervise(command, std::move(environment), exit_code, &sandbox, uid, &input,
+                   &bootstrap, streams[0] ? &streams : nullptr);
 }
 
 int64_t StartTime(int pid) {

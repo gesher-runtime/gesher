@@ -25,7 +25,7 @@ inline HANDLE DecodeHandle(uint64_t value) {
 struct Startup {
   uint32_t crt_descriptors = 0;
   uint32_t magic = 0x474c4155;  // GLAU
-  uint32_t version = 5;
+  uint32_t version = 6;
   Endpoint endpoint{};
   uint64_t channel = 0;
   uint64_t broker = 0;
@@ -36,8 +36,10 @@ struct Startup {
   uint64_t code_file = 0;
   uint64_t code_channel = 0;
   uint64_t code_name = 0;
+  uint64_t cohost_section = 0;
+  uint64_t cohost_host = 0;
 };
-static_assert(sizeof(Startup) == 80);
+static_assert(sizeof(Startup) == 96);
 inline constexpr uint32_t kOpenStandaloneInput = 0x47444f50;  // GDOP
 struct StandaloneName {
   static constexpr uint32_t kMaxPath = 32768;
@@ -51,7 +53,7 @@ inline bool ReadStartupRecord(Startup* result) {
   GetStartupInfoW(&startup);
   if (startup.cbReserved2 < sizeof(Startup) || startup.lpReserved2 == nullptr) return false;
   std::memcpy(result, startup.lpReserved2 + startup.cbReserved2 - sizeof(*result), sizeof(*result));
-  return result->crt_descriptors == 0 && result->magic == 0x474c4155 && result->version == 5 &&
+  return result->crt_descriptors == 0 && result->magic == 0x474c4155 && result->version == 6 &&
          result->reserved == 0 &&
          (result->endpoint == Endpoint::kApplication || result->endpoint == Endpoint::kStandalone ||
           startup.cbReserved2 == sizeof(Startup));
@@ -60,6 +62,8 @@ inline bool ReadStartupRecord(Startup* result) {
 inline bool ReadStartup(Endpoint endpoint, Startup* result) {
   Startup record;
   if (!ReadStartupRecord(&record) || record.endpoint != endpoint) return false;
+  if ((record.cohost_section == 0) != (record.cohost_host == 0) ||
+      (endpoint != Endpoint::kStandalone && record.cohost_section != 0)) return false;
   if (endpoint == Endpoint::kStandalone || endpoint == Endpoint::kApplication) {
     if ((record.code_file == 0) != (record.code_channel == 0) ||
         (record.code_file == 0) != (record.code_name == 0)) return false;
