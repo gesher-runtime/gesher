@@ -236,7 +236,7 @@ function world(over = {}) {
       w.calls.push(['nativeMerge', clone(args)]);
       if (w.hooks.nativeMerge) await w.hooks.nativeMerge(args);
       assert.match(query, /expectedHeadOid: \$head/);
-      assert.match(query, /mergeMethod: SQUASH/);
+      assert.match(query, /mergeMethod: MERGE}/);
       if (args.head !== w.pr.head.sha) throw new Error('native merge head changed');
       if (w.nativePolicy && !nativeReady()) throw new Error('Native repository policy blocks this merge');
       if (w.nativePolicy) recordNativeMerge('merge');

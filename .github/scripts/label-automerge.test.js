@@ -441,7 +441,7 @@ test('fork review events need no write token; CI completion rechecks QA', async 
   assert.equal(w.did('status').at(-1)[1].state, 'failure');
 });
 
-test('a preexisting merge-method request is cancelled before protected squash release', async () => {
+test('a preexisting merge-method request is cancelled before protected merge-commit release', async () => {
   const w = world({nativeAutoMethod: 'MERGE'}); await w.ciDone();
   assert.equal(w.did('nativeCancel').length, 1);
   assert.equal(w.nativeAutoMethod, null);

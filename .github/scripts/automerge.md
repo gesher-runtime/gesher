@@ -1,7 +1,7 @@
 # Label-approved native auto-merge
 
 Apply `automerge` after reviewing the current PR head. GitHub performs a native
-SQUASH merge after the required PR CI and exact-head QA gate succeed.
+merge-commit merge after the required PR CI and exact-head QA gate succeed.
 There is no merge queue and no second full merge-group CI run. In both legacy
 and App modes the trusted label controller uses GitHub's protected immediate
 merge API with `expectedHeadOid` after rechecking current authorization and CI.
@@ -40,7 +40,7 @@ The label records approval for that head without arming native waiting. Both
 legacy-only and App-enabled publication first cancel and verify removal of any
 request left by an earlier controller. Native waiting stays disarmed throughout
 CI, status publication and verification. Final release submits only the protected
-native SQUASH merge pinned to the reviewed head. A small metadata-only
+native merge-commit merge pinned to the reviewed head. A small metadata-only
 workflow, triggered when ci or arm64-windows completes, verifies the registered
 workflow IDs/paths, pull_request event, exact head/branch, target/source repository
 IDs and successful aggregate check suites from GitHub Actions. Display-name
@@ -118,7 +118,7 @@ completion or a new `automerge` label started the pass and GitHub still reports
 `gesher-automerge-reconcile` dispatch for the same PR and exact head with a
 `release_retry` count. The dispatched job joins that PR's concurrency queue and
 runs the full reconciliation again: label, permission, receipt, CI evidence and
-gate verification, then the same protected exact-head SQUASH release. It never
+gate verification, then the same protected exact-head merge-commit release. It never
 arms native waiting. A retry rewrites the gate before reading the state, so it
 polls twice as long (14 reads). Retries are queued in legacy and App modes, stop
 after 8, and end at once if the head changed or the PR closed. Recovery runs,
@@ -145,7 +145,7 @@ URL, current CI and ordinary approval validation all remain valid. A foreign
 same-name success cannot suppress recovery. A failed same-head rerun removes
 the stale label; a pending rerun restores pending rather than keeping old green.
 Recovery also resumes a valid green PR if a controller stopped after publication
-but before the final native SQUASH release, or if another native rule has since
+but before the final native merge-commit release, or if another native rule has since
 become satisfied. An open green PR is revalidated for an exact-head release;
 green alone never suppresses that attempt. An inherited native request is
 disarmed even while CI is pending. Current-status scans paginate contexts rather
@@ -210,7 +210,7 @@ App-only gating uses the same disarmed publication protocol as dual gating.
 An existing native request is cancelled and its removal verified before any
 status publication or new native approval receipt. The controller authenticates the App success, checks
 approval and CI again, writes the legacy success, then rechecks current approval,
-registered CI and the exact App receipt before releasing native SQUASH pinned to
+registered CI and the exact App receipt before releasing a native merge commit pinned to
 the reviewed head. `CLEAN`, `HAS_HOOKS` and `UNSTABLE` permit a protected
 `mergePullRequest` attempt; `BLOCKED` and `BEHIND` defer it without a mutation
 (see Deferred release retries).

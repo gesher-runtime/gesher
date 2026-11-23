@@ -124,7 +124,7 @@ async function deferRelease(retryGithub, owner, repo, pr, state, attempt, core) 
 async function release(mergeGithub, pr) {
   await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
     mergePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head,
-      mergeMethod: SQUASH}) { clientMutationId }
+      mergeMethod: MERGE}) { clientMutationId }
   }`, {id: pr.node_id, head: pr.head.sha});
 }
 
