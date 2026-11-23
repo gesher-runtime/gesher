@@ -102,6 +102,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Java DNS admission and completion ownership on Windows
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
       - name: Durable settings journal, replacement and crash recovery contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -469,6 +473,9 @@ jobs:
 
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
+
+      - name: Java DNS admission, cancellation, callback ownership and actual deadlines
+        run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
 
       - name: WebStorage origin, owned WebView responses and running-task contracts
         run: |
@@ -938,7 +945,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@6afcb6e671fc4f2d08a4a98220f9d9a906a327bf
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@5aa6b39027e9c38de2781ff9cda066418d25b1ba
     with:
       local-runner: false
 
