@@ -402,6 +402,7 @@ APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
  'compat/posix/include/gesher/file_description.h': '94ce9ad7806d727977cc2c6f6df9fa289d1ea94b124404aed6c58fb7416a95d9',
  'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
+ 'compat/posix/posix.cmake': '8fe75797496a0561ac677ddf12b7b11e31e429daa2ec0379856ffe934392b756',
  'compat/posix/src/binder.cc': '75f01226fce65a5c954986fe0528769e110a9f70e96009934885a381c5ff4f0a',
  'compat/posix/src/binder_wire.h': 'f613f9492b4171c397321f15519ec5b852f2917ad929b6d1e495c1136ddd62d7',
  'compat/posix/src/dirent.cc': '22e3bcf261e56a950fe7a1f3e719cfc5153505f2bd7a693eb6da82c71a4efcff',
