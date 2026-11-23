@@ -1807,7 +1807,7 @@ final class ContactsProvider extends ContentProvider {
             }
             case GROUPS:
             case GROUPS_ID:
-                return deleteLocalOrTombstone(db, "groups", rows, syncAdapter);
+                return deleteGroups(db, rows, syncAdapter, now);
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
@@ -1832,11 +1832,25 @@ final class ContactsProvider extends ContentProvider {
         return count;
     }
 
+    private static int deleteGroups(SQLiteDatabase db, String rows, boolean syncAdapter, long now) {
+        String members = "mimetype_id IN (SELECT _id FROM mimetypes WHERE mimetype = ?)"
+                + " AND data1 IN (SELECT CAST(_id AS TEXT) FROM groups WHERE " + rows + ")";
+        String[] args = {ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE};
+        Set<Long> rawIds = queryIds(db,
+                "SELECT DISTINCT raw_contact_id FROM data WHERE " + members, args);
+        db.delete("data", members, args);
+        int count = deleteLocalOrTombstone(db, "groups", rows, syncAdapter);
+        refreshRawAndParentContacts(db, rawIds, now, !syncAdapter);
+        return count;
+    }
+
     private static int deleteLocalOrTombstone(SQLiteDatabase db, String table, String rows,
             boolean syncAdapter) {
         if (syncAdapter) return db.delete(table, rows, null);
         int hard = db.delete(table, rows + " AND (account_type IS NULL OR account_type = '')", null);
-        db.execSQL("UPDATE " + table + " SET deleted = 1, dirty = 1, version = version + 1"
+        String detach = "raw_contacts".equals(table) ? ", contact_id = NULL, aggregation_mode = "
+                + ContactsContract.RawContacts.AGGREGATION_MODE_DISABLED : "";
+        db.execSQL("UPDATE " + table + " SET deleted = 1, dirty = 1, version = version + 1" + detach
                 + " WHERE (" + rows + ") AND deleted = 0");
         return hard + changesCount(db);
     }

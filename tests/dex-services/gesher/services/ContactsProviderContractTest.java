@@ -276,13 +276,18 @@ public final class ContactsProviderContractTest {
             member.put(ContactsContract.Data.MIMETYPE,
                     ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE);
             member.put(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID, groupId);
-            provider.insert(ContactsContract.Data.CONTENT_URI, member);
+            Uri membership = provider.insert(ContactsContract.Data.CONTENT_URI, member);
             try (Cursor c = provider.query(ContactsContract.Groups.CONTENT_SUMMARY_URI,
                     new String[] {ContactsContract.Groups.SUMMARY_COUNT,
                             ContactsContract.Groups.SUMMARY_WITH_PHONES},
                     "_id = ?", new String[] {Long.toString(groupId)}, null)) {
                 check(c != null && c.moveToFirst() && c.getInt(0) == 1 && c.getInt(1) == 1,
                         "Group summary counts real contact and phone memberships");
+            }
+            check(provider.delete(ContentUris.withAppendedId(ContactsContract.Groups.CONTENT_URI,
+                    groupId), null, null) == 1, "Group delete removes the group");
+            try (Cursor c = provider.query(membership, new String[] {"_id"}, null, null, null)) {
+                check(c.getCount() == 0, "Group delete clears its membership rows");
             }
 
             ContentValues emailCv = new ContentValues();
@@ -568,10 +573,13 @@ public final class ContactsProviderContractTest {
             }
             try (Cursor c = provider.query(syncRawUri,
                     new String[] { ContactsContract.RawContacts.DELETED, ContactsContract.RawContacts.DIRTY,
-                            ContactsContract.RawContacts.VERSION },
+                            ContactsContract.RawContacts.VERSION, ContactsContract.RawContacts.CONTACT_ID,
+                            ContactsContract.RawContacts.AGGREGATION_MODE },
                     "_id = ?", new String[] { Long.toString(rawId) }, null)) {
-                check(c != null && c.moveToFirst() && c.getInt(0) == 1 && c.getInt(1) == 1 && c.getInt(2) == 3,
-                        "SyncAdapter sees deleted=1, dirty=1, version=3 after soft-delete");
+                check(c != null && c.moveToFirst() && c.getInt(0) == 1 && c.getInt(1) == 1
+                        && c.getInt(2) == 3 && c.isNull(3)
+                        && c.getInt(4) == ContactsContract.RawContacts.AGGREGATION_MODE_DISABLED,
+                        "SyncAdapter sees a detached, dirty tombstone with aggregation disabled");
             }
             try (Cursor c = provider.query(ContactsContract.DeletedContacts.CONTENT_URI,
                     new String[] { ContactsContract.DeletedContacts.CONTACT_ID }, null, null, null)) {
