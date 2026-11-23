@@ -42,7 +42,7 @@ int SpawnInAppContainer(const std::u16string& command_line,
 // Only the broker and server inherit their respective private control handles.
 std::vector<int> StartProtectedDevice(const std::u16string& device,
     const std::vector<std::u16string>& commands, const std::vector<std::u16string>& logs,
-    const std::vector<std::u16string>& environment);
+    const std::vector<std::u16string>& environment, bool scoped = false);
 
 // A protected SystemServer must enroll the actual contained child before it
 // runs. The install UUID and UID come from the server's durable package data.

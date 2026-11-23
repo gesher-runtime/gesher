@@ -283,6 +283,57 @@ int StandaloneSupervisor(const fs::path& dir) {
   return Check(result == ERROR_SUCCESS && exit == 0 && BrokerStopped(dir),
                "standalone lock-only broker completes and shuts down") ? 0 : 1;
 }
+
+int ScopedServer() {
+  if (!launch::HasProtectedLaunchAuthority()) return 1;
+  Mark("scoped server ready");
+  Sleep(INFINITE);
+  return 1;
+}
+
+int ScopedSupervisor(const fs::path& runtime, const fs::path& dir) {
+  const auto device = U16(dir.filename().native()) + u"-scoped";
+  const auto children = launch::StartProtectedDevice(device,
+      {Quote(runtime / L"binderd.exe"), Quote(runtime / L"servicemanager.exe"),
+       Quote(fs::path(launch::ExePath())) + u" --scoped-server"},
+      {U16((dir / L"scoped-binder.log").native()), U16((dir / L"scoped-manager.log").native()),
+       U16((dir / L"scoped-server.log").native())},
+      {u"GESHER_BINDER=" + device}, true);
+  if (children.size() != 3 || !WaitMarker(children[2], dir / L"scoped-server.log", "scoped server ready")) {
+    return 1;
+  }
+  std::printf("%d %d %d\n", children[0], children[1], children[2]);
+  std::fflush(stdout);
+  Sleep(INFINITE);
+  return 1;
+}
+
+bool CheckScopedDevice(const fs::path& runtime, const fs::path& dir, const fs::path& probe) {
+  const auto scope_log = dir / L"scoped-supervisor.log";
+  const int supervisor = launch::Spawn(Quote(probe) + u" --scoped-supervisor " +
+      Quote(runtime) + u" " + Quote(dir), {}, {}, U16(scope_log.native()), false);
+  if (supervisor <= 0) return false;
+  std::array<DWORD, 3> pids{};
+  const auto deadline = GetTickCount64() + 10000;
+  do {
+    std::ifstream source(scope_log);
+    if (source >> pids[0] >> pids[1] >> pids[2]) break;
+    pids = {};
+    Sleep(20);
+  } while (GetTickCount64() < deadline && launch::ExitCode(supervisor) == STILL_ACTIVE);
+  std::array<HANDLE, 3> processes{};
+  bool ready = pids[2] != 0;
+  for (size_t i = 0; ready && i < pids.size(); ++i) {
+    processes[i] = OpenProcess(SYNCHRONIZE, FALSE, pids[i]);
+    ready = processes[i] != nullptr && WaitForSingleObject(processes[i], 0) == WAIT_TIMEOUT;
+  }
+  const bool killed = launch::KillChild(supervisor, launch::ChildStartTime(supervisor));
+  const bool stopped = ready && killed &&
+      WaitForMultipleObjects(static_cast<DWORD>(processes.size()), processes.data(), TRUE, 5000)
+          == WAIT_OBJECT_0;
+  for (HANDLE process : processes) if (process != nullptr) CloseHandle(process);
+  return Check(stopped, "scoped device job exits after its exact supervisor dies");
+}
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -290,6 +341,8 @@ int wmain(int argc, wchar_t** argv) {
   if (argc == 3 && std::wstring(argv[1]) == L"--hold") return Hold(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--standalone-guest") return StandaloneGuest(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--standalone-supervisor") return StandaloneSupervisor(argv[2]);
+  if (argc == 2 && std::wstring(argv[1]) == L"--scoped-server") return ScopedServer();
+  if (argc == 4 && std::wstring(argv[1]) == L"--scoped-supervisor") return ScopedSupervisor(argv[2], argv[3]);
   if (argc == 2 && std::wstring(argv[1]) == L"--query-inherited-file") return QueryInheritedFile();
   if (argc == 4 && std::wstring(argv[1]) == L"--observe") return Observe(argv[3], _wtoi(argv[2]));
   if (argc != 3) {
@@ -326,5 +379,6 @@ int wmain(int argc, wchar_t** argv) {
   if (!ok && pids.size() == 3) launch::KillChild(pids[2], launch::ChildStartTime(pids[2]));
   for (const auto* role : {kOwner, kObserver}) launch::DeleteAppContainer(Profile(dir, role));
   std::wprintf(L"Fixture logs: %ls\n", dir.c_str());
-  return ok && standalone_ok ? 0 : 1;
+  const bool scoped_ok = CheckScopedDevice(runtime, dir, probe);
+  return ok && standalone_ok && scoped_ok ? 0 : 1;
 }

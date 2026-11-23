@@ -46,6 +46,11 @@ struct Enrollment {
   bool* channel_failed = nullptr;
 };
 
+struct DeviceLifetime {
+  uint64_t job = 0;
+  uint64_t supervisor = 0;
+};
+
 bool SubmitLaunchRequest(HANDLE channel, launch::Request request, bool* channel_failed = nullptr) {
   uint32_t result = ERROR_ACCESS_DENIED;
   const ULONGLONG deadline = GetTickCount64() + 5000;
@@ -419,7 +424,7 @@ int SpawnInAppContainer(const std::u16string& command_line,
 
 std::vector<int> StartProtectedDevice(const std::u16string& device,
     const std::vector<std::u16string>& commands, const std::vector<std::u16string>& logs,
-    const std::vector<std::u16string>& environment) {
+    const std::vector<std::u16string>& environment, bool scoped) {
   std::lock_guard<std::mutex> bootstrap_lock(g_bootstrap_lock);
   process_identity::Process self;
   if (device.empty() || commands.size() != 3 || logs.size() != 3 ||
@@ -493,16 +498,24 @@ std::vector<int> StartProtectedDevice(const std::u16string& device,
   // The launcher owns the only job handle while the system server is suspended.
   // Deliver a non-inheritable copy to that exact running child, then drop ours.
   HANDLE remote_job = nullptr;
+  HANDLE remote_supervisor = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto child = g_children.find(system);
     if (child != g_children.end()) {
       DuplicateHandle(GetCurrentProcess(), lifetime_job.get(), child->second, &remote_job,
                       0, FALSE, DUPLICATE_SAME_ACCESS);
+      if (scoped) {
+        DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), child->second,
+                        &remote_supervisor, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                        FALSE, 0);
+      }
     }
   }
-  uint64_t delivered = launch::EncodeHandle(remote_job);
-  if (remote_job == nullptr || !launch::Transfer(job_writer.get(), &delivered, sizeof(delivered), true)) {
+  DeviceLifetime delivered{launch::EncodeHandle(remote_job),
+                           launch::EncodeHandle(remote_supervisor)};
+  if (remote_job == nullptr || (scoped && remote_supervisor == nullptr) ||
+      !launch::Transfer(job_writer.get(), &delivered, sizeof(delivered), true)) {
     TerminateJobObject(lifetime_job.get(), ERROR_ACCESS_DENIED);
     return {};
   }
@@ -517,6 +530,10 @@ struct Writer {
   std::map<std::array<uint8_t, 16>, peer::OwnedHandle> installations;
   std::map<std::array<uint8_t, 16>, uint64_t> stopped_through;
 };
+
+void CALLBACK StopSupervisedDevice(PVOID job, BOOLEAN) {
+  TerminateJobObject(static_cast<HANDLE>(job), ERROR_PROCESS_ABORTED);
+}
 
 Writer ReadWriter() {
   launch::Startup startup;
@@ -533,9 +550,10 @@ Writer ReadWriter() {
   if (!SetHandleInformation(writer.channel.get(), HANDLE_FLAG_INHERIT, 0) ||
       !SetHandleInformation(writer.broker.get(), HANDLE_FLAG_INHERIT, 0) ||
       !SetHandleInformation(job_pipe.get(), HANDLE_FLAG_INHERIT, 0)) return {};
-  uint64_t delivered = 0;
+  DeviceLifetime delivered;
   if (!launch::Transfer(job_pipe.get(), &delivered, sizeof(delivered), false)) return {};
-  peer::OwnedHandle job(launch::DecodeHandle(delivered));
+  peer::OwnedHandle job(launch::DecodeHandle(delivered.job));
+  peer::OwnedHandle supervisor(launch::DecodeHandle(delivered.supervisor));
   BOOL in_job = FALSE;
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   if (!job || !IsProcessInJob(GetCurrentProcess(), job.get(), &in_job) || !in_job ||
@@ -552,6 +570,19 @@ Writer ReadWriter() {
   {
     std::lock_guard<std::mutex> lock(g_lock);
     if (g_job != nullptr) return {};
+    if (delivered.supervisor != 0) {
+      HANDLE watch;
+      if (!supervisor || GetProcessId(supervisor.get()) == 0 ||
+          GetProcessId(supervisor.get()) == GetCurrentProcessId() ||
+          !RegisterWaitForSingleObject(&watch, supervisor.get(), StopSupervisedDevice,
+                                       job.get(), INFINITE, WT_EXECUTEONLYONCE)) {
+        TerminateJobObject(job.get(), ERROR_ACCESS_DENIED);
+        return {};
+      }
+      // The wait and its process handle belong to this server's lifetime.
+      // Keeping the process handle pins the exact supervisor across PID reuse.
+      (void)supervisor.release();
+    }
     g_job = job.release();
   }
   return writer;
