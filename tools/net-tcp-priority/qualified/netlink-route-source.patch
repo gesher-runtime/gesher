@@ -1,12 +1,12 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index 74021bb34..01759690d 100644
+index 30bf93d5d..7df4bee88 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
-@@ -71,0 +72 @@ bool g_record_only = false;
+@@ -72,0 +73 @@ bool g_record_only = false;
 +std::atomic<bool> g_netlink_inspection = false;
-@@ -1628,0 +1630 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
+@@ -1629,0 +1631 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
 +  bool device_attached = false;
-@@ -1685,0 +1688,8 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
+@@ -1686,0 +1689,8 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
 +        device_attached |= accepted;
 +        break;
 +      }
@@ -15,7 +15,7 @@ index 74021bb34..01759690d 100644
 +        accepted = !g_record_only && device_attached && system &&
 +            request.pid == system->generation.pid && request.birth == system->generation.birth;
 +        if (accepted) g_netlink_inspection.store(true, std::memory_order_release);
-@@ -1757,3 +1767,24 @@ void ServeProc(HANDLE pipe, In in, bool operator_hello) {
+@@ -1758,3 +1768,24 @@ void ServeProc(HANDLE pipe, In in, bool operator_hello) {
 -#ifdef GESHER_RECORD_LOCK_BROKER
 -bool WaitRecordClient(HANDLE pipe, bool accept_ack);
 -#endif
@@ -43,10 +43,10 @@ index 74021bb34..01759690d 100644
 +  reply.Put<int32_t>(client && client->role == peer::Role::kSystemServer ? 0 : -EACCES);
 +  if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
 +}
-@@ -1777 +1808 @@ void ServeEnrollChild(HANDLE pipe, In in) {
+@@ -1778 +1809 @@ void ServeEnrollChild(HANDLE pipe, In in) {
 -    WaitRecordClient(pipe, false);
 +    WaitForClient(pipe, false);
-@@ -1820,16 +1850,0 @@ bool ReplyRecordLock(HANDLE pipe, int error, const locks::LinuxFlock* result = n
+@@ -1821,16 +1851,0 @@ bool ReplyRecordLock(HANDLE pipe, int error, const locks::LinuxFlock* result = n
 -bool WaitRecordClient(HANDLE pipe, bool expect_acknowledgment) {
 -  // A guest cannot keep a broker thread or a temporary file pin indefinitely.
 -  const ULONGLONG deadline = GetTickCount64() + 5000;
@@ -63,13 +63,13 @@ index 74021bb34..01759690d 100644
 -  return false;
 -}
 -
-@@ -1839 +1854 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
+@@ -1840 +1855 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
 -  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
 +  if (ReplyRecordLock(pipe, error, result)) WaitForClient(pipe, false);
-@@ -1879 +1894 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
+@@ -1960 +1975 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
 -  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
 +  if (!ReplyRecordLock(pipe, 0) || !WaitForClient(pipe, true)) return;
-@@ -2306,0 +2322,2 @@ void Serve(HANDLE pipe) {
+@@ -2390,0 +2406,2 @@ void Serve(HANDLE pipe) {
 +        } else if (op == wire::kNetlinkInspection) {
 +          ServeNetlinkInspection(pipe, in);
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
@@ -79,7 +79,7 @@ index 93f84db15..be60c941b 100644
 @@ -29,0 +30 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/netlink.cc
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index eaa21e5c7..dfd7c9e9d 100644
+index a8567e34a..ad2c5b6a3 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -776,0 +777,19 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
@@ -103,7 +103,7 @@ index eaa21e5c7..dfd7c9e9d 100644
 +}
 +
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 504290a0e..e686a6db7 100644
+index 3359c9896..09891bdc6 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
 @@ -125,0 +126,2 @@ enum Op : uint32_t {

@@ -120,13 +120,24 @@ bool CheckInterfaceAddresses(bool expect_link_layer) {
   return saw_ip && saw_link_layer == expect_link_layer;
 }
 
+bool SubscribeAsGuest(int fd) {
+  for (const int group : {RTNLGRP_LINK, RTNLGRP_IPV4_IFADDR}) {
+    if (setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group, sizeof(group)) != 0 ||
+        setsockopt(fd, SOL_NETLINK, NETLINK_DROP_MEMBERSHIP, &group, sizeof(group)) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 int NoAuthority(bool contained) {
   gesher::process_identity::Process self;
   if (!gesher::process_identity::ReadLiveProcess(GetCurrentProcess(), &self) ||
       (self.principal.container.size != 0) != contained) return 1;
   int fd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_ROUTE);
   const bool okay = fd >= 0 && !gesher::binder_endpoint::MayInspectNetlink() && Denied(fd) &&
-      Check(CheckInterfaceAddresses(false), "ordinary getifaddrs retains IP rows only");
+      Check(CheckInterfaceAddresses(false), "ordinary getifaddrs retains IP rows only") &&
+      (!contained || Check(SubscribeAsGuest(fd), "real AppContainer can join and leave multicast groups"));
   if (fd >= 0) close(fd);
   return Check(okay, contained ? "contained app denied" : "unregistered host denied") ? 0 : 1;
 }
