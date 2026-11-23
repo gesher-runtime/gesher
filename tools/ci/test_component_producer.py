@@ -54,7 +54,8 @@ class ComponentConsumers(unittest.TestCase):
         self.historical_jobs = {}
         self.configure('tcp-selected-minimum')
 
-    def configure(self, name, producer_attempt='1', consumer_attempt='2', payload=None):
+    def configure(self, name, producer_attempt='1', consumer_attempt='2', payload=None,
+                  head_repository_id=9):
         self.name = name
         role, filename, _, destination = component.POLICIES[name]
         self.destination = self.root / destination
@@ -65,9 +66,12 @@ class ComponentConsumers(unittest.TestCase):
         self.committed_manifest = self.manifest.read_bytes()
         os.environ['GITHUB_RUN_ATTEMPT'] = consumer_attempt
         self.run['run_attempt'] = int(consumer_attempt)
+        self.run['head_repository']['id'] = head_repository_id
+        self.event.write_text(json.dumps({'pull_request': {'head': {
+            'sha': self.head, 'repo': {'id': head_repository_id}}}}))
         self.consumer = dict(source=self.checkout, supplier_head=self.head,
             repository=os.environ['GITHUB_REPOSITORY'], repository_id='1426153186',
-            head_repository_id='9', run='7', attempt=consumer_attempt, event='pull_request')
+            head_repository_id=str(head_repository_id), run='7', attempt=consumer_attempt, event='pull_request')
         self.original = dict(self.consumer, attempt=producer_attempt)
         producer = self.specs[0]['producer']
         old = dict(id=101, name=producer, status='completed', conclusion='success',
@@ -87,7 +91,7 @@ class ComponentConsumers(unittest.TestCase):
         self.items = [dict(id=1000, name=self.specs[0]['name'], expired=False,
             digest='sha256:' + hashlib.sha256(data).hexdigest(), size_in_bytes=len(data),
             created_at='2026-11-19T12:00:30Z', workflow_run=dict(id=7, head_sha=self.head,
-                repository_id=1426153186, head_repository_id=9))]
+                repository_id=1426153186, head_repository_id=head_repository_id))]
         self.downloads.clear()
 
     def api_json(self, endpoint):
@@ -200,6 +204,55 @@ class ComponentConsumers(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     self.stage()
                 self.assertFalse(self.destination.exists())
+
+    def test_tsf_shared_admission_same_repository_and_fork_metadata_controls(self):
+        # This is TSF's actual admission path after its PowerShell runner began
+        # delegating to the fixed component helper. Retain every old artifact
+        # negative and additionally reject missing size/digest/expiry fields.
+        cases = [(('workflow_run', field), self.checkout if field == 'head_sha' else 999,
+                  'Artifact identity mismatch')
+                 for field in ('id', 'head_sha', 'repository_id', 'head_repository_id')]
+        cases += [(('id',), 0, 'Invalid, repeated or unexpected artifact identity')]
+        cases += [((field,), invalid, 'Artifact digest, size or expiry mismatch')
+                  for field, invalid in (('size_in_bytes', 0), ('digest', 'WRONG'), ('expired', True))]
+        negatives = 0
+        for head_repository_id in (1426153186, 9):
+            with self.subTest(head_repository_id=head_repository_id, positive=True):
+                self.configure('tsf-format', head_repository_id=head_repository_id)
+                before = dict(os.environ)
+                result = self.stage()
+                self.assertEqual(result['producer_context'], self.original)
+                self.assertEqual(result['artifact']['workflow_run']['head_repository_id'], head_repository_id)
+                self.assertEqual((self.destination / 'provenance.json').read_bytes(), self.raw)
+                self.assertEqual(len(self.downloads), 2)
+                self.assertEqual(dict(os.environ), before)
+                shutil.rmtree(self.destination)
+                shutil.rmtree(self.root / 'ci-suppliers' / component.POLICIES[self.name][2])
+            for path, invalid, message in cases:
+                for missing in (False, True):
+                    with self.subTest(head_repository_id=head_repository_id, path=path, missing=missing):
+                        self.configure('tsf-format', head_repository_id=head_repository_id)
+                        self.assertFalse(self.destination.exists())
+                        batch = self.root / 'ci-suppliers' / component.POLICIES[self.name][2]
+                        self.assertFalse(batch.exists())
+                        record = self.items[0]
+                        for key in path[:-1]:
+                            record = record[key]
+                        if missing:
+                            record.pop(path[-1])
+                        else:
+                            record[path[-1]] = invalid
+                        reads = len(self.json_reads)
+                        before = dict(os.environ)
+                        with self.assertRaisesRegex(RuntimeError, message):
+                            self.stage()
+                        self.assertTrue(any('/artifacts?' in endpoint for endpoint in self.json_reads[reads:]))
+                        self.assertEqual(self.downloads, [])
+                        self.assertFalse(self.destination.exists())
+                        self.assertFalse(batch.exists())
+                        self.assertEqual(dict(os.environ), before)
+                        negatives += 1
+        self.assertEqual(negatives, 32)
 
     def test_no_untrusted_role_path_or_existing_destination_override(self):
         for name in ('other', '../../forged'):
