@@ -346,6 +346,17 @@ The [recorder contracts](media-recorder-contracts.md) pin lifecycle/error behavi
 requested codec handling, complete-container size admission, callback ordering
 and the exact boundaries of host and Windows validation.
 
+`MediaRecorder.setNextOutputFile` now queues one caller-selected writable,
+seekable MP4 descriptor. At the size limit the writer finalizes the current
+file and reuses its track/CSD metadata and sample-table capacity for the next
+file, while the actual capture, encoder and input Surface remain connected.
+Each new video file begins at a real key frame; 802/803/801 callbacks are ordered
+across audio/video workers, and unused descriptors retire on stop/reset/error.
+See the [rollover contract and allocation evidence](research/recorder-rollover-2026-11-22.md)
+for pinned Android behavior, error distinctions, source-based measurements and
+the required public EGL/Recorder/decoder Windows gate. Host tests and Java/DEX
+compilation do not establish that Windows runtime gate.
+
 ## Status and next steps
 
 - Native OpenSL full ci **40477536464** is GREEN at **e5693412**, attempt1:

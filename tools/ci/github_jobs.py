@@ -20,17 +20,23 @@ def get_jobs(endpoint):
     observed transient failure of that single request (not retried) falls back
     to the 50-row pages. Paging changes transport size, never producer acceptance.
     """
-    # Dependent jobs can appear while a workflow is still running. Discard the
-    # entire mixed snapshot and restart, rather than accepting partial pages or
-    # combining different generations. Other malformed responses fail at once.
     try:
-        return _single_page(endpoint)
+        return _consistent_snapshot(endpoint, _single_page)
     except GitHubTransientError:
         print('CI_GITHUB_JOBS_FALLBACK per_page=50', file=sys.stderr, flush=True)
+    return _consistent_snapshot(endpoint, _paged_snapshot)
+
+
+def _consistent_snapshot(endpoint, read):
+    # Counts and rows can disagree even within one response. Discard the whole
+    # snapshot; neither a partial page nor rows from an earlier read may escape.
+    # Retry only this validated inconsistency, never malformed IDs or metadata.
     for attempt in range(3):
         try:
-            return _paged_snapshot(endpoint)
-        except _InventoryChanged:
+            return read(endpoint)
+        except _InventoryChanged as error:
+            print(f'CI_GITHUB_JOBS_INCONSISTENT attempt={attempt + 1}/3 '
+                  f'retry={str(attempt < 2).lower()} {error}', file=sys.stderr, flush=True)
             if attempt == 2:
                 raise
             time.sleep(attempt + 1)
@@ -46,7 +52,6 @@ def _validated(value, page_size):
 
 
 def _single_page(endpoint):
-    # One request is one consistent generation, so no restart is needed.
     value = get_json(f'{endpoint}?per_page=100&page=1', retry_transient=False)
     count, items = _validated(value, 100)
     seen = set()
@@ -56,7 +61,8 @@ def _single_page(endpoint):
             raise GitHubReadError('Invalid or repeated job identity')
         seen.add(job_id)
     if len(items) != count:
-        raise GitHubReadError('Incomplete or oversized job page')
+        raise _InventoryChanged('Inconsistent job page: per_page=100 page=1 '
+                                f'total_count={count} received_count={len(items)}')
     return {'total_count': count, 'jobs': items}
 
 
@@ -67,17 +73,20 @@ def _paged_snapshot(endpoint):
     for page in (1, 2):
         value = get_json(f'{endpoint}?per_page=50&page={page}')
         count, items = _validated(value, 50)
-        if total is not None and count != total:
-            raise _InventoryChanged('Job inventory changed between pages')
-        total = count
         for job in items:
             job_id = job.get('id') if isinstance(job, dict) else None
             if type(job_id) is not int or job_id <= 0 or job_id in seen:
                 raise GitHubReadError('Invalid or repeated job identity')
             seen.add(job_id)
+        if total is not None and count != total:
+            raise _InventoryChanged('Job inventory changed between pages: '
+                                    f'page={page} expected_total_count={total} total_count={count}')
+        total = count
         rows.extend(items)
         if len(rows) != min(50 * page, total):
-            raise GitHubReadError('Incomplete or oversized job page')
+            raise _InventoryChanged(f'Inconsistent job page: per_page=50 page={page} '
+                                    f'total_count={total} received_count={len(rows)} '
+                                    f'expected_count={min(50 * page, total)}')
         if len(rows) == total:
             return {'total_count': total, 'jobs': rows}
     raise GitHubReadError('Incomplete job inventory')

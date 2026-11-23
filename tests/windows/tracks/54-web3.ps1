@@ -414,8 +414,9 @@ try {
       'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
       'Web3 net done') 'Web3 net done'
 
-    if (-not [GesherWeb3Proxy]::SetPac("http://127.0.0.1:$web3Http/proxy.pac")) { Write-Host 'INFO  web3: InternetSetOption (PAC) failed' }
+    # Windows may fetch the script as soon as PAC is enabled, before the app starts.
     $before = ([GesherWeb3Servers]::Log -split "`n").Count - 1
+    if (-not [GesherWeb3Proxy]::SetPac("http://127.0.0.1:$web3Http/proxy.pac")) { Write-Host 'INFO  web3: InternetSetOption (PAC) failed' }
     $null = Web3Run 'the Gesher device: web3app.apk''s NetActivity with a PAC script in Windows'' settings: a PAC default proxy, PacProxySelector answered by Windows'' evaluation of the script (one host through the proxy, the rest direct)' ($launch + '--activity', 'com.gesher.web3app.NetActivity', '--ez', 'pac', 'true') @(
       "pac http://127.0.0.1:$web3Http/proxy.pac",
       'Web3 net http://pac-proxied.test/net: 200 proxied by the test proxy for pac-proxied.test',

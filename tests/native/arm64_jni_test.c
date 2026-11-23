@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "jni_argument_callbacks.h"
+#include "jni_getenv_checks.h"
 
 static jclass g_class;  // gesher/Arm64Jni, a global reference
 static int g_onload_ran;
@@ -112,6 +113,7 @@ JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_callbacks(JNIEnv* env, jclass cls, j
   JNIEnv* again = NULL;
   check("GetEnv gives this JNIEnv",
         (*vm)->GetEnv(vm, (void**)&again, JNI_VERSION_1_6) == JNI_OK && again == env);
+  check("GetEnv version and interface boundary", jni_getenv_contracts(vm, env));
   return failures;
 }
 
@@ -177,6 +179,7 @@ static __thread int tl_marker = 1;
 static void* attached_thread(void* arg) {
   (void)arg;
   int ok = tl_marker == 1;
+  ok &= jni_getenv_detached(g_vm);
   tl_marker = 2;
   JNIEnv* env = NULL;
   JavaVMAttachArgs args = {JNI_VERSION_1_6, "arm64-guest-thread", NULL};
@@ -187,7 +190,9 @@ static void* attached_thread(void* arg) {
   jint r = from ? (*env)->CallStaticIntMethod(env, g_class, from, 20) : -2;
   JNIEnv* again = NULL;
   ok = ok && (*g_vm)->GetEnv(g_vm, (void**)&again, JNI_VERSION_1_6) == JNI_OK && again == env;
-  ok = ok && (*g_vm)->DetachCurrentThread(g_vm) == JNI_OK;
+  ok &= (*g_vm)->DetachCurrentThread(g_vm) == JNI_OK;
+  ok &= jni_getenv_detached(g_vm);
+  if (ok) puts("GetEnv attach/detach: all passed");
   return (void*)(intptr_t)(ok ? r : -3);
 }
 

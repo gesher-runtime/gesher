@@ -1,0 +1,46 @@
+diff --git a/libs/hwui/hwui/Bitmap.cpp b/libs/hwui/hwui/Bitmap.cpp
+--- a/libs/hwui/hwui/Bitmap.cpp
++++ b/libs/hwui/hwui/Bitmap.cpp
+@@ -36,7 +36,7 @@
+ #include <com_android_graphics_hwui_flags.h>
+ #endif // __linux__
+
+-#ifndef _WIN32
++#if !defined(_WIN32) || defined(GESHER)
+ #include <sys/mman.h>
+ #endif
+
+@@ -181,6 +181,7 @@
+     return allocateBitmap(bitmap, &Bitmap::allocateAshmemBitmap);
+ }
+
++#ifndef GESHER  // Gesher provides sealed memfd storage in shared_bitmap.cc.
+ sk_sp<Bitmap> Bitmap::allocateAshmemBitmap(size_t size, const SkImageInfo& info, size_t rowBytes) {
+ #ifdef __ANDROID__
+     // Create new ashmem region with read/write priv
+@@ -207,6 +208,7 @@
+     return Bitmap::allocateHeapBitmap(size, info, rowBytes);
+ #endif
+ }
++#endif  // !GESHER
+
+ sk_sp<Bitmap> Bitmap::allocateHardwareBitmap(const SkBitmap& bitmap) {
+ #ifdef __ANDROID__  // Layoutlib does not support hardware acceleration
+@@ -279,7 +281,7 @@
+
+ sk_sp<Bitmap> Bitmap::createFrom(const SkImageInfo& info, size_t rowBytes, int fd, void* addr,
+                                  size_t size, bool readOnly) {
+-#ifdef _WIN32 // ashmem not implemented on Windows
++#if defined(_WIN32) && !defined(GESHER) // Gesher implements mmap over shared sections
+      return nullptr;
+ #else
+     if (info.colorType() == kUnknown_SkColorType) {
+@@ -385,7 +387,7 @@
+             mPixelStorage.wrapped.pixelRef->unref();
+             break;
+         case PixelStorageType::Ashmem:
+-#ifndef _WIN32 // ashmem not implemented on Windows
++#if !defined(_WIN32) || defined(GESHER)
+             munmap(mPixelStorage.ashmem.address, mPixelStorage.ashmem.size);
+ #endif
+             close(mPixelStorage.ashmem.fd);

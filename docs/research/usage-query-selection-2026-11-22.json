@@ -1,0 +1,255 @@
+{
+  "schema": "gesher-usage-query-resource-v1",
+  "scope": "whole calling thread including unchanged fixture result iteration; host controlled native identity; no Windows/ART or RSS claim",
+  "baseline_commit": "6759e71cde265d0c76fef8725d8b1ceecd246279",
+  "baseline_sources": {
+    "app/java/com/gesher/server/ActivityUsageHistory.java": "4e614dc6d19e27eb0a039b7d2c9051ef359591d834dcc6f6c2ed716b2d6ca950",
+    "app/java/com/gesher/server/DesktopUsageStatsService.java": "30a1a3d1bbfe254f340c84daf6b14e62545f51874a5090613c3f2af954e806c3"
+  },
+  "candidate_sources": {
+    "app/java/com/gesher/server/ActivityUsageHistory.java": "a618aee391add30922350eee773b6e7b750ef38a272fa409458861fa8718f8ff",
+    "app/java/com/gesher/server/DesktopUsageStatsService.java": "8a009693912c06d0297106216d897f10793e26e18e43233e51e79680506df29f",
+    "tests/activity-usage/ActivityUsageQueryTest.java": "f1e62f56e1913eacc025f76af28c14d4e23da4077b1ba7974b841bf3318a06fc",
+    "tests/dex-services/com/gesher/server/ActivityFinishFixture.java": "38178b3ea7fb7e436fb67f1278e965b6adda4fa4703176639e7494566e073e4d",
+    "tools/test_activity_finish.py": "80e3a2550b9013703928cf76dc4b2c44c24e1dbecb288f8fac8bb251b7254307"
+  },
+  "input": {
+    "actual_transitions": 24000,
+    "retained_event_cap": 12000,
+    "actors": 32,
+    "packages": 2,
+    "equal_timestamp_group": 4
+  },
+  "runs": [
+    {
+      "order": 1,
+      "variant": "candidate",
+      "log_file": "root-r4-query-counter-0.log",
+      "log_sha256": "39cda053ab252ce9ecd8ccb10bd180f8864db31d16b047a7bbd7d98a81b2be2d",
+      "measurements": [
+        {
+          "workload": "recent-global",
+          "queries": 1000,
+          "events_per_query": 20,
+          "heap_bytes": 4109352,
+          "cpu_ns": 11703728,
+          "elapsed_ns": 11828414,
+          "checksum": 3783330000
+        },
+        {
+          "workload": "empty-future",
+          "queries": 1000,
+          "events_per_query": 0,
+          "heap_bytes": 480160,
+          "cpu_ns": 1696002,
+          "elapsed_ns": 1673581,
+          "checksum": 0
+        },
+        {
+          "workload": "package-type-window",
+          "queries": 1000,
+          "events_per_query": 64,
+          "heap_bytes": 9655320,
+          "cpu_ns": 45372427,
+          "elapsed_ns": 45316263,
+          "checksum": 12037216000
+        },
+        {
+          "workload": "absent-package-wide",
+          "queries": 256,
+          "events_per_query": 0,
+          "heap_bytes": 229536,
+          "cpu_ns": 16754776,
+          "elapsed_ns": 16720435,
+          "checksum": 0
+        },
+        {
+          "workload": "full-global-control",
+          "queries": 8,
+          "events_per_query": 12000,
+          "heap_bytes": 12303584,
+          "cpu_ns": 9968217,
+          "elapsed_ns": 13269234,
+          "checksum": 13699344128
+        }
+      ]
+    },
+    {
+      "order": 2,
+      "variant": "baseline",
+      "log_file": "root-r4-query-counter-1.log",
+      "log_sha256": "b3b0989e522b7b49c16fc4c54b0b97d160dcdac5d884d01c8c7406d290ece250",
+      "measurements": [
+        {
+          "workload": "recent-global",
+          "queries": 1000,
+          "events_per_query": 20,
+          "heap_bytes": 100659624,
+          "cpu_ns": 91306350,
+          "elapsed_ns": 101563792,
+          "checksum": 3783330000
+        },
+        {
+          "workload": "empty-future",
+          "queries": 1000,
+          "events_per_query": 0,
+          "heap_bytes": 96976160,
+          "cpu_ns": 62060165,
+          "elapsed_ns": 64239822,
+          "checksum": 0
+        },
+        {
+          "workload": "package-type-window",
+          "queries": 1000,
+          "events_per_query": 64,
+          "heap_bytes": 106372000,
+          "cpu_ns": 44758175,
+          "elapsed_ns": 48701756,
+          "checksum": 12037216000
+        },
+        {
+          "workload": "absent-package-wide",
+          "queries": 256,
+          "events_per_query": 0,
+          "heap_bytes": 24834208,
+          "cpu_ns": 29119637,
+          "elapsed_ns": 29057030,
+          "checksum": 0
+        },
+        {
+          "workload": "full-global-control",
+          "queries": 8,
+          "events_per_query": 12000,
+          "heap_bytes": 13658464,
+          "cpu_ns": 8342322,
+          "elapsed_ns": 8309594,
+          "checksum": 13699344128
+        }
+      ]
+    },
+    {
+      "order": 3,
+      "variant": "baseline",
+      "log_file": "root-r4-query-counter-2.log",
+      "log_sha256": "be3b3829351215c508e39d976652637299cab62d45dc68f1c343f7977b24cc6a",
+      "measurements": [
+        {
+          "workload": "recent-global",
+          "queries": 1000,
+          "events_per_query": 20,
+          "heap_bytes": 100639208,
+          "cpu_ns": 100102207,
+          "elapsed_ns": 105366542,
+          "checksum": 3783330000
+        },
+        {
+          "workload": "empty-future",
+          "queries": 1000,
+          "events_per_query": 0,
+          "heap_bytes": 96963952,
+          "cpu_ns": 66477561,
+          "elapsed_ns": 68330778,
+          "checksum": 0
+        },
+        {
+          "workload": "package-type-window",
+          "queries": 1000,
+          "events_per_query": 64,
+          "heap_bytes": 106394656,
+          "cpu_ns": 33173212,
+          "elapsed_ns": 34450207,
+          "checksum": 12037216000
+        },
+        {
+          "workload": "absent-package-wide",
+          "queries": 256,
+          "events_per_query": 0,
+          "heap_bytes": 24834208,
+          "cpu_ns": 22763609,
+          "elapsed_ns": 22716304,
+          "checksum": 0
+        },
+        {
+          "workload": "full-global-control",
+          "queries": 8,
+          "events_per_query": 12000,
+          "heap_bytes": 13658464,
+          "cpu_ns": 7597794,
+          "elapsed_ns": 7579944,
+          "checksum": 13699344128
+        }
+      ]
+    },
+    {
+      "order": 4,
+      "variant": "candidate",
+      "log_file": "root-r4-query-counter-3.log",
+      "log_sha256": "1e328369b3a7c3e36df8e416780e7133824a1af76e41b9eee2382eff45430e96",
+      "measurements": [
+        {
+          "workload": "recent-global",
+          "queries": 1000,
+          "events_per_query": 20,
+          "heap_bytes": 4109416,
+          "cpu_ns": 7645625,
+          "elapsed_ns": 7616516,
+          "checksum": 3783330000
+        },
+        {
+          "workload": "empty-future",
+          "queries": 1000,
+          "events_per_query": 0,
+          "heap_bytes": 480160,
+          "cpu_ns": 918706,
+          "elapsed_ns": 908269,
+          "checksum": 0
+        },
+        {
+          "workload": "package-type-window",
+          "queries": 1000,
+          "events_per_query": 64,
+          "heap_bytes": 9656160,
+          "cpu_ns": 15488064,
+          "elapsed_ns": 15456239,
+          "checksum": 12037216000
+        },
+        {
+          "workload": "absent-package-wide",
+          "queries": 256,
+          "events_per_query": 0,
+          "heap_bytes": 213152,
+          "cpu_ns": 18660980,
+          "elapsed_ns": 18602039,
+          "checksum": 0
+        },
+        {
+          "workload": "full-global-control",
+          "queries": 8,
+          "events_per_query": 12000,
+          "heap_bytes": 12304224,
+          "cpu_ns": 13154774,
+          "elapsed_ns": 16842969,
+          "checksum": 13699344128
+        }
+      ]
+    }
+  ],
+  "negative_control": {
+    "log_file": "root-r4-query-negative.log",
+    "sha256": "949bc1b8cf68d41bd3105324cd9acd299919d2db3bf00eacf49291575221f1e7",
+    "expected_failure": "Usage query allocation still scales with the unselected event suffix"
+  },
+  "validation": {
+    "root-r4-app-final.log": "aee6d52df02dc65177260c3ab2e370226d2dfc454d9b1e5c2c82f85930c3371c",
+    "root-r4-services-final.log": "88968524888585c6c90596e28abd196488ea838a93cc0b7f8fd9cc8cc3b4db1a",
+    "root-r4-public-all.log": "dc3bb56726da6f476c86da3226e0b1eb790ebcb5cf4497c1f34a0b79e8e517e2",
+    "java-review-root-r4-history.log": "2b5a8c5953dffa1c5311e81cb84865c69671ec4632a8f372795107d3bfdc9f39",
+    "java-review-root-r4-query.log": "b3dfbb0ca8e2eb6663ee8445548d8f213dbb2ddc7f06dcde73902559729d5d9e"
+  },
+  "limits": [
+    "No stable throughput ratio: CPU/time varied and full-range candidate timings exceeded baseline in this sequence.",
+    "Public API state/iteration executes on actual Android framework classes; native Binder identity and package/process metadata are explicit host fixtures.",
+    "Shared target fixture uses generated AIDL/Parcel on Windows; compilation is verified, execution is pending.",
+    "Fresh history allocates no full-capacity array; retained history bound and checkpoint format remain unchanged."
+  ]
+}

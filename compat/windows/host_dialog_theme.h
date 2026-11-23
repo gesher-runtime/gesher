@@ -239,6 +239,52 @@ static inline INT_PTR GesherHostThemeEvent(HWND dialog, GesherHostTheme* theme,
   return FALSE;
 }
 
+/* Gesher's icon for a host dialog's title bar and taskbar button: gesher.ico
+ * beside the module holding this code. The installer puts it in the same
+ * folder as gesher-launch.exe and libgesher_account_crypto.so. Each module
+ * compiles its own copy of this static function, so its address names that
+ * module. Without the file the dialog keeps working, just without an icon. */
+typedef struct {
+  HICON big_icon;
+  HICON small_icon;
+} GesherHostIcons;
+
+static inline void GesherHostLoadIcons(GesherHostIcons* icons) {
+  icons->big_icon = NULL;
+  icons->small_icon = NULL;
+  HMODULE module = NULL;
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                          | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          (LPCWSTR)(UINT_PTR)&GesherHostLoadIcons, &module)) return;
+  WCHAR path[MAX_PATH + 16];
+  DWORD length = GetModuleFileNameW(module, path, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return;
+  WCHAR* name = path;
+  for (WCHAR* at = path; *at; ++at) if (*at == L'\\' || *at == L'/') name = at + 1;
+  const WCHAR file[] = L"gesher.ico";
+  for (SIZE_T i = 0; i < sizeof(file) / sizeof(file[0]); ++i) name[i] = file[i];
+  icons->big_icon = (HICON)LoadImageW(NULL, path, IMAGE_ICON,
+      GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_LOADFROMFILE);
+  icons->small_icon = (HICON)LoadImageW(NULL, path, IMAGE_ICON,
+      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE);
+}
+
+/* DS_MODALFRAME hides only the default icon, not one set with WM_SETICON. */
+static inline void GesherHostSetIcons(HWND dialog, const GesherHostIcons* icons) {
+  if (icons->big_icon != NULL)
+    SendMessageW(dialog, WM_SETICON, ICON_BIG, (LPARAM)icons->big_icon);
+  if (icons->small_icon != NULL)
+    SendMessageW(dialog, WM_SETICON, ICON_SMALL, (LPARAM)icons->small_icon);
+}
+
+/* WM_SETICON does not take ownership: free once the dialog is gone. */
+static inline void GesherHostFreeIcons(GesherHostIcons* icons) {
+  if (icons->big_icon != NULL) DestroyIcon(icons->big_icon);
+  if (icons->small_icon != NULL) DestroyIcon(icons->small_icon);
+  icons->big_icon = NULL;
+  icons->small_icon = NULL;
+}
+
 static inline HWND GesherHostControl(HWND dialog, DWORD extra, const WCHAR* klass,
                                       const WCHAR* text, DWORD style, int id,
                                       int x, int y, int width, int height) {
@@ -261,6 +307,7 @@ typedef struct {
   BOOL accepted;
   HFONT heading_font;
   GesherHostTheme theme;
+  GesherHostIcons icons;
 } GesherHostPromptState;
 
 /* Windows EDIT controls use CRLF line breaks; do not mutate input or embed it in
@@ -338,6 +385,7 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
     }
     GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
     SendMessageW(dialog, DM_SETDEFID, deny ? IDCANCEL : IDOK, 0);
+    GesherHostSetIcons(dialog, &state->icons);
     // A host prompt may originate on a background system-server thread. Request
     // the foreground once, but never keep the dialog permanently topmost.
     if (!SetForegroundWindow(dialog)) {
@@ -401,8 +449,10 @@ static inline BOOL GesherHostPrompt(const WCHAR* title, const WCHAR* message,
   for (SIZE_T i = 0; i < chars; ++i) *at++ = title[i];
   *at++ = 9;
   for (SIZE_T i = 0; i < sizeof(font) / sizeof(font[0]); ++i) *at++ = font[i];
+  GesherHostLoadIcons(&state.icons);
   DialogBoxIndirectParamW(GetModuleHandleW(NULL), layout, owner, GesherHostPromptProc,
                           (LPARAM)&state);
+  GesherHostFreeIcons(&state.icons);
   return state.accepted;
 }
 #endif /* GESHER_HOST_DIALOG_THEME_H */

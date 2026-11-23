@@ -277,6 +277,23 @@ void JNICALL MR_setOutputFile(JNIEnv* env, jobject thiz, jobject fd) {
   c.fd = copy;
 }
 
+void JNICALL MR_setNextOutputFile(JNIEnv* env, jobject thiz, jobject fd) {
+  // Pinned Android JNI checks the argument before resolving the receiver.
+  if (fd == nullptr) {
+    jniThrow(env, "java/lang/IllegalArgumentException", "null file descriptor");
+    return;
+  }
+  auto r = Get(env, thiz);
+  if (r == nullptr) return;
+  const int f = FdOf(env, fd);
+  if (env->ExceptionCheck()) return;
+  std::string error;
+  bool invalid_state = false;
+  if (!r->recorder->SetNextOutputFile(f, &error, &invalid_state)) {
+    jniThrow(env, invalid_state ? "java/lang/IllegalStateException" : "java/io/IOException", error.c_str());
+  }
+}
+
 void JNICALL MR_setParameter(JNIEnv* env, jobject thiz, jstring pair) {
   if (pair == nullptr) return;
   auto r = GetConfigurable(env, thiz);
@@ -452,6 +469,7 @@ const JNINativeMethod kMethods[] = {
     {"setVideoSize", "(II)V", GESHER_NATIVE(MR_setVideoSize)},
     {"setMaxFileSize", "(J)V", GESHER_NATIVE(MR_setMaxFileSize)},
     {"_setOutputFile", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setOutputFile)},
+    {"_setNextOutputFile", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setNextOutputFile)},
     {"setParameter", "(Ljava/lang/String;)V", GESHER_NATIVE(MR_setParameter)},
     {"_prepare", "()V", GESHER_NATIVE(MR_prepare)},
     {"getSurface", "()Landroid/view/Surface;", GESHER_NATIVE(MR_getSurface)},

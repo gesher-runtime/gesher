@@ -111,6 +111,12 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     void stopServicesForPackage(String packageName) { mServices.stopPackage(packageName); }
 
+    /** Permission revocation kills the uid without force-stopping its package or its jobs. */
+    void killProcessesForExactAlarmRevocation(ApkPackage expected,
+            java.util.function.BooleanSupplier stillRevoked) {
+        mAtm.killUidForPermissionChange(expected, stillRevoked);
+    }
+
     boolean hasForegroundServiceNotification(String packageName, String channelId) {
         return mServices.hasForegroundServiceNotification(packageName, channelId);
     }
@@ -502,6 +508,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
     @Override
     public void removeContentProvider(IBinder connection, boolean stable) {
         mProviders.removeContentProvider(connection, stable);
+    }
+
+    @Override
+    public void unstableProviderDied(IBinder connection) {
+        mProviders.unstableProviderDied(connection);
     }
 
     // --- PendingIntents (PendingIntents) ---------------------------------------------------

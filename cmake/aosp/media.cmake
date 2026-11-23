@@ -254,6 +254,8 @@ target_compile_options(media_yuv_rgba_test PRIVATE -Wall -Wextra -Werror)
 # QueueSurface itself uses only hostgraphics and is shared by hwui and the renderer.
 target_sources(gesher_window_surface PRIVATE ${_media}/surface/queue_surface.cc)
 target_sources(hwui PRIVATE
+  ${_media}/surface/retriever_bitmap.cc
+  ${_media}/video/retriever_pixels.cc
   ${_media}/surface/reader_surface.cc
   ${_media}/surface/surface_jni.cc
   # SurfaceTexture's GL consumer: frames into the app's external texture.
@@ -273,3 +275,13 @@ target_compile_options(media_input_surface_callback_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter -fexceptions)
 target_link_libraries(media_input_surface_callback_test PRIVATE hostgraphics pthread)
 gesher_graphics_cxx(media_input_surface_callback_test)
+
+# Actual pinned-Skia raster conversion and the previous full-image oracle.
+add_executable(media_retriever_pixels_test
+  "${CMAKE_SOURCE_DIR}/tests/media/retriever_pixels_test.cc"
+  ${_media}/video/retriever_pixels.cc)
+target_include_directories(media_retriever_pixels_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_retriever_pixels_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter)
+target_link_libraries(media_retriever_pixels_test PRIVATE skia)
+gesher_graphics_cxx(media_retriever_pixels_test)

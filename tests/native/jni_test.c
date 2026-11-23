@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "jni_argument_callbacks.h"
+#include "jni_getenv_checks.h"
 
 // ASharedMemory (libandroid, in an app process), as libcutils' memfd regions:
 // created sized and sealed F_SEAL_GROW | F_SEAL_SHRINK; setProt(PROT_READ) adds
@@ -233,6 +234,7 @@ JNIEXPORT jint JNICALL Java_gesher_JniTest_callbacks(JNIEnv* env, jclass cls, jo
   JNIEnv* again = NULL;
   check("GetEnv gives this JNIEnv",
         (*vm)->GetEnv(vm, (void**)&again, JNI_VERSION_1_6) == JNI_OK && again == env);
+  check("GetEnv version and interface boundary", jni_getenv_contracts(vm, env));
 
   // Local frames.
   check("PushLocalFrame", (*env)->PushLocalFrame(env, 16) == 0);
@@ -251,6 +253,10 @@ JNIEXPORT jint JNICALL Java_gesher_JniTest_callReflected(JNIEnv* env, jclass cls
 // --- a thread of the library's own ---------------------------------------------
 
 static void* worker(void* out) {
+  if (!jni_getenv_detached(g_vm)) {
+    *(int*)out = -3;
+    return NULL;
+  }
   JNIEnv* env = NULL;
   if ((*g_vm)->AttachCurrentThread(g_vm, &env, NULL) != JNI_OK) {
     *(int*)out = -1;
@@ -258,7 +264,11 @@ static void* worker(void* out) {
   }
   jmethodID twice = (*env)->GetStaticMethodID(env, g_class, "twice", "(I)I");
   *(int*)out = (*env)->CallStaticIntMethod(env, g_class, twice, 50) + tls_counter;
-  (*g_vm)->DetachCurrentThread(g_vm);
+  if ((*g_vm)->DetachCurrentThread(g_vm) != JNI_OK || !jni_getenv_detached(g_vm)) {
+    *(int*)out = -4;
+  } else {
+    puts("GetEnv attach/detach: all passed");
+  }
   return NULL;
 }
 

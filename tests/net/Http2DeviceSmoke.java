@@ -162,6 +162,7 @@ public class Http2DeviceSmoke {
                     if (!new String(preface,java.nio.charset.StandardCharsets.US_ASCII)
                             .equals("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")) throw new IOException("Bad preface");
                     frame(out,4,0,0,new byte[0]);
+                    int blockedId=0;
                     for (;;) {
                         int n=(in.readUnsignedByte()<<16)|(in.readUnsignedByte()<<8)|in.readUnsignedByte();
                         int type=in.readUnsignedByte(),flags=in.readUnsignedByte(),id=in.readInt()&0x7fffffff;
@@ -176,7 +177,11 @@ public class Http2DeviceSmoke {
                         }
                         byte[] data=new byte[n]; in.readFully(data);
                         if (type==4 && (flags&1)==0) frame(out,4,1,0,new byte[0]);
-                        if (type==1) frame(out,1,4,id,new byte[]{(byte)0x88});
+                        if (type==1) {
+                            frame(out,1,4,id,new byte[]{(byte)0x88});
+                            if (blockedId==0) blockedId=id;
+                            else frame(out,0,1,id,Http2SessionContracts.BODY);
+                        }
                         if (type==0) {
                             if ((flags&1)!=0) throw new AssertionError("Upload ended without enough flow-control credit");
                             if (dataBytes.addAndGet(n)==65535) windowConsumed.countDown();
@@ -184,7 +189,8 @@ public class Http2DeviceSmoke {
                         // Deliberately give no DATA response and no write credit.
                     }
                 } catch (EOFException expected) {
-                    // Peer EOF confirms that cancellation closed the real socket.
+                // The private baseline closes on cancellation; a shared session
+                // closes when its engine is shut down after worker retirement.
                     if (!cancelRequested.get()) cancellationFailure(unexpected,canceled,expected);
                 } catch (SocketException reset) {
                     // An abortive TCP close is also a terminal peer-close result.
@@ -236,9 +242,22 @@ public class Http2DeviceSmoke {
                     throw new AssertionError("writer did not exhaust initial credit; DATA bytes="+dataBytes.get());
                 }
                 Thread[] workers=awaitBlockedDuplex(unexpected);
+                try {
+                    // The single accepted physical connection must still serve
+                    // a different stream while both directions above are parked.
+                    engine.getClass().getDeclaredField("http2Sessions");
+                    Http2SessionContracts.Call parallel=new Http2SessionContracts.Call(engine,
+                            "http://127.0.0.1:"+server.getLocalPort()+"/parallel",executor);
+                    parallel.start();
+                    if (!parallel.await().equals("success") || parallel.terminals.get()!=1) {
+                        throw new AssertionError("blocked duplex prevented an independent stream");
+                    }
+                    checkCancellationFailure(unexpected);
+                } catch (NoSuchFieldException historical) { /* Private baseline cannot share its connection. */ }
                 cancelRequested.set(true); stream.cancel(); canceled.get(10,TimeUnit.SECONDS);
-                if (!peerClosed.await(5,TimeUnit.SECONDS)) throw new AssertionError("canceled socket remained open");
                 awaitStreamIoRetirement(workers,unexpected);
+                engine.shutdown();
+                if (!peerClosed.await(5,TimeUnit.SECONDS)) throw new AssertionError("shutdown retained the canceled socket");
                 // Drain the production serial callback queue, not only its target
                 // executor: queued callbacks can otherwise be submitted after a
                 // barrier placed directly in the target executor's queue.
@@ -263,6 +282,10 @@ public class Http2DeviceSmoke {
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length==1 && (args[0].equals("sessions") || args[0].equals("sessions-baseline"))) {
+            Http2SessionContracts.run(!args[0].equals("sessions-baseline"));
+            return;
+        }
         if (args.length == 1 && args[0].equals("disabled")) {
             checkHttp2Disabled();
             return;

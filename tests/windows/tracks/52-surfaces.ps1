@@ -338,6 +338,36 @@ if (-not (Test-Path "$Dir/surfaceapp.apk")) {
     $script:surfacesFailedBefore = $failed
     $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--hidden-window') 'device' @("$root/logs-surfaces/com.gesher.surfaceapp.log")
     SurfaceChecks 'Gesher device' $r
+    # Use the real system server/Binder app processes. Read only this launch's
+    # appended log bytes, and require the exact pixels after both native senders
+    # have retired. The app itself rejects equal parent/relay PIDs.
+    $sharedBitmapLog = "$root/logs-surfaces/com.gesher.surfaceapp.log"
+    $sharedBitmapOffset = if (Test-Path -LiteralPath $sharedBitmapLog) { (Get-Item -LiteralPath $sharedBitmapLog).Length } else { 0 }
+    $sharedBitmapOut = RunTimed "$Dir/dalvikvm.exe" @($dvmSurfaces + @('com.gesher.app.Launcher', 'launch',
+      (NoDrive "$Dir/surfaceapp.apk"), '--activity', 'com.gesher.surfaceapp.BitmapSharedActivity', '--headless', '--keep-task')) 180
+    $sharedBitmapCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $sharedBitmapLog) {
+      $sharedBitmapBytes = [IO.File]::ReadAllBytes($sharedBitmapLog)
+      if ($sharedBitmapBytes.Length -ge $sharedBitmapOffset) {
+        $sharedBitmapOut += "`n" + [Text.Encoding]::UTF8.GetString($sharedBitmapBytes, [int]$sharedBitmapOffset,
+          [int]($sharedBitmapBytes.Length - $sharedBitmapOffset))
+      } else { $sharedBitmapOut += "`nshared bitmap: FAILED log truncated during launch" }
+    }
+    $sharedBitmapProblems = @()
+    if ($sharedBitmapCode -ne 0) { $sharedBitmapProblems += "process exit $sharedBitmapCode" }
+    if ($sharedBitmapOut -match 'shared bitmap: FAILED') { $sharedBitmapProblems += 'application failure' }
+    foreach ($cycle in 0..1) {
+      foreach ($size in @('9x7', '641x359')) {
+        if ($sharedBitmapOut -notmatch "shared bitmap: $size cycle $cycle exact pixels after both senders recycled; parent pid \d+ relay pid \d+") {
+          $sharedBitmapProblems += "missing independent transfer $size cycle $cycle"
+        }
+      }
+    }
+    if ($sharedBitmapOut -notmatch 'shared bitmap: PASS 8 Bitmap hops through separate Binder process; immutable identity, pixels, metadata and independent retirement verified') {
+      $sharedBitmapProblems += 'missing complete Binder/Skia acceptance'
+    }
+    SurfaceCheck 'immutable shared Bitmap across Binder keeps real pixels after both senders recycle' $sharedBitmapProblems
+    if ($sharedBitmapProblems.Count -ne 0) { $sharedBitmapOut | Out-Host }
     $script:surfacesFailedBefore = $failed
     $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--activity', 'com.gesher.surfaceapp.CodecScalingActivity', '--ez', 'scaling.remote', 'true', '--hidden-window') 'scaling-device' @("$root/logs-surfaces/com.gesher.surfaceapp.log") 'scaling' 6
     CodecScalingChecks 'Gesher device with Binder producer' $r $true
