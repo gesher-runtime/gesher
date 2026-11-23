@@ -1,12 +1,14 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <windows.h>
+#include <sys/statvfs.h>
 
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 
 #include <gesher/binder_bootstrap.h>
+#include <gesher/filesystem_capacity.h>
 #include <gesher/rooted_storage_wire.h>
 
 #include "../../compat/binder/peer_registry.h"
@@ -70,7 +72,24 @@ bool AwaitExit(HANDLE process) {
   return false;
 }
 
-int Guest(const wchar_t* name, const wchar_t* host_path, bool denied) {
+bool CheckCapacity(const wchar_t* name, uint64_t expected_total) {
+  OwnedHandle connection = Connect(name);
+  wire::Request request;
+  request.operation = wire::Op::kStatAndroidData;
+  wire::Reply reply;
+  wire::Filesystem stats;
+  const bool okay = connection && Request(connection.get(), request, L"", &reply) && reply.status == 0 &&
+      reply.handle == 0 && reply.flags == 0 &&
+      Transfer(connection.get(), &stats, sizeof(stats), false, GetTickCount64() + 3000) &&
+      stats.total_bytes == expected_total && expected_total > 0 && stats.available_bytes <= stats.free_bytes;
+  if (!Check(okay, "Android /data status preserves the actual host backing capacity without a handle")) return false;
+  connection.reset();
+  connection = Connect(name);
+  return Check(!connection || !Request(connection.get(), request, L"host-path", &reply),
+               "Android /data status has no guest-specified path");
+}
+
+int Guest(const wchar_t* name, const wchar_t* host_path, const wchar_t* volume_total, bool denied) {
   if (!Check(Lowbox(), "fixture uses an actual Windows AppContainer")) return 1;
   OwnedHandle connection = Connect(name);
   wire::Request request;
@@ -93,7 +112,12 @@ int Guest(const wchar_t* name, const wchar_t* host_path, bool denied) {
   if (!Check(GetHandleInformation(file.get(), &information) && !(information & HANDLE_FLAG_INHERIT) &&
              WriteFile(file.get(), "owned", 5, &count, nullptr) && count == 5,
              "committed noninheritable descriptor writes real selected data")) return 1;
+  wire::Filesystem file_volume;
+  if (!Check(gesher::QueryFilesystemCapacity(file.get(), &file_volume) == 0 && file_volume.total_bytes > 0 &&
+             file_volume.available_bytes <= file_volume.free_bytes,
+             "AppContainer queries the actual volume using the exact scoped file handle")) return 1;
   file.reset();
+  if (!CheckCapacity(name, _wcstoui64(volume_total, nullptr, 10))) return 1;
 
   connection = Connect(name);
   if (!Check(connection && Request(connection.get(), request, L"../outside", &reply) &&
@@ -177,7 +201,10 @@ bool Host(const fs::path& dir, const fs::path& executable, const std::wstring& p
   OwnedHandle root_ce = Pin(dir / L"ce"), root_de = Pin(dir / L"de");
   if (!root_ce || !root_de) return false;
   storage::Server server({root_ce.get(), root_de.get()});
-  const auto arguments = L" \"" + server.name() + L"\" \"" + (dir / L"ce/seed").wstring() + L"\"";
+  struct statvfs legacy{};
+  if (statvfs("/data", &legacy) != 0) return false;
+  const auto arguments = L" \"" + server.name() + L"\" \"" + (dir / L"ce/seed").wstring() + L"\" " +
+      std::to_wstring(legacy.f_blocks * legacy.f_frsize);
   Child legitimate = Spawn(fixture, L"--guest" + arguments, sid.value, dir / L"guest.log");
   Child outside = Spawn(fixture, L"--outside" + arguments, sid.value, dir / L"outside.log");
   OwnedHandle job(CreateJobObjectW(nullptr, nullptr));
@@ -196,7 +223,7 @@ bool Host(const fs::path& dir, const fs::path& executable, const std::wstring& p
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-  if (argc == 4) return Guest(argv[2], argv[3], std::wstring_view(argv[1]) == L"--outside");
+  if (argc == 5) return Guest(argv[2], argv[3], argv[4], std::wstring_view(argv[1]) == L"--outside");
   if (argc != 2) return 2;
   std::wstring profile = L"gesher-rooted-fixture-" + std::to_wstring(GetCurrentProcessId());
   wchar_t executable[32768];

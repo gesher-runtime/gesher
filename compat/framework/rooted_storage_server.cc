@@ -3,6 +3,7 @@
 #include "rooted_storage_server.h"
 
 #include <bcrypt.h>
+#include <sys/statvfs.h>
 
 #include <array>
 #include <atomic>
@@ -65,6 +66,8 @@ bool Valid(const wire::Request& request) {
     case wire::Op::kMakeDirectory: return request.flags == 0;
     case wire::Op::kRemove: return (request.flags & ~wire::kDirectory) == 0;
     case wire::Op::kRename: return (request.flags & ~wire::kReplace) == 0;
+    case wire::Op::kStatAndroidData:
+      return request.source_area == wire::kCredential && request.flags == 0 && request.path_units == 0;
   }
   return false;
 }
@@ -96,7 +99,7 @@ bool ReadName(HANDLE pipe, uint32_t units, std::wstring* name, ULONGLONG deadlin
 }
 
 int Dispatch(const Roots& roots, const wire::Request& request, std::wstring_view path,
-             std::wstring_view target, OwnedHandle* opened, bool* created) {
+             std::wstring_view target, OwnedHandle* opened, bool* created, wire::Filesystem* filesystem) {
   const Area area = ReadArea(request.source_area);
   switch (request.operation) {
     case wire::Op::kOpen: {
@@ -109,6 +112,14 @@ int Dispatch(const Roots& roots, const wire::Request& request, std::wstring_view
     case wire::Op::kRemove: return Remove(roots, area, path, (request.flags & wire::kDirectory) != 0);
     case wire::Op::kRename:
       return Rename(roots, area, path, ReadArea(request.target_area), target, (request.flags & wire::kReplace) != 0);
+    case wire::Op::kStatAndroidData: {
+      // Retain the exact legacy logical /data backing-volume resolution. The
+      // trusted host has no guest bootstrap scope, so this cannot recurse.
+      struct statvfs data{};
+      if (statvfs("/data", &data) != 0) return errno;
+      *filesystem = {data.f_bavail * data.f_frsize, data.f_blocks * data.f_frsize, data.f_bfree * data.f_frsize};
+      return 0;
+    }
   }
   return EINVAL;
 }
@@ -255,13 +266,17 @@ class Server::State {
     OwnedHandle file;
     bool created = false;
     wire::Reply reply;
-    reply.status = Dispatch(roots(), request, path, target, &file, &created);
+    wire::Filesystem filesystem{};
+    reply.status = Dispatch(roots(), request, path, target, &file, &created, &filesystem);
     if (!IsLive()) return;
     const ULONGLONG send_deadline = GetTickCount64() + kOperationWindowMillis;
     if (file) {
       if (!process_identity::MatchPipeSender(pipe, peer.get(), identity)) return;
       if (!TransferFile(pipe, peer.get(), identity, file.get(), created, send_deadline)) return;
     } else if (!Transfer(pipe, &reply, sizeof(reply), true, send_deadline)) {
+      return;
+    } else if (request.operation == wire::Op::kStatAndroidData && reply.status == 0 &&
+               !Transfer(pipe, &filesystem, sizeof(filesystem), true, send_deadline)) {
       return;
     }
     // DisconnectNamedPipe discards unread response bytes. An honest peer
