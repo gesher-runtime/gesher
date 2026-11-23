@@ -170,6 +170,8 @@ public final class GesherAppDriver {
         Application app = apk.makeApplicationInner(false /* forceDefaultAppClass */,
                 null /* instrumentation */);
         thread.mInitialApplication = app;
+        // Follow the Activities from the first one (the camera's orientation).
+        GesherActivityWindow.trackActivities();
         instrumentation.onCreate(null);
         instrumentation.callApplicationOnCreate(app);
         log(app.getClass().getName() + " onCreate");

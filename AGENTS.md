@@ -16,11 +16,14 @@ asks for a general code review without repeating the policy.
   the real one is hard (for example, choosing an existing image when the
   application asked for a live camera capture), and do not report success for
   something that did not happen.
-- Desktop adaptations (presentation, input, orientation, desktop defaults) are
-  in scope when they are documented, named as Gesher's where applications can
-  see them, and give way to real hardware. CONTRIBUTING.md lists the decided
-  examples, such as display-relative camera orientation and the stationary
-  accelerometer.
+- Report features, capabilities and hardware characteristics the PC really
+  has. Desktop adaptations (presentation, input, orientation) are in scope when
+  they are documented, named as Gesher's where applications can see them, and
+  give way to real hardware. A default may describe the PC's real state, never
+  substitute content, and a new default applications can see needs a
+  maintainer decision recorded in CONTRIBUTING.md, which lists the decided
+  ones (display-relative camera orientation, the front-facing PC camera, the
+  stationary accelerometer).
 - Preserve permissions, consent, security and lifecycle behavior. Discuss
   unclear scope questions in the issue or PR; the maintainer decides them.
   Continue ordinary compatibility work without additional scope approval.
@@ -37,8 +40,8 @@ asks for a general code review without repeating the policy.
    that did not happen. Inspect affected call paths and tests
    where needed; green CI does not establish policy compliance.
 3. Mark a policy violation as a **merge blocker**. Cite the code location,
-   what the application requested, what the implementation does, the applicable
-   contract and the observable consequence. Base removal or redesign on that
+   what the application requested, what the implementation does and the
+   observable consequence. Base removal or redesign on that
    mismatch or a concrete correctness, security, performance or resource problem.
    Preserve useful Windows adaptations without a substantiated defect; internal
    differences from AOSP are not sufficient grounds for rejection.
@@ -49,7 +52,7 @@ asks for a general code review without repeating the policy.
 4. Verify contract evidence and any relevant scope discussion in the supplied or
    accessible sources. If evidence is unavailable, state what is missing and
    withhold an approval recommendation. Do not treat a contributor's assertion
-   or a checked box as evidence of Android compatibility.
+   or a checked box as evidence.
 5. Check correctness, resource use and relevant regressions after scope review.
    Distinguish real production execution from mocks and host-only tests. Reassess
    affected findings when the PR changes.

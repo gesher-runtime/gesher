@@ -28,13 +28,20 @@ What must stay the same is what the user and the application actually do:
   a capture, a payment, an autofocus, a permission the user did not grant. When
   something is unavailable, use Android's own unavailable or unsupported
   behavior.
+- **Honest capabilities.** Features, capabilities and hardware characteristics
+  describe what the PC really has, apart from the decided adaptations listed
+  below. Selecting a real camera or describing its mounting does not raise its
+  hardware level or add capabilities.
 - **The user's choices and protections.** Permissions, consent, security and the
   application lifecycle keep working as on Android.
 
 Adapting Android to the desktop is in scope: presentation, input, orientation
 and defaults may follow what a PC is. Such adaptations are documented, named as
 Gesher's where an application can see them, and give way to real hardware when
-it exists.
+it exists. A default may describe the PC's real state (it stands still, its
+camera faces the user); it never substitutes content (an image, a location, a
+reading of something that is not there). A new default that applications can
+see is a maintainer decision, recorded in the examples below.
 
 Examples:
 
@@ -42,6 +49,7 @@ Examples:
 | --- | --- |
 | Connect Android's camera APIs to a Windows camera. | Within scope. |
 | Let the user select which real Windows camera is used, and describe its physical mounting. | Within scope. |
+| Report a PC camera not configured as rear as Android's front camera. | Within scope: a desktop default. A PC's camera faces the user; `GESHER_CAMERA_REAR_ID` marks a rear one. |
 | Report a camera's orientation relative to the display rotation of the Activity using it, since Windows delivers frames upright for the monitor. | Within scope: a desktop adaptation. The frames and the capture are real. |
 | Expose Gesher's stationary accelerometer (gravity only) on a PC without motion sensors. | Within scope: a desktop default. Real motion sensors replace it, it is documented and `GESHER_SENSOR_FALLBACK=0` turns it off. |
 | Implement an Android file-selection request with a Windows file picker. | Within scope: the user picks a file, as asked. |
@@ -49,9 +57,9 @@ Examples:
 | Report success for an operation that did not run (a capture, a payment, an autofocus). | Outside scope. |
 | Add package-name exceptions so tests pass while ordinary applications behave differently. | Outside scope. Tests must exercise the production behavior. |
 
-Mock devices and synthetic inputs belong in explicit, isolated tests. Anything
-synthetic that ordinary applications can see is a documented desktop default
-(as above), never a hidden test fixture.
+Mock devices and synthetic inputs belong in explicit, isolated tests. Ordinary
+applications see synthetic values only through a decided desktop default listed
+above, never through a test fixture.
 
 When it is unclear whether a change keeps the requested operation or replaces
 it, discuss it in an issue or PR and link the discussion. The maintainer decides

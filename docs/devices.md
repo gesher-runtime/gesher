@@ -65,10 +65,15 @@ Windows without them (no location service, no Media Foundation) gets clean
 - When Windows has no accelerometer, gyrometer or orientation sensor, Gesher
   adds "Gesher Stationary Accelerometer" (vendor Gesher): a PC stands still, so
   it reads gravity only, on Z (lying face up), continuously, at up to 100 Hz.
+  Z rather than an upright monitor's Y is deliberate: an app's
+  OrientationEventListener then reports no tilt (ORIENTATION_UNKNOWN), so apps
+  that follow the device's tilt do not rotate their content on a desk.
   This is a maintainer-approved desktop default (CONTRIBUTING.md). It is the
   same in every process and mode (single process and the Gesher device's app
   processes; the native sensor list decides, nothing is set per package), and
-  any real motion sensor replaces it. `GESHER_SENSOR_FALLBACK=0` turns it off:
+  any real motion sensor replaces it. A motion sensor class Windows fails to
+  activate (rather than reporting none) keeps it out, so it never stands in for
+  hardware that is present. `GESHER_SENSOR_FALLBACK=0` turns it off:
   the list is then empty on the runners and `registerListener` answers false.
   Both are checked in the single-process mode.
 - Each event queue is an eventfd watched by the queue's Looper, as Android's
@@ -108,7 +113,8 @@ Windows without them (no location service, no Media Foundation) gets clean
   source as a registered COM server and the Frame Server service; not done.
 - Characteristics: an EXTERNAL-level camera (as Android's USB cameras): fixed
   focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
-  device's sizes, LENS_FACING_EXTERNAL (the test camera: BACK), one partial
+  device's sizes, LENS_FACING_FRONT unless configured as the rear camera
+  (`GESHER_CAMERA_REAR_ID`; the test camera: BACK), one partial
   result, the available request/result/characteristics keys.
 - Orientation (maintainer-approved desktop adaptation, CONTRIBUTING.md): the
   frames are upright for the desktop monitor and Gesher does not rotate preview
@@ -117,9 +123,11 @@ Windows without them (no location service, no Media Foundation) gets clean
   using the camera (its own `Display.getRotation()`; the focused task's only in
   a process without an Activity, as a service): Android's formulas then ask
   for no rotation and apps keep unswapped preview sizes in landscape tasks.
-  In a landscape task the same camera reads 90 through Camera2 (LENS_FACING_EXTERNAL, the rear
-  sign) and 270 through the legacy API when it is not the rear camera (front,
-  mirrored). An app that caches the value (CameraX caches
+  A rear camera reads the Activity's rotation in degrees (90 at ROTATION_90), a
+  front camera its mirror (270 at ROTATION_90), the same through Camera2, the
+  legacy API and CameraX. A PC's camera is reported FRONT (and
+  FEATURE_CAMERA_FRONT) unless configured as rear: it faces the user
+  (maintainer decision, CONTRIBUTING.md). An app that caches the value (CameraX caches
   CameraCharacteristics per process) keeps the rotation of its first read; a
   later change of its task's orientation is not followed.
 - `CameraDeviceUser` (CameraDeviceClient): streams from OutputConfigurations,

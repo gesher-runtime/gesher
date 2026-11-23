@@ -30,9 +30,9 @@ author's later labels. No separate author COMMENT review is required. The bot
 records a native approval binding the repository, PR, head, base and label event.
 This receipt records authorization; it is not a code-review or scope verdict.
 
-Legacy unedited receipts and opening boundaries retain their meaning. Maintainer
-approval cannot waive the Android-visible contract requirements in
-CONTRIBUTING.md.
+Legacy unedited receipts and opening boundaries retain their meaning. The label
+does not replace a scope decision; scope decisions are recorded in
+CONTRIBUTING.md or the linked discussion.
 
 ## One PR CI run and final QA
 

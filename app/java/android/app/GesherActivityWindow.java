@@ -131,7 +131,7 @@ public final class GesherActivityWindow {
      * the main thread by the lifecycle callbacks; reading its Configuration is a field read.
      */
     public static int activeDisplayRotation() {
-        track();
+        trackActivities();
         Activity a = sCurrent.get();
         if (a == null) a = seedFromMainThread();
         if (a == null || a.isDestroyed()) return WindowConfiguration.ROTATION_UNDEFINED;
@@ -146,9 +146,10 @@ public final class GesherActivityWindow {
      * Follows Activities from their creation (onActivityPreCreated runs after attach, so
      * the new Activity's configuration is set, before onCreate: the record of the Activity
      * being replaced is not used) and on each resume. Registered once, when the
-     * Application exists.
+     * Application exists: by the app process before its first Activity transaction
+     * (GesherAppProcess, GesherAppDriver), else on the first rotation query.
      */
-    private static void track() {
+    static void trackActivities() {
         if (sTracking.get()) return;
         Application app = ActivityThread.currentApplication();
         if (app == null || !sTracking.compareAndSet(false, true)) return;
@@ -171,23 +172,30 @@ public final class GesherActivityWindow {
     }
 
     /**
-     * Before the callbacks saw an Activity (they were registered after it resumed): the top
-     * resumed one, else a resumed one, read from ActivityThread's records on the main thread,
-     * which owns them. Waits for the main thread briefly; null if it is busy or has none.
+     * Before the callbacks saw an Activity (they were registered after it was created): the
+     * top resumed one, else a resumed one, else one being created or started, read from
+     * ActivityThread's records on the main thread, which owns them. Waits for the main
+     * thread up to a second (an Activity's onCreate may hold it); null if it has none.
      */
     private static Activity seedFromMainThread() {
         ActivityThread at = ActivityThread.currentActivityThread();
         if (at == null) return null;
         java.util.concurrent.Callable<Activity> find = () -> {
-            Activity fallback = null;
+            Activity resumed = null;
+            Activity starting = null;
             for (int i = 0; i < at.mActivities.size(); i++) {
                 ActivityThread.ActivityClientRecord r = at.mActivities.valueAt(i);
-                if (r == null || r.activity == null || r.paused || r.stopped
-                        || r.activity.mFinished) continue;
-                if (r.isTopResumedActivity) return r.activity;
-                if (fallback == null) fallback = r.activity;
+                if (r == null || r.activity == null || r.activity.mFinished) continue;
+                int state = r.getLifecycleState();
+                if (state == android.app.servertransaction.ActivityLifecycleItem.ON_RESUME) {
+                    if (r.isTopResumedActivity) return r.activity;
+                    if (resumed == null) resumed = r.activity;
+                } else if (state == android.app.servertransaction.ActivityLifecycleItem.ON_CREATE
+                        || state == android.app.servertransaction.ActivityLifecycleItem.ON_START) {
+                    if (starting == null) starting = r.activity;
+                }
             }
-            return fallback;
+            return resumed != null ? resumed : starting;
         };
         Activity found;
         try {
@@ -199,7 +207,7 @@ public final class GesherActivityWindow {
                 if (!new android.os.Handler(android.os.Looper.getMainLooper()).post(task)) {
                     return null;
                 }
-                found = task.get(250, java.util.concurrent.TimeUnit.MILLISECONDS);
+                found = task.get(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
         } catch (Exception e) {
             return null;

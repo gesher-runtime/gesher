@@ -123,8 +123,7 @@ $sn = 'devices: sensors: '
 # answers null for each kind). By default Gesher's stationary accelerometer stands in for
 # the missing motion sensors (gravity on Z, CONTRIBUTING.md): the production path.
 function SensorsStationaryCheck([string] $Mode, [string] $Out, [int] $Code) {
-  if ($Out -match 'sensors: (accelerometer: [^
-]*)') { $win = $Matches[1] } else { $win = '(not logged)' }
+  if ($Out -match 'sensors: (accelerometer: [^\r\n]*)') { $win = $Matches[1] } else { $win = '(not logged)' }
   DevCheck "devices: sensors ($Mode): no Windows motion sensor here ($win); Gesher's stationary accelerometer by default: the list, gravity-only events on a Handler, flush, unregisterListener" $Out @(
     ,@("${sn}1 sensors: Gesher Stationary Accelerometer (android.sensor.accelerometer)",
       "${sn}accelerometer Gesher Stationary Accelerometer, range 78.4532, min delay 10000 us",

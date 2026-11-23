@@ -40,7 +40,7 @@ jobs:
             # The reviewed shared track also runs the camera callback-admission gate
             # and stationary accelerometer checks; its geocoder implementation and
             # the other nine pins are unchanged.
-            'tests/windows/tracks/58-devices.ps1' = 'cbd951900537d7b3eb3bcc2a52275f56fcdb04c0'
+            'tests/windows/tracks/58-devices.ps1' = '87167c73fd3ce570fef7caba9a80ae23f79047ad'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

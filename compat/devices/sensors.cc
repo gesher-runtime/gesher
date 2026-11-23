@@ -231,9 +231,12 @@ std::vector<Sensor> Find() {
   std::string& describe = DescribeText();
   int handle = 1;
   // A gravity-only reading would contradict a real accelerometer, gyrometer or
-  // orientation sensor, so the stationary default exists only without all three.
-  bool hasMotionSensor = false;
+  // orientation sensor, so the stationary default exists only when Windows answers
+  // that it has none of the three (a failed activation or query is not "none").
+  bool motionPresentOrUnknown = false;
   for (const WindowsClass& c : kWindowsClasses) {
+    const bool motion =
+        c.type == kAccelerometer || c.type == kGyroscope || c.type == kRotationVector;
     if (!describe.empty()) describe += ", ";
     describe += c.label;
     describe += ": ";
@@ -244,19 +247,25 @@ std::vector<Sensor> Find() {
       char buf[32];
       snprintf(buf, sizeof(buf), "HRESULT 0x%08lX", static_cast<unsigned long>(hr));
       describe += buf;
+      if (motion) motionPresentOrUnknown = true;
       continue;
     }
     IUnknown* sensor = nullptr;
     hr = statics->GetDefault(&sensor);
     statics->Release();
-    if (FAILED(hr) || sensor == nullptr) {
+    if (FAILED(hr)) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "HRESULT 0x%08lX", static_cast<unsigned long>(hr));
+      describe += buf;
+      if (motion) motionPresentOrUnknown = true;
+      continue;
+    }
+    if (sensor == nullptr) {
       describe += "none";
       continue;
     }
     describe += "present";
-    if (c.type == kAccelerometer || c.type == kGyroscope || c.type == kRotationVector) {
-      hasMotionSensor = true;
-    }
+    if (motion) motionPresentOrUnknown = true;
     auto source = std::make_shared<WindowsSource>(static_cast<ISensorBase*>(sensor), c.type);
     Sensor s;
     s.handle = handle++;
@@ -301,7 +310,7 @@ std::vector<Sensor> Find() {
     l.source = std::make_shared<TestSource>(kLight);
     list.push_back(l);
     describe += ", test sensors: accelerometer, light";
-  } else if (!hasMotionSensor && StationaryDefaultEnabled()) {
+  } else if (!motionPresentOrUnknown && StationaryDefaultEnabled()) {
     // Maintainer-approved desktop default (CONTRIBUTING.md): a PC without motion
     // sensors stands still, so the accelerometer reads gravity only. Named as
     // Gesher's; GESHER_SENSOR_FALLBACK=0 turns it off.

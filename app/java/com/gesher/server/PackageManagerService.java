@@ -1188,13 +1188,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
     }
 
-    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
+    /**
+     * Report real cameras: a configured rear camera as FEATURE_CAMERA, the others as front
+     * cameras (a PC's camera faces the user; CONTRIBUTING.md), without inferred capabilities.
+     */
     static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
-            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
+            addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
+                    : PackageManager.FEATURE_CAMERA_FRONT);
         }
     }
 

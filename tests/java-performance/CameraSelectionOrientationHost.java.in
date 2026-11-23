@@ -173,9 +173,16 @@ public final class CameraSelectionOrientationHost {
         addCameraFeatures(dualFeat, def);
         check(dualFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA)
-                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
+                && dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
                 && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
-                "uncalibrated cameras invented directional or autofocus capabilities");
+                "cameras not configured as rear must be front cameras, without autofocus");
+
+        android.util.ArrayMap<String, android.content.pm.FeatureInfo> mixedFeat =
+                new android.util.ArrayMap<>();
+        addCameraFeatures(mixedFeat, selected);
+        check(mixedFeat.containsKey(PackageManager.FEATURE_CAMERA)
+                && mixedFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT),
+                "a rear and a front camera must report both features");
 
         System.out.println("Camera selection & orientation PASS: " + checks + " checks");
     }
