@@ -463,6 +463,37 @@ public final class WifiAccessHost {
             lock.release();
             rejects(RuntimeException.class, lock::release, "under-locked release");
             rejects(IllegalArgumentException.class, () -> manager.createWifiLock(0, "t").acquire(), "invalid lock mode at acquire");
+            // Android moves the count before its checks: an over-release leaves it negative,
+            // so the next acquire does not hold the lock.
+            lock.acquire();
+            check(!lock.isHeld() && lock.toString().contains("refcount = 0"), "acquire after over-release is not held");
+            WifiManager.WifiLock sourced = manager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "w");
+            sourced.acquire();
+            rejects(SecurityException.class, () -> sourced.setWorkSource(null),
+                    "clearing a held lock's work source needs UPDATE_DEVICE_STATS");
+            sourced.release();
+            // One listener object may implement several listener interfaces; Android keeps a
+            // registration per listener type.
+            final class Both implements WifiManager.WifiStateChangedListener,
+                    WifiManager.SuggestionUserApprovalStatusListener {
+                @Override public void onWifiStateChanged() { }
+                @Override public void onUserApprovalStatusChange(int status) { }
+            }
+            Both both = new Both();
+            int before = service.callbacks.size();
+            manager.addWifiStateChangedListener(executor, both);
+            manager.addSuggestionUserApprovalStatusListener(executor, both);
+            check(service.callbacks.size() == before + 2, "each listener type is registered for the same object");
+            manager.removeWifiStateChangedListener(both);
+            check(service.callbacks.size() == before + 1, "removing one type keeps the other registration");
+            manager.removeSuggestionUserApprovalStatusListener(both);
+            queued.clear();
+            // WifiServiceImpl checks that fine location is granted, not merely declared.
+            caller.permissions.remove(FINE);
+            WifiManager.SuggestionConnectionStatusListener status = (s1, reason) -> { };
+            rejects(SecurityException.class, () -> manager.addSuggestionConnectionStatusListener(executor, status),
+                    "suggestion connection listener needs granted fine location");
+            caller.permissions.add(FINE);
         } finally {
             if (previousWifi == null) cache.remove(IWindowsWifi.NAME); else cache.put(IWindowsWifi.NAME, previousWifi);
         }

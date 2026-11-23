@@ -551,30 +551,34 @@ public class WifiManager {
     }
 
     // Keyed by identity, as Android keys listener proxies by System.identityHashCode.
-    private static final Map<Object, Remote> sRemotes = new IdentityHashMap<>();
+    private static final Map<Integer, Map<Object, Remote>> sRemotes = new HashMap<>();
+
+    private static Map<Object, Remote> remotes(int kind) {
+        return sRemotes.computeIfAbsent(kind, ignored -> new IdentityHashMap<>());
+    }
 
     private void register(int kind, Object key, Executor executor, IntConsumer target) {
         Remote remote = new Remote(executor, target);
         synchronized (sRemotes) {
-            if (sRemotes.containsKey(key)) return;
-            sRemotes.put(key, remote);
+            if (remotes(kind).containsKey(key)) return;
+            remotes(kind).put(key, remote);
         }
         IWindowsWifi service = service();
         if (service == null) return;
         try {
             service.registerCallback(packageName(), attributionTag(), kind, remote);
         } catch (RemoteException e) {
-            synchronized (sRemotes) { sRemotes.remove(key); }
+            synchronized (sRemotes) { remotes(kind).remove(key); }
             throw e.rethrowFromSystemServer();
         } catch (RuntimeException e) {
-            synchronized (sRemotes) { sRemotes.remove(key); }
+            synchronized (sRemotes) { remotes(kind).remove(key); }
             throw e;
         }
     }
 
     private void unregister(int kind, Object key) {
         Remote remote;
-        synchronized (sRemotes) { remote = sRemotes.remove(key); }
+        synchronized (sRemotes) { remote = remotes(kind).remove(key); }
         if (remote == null) return;
         remote.active = false;
         IWindowsWifi service = service();
@@ -615,7 +619,7 @@ public class WifiManager {
         if (executor == null) throw new IllegalArgumentException("Executor cannot be null");
         WifiAccess.enforceAccess(mContext);
         // From T, WifiServiceImpl requires ACCESS_FINE_LOCATION declared in the manifest.
-        if (!declares(FINE)) throw new SecurityException("UID " + myUid() + " has no location permission");
+        if (!granted(FINE)) throw new SecurityException("UID " + myUid() + " has no location permission");
         // Failures are reported only for suggested-network connection attempts.
         register(IWindowsWifi.CALLBACK_SUGGESTION_CONNECTION, listener, executor, value -> { });
     }
@@ -885,19 +889,17 @@ public class WifiManager {
 
         private WifiLock(int lockType, String tag) { mLockType = lockType; mTag = tag; }
 
+        // As Android: the count moves before the checks, so a failed first acquire leaves
+        // it at 1 (a retry is then a no-op) and an over-release leaves it negative.
         public void acquire() {
             synchronized (this) {
-                if (mRefCounted ? mRefCount == 0 : !mHeld) {
+                if (mRefCounted ? ++mRefCount == 1 : !mHeld) {
                     enforceLockPermission(WAKE_LOCK);
                     if (mLockType < WIFI_MODE_FULL || mLockType > WIFI_MODE_FULL_LOW_LATENCY) {
                         throw new IllegalArgumentException("lockMode =" + mLockType);
                     }
                     lockAcquired();
                     mHeld = true;
-                }
-                if (mRefCounted) {
-                    if (mRefCount == Integer.MAX_VALUE) throw new IllegalStateException("Wi-Fi lock count overflow");
-                    mRefCount++;
                 }
             }
         }
@@ -908,10 +910,17 @@ public class WifiManager {
                     lockReleased();
                     mHeld = false;
                 }
-                if (mRefCount < 0) {
-                    mRefCount = 0;
-                    throw new RuntimeException("WifiLock under-locked " + mTag);
+                if (mRefCount < 0) throw new RuntimeException("WifiLock under-locked " + mTag);
+            }
+        }
+        /** A held lock that is garbage collected stops counting toward the 50-lock limit. */
+        @Override protected void finalize() throws Throwable {
+            try {
+                synchronized (this) {
+                    if (mHeld) { lockReleased(); mHeld = false; }
                 }
+            } finally {
+                super.finalize();
             }
         }
         public void setReferenceCounted(boolean refCounted) {
@@ -923,14 +932,25 @@ public class WifiManager {
         public void setWorkSource(WorkSource ws) {
             synchronized (this) {
                 if (ws != null && ws.isEmpty()) ws = null;
-                boolean changed = ws == null ? mWorkSource != null : mWorkSource != null && !mWorkSource.equals(ws);
+                // As Android: clearing always counts as a change (and is applied first);
+                // a held lock's change needs UPDATE_DEVICE_STATS.
+                boolean changed = true;
+                if (ws == null) {
+                    mWorkSource = null;
+                } else {
+                    ws = ws.withoutNames();
+                    if (mWorkSource == null) {
+                        changed = false;
+                        mWorkSource = new WorkSource(ws);
+                    } else {
+                        changed = !mWorkSource.equals(ws);
+                        if (changed) mWorkSource.set(ws);
+                    }
+                }
                 if (changed && mHeld && !granted("android.permission.UPDATE_DEVICE_STATS")) {
                     throw new SecurityException("Neither user " + myUid()
                             + " nor current process has android.permission.UPDATE_DEVICE_STATS.");
                 }
-                if (ws == null) mWorkSource = null;
-                else if (mWorkSource == null) mWorkSource = new WorkSource(ws);
-                else mWorkSource.set(ws);
             }
         }
         @Override public String toString() {
@@ -953,14 +973,10 @@ public class WifiManager {
 
         public void acquire() {
             synchronized (this) {
-                if (mRefCounted ? mRefCount == 0 : !mHeld) {
+                if (mRefCounted ? ++mRefCount == 1 : !mHeld) {
                     enforceLockPermission(MULTICAST);
                     lockAcquired();
                     mHeld = true;
-                }
-                if (mRefCounted) {
-                    if (mRefCount == Integer.MAX_VALUE) throw new IllegalStateException("Multicast lock count overflow");
-                    mRefCount++;
                 }
             }
         }
@@ -971,10 +987,17 @@ public class WifiManager {
                     lockReleased();
                     mHeld = false;
                 }
-                if (mRefCount < 0) {
-                    mRefCount = 0;
-                    throw new RuntimeException("MulticastLock under-locked " + mTag);
+                if (mRefCount < 0) throw new RuntimeException("MulticastLock under-locked " + mTag);
+            }
+        }
+        /** As Android: a held lock that is garbage collected is released. */
+        @Override protected void finalize() throws Throwable {
+            try {
+                synchronized (this) {
+                    if (mHeld) { lockReleased(); mHeld = false; }
                 }
+            } finally {
+                super.finalize();
             }
         }
         public void setReferenceCounted(boolean refCounted) {
