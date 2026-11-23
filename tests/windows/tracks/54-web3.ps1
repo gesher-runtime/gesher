@@ -454,6 +454,48 @@ try {
     "Web3 net Proxy.getDefaultHost 127.0.0.1 port $web3Proxy",
     'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
     'Web3 net done') 'Web3 net done'
+
+  # The control panel's proxy settings (tools/package/gesher-control-panel.ps1's production
+  # Set-ProxySetting, as its dialogs save them), each followed by a fresh app process: every
+  # app's proxy, the package's own direct over it, then "Same as every app" again.
+  $panelSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../../tools/package/gesher-control-panel.ps1'))
+  $panelTokens = $null; $panelErrors = $null
+  $panelAst = [Management.Automation.Language.Parser]::ParseInput($panelSource, [ref]$panelTokens, [ref]$panelErrors)
+  foreach ($name in 'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes',
+          'ConvertTo-PropertiesValue', 'Get-ProxySettings', 'Set-ProxySetting') {
+    $definition = $panelAst.Find({ param($node)
+      $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $false)
+    . ([scriptblock]::Create($definition.Extent.Text))
+  }
+  $script:ProxyFile = $saved
+  $proxiedGet = 'proxy GET http://web3-proxied.test/net'
+  function PanelProxyRun([string] $Name, [string[]] $Expect, [bool] $Proxied) {
+    Write-Host "INFO  web3: the control panel saved proxy.properties: $((Get-Content -LiteralPath $script:ProxyFile) -join ' | ')"
+    $before = ([GesherWeb3Servers]::Log -split "`n").Count - 1
+    $null = Web3Run $Name ($launch + '--activity', 'com.gesher.web3app.NetActivity') ($Expect + 'Web3 net done') 'Web3 net done'
+    $seen = ([GesherWeb3Servers]::Log -split "`n" | Select-Object -Skip $before) -join "`n"
+    if ($seen.Contains($proxiedGet) -eq $Proxied) {
+      Write-Host "PASS  web3: the test proxy $(if ($Proxied) { 'served' } else { 'did not see' }) the fresh process's request ($Name)"
+    } else {
+      Write-Host "FAIL  web3: the test proxy's requests for $Name ($($seen -replace "`n", ' | '))"
+      $script:failed++
+    }
+  }
+  $panelProxy = "127.0.0.1:$web3Proxy"
+  Set-ProxySetting '' $panelProxy
+  Set-ProxySetting 'com.gesher.web3app' $null
+  PanelProxyRun 'the Gesher device: the control panel''s proxy for every app, in a fresh NetActivity process' @(
+    "gesher-net: Gesher's proxy (GESHER_PROXY=$panelProxy)",
+    "Web3 net Proxy.getDefaultHost 127.0.0.1 port $web3Proxy",
+    'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test') $true
+  Set-ProxySetting 'com.gesher.web3app' 'direct'
+  PanelProxyRun 'the Gesher device: the control panel''s direct for the package over every app''s proxy, in a fresh process' @(
+    "gesher-net: Gesher's proxy (GESHER_PROXY=direct)",
+    'Web3 net http://web3-proxied.test/net: failed: ') $false
+  Set-ProxySetting 'com.gesher.web3app' $null
+  PanelProxyRun 'the Gesher device: the control panel''s "Same as every app" for the package, in a fresh process' @(
+    "gesher-net: Gesher's proxy (GESHER_PROXY=$panelProxy)",
+    'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test') $true
 } finally {
   $shutdownLog = Join-Path $env:RUNNER_TEMP 'web3-device-shutdown.log'
   $sd = Start-Process "$Web3RuntimeExe" -ArgumentList (@($dvmWeb3) + 'com.gesher.app.Launcher', 'shutdown') `

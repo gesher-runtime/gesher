@@ -194,6 +194,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         /** Actual manual-driver lifecycle; null for a server-driven application. */
         State inProcessActivityState;
         InProcessActivity inProcessActivity;
+        /** Actual activity-start history for BIND_ALLOW_OOM_MANAGEMENT; owned by this process. */
+        boolean shortcutHasShownUi;
         final List<ActivityRecord> activities = new ArrayList<>();
 
         ProcessRecord(int pid, IApplicationThread thread) {
@@ -540,6 +542,66 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         mAm = am;
     }
 
+    void attachShortcuts(DesktopShortcutService shortcuts) {
+        if (mAm != null) mAm.attachShortcuts(shortcuts);
+    }
+
+    synchronized boolean shortcutForeground(int uid) {
+        if (mAm == null) return false;
+        return mAm.shortcutState(uid, shortcutRoots(), mProcesses, this::shortcutCodeCurrent);
+    }
+
+    /** Record real visits even when the process returns to background between API calls. */
+    synchronized void noteShortcutForeground(ProcessRecord visited, int state) {
+        if (mAm == null) return;
+        java.util.Map<ProcessRecord, Integer> roots = shortcutRoots();
+        if (visited != null && shortcutProcessCurrent(visited)) {
+            roots = new java.util.HashMap<>(roots);
+            roots.merge(visited, state, Math::min);
+        }
+        mAm.shortcutState(-1, roots, mProcesses, this::shortcutCodeCurrent);
+    }
+
+    private boolean shortcutProcessCurrent(ProcessRecord app) {
+        return app != null && mProcesses.contains(app) && shortcutCodeCurrent(app);
+    }
+
+    private boolean shortcutCodeCurrent(ProcessRecord app) {
+        return app.ready && !app.dead && !app.exiting
+                && !app.pidSuperseded && app.packageCode != null && app.packageCode.uid() == app.uid
+                && mPm.get(app.packageName) == app.packageCode && !mPm.isRemovalPending(app.packageName);
+    }
+
+    private java.util.Map<ProcessRecord, Integer> shortcutRoots() {
+        java.util.Map<ProcessRecord, Integer> roots = null;
+        for (ProcessRecord app : mProcesses) {
+            if (!app.ready || app.dead || app.exiting || app.pidSuperseded || app.packageCode == null
+                    || app.packageCode.uid() != app.uid || mPm.get(app.packageName) != app.packageCode
+                    || mPm.isRemovalPending(app.packageName)) continue;
+            // OomAdjuster: a process with a visible activity, or one pausing or paused
+            // (an activity Gesher keeps paused under a translucent one), is TOP.
+            State own = app.inProcessActivityState;
+            boolean top = own == State.RESUMED || own == State.RESUMING
+                    || own == State.PAUSING || own == State.PAUSED;
+            for (ActivityRecord activity : app.activities) {
+                if (top) break;
+                if (activity.finishing || !mActivities.contains(activity)
+                        || !activityCodeCurrent(activity)) continue;
+                State state = activity.state;
+                boolean visibleState = state == State.RESUMED || state == State.RESUMING
+                        || state == State.STARTED
+                        || state == State.LAUNCHING && !activity.launchingPaused;
+                top = state == State.PAUSING || state == State.PAUSED
+                        || visibleState && isVisible(activity);
+            }
+            if (top) {
+                if (roots == null) roots = new java.util.HashMap<>();
+                roots.put(app, ActivityManager.PROCESS_STATE_TOP);
+            }
+        }
+        return roots == null ? java.util.Map.of() : roots;
+    }
+
     /** Snapshot actual process/activity state without nesting a service-controller monitor. */
     synchronized java.util.Map<Integer, AppOpsService.UidState> appOpsUidStates() {
         java.util.Map<Integer, AppOpsService.UidState> result = new java.util.HashMap<>();
@@ -660,6 +722,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 || !mProcesses.contains(app) || app.packageCode != mPm.get(app.packageName)
                 || mPm.isRemovalPending(app.packageName)) return;
         app.inProcessActivityState = state;
+        if (app.ready && !app.pidSuperseded && (state == State.RESUMED || state == State.RESUMING)) {
+            app.shortcutHasShownUi = true;
+        }
         updateIdle();
     }
 
@@ -687,6 +752,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void recordUsage(ActivityRecord record, ActivityUsageHistory.State state) {
+        if (state == ActivityUsageHistory.State.RESUMED && record.app != null
+                && record.app.ready && !record.app.dead && !record.app.exiting && !record.app.pidSuperseded
+                && mProcesses.contains(record.app) && mActivities.contains(record)
+                && record.app.activities.contains(record) && activityCodeCurrent(record)
+                && record.app.uid == record.targetCode.uid()) {
+            record.app.shortcutHasShownUi = true;
+            noteShortcutForeground(record.app, ActivityManager.PROCESS_STATE_TOP);
+        }
         if (mUsageStats != null) {
             mUsageStats.transition(record.token, record.info.packageName, record.info.name, state);
         }
@@ -3735,6 +3808,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * Guarded by this.
      */
     private void updateIdle() {
+        noteShortcutForeground(null, 0);
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
         if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mAccountChoosers.isEmpty()
                 || !mExactAlarmSettingsSessions.isEmpty() || !mDocumentPickers.isEmpty()
@@ -4892,6 +4966,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             r.launchingPaused = !andResume;
             setState(r, State.LAUNCHING);
+            if (r.app != null && shortcutProcessCurrent(r.app)) r.app.shortcutHasShownUi = true;
         }
         schedule(r, t, andResume ? "LaunchActivityItem, ResumeActivityItem"
                 : "LaunchActivityItem, PauseActivityItem");
@@ -5170,6 +5245,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * resumed (multi-resume).
      */
     private void updateTopResumed() {
+        noteShortcutForeground(null, 0);
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
         ActivityRecord lose = null;
         ActivityRecord gain = null;
@@ -5793,6 +5869,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void setState(ActivityRecord r, State state) {
         synchronized (this) {
             r.state = state;
+            noteShortcutForeground(null, 0);
             notifyAll();
         }
     }
@@ -6333,6 +6410,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             r.launchingPaused = false;
             r.state = State.PAUSED;
+            noteShortcutForeground(null, 0);
             finishing = r.finishing;
             // Paused as its task went to the back: stopped now (nothing in front of it will
             // report idle).
@@ -6440,6 +6518,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (r.state == State.STOPPING) {
                 if (r.app != null && !r.app.dead) recordUsage(r, ActivityUsageHistory.State.STOPPED);
                 r.state = State.STOPPED;
+                noteShortcutForeground(null, 0);
             }
             destroy = r.finishing;
             notifyAll();
