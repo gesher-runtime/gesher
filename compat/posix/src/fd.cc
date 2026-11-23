@@ -145,7 +145,8 @@ class AppContainerNull {
     startup.cb = sizeof(startup);
     GetStartupInfoW(&startup);
     binder_bootstrap::Startup launch;
-    if (binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kApplication, &launch)) {
+    if (binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kApplication, &launch) ||
+        binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kStandalone, &launch)) {
       HANDLE inherited = binder_bootstrap::DecodeHandle(launch.null_device);
       handle_ = DuplicateVerifiedNull(inherited);
       if (inherited != startup.hStdInput && inherited != startup.hStdOutput &&

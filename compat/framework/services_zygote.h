@@ -48,9 +48,12 @@ std::vector<int> StartProtectedDevice(const std::u16string& device,
 // runs. The install UUID and UID come from the server's durable package data.
 int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std::u16string>& set,
     const std::vector<std::u16string>& unset, const std::u16string& log_path,
-    const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation);
+    const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation,
+    uint64_t start_sequence);
 bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bool revoke);
-bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation);
+bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation, uint64_t stop_through);
+uint32_t RunContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
+                               const std::u16string& code, uint32_t uid, uint32_t* exit_code);
 bool HasProtectedLaunchAuthority();
 bool PrepareProtectedOperator(int broker_pid, uint64_t birth);
 

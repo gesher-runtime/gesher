@@ -8,6 +8,7 @@
 
 #include "internal.h"
 #include "revocable_internal.h"
+#include "standalone_input.h"
 
 extern "C" int gesher_is_socket(int fd);
 
@@ -88,12 +89,16 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
     case gesher::PathKind::kFile: {
       // Directories need backup semantics to be opened; no access right is
       // needed to read attributes.
-      HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
+      auto& selected = gesher::standalone_input::Current();
+      const bool inherited = selected.Matches(windows);
+      HANDLE h = inherited ? selected.Open(true) : CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING,
                              FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
                              nullptr);
-      if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+      if (h == INVALID_HANDLE_VALUE) {
+        return inherited ? (errno = EACCES, -1) : gesher::FailWithLastError();
+      }
       int result = FromHandle(h, buf);
       if (result == 0 && !follow && gesher::IsSymlinkHandle(h)) {
         // A symbolic link (or a junction): Linux reports the link, its size

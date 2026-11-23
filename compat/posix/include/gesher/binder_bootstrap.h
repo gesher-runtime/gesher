@@ -10,7 +10,7 @@
 namespace gesher::binder_bootstrap {
 
 enum class Endpoint : uint32_t { kBroker = 1, kSystemServer = 2, kClient = 3,
-                                 kApplication = 4 };
+                                 kApplication = 4, kStandalone = 5 };
 
 inline uint64_t EncodeHandle(HANDLE handle) {
   return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(handle));
@@ -25,7 +25,7 @@ inline HANDLE DecodeHandle(uint64_t value) {
 struct Startup {
   uint32_t crt_descriptors = 0;
   uint32_t magic = 0x474c4155;  // GLAU
-  uint32_t version = 3;
+  uint32_t version = 5;
   Endpoint endpoint{};
   uint64_t channel = 0;
   uint64_t broker = 0;
@@ -33,8 +33,17 @@ struct Startup {
   uint64_t null_device = 0;
   uint32_t uid = 0;
   uint32_t reserved = 0;
+  uint64_t code_file = 0;
+  uint64_t code_channel = 0;
+  uint64_t code_name = 0;
 };
-static_assert(sizeof(Startup) == 56);
+static_assert(sizeof(Startup) == 80);
+inline constexpr uint32_t kOpenStandaloneInput = 0x47444f50;  // GDOP
+struct StandaloneName {
+  static constexpr uint32_t kMaxPath = 32768;
+  uint32_t length;
+  wchar_t path[kMaxPath];
+};
 
 inline bool ReadStartupRecord(Startup* result) {
   STARTUPINFOW startup{};
@@ -42,14 +51,19 @@ inline bool ReadStartupRecord(Startup* result) {
   GetStartupInfoW(&startup);
   if (startup.cbReserved2 < sizeof(Startup) || startup.lpReserved2 == nullptr) return false;
   std::memcpy(result, startup.lpReserved2 + startup.cbReserved2 - sizeof(*result), sizeof(*result));
-  return result->crt_descriptors == 0 && result->magic == 0x474c4155 && result->version == 3 &&
+  return result->crt_descriptors == 0 && result->magic == 0x474c4155 && result->version == 5 &&
          result->reserved == 0 &&
-         (result->endpoint == Endpoint::kApplication || startup.cbReserved2 == sizeof(Startup));
+         (result->endpoint == Endpoint::kApplication || result->endpoint == Endpoint::kStandalone ||
+          startup.cbReserved2 == sizeof(Startup));
 }
 
 inline bool ReadStartup(Endpoint endpoint, Startup* result) {
   Startup record;
   if (!ReadStartupRecord(&record) || record.endpoint != endpoint) return false;
+  if (endpoint != Endpoint::kStandalone &&
+      (record.code_channel != 0 || record.code_file != 0 || record.code_name != 0)) {
+    return false;
+  }
   switch (endpoint) {
     case Endpoint::kBroker:
       if (GetFileType(DecodeHandle(record.channel)) != FILE_TYPE_PIPE ||
@@ -73,6 +87,15 @@ inline bool ReadStartup(Endpoint endpoint, Startup* result) {
           GetFileType(DecodeHandle(record.null_device)) != FILE_TYPE_CHAR ||
           record.uid < 10000 || record.uid > 19999) return false;
       break;
+    case Endpoint::kStandalone:
+      if (record.channel != 0 || record.broker != 0 || record.job_delivery != 0 ||
+          GetFileType(DecodeHandle(record.null_device)) != FILE_TYPE_CHAR ||
+          record.uid < 10000 || record.uid > 19999 ||
+          (record.code_file == 0) != (record.code_channel == 0) ||
+          (record.code_file == 0) != (record.code_name == 0) ||
+          (record.code_file != 0 && (GetFileType(DecodeHandle(record.code_file)) != FILE_TYPE_DISK ||
+           GetFileType(DecodeHandle(record.code_channel)) != FILE_TYPE_PIPE))) return false;
+      break;
   }
   *result = record;
   return true;
@@ -81,7 +104,8 @@ inline bool ReadStartup(Endpoint endpoint, Startup* result) {
 inline uint32_t GuestUid() {
   Startup record;
   if (!ReadStartupRecord(&record)) return 0;
-  if (record.endpoint == Endpoint::kApplication && record.uid >= 10000 && record.uid <= 19999) {
+  if ((record.endpoint == Endpoint::kApplication || record.endpoint == Endpoint::kStandalone) &&
+      record.uid >= 10000 && record.uid <= 19999) {
     return record.uid;
   }
   if ((record.endpoint == Endpoint::kSystemServer || record.endpoint == Endpoint::kClient) &&

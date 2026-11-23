@@ -273,7 +273,7 @@ index ee26bfc04..7b34b365f 100644
 +  }
 +  g_sandbox = g_peer_registry || gesher::appcontainer::Enabled();
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index d693bd9fe..e3d04fb36 100644
+index d693bd9fe..fb6271bc5 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
 @@ -4,0 +5 @@
@@ -286,23 +286,27 @@ index d693bd9fe..e3d04fb36 100644
 -                             FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
 -                             OPEN_EXISTING, 0, nullptr);
 +    HANDLE nul = gesher::OpenDescriptorPlaceholder(true);
-@@ -612 +611,6 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -612 +611,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 -  std::vector<unsigned char> block(crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0), 0);
 +  auto& binder = binder_endpoint::Current();
 +  const bool protected_guest = binder.IsGuest();
++  const bool enrolled_guest = binder.IsEnrolledGuest();
 +  if (protected_guest && (extra_flags & CREATE_BREAKAWAY_FROM_JOB) != 0) return ERROR_ACCESS_DENIED;
 +  const size_t descriptor_bytes = crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0);
 +  std::vector<unsigned char> block(descriptor_bytes +
 +      (protected_guest ? sizeof(binder_bootstrap::Startup) : 0), 0);
-@@ -646,0 +651,15 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -646,0 +652,18 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 +  if (protected_guest) {
 +    binder_bootstrap::Startup admission;
-+    admission.endpoint = binder_bootstrap::Endpoint::kApplication;
++    admission.endpoint = enrolled_guest ? binder_bootstrap::Endpoint::kApplication
++                                       : binder_bootstrap::Endpoint::kStandalone;
 +    admission.uid = binder_bootstrap::GuestUid();
 +    if (admission.uid == 0) return ERROR_ACCESS_DENIED;
 +    HANDLE broker = nullptr;
-+    if (!binder.DuplicateToGuestChild(&broker)) return ERROR_ACCESS_DENIED;
-+    owned.values.push_back(broker);
++    if (enrolled_guest) {
++      if (!binder.DuplicateToGuestChild(&broker)) return ERROR_ACCESS_DENIED;
++      owned.values.push_back(broker);
++    }
 +    HANDLE nul = gesher::OpenNullDevice(GENERIC_READ | GENERIC_WRITE, true);
 +    if (nul == INVALID_HANDLE_VALUE) return GetLastError();
 +    owned.values.push_back(nul);
@@ -310,10 +314,10 @@ index d693bd9fe..e3d04fb36 100644
 +    admission.null_device = binder_bootstrap::EncodeHandle(nul);
 +    std::memcpy(block.data() + descriptor_bytes, &admission, sizeof(admission));
 +  }
-@@ -677,0 +697 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
-+  if (protected_guest) flags |= CREATE_SUSPENDED;
-@@ -686,0 +707,17 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
-+  if (started && protected_guest) {
+@@ -677,0 +701 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
++  if (enrolled_guest) flags |= CREATE_SUSPENDED;
+@@ -686,0 +711,17 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
++  if (started && enrolled_guest) {
 +    struct PendingChild {
 +      PROCESS_INFORMATION* info;
 +      ~PendingChild() {
@@ -387,13 +391,13 @@ index 50a85fb80..d0b21f474 100644
 +  // -> {magic, version, source (u64)}; <- {status}
 +  kEnrollChild = 13,
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index c001fa738..2ecbb61c2 100644
+index c001fa738..5660333f2 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
 @@ -38,0 +39,2 @@
 +#include "startup_null.h"
 +#include <gesher/binder_bootstrap.h>
-@@ -128 +130,72 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
+@@ -128 +130,73 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
 -int ReserveFd() {
 +namespace {
 +
@@ -413,7 +417,8 @@ index c001fa738..2ecbb61c2 100644
 +    startup.cb = sizeof(startup);
 +    GetStartupInfoW(&startup);
 +    binder_bootstrap::Startup launch;
-+    if (binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kApplication, &launch)) {
++    if (binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kApplication, &launch) ||
++        binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kStandalone, &launch)) {
 +      HANDLE inherited = binder_bootstrap::DecodeHandle(launch.null_device);
 +      handle_ = DuplicateVerifiedNull(inherited);
 +      if (inherited != startup.hStdInput && inherited != startup.hStdOutput &&
@@ -467,7 +472,7 @@ index c001fa738..2ecbb61c2 100644
 +
 +HANDLE OpenDescriptorPlaceholder(bool inheritable) {
 +  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
-@@ -130 +203,24 @@ int ReserveFd() {
+@@ -130 +204,24 @@ int ReserveFd() {
 -                         nullptr, OPEN_EXISTING, 0, nullptr);
 +                         &attributes, OPEN_EXISTING, 0, nullptr);
 +  if (h == INVALID_HANDLE_VALUE) {
@@ -493,14 +498,24 @@ index c001fa738..2ecbb61c2 100644
 +
 +int ReserveFd() {
 +  HANDLE h = OpenDescriptorPlaceholder();
-@@ -135 +231,2 @@ int ReserveFd() {
+@@ -135 +232,2 @@ int ReserveFd() {
 -  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
 +  else if (RegisterOfd(fd, O_RDWR) < 0 ||
 +           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
-@@ -136,0 +234 @@ int ReserveFd() {
+@@ -136,0 +235 @@ int ReserveFd() {
 +    ForgetOfd(fd);
-@@ -223,0 +322 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
+@@ -223,0 +323 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
 +    if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
+diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
+index a0a55f2a4..25bad5811 100644
+--- a/compat/posix/src/fsops.cc
++++ b/compat/posix/src/fsops.cc
+@@ -27,0 +28 @@
++#include "standalone_input.h"
+@@ -301,0 +303,3 @@ int Access(const char* path, int mode, bool follow) {
++  if (gesher::standalone_input::Current().Matches(windows)) {
++    return (mode & (W_OK | X_OK)) != 0 ? (errno = EACCES, -1) : 0;
++  }
 diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
 index 09fd4596c..382933857 100644
 --- a/compat/posix/src/ofd.cc

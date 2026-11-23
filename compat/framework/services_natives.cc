@@ -211,12 +211,13 @@ static std::array<uint8_t, 16> ZygoteInstallation(jlong high, jlong low) {
 static jint Zygote_spawnProtectedApp(JNIEnv* env, jclass, jstring commandLine,
                                      jobjectArray set, jobjectArray unset, jstring logPath,
                                      jstring name, jstring displayName, jobjectArray capabilities,
-                                     jint uid, jlong installHigh, jlong installLow) {
+                                     jint uid, jlong installHigh, jlong installLow, jlong startSeq) {
     gesher::zygote::AppContainerSpec spec{
         ZygoteString(env, name), ZygoteString(env, displayName), ZygoteStrings(env, capabilities)};
     return gesher::zygote::SpawnProtectedApp(ZygoteString(env, commandLine),
         ZygoteStrings(env, set), ZygoteStrings(env, unset), ZygoteString(env, logPath),
-        spec, static_cast<uint32_t>(uid), ZygoteInstallation(installHigh, installLow));
+        spec, static_cast<uint32_t>(uid), ZygoteInstallation(installHigh, installLow),
+        startSeq > 0 ? static_cast<uint64_t>(startSeq) : 0);
 }
 
 static jboolean Zygote_changeProtectedInstallation(JNIEnv*, jclass, jlong high, jlong low,
@@ -225,8 +226,10 @@ static jboolean Zygote_changeProtectedInstallation(JNIEnv*, jclass, jlong high, 
                                                         revoke == JNI_TRUE);
 }
 
-static jboolean Zygote_stopProtectedInstallation(JNIEnv*, jclass, jlong high, jlong low) {
-    return gesher::zygote::StopProtectedInstallation(ZygoteInstallation(high, low));
+static jboolean Zygote_stopProtectedInstallation(JNIEnv*, jclass, jlong high, jlong low,
+                                                   jlong stopThrough) {
+    return stopThrough >= 0 && gesher::zygote::StopProtectedInstallation(
+        ZygoteInstallation(high, low), static_cast<uint64_t>(stopThrough));
 }
 
 static jint Zygote_ensureAppContainer(JNIEnv* env, jclass, jstring name, jstring displayName) {
@@ -275,6 +278,23 @@ static jint Zygote_restartWithUid(JNIEnv* env, jclass, jint uid) {
     }
     // JNI/Java int retains all 32 bits, including an application's high-bit exit status.
     return static_cast<jint>(code);
+}
+
+static jint Zygote_runContainedStandalone(JNIEnv* env, jclass, jstring command, jstring name,
+                                           jstring display, jobjectArray capabilities,
+                                           jstring code, jint uid) {
+    gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
+                                        ZygoteStrings(env, capabilities)};
+    uint32_t exit = 0;
+    const uint32_t failure = gesher::zygote::RunContainedStandalone(ZygoteString(env, command), spec,
+        ZygoteString(env, code), static_cast<uint32_t>(uid), &exit);
+    if (failure != 0) {
+        char message[128];
+        std::snprintf(message, sizeof(message), "Contained program launch failed: Win32 error %lu",
+                      static_cast<unsigned long>(failure));
+        jniThrowException(env, "java/lang/IllegalStateException", message);
+    }
+    return static_cast<jint>(exit);
 }
 
 static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
@@ -348,10 +368,10 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativePrepareProtectedOperator", "(IJ)Z", GESHER_JNI(Zygote_prepareProtectedOperator)},
     {"nativeSpawnProtectedApp",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"
-     "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;IJJ)I",
+     "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;IJJJ)I",
      GESHER_JNI(Zygote_spawnProtectedApp)},
     {"nativeChangeProtectedInstallation", "(JJZ)Z", GESHER_JNI(Zygote_changeProtectedInstallation)},
-    {"nativeStopProtectedInstallation", "(JJ)Z", GESHER_JNI(Zygote_stopProtectedInstallation)},
+    {"nativeStopProtectedInstallation", "(JJJ)Z", GESHER_JNI(Zygote_stopProtectedInstallation)},
     {"nativeEnsureAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_ensureAppContainer)},
     {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
@@ -361,6 +381,9 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeGrantPropertyAreaRead", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_grantPropertyAreaRead)},
     {"nativeDeleteAppContainer", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_deleteAppContainer)},
     {"nativeRestartWithUid", "(I)I", GESHER_JNI(Zygote_restartWithUid)},
+    {"nativeRunContainedStandalone",
+     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;I)I",
+     GESHER_JNI(Zygote_runContainedStandalone)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeChildStartTime", "(I)J", GESHER_JNI(Zygote_childStartTime)},
     {"nativeExitCode", "(I)I", GESHER_JNI(Zygote_exitCode)},

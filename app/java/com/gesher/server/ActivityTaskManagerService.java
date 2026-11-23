@@ -437,6 +437,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
+    private final Map<String, Integer> mProtectedStops = new HashMap<>();
     /** How app processes are started; null: they start by themselves and attach. */
     private volatile ProcessStarter mStarter;
     /** The OS exit code of the latest start, unknown until that process actually exits. */
@@ -3514,6 +3515,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         com.gesher.app.window.AppWindows.retired(packageName);
     }
 
+    synchronized boolean protectedStartCurrent(ApkPackage pkg, long startSeq) {
+        PendingProcess pending = mStarting.get(startSeq);
+        return pending != null && pending.owner == pkg && pendingCurrent(pending)
+                && !mProtectedStops.containsKey(pkg.packageName);
+    }
+
     private void startProcess(String packageName, String processName, String reason, String sourceMode) {
         ProcessStarter starter = mStarter;
         if (starter == null) return;
@@ -3531,6 +3538,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (mPm.get(packageName) != owner || !owner.matchesEnabledApplication(0)
                     || mPm.isRemovalPending(packageName) || !enabledLifetime.getAsBoolean()) return;
+            if (mProtectedStops.containsKey(packageName)) return;
             if (processFor(packageName, processName) != null || starting(packageName, processName)) return;
             seq = mNextStartSeq++;
             mExitStatus.started(processKey(packageName, processName), seq);
@@ -3848,8 +3856,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     void forceStopPackage(String packageName) {
         List<ProcessRecord> stop = new ArrayList<>();
         ApkPackage installation;
+        long stopThrough;
         synchronized (this) {
             installation = SystemServer.isProtectedDevice() ? mPm.get(packageName) : null;
+            stopThrough = mNextStartSeq - 1;
             Set<Integer> affectedTasks = new HashSet<>();
             // Force stop removes transient grants both from and to the package,
             // including ownerless grants and packages with no live process.
@@ -3889,11 +3899,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (topOf(taskId) == null) discardAppTaskLocked(taskId);
             }
             if (!affectedTasks.isEmpty()) notifyTaskStackChangedLocked();
+            if (installation != null) mProtectedStops.merge(packageName, 1, Integer::sum);
             notifyAll();
         }
         // Also cancel sticky-service restarts when the old process has died.
-        if (mAm != null) mAm.stopServicesForPackage(packageName);
-        if (installation != null) Zygote.stopProtectedInstallation(installation);
+        try {
+            if (mAm != null) mAm.stopServicesForPackage(packageName);
+            if (installation != null) Zygote.stopProtectedInstallation(installation, stopThrough);
+        } finally {
+            if (installation != null) {
+                synchronized (this) {
+                    mProtectedStops.computeIfPresent(packageName,
+                            (name, count) -> count > 1 ? count - 1 : null);
+                }
+            }
+        }
         if (stop.isEmpty()) return;
         SystemServer.log("force-stopping " + packageName);
         endProcesses(stop, 5000);

@@ -106,7 +106,7 @@ final class AppSandbox {
      * idempotent: an ACE already there is not written (or propagated) again.
      */
     static int spawn(String commandLine, List<String> env, File logFile, ApkPackage pkg,
-            String packageName, boolean internet) {
+            String packageName, boolean internet, long startSeq) {
         String container = installationContainer(pkg);
         int error = Zygote.nativeEnsureAppContainer(container, packageName);
         if (error != 0) {
@@ -120,12 +120,12 @@ final class AppSandbox {
         }
         // dalvikvm.exe's own directory: a Windows path already (GetModuleFileNameW).
         String exeDir = exeDirectory();
+        if (exeDir == null && SystemServer.isProtectedDevice()) {
+            throw new IllegalStateException("The contained runtime directory is unavailable");
+        }
         if (exeDir != null) {
             int granted = Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, true);
-            if (granted != 0) {
-                SystemServer.log("sandbox: granting " + RUNTIME_FILES + " " + exeDir
-                        + ": Win32 error " + granted);
-            }
+            checkGrant(granted, RUNTIME_FILES, exeDir);
         }
         for (String dir : runtimeDirectories()) {
             grantCapability(dir, RUNTIME_FILES, READ_EXECUTE, true);
@@ -133,9 +133,9 @@ final class AppSandbox {
         // The APK itself; its directory (and the oat files in it) only when it is the
         // package's own code directory under data/app. An APK run from where the user
         // keeps it (Downloads) must not open that directory to the container.
-        File apk = canonical(new File(pkg.apkPath));
+        File apk = grantPath(new File(pkg.apkPath));
         grantContainer(apk.getPath(), container, READ_EXECUTE, false);
-        File apps = canonical(new File(Device.dataDir(), "app"));
+        File apps = grantPath(new File(Device.dataDir(), "app"));
         File code = apk.getParentFile();
         if (code != null && apps.getPath().equals(code.getParent())) {
             grantContainer(code.getPath(), container, READ_EXECUTE, true);
@@ -151,6 +151,9 @@ final class AppSandbox {
             logcat.getParentFile().mkdirs();
             logcat.createNewFile();
         } catch (java.io.IOException e) {
+            if (SystemServer.isProtectedDevice()) {
+                throw new IllegalStateException("Cannot create contained log " + logcat, e);
+            }
             SystemServer.log("sandbox: cannot create " + logcat + ": " + e);
         }
         grantContainer(logcat.getPath(), container, MODIFY, false);
@@ -159,7 +162,7 @@ final class AppSandbox {
                 + " with " + caps);
         if (SystemServer.isProtectedDevice()) {
             return Zygote.spawnProtectedApp(commandLine, env, logFile.getPath(), container,
-                    caps, pkg);
+                    caps, pkg, startSeq);
         }
         return Zygote.spawnInAppContainer(commandLine, env, logFile.getPath(), container,
                 packageName, caps);
@@ -202,15 +205,25 @@ final class AppSandbox {
         return dirs;
     }
 
+    static void prepareStandaloneRuntime() {
+        String exeDir = exeDirectory();
+        if (exeDir == null) throw new IllegalStateException("The contained runtime is unavailable");
+        ensureGrant(Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, true),
+                RUNTIME_FILES, exeDir);
+        for (String path : runtimeDirectories()) {
+            if (!new File(path).isDirectory()) continue;
+            String windows = Zygote.windowsPath(path);
+            ensureGrant(Zygote.nativeGrantToCapability(windows, RUNTIME_FILES, READ_EXECUTE, true),
+                    RUNTIME_FILES, windows);
+        }
+    }
+
     private static void grantCapability(String path, String capability, int access,
             boolean inherit) {
         if (path == null || !new File(path).exists()) return;
         String target = Zygote.windowsPath(path);
         int error = Zygote.nativeGrantToCapability(target, capability, access, inherit);
-        if (error != 0) {
-            SystemServer.log("sandbox: granting " + capability + " " + target
-                    + ": Win32 error " + error);
-        }
+        checkGrant(error, capability, target);
     }
 
     private static void grantContainer(String path, String container, int access,
@@ -218,9 +231,24 @@ final class AppSandbox {
         if (path == null || !new File(path).exists()) return;
         String target = Zygote.windowsPath(path);
         int error = Zygote.nativeGrantToAppContainer(target, container, access, inherit);
-        if (error != 0) {
-            SystemServer.log("sandbox: granting " + container + " " + target
-                    + ": Win32 error " + error);
-        }
+        checkGrant(error, container, target);
+    }
+
+    private static File grantPath(File path) {
+        // Keep the requested spelling for the native handle check. Resolving a
+        // guest-controlled junction here could hide where the path was redirected.
+        return SystemServer.isProtectedDevice() ? path.getAbsoluteFile() : canonical(path);
+    }
+
+    private static void checkGrant(int error, String sid, String target) {
+        if (error == 0) return;
+        String message = "sandbox: granting " + sid + " " + target + ": Win32 error " + error;
+        if (SystemServer.isProtectedDevice()) throw new IllegalStateException(message);
+        SystemServer.log(message);
+    }
+
+    private static void ensureGrant(int error, String sid, String target) {
+        if (error != 0) throw new IllegalStateException("Could not grant " + sid + " access to "
+                + target + " (Win32 error " + error + ")");
     }
 }

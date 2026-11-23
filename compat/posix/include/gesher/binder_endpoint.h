@@ -23,9 +23,13 @@ class Binding {
     if (!binder_bootstrap::ReadStartupRecord(&startup) ||
         (startup.endpoint != binder_bootstrap::Endpoint::kClient &&
          startup.endpoint != binder_bootstrap::Endpoint::kApplication &&
+         startup.endpoint != binder_bootstrap::Endpoint::kStandalone &&
          startup.endpoint != binder_bootstrap::Endpoint::kSystemServer)) return;
     required_ = true;
-    guest_ = startup.endpoint == binder_bootstrap::Endpoint::kApplication;
+    guest_ = startup.endpoint == binder_bootstrap::Endpoint::kApplication ||
+             startup.endpoint == binder_bootstrap::Endpoint::kStandalone;
+    if (startup.endpoint == binder_bootstrap::Endpoint::kStandalone) return;
+    enrolled_guest_ = startup.endpoint == binder_bootstrap::Endpoint::kApplication;
     HANDLE inherited = binder_bootstrap::DecodeHandle(startup.broker);
     if (GetProcessId(inherited) == 0) return;
     if (guest_ || startup.endpoint == binder_bootstrap::Endpoint::kClient) {
@@ -91,6 +95,7 @@ class Binding {
   }
 
   bool IsGuest() const { return guest_; }
+  bool IsEnrolledGuest() const { return enrolled_guest_; }
 
   bool DuplicateToGuestChild(HANDLE* duplicate) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -105,6 +110,7 @@ class Binding {
   bool required_ = false;
   bool operator_ = false;
   bool guest_ = false;
+  bool enrolled_guest_ = false;
 };
 
 inline Binding& Current() {

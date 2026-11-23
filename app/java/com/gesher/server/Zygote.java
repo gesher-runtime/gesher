@@ -36,10 +36,11 @@ public final class Zygote {
     public static native boolean nativePrepareProtectedOperator(int brokerPid, long birth);
     private static native int nativeSpawnProtectedApp(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,
-            String[] capabilities, int uid, long installHigh, long installLow);
+            String[] capabilities, int uid, long installHigh, long installLow, long startSeq);
     private static native boolean nativeChangeProtectedInstallation(long installHigh,
             long installLow, boolean revoke);
-    private static native boolean nativeStopProtectedInstallation(long installHigh, long installLow);
+    private static native boolean nativeStopProtectedInstallation(long installHigh,
+            long installLow, long stopThrough);
     static native int nativeEnsureAppContainer(String container, String displayName);
     static native int nativeGrantToAppContainer(String path, String container, int access,
             boolean inherit);
@@ -48,6 +49,8 @@ public final class Zygote {
     static native int nativeGrantPropertyAreaRead(String container);
     static native int nativeDeleteAppContainer(String container);
     private static native int nativeRestartWithUid(int uid);
+    static native int nativeRunContainedStandalone(String command, String container, String display,
+            String[] capabilities, String windowsCodePath, int uid);
     static native long nativeStartTime(int pid);
     static native long nativeChildStartTime(int pid);
     static native int nativeExitCode(int pid);
@@ -127,12 +130,12 @@ public final class Zygote {
     }
 
     static int spawnProtectedApp(String commandLine, List<String> setEnv, String logPath,
-            String container, List<String> capabilities, ApkPackage pkg) {
+            String container, List<String> capabilities, ApkPackage pkg, long startSeq) {
         UUID owner = UUID.fromString(pkg.enabledStateOwner());
         int pid = nativeSpawnProtectedApp(commandLine, setEnv.toArray(new String[0]),
                 new String[] {"GESHER_BINDER_UID"}, windowsPath(logPath), container,
                 pkg.packageName, capabilities.toArray(new String[0]), pkg.uid(),
-                owner.getMostSignificantBits(), owner.getLeastSignificantBits());
+                owner.getMostSignificantBits(), owner.getLeastSignificantBits(), startSeq);
         if (pid <= 0) {
             throw new IllegalStateException("Protected launch failed for "
                     + pkg.packageName + " with Win32 error " + (-pid));
@@ -146,10 +149,10 @@ public final class Zygote {
                 owner.getLeastSignificantBits(), revoke);
     }
 
-    static void stopProtectedInstallation(ApkPackage pkg) {
+    static void stopProtectedInstallation(ApkPackage pkg, long stopThrough) {
         UUID owner = UUID.fromString(pkg.enabledStateOwner());
         if (!nativeStopProtectedInstallation(owner.getMostSignificantBits(),
-                owner.getLeastSignificantBits())) {
+                owner.getLeastSignificantBits(), stopThrough)) {
             throw new IllegalStateException("Could not stop contained processes for "
                     + pkg.packageName);
         }

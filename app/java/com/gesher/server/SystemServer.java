@@ -351,6 +351,9 @@ public final class SystemServer {
             logFile.getParentFile().mkdirs();
             ApkPackage pkg = pm.get(packageName);
             if (pkg == null) throw new IllegalStateException("Unknown package " + packageName);
+            if (protectedDevice && !atm.protectedStartCurrent(pkg, startSeq)) {
+                throw new IllegalStateException("Contained start retired for " + packageName);
+            }
             String uid = String.valueOf(pkg.uid());
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
                     "GESHER_UID=" + uid,
@@ -379,7 +382,7 @@ public final class SystemServer {
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pkg, packageName,
-                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
+                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET), startSeq);
             }
             return Zygote.spawn(command, env, logFile.getPath(), false);
             }

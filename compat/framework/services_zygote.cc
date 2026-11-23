@@ -161,18 +161,27 @@ struct HandleList {
   LPPROC_THREAD_ATTRIBUTE_LIST value = nullptr;
   ~HandleList() { if (value != nullptr) DeleteProcThreadAttributeList(value); }
 
-  DWORD Initialize(HANDLE* handles, size_t count) {
+  DWORD Initialize(HANDLE* handles, size_t count, const SECURITY_CAPABILITIES* sandbox = nullptr,
+                   HANDLE* lifetime = nullptr) {
     SIZE_T size = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    DWORD attributes = 1 + (sandbox != nullptr) + (lifetime != nullptr);
+    InitializeProcThreadAttributeList(nullptr, attributes, 0, &size);
     if (size == 0) return GetLastError();
     storage.resize(size);
     auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-    if (!InitializeProcThreadAttributeList(list, 1, 0, &size)) return GetLastError();
+    if (!InitializeProcThreadAttributeList(list, attributes, 0, &size)) return GetLastError();
     value = list;
     if (!UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                     handles, count * sizeof(HANDLE), nullptr, nullptr)) {
       return GetLastError();
     }
+    if (sandbox != nullptr &&
+        !UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                   const_cast<SECURITY_CAPABILITIES*>(sandbox),
+                                   sizeof(*sandbox), nullptr, nullptr)) return GetLastError();
+    if (lifetime != nullptr &&
+        !UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, lifetime,
+                                   sizeof(*lifetime), nullptr, nullptr)) return GetLastError();
     return ERROR_SUCCESS;
   }
 };
@@ -506,6 +515,7 @@ struct Writer {
   peer::OwnedHandle channel;
   peer::OwnedHandle broker;
   std::map<std::array<uint8_t, 16>, peer::OwnedHandle> installations;
+  std::map<std::array<uint8_t, 16>, uint64_t> stopped_through;
 };
 
 Writer ReadWriter() {
@@ -587,10 +597,14 @@ bool PrepareProtectedOperator(int broker_pid, uint64_t birth) {
 
 int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std::u16string>& set,
     const std::vector<std::u16string>& unset, const std::u16string& log_path,
-    const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation) {
+    const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation,
+    uint64_t start_sequence) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& authority = Authority();
+  auto stopped = authority.stopped_through.find(installation);
   if (!authority.channel || !authority.broker || uid < 10000 || uid > 19999 ||
+      start_sequence == 0 ||
+      (stopped != authority.stopped_through.end() && start_sequence <= stopped->second) ||
       installation == std::array<uint8_t, 16>{}) return -ERROR_ACCESS_DENIED;
   HANDLE query_broker = nullptr;
   constexpr DWORD kPinRights = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
@@ -613,10 +627,16 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
   return pid;
 }
 
-bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation) {
+bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation,
+                               uint64_t stop_through) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& authority = Authority();
-  return authority.channel && authority.broker && StopInstallation(authority, installation);
+  if (!authority.channel || !authority.broker || installation == std::array<uint8_t, 16>{}) {
+    return false;
+  }
+  auto& previous = authority.stopped_through[installation];
+  previous = std::max(previous, stop_through);
+  return StopInstallation(authority, installation);
 }
 
 bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bool revoke) {
@@ -664,22 +684,46 @@ uint32_t DeleteAppContainer(const std::u16string& name) {
   return appcontainer::DeleteContainerProfile(Wide(name));
 }
 
-uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
-  if (uid < 10000 || exit_code == nullptr) return ERROR_INVALID_PARAMETER;
-  std::u16string exe = ExePath(), command = CommandLine();
-  if (exe.empty() || command.empty()) return ERROR_INVALID_PARAMETER;
-  // This is a loop guard, never evidence of package admission. The new VM parses
-  // and admits the APK again and checks its native/Binder UID before binding it.
-  const std::wstring decimal = std::to_wstring(uid);
-  const std::u16string identity = U(decimal.c_str(), decimal.size());
-  std::u16string environment = EnvironmentBlock(
-      {u"GESHER_UID=" + identity, u"GESHER_BINDER_UID=" + identity,
-       u"GESHER_STANDALONE_RESTARTED=1"}, {});
+namespace {
 
-  OwnedHandle input, output, error, job, process, thread;
+struct StandaloneInput {
+  peer::OwnedHandle file;
+  peer::OwnedHandle requests;
+  peer::OwnedHandle child_requests;
+  peer::OwnedHandle name;
+};
+
+void WaitWithStandaloneInput(HANDLE process, StandaloneInput& code) {
+  code.child_requests.reset();
+  while (WaitForSingleObject(process, 8) == WAIT_TIMEOUT) {
+    DWORD available = 0;
+    if (!PeekNamedPipe(code.requests.get(), nullptr, 0, nullptr, &available, nullptr)) break;
+    if (available < sizeof(uint32_t)) continue;
+    uint32_t request = 0;
+    const ULONGLONG deadline = GetTickCount64() + 200;
+    if (!launch::Transfer(code.requests.get(), &request, sizeof(request), false, deadline) ||
+        request != binder_bootstrap::kOpenStandaloneInput) break;
+    peer::OwnedHandle fresh(ReOpenFile(code.file.get(), GENERIC_READ, FILE_SHARE_READ, 0));
+    HANDLE remote = nullptr;
+    if (fresh.get() != INVALID_HANDLE_VALUE &&
+        WaitForSingleObject(process, 0) == WAIT_TIMEOUT) {
+      DuplicateHandle(GetCurrentProcess(), fresh.get(), process, &remote, 0, FALSE,
+                      DUPLICATE_SAME_ACCESS);
+    }
+    uint64_t response = launch::EncodeHandle(remote);
+    if (!launch::Transfer(code.requests.get(), &response, sizeof(response), true, deadline)) break;
+  }
+  code.requests.reset();
+}
+
+uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t* exit_code,
+                  const Container* sandbox, uint32_t uid, StandaloneInput* code) {
+  std::u16string exe = ExePath();
+  if (exe.empty() || command.empty()) return ERROR_INVALID_PARAMETER;
+  OwnedHandle input, output, error, device, job, process, thread;
   const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
   OwnedHandle* copies[] = {&input, &output, &error};
-  HANDLE handles[3]{};
+  HANDLE handles[7]{};
   for (size_t i = 0; i < 3; ++i) {
     HANDLE original = GetStdHandle(kinds[i]);
     if (original == nullptr || original == INVALID_HANDLE_VALUE) {
@@ -694,15 +738,32 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
     }
     handles[i] = copies[i]->value;
   }
-  HandleList attributes;
-  DWORD failure = attributes.Initialize(handles, 3);
-  if (failure != ERROR_SUCCESS) return failure;
-  job.value = CreateJobObjectW(nullptr, nullptr);
+  job.value = CreateLifetimeJob();
   if (job.value == nullptr) return GetLastError();
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-  if (!SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits,
-                               sizeof(limits))) return GetLastError();
+  launch::Startup admission;
+  if (sandbox != nullptr) {
+    SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
+    device.value = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, nullptr);
+    if (device.value == INVALID_HANDLE_VALUE) return GetLastError();
+    handles[3] = device.value;
+    admission.endpoint = launch::Endpoint::kStandalone;
+    admission.null_device = launch::EncodeHandle(device.value);
+    admission.uid = uid;
+  }
+  if (code != nullptr) {
+    handles[4] = code->file.get();
+    handles[5] = code->child_requests.get();
+    handles[6] = code->name.get();
+    admission.code_file = launch::EncodeHandle(handles[4]);
+    admission.code_channel = launch::EncodeHandle(handles[5]);
+    admission.code_name = launch::EncodeHandle(handles[6]);
+  }
+  HandleList attributes;
+  const size_t inherited = code != nullptr ? 7 : sandbox != nullptr ? 4 : 3;
+  DWORD failure = attributes.Initialize(handles, inherited,
+      sandbox != nullptr ? &sandbox->security : nullptr, sandbox != nullptr ? &job.value : nullptr);
+  if (failure != ERROR_SUCCESS) return failure;
 
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
@@ -710,6 +771,10 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
   startup.StartupInfo.hStdInput = input.value;
   startup.StartupInfo.hStdOutput = output.value;
   startup.StartupInfo.hStdError = error.value;
+  if (sandbox != nullptr) {
+    startup.StartupInfo.lpReserved2 = reinterpret_cast<BYTE*>(&admission);
+    startup.StartupInfo.cbReserved2 = sizeof(admission);
+  }
   startup.lpAttributeList = attributes.value;
   PROCESS_INFORMATION child{};
   if (!CreateProcessW(W(exe), reinterpret_cast<wchar_t*>(command.data()), nullptr, nullptr,
@@ -721,20 +786,91 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
   process.value = child.hProcess;
   thread.value = child.hThread;
   // Bind lifetime ownership before the child can execute any runtime or APK code.
-  if (!AssignProcessToJobObject(job.value, process.value)) {
+  if (sandbox == nullptr && !AssignProcessToJobObject(job.value, process.value)) {
     failure = GetLastError();
     if (TerminateProcess(process.value, 1)) WaitForSingleObject(process.value, INFINITE);
     return failure;
+  }
+  if (sandbox != nullptr) {
+    process_identity::Process admitted;
+    BOOL member = FALSE;
+    if (!process_identity::ReadLiveProcess(process.value, &admitted) ||
+        !admitted.principal.container.Matches(sandbox->sid.value) ||
+        admitted.principal.integrity >= SECURITY_MANDATORY_MEDIUM_RID ||
+        !IsProcessInJob(process.value, job.value, &member) || !member) {
+      return ERROR_ACCESS_DENIED;
+    }
   }
   // Transfer only the foreground permission Windows actually gives this launcher.
   // Failure leaves the normal OS focus rules in force; it never fabricates focus.
   AllowSetForegroundWindow(child.dwProcessId);
   if (ResumeThread(thread.value) == static_cast<DWORD>(-1)) return GetLastError();
+  if (code != nullptr) WaitWithStandaloneInput(process.value, *code);
   if (WaitForSingleObject(process.value, INFINITE) != WAIT_OBJECT_0) return GetLastError();
-  DWORD code = 0;
-  if (!GetExitCodeProcess(process.value, &code)) return GetLastError();
-  *exit_code = code;
+  DWORD result = 0;
+  if (!GetExitCodeProcess(process.value, &result)) return GetLastError();
+  *exit_code = result;
   return ERROR_SUCCESS;
+}
+
+}  // namespace
+
+uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
+  if (uid < 10000 || exit_code == nullptr) return ERROR_INVALID_PARAMETER;
+  // Legacy non-contained standalone identity is checked again by the admission
+  // code in the child. Production contained launches use the token below.
+  const std::wstring decimal = std::to_wstring(uid);
+  const std::u16string identity = U(decimal.c_str(), decimal.size());
+  auto environment = EnvironmentBlock(
+      {u"GESHER_UID=" + identity, u"GESHER_BINDER_UID=" + identity,
+       u"GESHER_STANDALONE_RESTARTED=1"}, {});
+  return Supervise(CommandLine(), std::move(environment), exit_code, nullptr, uid, nullptr);
+}
+
+uint32_t RunContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
+                               const std::u16string& code, uint32_t uid, uint32_t* exit_code) {
+  process_identity::Process self;
+  if (uid < 10000 || uid > 19999 || exit_code == nullptr ||
+      !process_identity::ReadLiveProcess(GetCurrentProcess(), &self) ||
+      self.principal.container.size != 0 || self.principal.restricted ||
+      self.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID) return ERROR_ACCESS_DENIED;
+  Container sandbox;
+  DWORD failure = PrepareContainer(spec, &sandbox);
+  if (failure != ERROR_SUCCESS) return failure;
+  StandaloneInput source;
+  if (!code.empty()) {
+    SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
+    source.file.reset(CreateFileW(W(code), GENERIC_READ, FILE_SHARE_READ, &inherit,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (source.file.get() == INVALID_HANDLE_VALUE) return GetLastError();
+    BY_HANDLE_FILE_INFORMATION file{};
+    if (GetFileType(source.file.get()) != FILE_TYPE_DISK ||
+        !GetFileInformationByHandle(source.file.get(), &file) ||
+        (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return ERROR_ACCESS_DENIED;
+    if (!launch::PrivatePipe(&source.requests, &source.child_requests)) return ERROR_ACCESS_DENIED;
+    DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+    if (!SetNamedPipeHandleState(source.requests.get(), &mode, nullptr, nullptr) ||
+        !SetHandleInformation(source.child_requests.get(), HANDLE_FLAG_INHERIT,
+                              HANDLE_FLAG_INHERIT)) return GetLastError();
+    using Name = binder_bootstrap::StandaloneName;
+    peer::OwnedHandle name(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                              0, sizeof(Name), nullptr));
+    if (!name) return GetLastError();
+    auto* record = static_cast<Name*>(MapViewOfFile(name.get(), FILE_MAP_WRITE, 0, 0, sizeof(Name)));
+    if (record == nullptr) return GetLastError();
+    const DWORD length = GetFullPathNameW(W(code), Name::kMaxPath, record->path, nullptr);
+    record->length = length;
+    UnmapViewOfFile(record);
+    HANDLE read_only = nullptr;
+    if (length == 0 || length >= Name::kMaxPath ||
+        !DuplicateHandle(GetCurrentProcess(), name.get(), GetCurrentProcess(),
+                         &read_only, FILE_MAP_READ, TRUE, 0)) return ERROR_ACCESS_DENIED;
+    source.name.reset(read_only);
+  }
+  auto environment = EnvironmentBlock({u"TEMP=" + sandbox.folder, u"TMP=" + sandbox.folder},
+      {u"GESHER_UID", u"GESHER_BINDER_UID", u"GESHER_BINDER", u"TMPDIR"});
+  return Supervise(command, std::move(environment), exit_code, &sandbox, uid,
+                   code.empty() ? nullptr : &source);
 }
 
 int64_t StartTime(int pid) {

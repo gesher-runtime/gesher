@@ -25,6 +25,7 @@
 #include <gesher/file_description.h>
 
 #include "internal.h"
+#include "standalone_input.h"
 #include "descriptor_resources.h"
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
@@ -298,6 +299,9 @@ int Access(const char* path, int mode, bool follow) {
     }
     case PathKind::kMissing:
       return errno = ENOENT, -1;
+  }
+  if (gesher::standalone_input::Current().Matches(windows)) {
+    return (mode & (W_OK | X_OK)) != 0 ? (errno = EACCES, -1) : 0;
   }
   HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,

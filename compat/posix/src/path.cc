@@ -27,6 +27,7 @@
 #include <gesher/unc_paths.h>
 
 #include "startup_null.h"
+#include "standalone_input.h"
 
 #include <string>
 #include <limits>
@@ -185,6 +186,18 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   if ((flags & O_DIRECT) != 0 && (flags & O_PATH) == 0) return errno = EINVAL, -1;
   if ((flags & O_NOATIME) != 0 && (flags & O_PATH) == 0) return errno = EOPNOTSUPP, -1;
   if ((flags & O_PATH) == 0) flags |= O_LARGEFILE;
+  auto& selected = standalone_input::Current();
+  if (selected.Matches(path)) {
+    const bool metadata_only = (flags & O_PATH) != 0;
+    if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
+    if (!metadata_only) {
+      if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return errno = EEXIST, -1;
+      if ((Access(flags) & GENERIC_WRITE) != 0) return errno = EACCES, -1;
+    }
+    HANDLE owned = selected.Open(metadata_only, (flags & O_CLOEXEC) == 0);
+    if (owned == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
+    return FdFromHandle(owned, flags);
+  }
   DWORD disposition;
   if ((flags & O_PATH) != 0) {
     disposition = OPEN_EXISTING;

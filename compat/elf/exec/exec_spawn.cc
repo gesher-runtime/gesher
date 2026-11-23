@@ -610,6 +610,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   constexpr unsigned char kFopen = 0x01, kFpipe = 0x08, kFdev = 0x40;
   auto& binder = binder_endpoint::Current();
   const bool protected_guest = binder.IsGuest();
+  const bool enrolled_guest = binder.IsEnrolledGuest();
   if (protected_guest && (extra_flags & CREATE_BREAKAWAY_FROM_JOB) != 0) return ERROR_ACCESS_DENIED;
   const size_t descriptor_bytes = crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0);
   std::vector<unsigned char> block(descriptor_bytes +
@@ -650,12 +651,15 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   }
   if (protected_guest) {
     binder_bootstrap::Startup admission;
-    admission.endpoint = binder_bootstrap::Endpoint::kApplication;
+    admission.endpoint = enrolled_guest ? binder_bootstrap::Endpoint::kApplication
+                                       : binder_bootstrap::Endpoint::kStandalone;
     admission.uid = binder_bootstrap::GuestUid();
     if (admission.uid == 0) return ERROR_ACCESS_DENIED;
     HANDLE broker = nullptr;
-    if (!binder.DuplicateToGuestChild(&broker)) return ERROR_ACCESS_DENIED;
-    owned.values.push_back(broker);
+    if (enrolled_guest) {
+      if (!binder.DuplicateToGuestChild(&broker)) return ERROR_ACCESS_DENIED;
+      owned.values.push_back(broker);
+    }
     HANDLE nul = gesher::OpenNullDevice(GENERIC_READ | GENERIC_WRITE, true);
     if (nul == INVALID_HANDLE_VALUE) return GetLastError();
     owned.values.push_back(nul);
@@ -694,7 +698,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   startup.lpAttributeList = attributes;
   std::wstring command_line = launch.command_line;
   DWORD flags = CREATE_UNICODE_ENVIRONMENT | extra_flags;
-  if (protected_guest) flags |= CREATE_SUSPENDED;
+  if (enrolled_guest) flags |= CREATE_SUSPENDED;
   // With no inherited handles, CREATE_NO_WINDOW still supplies fresh console
   // standard handles. Default to detaching this native child, while preserving
   // any console mode the caller explicitly requested.
@@ -704,7 +708,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   BOOL started = CreateProcessW(launch.application.c_str(), command_line.data(), nullptr, nullptr, attributes ? TRUE : FALSE,
       flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
   DWORD error = started ? ERROR_SUCCESS : GetLastError();
-  if (started && protected_guest) {
+  if (started && enrolled_guest) {
     struct PendingChild {
       PROCESS_INFORMATION* info;
       ~PendingChild() {
