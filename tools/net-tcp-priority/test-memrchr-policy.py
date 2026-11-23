@@ -22,7 +22,13 @@ spec.loader.exec_module(policy)
 FOLDER = 'tools/net-tcp-priority/qualified/'
 MANIFEST = FOLDER + 'memrchr-source.json'
 PATCH = FOLDER + 'memrchr-source.patch'
-read_bytes = Path.read_bytes
+raw_read_bytes = Path.read_bytes
+# The outer transition is checked against the real current file first. Keep
+# every existing Memrchr negative control on that exact reconstructed input;
+# the separate scandir suite mutates the complete composed chain itself.
+preceding = policy.preceding_scandir_source(raw_read_bytes(ROOT / policy.SCANDIR_SOURCE))
+def read_bytes(path):
+    return preceding if path == ROOT / policy.SCANDIR_SOURCE else raw_read_bytes(path)
 manifest = json.loads((ROOT / MANIFEST).read_bytes())
 transition_patch = (ROOT / PATCH).read_bytes()
 checks = 0
@@ -47,6 +53,7 @@ def rejected(label, changes, expected, repinned=None):
         return overrides[path] if path in overrides else read_bytes(path)
 
     with patch.object(Path, 'read_bytes', mutated), \
+            patch.object(policy, 'preceding_scandir_source', lambda current: current), \
             patch.object(policy, 'MEMRCHR_TRANSITION_SHA256', pin), \
             contextlib.redirect_stdout(io.StringIO()):
         try:
@@ -66,7 +73,7 @@ with contextlib.redirect_stdout(io.StringIO()):
     policy.check()
 
 name = policy.MEMRCHR_SOURCE
-original = (ROOT / name).read_bytes()
+original = read_bytes(ROOT / name)
 changed = original + b'\n// undeclared source bytes\n'
 rejected('unqualified source bytes', {name: changed}, name)
 repinned = copy.deepcopy(manifest)

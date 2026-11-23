@@ -5,6 +5,7 @@ import base64
 import gzip
 import hashlib
 import io
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -63,7 +64,17 @@ def campaign(raw: dict, summary: dict) -> None:
 
 def main() -> None:
     report = json.loads((ROOT / "docs/research/memrchr-word-search-2026-11-23.json").read_text())
-    source = (ROOT / contracts.SOURCE).read_bytes()
+    current = (ROOT / contracts.SOURCE).read_bytes()
+    # The recorded whole-TU receipts remain historical. Reconstruct that exact
+    # source through the independently pinned directory-only transition before
+    # every original comparison; also prove the measured component is unchanged.
+    spec = importlib.util.spec_from_file_location("scandir_source_policy",
+        ROOT / "tools/net-tcp-priority/test-selected-policy.py")
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    source = policy.preceding_scandir_source(current)
+    check(contracts.production(current.decode()) == contracts.production(source.decode()),
+          "measured Memrchr component unchanged by exact directory transition")
     check(sha(source) == report["production_source_sha256"], "reviewed production source")
     archive = report["evidence_archive"]
     packed = base64.b64decode(archive["data"], validate=True)

@@ -1,0 +1,208 @@
+// Reuse the maintained whole-directory/real allocator boundary unchanged,
+// with a larger bounded pointer tracker for the additional large fixtures.
+#include <algorithm>
+#define main original_directory_main
+#define __wrap_malloc directory_original_wrap_malloc
+#define __wrap_realloc directory_original_wrap_realloc
+#define __wrap_free directory_original_wrap_free
+@HOST_TEMPLATE@
+#undef __wrap_malloc
+#undef __wrap_realloc
+#undef __wrap_free
+#undef main
+
+// Additional counters observe the same real allocation boundary. The ordinary
+// timing binary contains none of these wrappers or the pointer tracker.
+namespace storage {
+struct Block { uintptr_t address; size_t bytes; };
+Block blocks[16384];
+size_t count, live, peak, sort_peak;
+bool enabled, sorting;
+void Remove(uintptr_t address) {
+  for (size_t i = 0; i < count; ++i) if (blocks[i].address == address) {
+    live -= blocks[i].bytes; blocks[i] = blocks[--count]; return;
+  }
+}
+void Add(void* pointer, size_t bytes) {
+  if (!enabled || !allocations_armed || pointer == nullptr) return;
+  if (count == sizeof(blocks) / sizeof(blocks[0])) std::abort();
+  blocks[count++] = {reinterpret_cast<uintptr_t>(pointer), bytes};
+  live += bytes; peak = std::max(peak, live);
+  if (sorting) sort_peak = std::max(sort_peak, live);
+}
+}
+extern "C" void* __wrap_malloc(size_t bytes) {
+  void* pointer = directory_original_wrap_malloc(bytes);
+  storage::Add(pointer, bytes); return pointer;
+}
+extern "C" void* __wrap_realloc(void* old, size_t bytes) {
+  const uintptr_t address = reinterpret_cast<uintptr_t>(old);
+  void* pointer = directory_original_wrap_realloc(old, bytes);
+  if (pointer != nullptr) { storage::Remove(address); storage::Add(pointer, bytes); }
+  return pointer;
+}
+extern "C" void __wrap_free(void* pointer) {
+  storage::Remove(reinterpret_cast<uintptr_t>(pointer));
+  directory_original_wrap_free(pointer);
+}
+
+#define dlsym directory_symbol
+#include "scandir_sort_contract_test.inc"
+#undef dlsym
+
+namespace {
+using gesher::bionic::BionicDirent;
+using gesher::bionic::Scandir;
+using gesher::bionic::Scandirat;
+enum class Order { Sorted, Reverse, Nearby, Random, Groups, Lexical };
+struct Directory {
+  std::string path;
+  size_t count;
+  explicit Directory(size_t n) : count(n) {
+    char name[] = "/tmp/gesher-scandir-sort-XXXXXX";
+    if (!::mkdtemp(name)) std::abort();
+    path = name;
+    for (size_t i = 0; i < n; ++i) {
+      char leaf[48]; std::snprintf(leaf, sizeof(leaf), "/item-%05zu", i);
+      int fd = ::open((path + leaf).c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+      if (fd < 0 || ::close(fd)) std::abort();
+    }
+  }
+  ~Directory() {
+    for (size_t i = 0; i < count; ++i) {
+      char leaf[48]; std::snprintf(leaf, sizeof(leaf), "/item-%05zu", i);
+      if (::unlink((path + leaf).c_str())) std::abort();
+    }
+    if (::rmdir(path.c_str())) std::abort();
+  }
+};
+size_t sort_checks;
+void Require(bool okay, const char* label) {
+  ++sort_checks;
+  if (!okay) { std::fprintf(stderr, "FAIL SCANDIR_SORT %s\n", label); std::exit(1); }
+}
+uint64_t Key(const BionicDirent& e, Order order) {
+  uint64_t x = static_cast<uint64_t>(e.d_off);
+  if (order == Order::Reverse) return UINT64_MAX - x;
+  if (order == Order::Nearby) return x ^ 1;
+  if (order == Order::Groups) return x % 7;
+  if (order == Order::Random) { x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16; }
+  return x;
+}
+int Value(const BionicDirent& a, const BionicDirent& b, Order order) {
+  if (order == Order::Lexical) return std::strcmp(a.d_name, b.d_name);
+  uint64_t x = Key(a, order), y = Key(b, order);
+  return (x > y) - (x < y);
+}
+struct Context {
+  Order order;
+  size_t compared = 0;
+  size_t first_live = 0;
+  int last_errno = EBUSY, first_allocations = -1;
+  bool deny = false, reenter = false, entered = false, change_arguments = false;
+  const Directory* nested = nullptr;
+};
+Context* ctx;
+int BIONIC_SYSV SelectEntry(const BionicDirent* e) { errno = ENOTTY; return e->d_name[0] != '.'; }
+void FreeEntries(BionicDirent** list, int n) {
+  for (int i = 0; i < n; ++i) std::free(list[i]);
+  std::free(list);
+}
+int BIONIC_SYSV CompareEntry(const BionicDirent** a, const BionicDirent** b) {
+  auto& c = *ctx;
+  Require(errno == c.last_errno, "comparator errno chain preserved");
+  if (c.first_allocations < 0) {
+    c.first_allocations = allocation_calls; c.first_live = storage::live;
+    if (allocations_armed) { storage::sort_peak = storage::live; storage::sorting = true; }
+  }
+  ++c.compared;
+  if (c.deny) fail_allocation = allocation_calls;
+  if (c.reenter && !c.entered) {
+    c.entered = true;
+    bool previous = allocations_armed; allocations_armed = false;
+    Context nested{Order::Reverse}; ctx = &nested;
+    BionicDirent** list = nullptr; errno = EDOM;
+    int n = Scandir(c.nested->path.c_str(), &list, SelectEntry, CompareEntry);
+    Require(n == static_cast<int>(c.nested->count) && errno == EDOM, "real nested scan preserves its result and errno");
+    for (int i = 1; i < n; ++i) Require(list[i - 1]->d_off > list[i]->d_off, "nested result order");
+    FreeEntries(list, n); ctx = &c; allocations_armed = previous;
+  }
+  int answer = Value(**a, **b, c.order);
+  if (c.change_arguments) { *a = nullptr; *b = nullptr; }
+  c.last_errno = c.compared % 2 ? E2BIG : EACCES; errno = c.last_errno;
+  return answer;
+}
+std::vector<BionicDirent> Reference(const Directory& dir, Order order) {
+  std::vector<BionicDirent> result;
+  DIR* d = ::opendir(dir.path.c_str()); if (!d) std::abort();
+  int64_t position = 0;
+  while (auto* e = ::readdir(d)) {
+    ++position;
+    if (e->d_name[0] == '.') continue;
+    BionicDirent value{};
+    value.d_ino = e->d_ino ? e->d_ino : static_cast<uint64_t>(e->d_off);
+    value.d_off = position; value.d_type = e->d_type; value.d_reclen = sizeof(value);
+    std::strcpy(value.d_name, e->d_name); result.push_back(value);
+  }
+  if (::closedir(d)) std::abort();
+  std::stable_sort(result.begin(), result.end(), [order](const auto& a, const auto& b) { return Value(a, b, order) < 0; });
+  return result;
+}
+void Verify(BionicDirent** actual, int n, const std::vector<BionicDirent>& expected) {
+  Require(n == static_cast<int>(expected.size()), "complete directory count");
+  for (int i = 0; i < n; ++i) {
+    const auto& a = *actual[i]; const auto& e = expected[static_cast<size_t>(i)];
+    Require(a.d_ino == e.d_ino && a.d_off == e.d_off && a.d_type == e.d_type &&
+      a.d_reclen == e.d_reclen && std::strcmp(a.d_name, e.d_name) == 0,
+      "every entry and stable tie matches independent enumeration");
+  }
+}
+void RunCase(const Directory& dir, Order order, bool candidate, bool deny = false, bool nested = false) {
+  auto expected = Reference(dir, order);
+  Context c{order}; c.deny = deny; c.reenter = nested; c.nested = &dir; c.change_arguments = nested; ctx = &c;
+  allocation_calls = 0; fail_allocation = -1; allocations_armed = true;
+  Require(storage::count == 0 && storage::live == 0, "storage scope starts empty");
+  storage::peak = storage::sort_peak = 0; storage::sorting = false; storage::enabled = true;
+  BionicDirent** entries = nullptr; int old_closes = closes; errno = EDOM;
+  int n = Scandir(dir.path.c_str(), &entries, SelectEntry, CompareEntry); int error = errno;
+  allocations_armed = false; fail_allocation = -1;
+  storage::enabled = storage::sorting = false;
+  Require(error == EDOM, "caller errno restored");
+  Require(closes == old_closes + (c.entered ? 2 : 1), "exact directory ownership retirement");
+  Verify(entries, n, expected);
+  int scratch = c.first_allocations < 0 ? 0 : allocation_calls - c.first_allocations;
+  if (candidate && dir.count >= 128 && order == Order::Reverse) {
+    Require(scratch == 1, "one optional scratch attempt");
+    size_t levels = 0; for (size_t x = 1; x < dir.count; x *= 2) ++levels;
+    if (!deny) Require(c.compared <= dir.count * (10 + levels), "bounded large-directory comparison work");
+  }
+  if (dir.count < 128 || order == Order::Sorted || order == Order::Nearby)
+    Require(scratch == 0, "tiny and nearly sorted use no scratch");
+  const size_t extra = c.compared ? storage::sort_peak - c.first_live : 0;
+  Require(extra == (scratch && !deny ? dir.count * sizeof(void*) : 0),
+    "exact optional pointer scratch live bytes");
+  Require(!c.compared || storage::live == c.first_live, "sorting retains no extra allocation bytes");
+  Require(owned_count == dir.count + (dir.count ? 1 : 0), "only caller-owned entries and array remain");
+  FreeEntries(entries, n); Require(owned_count == 0, "all result allocations released");
+  Require(storage::count == 0 && storage::live == 0, "all scoped allocation bytes released");
+  std::printf("SCANDIR_CASE count=%zu order=%d comparisons=%zu scratch=%d denied=%d nested=%d sort_live=%zu scratch_live=%zu peak=%zu\n",
+    dir.count, static_cast<int>(order), c.compared, scratch, deny, nested,
+    c.first_live, extra, storage::peak);
+}
+}
+int main(int argc, char** argv) {
+  bool candidate = argc == 2 && std::strcmp(argv[1], "--candidate") == 0;
+  for (size_t n : {0U, 1U, 2U, 16U, 127U, 128U, 129U, 256U, 511U, 1024U}) {
+    Directory dir(n);
+    for (Order order : {Order::Sorted, Order::Reverse, Order::Nearby, Order::Random, Order::Groups, Order::Lexical})
+      RunCase(dir, order, candidate);
+  }
+  Directory dir(256);
+  RunCase(dir, Order::Reverse, candidate, true);
+  RunCase(dir, Order::Groups, candidate, false, true);
+  test_directory_contracts();
+  test_scandir_sort_contracts();
+  for (const char* test : {"allocations", "reader", "fdopen"}) test_directory_failures(test);
+  Require(failures == 0, "all original public/failure contracts pass");
+  std::printf("SCANDIR_SORT_PASS checks=%zu candidate=%d complete_production_directory=true\n", sort_checks, candidate);
+}
