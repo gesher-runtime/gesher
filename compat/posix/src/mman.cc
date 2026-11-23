@@ -1512,6 +1512,25 @@ int gesher_mmap_placeholders(void) { return Placeholders().available() ? 1 : 0; 
 // Internal outcome of the most recent mmap, not a guest libc interface.
 int gesher_mmap_replaced_private_pages(void) { return g_mmap_replaced_private_pages ? 1 : 0; }
 
+// Internal, for the ELF loader (android_dlopen_ext's reserved address space):
+// whether every page of [addr, addr + length) is address space this layer
+// tracks - a mapping, or a page of one of its reservations that munmap left
+// unmapped - so MAP_FIXED there replaces pages of ours rather than reaching
+// address space that is free or someone else's. 0 for an empty or wrapping range.
+int gesher_mmap_range_tracked(const void* addr, size_t length) {
+  State& s = state();
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+  if (length == 0 || length > UINTPTR_MAX - begin) return 0;
+  const uintptr_t end = begin + length;
+  std::lock_guard<std::mutex> guard(s.lock);
+  for (uintptr_t at = begin; at < end;) {
+    auto it = FindRegion(s, at);
+    if (it == s.regions.end()) return 0;
+    at = it->first + it->second.size;
+  }
+  return 1;
+}
+
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
   g_mmap_replaced_private_pages = false;
   State& s = state();

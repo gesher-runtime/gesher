@@ -1069,10 +1069,13 @@ constexpr uint64_t kDlextReservedAddressRecursive = 0x400;
 constexpr uint64_t kDlextValidFlags = kDlextReservedAddress | kDlextReservedAddressHint |
     kDlextWriteRelro | kDlextUseRelro | kDlextUseLibraryFd | kDlextUseLibraryFdOffset |
     kDlextForceLoad | kDlextUseNamespace | kDlextReservedAddressRecursive;
-// Valid flags this loader does not implement: a load that needs them fails
-// with a dlerror naming them instead of loading the library some other way.
+// Valid flags this loader does not implement: a call with any of them fails
+// with a dlerror naming them, even for a library already loaded, instead of
+// loading or returning the library without what they ask. FORCE_LOAD is not
+// among them: it only asks not to reuse a loaded library of the same file,
+// which matters only when one is loaded (DlOpenImpl).
 constexpr uint64_t kDlextUnsupportedFlags = kDlextWriteRelro | kDlextUseRelro |
-    kDlextUseLibraryFd | kDlextUseLibraryFdOffset | kDlextForceLoad | kDlextUseNamespace |
+    kDlextUseLibraryFd | kDlextUseLibraryFdOffset | kDlextUseNamespace |
     kDlextReservedAddressRecursive;
 
 void* DlOpenFail(const std::string& message) {
@@ -1084,7 +1087,7 @@ void* DlOpenUnsupported(uint64_t flags) {
   char message[96];
   std::snprintf(message, sizeof(message),
                 "android_dlopen_ext: extended flags 0x%llx are not supported",
-                static_cast<unsigned long long>(flags & kDlextUnsupportedFlags));
+                static_cast<unsigned long long>(flags));
   return DlOpenFail(message);
 }
 
@@ -1131,24 +1134,33 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
                     static_cast<unsigned long long>(ext->flags));
       return DlOpenFail(message);
     }
-    if ((ext->flags & kDlextUseNamespace) != 0) {
-      if (ext->library_namespace == nullptr) {
-        return DlOpenFail("ANDROID_DLEXT_USE_NAMESPACE is set but extinfo->library_namespace is null");
-      }
-      // Nothing here creates a linker namespace, so none can be searched in
-      // place of the default one, not even for a library already loaded.
-      return DlOpenUnsupported(ext->flags);
+    if ((ext->flags & kDlextUseNamespace) != 0 && ext->library_namespace == nullptr) {
+      return DlOpenFail("ANDROID_DLEXT_USE_NAMESPACE is set but extinfo->library_namespace is null");
+    }
+    // Not implemented (nothing here creates a linker namespace either): fail
+    // before any lookup, so a library already loaded is not returned as if
+    // the flags had been honoured.
+    if ((ext->flags & kDlextUnsupportedFlags) != 0) {
+      return DlOpenUnsupported(ext->flags & kDlextUnsupportedFlags);
     }
   }
+  const bool force_load = ext != nullptr && (ext->flags & kDlextForceLoad) != 0;
   if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
-  if (void* platform = PlatformLibraryHandle(filename)) return platform;
+  if (void* platform = PlatformLibraryHandle(filename)) {
+    if (force_load) return DlOpenUnsupported(kDlextForceLoad);
+    return platform;
+  }
   const char* slash = std::strrchr(filename, '/');
   const char* base = slash ? slash + 1 : filename;
-  // Already loaded: the same handle, where it is, whatever extinfo asks
-  // (bionic finds a loaded library by soname before it maps anything).
-  if (gesher::elf::Library* existing = gesher::elf::Find(base)) return existing;
-  if (ext != nullptr && (ext->flags & kDlextUnsupportedFlags) != 0) {
-    return DlOpenUnsupported(ext->flags);
+  // Already loaded: the same handle, where it is, whatever reservation
+  // extinfo offers (bionic finds a loaded library before it maps anything).
+  // FORCE_LOAD asks for a second copy instead, which this loader cannot make
+  // (one object per name): that fails rather than returning the first copy.
+  // A library unloaded from its reservation by a concurrent dlclose is no
+  // longer found, and loads again below.
+  if (gesher::elf::Library* existing = gesher::elf::Find(base)) {
+    if (force_load) return DlOpenUnsupported(kDlextForceLoad);
+    if (gesher::elf::AddReservedReference(existing)) return existing;
   }
   std::string path = filename;
   std::vector<std::string> dirs = LibraryDirectories();
@@ -1185,6 +1197,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
   } else if (!dir.empty()) {
     NoteLibraryDirectory(dir);
   }
+  if (lib != nullptr) gesher::elf::AddReservedReference(lib);
   return lib;
 }
 // dlsym: the shim's own symbols stand in for the libraries it implements, as
@@ -1214,7 +1227,20 @@ void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
   }
   return p;
 }
-int BIONIC_SYSV DlClose(void*) { return 0; }
+// dlclose: each dlopen/android_dlopen_ext that returns a library loaded into
+// a caller's reservation takes a reference (gesher::elf::AddReservedReference),
+// and the last dlclose unloads it (ReleaseReservedReference), so the caller
+// can unmap its reservation without leaving a loaded object in it, as with
+// bionic's reference counts. Every other library stays loaded for the life of
+// the process, as before.
+int BIONIC_SYSV DlClose(void* handle) {
+  if (handle == nullptr || IsPlatformLibraryHandle(handle) ||
+      handle == reinterpret_cast<void*>(-1) || handle == reinterpret_cast<void*>(-2)) {
+    return 0;
+  }
+  gesher::elf::ReleaseReservedReference(static_cast<gesher::elf::Library*>(handle));
+  return 0;
+}
 const char* BIONIC_SYSV DlError() {
   if (!t_has_dlerror) return nullptr;
   t_has_dlerror = false;

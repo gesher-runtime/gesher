@@ -33,6 +33,9 @@
 // Whether gesher-base's mmap is placeholder-based (compat/posix/src/mman.cc):
 // MAP_FIXED file views inside a reservation, executable file views.
 extern "C" int gesher_mmap_placeholders(void);
+// Whether every page of a range is gesher-base's (a mapping or an unmapped page
+// of one of its reservations), so MAP_FIXED there replaces only its pages.
+extern "C" int gesher_mmap_range_tracked(const void* addr, size_t length);
 
 // DT_RELR's entry type; this elf.h predates it.
 using Elf64_Relr = uint64_t;
@@ -131,6 +134,15 @@ struct Library {
   // [base, base + map_size) is part of the caller's reservation
   // (LoadOptions::reserved_addr): given back PROT_NONE, never unmapped.
   bool mapped_by_caller = false;
+  // The parts of the caller's reservation this load mapped over ([start,
+  // length)), each given back PROT_NONE when the load fails or the object is
+  // unloaded (GiveBackCallerRanges). Pages between segments are left alone.
+  std::vector<std::pair<uint8_t*, size_t>> caller_ranges;
+  // Unloaded from the caller's reservation (ReleaseReservedReference): no longer
+  // listed; the handle stays valid memory but finds nothing.
+  bool retired = false;
+  // dlopen references (AddReservedReference) not yet given back by dlclose.
+  size_t reserved_refs = 0;
   bool is_closed = false;
   bool is_closing = false;  // finalizers claimed, still visible until they finish
   bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
@@ -655,6 +667,73 @@ inline bool EnsureWritable(Library* lib, const void* where, size_t n) {
 
 bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error);
 
+// Makes the pages of [base, base + map_size) that no PT_LOAD segment covers
+// inaccessible and uncommitted (an anonymous PROT_NONE mapping over them).
+bool ProtectGaps(Library* lib, const Elf64_Phdr* phdr, int phnum, std::string* error) {
+  std::vector<std::pair<uintptr_t, uintptr_t>> used;
+  const auto bias = reinterpret_cast<uintptr_t>(lib->load_bias);
+  for (int i = 0; i < phnum; ++i) {
+    if (phdr[i].p_type != PT_LOAD) continue;
+    used.emplace_back(bias + PageDown(phdr[i].p_vaddr),
+                      bias + PageUp(phdr[i].p_vaddr + phdr[i].p_memsz));
+  }
+  std::sort(used.begin(), used.end());
+  uintptr_t at = reinterpret_cast<uintptr_t>(lib->base);
+  const uintptr_t end = at + lib->map_size;
+  auto protect = [&](uintptr_t from, uintptr_t to) {
+    if (from >= to) return true;
+    void* p = reinterpret_cast<void*>(from);
+    const size_t n = to - from;
+    if (mmap(p, n, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == p) return true;
+    return mprotect(p, n, PROT_NONE) == 0;  // at least inaccessible
+  };
+  for (const auto& r : used) {
+    if (!protect(at, std::min(r.first, end))) {
+      Fail(error, "cannot make the gaps between segments inaccessible");
+      return false;
+    }
+    at = std::max(at, r.second);
+  }
+  if (!protect(at, end)) {
+    Fail(error, "cannot make the gaps between segments inaccessible");
+    return false;
+  }
+  return true;
+}
+
+// Gives the parts of the caller's reservation this object mapped over back
+// as bionic does (soinfo_free: an anonymous PROT_NONE mapping, MAP_FIXED):
+// still mapped, the caller's. gesher-base replaces each range under its lock
+// in one step (it punches the range, then fills the same placeholder), so no
+// other mapping can take it in between. If that fails, what of the object is
+// left there is at least taken down: file views unmapped, other pages made
+// inaccessible.
+void GiveBackCallerRanges(Library* lib) {
+  for (const auto& range : lib->caller_ranges) {
+    void* p = range.first;
+    if (mmap(p, range.second, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == p) {
+      continue;
+    }
+    std::fprintf(stderr, "gesher elf: %s: cannot map [%p, %p) of the caller's reservation back "
+                 "PROT_NONE (errno %d)\n", lib->name.c_str(), p,
+                 static_cast<void*>(range.first + range.second), errno);
+    for (uint8_t* at = range.first; at < range.first + range.second;) {
+      MEMORY_BASIC_INFORMATION info;
+      if (VirtualQuery(at, &info, sizeof(info)) != sizeof(info)) break;
+      uint8_t* run_end = std::min(range.first + range.second,
+                                  static_cast<uint8_t*>(info.BaseAddress) + info.RegionSize);
+      const size_t n = static_cast<size_t>(run_end - at);
+      if (info.Type == MEM_MAPPED) {
+        munmap(at, n);
+      } else if (info.State == MEM_COMMIT && (info.Protect & 0xff) != PAGE_NOACCESS) {
+        mprotect(at, n, PROT_NONE);
+      }
+      at = run_end;
+    }
+  }
+  lib->caller_ranges.clear();
+}
+
 // Maps the PT_LOAD segments of the object into a fresh reservation. Fills
 // base, load_bias, map_size. Returns false on error.
 //
@@ -672,9 +751,12 @@ bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error);
 // span goes at the start of the caller's reservation when it fits, as bionic's
 // ElfReader::ReserveAddressSpace places it: no reservation of the loader's own,
 // every mapping MAP_FIXED over the caller's pages, which stay the caller's
-// (mapped_by_caller). Pages of the span between segments keep what the caller
-// mapped there (PROT_NONE). A span that does not fit fails the load before
-// anything is mapped, or (hint) is loaded anywhere.
+// (mapped_by_caller; caller_ranges records what was mapped over). Pages of
+// the span between segments keep what the caller mapped there with file
+// views, and become PROT_NONE when the segments are copied (ProtectGaps). A
+// span that does not fit, or reaches pages gesher-base does not track, fails
+// the load before anything is mapped; with the hint, one that does not fit
+// is loaded anywhere.
 bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd,
                  const LoadOptions& options, std::string* error) {
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
@@ -723,22 +805,39 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd,
       if (!options.reserved_hint) {
         // bionic's text, including its first number (reserved_size - load_size, negative).
         char message[256];
+        // The name is the file's path, as bionic's ElfReader names it.
         std::snprintf(message, sizeof(message),
                       "reserved address space %zd smaller than %zd bytes needed for \"%s\"",
                       static_cast<ssize_t>(options.reserved_size - lib->map_size),
-                      static_cast<ssize_t>(lib->map_size), lib->name.c_str());
+                      static_cast<ssize_t>(lib->map_size), lib->path.c_str());
         Fail(error, message);
         return false;
       }
       // Too small for a hint: anywhere, as without one.
     } else {
+      // Only the span is used, whatever reserved_size says beyond it.
       const auto at = reinterpret_cast<uintptr_t>(options.reserved_addr);
-      if (at == 0 || at % kPageSize != 0 || options.reserved_size > UINTPTR_MAX - at) {
+      if (at == 0 || at % kPageSize != 0 || lib->map_size > UINTPTR_MAX - at) {
         // bionic would mmap MAP_FIXED there and fail; never map elsewhere.
-        char message[160];
+        char message[600];
         std::snprintf(message, sizeof(message),
                       "reserved address %p is not a page-aligned address range for \"%s\"",
-                      options.reserved_addr, lib->name.c_str());
+                      options.reserved_addr, lib->path.c_str());
+        Fail(error, message);
+        return false;
+      }
+      // bionic maps MAP_FIXED over whatever is there. Here MAP_FIXED can
+      // only replace pages gesher-base tracks, so a span reaching address
+      // space that is free or not its own fails now, before anything is
+      // mapped, rather than half way through.
+      if (gesher_mmap_range_tracked(options.reserved_addr, lib->map_size) == 0) {
+        char message[600];
+        std::snprintf(message, sizeof(message),
+                      "reserved address space [%p, %p) needed for \"%s\" is not all mapped "
+                      "by the caller",
+                      options.reserved_addr,
+                      static_cast<void*>(static_cast<uint8_t*>(options.reserved_addr) + lib->map_size),
+                      lib->path.c_str());
         Fail(error, message);
         return false;
       }
@@ -756,6 +855,7 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd,
       // a failed MAP_FIXED may already have replaced the caller's pages.
       lib->base = reserved;
       lib->mapped_by_caller = true;
+      lib->caller_ranges.emplace_back(reserved, lib->map_size);
     }
     void* reservation = mmap(reserved, lib->map_size, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS | (reserved ? MAP_FIXED : 0), -1, 0);
@@ -775,6 +875,9 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd,
       // .bss (p_memsz > p_filesz) stays zero from the anonymous mapping.
     }
     if (!ProtectSegments(lib, data, error)) return false;
+    // Pages of the span between segments: inaccessible and uncommitted, as
+    // they are in a file-view load (and as bionic leaves a reservation's).
+    if (!ProtectGaps(lib, phdr, ehdr->e_phnum, error)) return false;
     // With overlapping segments the last protection wins. Do not mark a
     // whole segment writable in that case: EnsureWritable checks each page.
     if (!shared_pages) {
@@ -819,6 +922,7 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd,
     if (ph.p_filesz > 0) {
       const size_t len = static_cast<size_t>(file_page_end - seg_page);
       bool mapped = false;
+      if (lib->mapped_by_caller) lib->caller_ranges.emplace_back(seg_page, len);
       if (ph.p_vaddr % kPageSize == ph.p_offset % kPageSize) {
         mapped = mmap(seg_page, len, prot, MAP_PRIVATE | MAP_FIXED, fd,
                       static_cast<off_t>(PageDown(ph.p_offset))) == seg_page;
@@ -853,6 +957,9 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd,
     }
     // The rest of .bss: anonymous zero pages.
     uint8_t* anon_start = ph.p_filesz > 0 ? file_page_end : seg_page;
+    if (seg_end > anon_start && lib->mapped_by_caller) {
+      lib->caller_ranges.emplace_back(anon_start, static_cast<size_t>(seg_end - anon_start));
+    }
     if (seg_end > anon_start &&
         mmap(anon_start, static_cast<size_t>(seg_end - anon_start), prot,
              MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != anon_start) {
@@ -1583,13 +1690,10 @@ void DiscardLibrary(Library* lib) {
     }
     VirtualFree(lib->unresolved_data, 0, MEM_RELEASE);
   }
-  if (lib->base != nullptr && lib->mapped_by_caller) {
-    // The caller's reservation (android_dlopen_ext): its pages become
-    // PROT_NONE again, as bionic's soinfo_free leaves them, and stay mapped.
-    // gesher-base replaces them under its lock in one step (Punch, then a
-    // PROT_NONE fill of the same placeholder), so no other mapping can take
-    // the range in between.
-    mmap(lib->base, lib->map_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+  if (lib->mapped_by_caller) {
+    // The caller's reservation (android_dlopen_ext): what was mapped over it
+    // becomes PROT_NONE again and stays the caller's.
+    GiveBackCallerRanges(lib);
   } else if (lib->base != nullptr) {
     munmap(lib->base, lib->map_size);
   }
@@ -1931,7 +2035,7 @@ Library* LoadFromMemory(const char* name, const void* data, size_t size, std::st
 
 void* Lookup(Library* library, const char* name) {
   std::lock_guard<std::recursive_mutex> lock(g_mutex);
-  if (library == nullptr || name == nullptr) return nullptr;
+  if (library == nullptr || name == nullptr || library->retired) return nullptr;
   uint32_t gh = GnuHash(name), sh = SysvHash(name);
   const Elf64_Sym* sym = FindDefinedSymbol(library, name, gh, sh);
   if (sym != nullptr) return SymbolAddress(library, sym);
@@ -2019,6 +2123,62 @@ void Close(Library* library) {
     library->is_closed = true;
     library->is_closing = false;
   }
+}
+
+bool AddReservedReference(Library* library) {
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  if (library == nullptr || library->retired) return false;
+  if (library->mapped_by_caller) ++library->reserved_refs;
+  return true;
+}
+
+bool ReleaseReservedReference(Library* library) {
+  std::lock_guard<std::recursive_mutex> operation(g_mutex);
+  // Only a handle of a loaded object is looked at (dlclose takes any pointer;
+  // a second dlclose of an unloaded one finds nothing).
+  auto& loaded = Loaded();
+  if (library == nullptr || std::find(loaded.begin(), loaded.end(), library) == loaded.end() ||
+      !library->mapped_by_caller || library->reserved_refs == 0) {
+    return false;
+  }
+  if (--library->reserved_refs != 0) return false;
+  // Kept loaded: TLS other threads may have blocks of, or an object another
+  // loaded one needs (its DT_NEEDED), as bionic keeps a referenced one.
+  if (library->tls.present) return false;
+  for (Library* other : Loaded()) {
+    if (other == library) continue;
+    if (std::find(other->dependencies.begin(), other->dependencies.end(), library) !=
+        other->dependencies.end()) return false;
+  }
+  Close(library);  // finalizers (DT_FINI_ARRAY: __cxa_finalize of its __dso_handle)
+  loaded.erase(std::remove(loaded.begin(), loaded.end(), library), loaded.end());
+  if (library->guest_code_registered) {
+    gesher::arm64::RemoveCode(library->base, library->map_size);
+    library->guest_code_registered = false;
+  }
+  library->rewrite_registration.reset();
+  for (void* stub : library->unresolved_functions) {
+    if (library->is_aarch64) gesher::arm64::UnbindHostFunction(stub);
+  }
+  library->unresolved_functions.clear();
+  for (uint8_t* page : library->unresolved_pages) VirtualFree(page, 0, MEM_RELEASE);
+  library->unresolved_pages.clear();
+  if (library->unresolved_data != nullptr) {
+    {
+      std::lock_guard<std::mutex> lock(g_data_mutex);
+      g_data_owners.erase(std::remove(g_data_owners.begin(), g_data_owners.end(), library),
+                          g_data_owners.end());
+    }
+    VirtualFree(library->unresolved_data, 0, MEM_RELEASE);
+    library->unresolved_data = nullptr;
+  }
+  GiveBackCallerRanges(library);
+  // The handle stays valid memory (the app may still hold it) but names
+  // nothing: Lookup finds nothing in it, and it is in no list.
+  library->retired = true;
+  library->symtab = nullptr;
+  library->phdr = nullptr;
+  return true;
 }
 
 bool SetupThreadTls() { return TlsSetupThread(); }

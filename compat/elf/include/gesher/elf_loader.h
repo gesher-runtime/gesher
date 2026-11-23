@@ -58,12 +58,19 @@ struct LoadOptions {
   // in [reserved_addr, reserved_addr + reserved_size), and the object is then
   // loaded with its first page at reserved_addr, its segments mapped
   // MAP_FIXED over the caller's mapping. The reservation stays the caller's:
-  // what the object does not use is left as it was, and a failed load maps
-  // the pages it used back PROT_NONE instead of unmapping them. An object
-  // that does not fit fails the load (reserved_hint false) without touching
-  // the reservation, or is loaded elsewhere (reserved_hint true). Only the
-  // object named by the load: its dependencies are loaded anywhere.
-  // reserved_addr must be page aligned when the object fits.
+  // what lies beyond the span is left as it was; pages of the span between
+  // segments are PROT_NONE (left as the caller mapped them when the segments
+  // are file views, mapped PROT_NONE when they are copied); a failed load or
+  // ReleaseReservedReference maps the pages it used back PROT_NONE instead of
+  // unmapping them. An object that does not fit fails the load (reserved_hint
+  // false) without touching the reservation, or is loaded elsewhere
+  // (reserved_hint true). Only the object named by the load: its
+  // dependencies are loaded anywhere. reserved_addr must be page aligned when
+  // the object fits (only the span is checked against the end of the address
+  // space, not reserved_size), and every page of the span must already be
+  // address space gesher-base tracks (mapped by the caller, or an unmapped
+  // page of one of its reservations); otherwise the load fails before
+  // anything is mapped.
   bool use_reserved = false;
   void* reserved_addr = nullptr;
   size_t reserved_size = 0;
@@ -106,6 +113,20 @@ const char* Soname(Library* library);
 // Runs the object's DT_FINI_ARRAY / DT_FINI and marks it closed. The mapping is
 // kept (handles may still be held); full unmap is not implemented.
 void Close(Library* library);
+
+// dlopen references to an object loaded into a caller's reservation
+// (LoadOptions::use_reserved), as bionic counts them. AddReservedReference
+// takes one (no-op for other objects); false if `library` was unloaded, so
+// the caller loads it again. ReleaseReservedReference (dlclose) gives one
+// back; the last one unloads the object: its finalizers run, it leaves every
+// list (dlsym, dl_iterate_phdr, dladdr, symbol binding of later loads, the
+// arm64 translator's code ranges) and what it used of the reservation is
+// mapped back PROT_NONE, so the caller may then unmap its reservation. The
+// handle stays valid memory but finds nothing. An object with TLS, or one
+// another loaded object depends on, stays loaded. Returns whether it was
+// unloaded; false for any handle that is not a loaded reserved object.
+bool AddReservedReference(Library* library);
+bool ReleaseReservedReference(Library* library);
 
 // What dl_iterate_phdr reports for one loaded object.
 struct PhdrInfo {

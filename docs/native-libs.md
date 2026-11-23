@@ -137,27 +137,47 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     bionic's extended options. As bionic's `do_dlopen`, a flag outside
     `ANDROID_DLEXT_VALID_FLAG_BITS`, `USE_LIBRARY_FD_OFFSET` without
     `USE_LIBRARY_FD` and `USE_NAMESPACE` with a null namespace fail with its
-    dlerror texts; a null `extinfo` is `dlopen`; a library already loaded
-    (by soname) is returned where it is. `RESERVED_ADDRESS` loads the
-    library with its first page at `reserved_addr` (load bias
-    `reserved_addr - page_start(min p_vaddr)`), its segments mapped
-    `MAP_FIXED` over the caller's reservation, whose unused pages stay as the
-    caller mapped them; if the load span (`page_end(max p_vaddr + p_memsz) -
-    page_start(min p_vaddr)`) exceeds `reserved_size` the call fails
-    (`reserved address space ... smaller than ... bytes needed for "..."`)
-    without touching the reservation. `RESERVED_ADDRESS_HINT` loads the same
-    way when the span fits, and anywhere when it does not. A load that fails
-    after mapping into the reservation maps those pages back `PROT_NONE`
-    (`LoadOptions::reserved_addr`, `Library::mapped_by_caller`), as
-    bionic's `soinfo_free` does: the reservation stays the caller's. Only
-    the named library goes there; its dependencies load anywhere. The other
-    valid flags are not implemented and fail the call with `android_dlopen_ext:
-    extended flags 0x... are not supported` (before anything is mapped)
-    rather than being ignored: `WRITE_RELRO`, `USE_RELRO`, `USE_LIBRARY_FD`
-    (and `_OFFSET`), `FORCE_LOAD`, `RESERVED_ADDRESS_RECURSIVE` and
-    `USE_NAMESPACE` (no linker namespaces exist here). `GESHER_TRACE_DL`
-    prints the flags, `reserved_addr` and `reserved_size` of each call.
-    Tested from x86-64 and arm64-v8a code by `tests/native/dlext_test.c`.
+    dlerror texts; a null `extinfo` is `dlopen`. The valid flags gesher does
+    not implement fail the call with `android_dlopen_ext: extended flags
+    0x... are not supported` before any lookup, so also for a library
+    already loaded, rather than being ignored: `WRITE_RELRO`, `USE_RELRO`,
+    `USE_LIBRARY_FD` (and `_OFFSET`: the fd is not read),
+    `RESERVED_ADDRESS_RECURSIVE` and `USE_NAMESPACE` (no linker namespaces
+    exist here). `FORCE_LOAD` only asks not to reuse a loaded copy: a
+    library not loaded yet loads as usual, a loaded one fails the same way
+    (this loader cannot load a second copy). Otherwise a library already
+    loaded (by soname) is returned where it is, whatever reservation is
+    offered. `RESERVED_ADDRESS` loads the library with its first page at
+    `reserved_addr` (load bias `reserved_addr - page_start(min p_vaddr)`), its
+    segments mapped `MAP_FIXED` over the caller's reservation; beyond the
+    load span (`page_end(max p_vaddr + p_memsz) - page_start(min p_vaddr)`)
+    the reservation is left as it was, and pages of the span between
+    segments are `PROT_NONE` (the caller's own with file views; mapped
+    `PROT_NONE` when segments are copied, as without placeholders). If the
+    span exceeds `reserved_size` the call fails with bionic's text
+    (`reserved address space <reserved_size - span> smaller than <span>
+    bytes needed for "<path>"`) without touching the reservation; only the
+    span is checked against the end of the address space. bionic maps over
+    whatever is at `reserved_addr`; gesher-base can only replace address space
+    it tracks, so a span reaching pages nobody mapped (or not mapped through
+    it) fails before anything is mapped (`... is not all mapped by the
+    caller`); pages a `munmap` left inside a reservation still count.
+    `RESERVED_ADDRESS_HINT` loads the same way when the span fits and
+    anywhere when it does not; with `RESERVED_ADDRESS` too, the strict one
+    wins. A load that fails after mapping into the reservation maps exactly
+    the ranges it mapped back `PROT_NONE`, as bionic's `soinfo_free` does
+    (`LoadOptions::reserved_addr`, `Library::caller_ranges`); if that fails
+    it unmaps what of the library is left there and logs it. Only the named
+    library goes there; its dependencies load anywhere. `dlopen`s of such a
+    library are counted, and the last `dlclose` unloads it
+    (`ReleaseReservedReference`): its finalizers run, it leaves `dlsym`,
+    `dl_iterate_phdr`, `dladdr` and the arm64 translator's code ranges, and
+    its pages become `PROT_NONE` again, so the caller can unmap its
+    reservation; one with TLS, or one another loaded library depends on,
+    stays loaded. Every other library still stays loaded for the life of the
+    process. `GESHER_TRACE_DL` prints the flags, `reserved_addr` and
+    `reserved_size` of each call. Tested from x86-64 and arm64-v8a code, with
+    and without placeholder mappings, by `tests/native/dlext_test.c`.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,
