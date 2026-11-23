@@ -88,3 +88,32 @@ extra setup.
 - Ship Google's proprietary apps or Play Services. microG may be integrated
   later for apps that depend on Play Services APIs.
 - Run apps that need kernel drivers or root.
+
+## Desktop script responsibilities
+
+All desktop scripts remain in `tools/package` and are installed by `gesher.iss`.
+
+| File | Responsibility |
+| --- | --- |
+| `gesher-control-panel.ps1` | WPF presentation, refresh, action admission/completion, update confirmation and close policy. |
+| `gesher-panel-actions.ps1` | APK error propagation and background execution, including ConsoleHost/native handle ownership. |
+| `gesher-panel-native.ps1` | Native desktop and metadata monitoring helpers. |
+| `gesher-app.ps1` | Application/device command entry point and runtime/profile orchestration. |
+| `gesher-app-microg.ps1` | microG staging and enable/disable operations. |
+| `gesher-update.ps1` | Release discovery, verified download and installer process helpers. |
+| `gesher-runtime-files.ps1` | Runtime-owned file synchronization into the Android profile. |
+| `gesher-ui.ps1`, `ui-messages.json` | Language selection and message catalog. |
+| `gesher.iss` | Per-user installation, shell integration and optional components. |
+
+The panel dot-sources the action module at the former definition site, supplying
+`$here` (installed script directory) and the selected UI language.
+`New-PanelActionWorker(operation, request)` returns the existing
+`PowerShell`, `Handle`, `Disposed` record; its result contains `Errors`. The panel
+owns admission, polling, disposal and feedback. Workers receive data, never WPF
+controls, retaining helper ordering, exit codes and temporary-file cleanup.
+A committing install is not stopped on close.
+
+Update orchestration stays with confirmation/rendering in the panel; transport
+and installer helpers already live in `gesher-update.ps1`. Further splitting
+should follow responsibility rather than line counts.
+See [Build and package](build-and-package.md) for derived artifacts and validation.

@@ -1,6 +1,6 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # The Control Center's install failures carry their reason: Install-PanelApk (the
-# production function, taken from gesher-control-panel.ps1) hands gesher-app.ps1 a
+# production function, taken from gesher-panel-actions.ps1) hands gesher-app.ps1 a
 # file in GESHER_LAUNCH_ERROR_FILE, which PowerShell passes to Launcher through
 # Unicode arguments. com.gesher.app.Launcher writes why an
 # install failed (a different signing key, ...), and shows it after "failed".
@@ -37,7 +37,7 @@ foreach ($lang in 'en', 'he') {
 Assert-Install ($catalog.messages.install_update_incompatible.he.Contains($catalog.messages.cp_title.he)) 'The Hebrew advice names the Control Center as its title does'
 
 # Install-PanelApk itself, as the panel defines it.
-$ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $PanelPath), [ref]$null, [ref]$null)
+$ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path $PanelPath) 'gesher-panel-actions.ps1'), [ref]$null, [ref]$null)
 $function = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Install-PanelApk' }, $true)
 Assert-Install ($null -ne $function) 'The control panel defines Install-PanelApk'
 . ([scriptblock]::Create($function.Extent.Text))

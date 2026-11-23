@@ -6,9 +6,12 @@ $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath($PanelPath), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
+$actionAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path $PanelPath) 'gesher-panel-actions.ps1'), [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($name in 'Set-Busy','Complete-DashboardAction','Install-PanelApk','New-PanelActionWorker',
         'Start-PanelAction','Complete-PanelAction','Test-PanelActionClose') {
-    $definition = @($ast.FindAll({ param($node)
+    $sourceAst = if ($name -in 'Install-PanelApk','New-PanelActionWorker') { $actionAst } else { $ast }
+    $definition = @($sourceAst.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $false))
     if ($definition.Count -ne 1) { throw "Expected one production function: $name" }
@@ -24,7 +27,7 @@ foreach ($name in 'Set-Busy','Complete-DashboardAction','Install-PanelApk','New-
 # unchanged for ABI inspection. The failure census below observes their real
 # native acquisitions and releases without counting unrelated CLR/WPF handles.
 foreach ($name in 'Initialize-PanelActionNative', 'Invoke-PanelActionNative') {
-    $definition = @($ast.FindAll({ param($node)
+    $definition = @($actionAst.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $true))
     if ($definition.Count -ne 1) { throw "Expected one production native function: $name" }

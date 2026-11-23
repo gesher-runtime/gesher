@@ -1,5 +1,7 @@
 # The Windows installer
 
+For rebuilding from a defined source, see [Build and package](build-and-package.md).
+
 `tools/package/gesher.iss` (Inno Setup 6) is built and tested by the
 `package` job in `.github/workflows/ci.yml`. It installs per user, without
 administrator rights, into `%LOCALAPPDATA%\Programs\Gesher`, puts `gesher`
