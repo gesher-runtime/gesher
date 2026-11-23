@@ -91,7 +91,9 @@ final class JobSchedulerService extends IJobScheduler.Default
     private static final int OBSERVE_TOP = 1 << 4;
     private static final int HISTORY_LIMIT = 10;
     private static final int MAX_RUNNING = 4;
-    private static final int PERSIST_VERSION = 0x474a4232; // GJB2: code-bound records.
+    private static final int MAX_JOBS_PER_APP = 150;
+    private static final int PERSIST_VERSION = 0x474a4233; // GJB3: code-bound records with admission UID.
+    private static final int LEGACY_PERSIST_VERSION = 0x474a4232;
 
     private final ActivityManagerService mAm;
     private final ActivityTaskManagerService mAtm;
@@ -116,6 +118,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         final JobInfo info;
         final int ownerUid;
         final String ownerIdentity;
+        // JobStore counts self-scheduled jobs by scheduling UID. Cross-UID
+        // attributed work is exempt, while a same-UID attributed job still counts.
+        final int quotaUid;
         long earliest;          // elapsedRealtime; 0: none
         long latest;            // elapsedRealtime; Long.MAX_VALUE: none
         long originalLatest;    // periodic window retained across failure retries
@@ -136,8 +141,13 @@ final class JobSchedulerService extends IJobScheduler.Default
         final java.util.LinkedHashSet<String> changedAuthorities = new java.util.LinkedHashSet<>();
         long firstChange;
         long lastChange;
+        boolean contentTriggerReady;
 
         Job(String packageName, String namespace, JobInfo info) {
+            this(packageName, namespace, info, Integer.MIN_VALUE);
+        }
+
+        Job(String packageName, String namespace, JobInfo info, int quotaUid) {
             this.packageName = packageName;
             removalEpoch = mRemovalEpochs.getOrDefault(packageName, 0L);
             this.namespace = namespace;
@@ -146,6 +156,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             ApkPackage owner = mPm.get(packageName);
             ownerUid = owner == null ? -1 : owner.uid();
             ownerIdentity = NotificationManagerService.codeIdentity(owner);
+            this.quotaUid = quotaUid == Integer.MIN_VALUE ? ownerUid : quotaUid;
             handleAbandonedJobs = owner != null && android.app.job.Flags.handleAbandonedJobs()
                     && java.util.Arrays.binarySearch(CompatChanges.disabledFor(
                             owner.parsed.getTargetSdkVersion()),
@@ -226,14 +237,15 @@ final class JobSchedulerService extends IJobScheduler.Default
                 triggeredUris = null;
                 triggeredAuthorities = null;
             } else {
-                // JobStatus.MAX_URIS_TO_REPORT: more than that and only the authorities.
-                triggeredUris = job.changedUris.size() <= 50
-                        ? job.changedUris.toArray(new android.net.Uri[0]) : null;
+                // New notifications are bounded in contentChanged. Android carries
+                // the full union of failed and newly pending batches into a retry.
+                triggeredUris = job.changedUris.toArray(new android.net.Uri[0]);
                 triggeredAuthorities = job.changedAuthorities.toArray(new String[0]);
                 job.changedUris.clear();
                 job.changedAuthorities.clear();
                 job.firstChange = 0;
                 job.lastChange = 0;
+                job.contentTriggerReady = false;
             }
         }
 
@@ -499,6 +511,34 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     // Guarded by this.
     private final List<Job> mJobs = new ArrayList<>();
+    private final Map<Integer, Integer> mJobsPerUid = new HashMap<>();
+
+    /** Registry publication and admission accounting share the scheduler monitor. */
+    private void addJobLocked(Job job) {
+        mJobs.add(job);
+        if (job.quotaUid >= 0) mJobsPerUid.merge(job.quotaUid, 1, Integer::sum);
+    }
+
+    private void removeJobLocked(Job job) {
+        int index = mJobs.indexOf(job);
+        if (index < 0) return;
+        if (job.quotaUid >= 0) {
+            // Every registry insertion goes through addJobLocked. A record
+            // without a reservation would make this count underflow; fail
+            // before mutating either structure instead of skipping it.
+            Integer count = mJobsPerUid.get(job.quotaUid);
+            if (count == null || count <= 0) {
+                throw new IllegalStateException("Unaccounted job " + job + " for uid " + job.quotaUid);
+            }
+            if (count == 1) mJobsPerUid.remove(job.quotaUid);
+            else mJobsPerUid.put(job.quotaUid, count - 1);
+        }
+        mJobs.remove(index);
+    }
+
+    private void removeJobsLocked(List<Job> jobs) {
+        for (Job job : jobs) removeJobLocked(job);
+    }
     // Associations survive removal from the scheduled-job list until each Run
     // actually completes; canceled/rescheduled services may still be stopping.
     private final Set<Run> mNotificationRuns = new HashSet<>();
@@ -604,7 +644,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     synchronized void start() {
         if (mThread != null) return;
         for (Job j : loadPersisted()) {
-            mJobs.add(j);
+            addJobLocked(j);
             SystemServer.log("jobscheduler: persisted " + j + " scheduled again");
         }
         updateNetworkObservationLocked();
@@ -621,7 +661,7 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     @Override
     public int schedule(String namespace, JobInfo job) {
-        return scheduleInternal(namespace, job, null);
+        return scheduleInternal(namespace, job, null, false);
     }
 
     @Override
@@ -634,21 +674,22 @@ final class JobSchedulerService extends IJobScheduler.Default
                 || !packageName.equals(job.getService().getPackageName())) {
             throw new SecurityException("Job attribution must match its service owner");
         }
-        return scheduleInternal(namespace, job, null);
+        return scheduleInternal(namespace, job, null, true);
     }
 
     @Override
     public int enqueue(String namespace, JobInfo info, JobWorkItem work) {
         if (work == null) throw new IllegalArgumentException("Missing job work item");
-        return scheduleInternal(namespace, info, work);
+        return scheduleInternal(namespace, info, work, false);
     }
 
-    private int scheduleInternal(String namespace, JobInfo info, JobWorkItem work) {
+    private int scheduleInternal(String namespace, JobInfo info, JobWorkItem work, boolean attributed) {
         if (info == null || info.getService() == null) throw new IllegalArgumentException("Missing job service");
         ComponentName service = info.getService();
         String pkg = service.getPackageName();
         ApkPackage capturedOwner = mPm.get(pkg);
         own(pkg);
+        int callingUid = mCallers.callerUid();
         ServiceInfo si = checkedService(pkg, info);
         if (si == null) {
             throw new IllegalArgumentException("No such service " + service);
@@ -672,31 +713,70 @@ final class JobSchedulerService extends IJobScheduler.Default
         start();
         Run stop = null;
         Job job;
-        synchronized (this) {
-            if (capturedOwner == null || mPm.get(pkg) != capturedOwner || mPm.isRemovalPending(pkg)) {
-                throw new SecurityException("Job owner changed before publication");
-            }
-            Job old = find(pkg, namespace, info.getId());
-            if (work != null && old != null && old.info.equals(info)) {
-                // enqueue onto the same job: its work queue grows.
-                job = old;
-            } else {
-                job = new Job(pkg, namespace, info);
-                timesForNew(job);
-                if (old != null) {
-                    mJobs.remove(old);
-                    job.work.addAll(old.work);
-                    job.nextWorkId = old.nextWorkId;
-                    if (old.run != null && !old.run.stopping) stop = old.run;
+        List<Job> stale = null;
+        try {
+            synchronized (this) {
+                if (capturedOwner == null || mPm.get(pkg) != capturedOwner || mPm.isRemovalPending(pkg)) {
+                    throw new SecurityException("Job owner changed before publication");
                 }
-                mJobs.add(job);
+                // Records with this key whose owner code changed can never run or be
+                // found again; this schedule supersedes them, so they must not keep
+                // holding a reservation alongside the replacement.
+                Job old = null;
+                for (Job j : mJobs) {
+                    if (!j.same(pkg, namespace, info.getId())) continue;
+                    if (current(j)) {
+                        if (old == null) old = j;
+                    } else {
+                        if (stale == null) stale = new ArrayList<>();
+                        stale.add(j);
+                    }
+                }
+                if (stale != null) removeJobsLocked(stale);
+                if (work != null && old != null && old.info.equals(info)) {
+                    // enqueue onto the same job: its work queue grows.
+                    job = old;
+                } else {
+                    // Android 16 r4 tests >150 before publication: 151 distinct jobs
+                    // are admitted, then ordinary replacements/new jobs fail too.
+                    // The identical-info enqueue fast path above bypasses this check.
+                    if (!attributed && mJobsPerUid.getOrDefault(callingUid, 0) > MAX_JOBS_PER_APP) {
+                        if (stale != null) updateNetworkObservationLocked();
+                        throw new IllegalStateException("Apps may not schedule more than "
+                                + MAX_JOBS_PER_APP + " distinct jobs");
+                    }
+                    int quotaUid = !attributed || callingUid == capturedOwner.uid() ? callingUid : -1;
+                    job = new Job(pkg, namespace, info, quotaUid);
+                    timesForNew(job);
+                    if (old != null) {
+                        removeJobLocked(old);
+                        job.work.addAll(old.work);
+                        job.nextWorkId = old.nextWorkId;
+                        if (hasTriggers(info) && !old.changedAuthorities.isEmpty()) {
+                            // ContentObserverController transfers only the pending
+                            // batch, not changes already owned by the replaced Run.
+                            job.changedUris.addAll(old.changedUris);
+                            job.changedAuthorities.addAll(old.changedAuthorities);
+                            job.firstChange = old.firstChange;
+                            job.lastChange = old.lastChange;
+                            job.contentTriggerReady = true;
+                            old.changedUris.clear();
+                            old.changedAuthorities.clear();
+                        }
+                        if (old.run != null && !old.run.stopping) stop = old.run;
+                    }
+                    addJobLocked(job);
+                }
+                if (work != null) {
+                    work.setWorkId(job.nextWorkId++);
+                    job.work.add(work);
+                }
+                updateNetworkObservationLocked();
+                notifyAll();
             }
-            if (work != null) {
-                work.setWorkId(job.nextWorkId++);
-                job.work.add(work);
-            }
-            updateNetworkObservationLocked();
-            notifyAll();
+        } finally {
+            // Delivered outside the monitor like cancel(), also when admission fails.
+            if (stale != null) cancelled(stale, "superseded");
         }
         if (stop != null) stopRun(stop, JobParameters.STOP_REASON_CANCELLED_BY_APP,
                 JobParameters.INTERNAL_STOP_REASON_CANCELED, "rescheduled");
@@ -714,7 +794,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             for (Job j : mJobs) {
                 if (j.same(pkg, namespace, jobId)) cancelled.add(j);
             }
-            mJobs.removeAll(cancelled);
+            removeJobsLocked(cancelled);
             updateNetworkObservationLocked();
             notifyAll();
         }
@@ -740,7 +820,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                     cancelled.add(j);
                 }
             }
-            mJobs.removeAll(cancelled);
+            removeJobsLocked(cancelled);
             updateNetworkObservationLocked();
             notifyAll();
         }
@@ -1101,7 +1181,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (job.earliest > now) next = Math.min(next, job.earliest);
                 if (job.latest > now) next = Math.min(next, job.latest);
                 if (hasTriggers(job.info)) {
-                    long at = triggerReadyAt(job);
+                    long at = triggerReadyAt(job, now);
                     if (at > now) next = Math.min(next, at);
                 }
             }
@@ -1177,7 +1257,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         if (needsNetwork(info) && satisfyingNetwork(info, state) == null) {
             reasons |= reasonBit(JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY);
         }
-        if (hasTriggers(info) && triggerReadyAt(job) > now) {
+        if (hasTriggers(info) && triggerReadyAt(job, now) > now) {
             reasons |= reasonBit(JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONTENT_TRIGGER);
         }
         if (info.isRequireStorageNotLow() && !state.storageNotLow) {
@@ -1339,6 +1419,10 @@ final class JobSchedulerService extends IJobScheduler.Default
     /** ContentObserverController's defaults for a trigger's update and maximum delays. */
     private static final long DEFAULT_TRIGGER_UPDATE_DELAY_MS = 10_000;
     private static final long DEFAULT_TRIGGER_MAX_DELAY_MS = 2 * 60_000;
+    private static final long MIN_TRIGGER_UPDATE_DELAY_MS = 500;
+    private static final long MIN_TRIGGER_MAX_DELAY_MS = 1_000;
+    private static final int MAX_TRIGGER_URIS = 50;
+    private static final int URGENT_TRIGGER_URIS = 40;
 
     private static boolean hasTriggers(JobInfo info) {
         JobInfo.TriggerContentUri[] t = info.getTriggerContentUris();
@@ -1350,23 +1434,40 @@ final class JobSchedulerService extends IJobScheduler.Default
      * for its update delay, or its maximum delay after the first change; never without a
      * change (Long.MAX_VALUE). Guarded by this.
      */
-    private long triggerReadyAt(Job j) {
+    private long triggerReadyAt(Job j, long now) {
         if (j.changedAuthorities.isEmpty()) return Long.MAX_VALUE;
+        if (j.contentTriggerReady) return 0;
         long update = j.info.getTriggerContentUpdateDelay();
         long max = j.info.getTriggerContentMaxDelay();
         if (update < 0) update = DEFAULT_TRIGGER_UPDATE_DELAY_MS;
+        else update = Math.max(update, MIN_TRIGGER_UPDATE_DELAY_MS);
         if (max < 0) max = DEFAULT_TRIGGER_MAX_DELAY_MS;
-        return Math.min(j.lastChange + update, j.firstChange + max);
+        else max = Math.max(max, MIN_TRIGGER_MAX_DELAY_MS);
+        long ready = Math.min(triggerDeadline(j.lastChange, update), triggerDeadline(j.firstChange, max));
+        if (j.changedUris.size() >= URGENT_TRIGGER_URIS || ready <= now) {
+            // Once the content constraint is satisfied, later notifications must
+            // not make it false while another constraint still prevents execution.
+            j.contentTriggerReady = true;
+            return 0;
+        }
+        return ready;
+    }
+
+    private static long triggerDeadline(long since, long delay) {
+        return delay > Long.MAX_VALUE - since ? Long.MAX_VALUE : since + delay;
     }
 
     /** ContentService's changes: jobs whose triggers they match take note, and may run. */
     private void contentChanged(android.net.Uri[] uris, int flags) {
         boolean any = false;
+        boolean wake = false;
         long now = SystemClock.elapsedRealtime();
         synchronized (this) {
             for (Job j : mJobs) {
                 JobInfo.TriggerContentUri[] triggers = j.info.getTriggerContentUris();
                 if (triggers == null) continue;
+                long previousReady = triggerReadyAt(j, now);
+                boolean matched = false;
                 for (android.net.Uri uri : uris) {
                     for (JobInfo.TriggerContentUri t : triggers) {
                         boolean descendants = (t.getFlags()
@@ -1376,14 +1477,23 @@ final class JobSchedulerService extends IJobScheduler.Default
                         }
                         if (j.changedAuthorities.isEmpty()) j.firstChange = now;
                         j.lastChange = now;
-                        j.changedUris.add(uri);
+                        // Match ContentObserverController: cap newly observed
+                        // URIs, but keep every authority and any carried retry union.
+                        if (j.changedUris.size() < MAX_TRIGGER_URIS) j.changedUris.add(uri);
                         j.changedAuthorities.add(uri.getAuthority());
-                        any = true;
+                        matched = true;
                         break;
                     }
                 }
+                if (matched) {
+                    any = true;
+                    // Extending the quiet period cannot bring work forward. The
+                    // existing wake will resample it; notify only for an earlier
+                    // due time (including the first change or urgent threshold).
+                    if (j.run == null && triggerReadyAt(j, now) < previousReady) wake = true;
+                }
             }
-            if (any) notifyAll();
+            if (wake) notifyAll();
         }
         if (any) SystemServer.log("jobscheduler: content changed: " + java.util.Arrays.toString(uris));
     }
@@ -1673,7 +1783,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         long now = SystemClock.elapsedRealtime();
         boolean inList = mJobs.contains(j);
         if (!inList || !current(j)) {
-            mJobs.remove(j);
+            removeJobLocked(j);
             keep = false;
         } else if (reschedule) {
             // Preserve the trigger that selected this attempt for the retry.
@@ -1683,6 +1793,9 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (run.triggeredUris != null) java.util.Collections.addAll(j.changedUris, run.triggeredUris);
                 j.lastChange = now;
             }
+            // The retry also takes pending notifications received during a run
+            // that originally started without content (for example, a deadline).
+            if (!j.changedAuthorities.isEmpty()) j.contentTriggerReady = true;
             rescheduleForFailure(j, run, now);
             keep = true;
         } else if (j.info.isPeriodic()) {
@@ -1692,7 +1805,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             j.abandonedFailures = 0;
             keep = true;
         } else {
-            mJobs.remove(j);
+            removeJobLocked(j);
             keep = false;
         }
         if (!keep) {
@@ -1854,6 +1967,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             j.info.writeToParcel(p, 0);
             p.writeInt(j.ownerUid);
             p.writeString(j.ownerIdentity);
+            p.writeInt(j.quotaUid);
             File f = persistFile(j);
             f.getParentFile().mkdirs();
             try (OutputStream out = new FileOutputStream(f)) {
@@ -1879,7 +1993,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         synchronized (this) {
             mRemovalEpochs.put(name, mRemovalEpochs.getOrDefault(name, 0L) + 1);
             for (Job job : mJobs) if (name.equals(job.packageName)) cancelled.add(job);
-            mJobs.removeAll(cancelled);
+            removeJobsLocked(cancelled);
             updateNetworkObservationLocked();
             notifyAll();
             File[] persisted = persistDir().listFiles();
@@ -1905,8 +2019,10 @@ final class JobSchedulerService extends IJobScheduler.Default
                 byte[] data = in.readAllBytes();
                 p.unmarshall(data, 0, data.length);
                 p.setDataPosition(0);
-                boolean bound = p.readInt() == PERSIST_VERSION;
-                if (!bound) { f.delete(); continue; } // An unbound record has no verifiable installed owner.
+                int version = p.readInt();
+                if (version != PERSIST_VERSION && version != LEGACY_PERSIST_VERSION) {
+                    f.delete(); continue; // An unbound record has no verifiable installed owner.
+                }
                 String pkg = p.readString();
                 String namespace = p.readString();
                 JobInfo info = JobInfo.CREATOR.createFromParcel(p);
@@ -1914,9 +2030,15 @@ final class JobSchedulerService extends IJobScheduler.Default
                     f.delete();  // uninstalled
                     continue;
                 }
-                Job j = new Job(pkg, namespace, info);
-                if ((bound && (p.readInt() != j.ownerUid
-                        || !Objects.equals(p.readString(), j.ownerIdentity))) || !current(j)
+                int ownerUid = p.readInt();
+                String ownerIdentity = p.readString();
+                // GJB2 did not record attribution. Retain its verified owner and
+                // count it conservatively; never discard valid work for a quota.
+                if (version == PERSIST_VERSION && p.dataAvail() < 4) { f.delete(); continue; }
+                int quotaUid = version == PERSIST_VERSION ? p.readInt() : ownerUid;
+                Job j = new Job(pkg, namespace, info, quotaUid);
+                if (quotaUid < -1 || ownerUid != j.ownerUid
+                        || !Objects.equals(ownerIdentity, j.ownerIdentity) || !current(j)
                         || mPm.permissions().checkPermission(pkg,
                                 android.Manifest.permission.RECEIVE_BOOT_COMPLETED)
                                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {

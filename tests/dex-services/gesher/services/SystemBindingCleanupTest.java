@@ -149,8 +149,10 @@ public final class SystemBindingCleanupTest {
                 scheduler, h.owner, null, info);
         Object run = construct(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
         field(jobType, "run").set(job, run);
-        ((List<Object>) field(schedulerType, "mJobs").get(scheduler)).add(job);
-        field(schedulerType, "mRunning").setInt(scheduler, 1);
+        synchronized (scheduler) {
+            method(schedulerType, "addJobLocked", jobType).invoke(scheduler, job);
+            field(schedulerType, "mRunning").setInt(scheduler, 1);
+        }
         IServiceConnection connection = (IServiceConnection) field(runType, "connection").get(run);
         // Use the production job bind path, not a test-specific connection registry.
         method(schedulerType, "bind", runType).invoke(scheduler, run);

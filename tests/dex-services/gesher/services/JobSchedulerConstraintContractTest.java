@@ -119,7 +119,7 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static class TestService extends IJobService.Stub {
+    static class TestService extends IJobService.Stub {
         int starts;
         int stops;
         int networkChanges;
@@ -177,7 +177,7 @@ public final class JobSchedulerConstraintContractTest {
         public void getTransferredUploadBytes(JobParameters params, JobWorkItem item) { }
     }
 
-    private static final class TestRunHandle {
+    static final class TestRunHandle {
         final Object job;
         final Object run;
         final TestService service;
@@ -191,7 +191,7 @@ public final class JobSchedulerConstraintContractTest {
         }
     }
 
-    private static final class Harness implements AutoCloseable {
+    static final class Harness implements AutoCloseable {
         final Object pm, atm, am, scheduler;
         final ConnectivityService connectivity;
         final Class<?> schedulerType, jobType, runType;
@@ -200,8 +200,14 @@ public final class JobSchedulerConstraintContractTest {
         Harness() throws Exception { this(true, false); }
         Harness(boolean networkPermission) throws Exception { this(networkPermission, false); }
 
+        Harness(boolean networkPermission, boolean bootPermission) throws Exception {
+            this(networkPermission, bootPermission, false);
+        }
+
+        // The parsed package is sealed by hideAsFinal(), so permissions such as
+        // RECEIVE_BOOT_COMPLETED must be declared here rather than added later.
         @SuppressWarnings("unchecked")
-        Harness(boolean networkPermission, boolean observeConnectivity) throws Exception {
+        Harness(boolean networkPermission, boolean bootPermission, boolean observeConnectivity) throws Exception {
             parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".TestJobService");
@@ -216,7 +222,7 @@ public final class JobSchedulerConstraintContractTest {
                     android.Manifest.permission.ACCESS_NETWORK_STATE, 0, java.util.Set.of()));
             parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                     "android.permission.RUN_USER_INITIATED_JOBS", 0, java.util.Set.of()));
-            if (observeConnectivity) parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+            if (bootPermission) parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                     android.Manifest.permission.RECEIVE_BOOT_COMPLETED, 0, java.util.Set.of()));
             parsed.hideAsFinal();
 
@@ -260,7 +266,7 @@ public final class JobSchedulerConstraintContractTest {
             userInitiatedDefinition.protectionLevel = android.content.pm.PermissionInfo.PROTECTION_NORMAL;
             ((Map<String, android.content.pm.PermissionInfo>) get(catalog, "mFramework"))
                     .put(userInitiatedDefinition.name, userInitiatedDefinition);
-            if (observeConnectivity) {
+            if (bootPermission) {
                 android.content.pm.PermissionInfo boot = new android.content.pm.PermissionInfo();
                 boot.name = android.Manifest.permission.RECEIVE_BOOT_COMPLETED;
                 boot.packageName = "android";
@@ -404,7 +410,7 @@ public final class JobSchedulerConstraintContractTest {
 
     /** Same ownership path on a controlled host, with real persisted Parcels on Windows/ART. */
     public static void connectivityOwnershipContracts(boolean realParcel) throws Exception {
-        try (Harness h = new Harness(true, true)) {
+        try (Harness h = new Harness(true, true, true)) {
             check(networkObservers(h.connectivity) == 0, "Empty scheduler acquired network observation");
             h.schedule(new JobInfo.Builder(201, serviceComponent()).setMinimumLatency(3_600_000).build());
             check(networkObservers(h.connectivity) == 0, "A latency-only job acquired network observation");
@@ -1699,6 +1705,8 @@ public final class JobSchedulerConstraintContractTest {
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true);
         contracts();
         connectivityOwnershipContracts(true);
+        JobSchedulerAdmissionTest.contracts(true);
+        JobSchedulerContentTriggerTest.contracts(true);
         System.out.println("JobSchedulerConstraintContractTest all passed: " + checks + " checks");
     }
 }

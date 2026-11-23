@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "compat/media/video/video_decoder.h"
+@PIXEL_ORIENTATION_INCLUDE@
 
 #define HAS_INDEXED_SELECTOR @HAS_INDEXED_SELECTOR@
 #define HAS_DISPLAY_METADATA @HAS_DISPLAY_METADATA@

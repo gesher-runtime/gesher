@@ -13,6 +13,7 @@
 
 #include "shim_internal.h"
 #include "extra_bionic.h"
+#include "memmem_search.h"
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
@@ -445,11 +446,7 @@ int BIONIC_SYSV Strcasecmp(const char* a, const char* b) { return _stricmp(a, b)
 int BIONIC_SYSV Strncasecmp(const char* a, const char* b, size_t n) { return _strnicmp(a, b, n); }
 void* BIONIC_SYSV Memmem(const void* h, size_t hn, const void* n, size_t nn) {
   if (nn == 0) return const_cast<void*>(h);
-  auto hp = static_cast<const uint8_t*>(h);
-  for (size_t i = 0; i + nn <= hn; ++i) {
-    if (std::memcmp(hp + i, n, nn) == 0) return const_cast<uint8_t*>(hp + i);
-  }
-  return nullptr;
+  return const_cast<void*>(search::FindBytes(h, hn, n, nn));
 }
 
 // FORTIFY (_FORTIFY_SOURCE) checked variants: check, then do the work.

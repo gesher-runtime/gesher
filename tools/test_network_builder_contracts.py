@@ -66,7 +66,7 @@ def main() -> None:
         subprocess.run([str(args.java_home / "bin/java"), "-cp", runtime,
                         "NetworkBuilderHost", str(native), args.case], check=True, timeout=30)
     if full_run and OKHTTP_SOURCE.is_dir():
-        subprocess.run([sys.executable, str(ROOT / "tools/test_http_engine_policy.py"),
+        subprocess.run([sys.executable, str(ROOT / "tools/test_http_engine.py"),
                         "--java-home", str(args.java_home.resolve()),
                         "--okhttp-source", str(OKHTTP_SOURCE)], check=True, timeout=300)
 
