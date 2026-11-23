@@ -85,7 +85,10 @@ final class AccountChooser {
         } catch (RuntimeException | LinkageError e) {
             // Fail closed without putting account labels, Bundles or native errors in logs.
             SystemServer.log("account chooser unavailable: " + e.getClass().getSimpleName());
+        } finally {
+            // The native call has exited before its reservation is released, including
+            // caller retirement and a worker Error. A selected result is already final.
+            finish(null);
         }
-        finish(null);
     }
 }
