@@ -464,6 +464,8 @@ public final class SystemServer {
         void start() throws Exception {
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
+            // The text-to-speech engine, when Windows has voices (docs/tts.md).
+            TtsEngineApp.sync(mInstaller, mServices.pm);
             trackLauncherRecords(mServices.pm);
             // The launcher waits for this file: the services are registered.
             File ready = Device.readyFile();
