@@ -131,7 +131,7 @@ try {
 
   $contactsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'ContactsProviderContractTest') 120
   $contactsCode = $LASTEXITCODE
-  Check 'services: ContactsProvider persistence, strict SQL, phone lookup, batching, sync and permissions' {
+  Check 'services: ContactsProvider persistence, strict SQL, E.164, phone lookup, applyBatch, sync, Profile and permissions' {
     $global:LASTEXITCODE = $contactsCode
     $contactsOut
   } @('ContactsProviderContractTest all passed')

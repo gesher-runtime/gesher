@@ -45,7 +45,7 @@ final class ContactsProviderSupport {
     }
 
     static boolean isSystemAuthority(String authority) {
-        return CALL_LOG_AUTHORITY.equals(authority) || CONTACTS_AUTHORITY.equals(authority);
+        return CONTACTS_AUTHORITY.equals(authority) || CALL_LOG_AUTHORITY.equals(authority);
     }
 
     static ProviderInfo contactsProviderInfo() {

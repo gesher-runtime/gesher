@@ -520,8 +520,10 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
             if ((flags & PackageManager.GET_PROVIDERS) != 0
                     && ContactsProviderSupport.matchesProviderFlags(flags)) {
-                info.providers = new ProviderInfo[] {ContactsProviderSupport.callLogProviderInfo(),
-                        ContactsProviderSupport.contactsProviderInfo()};
+                info.providers = new ProviderInfo[] {
+                        ContactsProviderSupport.contactsProviderInfo(),
+                        ContactsProviderSupport.callLogProviderInfo()
+                };
             }
             return info;
         }

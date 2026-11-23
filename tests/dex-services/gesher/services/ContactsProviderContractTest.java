@@ -273,7 +273,8 @@ public final class ContactsProviderContractTest {
                     null, null, null)) {
                 check(c != null && c.moveToFirst() && "+972 50-234-5678".equals(c.getString(0))
                         && c.getInt(1) == ContactsContract.DisplayNameSources.PHONE
-                        && c.getInt(2) == 1 && "+972 50-234-5678".equals(c.getString(3)),
+                        && c.getInt(2) == 1 && "+972 50-234-5678".equals(c.getString(3))
+                            && "#".equals(c.getString(4)),
                         "Display name falls back to Phone when higher sources absent");
             }
             // Verify auto-populated data4 normalized phone number
@@ -471,6 +472,12 @@ public final class ContactsProviderContractTest {
             data.put("mimetype", ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE);
             data.put("data1", "+16505550100");
             Uri phone = provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            Uri enterprise = Uri.withAppendedPath(ContactsContract.PhoneLookup.ENTERPRISE_CONTENT_FILTER_URI,
+                    "+16505550100");
+            try (Cursor c = provider.query(enterprise, new String[] {"_id"}, null, null, null)) {
+                check(c.moveToFirst() && c.getLong(0) == contactId && c.getCount() == 1,
+                        "enterprise phone lookup returns its genuine primary-user contact");
+            }
             data.put("mimetype", ContactsContract.CommonDataKinds.SipAddress.CONTENT_ITEM_TYPE);
             data.put("data1", "fixture@example.invalid");
             Uri sip = provider.insert(ContactsContract.Data.CONTENT_URI, data);
@@ -480,8 +487,19 @@ public final class ContactsProviderContractTest {
             check(count(provider, callables) == 2
                             && count(provider, ContentUris.withAppendedId(callables, ContentUris.parseId(sip))) == 1,
                     "callables contain phone and SIP rows without email rows");
-            Uri callableFilter = Uri.withAppendedPath(Uri.withAppendedPath(callables, "filter"), "example.invalid");
-            check(count(provider, callableFilter) == 1, "callable filter matches the SIP address");
+            Uri callableFilter = Uri.withAppendedPath(Uri.withAppendedPath(callables, "filter"), "fixture@");
+            check(count(provider, callableFilter) == 1, "callable filter matches the SIP address prefix");
+            check(count(provider, callableFilter.buildUpon().appendQueryParameter("search_phone_number", "false")
+                    .appendQueryParameter("search_display_name", "false").build()) == 0,
+                    "callable filter honors disabling both address and display-name search");
+            Uri numberFilter = Uri.withAppendedPath(Uri.withAppendedPath(callables, "filter"), "+1 (650)");
+            check(count(provider, numberFilter) == 1, "callable filter normalizes a dialed prefix");
+            Uri allFiltered = Uri.withAppendedPath(callables, "filter");
+            data.put("mimetype", ContactsContract.CommonDataKinds.SipAddress.CONTENT_ITEM_TYPE);
+            Uri duplicate = provider.insert(ContactsContract.Data.CONTENT_URI, data);
+            check(count(provider, allFiltered) == 2 && count(provider, callables) == 3,
+                    "callable filter deduplicates addresses within a contact");
+            check(provider.delete(duplicate, null, null) == 1, "remove duplicate callable fixture");
 
             Uri strequent = ContactsContract.Contacts.CONTENT_STREQUENT_URI;
             Uri feedback = Uri.withAppendedPath(ContactsContract.DataUsageFeedback.FEEDBACK_URI,
@@ -1366,6 +1384,13 @@ public final class ContactsProviderContractTest {
                     check(c != null && c.getCount() == 2,
                             "Read app queries contacts via IContentProvider cleanly");
                 }
+                ArrayList<ContentProviderOperation> queries = new ArrayList<>();
+                queries.add(ContentProviderOperation.newAssertQuery(ContactsContract.Contacts.CONTENT_URI)
+                        .withExpectedCount(2).build());
+                ContentProviderResult[] results = h.provider.applyBatch(
+                        source(13302, PKG_READ), "com.android.contacts", queries);
+                check(results.length == 1 && results[0].count == 2,
+                        "Read-only caller applies an assert-only batch over provider transport");
                 rejects(SecurityException.class, () -> h.provider.insert(
                         source(13302, PKG_READ), ContactsContract.RawContacts.CONTENT_URI, new ContentValues(), null));
                 try (AssetFileDescriptor afd = h.provider.openAssetFile(source(13302, PKG_READ),

@@ -73,14 +73,9 @@ import java.util.concurrent.TimeUnit;
  * directory entry, enforces {@code READ_CONTACTS} / {@code WRITE_CONTACTS}, AppOps,
  * and URI grants, and implements transactional {@link #applyBatch}, sync-adapter
  * soft/hard deletes, loose {@code phone_lookup} matching, and display-name fallback.
- * The legacy {@code contacts} authority, usage feedback, frequent contacts,
- * provider status, callable queries and dedicated contact photo URIs are outside
- * this implementation.
- *
- * <p><b>Limitation (1:1 contacts without multi-raw-contact aggregation):</b>
- * Inserting a {@code raw_contact} creates its own aggregate {@code contacts}
- * row. Automatic cross-account raw-contact aggregation and
- * split/join heuristics are not implemented.
+ * The user profile has a separate ID range and a single aggregate contact.
+ * Ordinary raw contacts each have their own aggregate. Automatic
+ * cross-account merging and split/join heuristics remain unsupported.
  */
 final class ContactsProvider extends ContentProvider {
     private static final Set<String> CONTACT_OPTIONS = Set.of(
@@ -244,7 +239,7 @@ final class ContactsProvider extends ContentProvider {
         sUriMatcher.addURI(auth, "data/phones/filter/*", PHONES_FILTER);
         sUriMatcher.addURI(auth, "data/callables", CALLABLES);
         sUriMatcher.addURI(auth, "data/callables/#", CALLABLES_ID);
-        sUriMatcher.addURI(auth, "data/callables/filter", CALLABLES);
+        sUriMatcher.addURI(auth, "data/callables/filter", CALLABLES_FILTER);
         sUriMatcher.addURI(auth, "data/callables/filter/*", CALLABLES_FILTER);
         sUriMatcher.addURI(auth, "data/emails", EMAILS);
         sUriMatcher.addURI(auth, "data/emails/#", EMAILS_ID);
@@ -1185,6 +1180,7 @@ final class ContactsProvider extends ContentProvider {
         String effSelection = selection;
         String[] effArgs = selectionArgs;
         String defaultOrder = null;
+        String groupBy = null;
         boolean syncAdapter = isCallerSyncAdapter(uri);
 
         switch (match) {
@@ -1383,9 +1379,37 @@ final class ContactsProvider extends ContentProvider {
                     effSelection = scopedSelection(effSelection, "_id = ?");
                     effArgs = ContactsProviderSupport.prependArgs(effArgs, id);
                 } else if (match == CALLABLES_FILTER) {
-                    String pattern = "%" + uri.getLastPathSegment() + "%";
-                    effSelection = scopedSelection(effSelection, "(display_name LIKE ? OR data1 LIKE ?)");
-                    effArgs = ContactsProviderSupport.prependArgs(effArgs, pattern, pattern);
+                    groupBy = "CASE WHEN mimetype = '" + MIME_PHONE + "' AND data4 IS NOT NULL"
+                            + " THEN data4 ELSE data1 END, contact_id";
+                    if (uri.getPathSegments().size() > 3) {
+                        String filter = uri.getLastPathSegment();
+                        ArrayList<String> matches = new ArrayList<>();
+                        ArrayList<String> bindings = new ArrayList<>();
+                        String prefix = callablePrefix(filter);
+                        if (uri.getBooleanQueryParameter("search_display_name", true)) {
+                            matches.add("(display_name LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')");
+                            bindings.add(prefix);
+                            bindings.add("% " + prefix);
+                        }
+                        if (uri.getBooleanQueryParameter("search_phone_number", true)) {
+                            String number = PhoneNumberUtils.normalizeNumber(filter);
+                            if (!number.isEmpty()) {
+                                matches.add("(mimetype = '" + MIME_PHONE + "' AND "
+                                        + "(_PHONE_NUMBER_STRIPPED_REVERSED(data1) LIKE ?"
+                                        + " OR _PHONE_NUMBER_STRIPPED_REVERSED(data4) LIKE ?))");
+                                String reversed = "%" + new StringBuilder(number).reverse();
+                                bindings.add(reversed);
+                                bindings.add(reversed);
+                            }
+                            matches.add("(mimetype = '" + MIME_SIP + "' AND "
+                                    + "(data1 LIKE ? ESCAPE '\\' OR data1 LIKE ? ESCAPE '\\'))");
+                            bindings.add(prefix);
+                            bindings.add("sip:" + prefix);
+                        }
+                        effSelection = scopedSelection(effSelection,
+                                matches.isEmpty() ? "0" : "(" + String.join(" OR ", matches) + ")");
+                        effArgs = ContactsProviderSupport.prependArgs(effArgs, bindings.toArray(String[]::new));
+                    }
                 }
                 break;
             case PHONE_LOOKUP: {
@@ -1492,7 +1516,7 @@ final class ContactsProvider extends ContentProvider {
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
             cursor = qb.query(db, projection, effSelection, effArgs,
-                    null, null, sortOrder == null || sortOrder.isBlank() ? defaultOrder : sortOrder, limit);
+                    groupBy, null, sortOrder == null || sortOrder.isBlank() ? defaultOrder : sortOrder, limit);
         }
         try {
             ContactsProviderSupport.setNotificationUri(cursor, getContext(), uri);
@@ -2877,10 +2901,35 @@ final class ContactsProvider extends ContentProvider {
 
     private static void putPhonebookEntry(ContentValues values,
             AlphabeticIndex.ImmutableIndex<Void> index, String name, String suffix) {
-        int bucket = name == null || name.isEmpty() ? 0 : index.getBucketIndex(name);
-        String label = name == null || name.isEmpty() ? "" : index.getBucket(bucket).getLabel();
+        int numberBucket = index.getBucketCount() - 1;
+        int bucket = numberBucket;
+        String label = "#";
+        if (name != null && !name.isEmpty() && !startsWithPhoneNumber(name)) {
+            int localeBucket = index.getBucketIndex(name);
+            AlphabeticIndex.Bucket<Void> entry = index.getBucket(localeBucket);
+            if (entry != null) {
+                bucket = localeBucket >= numberBucket ? localeBucket + 1 : localeBucket;
+                label = entry.getLabel();
+            }
+        }
         values.put("phonebook_bucket" + suffix, bucket);
         values.put("phonebook_label" + suffix, label);
+    }
+
+    private static boolean startsWithPhoneNumber(String name) {
+        for (int offset = 0; offset < name.length();) {
+            int character = name.codePointAt(offset);
+            if (character != '+' && character != '(' && character != ')'
+                    && character != '.' && character != '-' && !Character.isWhitespace(character)) {
+                return Character.isDigit(character);
+            }
+            offset += Character.charCount(character);
+        }
+        return false;
+    }
+
+    private static String callablePrefix(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
     }
 
     private static String trimOrNull(String value) {
