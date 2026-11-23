@@ -1,23 +1,44 @@
 # App isolation (AppContainer)
 
-**Today Android apps in Gesher are not isolated from Windows.** Each app process
-runs with the Windows user's full token. Android's permissions govern what an
-app does through Android's APIs; they do not stop its code, native code above
-all, from reading and changing the user's files, using the network or starting
-programs. Treat an `.apk` like a downloaded `.exe`: install only apps you trust.
-The README, the installed README and the installer say so.
+**By default, Android apps in Gesher run with the Windows user's full token.**
+In that mode Android permissions govern Android APIs. Native app code can also
+use the Windows user's access to files, the network and programs. Treat an
+`.apk` like a downloaded `.exe` and install only apps you trust.
 
 This document is the implementation map for isolating every package in a
 Windows AppContainer of its own ([ADR 0090](decisions/0090-appcontainer-app-isolation.md),
 issue #314), and the record of what each milestone established.
 
-## Trying it
+## Trying the protected launcher
 
-M1 is a developer experiment for a test layout. The installed launcher
-starts the ordinary runtime, even if its parent process set `GESHER_SANDBOX`.
-The fixture scripts set `GESHER_SANDBOX=appcontainer` on their own test device
-so the system server starts its app processes in their packages' AppContainers.
-See the M1 results below for the launch dependencies the experiment exposes.
+Use the packaged runtime from a build with protected launch support. Set the
+environment variable in the PowerShell session that runs your commands:
+
+```powershell
+$env:GESHER_SANDBOX = 'appcontainer-trusted'
+gesher-app start
+gesher-app my-app.apk
+```
+
+The same setting applies to `gesher-app my-app.apk --single-process`,
+`gesher-app my-app.apk --system-server`, and `gesher my-program.dex my.Main`.
+For the standalone APK path, `--single-process --data-dir DIR` makes the
+selected data directory available through the protected storage broker.
+
+If a legacy device is still running, the launch command reports that it cannot
+attach. Finish work in its apps and let the device stop, or run
+`gesher-app shutdown` when you are ready to close its apps. Re-run the
+protected command after it stops. Gesher uses the same installed package
+registry and data directories. An already protected device continues using
+its protected policy for its lifetime.
+
+Headless launches can exercise ART and the storage broker. Testing desktop
+input or paste requires an interactive Windows session. Testing camera frames
+or microphone samples requires an available Windows capture device and the
+corresponding Android grant. In the absence of a capture device, applications
+see the runtime's unavailable-device path.
+
+### Historical M1 fixtures
 
 - `tests/windows/tracks/53-sandbox.ps1` (CI): binderd in sandbox mode and the
   production launch path with real AppContainer tokens
@@ -26,7 +47,7 @@ See the M1 results below for the launch dependencies the experiment exposes.
   sandbox on installs and launches `lifecycle.apk`, records the app process's
   token and prints the logs. `-NoSandbox` runs the same as a baseline.
 
-## Design
+## M1 design
 
 | Process | Token |
 |---|---|
