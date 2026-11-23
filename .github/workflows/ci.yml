@@ -389,6 +389,7 @@ jobs:
       - name: Descriptor-backed stdio and stream lifetime contracts
         run: |
           python3 tools/test_stdio_contracts.py --sanitize
+          python3 tools/test_stdio_scanning.py --sanitize --negative-controls
           python3 tools/test_socket_registry_lifetime.py --sanitize
 
       - name: MediaPlayer PCM priming and playback lifecycle contracts

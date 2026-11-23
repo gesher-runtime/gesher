@@ -80,6 +80,25 @@ class FormatScope {
   State* previous_;
   CancellationCleanup cleanup_;
 };
+// Both MinGW scanners already run under AccessStream. Their public character
+// callbacks can use that pinned owner without reacquiring the registry/locks.
+// Keep a separate input context: nested scans restore it before owner cleanup,
+// and a callback for another or re-registered stream takes the ordinary path.
+thread_local State* scanning_stream = nullptr;
+class ScanScope {
+ public:
+  explicit ScanScope(State* state) : previous_(scanning_stream), cleanup_(Restore, this) {
+    scanning_stream = state;
+  }
+ private:
+  static void Restore(void* raw) { scanning_stream = static_cast<ScanScope*>(raw)->previous_; }
+  State* previous_;
+  CancellationCleanup cleanup_;
+};
+State* ScanCallback(FILE* stream) {
+  return scanning_stream && scanning_stream->stream == stream && scanning_stream->live
+      ? scanning_stream : nullptr;
+}
 using Streams = std::map<FILE*, StatePtr>;
 struct Registry {
   std::mutex mutex;
@@ -287,6 +306,10 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
 }
 size_t ReadLocal(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
   if (size == 0 || count == 0) return 0;
+  if (auto* state = ScanCallback(stream)) {
+    state->line_output.store(false, std::memory_order_release);
+    return state->buffer.Read(bytes, size, count, Reader(state), Writer(state->fd));
+  }
   AccessStream state(stream, unlocked);
   if (!state) return 0;
   state->line_output.store(false, std::memory_order_release);
@@ -309,6 +332,10 @@ char* LineLocal(char* bytes, int count, FILE* stream, bool unlocked) {
   return bytes;
 }
 int UngetLocal(int character, FILE* stream) {
+  if (auto* state = ScanCallback(stream)) {
+    state->line_output.store(false, std::memory_order_release);
+    return state->buffer.Unget(character, Writer(state->fd));
+  }
   AccessStream state(stream, false);
   if (!state) return EOF;
   state->line_output.store(false, std::memory_order_release);
@@ -416,14 +443,12 @@ wint_t PutWideLocal(wchar_t value, FILE* stream) {
   AccessStream state(stream, false);
   return state ? PutWide(state.Get(), value) : WEOF;
 }
-wint_t GetWideLocal(FILE* stream) {
-  AccessStream state(stream, false);
-  if (!state) return WEOF;
+wint_t GetWide(State* state) {
   state->buffer.Orient(1);
   state->line_output.store(false, std::memory_order_release);
   bool partial = false;
   for (;;) {
-    int value = state->buffer.Get(Reader(state.Get()), Writer(state->fd));
+    int value = state->buffer.Get(Reader(state), Writer(state->fd));
     if (value == EOF) { if (partial) state->buffer.SetError(EILSEQ); return WEOF; }
     const char byte = static_cast<char>(value);
     wchar_t decoded = 0;
@@ -433,10 +458,12 @@ wint_t GetWideLocal(FILE* stream) {
     return static_cast<wint_t>(decoded);
   }
 }
-wint_t UngetWideLocal(wint_t value, FILE* stream) {
-  if (value == WEOF) return WEOF;
+wint_t GetWideLocal(FILE* stream) {
+  if (auto* state = ScanCallback(stream)) return GetWide(state);
   AccessStream state(stream, false);
-  if (!state) return WEOF;
+  return state ? GetWide(state.Get()) : WEOF;
+}
+wint_t UngetWide(State* state, wint_t value) {
   state->buffer.Orient(1);
   state->line_output.store(false, std::memory_order_release);
   char encoded[MB_LEN_MAX];
@@ -448,6 +475,12 @@ wint_t UngetWideLocal(wint_t value, FILE* stream) {
   }
   state->input_conversion = {};
   return value;
+}
+wint_t UngetWideLocal(wint_t value, FILE* stream) {
+  if (value == WEOF) return WEOF;
+  if (auto* state = ScanCallback(stream)) return UngetWide(state, value);
+  AccessStream state(stream, false);
+  return state ? UngetWide(state.Get(), value) : WEOF;
 }
 int PrintLocal(FILE* stream, const char* format, va_list arguments) {
   AccessStream state(stream, false);
@@ -479,12 +512,14 @@ int ScanLocal(FILE* stream, const char* format, va_list arguments) {
   state->buffer.Orient(-1);
   // The runtime parser uses public getc/ungetc. Wrapping its va_list entry
   // retains this same stream lock for the whole conversion sequence.
+  ScanScope callbacks(state.Get());
   return __real___mingw_vfscanf(stream, format, arguments);
 }
 int ScanWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
   AccessStream state(stream, false);
   if (!state) return EOF;
   state->buffer.Orient(1);
+  ScanScope callbacks(state.Get());
   return __real___mingw_vfwscanf(stream, format, arguments);
 }
 BionicState* BionicMetadataLocal(const std::shared_ptr<void>& token) {
