@@ -4,6 +4,7 @@
  */
 
 #include "drop_target.h"
+#include "drop_paths.h"
 
 #include <jni.h>
 
@@ -363,38 +364,20 @@ bool GesherDropTarget::ExtractAndDispatchDrop(IDataObject* pDataObj, POINT clien
   if (pDataObj == nullptr) return false;
 
   FORMATETC fmt_hdrop = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
-  if (pDataObj->QueryGetData(&fmt_hdrop) == S_OK) {
-    STGMEDIUM medium = {};
-    if (SUCCEEDED(pDataObj->GetData(&fmt_hdrop, &medium))) {
-      std::vector<std::wstring> files;
-      HDROP hdrop = medium.tymed == TYMED_HGLOBAL ? static_cast<HDROP>(GlobalLock(medium.hGlobal)) : nullptr;
-      if (hdrop != nullptr) {
-        const UINT count = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
-        files.reserve(count);
-        for (UINT i = 0; i < count; i++) {
-          const UINT len = DragQueryFileW(hdrop, i, nullptr, 0);
-          if (!len) break;
-          std::wstring path(len + 1, L'\0');
-          if (DragQueryFileW(hdrop, i, path.data(), len + 1) != len) break;
-          path.resize(len);
-          files.push_back(std::move(path));
-        }
-        GlobalUnlock(medium.hGlobal);
-        if (files.size() != count) files.clear();
-      }
-      ReleaseStgMedium(&medium);
-      if (files.empty()) return false;
-      const auto* dropped = &files;
-      if (binder_endpoint::Current().IsGuest() && !CanReadDropPaths(files)) {
-        auto drop = std::make_unique<DropFiles>();
-        if (!drop->Copy(pDataObj, files)) return false;
-        dropped = &drop->paths;
-        file_drops_.push_back(std::move(drop));
-      }
-      DispatchDragToSession(hwnd_, kActionDrop, static_cast<float>(client_pt.x),
-                            static_cast<float>(client_pt.y), dropped, L"");
-      return true;
+  const auto files = pDataObj->QueryGetData(&fmt_hdrop) == S_OK
+      ? ReadDropPaths(pDataObj) : std::nullopt;
+  if (files) {
+    if (files->empty()) return false;
+    const auto* dropped = &*files;
+    if (binder_endpoint::Current().IsGuest() && !CanReadDropPaths(*files)) {
+      auto drop = std::make_unique<DropFiles>();
+      if (!drop->Copy(pDataObj, *files)) return false;
+      dropped = &drop->paths;
+      file_drops_.push_back(std::move(drop));
     }
+    DispatchDragToSession(hwnd_, kActionDrop, static_cast<float>(client_pt.x),
+                          static_cast<float>(client_pt.y), dropped, L"");
+    return true;
   }
 
   FORMATETC fmt_unicode = {CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
