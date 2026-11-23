@@ -132,6 +132,16 @@ promises. Absent (c): nothing implements it.
   are absent.
 - `tools/test_camera_selection_and_orientation.py`: `camera.external` for an
   unconfigured camera, not for a configured rear one.
+- CI runs `PackageServiceQueriesTest` without `libandroid_runtime`. Without
+  the property natives, the RAM features and `ro.opengles.version` are absent
+  (`GL_ES_VERSION_UNDEFINED`), and the test expects exactly that. Through
+  `ServiceFixtureRunner`, which has the natives, it expects the real values.
+  Locally (ART, installed boot jars, this branch's gesher-app.jar), it ran
+  with GLES 0x30000, RAM normal, and webview 158.0.4370.33 when the WebView2
+  bridge sat next to gesher-app.jar. `devsvc_hardware.cc`'s probes on the
+  development machine report no touch digitizer, no audio render endpoint and
+  one wired Ethernet interface (the physical I219-LM). Hyper-V virtual, WAN
+  miniport and kernel-debug adapters are excluded.
 - Limits: the development machine has no touch digitizer, camera, audio
   endpoint, Wi-Fi or sensors. Multitouch on a real touchscreen, a real webcam's
   `camera.external` and a hardware GPU below feature level 10_1 falling back to
