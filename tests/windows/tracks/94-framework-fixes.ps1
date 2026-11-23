@@ -151,6 +151,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
 
+$exactAlarmOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExactAlarmContractTest') 90
+$exactAlarmCode = $LASTEXITCODE
+Check 'services: exact alarm scheduling contracts, permissions and revocation' {
+  $global:LASTEXITCODE = $exactAlarmCode
+  $exactAlarmOut
+} @('ExactAlarmContractTest all passed: 414 checks verified')
+
 $schedulerConstraintsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'JobSchedulerConstraintContractTest') 90
 $schedulerConstraintsCode = $LASTEXITCODE
@@ -568,6 +576,9 @@ Check 'services: android.net.DnsResolver (the Connectivity module''s API) resolv
   $fixesOut
 } @('FrameworkFixesTest: android.net.DnsResolver: query and rawQuery answer localhost through the executor, other types NOTIMP, a cancelled query is silent',
   'FrameworkFixesTest all passed')
+Check 'services: bounded DNS ownership through real ART and Windows localhost lookup' {
+  FixesRun ($dvmFixes + 'gesher.services.DnsAdmissionTest') 80
+} @('DnsAdmissionTest passed:')
 Check 'services: BluetoothManager without an adapter, and android.os.Debug''s native heap counters' {
   $global:LASTEXITCODE = $fixesCode
   $fixesOut
