@@ -1,6 +1,6 @@
 # Software AVC decoded output ownership — 23 November 2026
 
-This is a bounded M04/M05/T12 leaf of [#56](https://github.com/gesher-runtime/gesher/issues/56).
+This is a bounded M08/T12 component of [#56](https://github.com/gesher-runtime/gesher/issues/56).
 It changes the software H.264 fallback's intermediate frame delivery. Codec
 selection, hardware claims, decoded pixels, crop geometry, output ordering,
 consumer ownership, failure behavior and EOS remain unchanged. The associated
@@ -128,3 +128,60 @@ python3 tools/test_soft_avc_output.py \
 `fixtures.json` records the independent decoder version and real B-frame types.
 The additional reusable-framework SHA repair points to the identical published
 recipe already reviewed for #336; runner routes and acceptance gates are unchanged.
+
+## Full-CI follow-up: collect after a completed camera frame
+
+The full fork run on published head
+`55fe2e2778f3e0ea1576117569bb99b90447d1a7`
+([45131006119](https://github.com/yom-chadash/gesher/actions/runs/45131006119))
+ran the new AVC ownership probe successfully in the actual Windows 2022 media
+shard. That shard nevertheless failed its existing recordapp camera assertion:
+the first Media Foundation `ReadSample` took 1,017,877 microseconds, leaving
+only 28 frames in a two-second collection window that began before the first
+capture. All 28 delivered frames were accepted, encoded and muxed with zero
+queue drops or encode failures. Their decoded order and picture were correct,
+but the 0.9-second file failed the unchanged duration and 30-frame minimum.
+The later device-process invocation delivered 62 callbacks and passed. These
+observations identify the missing fixture synchronization; they do not establish
+a decoder regression or excuse the failed assertion.
+
+The fixture now waits at most ten seconds for an actual
+[`onCaptureCompleted`](https://developer.android.com/reference/android/hardware/camera2/CameraCaptureSession.CaptureCallback#onCaptureCompleted(android.hardware.camera2.CameraCaptureSession,%20android.hardware.camera2.CaptureRequest,%20android.hardware.camera2.TotalCaptureResult))
+from its fresh recording session and request. Both the callback request and
+result request must be that exact request; the first result's
+[`getSequenceId()`](https://developer.android.com/reference/android/hardware/camera2/CaptureResult#getSequenceId())
+must match the ID returned by `setRepeatingRequest`. A callback arriving before
+submission returns is retained. A foreign or stale callback cannot begin the
+window. Missing or mismatched completion causes explicit failure after recorder
+release and camera close, with no recording data synthesized.
+
+Only then does the original two-second collection run. The duration, minimum
+30 decoded frames, order, actual test-picture pixels, capture/loss diagnostics,
+and close-before-thread-quit checks remain. The Windows assertion also requires
+the new owned-completion readiness line. Existing open/configure/close waits
+and the overall Windows process timeout are unchanged. No production runtime,
+decoder/provider or capture implementation changes in this follow-up.
+
+`tools/test_recorder_camera_ready.py` extracts the actual callback and readiness
+expression into an explicit host boundary. Opaque Camera2 identities surround
+the real JDK latch and atomics; no camera frame or successful recording is
+simulated. It passes 15 checks including a real ten-second no-completion timeout,
+callback-before-return, asynchronous wakeup, repeated completion and sequence
+mismatch. Four mutants independently removing the session, callback-request,
+result-request and sequence guard each fail their corresponding assertion.
+The old unsynchronized fixture fails the collection-order guard. The complete
+recordapp Java sources also compile against the cached Android framework and
+core modules using the APK build's compiler options. Actual Windows recording
+and full-CI success at the repaired head remain pending.
+
+The same old-head run's package job lost its hosted runner during
+`Install, run Hello, uninstall`; earlier installer build/upload steps passed.
+GitHub's observed annotation reports loss of runner communication. Its API log
+blob is unavailable. This is the observed failure category, not a diagnosis of
+an external or product cause; the new full run must exercise it again.
+
+The branch composes published main
+`5aa6b39027e9c38de2781ff9cda066418d25b1ba`. Its reusable-framework recipe has
+blob `6dc4cca565aaf15fdf518eee825b0e44765b275f`, exactly equal to the unreachable
+`fe42fc3d4854141df94cd1e05cfbd10c4a686315` reference inherited from main. The
+caller pins the reachable main commit without changing the new recipe or gates.

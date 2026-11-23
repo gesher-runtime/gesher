@@ -518,6 +518,7 @@ jobs:
           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
+          python3 tools/test_recorder_camera_ready.py --java-home "$JAVA_HOME" --negative-controls
 
       - name: Validate user interface translations
         run: |
