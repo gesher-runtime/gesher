@@ -49,7 +49,7 @@ struct Watch {
   unsigned long long volume = 1, index = 42;
   std::vector<DWORD> buffer = std::vector<DWORD>(kBufferSize / 4);
   bool extended = true, removed = false, ignored_sent = false,
-       awaiting_rename = false, still_linked = false;
+       awaiting_rename = false, still_linked = false, stale_name = false;
   std::set<std::wstring> writing;
   std::map<std::wstring, std::pair<long long, long long>> contents;
 };
