@@ -85,6 +85,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ steps.repo.outputs.name }}
           permission-contents: write
+          permission-issues: write
           permission-pull-requests: write
           permission-workflows: write
           # Empty input is omitted by the pinned action. Phase 1 installations

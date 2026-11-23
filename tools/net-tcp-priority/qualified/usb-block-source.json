@@ -23,7 +23,7 @@
   "base": "08146b1ea150229313ef14a8fcd99df217a57fb9",
   "dependencies_sha256": {
     "compat/binder/protected_client_startup.h": "7d2889f2487c60f2ab09afd6944e61b14032eb8891c70ec0a5e81d8f6a879b63",
-    "compat/binder/protected_data_client.cc": "50a47ec6348fc019f4f4fe6fcf0b66f39d6a7a98cad85ebee0916a083d9b68fe",
+    "compat/binder/protected_data_client.cc": "939d05144482fd35c2cdec1945af62f481dbcf69b418e74b849d8417cb93b25f",
     "compat/binder/protected_data_client.h": "c28d4830b31e4d21070e5946932dda7a910f0ee5dea71f438a95cd278643d59f",
     "compat/binder/protected_data_pipe.h": "107e98b44e6075102e55fa434dc06422866f213ef800c4ddbcddb294f2bd2529",
     "compat/posix/include/gesher/usb_block.h": "7a8ccd07ed0f647864abc4eb6636878fc412ca7e8c6d6f90d214a07df190967a",

@@ -102,6 +102,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Build actual UIA query cancellation and lifecycle controls
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\accessibility\query_pool.cc tests\windows\web3\query_pool_test.cc /Fe:query-pool-test.exe
+      - name: Run actual Windows UIA retirement, saturation and worker ownership controls
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\query-pool-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
@@ -301,6 +311,7 @@ jobs:
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_supplier_bundle.py
           python3 -m unittest discover -s tools/ci -p test_producer_context.py
           python3 -m unittest discover -s tools/ci -p test_binder_modes.py
           python3 -m unittest discover -s tools/ci -p test_native2_producer_context.py
@@ -390,8 +401,12 @@ jobs:
           python3 tools/test_boottime_resume.py --sanitize
           python3 tools/test_timerfd_contracts.py --sanitize
           python3 tools/test_input_surface_callbacks.py --sanitize
+          python3 tools/test_codec_input_surfaces.py --sanitize
+          python3 tools/test_persistent_input_jni.py
+          python3 tools/test_recorder_persistent_input.py --sanitize
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
+          python3 tools/test_uia_query_retirement.py --sanitize
           python3 tools/test_dns_admission.py --sanitize
 
       - name: Stream device identity across close and reopen
@@ -568,6 +583,7 @@ jobs:
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
+          python3 tools/test_capture_permission_flow.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
           python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
@@ -941,8 +957,9 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
-    timeout-minutes: 23
+    # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+    # published hourly reset instead of failing the job.
+    timeout-minutes: 69
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -1543,6 +1560,33 @@ jobs:
             throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
           }
           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
+          foreach ($ext in $bundleExtensions) {
+            if ((Get-ItemProperty "$cls\$ext").'(default)' -ne 'Gesher.Xapk') { throw "$ext default ProgID is missing" }
+            if ($null -eq (Get-ItemProperty "$cls\$ext\OpenWithProgids").'Gesher.Xapk') {
+              throw "$ext OpenWithProgids lacks Gesher.Xapk"
+            }
+          }
+          $bundleOpen = (Get-ItemProperty "$cls\Gesher.Xapk\shell\open\command").'(default)'
+          if ($bundleOpen -ne $open) { throw "Bundle open command differs from the APK command: $bundleOpen" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($ext in '.apkm', '.apk+') {
+            $bundle = Join-Path $env:RUNNER_TEMP "shell launch$ext"
+            $archive = [IO.Compression.ZipFile]::Open($bundle, 'Create')
+            try {
+              $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
+            } finally { $archive.Dispose() }
+            $psi.Arguments = '"{0}"' -f $bundle
+            $p = [Diagnostics.Process]::Start($psi)
+            $errors = $p.StandardError.ReadToEndAsync()
+            $out = $p.StandardOutput.ReadToEnd()
+            $p.WaitForExit()
+            $out += $errors.Result
+            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
+              throw "$ext open command failed (exit $($p.ExitCode)): $out"
+            }
+          }
+          'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
@@ -1886,6 +1930,13 @@ jobs:
           if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
           if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
           'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path "$cls\Gesher.Xapk") { throw 'Uninstall left the Gesher.Xapk ProgID' }
+          foreach ($ext in '.apks', '.xapk', '.apkm', '.apk+') {
+            if ((Get-ItemProperty "$cls\$ext" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Xapk' -or
+                $null -ne (Get-ItemProperty "$cls\$ext\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Xapk') {
+              throw "Uninstall left the Gesher bundle association for $ext"
+            }
+          }
           if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
           $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
           if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
@@ -1983,9 +2034,39 @@ jobs:
           name: e2e-results-${{ matrix.os }}
           path: e2e-results/
 
+  # The fourteen test shards consume the same core supplier batch. Receiving
+  # it once here (run, job and artifact reads plus fourteen archive requests)
+  # and publishing the verified tree as one bundle replaces 14 batch receipts
+  # (20 API requests each) with one bundle receipt per shard (7 requests).
+  # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
+  core-suppliers:
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    runs-on: ubuntu-24.04
+    # Room for a reachable wait on the shared hourly API quota.
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tools/ci
+            tools/surface
+      - name: Verify and stage the complete core supplier batch with its ledger
+        run: python3 tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core --ledger
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-suppliers
+          path: ci-suppliers/core/
+          if-no-files-found: error
+          # Every ledgered file must arrive; consumers reject any difference.
+          include-hidden-files: true
+          # Default retention, like the producers' artifacts: a rerun of a
+          # failed shard reuses this job's bundle for as long as it can rerun.
+
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
     strategy:
       fail-fast: false
       matrix:
@@ -2021,10 +2102,10 @@ jobs:
             tools/fonts
             tools/binder
 
-      - name: Verify and stage the complete core supplier batch
+      - name: Verify and stage the complete core supplier bundle
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
+          python tools/ci/artifact_receipt.py --name core-suppliers --producer core-suppliers --bundle-of tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble windows-x64 artifact
@@ -2552,8 +2633,9 @@ jobs:
   supplier-correlation:
     needs: [source-identity, build, compile]
     runs-on: ubuntu-24.04
-    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
-    timeout-minutes: 25
+    # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+    # published hourly reset instead of failing the job.
+    timeout-minutes: 71
     env:
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
@@ -2629,7 +2711,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job

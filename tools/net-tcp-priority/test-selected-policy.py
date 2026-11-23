@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01'
+OFD_QUALIFICATION_SHA256 = 'c85383129e374f4511efe091896a3ce62d536d3eeb58fc8a1588995e7e799e1c'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -399,7 +399,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # is checked against historical main bytes; the socket ownership and poll
 # checks still compare live code.
 USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
-USB_BLOCK_TRANSITION_SHA256 = '72cb2240d1cbe88f6fd8e9b47644eeee149f64646d76d964379e5c5768f99424'
+USB_BLOCK_TRANSITION_SHA256 = '177f70e257f8b0e0220702e795ba009f297a70fbcff91d61fcd1f483fce3d209'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

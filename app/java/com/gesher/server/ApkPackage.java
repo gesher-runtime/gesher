@@ -299,6 +299,11 @@ public final class ApkPackage {
         return parse(base.getPath(), directory);
     }
 
+    /** Identify the base APK from the manifest before assembling a package cluster. */
+    public static boolean isBaseApk(File file) throws IOException {
+        return codeApkLite(file).getSplitName() == null;
+    }
+
     static ApkLite codeApkLite(File file) throws IOException {
         if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
@@ -729,10 +734,10 @@ public final class ApkPackage {
 
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
-        return packageInfo(flags, false);
+        return packageInfo(flags, false, null);
     }
 
-    private PackageInfo packageInfo(long flags, boolean providerQuery) {
+    private PackageInfo packageInfo(long flags, boolean providerQuery, String authority) {
         if ((flags & DIRECT_BOOT) == 0) {
             flags |= DIRECT_BOOT;
         }
@@ -740,13 +745,23 @@ public final class ApkPackage {
         // Include manifest-disabled declarations before applying installed overrides.
         // A provider query also needs both boot states: choose its registered first
         // component before either boot-state or enabled-state filtering.
-        PackageInfo pi = PackageInfoCommonUtils.generate(parsed,
-                flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0),
-                0 /* userId */);
+        long generated = flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0);
+        PackageInfo pi = PackageInfoCommonUtils.generate(parsed, generated, 0 /* userId */);
         installed(pi.applicationInfo, state, flags);
         pi.activities = installedComponents(pi.activities, pi.applicationInfo, flags, state);
         pi.receivers = installedComponents(pi.receivers, pi.applicationInfo, flags, state);
         pi.services = installedComponents(pi.services, pi.applicationInfo, flags, state);
+        if ((flags & PackageManager.GET_PROVIDERS) != 0 && (generated & DIRECT_BOOT) != DIRECT_BOOT) {
+            // Other component lists still use the caller's original boot flags.
+            ProviderInfo[] allProviders = PackageInfoCommonUtils.generate(parsed,
+                    (generated | DIRECT_BOOT) & ~(PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS
+                            | PackageManager.GET_SERVICES | PackageManager.GET_PERMISSIONS
+                            | PackageManager.GET_CONFIGURATIONS), 0 /* userId */).providers;
+            registerAuthorities(allProviders, authority);
+            pi.providers = filterProviderBootState(allProviders, generated);
+        } else {
+            registerAuthorities(pi.providers, authority);
+        }
         if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
         pi.firstInstallTime = mInstallTime;
@@ -976,10 +991,82 @@ public final class ApkPackage {
      * common to bind, publication and PackageManager's authority/component queries.
      */
     public List<ProviderInfo> providers(long flags) {
-        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true);
+        return providerList(flags, null);
+    }
+
+    ProviderInfo providerForAuthority(String authority, long flags) {
+        for (ProviderInfo info : providerList(flags, authority)) {
+            if (ContentProviders.hasAuthority(info, authority)) return info;
+        }
+        return null;
+    }
+
+    private List<ProviderInfo> providerList(long flags, String authority) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true, authority);
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;
+    }
+
+    /**
+     * ComponentResolver.addProvidersLocked registers a package's providers in manifest
+     * order: each authority belongs to the first declaration that names it, a later one
+     * keeps only the authorities still free ("Skipping provider name ..."), and one left
+     * with none has a null authority, so queryContentProviders never binds it. Done
+     * before enabled and direct-boot filtering, as registration happens at scan time.
+     * Authorities shared with another package are not resolved here: ContentProviders
+     * rejects that ambiguity instead of picking an owner by install order. Use the
+     * same first-declaration-per-class rule as the provider queries and index.
+     *
+     * <p>For a syncable provider Android maps the first authority to the class record
+     * and maps the aliases to a non-syncable copy that retains the first authority
+     * if registered. Binding uses the class view; authority lookups select
+     * the record registered under the requested authority.
+     */
+    private static void registerAuthorities(ProviderInfo[] providers, String authority) {
+        if (providers == null) return;
+        Set<String> registered = new HashSet<>();
+        Set<String> components = new HashSet<>();
+        for (ProviderInfo info : providers) {
+            if (!components.add(info.name) || info.authority == null) continue;
+            String[] authorities = info.authority.split(";");
+            String first = null;
+            StringBuilder others = null;
+            boolean skipped = false;
+            for (int i = 0; i < authorities.length; i++) {
+                String name = authorities[i];
+                if (!registered.add(name)) {
+                    skipped = true;
+                    continue;
+                }
+                if (i == 0) {
+                    first = name;
+                } else {
+                    if (others == null) others = new StringBuilder(name);
+                    else others.append(';').append(name);
+                }
+            }
+            String registeredAuthorities = others == null ? first
+                    : first == null ? others.toString() : first + ";" + others;
+            if (info.isSyncable) {
+                boolean classRecord = authority == null || authority.equals(first);
+                info.authority = classRecord ? first : registeredAuthorities;
+                info.isSyncable = classRecord;
+            } else if (skipped) {
+                info.authority = registeredAuthorities;
+            }
+        }
+    }
+
+    private static ProviderInfo[] filterProviderBootState(ProviderInfo[] providers, long flags) {
+        if (providers == null) return null;
+        int count = 0;
+        for (ProviderInfo info : providers) {
+            long state = info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+            if ((flags & state) != 0) providers[count++] = info;
+        }
+        return count == 0 ? null : count == providers.length ? providers : Arrays.copyOf(providers, count);
     }
 
     private static ProviderInfo[] registeredProviders(ProviderInfo[] providers, long flags) {
