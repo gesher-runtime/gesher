@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "title": "Restore the unattached drop backend boundary in the #427 SQLite host fixture",
+  "parent": "b1962c3be9f484da7b1272e2c4f909c5df68a8e6",
+  "source_head": "3477578163468ec1a1fd525a4518608009615e66",
+  "source_tree": "cc8e01423905a40243a6eb67ac1634b24179a086",
+  "failed_run": 45285898943,
+  "failed_job": 138082634530,
+  "failed_generated_merge": "d6364d131e5586e3c3b0cf309cbed7621c1fb885",
+  "changed_source_paths": [
+    "tools/test_sqlite_paths.py",
+    "tests/native/sqlite_path_namespace_test.cc"
+  ],
+  "input_proof": {
+    "checks": 94,
+    "parent": "b1962c3be9f484da7b1272e2c4f909c5df68a8e6",
+    "failed_merge": "d6364d131e5586e3c3b0cf309cbed7621c1fb885",
+    "failure_run": 45285898943,
+    "failure_job": 138082634530,
+    "inputs": {
+      "tools/test_sqlite_paths.py": {
+        "parent_sha256": "aa5043ca7610f70a23464827bbe0ac3ff1e1d84d3ac3e7455ac3a82eb72e9f54",
+        "failed_merge_sha256": "aa5043ca7610f70a23464827bbe0ac3ff1e1d84d3ac3e7455ac3a82eb72e9f54",
+        "current_sha256": "dfdd91bba9c5dd57ee7ff3a71b07b4226fa97c666f7dddc0cffb8f4444cfd7af"
+      },
+      "tests/native/sqlite_path_test.cc": {
+        "parent_sha256": "7adc4bb8b94fbaf67417434d440443a178ea014af0b2264240615fa4f2189455",
+        "failed_merge_sha256": "7adc4bb8b94fbaf67417434d440443a178ea014af0b2264240615fa4f2189455",
+        "current_sha256": "7adc4bb8b94fbaf67417434d440443a178ea014af0b2264240615fa4f2189455"
+      },
+      "tests/native/sqlite_path_host.h.in": {
+        "parent_sha256": "66b2bfb38c5bbdd21c5c67a6e5b096cc26768cac1d9e85f21b08e3e36aa22b3b",
+        "failed_merge_sha256": "66b2bfb38c5bbdd21c5c67a6e5b096cc26768cac1d9e85f21b08e3e36aa22b3b",
+        "current_sha256": "66b2bfb38c5bbdd21c5c67a6e5b096cc26768cac1d9e85f21b08e3e36aa22b3b"
+      },
+      "compat/posix/src/sqlite_path.cc": {
+        "parent_sha256": "793968fbd0e9d3002568a6da6f2ae2ec082bdb048d1d32ca3aa3f9496dab87fe",
+        "failed_merge_sha256": "793968fbd0e9d3002568a6da6f2ae2ec082bdb048d1d32ca3aa3f9496dab87fe",
+        "current_sha256": "793968fbd0e9d3002568a6da6f2ae2ec082bdb048d1d32ca3aa3f9496dab87fe"
+      },
+      "compat/posix/src/path.cc": {
+        "parent_sha256": "78abebbd0f39d4b231906c9b14a03f0b30091a5dcad32e571d37365098a57647",
+        "failed_merge_sha256": "78abebbd0f39d4b231906c9b14a03f0b30091a5dcad32e571d37365098a57647",
+        "current_sha256": "78abebbd0f39d4b231906c9b14a03f0b30091a5dcad32e571d37365098a57647"
+      },
+      "compat/posix/src/internal.h": {
+        "parent_sha256": "63d4a1383062aee4d6b96bbbbc0ec1c8858ae2af49d4ebabcaaee9b53d32033f",
+        "failed_merge_sha256": "63d4a1383062aee4d6b96bbbbc0ec1c8858ae2af49d4ebabcaaee9b53d32033f",
+        "current_sha256": "63d4a1383062aee4d6b96bbbbc0ec1c8858ae2af49d4ebabcaaee9b53d32033f"
+      },
+      "compat/posix/include/gesher/drop_mount.h": {
+        "parent_sha256": "43703b7861be5117ff7052b267631b8b74838a31c1d8e9e1b4a839ea5cc695d8",
+        "failed_merge_sha256": "43703b7861be5117ff7052b267631b8b74838a31c1d8e9e1b4a839ea5cc695d8",
+        "current_sha256": "43703b7861be5117ff7052b267631b8b74838a31c1d8e9e1b4a839ea5cc695d8"
+      },
+      "compat/posix/src/drop_mount.cc": {
+        "parent_sha256": "55c1c757043f0a0e3789ce7202143dce253470545592a79abd7fcc00c46c3691",
+        "failed_merge_sha256": "55c1c757043f0a0e3789ce7202143dce253470545592a79abd7fcc00c46c3691",
+        "current_sha256": "55c1c757043f0a0e3789ce7202143dce253470545592a79abd7fcc00c46c3691"
+      },
+      "compat/posix/include/gesher/reserved_names.h": {
+        "parent_sha256": "a01b5a282a470d39735eb7f0546fd39983c0e68d03291bbaf14306568b951dd6",
+        "failed_merge_sha256": "a01b5a282a470d39735eb7f0546fd39983c0e68d03291bbaf14306568b951dd6",
+        "current_sha256": "a01b5a282a470d39735eb7f0546fd39983c0e68d03291bbaf14306568b951dd6"
+      },
+      "compat/posix/include/gesher/unc_paths.h": {
+        "parent_sha256": "477453cb1cf7ad9a406d4472972cf431206e88a298bb59a912e8ccd013436330",
+        "failed_merge_sha256": "477453cb1cf7ad9a406d4472972cf431206e88a298bb59a912e8ccd013436330",
+        "current_sha256": "477453cb1cf7ad9a406d4472972cf431206e88a298bb59a912e8ccd013436330"
+      },
+      "patches/external/sqlite/0001-win32-guest-paths.patch": {
+        "parent_sha256": "23446f894f3a4b476a5cc42408d20c66044e7d612f292c70cf4e27701b55a7a3",
+        "failed_merge_sha256": "23446f894f3a4b476a5cc42408d20c66044e7d612f292c70cf4e27701b55a7a3",
+        "current_sha256": "23446f894f3a4b476a5cc42408d20c66044e7d612f292c70cf4e27701b55a7a3"
+      },
+      ".github/workflows/ci.yml": {
+        "parent_sha256": "b966c350b71f73624c395dca3870f42162fbf8db3bc7acec11f1247d7611c080",
+        "current_sha256": "b966c350b71f73624c395dca3870f42162fbf8db3bc7acec11f1247d7611c080"
+      },
+      "CMakeLists.txt": {
+        "parent_sha256": "a4793e8a5d90119dfd24b7e3f3a4177827964d3f2053dd45b4c1f899d7ffb177",
+        "current_sha256": "a4793e8a5d90119dfd24b7e3f3a4177827964d3f2053dd45b4c1f899d7ffb177"
+      },
+      "tools/net-tcp-priority/test-selected-policy.py": {
+        "parent_sha256": "87f3e104af2e54bf60cd3d0a3c9b25882cb2bf489588fda578b6e0a80bf4c5e5",
+        "current_sha256": "87f3e104af2e54bf60cd3d0a3c9b25882cb2bf489588fda578b6e0a80bf4c5e5"
+      },
+      "tools/net-tcp-priority/qualified/ofd-stream-source.json": {
+        "parent_sha256": "9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01",
+        "current_sha256": "9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01"
+      },
+      "AGENTS.md": {
+        "parent_sha256": "bafa5b9fb060d4f85e2968dad2316d9785bbc68ee07f51b7cf54304cc95a42b3",
+        "current_sha256": "bafa5b9fb060d4f85e2968dad2316d9785bbc68ee07f51b7cf54304cc95a42b3"
+      },
+      "CONTRIBUTING.md": {
+        "parent_sha256": "4acb64a35a231becf60fa962c7be29c209bbca016e2ace733eeafec1602e0c9c",
+        "current_sha256": "4acb64a35a231becf60fa962c7be29c209bbca016e2ace733eeafec1602e0c9c"
+      }
+    },
+    "original_sqlite_check_sites": 84,
+    "new_namespace_test_sha256": "339a35d329cace9c59a4f9de62897bf42b0153ef1ab2e7950341d8e550554685",
+    "generated_namespace_sha256": "ee8ab2b5315fc21f1a6ae8971ed65f92e500e79161881e36cbfc0e776675285b",
+    "actual_results": {
+      "old_entry": "same undeclared drop_mount compile failure",
+      "current_entry": "13 namespace +259 actual SQLite checks",
+      "retained_original_callback": "132 checks/35 failures; all four original negative predicates required",
+      "negative_controls": "six compiled assertion-specific mutants and two extraction rejection controls"
+    },
+    "limits": [
+      "Explicitly unattached drop/rooted-storage backend, not authenticated Windows broker access.",
+      "UTF conversion and Windows lexical canonicalization remain declared adapters; actual SQL/pager/journal/WAL/URI/file IO uses pinned SQLite Unix VFS.",
+      "The baseline Python traceback was emitted after the current helper was edited, so displayed traceback source snippets can reflect the later working file; its archived code bytes, compiler command, generated TU and actual compiler diagnostic are independently bound above.",
+      "No Windows/ART/AppContainer/permission/lifetime result or whole-PR approval is inferred."
+    ]
+  },
+  "validation": {
+    "namespace_checks": 13,
+    "actual_sqlite_checks": 259,
+    "old_callback_checks": 132,
+    "old_callback_expected_failures": 35,
+    "old_callback_required_negative_predicates": 4,
+    "compiled_boundary_mutants": 6,
+    "prefix_extraction_negatives": 2,
+    "download_tests": 9
+  },
+  "independent_namespace_review": {
+    "checks": 20,
+    "namespace_checks": 13,
+    "receipt": "independent/proof.json"
+  },
+  "archive": {
+    "path": "docs/research/evidence/sqlite-drop-fixture-2026-11-23.tar.gz",
+    "bytes": 5209695,
+    "sha256": "e98ae1de9d1acf1caf1fab2ee6ed49dead9e47ec6472178795da5d7e5164b77c",
+    "regular_members": 106,
+    "manifest_members": 105
+  },
+  "limits": [
+    "Explicitly unattached drop/rooted-storage backend, not authenticated Windows broker access.",
+    "UTF conversion and Windows lexical canonicalization remain declared adapters; actual SQL/pager/journal/WAL/URI/file IO uses pinned SQLite Unix VFS.",
+    "The baseline Python traceback was emitted after the current helper was edited, so displayed traceback source snippets can reflect the later working file; its archived code bytes, compiler command, generated TU and actual compiler diagnostic are independently bound above.",
+    "No Windows/ART/AppContainer/permission/lifetime result or whole-PR approval is inferred."
+  ]
+}
