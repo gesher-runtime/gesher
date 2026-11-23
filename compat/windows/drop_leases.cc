@@ -49,14 +49,18 @@ class DropLeases::State {
     binder_peer::OwnedHandle handle;
     bool directory;
   };
-  std::map<uint64_t, std::vector<Root>> leases;
+  struct Lease {
+    OleDropSource owner;
+    std::vector<Root> roots;
+  };
+  std::map<uint64_t, Lease> leases;
   uint64_t next = 1;
 };
 
 DropLeases::DropLeases() : state_(std::make_unique<State>()) {}
 DropLeases::~DropLeases() = default;
 
-int DropLeases::Retain(const OleDropSource& source, const std::vector<std::wstring>& paths,
+int DropLeases::Retain(OleDropSource source, const std::vector<std::wstring>& paths,
                        Offer* offer) {
   if (!offer || paths.empty()) return EINVAL;
   if (paths.size() > kMaxRootsPerLease) return E2BIG;
@@ -82,7 +86,7 @@ int DropLeases::Retain(const OleDropSource& source, const std::vector<std::wstri
     roots.push_back({std::move(owned), directory});
   }
   pending.lease = state_->next++;
-  state_->leases.emplace(pending.lease, std::move(roots));
+  state_->leases.emplace(pending.lease, State::Lease{std::move(source), std::move(roots)});
   *offer = std::move(pending);
   return 0;
 }
@@ -97,8 +101,10 @@ int DropLeases::Open(uint64_t lease, uint32_t item, std::wstring_view relative,
   *opened = INVALID_HANDLE_VALUE;
   if (relative.size() > kMaxRelativeUnits) return ENAMETOOLONG;
   const auto found = state_->leases.find(lease);
-  if (found == state_->leases.end() || item >= found->second.size()) return ENOENT;
-  const auto& root = found->second[item];
+  if (found == state_->leases.end() || item >= found->second.roots.size()) return ENOENT;
+  const auto authorization = found->second.owner.AuthorizeIo();
+  if (!authorization) return EACCES;
+  const auto& root = found->second.roots[item];
   if (root.directory) {
     rooted_storage::OpenRequest request;
     request.access = metadata ? rooted_storage::Access::kMetadata : rooted_storage::Access::kRead;

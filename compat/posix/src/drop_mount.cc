@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <map>
 #include <mutex>
+#include <set>
 #include <utility>
 
 #include <gesher/binder_endpoint.h>
@@ -30,24 +31,12 @@ struct Alias {
   uint64_t lease;
   uint32_t item;
   std::wstring name;
-};
-
-struct DiskId {
-  ULONGLONG volume;
-  DWORD high;
-  DWORD low;
-  auto operator<=>(const DiskId&) const = default;
-};
-
-struct Projection {
-  uint64_t alias;
-  std::wstring path;
+  std::shared_ptr<Channel> activity;
 };
 
 struct Aliases {
   std::mutex lock;
   std::map<uint64_t, Alias> items;
-  std::map<DiskId, Projection> descriptors;
   uint64_t next = 1;
   std::atomic<bool> enabled{false};
 };
@@ -83,6 +72,7 @@ class Channel::State {
   std::mutex lock;
   HANDLE pipe;
   std::weak_ptr<Channel> self;
+  std::atomic<bool> detached{false};
 };
 
 Channel::Channel(HANDLE pipe) : state_(std::make_unique<State>(pipe)) {}
@@ -118,9 +108,6 @@ void Channel::Close() {
   for (auto item = global.items.begin(); item != global.items.end();) {
     item = item->second.owner == this ? global.items.erase(item) : std::next(item);
   }
-  for (auto entry = global.descriptors.begin(); entry != global.descriptors.end();) {
-    entry = global.items.contains(entry->second.alias) ? std::next(entry) : global.descriptors.erase(entry);
-  }
 }
 
 bool Channel::Poll(Event* event) {
@@ -128,7 +115,7 @@ bool Channel::Poll(Event* event) {
   *event = {};
   std::lock_guard<std::mutex> guard(state_->lock);
   HANDLE pipe = state_->pipe;
-  if (pipe == INVALID_HANDLE_VALUE) return false;
+  if (pipe == INVALID_HANDLE_VALUE || Detached()) return false;
   wire::Request request;
   request.op = wire::Op::kPoll;
   wire::Event result;
@@ -171,7 +158,7 @@ bool Channel::Poll(Event* event) {
     auto path = AliasPath(alias, names[i]);
     std::replace(path.begin(), path.end(), L'\\', L'/');
     event->paths.push_back(std::move(path));
-    global.items.emplace(alias, Alias{this, state_->self, result.lease, i, std::move(names[i])});
+    global.items.emplace(alias, Alias{this, state_->self, result.lease, i, std::move(names[i]), {}});
   }
   return true;
 }
@@ -259,33 +246,56 @@ int Open(const Selection& selection, uint32_t flags, HANDLE* file) {
       (flags & storage::kDirectory) != 0, metadata, file);
   if (error) return error;
 
-  BY_HANDLE_FILE_INFORMATION info{};
-  if (GetFileInformationByHandle(*file, &info)) {
-    const DiskId id{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
-    auto path = AliasPath(selection.alias, item.name);
-    if (!selection.relative.empty()) {
-      path += L'\\' + selection.relative;
-      std::replace(path.begin(), path.end(), L'/', L'\\');
-    }
-    std::lock_guard<std::mutex> guard(global.lock);
-    if (global.items.contains(selection.alias) && global.descriptors.size() < 4096) {
-      global.descriptors.insert_or_assign(id, Projection{selection.alias, std::move(path)});
-    }
-  }
   return 0;
 }
 
-std::wstring DescriptorPath(HANDLE file) {
-  if (!Enabled()) return {};
-  BY_HANDLE_FILE_INFORMATION info{};
-  if (!GetFileInformationByHandle(file, &info)) return {};
-  const DiskId id{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
-  auto& global = Global();
-  std::lock_guard<std::mutex> guard(global.lock);
-  const auto found = global.descriptors.find(id);
-  return found == global.descriptors.end() ? std::wstring{} : found->second.path;
-}
+bool Channel::Detached() const { return state_->detached.load(std::memory_order_acquire); }
 
+void Channel::Detach() {
+  {
+    std::lock_guard<std::mutex> guard(state_->lock);
+    if (state_->detached.exchange(true, std::memory_order_acq_rel)) return;
+  }
+  std::set<uint64_t> discarded;
+  bool retained = false;
+  auto& global = Global();
+  {
+    std::lock_guard<std::mutex> guard(global.lock);
+    for (auto item = global.items.begin(); item != global.items.end();) {
+      if (item->second.owner != this) {
+        ++item;
+      } else if (item->second.activity) {
+        retained = true;
+        ++item;
+      } else {
+        discarded.insert(item->second.lease);
+        item = global.items.erase(item);
+      }
+    }
+  }
+  if (!retained) {
+    Close();
+    return;
+  }
+  bool failed = false;
+  {
+    std::lock_guard<std::mutex> guard(state_->lock);
+    HANDLE pipe = state_->pipe;
+    if (pipe == INVALID_HANDLE_VALUE) return;
+    wire::Request request;
+    request.op = wire::Op::kDetach;
+    wire::Reply reply;
+    const auto deadline = Deadline();
+    failed = !Transfer(pipe, &request, sizeof(request), true, deadline) ||
+        !Transfer(pipe, &reply, sizeof(reply), false, deadline) ||
+        reply.magic != wire::kMagic || reply.status != 0 || reply.handle != 0;
+  }
+  if (failed) {
+    Close();
+    return;
+  }
+  for (const auto lease : discarded) Release(lease);
+}
 
 void Channel::Release(uint64_t lease) {
   bool failed = false;
@@ -305,6 +315,25 @@ void Channel::Release(uint64_t lease) {
   if (failed) Close();
 }
 
+bool Keep(std::wstring_view path) {
+  std::wstring mapped(path);
+  std::replace(mapped.begin(), mapped.end(), L'/', L'\\');
+  const auto selection = Lookup(mapped);
+  if (!selection.alias) return false;
+  auto& global = Global();
+  std::lock_guard<std::mutex> guard(global.lock);
+  const auto found = global.items.find(selection.alias);
+  if (found == global.items.end()) return false;
+  const auto channel = found->second.channel.lock();
+  if (!channel || channel->Detached()) return false;
+  const uint64_t lease = found->second.lease;
+  for (auto& entry : global.items) {
+    auto& item = entry.second;
+    if (item.owner == channel.get() && item.lease == lease) item.activity = channel;
+  }
+  return true;
+}
+
 void Release(std::wstring_view path) {
   std::wstring mapped(path);
   std::replace(mapped.begin(), mapped.end(), L'/', L'\\');
@@ -322,9 +351,6 @@ void Release(std::wstring_view path) {
     for (auto item = global.items.begin(); item != global.items.end();) {
       item = item->second.owner == channel.get() && item->second.lease == lease
           ? global.items.erase(item) : std::next(item);
-    }
-    for (auto entry = global.descriptors.begin(); entry != global.descriptors.end();) {
-      entry = global.items.contains(entry->second.alias) ? std::next(entry) : global.descriptors.erase(entry);
     }
   }
   if (channel) channel->Release(lease);

@@ -9,7 +9,6 @@
 #include "internal.h"
 #include "revocable_internal.h"
 #include "rooted_storage_client.h"
-#include <gesher/drop_mount.h>
 #include "standalone_input.h"
 
 extern "C" int gesher_is_socket(int fd);
@@ -188,7 +187,7 @@ int fstat(int fd, struct stat* buf) {
   switch (GetFileType(h)) {
     case FILE_TYPE_DISK: {
       const int result = FromHandle(h, buf);
-      if (result == 0 && !gesher::drop_mount::DescriptorPath(h).empty()) buf->st_mode &= ~0222;
+      if (result == 0 && !gesher::DropDescriptorPath(snapshot).empty()) buf->st_mode &= ~0222;
       return result;
     }
     case FILE_TYPE_PIPE:

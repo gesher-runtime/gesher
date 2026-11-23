@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cwchar>
 #include <exception>
+#include <utility>
 
 namespace gesher::windows {
 namespace {
@@ -146,6 +147,20 @@ HRESULT ConfigureDropWorkerCom() {
   return result;
 }
 
+OleDropSource::OleDropSource(OleDropSource&& other) noexcept
+    : token_(std::exchange(other.token_, nullptr)) {}
+
+OleDropSource::Access::Access(HANDLE token) {
+  if (!token || (!OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &previous_) &&
+                 GetLastError() != ERROR_NO_TOKEN)) return;
+  active_ = SetThreadToken(nullptr, token) != FALSE;
+}
+
+OleDropSource::Access::~Access() {
+  if (active_ && !SetThreadToken(nullptr, previous_)) RetireOnFailedRevert();
+  if (previous_) CloseHandle(previous_);
+}
+
 OleDropSource::~OleDropSource() {
   if (token_) CloseHandle(token_);
 }
@@ -172,7 +187,7 @@ bool OleDropSource::Capture() {
       GetTokenInformation(source, TokenImpersonationLevel, &level, sizeof(level), &length) &&
       level >= SecurityIdentification && process_identity::ReadPrincipal(source, &caller) &&
       process_identity::ReadPrincipal(authority, &worker) && caller == worker &&
-      (level >= SecurityImpersonation || EquivalentAccess(source, authority)) &&
+      EquivalentAccess(source, authority) &&
       DuplicateTokenEx(level >= SecurityImpersonation ? source : authority,
           TOKEN_QUERY | TOKEN_IMPERSONATE, nullptr, SecurityImpersonation, TokenImpersonation, &token_);
   if (authority) CloseHandle(authority);
@@ -181,24 +196,24 @@ bool OleDropSource::Capture() {
 }
 
 HANDLE OleDropSource::Open(const wchar_t* path) const {
-  if (!token_ || !FileSystemPath(path) || !ImpersonateLoggedOnUser(token_)) {
-    SetLastError(ERROR_ACCESS_DENIED);
+  if (!FileSystemPath(path)) {
+    SetLastError(ERROR_INVALID_NAME);
     return INVALID_HANDLE_VALUE;
   }
-  HANDLE result = CreateFileW(path, GENERIC_READ,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-  DWORD error = result == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
-  if (!RevertToSelf()) {
-    RetireOnFailedRevert();
-    error = ERROR_ACCESS_DENIED;
+  DWORD error = ERROR_ACCESS_DENIED;
+  HANDLE result = INVALID_HANDLE_VALUE;
+  {
+    const auto authorization = AuthorizeIo();
+    if (authorization) {
+      result = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+          nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      error = result == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    }
   }
   if (result != INVALID_HANDLE_VALUE && GetFileType(result) != FILE_TYPE_DISK) {
-    error = ERROR_INVALID_DATA;
-  }
-  if (error != ERROR_SUCCESS && result != INVALID_HANDLE_VALUE) {
     CloseHandle(result);
     result = INVALID_HANDLE_VALUE;
+    error = ERROR_INVALID_DATA;
   }
   SetLastError(error);
   return result;

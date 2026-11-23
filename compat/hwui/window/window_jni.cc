@@ -74,14 +74,22 @@ void ThrowCreateFailure(JNIEnv* env, const char* what, int width, int height) {
   if (c != nullptr) env->ThrowNew(c, message);
 }
 
-void JNICALL NativeWindow_releaseHostedDrop(JNIEnv* env, jclass, jstring path) {
-  if (path == nullptr) return;
+std::wstring HostedDropPath(JNIEnv* env, jstring path) {
+  if (path == nullptr) return {};
   const auto* chars = env->GetStringChars(path, nullptr);
-  if (!chars) return;
+  if (!chars) return {};
   const auto count = static_cast<size_t>(env->GetStringLength(path));
-  const std::wstring value(reinterpret_cast<const wchar_t*>(chars), count);
+  std::wstring value(reinterpret_cast<const wchar_t*>(chars), count);
   env->ReleaseStringChars(path, chars);
-  gesher::drop_mount::Release(value);
+  return value;
+}
+
+jboolean JNICALL NativeWindow_keepHostedDrop(JNIEnv* env, jclass, jstring path) {
+  return gesher::drop_mount::Keep(HostedDropPath(env, path)) ? JNI_TRUE : JNI_FALSE;
+}
+
+void JNICALL NativeWindow_releaseHostedDrop(JNIEnv* env, jclass, jstring path) {
+  gesher::drop_mount::Release(HostedDropPath(env, path));
 }
 
 jlong JNICALL NativeWindow_create(JNIEnv* env, jclass, jstring title, jint width, jint height) {
@@ -340,6 +348,7 @@ void JNICALL NativeWindow_setScreenPosition(JNIEnv*, jclass, jlong ptr, jint x, 
 }
 
 const JNINativeMethod kMethods[] = {
+    {"nKeepHostedDrop", "(Ljava/lang/String;)Z", reinterpret_cast<void*>(&NativeWindow_keepHostedDrop)},
     {"nReleaseHostedDrop", "(Ljava/lang/String;)V", reinterpret_cast<void*>(&NativeWindow_releaseHostedDrop)},
     {"nCreate", "(Ljava/lang/String;II)J", reinterpret_cast<void*>(&NativeWindow_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&NativeWindow_destroy)},

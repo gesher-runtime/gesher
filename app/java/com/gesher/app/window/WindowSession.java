@@ -52,6 +52,8 @@ import com.gesher.server.WindowManagerService;
 import java.io.FileDescriptor;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import com.android.internal.view.IDragAndDropPermissions;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -251,7 +253,7 @@ public final class WindowSession extends IWindowSession.Stub {
         /** The last size WM_SIZE reported, not yet applied (guarded by this). */
         int pendingWidth;
         int pendingHeight;
-        final ArrayDeque<String> pendingHostedDrops = new ArrayDeque<>();
+        final ArrayDeque<HostedDropGrant> pendingHostedDrops = new ArrayDeque<>();
         boolean resizePending;
         boolean focused;
         /** A WM_CHAR high surrogate waiting for its low half. */
@@ -2788,6 +2790,80 @@ public final class WindowSession extends IWindowSession.Stub {
         }
     }
 
+    private static final class HostedDropGrant extends IDragAndDropPermissions.Stub
+            implements android.app.Application.ActivityLifecycleCallbacks {
+        private final String path;
+        private final IBinder owner;
+        private android.app.Activity activity;
+        private boolean taken;
+        private boolean finished;
+        private boolean released;
+
+        HostedDropGrant(String path, IBinder owner) {
+            this.path = path;
+            this.owner = owner;
+        }
+
+        @Override
+        public synchronized void take(IBinder token) {
+            if (owner == null || !owner.equals(token)) {
+                throw new SecurityException("Drop belongs to a different activity");
+            }
+            if (activity != null) return;
+            android.app.Activity local = activity(token);
+            if (local == null || local.isDestroyed()) {
+                throw new SecurityException("Drop activity is no longer attached");
+            }
+            takeTransient();
+            activity = local;
+            local.registerActivityLifecycleCallbacks(this);
+            if (local.isDestroyed()) release();
+        }
+
+        @Override
+        public synchronized void takeTransient() {
+            if (released || (finished && !taken)) {
+                throw new SecurityException("Drop grant expired");
+            }
+            if (!taken && !NativeWindow.keepHostedDrop(path)) {
+                throw new SecurityException("Drop files are no longer available");
+            }
+            taken = true;
+        }
+
+        void finish(boolean consumed) {
+            boolean retire;
+            synchronized (this) {
+                finished = true;
+                retire = !consumed || !taken;
+            }
+            if (retire) release();
+        }
+
+        @Override
+        public void release() {
+            android.app.Activity local;
+            synchronized (this) {
+                if (released) return;
+                released = true;
+                local = activity;
+                activity = null;
+            }
+            if (local != null) local.unregisterActivityLifecycleCallbacks(this);
+            NativeWindow.releaseHostedDrop(path);
+        }
+
+        @Override public void onActivityDestroyed(android.app.Activity a) {
+            if (a.getActivityToken() == owner) release();
+        }
+        @Override public void onActivityCreated(android.app.Activity a, Bundle b) {}
+        @Override public void onActivityStarted(android.app.Activity a) {}
+        @Override public void onActivityResumed(android.app.Activity a) {}
+        @Override public void onActivityPaused(android.app.Activity a) {}
+        @Override public void onActivityStopped(android.app.Activity a) {}
+        @Override public void onActivitySaveInstanceState(android.app.Activity a, Bundle b) {}
+    }
+
     private void handleNativeDrag(long hwnd, int action, float x, float y,
             String[] files, String text, boolean fileDrag, boolean hosted) {
         AppWindow target = null;
@@ -2830,17 +2906,18 @@ public final class WindowSession extends IWindowSession.Stub {
             desc = new ClipDescription("text/plain", new String[] {"text/plain"});
         }
 
-        android.view.DragEvent event = createDragEvent(action, x, y, data, desc);
-        if (event == null) {
-            NativeWindow.releaseHostedDrop(offeredPath);
-            return;
-        }
-
         final AppWindow w = target;
-        final android.view.DragEvent dragEvent = event;
+        final HostedDropGrant grant = offeredPath == null ? null
+                : new HostedDropGrant(offeredPath, root(w).attrs.token);
+        final android.view.DragEvent dragEvent = android.view.DragEvent.obtain(
+                action, x, y, 0f, 0f, 0,
+                grant == null ? 0 : View.DRAG_FLAG_GLOBAL | View.DRAG_FLAG_GLOBAL_URI_READ,
+                null, desc, data, null, grant,
+                action == android.view.DragEvent.ACTION_DROP
+                        || action == android.view.DragEvent.ACTION_DRAG_ENDED);
         Runnable dispatch = () -> {
-            if (offeredPath != null) {
-                synchronized (w) { w.pendingHostedDrops.addLast(offeredPath); }
+            if (grant != null) {
+                synchronized (w) { w.pendingHostedDrops.addLast(grant); }
             }
             ViewRootImpl root = viewRoot(w);
             if (root != null) {
@@ -2848,18 +2925,22 @@ public final class WindowSession extends IWindowSession.Stub {
                     root.dispatchDragEvent(dragEvent);
                 } catch (Throwable t) {
                     log("root.dispatchDragEvent: " + t);
+                    abandonHostedDrop(w, grant);
                 }
             } else if (w.client != null) {
                 try {
                     w.client.dispatchDragEvent(dragEvent);
                 } catch (RemoteException e) {
                     log("client.dispatchDragEvent: " + e);
+                    abandonHostedDrop(w, grant);
                 }
+            } else {
+                abandonHostedDrop(w, grant);
             }
         };
 
         if (w.handler != null) {
-            if (!w.handler.post(dispatch)) NativeWindow.releaseHostedDrop(offeredPath);
+            if (!w.handler.post(dispatch) && grant != null) grant.release();
         } else {
             dispatch.run();
         }
@@ -2872,61 +2953,10 @@ public final class WindowSession extends IWindowSession.Stub {
         return android.net.Uri.fromFile(new java.io.File(path));
     }
 
-    private static android.view.DragEvent createDragEvent(int action, float x, float y,
-            ClipData data, ClipDescription desc) {
-        for (java.lang.reflect.Method m : android.view.DragEvent.class.getDeclaredMethods()) {
-            if ("obtain".equals(m.getName())) {
-                m.setAccessible(true);
-                Class<?>[] types = m.getParameterTypes();
-                Object[] args = new Object[types.length];
-                for (int i = 0; i < types.length; i++) {
-                    if (types[i] == int.class) {
-                        args[i] = (i == 0) ? action : 0;
-                    } else if (types[i] == float.class) {
-                        if (i == 1) args[i] = x;
-                        else if (i == 2) args[i] = y;
-                        else args[i] = 0f;
-                    } else if (types[i] == boolean.class) {
-                        args[i] = (action == android.view.DragEvent.ACTION_DROP
-                                || action == android.view.DragEvent.ACTION_DRAG_ENDED);
-                    } else if (ClipData.class.isAssignableFrom(types[i])) {
-                        args[i] = data;
-                    } else if (ClipDescription.class.isAssignableFrom(types[i])) {
-                        args[i] = desc != null ? desc : (data != null ? data.getDescription() : null);
-                    } else {
-                        args[i] = null;
-                    }
-                }
-                try {
-                    return (android.view.DragEvent) m.invoke(null, args);
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-        try {
-            java.lang.reflect.Constructor<?> c =
-                    android.view.DragEvent.class.getDeclaredConstructor();
-            c.setAccessible(true);
-            android.view.DragEvent event = (android.view.DragEvent) c.newInstance();
-            setDragField(event, "mAction", action);
-            setDragField(event, "mX", x);
-            setDragField(event, "mY", y);
-            setDragField(event, "mClipData", data);
-            setDragField(event, "mClipDescription",
-                    desc != null ? desc : (data != null ? data.getDescription() : null));
-            return event;
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    private static void setDragField(Object obj, String fieldName, Object val) {
-        try {
-            Field f = obj.getClass().getDeclaredField(fieldName);
-            f.setAccessible(true);
-            f.set(obj, val);
-        } catch (Throwable ignored) {
-        }
+    private static void abandonHostedDrop(AppWindow target, HostedDropGrant grant) {
+        if (grant == null) return;
+        synchronized (target) { target.pendingHostedDrops.remove(grant); }
+        grant.release();
     }
 
     @Override
@@ -2940,9 +2970,9 @@ public final class WindowSession extends IWindowSession.Stub {
         AppWindow target;
         synchronized (mWindows) { target = mWindows.get(window.asBinder()); }
         if (target == null) return;
-        String offer;
-        synchronized (target) { offer = target.pendingHostedDrops.pollFirst(); }
-        if (!consumed) NativeWindow.releaseHostedDrop(offer);
+        HostedDropGrant grant;
+        synchronized (target) { grant = target.pendingHostedDrops.pollFirst(); }
+        if (grant != null) grant.finish(consumed);
     }
 
     @Override

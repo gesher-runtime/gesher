@@ -445,7 +445,7 @@ void Window::Run(std::wstring title, int width, int height) {
             Sleep(22);
           }
         }
-        hosted_drop->Close();
+        if (!hosted_drop->Detached()) hosted_drop->Close();
       });
     }
   }
@@ -494,7 +494,7 @@ void Window::Run(std::wstring title, int width, int height) {
   }
   layered_bitmap_.reset();
   if (hosted_drop) {
-    hosted_drop->Close();
+    hosted_drop->Detach();
     hosted_poll.join();
   } else if (hwnd != nullptr) {
     gesher::windows::RevokeWindowDropTarget(hwnd);

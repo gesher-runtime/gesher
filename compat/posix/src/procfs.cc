@@ -1010,6 +1010,10 @@ bool ReadLink(const std::wstring& name, std::string* target) {
       *target = "anon_inode:[gesher-revocable]";
       return true;
     }
+    if (const auto drop = DropDescriptorPath(snapshot); !drop.empty()) {
+      *target = LinuxPath(drop.c_str());
+      return true;
+    }
     return FdTarget(n.fd, target);
   }
   wchar_t buf[32768];
@@ -1044,6 +1048,9 @@ int Open(const std::wstring& name, int flags) {
       auto snapshot = CaptureDescriptor(n.fd);
       if (!snapshot) return -1;
       if (FileDescriptionIsRevocable(snapshot)) return ReopenRevocableFileDescription(snapshot, flags);
+      if (const auto drop = DropDescriptorPath(snapshot); !drop.empty()) {
+        return open(LinuxPath(drop.c_str()).c_str(), flags & ~(O_CREAT | O_EXCL), 0);
+      }
       // NPFS does not expose a fresh endpoint on this existing byte queue
       // through ReOpenFile. Fail rather than returning an alias with a
       // different access direction or shared O_NONBLOCK state.

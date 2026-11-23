@@ -23,11 +23,27 @@ HRESULT ConfigureDropWorkerCom();
 class OleDropSource {
  public:
   OleDropSource() = default;
+  OleDropSource(OleDropSource&& other) noexcept;
   ~OleDropSource();
   OleDropSource(const OleDropSource&) = delete;
   OleDropSource& operator=(const OleDropSource&) = delete;
 
   bool Capture();
+
+  class Access {
+   public:
+    ~Access();
+    Access(const Access&) = delete;
+    Access& operator=(const Access&) = delete;
+    explicit operator bool() const { return active_; }
+
+   private:
+    friend class OleDropSource;
+    explicit Access(HANDLE token);
+    HANDLE previous_ = nullptr;
+    bool active_ = false;
+  };
+  Access AuthorizeIo() const { return Access(token_); }
 
   // The returned handle belongs to the caller. Directories are opened for
   // read-only enumeration. Only seekable file-system objects are returned.

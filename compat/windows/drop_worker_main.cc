@@ -104,7 +104,7 @@ class DropTarget final : public IDropTarget {
     if (copy && data && window_->Live() && authority.Capture()) {
       auto paths = ReadDropPaths(data, wire::kMaxRoots);
       DropLeases::Offer offer;
-      if (paths && leases_.Retain(authority, *paths, &offer) == 0 && window_->Live()) {
+      if (paths && leases_.Retain(std::move(authority), *paths, &offer) == 0 && window_->Live()) {
         Push(wire::Action::kDrop, at, std::move(offer));
         *effect = DROPEFFECT_COPY;
       } else if (!paths && window_->Live()) {
@@ -145,6 +145,12 @@ class DropTarget final : public IDropTarget {
 
   void ReleaseLease(uint64_t identity) { leases_.Release(identity); }
 
+  void RetireWindow() {
+    active_ = false;
+    for (const auto& pending : events_) if (pending.offer.lease) leases_.Release(pending.offer.lease);
+    events_.clear();
+  }
+
  private:
   struct Pending {
     wire::Event event;
@@ -183,6 +189,7 @@ bool Valid(const wire::Request& request) {
   switch (request.op) {
     case wire::Op::kAttach: return request.identity != 0 && request.identity <= UINTPTR_MAX;
     case wire::Op::kRelease: return request.identity != 0;
+    case wire::Op::kDetach:
     case wire::Op::kPoll: return request.identity == 0;
     default: return false;
   }
@@ -243,7 +250,7 @@ int Serve(HANDLE pipe, HANDLE child) {
   auto revoke = [](HostedDropWindow* owned) { owned->Revoke(); };
   const std::unique_ptr<HostedDropWindow, decltype(revoke)> registration(window.get(), revoke);
   if (!Send(pipe, &reply, sizeof(reply), initial)) return ERROR_BROKEN_PIPE;
-  while (window->Live()) {
+  while (WaitForSingleObject(child, 0) == WAIT_TIMEOUT) {
     MSG message{};
     while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
       if (message.message == WM_QUIT) return 0;
@@ -262,6 +269,11 @@ int Serve(HANDLE pipe, HANDLE child) {
     switch (request.op) {
       case wire::Op::kPoll:
         if (!target->Poll(pipe, deadline)) return ERROR_BROKEN_PIPE;
+        break;
+      case wire::Op::kDetach:
+        window->Revoke();
+        target->RetireWindow();
+        if (!Send(pipe, &reply, sizeof(reply), deadline)) return ERROR_BROKEN_PIPE;
         break;
       case wire::Op::kRelease:
         target->ReleaseLease(request.identity);

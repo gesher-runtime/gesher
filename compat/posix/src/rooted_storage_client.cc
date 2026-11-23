@@ -160,7 +160,6 @@ Selection Lookup(const std::wstring& mapped) {
 }
 
 std::wstring DescriptorPath(HANDLE file) {
-  if (auto drop = drop_mount::DescriptorPath(file); !drop.empty()) return drop;
   const auto& state = cohost_bootstrap::Current();
   if (!state || state.storage_pipe.empty()) return {};
   constexpr DWORD format = FILE_NAME_NORMALIZED | VOLUME_NAME_NT;
