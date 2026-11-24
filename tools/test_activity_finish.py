@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,9 @@ def main() -> None:
         parser.error("A C compiler is required for native initialization boundaries")
     classpath = os.pathsep.join(str(path.resolve()) for path in
             (args.app_classes, args.framework_classes, args.core_classes, args.apksig))
+    if args.group in ("all", "usage", "usage-query") and not args.usage_source_ref:
+        subprocess.run([sys.executable, str(ROOT / "tools/test_usage_observer_contracts.py"),
+                        "--java-home", str(args.java_home)], check=True, timeout=120)
     with tempfile.TemporaryDirectory(prefix="gesher-activity-finish-") as directory:
         work = Path(directory); classes = work / "classes"; classes.mkdir()
         if args.group in ("all", "usage-query") and not args.usage_source_ref:
@@ -45,17 +49,13 @@ def main() -> None:
         sources = []
         for name in ("ActivityCallerState", "ActivityClientController", "ActivityTaskManagerService",
                      "ActivityManagerService", "PendingIntents", "UriGrants", "ActivityUsageHistory",
-                     "UsageLimitObservers", "DesktopUsageStatsService"):
+                     "DesktopUsageStatsService"):
             relative = "app/java/com/gesher/server/" + name + ".java"
             source = ROOT / relative
             source_ref = args.controller_source_ref if name == "ActivityClientController" else (
-                    args.usage_source_ref if name in ("ActivityUsageHistory", "UsageLimitObservers",
-                                                     "DesktopUsageStatsService") else None)
+                    args.usage_source_ref if name in ("ActivityUsageHistory", "DesktopUsageStatsService",
+                                                     "ActivityTaskManagerService") else None)
             if source_ref:
-                exists = subprocess.run(["git", "cat-file", "-e", source_ref + ":" + relative],
-                                        cwd=ROOT, capture_output=True)
-                if exists.returncode != 0 and name == "UsageLimitObservers":
-                    continue
                 source = work / (name + ".java")
                 old = subprocess.run(["git", "show", source_ref + ":" + relative],
                                      cwd=ROOT, check=True, capture_output=True)
@@ -63,6 +63,8 @@ def main() -> None:
             sources.append(str(source))
         sources += [str(ROOT / "tests/dex-services/com/gesher/server/ActivityFinishFixture.java"),
                     str(ROOT / "tests/activity-finish/ActivityFinishHost.java")]
+        if not args.usage_source_ref:
+            sources.append(str(ROOT / "app/java/com/gesher/server/UsageLimitObservers.java"))
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), *sources], check=True)
         # Real Android NativeAllocationRegistry requires its supplied Cleaner in
