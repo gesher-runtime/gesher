@@ -63,7 +63,12 @@ public final class SplitPackageContractTest {
         Field f = type.getDeclaredField(name); f.setAccessible(true); return f;
     }
     private static File cluster(File data, String name, Map<String, byte[]> files) throws IOException {
-        File archive = new File(data, name + ".apks");
+        return cluster(data, name, ".apks", files);
+    }
+
+    private static File cluster(File data, String name, String extension, Map<String, byte[]> files)
+            throws IOException {
+        File archive = new File(data, name + extension);
         try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(archive))) {
             for (Map.Entry<String, byte[]> entry : files.entrySet()) {
                 out.putNextEntry(new ZipEntry(entry.getKey()));
@@ -288,6 +293,22 @@ public final class SplitPackageContractTest {
             require(expected.getCause() instanceof SecurityException, "External cluster failed for the wrong reason");
         }
         invalidUpdates(data, inputs, good, pm, installer, install);
+        for (String extension : new String[]{".xapk", ".apkm", ".APK+"}) {
+            File equivalent = cluster(data, "equivalent", extension, good);
+            result = (String[]) install.invoke(installer, equivalent.getPath());
+            require("unchanged".equals(result[1]), extension + " changed identical installed APKs");
+        }
+        Map<String, byte[]> arbitraryNames = new LinkedHashMap<>();
+        arbitraryNames.put("apks/display.apk", inputs.get("entry"));
+        arbitraryNames.put("apks/assets.apk", inputs.get("core"));
+        arbitraryNames.put("apks/application.apk", inputs.get("base"));
+        File renamed = cluster(data, "renamed", ".apk+", arbitraryNames);
+        result = (String[]) install.invoke(installer, renamed.getPath());
+        require("updated".equals(result[1]), "APK+ did not install the manifest-identified cluster");
+        ApplicationInfo renamedInfo = pm.get(PACKAGE).applicationInfo(0);
+        require(Arrays.equals(renamedInfo.splitNames, new String[]{"feature.core", "feature.entry"}),
+                "Arbitrary archive names dropped required feature splits");
+        loadFeature(renamedInfo);
         cachedSourceUpdates(data, inputs);
         codeRootBoundary(data, installerType);
         inheritedSplitSessions(data, inputs);
@@ -837,10 +858,12 @@ public final class SplitPackageContractTest {
             PackageManagerService pm, Object installer, Method install) throws Exception {
         byte[] registry = Files.readAllBytes(new File(data, "system/packages.list").toPath());
         ApkPackage before = pm.get(PACKAGE);
-        for (String bad : new String[]{"missing-dependency", "duplicate", "foreign", "core-major"}) {
+        for (String bad : new String[]{"missing-dependency", "duplicate", "duplicate-leaf", "multiple-bases", "foreign", "core-major"}) {
             Map<String, byte[]> files = new LinkedHashMap<>(good);
             if (bad.equals("missing-dependency")) files.remove("split_z_core.apk");
             else if (bad.equals("duplicate")) files.put("split_duplicate.apk", inputs.get("core"));
+            else if (bad.equals("duplicate-leaf")) files.put("nested/base.apk", inputs.get("base"));
+            else if (bad.equals("multiple-bases")) files.put("another.apk", inputs.get("base"));
             else files.put("split_z_core.apk", inputs.get(bad));
             try {
                 install.invoke(installer, cluster(data, bad, files).getPath());

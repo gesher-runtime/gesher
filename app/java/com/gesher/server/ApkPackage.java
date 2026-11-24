@@ -299,6 +299,11 @@ public final class ApkPackage {
         return parse(base.getPath(), directory);
     }
 
+    /** Identify the base APK from the manifest before assembling a package cluster. */
+    public static boolean isBaseApk(File file) throws IOException {
+        return codeApkLite(file).getSplitName() == null;
+    }
+
     private static ApkLite codeApkLite(File file) throws IOException {
         if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
