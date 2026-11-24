@@ -5,6 +5,7 @@
 #include "../../compat/usb_storage/protected_identity.h"
 #include "../../compat/usb_storage/authority_launch.h"
 #include "../../compat/framework/app_container.h"
+#include "usb_scm_profile_control.h"
 #include <aclapi.h>
 #include <securityappcontainer.h>
 #include <sddl.h>
@@ -14,11 +15,13 @@
 #include <wtsapi32.h>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -27,6 +30,7 @@
 namespace {
 namespace storage = gesher::usb_storage;
 namespace container = gesher::appcontainer;
+namespace profile_control = gesher::usb_storage::test;
 struct Close { void operator()(void* h) const { if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h); } };
 struct ScClose { void operator()(SC_HANDLE h) const { if (h) CloseServiceHandle(h); } };
 struct Free { void operator()(void* p) const { if (p) LocalFree(p); } };
@@ -78,6 +82,7 @@ struct NamespaceDirectoryEvidence {
   TokenObjectEvidence security;
 };
 struct NamespaceEvidence {
+  DWORD token_validation = ERROR_NOT_READY;
   DWORD status = ERROR_NOT_READY, worker_session = 0, token_session = 0, private_impersonate = ERROR_NOT_READY;
   DWORD directory_export = ERROR_NOT_READY, source_private = 0, count = 0;
   NamespacePathEvidence system_path, private_path;
@@ -100,13 +105,19 @@ struct Evidence {
   DWORD private_caller_token_access = ERROR_NOT_READY;
   DWORD system_caller_token_access = ERROR_NOT_READY;
   EquivalentTokenEvidence equivalent;
+  profile_control::ScmProfileControlEvidence scm_control;
   char stage[96] = "complete";
   char cleanup_stage[64] = "none";
 };
 // Fixed diagnostic payload: two API paths, eight exact directory observations,
 // and at most twelve ACEs per object. The controller validates counts/strings.
 static_assert(std::is_trivially_copyable_v<Evidence> && sizeof(Evidence) <= 16384);
-struct Configuration { std::wstring name, image, directory; DWORD session = 0; } config;
+struct Configuration {
+  std::wstring name, image, directory;
+  DWORD session = 0;
+  ULONGLONG worker_deadline = 0;
+  bool scm_profile_control = false;
+} config;
 SERVICE_STATUS_HANDLE service_status = nullptr;
 Handle service_stop;
 Handle service_job;
@@ -118,6 +129,18 @@ std::wstring Image() {
   return {path.data(), size};
 }
 std::wstring Quote(const std::wstring& value) { return L"\"" + value + L"\""; }
+bool DeadlineArgument(std::wstring_view value, ULONGLONG* result) {
+  if (!result || value.empty() || value.size() > 20 || (value.size() > 1 && value.front() == L'0')) return false;
+  ULONGLONG parsed = 0;
+  for (wchar_t c : value) {
+    if (c < L'0' || c > L'9') return false;
+    const ULONGLONG digit = static_cast<ULONGLONG>(c - L'0');
+    if (parsed > ((std::numeric_limits<ULONGLONG>::max)() - digit) / 10) return false;
+    parsed = parsed * 10 + digit;
+  }
+  *result = parsed;
+  return true;
+}
 Local Security(bool low = false) {
   PSECURITY_DESCRIPTOR raw = nullptr;
   const wchar_t* policy = low ? L"O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)S:(ML;OICI;NW;;;LW)" :
@@ -424,7 +447,7 @@ TokenCallEvidence ObserveThreadReopen(DWORD access, BOOL as_self) {
   return observed;
 }
 TokenCallEvidence ObserveNativeLowbox(CreateDiagnosticNativeLowbox create, HANDLE token,
-                                     const SECURITY_CAPABILITIES& capabilities) {
+                                     const SECURITY_CAPABILITIES& capabilities, Handle* retained = nullptr) {
   TokenCallEvidence observed;
   if (!create) return observed;
   HANDLE raw = nullptr;
@@ -434,14 +457,15 @@ TokenCallEvidence ObserveNativeLowbox(CreateDiagnosticNativeLowbox create, HANDL
   observed.status = static_cast<DWORD>(status);
   observed.succeeded = static_cast<DWORD>(status >= 0);
   observed.returned_token = static_cast<DWORD>(raw && raw != INVALID_HANDLE_VALUE);
-  const Handle close(raw);
+  Handle close(raw);
+  if (retained && status >= 0 && observed.returned_token) *retained = std::move(close);
   return observed;
 }
 void ObserveTokenPhase(HANDLE token, PSID private_user, SECURITY_CAPABILITIES capabilities,
                        CreateDiagnosticLowbox wrapper, CreateDiagnosticNativeLowbox native,
-                       TokenPhaseEvidence* observed) {
+                       TokenPhaseEvidence* observed, Handle* namespace_token = nullptr) {
   observed->object = ObserveTokenObject(token, private_user);
-  observed->native_system = ObserveNativeLowbox(native, token, capabilities);
+  observed->native_system = ObserveNativeLowbox(native, token, capabilities, namespace_token);
   if (!ImpersonateLoggedOnUser(token)) { observed->impersonate = GetLastError(); return; }
   // No throwing C++ operations occur while impersonating. The raw kernel call
   // precedes the private-only wrapper, which may initialize namespace objects.
@@ -473,9 +497,11 @@ bool SafeNamespacePath(std::wstring_view value) {
   }
   return true;
 }
-void ObserveNamespacePath(HANDLE token, PSID package, NamespacePathEvidence* observed) {
+void ObserveNamespacePath(HANDLE lowbox, NamespacePathEvidence* observed) {
   ULONG returned = 0;
-  const BOOL ok = GetAppContainerNamedObjectPath(token, package,
+  // Match the CLR's primary-token query form in dotnet/coreclr
+  // release/2.0.0/src/vm/profattach.cpp: a validated AppContainer token, NULL SID.
+  const BOOL ok = GetAppContainerNamedObjectPath(lowbox, nullptr,
       static_cast<ULONG>(std::size(observed->path)), observed->path, &returned);
   observed->status = ok ? ERROR_SUCCESS : GetLastError();
   observed->succeeded = static_cast<DWORD>(ok != FALSE);
@@ -534,16 +560,48 @@ void AddNamespaceCandidate(std::wstring path, DWORD candidate, NamespaceEvidence
     path.resize(separator);
   }
 }
-void ObserveNamespace(HANDLE token, const storage::AuthorityLaunchSpec& spec, NamespaceEvidence* observed) {
+void VerifyNamespaceToken(HANDLE lowbox, HANDLE private_primary, const storage::AuthorityLaunchSpec& spec) {
+  Require(lowbox && lowbox != INVALID_HANDLE_VALUE, "diagnostic-namespace-lowbox-handle", ERROR_INVALID_HANDLE);
+  const auto user = User(lowbox);
+  TOKEN_STATISTICS expected{}, actual{};
+  DWORD bytes = 0, session = 0, app_container = 0;
+  Require(GetTokenInformation(private_primary, TokenStatistics, &expected, sizeof(expected), &bytes) &&
+      GetTokenInformation(lowbox, TokenStatistics, &actual, sizeof(actual), &bytes) &&
+      GetTokenInformation(lowbox, TokenSessionId, &session, sizeof(session), &bytes) &&
+      GetTokenInformation(lowbox, TokenIsAppContainer, &app_container, sizeof(app_container), &bytes),
+      "diagnostic-namespace-lowbox-identity-query");
+  Require(actual.TokenType == TokenPrimary && app_container == 1 &&
+      EqualSid(const_cast<BYTE*>(user.data()), spec.desktop_user) && session == spec.desktop_session &&
+      actual.AuthenticationId.HighPart == expected.AuthenticationId.HighPart &&
+      actual.AuthenticationId.LowPart == expected.AuthenticationId.LowPart,
+      "diagnostic-namespace-lowbox-identity", ERROR_ACCESS_DENIED);
+  struct PackageBuffer { TOKEN_APPCONTAINER_INFORMATION information; BYTE sid[SECURITY_MAX_SID_SIZE]; } package{};
+  Require(GetTokenInformation(lowbox, TokenAppContainerSid, &package, sizeof(package), &bytes),
+      "diagnostic-namespace-lowbox-package-query");
+  const auto first = reinterpret_cast<std::uintptr_t>(&package);
+  const auto sid = reinterpret_cast<std::uintptr_t>(package.information.TokenAppContainer);
+  Require(bytes >= sizeof(package.information) && bytes <= sizeof(package) && sid >= first && sid - first <= bytes &&
+      bytes - (sid - first) >= 8, "diagnostic-namespace-lowbox-package-bounds", ERROR_INVALID_SID);
+  PSID actual_package = package.information.TokenAppContainer;
+  const size_t sid_bytes = 8 + static_cast<size_t>(*GetSidSubAuthorityCount(actual_package)) * sizeof(DWORD);
+  Require(sid_bytes <= bytes - (sid - first) && IsValidSid(actual_package) &&
+      EqualSid(actual_package, spec.capabilities.AppContainerSid), "diagnostic-namespace-lowbox-package", ERROR_INVALID_SID);
+}
+void ObserveNamespace(HANDLE lowbox, HANDLE private_primary, const storage::AuthorityLaunchSpec& spec, NamespaceEvidence* observed) {
   try {
+    // Keep the API's queried object distinct from its caller context. The raw
+    // token is never assigned to a process or impersonated; it exists only for
+    // this identity-checked read-only query and is closed by the caller.
+    VerifyNamespaceToken(lowbox, private_primary, spec);
+    observed->token_validation = ERROR_SUCCESS;
     DWORD bytes = 0;
     Require(ProcessIdToSessionId(GetCurrentProcessId(), &observed->worker_session), "diagnostic-worker-session");
-    Require(GetTokenInformation(token, TokenSessionId, &observed->token_session, sizeof(observed->token_session), &bytes),
+    Require(GetTokenInformation(lowbox, TokenSessionId, &observed->token_session, sizeof(observed->token_session), &bytes),
         "diagnostic-token-session");
-    ObserveNamespacePath(token, spec.capabilities.AppContainerSid, &observed->system_path);
-    if (ImpersonateLoggedOnUser(token)) {
+    ObserveNamespacePath(lowbox, &observed->system_path);
+    if (ImpersonateLoggedOnUser(private_primary)) {
       observed->private_impersonate = ERROR_SUCCESS;
-      ObserveNamespacePath(token, spec.capabilities.AppContainerSid, &observed->private_path);
+      ObserveNamespacePath(lowbox, &observed->private_path);
       if (!RevertToSelf()) std::abort();
     } else observed->private_impersonate = GetLastError();
     const bool private_valid = observed->private_path.validation == ERROR_SUCCESS;
@@ -574,7 +632,7 @@ void ObserveNamespace(HANDLE token, const storage::AuthorityLaunchSpec& spec, Na
       const Handle query = ObserveDirectoryOpen(open, directory.path, length, query_traverse, &directory.system_query);
       const Handle security = ObserveDirectoryOpen(open, directory.path, length, READ_CONTROL, &directory.system_security);
       if (security) directory.security = ObserveTokenObject(security.get(), spec.desktop_user);
-      if (!ImpersonateLoggedOnUser(token)) { directory.impersonate = GetLastError(); continue; }
+      if (!ImpersonateLoggedOnUser(private_primary)) { directory.impersonate = GetLastError(); continue; }
       directory.impersonate = ERROR_SUCCESS;
       {
         const Handle private_query = ObserveDirectoryOpen(open, directory.path, length, query_traverse, &directory.private_query);
@@ -583,7 +641,10 @@ void ObserveNamespace(HANDLE token, const storage::AuthorityLaunchSpec& spec, Na
       if (!RevertToSelf()) std::abort();
     }
     observed->status = ERROR_SUCCESS;
-  } catch (const Failure& failure) { observed->status = failure.status; }
+  } catch (const Failure& failure) {
+    observed->status = failure.status;
+    if (observed->token_validation == ERROR_NOT_READY) observed->token_validation = failure.status;
+  }
   catch (...) { observed->status = ERROR_NOT_ENOUGH_MEMORY; }
 }
 void ObserveEquivalentToken(HANDLE token, const storage::AuthorityLaunchSpec& spec, EquivalentTokenEvidence* observed) {
@@ -635,8 +696,9 @@ void ObserveEquivalentToken(HANDLE token, const storage::AuthorityLaunchSpec& sp
         "diagnostic-default-acl", ERROR_INVALID_ACL);
     TOKEN_DEFAULT_DACL defaults{acl};
     Require(SetTokenInformation(raw, TokenDefaultDacl, &defaults, sizeof(defaults)), "diagnostic-seal-default-dacl");
-    ObserveTokenPhase(raw, spec.desktop_user, spec.capabilities, wrapper, native, &observed->after);
-    ObserveNamespace(raw, spec, &observed->object_namespace);
+    Handle namespace_token;
+    ObserveTokenPhase(raw, spec.desktop_user, spec.capabilities, wrapper, native, &observed->after, &namespace_token);
+    ObserveNamespace(namespace_token.get(), raw, spec, &observed->object_namespace);
     observed->status = ERROR_SUCCESS;
     std::snprintf(observed->stage, sizeof(observed->stage), "%s", "complete");
   } catch (const Failure& failure) {
@@ -718,6 +780,8 @@ void PrintDirectoryCall(DWORD index, const char* operation, const DirectoryCallE
   }
 }
 void PrintNamespace(const NamespaceEvidence& observed) {
+  std::printf("Protected launch: namespace-query-source=diagnostic-native-lowbox package-argument=null token-validation-win32=%lu caller-contexts=system,legacy-private-primary\n",
+      static_cast<unsigned long>(observed.token_validation));
   std::printf("Protected launch: namespace-observation win32=%lu worker-session=%lu token-session=%lu private-impersonation-win32=%lu directory-export-win32=%lu source-private=%lu count=%lu\n",
       static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.worker_session),
       static_cast<unsigned long>(observed.token_session), static_cast<unsigned long>(observed.private_impersonate),
@@ -765,7 +829,7 @@ void PrintNamespace(const NamespaceEvidence& observed) {
 }
 void PrintEquivalentToken(const EquivalentTokenEvidence& observed) {
   if (!observed.attempted) return;
-  std::printf("Protected launch: post-failure-equivalent-token setup-stage=%s setup-win32=%lu wrapper-export-win32=%lu native-export-win32=%lu\n",
+  std::printf("Protected launch: post-failure-equivalent-token context=legacy-automatic-impersonation setup-stage=%s setup-win32=%lu wrapper-export-win32=%lu native-export-win32=%lu\n",
       observed.stage, static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.wrapper_export),
       static_cast<unsigned long>(observed.native_export));
   // These sequential observations may reuse objects initialized by the failed
@@ -777,6 +841,7 @@ void PrintEquivalentToken(const EquivalentTokenEvidence& observed) {
 Evidence RunSystem() {
   Evidence evidence;
   bool installed = false;
+  bool production_attempted = false;
   storage::ProtectedIdentityCleanup cleanup;
   std::unique_ptr<storage::ProtectedIdentity> identity;
   std::unique_ptr<storage::AuthorityLaunch> child;
@@ -888,6 +953,7 @@ Evidence RunSystem() {
     Require(storage::AuthorityLaunch::Create(identity->token(), shadowed, &child) == ERROR_INVALID_PARAMETER && !child,
         "deny-case-insensitive-environment-shadow", ERROR_INVALID_DATA);
     ObserveLaunchAccess(identity->token(), &evidence);
+    production_attempted = true;
     const DWORD created = storage::AuthorityLaunch::Create(identity->token(), spec, &child, &stage);
     if (created != ERROR_SUCCESS && std::strcmp(stage, "lowbox.create-token") == 0) {
       // The failed production object has already been destroyed. This is an
@@ -952,6 +1018,12 @@ Evidence RunSystem() {
   // is deleted only after this profile-calling process has itself exited.
   record_cleanup(cleanup.profile_error.load(), "recorded-profile-cleanup");
   record_cleanup(cleanup.privilege_restore_error, "restore-profile-privileges");
+  if (config.scm_profile_control || (production_attempted && evidence.status != ERROR_SUCCESS)) {
+    // This isolated comparison runs after the original worker cleanup. Its
+    // separate result cannot change either the production or cleanup verdict.
+    profile_control::ObserveScmProfileControl(config.image, config.directory,
+        config.worker_deadline, &evidence.scm_control);
+  }
   return evidence;
 }
 void Report(DWORD state, DWORD error = ERROR_SUCCESS) {
@@ -1021,13 +1093,14 @@ DWORD Guest(const wchar_t* profile) {
   }
   return written == 3 ? ERROR_SUCCESS : ERROR_WRITE_FAULT;
 }
-DWORD Controller() {
+DWORD Controller(bool explicit_scm_control) {
   DWORD result = ERROR_SUCCESS;
   Service service;
   Handle process;
   Handle job;
   std::wstring directory, image;
   bool own_directory = false;
+  profile_control::ScmProfileControlEvidence scm_control;
   try {
     BOOL admin = FALSE;
     BYTE admin_sid[SECURITY_MAX_SID_SIZE]{};
@@ -1076,13 +1149,17 @@ DWORD Controller() {
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     Require(SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)),
         "configure-desktop-job");
-    const std::wstring command = Quote(image) + L" --test-service " + name + L" " + std::to_wstring(session);
+    // Compute the single watchdog deadline before service startup and pass the
+    // same absolute value to the worker. No phase refreshes this ninety seconds.
+    const ULONGLONG deadline = GetTickCount64() + 90000;
+    std::wstring command = Quote(image) + L" --test-service " + name + L" " + std::to_wstring(session) +
+        L" " + std::to_wstring(deadline);
+    if (explicit_scm_control) command += L" --scm-profile-control";
     service.reset(CreateServiceW(manager.get(), name.c_str(), name.c_str(), SERVICE_START | SERVICE_STOP |
         SERVICE_QUERY_STATUS | DELETE, SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
         command.c_str(), nullptr, nullptr, nullptr, L"LocalSystem", nullptr));
     Require(!!service, "create-owned-system-service");
     Require(StartServiceW(service.get(), 0, nullptr), "start-owned-system-service");
-    const ULONGLONG deadline = GetTickCount64() + 90000;
     for (;;) {
       SERVICE_STATUS_PROCESS state{};
       DWORD bytes = 0;
@@ -1116,6 +1193,7 @@ DWORD Controller() {
     std::printf("Protected launch: stage=%s win32=%lu cleanup_win32=%lu cleanup_stage=%s\n", evidence.stage,
         static_cast<unsigned long>(evidence.status), static_cast<unsigned long>(evidence.cleanup), evidence.cleanup_stage);
     PrintEquivalentToken(evidence.equivalent);
+    scm_control = evidence.scm_control;
     result = evidence.status ? evidence.status : evidence.cleanup;
   } catch (const Failure& failure) {
     std::fprintf(stderr, "Protected launch: stage=%s win32=%lu\n", failure.stage, static_cast<unsigned long>(failure.status));
@@ -1154,9 +1232,11 @@ DWORD Controller() {
     process.reset();
   }
   bool job_empty = !job;
+  ULONGLONG control_cleanup_deadline = GetTickCount64();
   if (job) {
     if (!TerminateJobObject(job.get(), ERROR_OPERATION_ABORTED)) record_cleanup(GetLastError(), "terminate-desktop-job");
     const ULONGLONG deadline = GetTickCount64() + 10000;
+    control_cleanup_deadline = deadline;
     do {
       JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
       if (!QueryInformationJobObject(job.get(), JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr)) {
@@ -1167,6 +1247,36 @@ DWORD Controller() {
       Sleep(25);
     } while (GetTickCount64() < deadline);
     if (!job_empty) record_cleanup(ERROR_TIMEOUT, "wait-empty-desktop-job");
+  }
+  if (own_directory) {
+    // Control artifacts are a separate sibling. Their cleanup cannot change
+    // the original result or consume a new timeout. Wait for the exact worker
+    // object before inspecting its manifest, including the timeout path.
+    try {
+      if (worker_exit_verified) {
+        profile_control::CleanupScmProfileControl(image, directory,
+            control_cleanup_deadline, &scm_control);
+      } else {
+        const DWORD attributes = GetFileAttributesW((directory + L"-scm-control").c_str());
+        const DWORD error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_PROCESS_ABORTED;
+        if (attributes != INVALID_FILE_ATTRIBUTES || (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)) {
+          scm_control.cleanup_attempted = 1;
+          scm_control.cleanup_status = error;
+          scm_control.artifacts_retained = 1;
+          std::snprintf(scm_control.cleanup_stage, sizeof(scm_control.cleanup_stage), "%s", "unverified-primary-worker-exit");
+        }
+      }
+    } catch (...) {
+      scm_control.cleanup_attempted = 1;
+      scm_control.cleanup_status = ERROR_NOT_ENOUGH_MEMORY;
+      scm_control.artifacts_retained = 1;
+      std::snprintf(scm_control.cleanup_stage, sizeof(scm_control.cleanup_stage), "%s", "controller-control-allocation");
+    }
+  }
+  if (explicit_scm_control || scm_control.attempted || scm_control.artifacts_retained) {
+    std::printf("Protected SCM control: trigger=%s\n", explicit_scm_control ?
+        "explicit-opt-in" : "automatic-after-production-failure");
+    profile_control::PrintScmProfileControlEvidence(scm_control);
   }
   bool profile_cleanup_verified = true;
   if (own_directory && !worker_exit_verified) {
@@ -1209,11 +1319,15 @@ DWORD Controller() {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  DWORD control_exit = ERROR_INVALID_PARAMETER;
+  if (profile_control::DispatchScmProfileControlService(argc, argv, &control_exit)) return static_cast<int>(control_exit);
   if (argc == 2 && std::wstring_view(argv[1]) == L"runtime-identity") return storage::RunRuntimeIdentityService();
   if (argc == 4 && std::wstring_view(argv[1]) == L"--prepare-desktop") return static_cast<int>(storage::PrepareRuntimeDesktop(argv[2], argv[3]));
   if (argc == 3 && std::wstring_view(argv[1]) == L"--guest") return static_cast<int>(Guest(argv[2]));
-  if (argc == 4 && std::wstring_view(argv[1]) == L"--test-service") {
+  if ((argc == 5 || argc == 6) && std::wstring_view(argv[1]) == L"--test-service") {
     try {
+      Require(argc == 5 || std::wstring_view(argv[5]) == L"--scm-profile-control",
+          "test-control-argument", ERROR_INVALID_PARAMETER);
       config.image = Image();
       config.directory = config.image.substr(0, config.image.find_last_of(L'\\'));
       config.name = argv[2];
@@ -1221,9 +1335,16 @@ int wmain(int argc, wchar_t** argv) {
       const unsigned long session = std::wcstoul(argv[3], &end, 10);
       Require(session && session < MAXDWORD && end && !*end, "test-session-argument", ERROR_INVALID_PARAMETER);
       config.session = static_cast<DWORD>(session);
+      Require(DeadlineArgument(argv[4], &config.worker_deadline), "test-deadline-argument", ERROR_INVALID_PARAMETER);
+      const ULONGLONG now = GetTickCount64();
+      Require(config.worker_deadline > now && config.worker_deadline - now <= 90000,
+          "test-existing-worker-deadline", ERROR_INVALID_PARAMETER);
+      config.scm_profile_control = argc == 6;
       SERVICE_TABLE_ENTRYW entries[] = {{config.name.data(), ServiceMain}, {nullptr, nullptr}};
       return StartServiceCtrlDispatcherW(entries) ? 0 : static_cast<int>(GetLastError());
     } catch (...) { return 1; }
   }
-  return argc == 1 ? static_cast<int>(Controller()) : 2;
+  if (argc == 1) return static_cast<int>(Controller(false));
+  if (argc == 2 && std::wstring_view(argv[1]) == L"--scm-profile-control") return static_cast<int>(Controller(true));
+  return 2;
 }
