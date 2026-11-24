@@ -30,33 +30,49 @@ final class KeyBoundHello implements WindowsHelloBackend {
     @Override
     public Verification verify(Request request, Completion completion) {
         if (!mKeys.confirmsWithKey()) return mVerifier.verify(request, completion);
-        Chain chain = new Chain();
-        chain.set(mKeys.authorize(request, 0, result -> {
-            if (result != KeystoreAuthorization.NO_BINDING) {
-                completion.onResult(result);
-            } else if (!chain.set(mVerifier.verify(request, completion))) {
-                // Canceled in between: the verifier's completion reports it.
-            }
-        }));
+        Chain chain = new Chain(request, completion);
+        chain.start();
         return chain;
     }
 
     /** The verification in progress: the key's, then possibly the verifier's. */
-    private static final class Chain implements Verification {
+    private final class Chain implements Verification {
+        private final Request mRequest;
+        private final Completion mCompletion;
         private Verification mCurrent;
         private boolean mCanceled;
 
-        /** False when already canceled: {@code next} is canceled at once. */
-        synchronized boolean set(Verification next) {
-            mCurrent = next;
-            if (mCanceled) next.cancel();
-            return !mCanceled;
+        Chain(Request request, Completion completion) {
+            mRequest = request;
+            mCompletion = completion;
+        }
+
+        synchronized void start() {
+            // Publish the key's handle before its callback can start the verifier.
+            mCurrent = mKeys.authorize(mRequest, 0, this::keyFinished);
+        }
+
+        private void keyFinished(int result) {
+            synchronized (this) {
+                if (mCanceled) {
+                    result = CANCELED;
+                } else if (result == KeystoreAuthorization.NO_BINDING) {
+                    mCurrent = mVerifier.verify(mRequest, mCompletion);
+                    return;
+                }
+            }
+            mCompletion.onResult(result);
         }
 
         @Override
-        public synchronized void cancel() {
-            mCanceled = true;
-            if (mCurrent != null) mCurrent.cancel();
+        public void cancel() {
+            Verification current;
+            synchronized (this) {
+                if (mCanceled) return;
+                mCanceled = true;
+                current = mCurrent;
+            }
+            current.cancel();
         }
     }
 }
