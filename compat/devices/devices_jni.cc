@@ -172,6 +172,11 @@ jint WindowsCamera_read(JNIEnv* env, jclass, jlong handle, jbyteArray frame) {
   return static_cast<jint>(hr);
 }
 
+void WindowsCamera_close(JNIEnv*, jclass, jlong handle) {
+  delete reinterpret_cast<cam::Capture*>(handle);
+  LogCameraDeliveryTrace();
+}
+
 // Focus control (camera_mf.h's FocusOp): 0 or the failure's HRESULT; out[0..1] = the
 // lens position and the driver's flags afterwards.
 jint WindowsCamera_focus(JNIEnv* env, jclass, jlong handle, jint op, jintArray out) {
@@ -184,11 +189,6 @@ jint WindowsCamera_focus(JNIEnv* env, jclass, jlong handle, jint op, jintArray o
     env->SetIntArrayRegion(out, 0, 2, values);
   }
   return static_cast<jint>(hr);
-}
-
-void WindowsCamera_close(JNIEnv*, jclass, jlong handle) {
-  delete reinterpret_cast<cam::Capture*>(handle);
-  LogCameraDeliveryTrace();
 }
 
 const JNINativeMethod gWindowsCameraMethods[] = {
