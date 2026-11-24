@@ -1506,6 +1506,33 @@ jobs:
             throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
           }
           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
+          foreach ($ext in $bundleExtensions) {
+            if ((Get-ItemProperty "$cls\$ext").'(default)' -ne 'Gesher.Xapk') { throw "$ext default ProgID is missing" }
+            if ($null -eq (Get-ItemProperty "$cls\$ext\OpenWithProgids").'Gesher.Xapk') {
+              throw "$ext OpenWithProgids lacks Gesher.Xapk"
+            }
+          }
+          $bundleOpen = (Get-ItemProperty "$cls\Gesher.Xapk\shell\open\command").'(default)'
+          if ($bundleOpen -ne $open) { throw "Bundle open command differs from the APK command: $bundleOpen" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($ext in '.apkm', '.apk+') {
+            $bundle = Join-Path $env:RUNNER_TEMP "shell launch$ext"
+            $archive = [IO.Compression.ZipFile]::Open($bundle, 'Create')
+            try {
+              $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
+            } finally { $archive.Dispose() }
+            $psi.Arguments = '"{0}"' -f $bundle
+            $p = [Diagnostics.Process]::Start($psi)
+            $errors = $p.StandardError.ReadToEndAsync()
+            $out = $p.StandardOutput.ReadToEnd()
+            $p.WaitForExit()
+            $out += $errors.Result
+            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
+              throw "$ext open command failed (exit $($p.ExitCode)): $out"
+            }
+          }
+          'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
@@ -1849,6 +1876,13 @@ jobs:
           if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
           if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
           'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path "$cls\Gesher.Xapk") { throw 'Uninstall left the Gesher.Xapk ProgID' }
+          foreach ($ext in '.apks', '.xapk', '.apkm', '.apk+') {
+            if ((Get-ItemProperty "$cls\$ext" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Xapk' -or
+                $null -ne (Get-ItemProperty "$cls\$ext\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Xapk') {
+              throw "Uninstall left the Gesher bundle association for $ext"
+            }
+          }
           if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
           $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
           if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }

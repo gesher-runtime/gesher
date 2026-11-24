@@ -198,12 +198,16 @@ Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"
 ; gesher-launch.exe: no console window flashes (compat/shell/gesher_launch.cc).
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
-; Split APK bundles (.xapk, .apks: base.apk with its config.*.apk), the same way
-; as `.apk`, including per-file icons drawn from the base APK and resource splits.
+; Split APK bundles use the same integration as `.apk`, including per-file
+; icons drawn from the base APK and resource splits.
 Root: HKCU; Subkey: "Software\Classes\.xapk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.xapk')
 Root: HKCU; Subkey: "Software\Classes\.xapk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Classes\.apks"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.apks')
 Root: HKCU; Subkey: "Software\Classes\.apks\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\.apkm"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.apkm')
+Root: HKCU; Subkey: "Software\Classes\.apkm\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\.apk+"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.apk+')
+Root: HKCU; Subkey: "Software\Classes\.apk+\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_bundle}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"
@@ -254,7 +258,7 @@ begin
   Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
 end;
 
-// The same for a bundle extension (.xapk, .apks) and Gesher.Xapk.
+// The same for a bundle extension and Gesher.Xapk.
 function BundleUnclaimed(Ext: String): Boolean;
 var
   ProgId: String;
@@ -654,6 +658,8 @@ begin
     RemoveDefault(ApkKey, ApkProgId);
     RemoveDefault('Software\Classes\.xapk', BundleProgId);
     RemoveDefault('Software\Classes\.apks', BundleProgId);
+    RemoveDefault('Software\Classes\.apkm', BundleProgId);
+    RemoveDefault('Software\Classes\.apk+', BundleProgId);
     Path := PathEntries();
     Dir := ExpandConstant('{app}');
     if HasEntry(Path, Dir) then

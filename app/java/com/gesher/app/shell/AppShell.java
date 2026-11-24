@@ -708,7 +708,7 @@ public final class AppShell {
     private static final long APK_ICON_CACHE_GRACE_MS = 10 * 60_000L;
 
     /**
-     * {@code gesher-app apk-icon APK}, also accepting APKS/XAPK bundles, what the icon
+     * {@code gesher-app apk-icon APK}, also accepting split APK bundles, what the icon
      * handler runs for a file it has no
      * icon of (gesher_shellext.dll, in the background, at most twice at once): draws the
      * app's icon as {@link #registerQuietly} does, without installing the app, into
