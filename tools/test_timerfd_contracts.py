@@ -52,16 +52,31 @@ def main() -> int:
     # The new dispatcher is test infrastructure for an old-source control;
     # old timers never subscribe to it, so resume cannot secretly repair them.
     resume_source = (ROOT / "compat/posix/src/resume.cc").read_text()
+    owned_registry = "struct ObjectOwner {" in epoll
+    lookup_start = ("std::shared_ptr<ObjectOwner> Lookup(int fd)" if owned_registry
+                    else "bool Lookup(int fd, Object* object)")
+    # Compile the real owner, alias registry and retirement functions. Their
+    # weak epoll subscriptions require the actual state declarations too, even
+    # though this timer-only corpus never registers an epoll interest. Keep the
+    # old layout only when it is genuinely present in a --source-ref control.
+    object_state = section(epoll, "struct Epoll;\n", "struct EpollPollScratch {") if owned_registry else "struct Epoll {};"
+    object_operations = section(epoll, "std::shared_ptr<EventFd> LookupEventFd(",
+                                "int SampleVirtualEntries(EpollPollScratch& scratch, bool prepare_wait) {"
+                                if owned_registry else "bool IsNonBlocking(EventFd&")
+    object_operations += section(epoll, "bool IsNonBlocking(EventFd&",
+                                 "// Virtual registrations retire" if owned_registry else "// Linux drops an entry")
     replacements = {
         "RESUME_CORE": re.sub(r"^#include[^\n]*\n", "", resume_source, flags=re.M),
         "HAS_ANDROID_CLOCKS": str(int("#include <gesher/clocks.h>" in core)),
         "EVENT_FD": section(epoll, "struct EpollWakeChannels {" if "struct EpollWakeChannels {" in epoll
                             else "struct EventFd {", "namespace {\n\nstruct Epoll;"),
-        "OBJECT_REGISTRY": section(epoll, "struct Object {", "// Every live epoll"),
-        "OBJECT_LOOKUP": section(epoll, "bool Lookup(int fd, Object* object)", "std::shared_ptr<Epoll> LookupEpoll("),
-        "OBJECT_INSERT": section(epoll, "void Insert(int fd, Object object)", "int ReadEventFd("),
+        "OBJECT_STATE": object_state,
+        "OBJECT_REGISTRY": section(epoll, "struct Object {", lookup_start if owned_registry else "// Every live epoll"),
+        "OBJECT_LOOKUP": section(epoll, lookup_start, "std::shared_ptr<Epoll> LookupEpoll("),
+        "OBJECT_INSERT": section(epoll, "void NotifyAliasesLocked(" if owned_registry else "void Insert(int fd, Object object)",
+                                 "void ConfigureOwnerEntry(" if owned_registry else "int ReadEventFd("),
         "EVENT_IO": section(epoll, "int ReadEventFd(", "// epoll's event bits"),
-        "OBJECT_OPERATIONS": section(epoll, "std::shared_ptr<EventFd> LookupEventFd(", "// Linux drops an entry"),
+        "OBJECT_OPERATIONS": object_operations,
         "EVENT_CREATE": section(epoll, "int eventfd(unsigned int initval", "int eventfd_read("),
         "TIMER_CORE": timer_core,
         "TIMER_ADAPTER": section(bionic, "// --- timerfd ", "\n}  // namespace\n\nbool DispatchTimerfdSyscall"),

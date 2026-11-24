@@ -4,8 +4,10 @@
  */
 package com.gesher.camera;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
@@ -49,6 +51,7 @@ import java.util.List;
 public class CaptureActivity extends Activity {
     static final String EXTRA_AUTO_CAPTURE_MS = "com.gesher.camera.extra.AUTO_CAPTURE_MS";
     private static final int THUMBNAIL_WIDTH = 160;
+    private static final int REQUEST_CAMERA = 1;
 
     private final HandlerThread mThread = new HandlerThread("gesher-camera");
     private Handler mHandler;
@@ -58,7 +61,8 @@ public class CaptureActivity extends Activity {
     private CameraCaptureSession mSession;
     private ImageReader mPreviewReader;
     private ImageReader mStillReader;
-    private boolean mDone;
+    private volatile boolean mDone;
+    private boolean mCameraStarted;
     private long mLastShown;
 
     static void log(String message) {
@@ -88,6 +92,35 @@ public class CaptureActivity extends Activity {
         root.addView(buttons, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         setContentView(root);
 
+        requestCameraAccess();
+    }
+
+    private void requestCameraAccess() {
+        if (mDone || isFinishing() || isDestroyed()) return;
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.CAMERA}, REQUEST_CAMERA);
+            return;
+        }
+        startCamera();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQUEST_CAMERA || mDone || isFinishing() || isDestroyed()) return;
+        // Recheck the live grant as it may have been revoked while the result was queued.
+        if (permissions.length == 1 && Manifest.permission.CAMERA.equals(permissions[0])
+                && results.length == 1 && results[0] == PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            startCamera();
+        } else {
+            done(RESULT_CANCELED, null, "camera permission denied");
+        }
+    }
+
+    private void startCamera() {
+        if (mCameraStarted || mDone || isFinishing() || isDestroyed()) return;
+        mCameraStarted = true;
         mThread.start();
         mHandler = new Handler(mThread.getLooper());
         CameraManager cm = getSystemService(CameraManager.class);
@@ -225,6 +258,7 @@ public class CaptureActivity extends Activity {
         return v < 0 ? 0 : v > 255 ? 255 : v;
     }
     private void capture() {
+        if (mDone || mHandler == null) return;
         mHandler.post(() -> {
             if (mSession == null || mDone) {
                 if (!mDone) mMain.postDelayed(this::capture, 300);  // not open yet
@@ -297,10 +331,11 @@ public class CaptureActivity extends Activity {
                 "a " + w + "x" + h + " photo, returned as a " + tw + "x" + th + " thumbnail");
     }
 
-    private void done(int result, Intent data, String why) {
+    private synchronized void done(int result, Intent data, String why) {
+        if (mDone) return;
+        mDone = true;
         mMain.post(() -> {
-            if (mDone) return;
-            mDone = true;
+            if (isDestroyed()) return;
             log((result == RESULT_OK ? "done: " : "cancelled: ") + why);
             setResult(result, data);
             finish();
@@ -310,7 +345,8 @@ public class CaptureActivity extends Activity {
     @Override
     protected void onDestroy() {
         mDone = true;
-        mHandler.post(() -> {
+        mMain.removeCallbacksAndMessages(null);
+        if (mHandler != null) mHandler.post(() -> {
             if (mSession != null) mSession.close();
             if (mDevice != null) mDevice.close();
             if (mPreviewReader != null) mPreviewReader.close();

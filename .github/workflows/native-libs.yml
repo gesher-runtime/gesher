@@ -102,6 +102,10 @@ jobs:
           "$cc" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test26.so -o dist-native/fs_test26.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test29.so -o dist-native/fs_test29.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_late.so -o dist-native/fs_late.so tests/native/fs_late.c
+          # android_dlopen_ext (tests/native/dlext_test.c): the libraries it
+          # loads into reservations, in a directory of their own (arm64.yml
+          # builds the same names for arm64-v8a).
+          bash tests/native/build-dlext.sh "$cc29" dist-native/dlext
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong -fasynchronous-unwind-tables -Wall -Wextra -Werror -Wl,-soname,fs_partial_unwind.so -o dist-native/fs_partial_unwind.so tests/native/fs_partial_unwind.c
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all dist-native/fs_partial_unwind.so
           # Raw Linux system calls (`syscall` instructions) and code written
@@ -120,6 +124,10 @@ jobs:
           mkdir -p ndk-c-headers/android
           sed 's/const ARect& /const ARect* _Nonnull /g' "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/android/surface_control.h" > ndk-c-headers/android/surface_control.h
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android31-clang" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -I ndk-c-headers -Wl,-soname,libsurface_control_test.so -o dist-native/surface_control_test.so tests/native/surface_control_test.c -landroid -lEGL -lGLESv3 -ldl
+          # AHardwareBuffer_fromHardwareBuffer on an ImageReader image's HardwareBuffer
+          # (tests/dex-graphics/gesher/ImageReaderPrivateTest.java loads it).
+          # AHardwareBuffer_getId is API 31, so this one is built for 31 (as surface_control_test is).
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android31-clang" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libreader_buffer_test.so -o dist-native/reader_buffer_test.so tests/native/reader_buffer_test.c -landroid -lEGL -lGLESv2 -ldl
 
           # getenv results outlive setenv/putenv/unsetenv, as bionic's do.
           "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libenvironment_lifetime_test.so -o dist-native/environment_lifetime_test.so tests/native/environment_lifetime_test.c
