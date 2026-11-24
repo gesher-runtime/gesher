@@ -84,6 +84,22 @@ final class AppDataStorage {
         this.metadata = metadata;
     }
 
+    /**
+     * Give a package Gesher describes without an APK (no {@link ApkPackage}) the data
+     * areas an installed package of that name has under {@code $ANDROID_DATA}, as
+     * ApkPackage.applicationInfo does, and its default native library directory.
+     * Nothing is created: another app that opens such a package's context finds no
+     * writable private directory, as it does for any other package on Android, and
+     * never reaches a path outside the device's data root.
+     */
+    static void describeInstalled(android.content.pm.ApplicationInfo ai) {
+        AppDataStorage storage = installed(new File(Device.dataDir()), ai.packageName);
+        ai.dataDir = storage.credential.toString();
+        ai.credentialProtectedDataDir = ai.dataDir;
+        ai.deviceProtectedDataDir = storage.device.toString();
+        ai.nativeLibraryDir = ai.dataDir + "/lib";
+    }
+
     static AppDataStorage installed(File dataRoot, String packageName) {
         if (packageName == null
                 || !packageName.matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+")) {
