@@ -141,9 +141,27 @@ public final class Launcher {
                     return text("install_bad_split_signature", detail);
                 case "INSTALL_FAILED_MISSING_SPLIT":
                     return text("install_missing_split", detail);
-                case "INSTALL_FAILED_NO_MATCHING_ABIS":
+                case "INSTALL_FAILED_NO_MATCHING_ABIS": {
+                    // Installer includes the filename and ZIP entry ABI names in its
+                    // diagnostic. Either can contain our delimiters: translate the
+                    // structured form only when the boundary is unambiguous.
+                    String marker = " has native code only for ";
+                    int hasNative = detail.indexOf(marker);
+                    int supported = detail.lastIndexOf("; Gesher runs ");
+                    if (hasNative > 0 && hasNative == detail.lastIndexOf(marker)
+                            && supported > hasNative + marker.length()) {
+                        String name = detail.substring(0, hasNative);
+                        String abis = detail.substring(hasNative + marker.length(), supported);
+                        if (abis.matches("[A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*")) {
+                            return text("install_no_matching_abis", name, abis);
+                        }
+                    }
+                    // A missing or unfamiliar detail does not establish a filename,
+                    // an ABI, or its bitness. Preserve it without inventing any.
+                    return text("install_no_matching_abis_details", detail.isEmpty() ? code : detail);
+                }
                 case "INSTALL_FAILED_BAD_DEX_METADATA":
-                    // Their text already says what is wrong.
+                    // Its text already says what is wrong.
                     return detail.isEmpty() ? code : detail;
                 default:
                     // Others name only the package or file: the code says what failed.
