@@ -35,6 +35,11 @@ namespace gesher::devices::speech_recognition {
 // SAPI's own HRESULTs that this file reports (sperror.h).
 constexpr HRESULT kSpErrNotFound = static_cast<HRESULT>(0x8004503AL);  // SPERR_NOT_FOUND
 
+// Keep the native allocation bounded even when a caller bypasses the Java limit.
+// RecognizerIntent.EXTRA_MAX_RESULTS is a maximum; fewer real alternatives are valid.
+// Keep in sync with WindowsSpeechRecognition.MAX_ALTERNATES.
+constexpr int kMaxAlternates = 64;
+
 // One installed SAPI recognizer token.
 struct Recognizer {
   std::wstring token_id;
