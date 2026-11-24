@@ -1,0 +1,96 @@
+name: Service native diagnostics
+
+on:
+  push:
+    branches: [palmoni5/qa-service-diagnostics-20261124]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Reviewed native services (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    steps:
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Check out reviewed printing snapshot
+        if: ${{ !cancelled() }}
+        uses: actions/checkout@v4
+        with:
+          repository: gesher-runtime/gesher
+          ref: 0bfde120327a476263c6887e53a86a6402caed78
+          path: printing
+          persist-credentials: false
+          sparse-checkout: |
+            compat/print
+            compat/devices
+            tests/print
+      - name: Build actual Windows printer contracts with runtime GDI flags
+        if: ${{ !cancelled() }}
+        working-directory: printing
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /Icompat\devices compat\print\print_win32.cc compat\devices\winrt.cc tests\print\print_windows_test.cc /Fe:print-windows-test.exe winspool.lib comdlg32.lib gdi32.lib user32.lib ole32.lib
+      - name: Print a generated PDF and exercise cancellation without user input
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        working-directory: printing
+        shell: pwsh
+        run: |
+          & .\print-windows-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows print host contracts failed' }
+
+      - name: Check out reviewed speech recognition snapshot
+        if: ${{ !cancelled() }}
+        uses: actions/checkout@v4
+        with:
+          repository: gesher-runtime/gesher
+          ref: 484f6f3f40d68d8086b5519d79300113e3ebc869
+          path: speech
+          persist-credentials: false
+          sparse-checkout: |
+            compat/devices
+            tests/speech
+      - name: Build actual Windows speech recognition contracts with host CI flags
+        if: ${{ !cancelled() }}
+        working-directory: speech
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\speech\speech_recognition_windows_test.cc compat\devices\speech_recognition_win.cc /Fe:speech-recognition-windows.exe ole32.lib uuid.lib
+      - name: Exercise real SAPI with handed-over PCM and no microphone
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        working-directory: speech
+        shell: pwsh
+        run: |
+          & .\speech-recognition-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech recognition contracts failed' }
+
+      - name: Check out reviewed intent-handler snapshot
+        if: ${{ !cancelled() }}
+        uses: actions/checkout@v4
+        with:
+          repository: gesher-runtime/gesher
+          ref: 6141ce8a5bd5476dd029fbbff9cba24b82b399d0
+          path: intents
+          persist-credentials: false
+          sparse-checkout: |
+            compat/devsvc
+            tests/uri-handlers
+      - name: Build actual Windows associations and dialing confirmation contracts
+        if: ${{ !cancelled() }}
+        working-directory: intents
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\url_handlers_win.cc tests\uri-handlers\url_handlers_windows_test.cc /Fe:url-handlers-test.exe shlwapi.lib shell32.lib advapi32.lib user32.lib
+      - name: Exercise real associations and automatically dismiss dialing dialogs
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        working-directory: intents
+        shell: pwsh
+        run: |
+          & .\url-handlers-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'URI scheme handler lookup checks failed' }
