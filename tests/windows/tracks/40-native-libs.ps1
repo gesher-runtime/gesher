@@ -201,6 +201,10 @@ Check 'bionic shim: creat and creat64 create or truncate a write-only file' {
   & "$Dir/bionic_creat_test.exe"
 } @('bionic_creat_test all passed')
 
+Check 'bionic shim: libstdc++.so operator new/delete and static-init guards' {
+  & "$Dir/bionic_libstdcxx_test.exe"
+} @('bionic_libstdcxx_test all passed')
+
 Check 'bionic shim: shared CRT stream ownership and wide stdio' {
   & "$Dir/bionic_stdio_contract_test.exe"
 } @('bionic_stdio_contract_test all passed')

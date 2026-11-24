@@ -37,6 +37,7 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -45,6 +46,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace gesher::bionic {
@@ -1037,6 +1039,73 @@ int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
   return 0;
 }
 
+// --- libstdc++.so -----------------------------------------------------------
+// Android's libstdc++.so exports (bionic/libc/libstdc++.map.txt, LP64 names):
+// operator new and delete over malloc and free (bionic/libc/bionic/new.cpp),
+// the static-initialisation guards and __cxa_pure_virtual. A library linked
+// against it (DT_NEEDED libstdc++.so, issue #480: Dreame's libemgmo.so) gets
+// these; before, operator new was an unresolved stub that returned null.
+
+[[noreturn]] void OperatorNewFailed(const char* form, size_t n) {
+  std::fprintf(stderr, "gesher bionic: %s failed to allocate %zu bytes\n", form, n);
+  Abort();
+}
+void* BIONIC_SYSV OperatorNew(size_t n) {
+  void* p = Malloc(n);
+  if (p == nullptr) OperatorNewFailed("new", n);
+  return p;
+}
+void* BIONIC_SYSV OperatorNewArray(size_t n) {
+  void* p = Malloc(n);
+  if (p == nullptr) OperatorNewFailed("new[]", n);
+  return p;
+}
+// std::nothrow: an empty object, of which only the address is used.
+char g_std_nothrow = 0;
+void* BIONIC_SYSV OperatorNewNothrow(size_t n, const void*) { return Malloc(n); }
+void BIONIC_SYSV OperatorDelete(void* p) { Free(p); }
+void BIONIC_SYSV OperatorDeleteNothrow(void* p, const void*) { Free(p); }
+
+// The Itanium guard (64 bits on LP64, x86-64 and arm64 alike): compiled code
+// reads its first byte with acquire semantics and calls __cxa_guard_acquire
+// only while it is 0. One thread runs the initialiser; the others wait for
+// its release (first byte 1) or abort (the next one runs it). Bionic does not
+// detect a recursive initialisation either: it waits, as here.
+std::mutex g_guard_mutex;
+std::condition_variable g_guard_done;
+std::unordered_set<const void*> g_guard_pending;
+
+int BIONIC_SYSV CxaGuardAcquire(uint64_t* guard) {
+  auto* complete = reinterpret_cast<uint8_t*>(guard);
+  if (__atomic_load_n(complete, __ATOMIC_ACQUIRE) != 0) return 0;
+  std::unique_lock<std::mutex> lock(g_guard_mutex);
+  g_guard_done.wait(lock, [&] { return g_guard_pending.count(guard) == 0; });
+  if (__atomic_load_n(complete, __ATOMIC_ACQUIRE) != 0) return 0;
+  g_guard_pending.insert(guard);
+  return 1;
+}
+void BIONIC_SYSV CxaGuardRelease(uint64_t* guard) {
+  {
+    std::lock_guard<std::mutex> lock(g_guard_mutex);
+    __atomic_store_n(reinterpret_cast<uint8_t*>(guard), 1, __ATOMIC_RELEASE);
+    g_guard_pending.erase(guard);
+  }
+  g_guard_done.notify_all();
+}
+void BIONIC_SYSV CxaGuardAbort(uint64_t* guard) {
+  {
+    std::lock_guard<std::mutex> lock(g_guard_mutex);
+    g_guard_pending.erase(guard);
+  }
+  g_guard_done.notify_all();
+}
+
+[[noreturn]] void BIONIC_SYSV CxaPureVirtual() {
+  std::fprintf(stderr, "gesher bionic: Pure virtual function called. "
+                       "Are you calling virtual methods from a destructor?\n");
+  Abort();
+}
+
 // --- libdl (through the ELF loader) ----------------------------------------
 
 thread_local std::string t_dlerror;
@@ -1594,6 +1663,20 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("__cxa_atexit", CxaAtexit);
   ENTRY("__cxa_finalize", CxaFinalize);
   ENTRY("atexit", Atexit);
+  // libstdc++.so.
+  ENTRY("_Znwm", OperatorNew);
+  ENTRY("_Znam", OperatorNewArray);
+  ENTRY("_ZnwmRKSt9nothrow_t", OperatorNewNothrow);
+  ENTRY("_ZnamRKSt9nothrow_t", OperatorNewNothrow);
+  ENTRY("_ZdlPv", OperatorDelete);
+  ENTRY("_ZdaPv", OperatorDelete);
+  ENTRY("_ZdlPvRKSt9nothrow_t", OperatorDeleteNothrow);
+  ENTRY("_ZdaPvRKSt9nothrow_t", OperatorDeleteNothrow);
+  ENTRY("__cxa_guard_acquire", CxaGuardAcquire);
+  ENTRY("__cxa_guard_release", CxaGuardRelease);
+  ENTRY("__cxa_guard_abort", CxaGuardAbort);
+  ENTRY("__cxa_pure_virtual", CxaPureVirtual);
+  ENTRY("_ZSt7nothrow", &g_std_nothrow);
   ENTRY("__tls_get_addr", TlsGetAddr);
   ENTRY("__gcov_dump", GcovStub);
   ENTRY("__gcov_flush", GcovStub);

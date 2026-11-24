@@ -274,6 +274,12 @@ add_executable(bionic_creat_test tests/native/bionic_creat_test.cc)
 target_compile_options(bionic_creat_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(bionic_creat_test PRIVATE gesher_bionic gesher_elf)
 
+# Android's libstdc++.so exports (operator new/delete, guards) through the
+# actual Bionic shim (issue #480).
+add_executable(bionic_libstdcxx_test tests/native/bionic_libstdcxx_test.cc)
+target_compile_options(bionic_libstdcxx_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(bionic_libstdcxx_test PRIVATE gesher_bionic gesher_elf)
+
 # Real Bionic stream locks and wide I/O through the exported FILE APIs.
 add_executable(bionic_stdio_contract_test tests/native/bionic_stdio_contract_test.cc)
 target_compile_options(bionic_stdio_contract_test PRIVATE -Wall -Wextra -Werror)
