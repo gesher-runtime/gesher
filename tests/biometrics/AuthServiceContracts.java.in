@@ -594,7 +594,12 @@ class RemoteException extends Exception {
     private static final long serialVersionUID = 1L;
 }
 
+// StandIn's extension signatures mention Parcel; auth has no extension transactions.
+final class Parcel {
+}
+
 interface IBinder {
+    int FIRST_CALL_TRANSACTION = 1;
     interface DeathRecipient { void binderDied(); }
     void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException;
     boolean unlinkToDeath(DeathRecipient recipient, int flags);
