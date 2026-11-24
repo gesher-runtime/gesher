@@ -427,6 +427,77 @@ public final class AccountSecurityTest {
         System.out.println("AccountSecurityTest: stand-in accounts ignore and preserve device records; persistent service remains fail-closed");
     }
 
+    /**
+     * AccountManager.getPreviousName needs no permission or authenticator signature: any
+     * client that can see the account reads it, a hidden or missing account answers null.
+     */
+    private static void previousName() throws Exception {
+        String previous = System.getenv("ANDROID_DATA");
+        File temporary = Files.createTempDirectory("gesher-account-previous-name-").toFile();
+        try {
+            android.system.Os.setenv("ANDROID_DATA", temporary.getAbsolutePath(), true);
+            Class<?> service = Class.forName("com.gesher.server.AccountManagerService");
+            Class<?> pm = Class.forName("com.gesher.server.PackageManagerService");
+            Class<?> am = Class.forName("com.gesher.server.ActivityManagerService");
+            Object packages = pm.getConstructor(java.util.Collection.class).newInstance(Collections.emptyList());
+            Object manager = construct(service, new Class<?>[] {am, pm, boolean.class}, null, packages, false);
+            IAccountManager binder = (IAccountManager) manager;
+            Class<?> entry = Class.forName(service.getName() + "$Entry");
+            Class<?> caller = Class.forName(service.getName() + "$Caller");
+            Class<?>[] callerArguments = {String.class, String.class, boolean.class, int.class, int.class};
+            Object owner = construct(caller, callerArguments, "test.owner", "cert:original", false, 11000, 100);
+            Object client = construct(caller, callerArguments, "test.client", "cert:client", false, 11001, 101);
+            Object replacement = construct(caller, callerArguments, "test.client", "cert:new", false, 11001, 102);
+            Object record = construct(entry, new Class<?>[0]);
+            field(record, "owner", "test.owner"); field(record, "ownerIdentity", "cert:original");
+            @SuppressWarnings("unchecked") Map<String, Integer> grants = (Map<String, Integer>) field(record, "visibility");
+            String clientKey = (String) method(caller, "key").invoke(client);
+            grants.put(clientKey, AccountManager.VISIBILITY_VISIBLE);
+            @SuppressWarnings("unchecked") Map<Account, Object> accounts = (Map<Account, Object>) field(manager, "mAccounts");
+            Account original = new Account("before-rename@example.test", "test.type");
+            Account renamed = new Account("after-rename@example.test", "test.type");
+            accounts.put(original, record);
+            Method read = method(service, "previousName", caller, Account.class);
+            require(read.invoke(manager, client, original) == null, "A never-renamed account reported a previous name");
+
+            // The production rename path, run by this in-process (system) caller.
+            List<Bundle> results = new ArrayList<>();
+            binder.renameAccount(new IAccountManagerResponse.Stub() {
+                @Override public void onResult(Bundle value) { results.add(value); }
+                @Override public void onError(int code, String message) { throw new AssertionError(message); }
+            }, original, renamed.name);
+            require(results.size() == 1 && renamed.name.equals(results.get(0).getString(AccountManager.KEY_ACCOUNT_NAME)),
+                    "Rename did not complete");
+            require(original.name.equals(binder.getPreviousName(renamed)), "Service caller lost the previous name");
+            require(original.name.equals(read.invoke(manager, owner, renamed)), "Authenticator lost the previous name");
+            require(original.name.equals(read.invoke(manager, client, renamed)),
+                    "A non-owner client that sees the account was denied its previous name");
+            grants.put(clientKey, AccountManager.VISIBILITY_USER_MANAGED_VISIBLE);
+            require(original.name.equals(read.invoke(manager, client, renamed)),
+                    "A user-managed visible client was denied the previous name");
+            grants.put(clientKey, AccountManager.VISIBILITY_NOT_VISIBLE);
+            require(read.invoke(manager, client, renamed) == null, "A hidden account disclosed its previous name");
+            grants.put(clientKey, AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE);
+            require(read.invoke(manager, client, renamed) == null,
+                    "A user-managed hidden account disclosed its previous name");
+            grants.put(clientKey, AccountManager.VISIBILITY_VISIBLE);
+            require(read.invoke(manager, replacement, renamed) == null,
+                    "A replaced client signer inherited the previous name");
+            require(read.invoke(manager, client, original) == null, "The old account name still resolved");
+            Account missing = new Account("missing@example.test", "test.type");
+            require(read.invoke(manager, client, missing) == null && binder.getPreviousName(missing) == null,
+                    "A missing account reported a previous name");
+            try {
+                binder.getPreviousName(null);
+                throw new AssertionError("A null account was accepted");
+            } catch (NullPointerException expected) { }
+        } finally {
+            if (previous == null) android.system.Os.unsetenv("ANDROID_DATA");
+            else android.system.Os.setenv("ANDROID_DATA", previous, true);
+        }
+        System.out.println("AccountSecurityTest: previous name reaches every client that sees the account; hidden, re-signed or missing accounts answer null without SecurityException");
+    }
+
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         if (args.length > 0 && args[0].equals("grant-probe")) {
@@ -443,7 +514,7 @@ public final class AccountSecurityTest {
         else if (args.length > 0 && args[0].equals("remote-denied")) remoteDenied(args);
         else if (args.length > 0 && args[0].equals("crypto-denied")) cryptoDenied();
         else if (args.length > 0 && args[0].equals("standin-storage")) standinStorage();
-        else policy();
+        else { policy(); previousName(); }
         System.out.println("AccountSecurityTest all passed");
     }
 }

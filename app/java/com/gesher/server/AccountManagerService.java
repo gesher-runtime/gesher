@@ -944,9 +944,20 @@ public final class AccountManagerService extends IAccountManager.Default {
         result.putString(AccountManager.KEY_ACCOUNT_TYPE, renamed.type); reply(response, result);
     }
 
+    /** Android requires no permission or authenticator signature to read a previous name. */
     @Override
-    public synchronized String getPreviousName(Account account) {
-        Entry e = mAccounts.get(account); requireOwner(caller(null), e);
+    public String getPreviousName(Account account) {
+        java.util.Objects.requireNonNull(account, "account cannot be null");
+        return previousName(caller(null), account);
+    }
+
+    /**
+     * Any client that can see the account reads its previous name. An account hidden from
+     * the client is not disclosed here either, as getAccounts and getAccountsByType do not.
+     */
+    private synchronized String previousName(Caller c, Account account) {
+        Entry e = mAccounts.get(account);
+        if (e == null || !visible(c, account, e)) return null;
         return e.data.get("gesher.previousAccountName");
     }
 
