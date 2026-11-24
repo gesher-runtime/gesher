@@ -262,6 +262,10 @@ public final class MediaStoreHost {
         check("1".equals(pending.get("is_pending")) && expires.equals(pending.get("date_expires")),
                 "IS_PENDING=1 and DATE_EXPIRES=now+7d");
         check("com.example.camera".equals(pending.get("owner_package_name")), "owner is the inserting package");
+        check(camera.pkg.equals(index.ownerOf(new File(pending.get("_data")))),
+                "internal ownership lookup includes pending rows without caller filtering");
+        check(index.ownerOf(new File(volume, "not-indexed")) == null,
+                "internal ownership lookup distinguishes an absent media row");
         check("Pictures/Gesher/".equals(pending.get("relative_path")), "relative_path normalized to Pictures/Gesher/");
         check("external_primary".equals(pending.get("volume_name")), "volume_name external_primary");
         check("sunset.png".equals(pending.get("_display_name")), "display name without the pending prefix");
@@ -454,14 +458,23 @@ public final class MediaStoreHost {
         // ---- 6. delete ----------------------------------------------------------------------
         File dupFile = new File(rows(index.query(camera, dupUri, null, args())).get(0).get("_data"));
         write(dupFile, png(1, 1));
+        long beforeDelete = index.generation("external_primary");
         check(index.delete(camera, dupUri, args()) == 1 && !dupFile.exists(), "owner delete removes row and file");
+        check(index.generation("external_primary") > beforeDelete,
+                "deleting an item advances the generation used by gallery synchronization");
         check(rows(index.query(camera, dupUri, null, args())).isEmpty(), "deleted row is gone");
+        long afterDelete = index.generation("external_primary");
+        check(index.delete(camera, IMAGES, args("_id=?", new String[] {Long.toString(ContentUris.parseId(dupUri))}, null)) == 0
+                && index.generation("external_primary") == afterDelete,
+                "a delete matching no rows does not invent a new media change");
         check(index.delete(legacy, Uri.parse(IMAGES + "/" + ContentUris.parseId(noExtUri)), args()) == 1,
                 "a legacy writer deletes another app's image");
         ContentValues trash = new ContentValues();
         trash.put("is_trashed", 1);
         check(index.update(camera, photo, trash, args()) == 1, "the owner trashes its item");
         Map<String, String> trashedRow = rows(index.query(camera, photo, null, args())).get(0);
+        check(camera.pkg.equals(index.ownerOf(new File(trashedRow.get("_data")))),
+                "internal ownership lookup includes trashed rows without caller filtering");
         check(new File(trashedRow.get("_data")).getName().startsWith(".trashed-") && !finalFile.exists()
                 && rows(index.query(camera, IMAGES, null, args("_id=?", new String[] {Long.toString(photoId)}, null))).isEmpty(),
                 "a trashed item is renamed .trashed-<expires>-<name> and leaves default queries");
@@ -514,8 +527,11 @@ public final class MediaStoreHost {
         write(outside, jpeg(8, 8, false));
         check(index.scanFile(outside) == null, "files outside the shared volume are not indexed");
         check(index.scanFile(new File(volume, "Music/missing.mp3")) == null, "a missing file scans to null");
+        long beforeScanDelete = index.generation("external_primary");
         check(shot.delete() && index.scanFile(shot) == null
                 && rows(index.query(system, scanned, null, args())).isEmpty(), "scanning a deleted file forgets it");
+        check(index.generation("external_primary") > beforeScanDelete,
+                "scanner cleanup advances generation for the deleted row");
         pass("media: MediaScannerConnection.scanFile / ACTION_MEDIA_SCANNER_SCAN_FILE indexes a file written to "
                 + "the shared volume with its real metadata, no owner, invisible/hidden/.nomedia rules, and forgets deleted files");
 
@@ -585,6 +601,7 @@ public final class MediaStoreHost {
         own.put("relative_path", "Android/media/com.example.camera/");
         Uri ownUri = restarted.insert(camera, IMAGES, own);
         check(ownMedia.isDirectory(), "an app may place items in its Android/media directory");
+        long beforeOrphan = restarted.generation("external_primary");
         restarted.packageOrphaned("com.example.camera");
         check(rows(restarted.query(camera, photo, null, args())).isEmpty()
                 && rows(restarted.query(gallery, photo, null, args())).size() == 1
@@ -592,11 +609,42 @@ public final class MediaStoreHost {
                 "a removed package's published media stays, without an owner");
         check(rows(restarted.query(system, ownUri, null, args())).isEmpty(),
                 "Android/media rows whose file is gone are deleted");
+        check(restarted.generation("external_primary") > beforeOrphan,
+                "removing an absent package-media row advances generation");
+        App formerOwner = new App("com.example.former", 10201, 35);
+        Uri orphanOnly = ownedPng(restarted, formerOwner, "Pictures/", "orphan-only.png");
+        long beforeOrphanOnly = restarted.generation("external_primary");
+        int beforeOrphanNotifications = host.notified.size();
+        restarted.packageOrphaned(formerOwner.pkg);
+        Map<String, String> orphanOnlyRow = rows(restarted.query(system, orphanOnly, null, args())).get(0);
+        check(restarted.ownerOf(new File(orphanOnlyRow.get("_data"))) == null,
+                "internal ownership lookup returns null for a retained ownerless row");
+        check(restarted.generation("external_primary") > beforeOrphanOnly
+                && Long.parseLong(orphanOnlyRow.get("generation_modified")) > beforeOrphanOnly
+                && orphanOnlyRow.get("owner_package_name") == null && host.notified.size() > beforeOrphanNotifications,
+                "orphaning retained media advances both generations and notifies observers");
         check(restarted.deleteExpired() == 0 && draftFile.exists(), "unexpired pending items stay");
         clock.now += 8L * 24 * 3600 * 1000;
+        long beforeExpiry = restarted.generation("external_primary");
         check(restarted.deleteExpired() == 1 && !draftFile.exists()
                 && rows(restarted.query(system, draft, null, args())).isEmpty(),
                 "an orphaned pending item is deleted with its file once DATE_EXPIRES passed");
+        check(restarted.generation("external_primary") > beforeExpiry,
+                "expiring a pending item advances generation");
+        ContentValues oldDraftValues = new ContentValues();
+        oldDraftValues.put("_display_name", "old-clock.png");
+        oldDraftValues.put("is_pending", 1);
+        oldDraftValues.put("date_expires", clock.now / 1000 - 14L * 24 * 3600);
+        Uri oldDraft = restarted.insert(camera, IMAGES, oldDraftValues);
+        File oldDraftFile = new File(dataOf(restarted, camera, oldDraft));
+        write(oldDraftFile, png(2, 2));
+        long beforeExtension = restarted.generation("external_primary");
+        check(restarted.deleteExpired() == 0, "extending an old expiry is not counted as deletion");
+        Map<String, String> extendedRow = rows(restarted.query(system, oldDraft, null, pendingArgs())).get(0);
+        check(restarted.generation("external_primary") > beforeExtension
+                && Long.parseLong(extendedRow.get("generation_modified")) > beforeExtension
+                && !oldDraftFile.exists() && new File(extendedRow.get("_data")).isFile(),
+                "extending an old pending item updates its path and both generations");
         pass("media: package removal orphans published media and drops missing Android/media rows; "
                 + "expired pending items (and their files) are deleted");
 
@@ -668,6 +716,7 @@ public final class MediaStoreHost {
         File crashExpiring = new File(dataOf(restarted, system, crashExpire));
         write(crashExpiring, png(4, 4));
         File crashDir = new File(volume, "Pictures/Crash");
+        long beforeRecovery = restarted.generation("external_primary");
         reopened.close();
 
         check(crash("rename", dbFile, volume, journal, clock.now, crashRename) == MediaStoreCrashChild.HALTED
@@ -698,9 +747,26 @@ public final class MediaStoreHost {
                 "after the restart the row whose file was already deleted is gone, as the scanner's reconcile does");
         check(rows(recovered.query(system, crashExpire, null, pendingArgs())).isEmpty(),
                 "after the restart the expired item whose file was already deleted is gone");
+        check(recovered.generation("external_primary") > beforeRecovery,
+                "crash recovery publishes a new generation for the deleted rows");
         check(journalEntries(journal) == 0, "recovery consumes the journal");
         pass("media: a system server killed between a file move/delete and the SQLite commit (rename, "
                 + "pending -> published, delete, expiry) restarts with every row and file consistent");
+
+        Uri failedDelete = ownedPng(recovered, camera, "Pictures/Crash", "failed-delete.png");
+        long beforeFailedDelete = recovered.generation("external_primary");
+        recoveredDb.execSQL("CREATE TEMP TRIGGER fail_generation BEFORE UPDATE ON local_metadata "
+                + "BEGIN SELECT RAISE(ABORT, 'generation write failed'); END");
+        expect(android.database.sqlite.SQLiteException.class,
+                () -> recovered.delete(camera, failedDelete, args()), "failed generation write aborts deletion");
+        check(recovered.generation("external_primary") == beforeFailedDelete
+                && rows(recovered.query(system, failedDelete, null, args())).size() == 1,
+                "row deletion and generation roll back together when the database write fails");
+        recoveredDb.execSQL("DROP TRIGGER fail_generation");
+        MediaStoreIndex recoveredFailure = new MediaStoreIndex(recoveredDb, host);
+        check(rows(recoveredFailure.query(system, failedDelete, null, args())).isEmpty()
+                && recoveredFailure.generation("external_primary") > beforeFailedDelete,
+                "a later journal recovery commits the removed file's row and generation together");
 
         recoveredDb.close();
         System.out.println("media: " + sChecks + " checks passed");
