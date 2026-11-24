@@ -3,11 +3,15 @@
 // needs none of hardware_buffer.h's EGL/GL headers. Implemented in
 // compat/bionic/hardware_buffer.cc, linked into dalvikvm only.
 //
-// A reader keeps a small pool of these buffers and writes each frame into one
-// that nothing else holds, so the buffers (and their AHardwareBuffer_getId) repeat
-// across frames and an app's per-id texture caches keep hitting. Every holder
-// (an Image, a Java HardwareBuffer, an EGLImage) owns a reference; the pool
-// writes only into a buffer it alone references.
+// A reader keeps a pool of these buffers and writes each frame into one that no
+// Image, Java HardwareBuffer or app reference holds, so the buffers (and their
+// AHardwareBuffer_getId) repeat across frames and an app's per-id texture caches
+// keep hitting. As on Android, where a BufferQueue slot is rewritten once its
+// Image is closed even if a consumer still maps it, a buffer whose only other
+// references are the app's EGLImages is reused too. The new pixels reach the
+// GPU form (the texture those EGLImages share) when a consumer next takes the
+// buffer (FlushRgbaToGpu, from Image.getHardwareBuffer), on the GPU thread in
+// order with the compositor, not for frames that are dropped.
 #pragma once
 
 #include <stdint.h>
@@ -15,18 +19,21 @@
 namespace gesher::bionic::ahb {
 
 // A new buffer, one reference (the caller's); GPU_SAMPLED_IMAGE | CPU_READ_OFTEN
-// usage, rows of width * 4 bytes. Null when it cannot be allocated.
+// usage, or CPU_READ_OFTEN alone (logged once) when there is no GPU form to give,
+// rows of width * 4 bytes. Null only when memory runs out.
 void* AllocateRgbaBuffer(uint32_t width, uint32_t height);
 void RetainRgbaBuffer(void* buffer);
 void ReleaseRgbaBuffer(void* buffer);
-// Only the caller holds a reference (so the buffer may be written).
+// Only the caller holds a reference.
 bool RgbaBufferUnshared(void* buffer);
+// Nothing but the caller (the pool) and EGLImages of it hold references: it may be written.
+bool RgbaBufferReusable(void* buffer);
 // The CPU memory (width * height * 4 bytes).
 uint8_t* RgbaBufferPixels(void* buffer);
-// After the CPU wrote RgbaBufferPixels: the buffer's GPU form, if it has one,
-// is brought up to date before this returns; otherwise it is made from the
-// memory when first used.
-void PublishRgbaWrite(void* buffer);
+// The CPU wrote RgbaBufferPixels: the GPU form, if any, is older until FlushRgbaToGpu.
+void MarkRgbaWritten(void* buffer);
+// Brings an existing GPU form up to date with the memory (before an app samples it).
+void FlushRgbaToGpu(void* buffer);
 // AHardwareBuffer_getId and the usage AHardwareBuffer_describe reports.
 uint64_t RgbaBufferId(void* buffer);
 uint64_t RgbaBufferUsage(void* buffer);

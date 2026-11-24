@@ -1008,6 +1008,14 @@ void* AllocateRgbaBuffer(uint32_t width, uint32_t height) {
   desc.layers = 1;
   desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
   desc.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+  if (!Served(&desc)) {
+    // No GPU device (ANGLE/Direct3D 11 unavailable) or a size it cannot take: the
+    // reader still delivers frames, in a CPU-only buffer that an app's
+    // eglCreateImageKHR refuses cleanly (no GPU usage).
+    static std::atomic<bool> said{false};
+    LogOnce(&said, "no GPU form for ImageReader buffers: they are CPU-only");
+    desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+  }
   AHardwareBuffer* app = nullptr;
   if (Allocate(&desc, &app) != 0) return nullptr;
   return app;  // stride == width (Allocate)
@@ -1018,21 +1026,36 @@ void ReleaseRgbaBuffer(void* buffer) { Release(FromApp(buffer)); }
 bool RgbaBufferUnshared(void* buffer) {
   return FromApp(buffer)->refs.load(std::memory_order_acquire) == 1;
 }
+bool RgbaBufferReusable(void* buffer) {
+  Buffer* b = FromApp(buffer);
+  std::lock_guard<std::mutex> lock(b->mutex);
+  // The pool's own reference and the EGLImages' (each holds one, counted in
+  // app_images) do not keep a buffer: as on Android, where a slot is rewritten
+  // once its Image is closed, whatever consumers still map it.
+  return b->refs.load(std::memory_order_acquire) - b->app_images == 1;
+}
 uint8_t* RgbaBufferPixels(void* buffer) { return FromApp(buffer)->data; }
 uint64_t RgbaBufferId(void* buffer) { return FromApp(buffer)->id; }
 uint64_t RgbaBufferUsage(void* buffer) { return FromApp(buffer)->desc.usage; }
 
-void PublishRgbaWrite(void* buffer) {
+void MarkRgbaWritten(void* buffer) {
   Buffer* b = FromApp(buffer);
-  bool has_texture;
+  std::lock_guard<std::mutex> lock(b->mutex);
+  b->memory_newer = true;
+}
+
+void FlushRgbaToGpu(void* buffer) {
+  Buffer* b = FromApp(buffer);
+  bool upload;
   {
     std::lock_guard<std::mutex> lock(b->mutex);
-    has_texture = b->has_texture;
-    if (!has_texture) b->memory_newer = true;
+    upload = b->has_texture && b->memory_newer;
+    if (upload) b->memory_newer = false;
   }
-  // As AHardwareBuffer_unlock after a CPU write: an existing texture (an app's
-  // EGLImage of it) gets the new pixels before this returns.
-  if (has_texture)
+  // A texture made before (an app's EGLImage of this buffer) gets the new pixels
+  // here, on the GPU thread in order with the compositor. Without a texture the
+  // memory is uploaded when one is first made (EnsureTexture).
+  if (upload)
     gpu::Thread::Get()->Run([&] {
       UploadRect(b, ARect{0, 0, static_cast<int32_t>(b->desc.width), static_cast<int32_t>(b->desc.height)});
     });

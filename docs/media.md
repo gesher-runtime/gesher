@@ -13,17 +13,29 @@ Its images report the reader's PRIVATE format and have no CPU planes
 (`getPlanes()` is empty, as Android's). Their pixels are RGBA whatever
 produced them: a drawn frame, a camera frame (converted from NV12) or a
 decoder's output (a decoder renders to the reader's native window, so it
-arrives as a Surface frame). The reader keeps a small pool of RGBA
-AHardwareBuffers and writes each frame into one nothing else references, so
-the buffers, and their `AHardwareBuffer_getId`s, repeat across frames (an
-app's per-id texture caches keep hitting) and a buffer held by an Image, a
-`HardwareBuffer` or an EGLImage is never overwritten; a busy pool grows.
+arrives as a Surface frame). The reader keeps a pool of RGBA AHardwareBuffers
+and writes each frame into the first one that no Image, `HardwareBuffer` or
+other app reference holds, so the buffers, and their `AHardwareBuffer_getId`s,
+repeat across frames and an app's per-id texture caches keep hitting; a pool
+whose buffers are all held grows (and is trimmed past twice `maxImages` + 2).
+As on Android, where a BufferQueue slot is rewritten once its Image is closed
+even while a consumer still maps it, a buffer whose only other references are
+the app's EGLImages is reused. Its new pixels reach the texture those EGLImages
+share when the app next takes the image (`Image.getHardwareBuffer()`), on the
+GPU thread in order with the compositor, so frames that are dropped cost no
+upload. Without a GPU device (ANGLE/Direct3D 11 unavailable) the buffers are
+CPU-only (logged once; `eglCreateImageKHR` refuses them) and readers work as
+before; if even that allocation fails a frame stays in process memory and has
+no HardwareBuffer. `discardFreeBuffers()` lets go of the buffers nothing holds.
 `Image.getHardwareBuffer()` wraps the image's pooled buffer, holding a
 reference (`HardwareBuffer.getId()`/`getUsage()` agree with
 `AHardwareBuffer_getId`/`describe`); `Bitmap.wrapHardwareBuffer()` converts it
 to an immutable software bitmap that remains drawable after the image or buffer
 closes. `Image.getFence()` is the empty fence (the image is complete when
-queued); `SyncFence`'s natives work over Gesher's native fences. This supports
+queued); `SyncFence`'s natives work over Gesher's native fences (an
+`eglDupNativeFenceFDANDROID` descriptor): `isValid`, `awaitForever` and `await`
+are real, `getSignalTime` is `SIGNAL_TIME_PENDING` while pending and
+`SIGNAL_TIME_INVALID` once signaled, since the fence records no time. This supports
 Flutter's platform-view display path without changing the application's APK.
 An NDK library imports a buffer with `AHardwareBuffer_fromHardwareBuffer`
 (`compat/bionic/hardware_buffer_java.cc`): the image's pooled AHardwareBuffer

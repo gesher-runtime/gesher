@@ -115,35 +115,51 @@ struct Reader {
   bool closed = false;
   std::shared_ptr<gesher::media::ReaderSurface> producer;
   // RGBA buffers frames are written into (a reference each, the pool's own). A
-  // frame goes into one nothing else references, so the buffers, and their ids,
-  // repeat; a busy pool grows, and its oldest entries are let go past maxImages + 2.
+  // frame goes into the first one that only EGLImages (and the pool) still
+  // reference, so the buffers, and their ids, repeat; a pool whose buffers are
+  // all held by Images grows, and its oldest entries are let go past twice
+  // maxImages (the queue and the acquired images) + 2.
   std::vector<void*> pool;
 };
 
 // A pooled buffer for the next RGBA frame of `r`, with a reference for the
-// caller (an Image); null once the reader is closed or when none can be made.
+// caller (an Image); null once the reader is closed, or when memory runs out
+// (the caller then keeps the frame in process memory). A new buffer is made
+// outside the reader's lock: the first one may start the GPU thread.
 void* AcquireRgbaBuffer(const std::shared_ptr<Reader>& r) {
   using namespace gesher::bionic::ahb;
+  {
+    std::lock_guard<std::mutex> lock(r->mutex);
+    if (r->closed) return nullptr;
+    for (void* candidate : r->pool) {
+      if (RgbaBufferReusable(candidate)) {
+        RetainRgbaBuffer(candidate);
+        return candidate;
+      }
+    }
+  }
+  void* fresh = AllocateRgbaBuffer(r->width, r->height);
+  if (fresh == nullptr) return nullptr;
   std::lock_guard<std::mutex> lock(r->mutex);
-  if (r->closed) return nullptr;
-  void* buffer = nullptr;
-  for (void* candidate : r->pool) {
-    if (RgbaBufferUnshared(candidate)) {
-      buffer = candidate;
-      break;
-    }
+  if (r->closed) {
+    ReleaseRgbaBuffer(fresh);
+    return nullptr;
   }
-  if (buffer == nullptr) {
-    buffer = AllocateRgbaBuffer(r->width, r->height);
-    if (buffer == nullptr) return nullptr;
-    r->pool.push_back(buffer);
-    while (static_cast<int>(r->pool.size()) > r->maxImages + 2) {
-      ReleaseRgbaBuffer(r->pool.front());  // its holders keep it alive
-      r->pool.erase(r->pool.begin());
-    }
+  r->pool.push_back(fresh);
+  while (static_cast<int>(r->pool.size()) > 2 * r->maxImages + 2) {
+    ReleaseRgbaBuffer(r->pool.front());  // its holders keep it alive
+    r->pool.erase(r->pool.begin());
   }
-  RetainRgbaBuffer(buffer);
-  return buffer;
+  RetainRgbaBuffer(fresh);
+  return fresh;
+}
+
+// Where an RGBA frame of `r` goes: a pooled buffer, else process memory.
+uint8_t* RgbaStorage(const std::shared_ptr<Reader>& r, Image* image) {
+  image->rgba = AcquireRgbaBuffer(r);
+  if (image->rgba != nullptr) return image->bytes();
+  image->data.resize(static_cast<size_t>(r->width) * r->height * 4);
+  return image->data.data();
 }
 
 struct {
@@ -221,19 +237,13 @@ void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
   bool attached = gIr.vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_EDETACHED;
   if (attached && gIr.vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK) return;
   if (env == nullptr) return;
-  void* buffer = AcquireRgbaBuffer(r);
-  if (buffer == nullptr) {
-    if (attached) gIr.vm->DetachCurrentThread();
-    return;
-  }
   auto* image = new Image();
-  image->rgba = buffer;
   image->width = r->width;
   image->height = r->height;
   image->timestampNs = timestamp;
   image->dataSpace = r->dataSpace;
   image->halFormat = r->halFormat;
-  auto* output = reinterpret_cast<uint32_t*>(image->bytes());
+  auto* output = reinterpret_cast<uint32_t*>(RgbaStorage(r, image));
   if (width == r->width && height == r->height) {
     memcpy(output, pixels, static_cast<size_t>(width) * height * 4);
   } else {
@@ -241,7 +251,7 @@ void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
       for (int x = 0; x < r->width; x++)
         output[static_cast<size_t>(y) * r->width + x] = pixels[static_cast<size_t>(y * height / r->height) * width + x * width / r->width];
   }
-  gesher::bionic::ahb::PublishRgbaWrite(buffer);
+  if (image->rgba != nullptr) gesher::bionic::ahb::MarkRgbaWritten(image->rgba);
   image->planes.push_back({0, static_cast<size_t>(r->width) * r->height * 4, r->width * 4, 4});
   EnqueueImage(env, r, image);
   if (attached) gIr.vm->DetachCurrentThread();
@@ -360,7 +370,20 @@ jint ImageReader_detachImage(JNIEnv* env, jobject, jobject, jboolean) {
   return -1;
 }
 
-void ImageReader_discardFreeBuffers(JNIEnv*, jobject) {}
+// Lets go of the pooled buffers nothing references (no Image, HardwareBuffer or EGLImage).
+void ImageReader_discardFreeBuffers(JNIEnv* env, jobject thiz) {
+  auto r = ReaderOf(env, thiz);
+  if (r == nullptr) return;
+  std::lock_guard<std::mutex> lock(r->mutex);
+  for (auto it = r->pool.begin(); it != r->pool.end();) {
+    if (gesher::bionic::ahb::RgbaBufferUnshared(*it)) {
+      gesher::bionic::ahb::ReleaseRgbaBuffer(*it);
+      it = r->pool.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
 
 jobjectArray ImageReader_createImagePlanes(JNIEnv* env, jclass, jint, jobject, jint, jint, jint,
                                            jint, jint, jint) {
@@ -414,6 +437,9 @@ jobject Image_getHardwareBuffer(JNIEnv* env, jobject thiz) {
   // Only RGBA pixels (drawn into the Surface, or a camera or decoder frame converted
   // to RGBA) can be handed out; a YUV or JPEG image has no such buffer.
   if (image == nullptr || image->rgba == nullptr) return nullptr;
+  // An existing GPU form (an EGLImage the app kept from an earlier frame in this
+  // buffer) takes this frame's pixels now, when the app asks for the image.
+  gesher::bionic::ahb::FlushRgbaToGpu(image->rgba);
   return gesher::media::ReaderHardwareBuffer(env, image->rgba, image->width, image->height);
 }
 
@@ -489,13 +515,8 @@ int QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv1
   } else if (r->halFormat == kHalRgba8888 || r->halFormat == kHalPrivate) {
     // RGBA, and PRIVATE too: a GPU-sampled reader's images are sampled as RGBA
     // (getHardwareBuffer); a PRIVATE image has no visible planes.
-    i->rgba = AcquireRgbaBuffer(r);
-    if (i->rgba == nullptr) {
-      delete i;
-      return NO_INIT;
-    }
-    Nv12ToRgba(nv12, w, h, i->bytes(), tw, tw, th);
-    gesher::bionic::ahb::PublishRgbaWrite(i->rgba);
+    Nv12ToRgba(nv12, w, h, RgbaStorage(r, i), tw, tw, th);
+    if (i->rgba != nullptr) gesher::bionic::ahb::MarkRgbaWritten(i->rgba);
     i->planes.push_back({0, static_cast<size_t>(tw) * th * 4, tw * 4, 4});
   } else {
     // YUV_420_888: I420.
@@ -569,14 +590,10 @@ int QueueVideoFrame(JNIEnv* env, const std::shared_ptr<Reader>& r,
   image->halFormat = r->halFormat;
   const int tw = r->width, th = r->height;
   if (r->halFormat == kHalRgba8888 || r->halFormat == kHalPrivate) {
-    image->rgba = AcquireRgbaBuffer(r);
-    if (image->rgba == nullptr) {
-      delete image;
-      return NO_INIT;
-    }
+    uint8_t* const rgba = RgbaStorage(r, image);
     for (int ty = 0; ty < th; ++ty) {
       const int sy = static_cast<int>(static_cast<int64_t>(ty) * h / th);
-      uint8_t* row = image->bytes() + static_cast<size_t>(ty) * tw * 4;
+      uint8_t* row = rgba + static_cast<size_t>(ty) * tw * 4;
       for (int tx = 0; tx < tw; ++tx) {
         const int sx = static_cast<int>(static_cast<int64_t>(tx) * w / tw);
         const int c = y[static_cast<size_t>(sy) * frame.stride_y + sx] - 16;
@@ -588,7 +605,7 @@ int QueueVideoFrame(JNIEnv* env, const std::shared_ptr<Reader>& r,
         row[tx * 4 + 3] = 255;
       }
     }
-    gesher::bionic::ahb::PublishRgbaWrite(image->rgba);
+    if (image->rgba != nullptr) gesher::bionic::ahb::MarkRgbaWritten(image->rgba);
     image->planes.push_back({0, static_cast<size_t>(tw) * th * 4, tw * 4, 4});
   } else {
     const size_t y_size = static_cast<size_t>(tw) * th;

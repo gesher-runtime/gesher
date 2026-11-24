@@ -17,6 +17,7 @@ import android.opengl.EGLSurface;
 import android.opengl.GLES20;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.ParcelFileDescriptor;
 import android.view.Surface;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
@@ -36,13 +37,16 @@ public final class ImageReaderPrivateTest {
     private static final int RED = 0xff0000ff, GREEN = 0xff00ff00, BLUE = 0xffff0000;
 
     private static native int nativeInspect(HardwareBuffer buffer, int[] probes, int[] out);
+    private static native int nativeFenceFd();
 
     private static final int[] PROBES = {4, 4, 28, 4, 4, 20, 28, 20};
     // Indexes of nativeInspect's result.
     private static final int STATUS = 0, WIDTH = 1, HEIGHT = 2, FORMAT = 3, USAGE = 4, SAME = 5,
-            IMAGE = 6, ID_LO = 7, ID_HI = 8, USAGE_HI = 9, GL = 10, PIXELS = 11;
-    // nativeInspect's result: the fixed values, then the CPU pixels and the GL pixels of PROBES.
-    private static final int RESULT = PIXELS + PROBES.length;
+            IMAGE = 6, ID_LO = 7, ID_HI = 8, USAGE_HI = 9, GL_2D = 10, GL_EXT = 11, PIXELS = 12;
+    private static final int N = PROBES.length / 2;
+    // nativeInspect's result: the fixed values, then the CPU, GL_TEXTURE_2D and
+    // GL_TEXTURE_EXTERNAL_OES pixels of PROBES.
+    private static final int RESULT = PIXELS + 3 * N;
 
     static void check(boolean value, String label) {
         if (!value) throw new AssertionError(label);
@@ -90,11 +94,14 @@ public final class ImageReaderPrivateTest {
                         + Integer.toHexString(out[PIXELS + i]) + " is 0x" + Integer.toHexString(expect[i]));
             if (gl) {
                 check(out[IMAGE] == 1, label + ": eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) of the buffer");
-                check(out[GL] == 1, label + ": the EGLImage binds to a texture that a framebuffer reads");
-                for (int i = 0; i < expect.length; i++)
-                    check(out[PIXELS + PROBES.length / 2 + i] == expect[i], label + ": texture pixel " + i + " 0x"
-                            + Integer.toHexString(out[PIXELS + PROBES.length / 2 + i]) + " is 0x"
-                            + Integer.toHexString(expect[i]));
+                check(out[GL_2D] == 1, label + ": the EGLImage binds to a GL_TEXTURE_2D that a framebuffer reads");
+                check(out[GL_EXT] == 1, label + ": a samplerExternalOES shader samples the EGLImage");
+                for (int i = 0; i < expect.length; i++) {
+                    check(out[PIXELS + N + i] == expect[i], label + ": texture pixel " + i + " 0x"
+                            + Integer.toHexString(out[PIXELS + N + i]) + " is 0x" + Integer.toHexString(expect[i]));
+                    check(out[PIXELS + 2 * N + i] == expect[i], label + ": external-sampled pixel " + i + " 0x"
+                            + Integer.toHexString(out[PIXELS + 2 * N + i]) + " is 0x" + Integer.toHexString(expect[i]));
+                }
             }
         }
     }
@@ -143,13 +150,29 @@ public final class ImageReaderPrivateTest {
                 check(nativeInspect(held, PROBES, out) == 0 && out[PIXELS] == RED
                         && out[PIXELS + 1] == BLUE, "the buffer outlives its image");
                 latch[0] = new CountDownLatch(1);
-                canvas = reader.getSurface().lockCanvas(null);
+                canvas = reader.getSurface().lockHardwareCanvas();
                 canvas.drawColor(Color.GREEN);
                 reader.getSurface().unlockCanvasAndPost(canvas);
-                image = next(reader, latch[0], "lockCanvas");
-                inspect(image, new int[] {GREEN, GREEN, GREEN, GREEN}, false, "lockCanvas");
+                image = next(reader, latch[0], "second hardware frame");
+                inspect(image, new int[] {GREEN, GREEN, GREEN, GREEN}, false, "second hardware frame");
                 check(nativeInspect(held, PROBES, out) == 0 && out[PIXELS] == RED,
                         "the earlier buffer still holds its own frame");
+                image.close();
+                held.close();
+                check(nativeInspect(held, PROBES, out) != 0,
+                        "a closed HardwareBuffer is not imported");
+            }
+
+            // --- software Canvas (a Surface does not mix it with lockHardwareCanvas) ----
+            try (ImageReader reader = privateReader(2)) {
+                CountDownLatch[] latch = {new CountDownLatch(1)};
+                reader.setOnImageAvailableListener(r -> latch[0].countDown(), handler);
+                Canvas canvas = reader.getSurface().lockCanvas(null);
+                canvas.drawColor(Color.RED);
+                reader.getSurface().unlockCanvasAndPost(canvas);
+                Image image = next(reader, latch[0], "lockCanvas");
+                inspect(image, new int[] {RED, RED, RED, RED}, false, "lockCanvas");
+                HardwareBuffer held = image.getHardwareBuffer();
                 image.close();
                 long heldId = held.getId();
                 // Buffers repeat across frames, but a held one is never overwritten.
@@ -166,11 +189,10 @@ public final class ImageReaderPrivateTest {
                     }
                 }
                 check(ids.size() <= 3, "buffer ids repeat across frames (" + ids.size() + " distinct in 8)");
+                int[] out = new int[RESULT];
                 check(nativeInspect(held, PROBES, out) == 0 && out[PIXELS] == RED,
                         "the held buffer kept its frame while others were drawn");
                 held.close();
-                check(nativeInspect(held, PROBES, out) != 0,
-                        "a closed HardwareBuffer is not imported");
             }
 
             // --- EGL producer, as the platform-view render target draws ---------------
@@ -193,12 +215,44 @@ public final class ImageReaderPrivateTest {
                         reader.getSurface(), new int[] {EGL14.EGL_NONE}, 0);
                 check(surface != EGL14.EGL_NO_SURFACE, "EGL window surface on the PRIVATE reader");
                 check(EGL14.eglMakeCurrent(display, surface, surface, context), "EGL make current");
+                // An asymmetric frame, so a flip or a red/blue swap shows: blue, with
+                // GL's bottom-left quadrant (the image's bottom-left) red. PROBES are the
+                // image's top-left, top-right, bottom-left and bottom-right.
                 GLES20.glViewport(0, 0, W, H);
-                GLES20.glClearColor(0f, 1f, 0f, 1f);
+                GLES20.glClearColor(0f, 0f, 1f, 1f);
                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
+                GLES20.glScissor(0, 0, W / 2, H / 2);
+                GLES20.glClearColor(1f, 0f, 0f, 1f);
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
                 check(EGL14.eglSwapBuffers(display, surface), "EGL swap into the PRIVATE reader");
                 Image image = next(reader, latch, "EGL");
-                inspect(image, new int[] {GREEN, GREEN, GREEN, GREEN}, true, "EGL");
+                inspect(image, new int[] {BLUE, BLUE, RED, BLUE}, true, "EGL quadrant");
+                image.close();
+                // The next frame (in the same pooled buffer, whose texture exists by now):
+                // the red quadrant moves to the top-right and the new pixels reach the GPU.
+                CountDownLatch second = new CountDownLatch(1);
+                reader.setOnImageAvailableListener(r -> second.countDown(), handler);
+                GLES20.glClearColor(0f, 1f, 0f, 1f);
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
+                GLES20.glScissor(W / 2, H / 2, W / 2, H / 2);
+                GLES20.glClearColor(1f, 0f, 0f, 1f);
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+                check(EGL14.eglSwapBuffers(display, surface), "second EGL swap");
+                image = next(reader, second, "EGL second frame");
+                inspect(image, new int[] {GREEN, RED, GREEN, GREEN}, true, "EGL second frame");
+                // A descriptor-backed SyncFence over a native fence of this display.
+                int fd = nativeFenceFd();
+                check(fd >= 0, "a native fence descriptor from eglDupNativeFenceFDANDROID");
+                try (SyncFence fence = SyncFence.create(ParcelFileDescriptor.adoptFd(fd))) {
+                    check(fence.isValid(), "a descriptor-backed SyncFence is valid");
+                    check(fence.awaitForever(), "it signals");
+                    check(fence.getSignalTime() == SyncFence.SIGNAL_TIME_INVALID,
+                            "a signaled fence has no recorded signal time");
+                }
                 image.close();
                 EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE,
                         EGL14.EGL_NO_CONTEXT);
