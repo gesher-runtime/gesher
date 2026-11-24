@@ -452,6 +452,32 @@ public final class SurfaceParcelTest {
         require(memfds() == own, "the consumer kept " + (memfds() - own) + " frame descriptors");
         say("six frames through one memfd the producer reuses; the consumer keeps no descriptor");
 
+        // Keep one writable image acquired while the real remote producer
+        // reuses its transport buffer for another frame. Each image must own
+        // its snapshot until the consumer explicitly closes it.
+        draw(producer, 1, Color.RED, Color.BLUE);
+        try (Image held = reader.acquireNextImage()) {
+            require(held != null, "the held snapshot did not reach the ImageReader");
+            long heldTimestamp = held.getTimestamp();
+            require(differing(held, Color.RED, Color.BLUE) == 0,
+                    "the held snapshot initially has wrong pixels");
+            draw(producer, 1, Color.GREEN, Color.WHITE);
+            try (Image newer = reader.acquireNextImage()) {
+                require(newer != null, "the second snapshot did not reach the ImageReader");
+                require(differing(newer, Color.GREEN, Color.WHITE) == 0,
+                        "the newer snapshot has wrong pixels");
+                require(differing(held, Color.RED, Color.BLUE) == 0
+                                && held.getTimestamp() == heldTimestamp,
+                        "producer reuse changed an acquired snapshot");
+            }
+            require(differing(held, Color.RED, Color.BLUE) == 0
+                            && held.getTimestamp() == heldTimestamp,
+                    "releasing the newer image changed the held snapshot");
+        }
+        require(producerMemfds(producer) == baseline + 1 && memfds() == own,
+                "holding and releasing two snapshots leaked frame descriptors");
+        say("acquired RGBA snapshots survive remote producer reuse and independent release");
+
         attached = attach(producer, 1, readerSurface);
         require(attached.kept, "readFromParcel of the same consumer replaced the producer's Surface");
         Surface back = returned(producer, 1);

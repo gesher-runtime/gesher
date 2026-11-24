@@ -181,9 +181,15 @@ void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
   image->halFormat = r->halFormat;
   image->data.resize(static_cast<size_t>(r->width) * r->height * 4);
   auto* output = reinterpret_cast<uint32_t*>(image->data.data());
-  for (int y = 0; y < r->height; y++)
-    for (int x = 0; x < r->width; x++)
-      output[static_cast<size_t>(y) * r->width + x] = pixels[static_cast<size_t>(y * height / r->height) * width + x * width / r->width];
+  if (width == r->width && height == r->height && !image->data.empty()) {
+    // QueueSurface publishes packed RGBA. Equal extents need no coordinate
+    // remapping; the acquired image still owns a separate, writable snapshot.
+    memcpy(image->data.data(), pixels, image->data.size());
+  } else {
+    for (int y = 0; y < r->height; y++)
+      for (int x = 0; x < r->width; x++)
+        output[static_cast<size_t>(y) * r->width + x] = pixels[static_cast<size_t>(y * height / r->height) * width + x * width / r->width];
+  }
   image->planes.push_back({0, image->data.size(), r->width * 4, 4});
   EnqueueImage(env, r, image);
   if (attached) gIr.vm->DetachCurrentThread();
