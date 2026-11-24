@@ -318,8 +318,10 @@ long form).
 User-supplied paths are not rewritten: the APK given to `gesher-app` (`install`,
 `launch`, a double-clicked APK or split APK bundle) and the dex given to `gesher`
 are passed in long form (`UserPath`), so the installer still sees the real file
-name, recognizes APK bundles by their suffix and finds a `.dm` file
-beside the APK.
+name and finds a `.dm` file beside the APK. Whether a file is an APK or a
+bundle is decided by its content, not its suffix: an APK has
+`AndroidManifest.xml` at its root, a bundle is a ZIP of `.apk` files. A single
+APK saved as `.xapk` installs as that APK.
 
 Limitations:
 

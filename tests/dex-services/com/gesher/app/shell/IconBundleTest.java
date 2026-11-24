@@ -168,7 +168,23 @@ public final class IconBundleTest {
         tooMany[0] = "base.apk";
         for (int i = 1; i < tooMany.length; i++) tooMany[i] = "config." + i + ".apk";
         zip(bad, tooMany); rejects(bad);
-        Files.write(bad.toPath(), new byte[] {1, 2, 3}); rejects(bad);
+        // Content, not the suffix, makes a bundle: these are single APK inputs.
+        Files.write(bad.toPath(), new byte[] {1, 2, 3});
+        try (Inputs single = Inputs.open(bad)) {
+            check(single.paths.length == 1 && single.base.equals(bad.getAbsolutePath()),
+                    "a file that is not a ZIP is read as an APK, not a bundle");
+        }
+        File plainXapk = new File(output, "plain.xapk");
+        Files.copy(full.toPath(), plainXapk.toPath());
+        try (Inputs single = Inputs.open(plainXapk)) {
+            check(single.paths.length == 1 && single.base.equals(plainXapk.getAbsolutePath()),
+                    "an APK saved as .xapk is read as the APK it is");
+        }
+        check(color(ico(plainXapk, new File(output, "plain.xapk.ico"))) == red, "APK named .xapk draws its icon");
+        File bundleApk = new File(output, "icon-bundle-saved-as.apk");
+        Files.copy(new File(fixtures, "icon-bundle.xapk").toPath(), bundleApk.toPath());
+        check(color(bundleIco(bundleApk, new File(output, "bundle-as-apk.ico"))) == red,
+                "a bundle saved as .apk is read as the bundle it is");
         File temporary;
         try (Inputs inputs = Inputs.open(nested)) {
             temporary = new File(inputs.base).getParentFile();

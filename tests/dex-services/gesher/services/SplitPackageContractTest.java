@@ -298,6 +298,12 @@ public final class SplitPackageContractTest {
             result = (String[]) install.invoke(installer, equivalent.getPath());
             require("unchanged".equals(result[1]), extension + " changed identical installed APKs");
         }
+        // The content, not the suffix, decides: a lone base APK saved as .xapk is that APK.
+        File plainNamedBundle = new File(data, "base-only.xapk");
+        Files.write(plainNamedBundle.toPath(), inputs.get("base"));
+        result = (String[]) install.invoke(installer, plainNamedBundle.getPath());
+        require("unchanged".equals(result[1]), "A base APK saved as .xapk was not installed as that APK");
+        metadata(pm.get(PACKAGE));
         Map<String, byte[]> arbitraryNames = new LinkedHashMap<>();
         arbitraryNames.put("apks/display.apk", inputs.get("entry"));
         arbitraryNames.put("apks/assets.apk", inputs.get("core"));

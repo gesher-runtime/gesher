@@ -1,0 +1,33 @@
+name: Package bundle contracts
+
+on:
+  pull_request:
+    paths:
+      - 'app/java/com/gesher/app/PackageBundles.java'
+      - 'tests/package/PackageBundlesTest.java'
+      - 'tools/test_package_bundles.py'
+      - '.github/workflows/package-bundle-contracts.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/java/com/gesher/app/PackageBundles.java'
+      - 'tests/package/PackageBundlesTest.java'
+      - 'tools/test_package_bundles.py'
+      - '.github/workflows/package-bundle-contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Classify and select the APKs of real bundle archives
+        run: python3 tools/test_package_bundles.py
