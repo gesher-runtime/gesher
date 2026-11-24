@@ -230,6 +230,11 @@ void PruneArtShimDirectories(const std::string& dir, const std::string& keep,
     stale.push_back(it->path());
   }
   for (const fs::path& sub : stale) {
+    // Another process may have started using it since the listing (it marks
+    // the directory used before loading from it): look again just before.
+    std::error_code time_error;
+    const auto written = fs::last_write_time(sub, time_error);
+    if (time_error || fs::file_time_type::clock::now() - written < min_age) continue;
     // A file another process has mapped cannot be deleted (Windows): it and
     // its directory stay, to be pruned by a later process.
     std::error_code ignored;

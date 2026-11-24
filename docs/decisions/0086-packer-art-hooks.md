@@ -65,8 +65,9 @@ no symbol.
   (once; a process that has an older one mapped keeps it) and loads it with
   the ELF loader. After loading, it removes the directories of other images
   of its kind (and the 32-bit names used before) that have been untouched
-  for a day; a file another process still has mapped is not deleted, and its
-  directory stays. It exports only the `LoadClass` symbol, a System V function that
+  for a day (looked at again just before each is removed: another process
+  marks a directory used before loading from it); a file another process
+  still has mapped is not deleted, and its directory stays. It exports only the `LoadClass` symbol, a System V function that
   does nothing: a normal prologue, two 8-byte NOPs and the epilogue. An inline
   hook can displace the first 14 bytes (or 5) on whole, position-independent
   instructions.
