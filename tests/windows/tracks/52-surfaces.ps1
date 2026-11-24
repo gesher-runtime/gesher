@@ -87,6 +87,37 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   try {
+  # Diagnostic observations never select a window, retry a capture, or change a verdict.
+  # Retain at most 128 events and 128 Ki characters of the already-read combined log.
+  $trace = [ordered]@{ Schema = 1; Tag = $Tag; Prefix = $Prefix; Phases = $Phases;
+    WrapperPid = $p.Id; CommandLog = $log; AppLogStartCharacters = $starts;
+    Events = [Collections.Generic.List[object]]::new(); DroppedEvents = 0 }
+  $traceClock = [Diagnostics.Stopwatch]::StartNew()
+  $tracePhases = @{}
+  $breakReason = 'phase-limit-or-deadline'
+  $text = ''
+  $observe = {
+    param([string] $Kind, [int] $Phase, [IntPtr] $Window, [int] $Characters, $Pixels = $null)
+    if ($trace.Events.Count -ge 128) { $trace.DroppedEvents++; return }
+    $event = [ordered]@{ Kind = $Kind; Milliseconds = $traceClock.ElapsedMilliseconds;
+      Phase = $Phase; Hwnd = ('0x{0:x}' -f $Window.ToInt64()); LogCharacters = $Characters }
+    if ($Window -ne [IntPtr]::Zero) {
+      try {
+        $event.WindowAlive = [GesherWin32]::IsWindow($Window)
+        $event.WindowOwnerPid = [GesherWin32]::ProcessId($Window)
+        $size = [GesherWin32]::ClientSize($Window)
+        $event.ClientWidth = $size[0]; $event.ClientHeight = $size[1]
+      } catch { $event.WindowObservationError = $_.Exception.GetType().FullName }
+    }
+    if ($Kind -eq 'capture-result') {
+      $event.CaptureReturnedNull = $null -eq $Pixels
+      if ($null -ne $Pixels) {
+        $event.CaptureValues = $Pixels.Length
+        if ($Pixels.Length -ge 2) { $event.CaptureWidth = $Pixels[0]; $event.CaptureHeight = $Pixels[1] }
+      }
+    }
+    $trace.Events.Add($event)
+  }.GetNewClosure()
   $read = {
     $t = Get-Content -Raw $log -ErrorAction SilentlyContinue
     foreach ($f in $AppLogs) {
@@ -115,17 +146,34 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
     }
     if ($hwnd -eq [IntPtr]::Zero) {
       $m = [regex]::Match($text, 'first frame drawn \((\d+) presented\), \w+, hwnd 0x([0-9a-f]+)')
-      if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16) }
+      if ($m.Success) {
+        $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16)
+        & $observe 'hwnd-marker' $phase $hwnd $text.Length
+      }
     }
-    if ($text.Contains("${Prefix}: done") -or $p.HasExited) { break }
+    if (-not $tracePhases.ContainsKey($phase) -and $text.Contains("${Prefix}: phase $phase ready")) {
+      $tracePhases[$phase] = $true
+      & $observe 'phase-marker' $phase $hwnd $text.Length
+    }
+    if ($text.Contains("${Prefix}: done") -or $p.HasExited) {
+      $breakReason = if ($text.Contains("${Prefix}: done")) { 'done-marker' } else { 'wrapper-exited' }
+      break
+    }
     if ($hwnd -ne [IntPtr]::Zero -and $text.Contains("${Prefix}: phase $phase ready")) {
       Start-Sleep -Milliseconds 1500  # the frames after the step land
+      & $observe 'capture-attempt' $phase $hwnd $text.Length
       $shots[$phase] = [GesherWin32]::Capture($hwnd)
+      & $observe 'capture-result' $phase $hwnd $text.Length $shots[$phase]
       $phase++
       continue
     }
     Start-Sleep -Milliseconds 250
   }
+  if ($breakReason -eq 'phase-limit-or-deadline') {
+    $breakReason = if ($phase -gt $Phases) { 'phase-limit' } else { 'phase-deadline' }
+  }
+  $trace.PollBreakReason = $breakReason
+  & $observe 'poll-ended' $phase $hwnd $text.Length
   $timedOut = -not $p.WaitForExit(120000)
   if ($timedOut) {
     # Its threads' stacks into its log before it goes (ART's SIGQUIT dump).
@@ -142,6 +190,8 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
   if ($timedOut) { $text += "
 (killed: still running 120 s after its last phase)" }
   $exitCode = if ($timedOut) { -1 } else { $p.ExitCode }
+  $trace.ExitWaitTimedOut = $timedOut; $trace.ExitCode = $exitCode
+  $trace.CapturedPhaseKeys = @($shots.Keys | Sort-Object)
   return @{ Text = $text; Shots = $shots; Hwnd = $hwnd; Exit = $exitCode }
   } finally {
     try {
@@ -149,7 +199,27 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
         try { $p.Kill($true) } catch { Write-Host "INFO  surfaces: final process kill failed: $_" }
         if (-not $p.WaitForExit(5000)) { Write-Host 'INFO  surfaces: final process cleanup exceeded five seconds' }
       }
-    } finally { $p.Dispose() }
+    } finally {
+      $p.Dispose()
+      try {
+        $trace.CompletedMilliseconds = $traceClock.ElapsedMilliseconds
+        $trace.LogCharacters = if ($null -eq $text) { 0 } else { $text.Length }
+        $folder = Join-Path $env:RUNNER_TEMP 'gesher-surface-evidence'
+        [void][IO.Directory]::CreateDirectory($folder)
+        $name = ($Tag -replace '[^a-zA-Z0-9_-]', '_')
+        if ($name.Length -gt 64) { $name = $name.Substring(0, 64) }
+        $stem = Join-Path $folder ("$name-$([Guid]::NewGuid().ToString('N'))")
+        [IO.File]::WriteAllText("$stem.json", ($trace | ConvertTo-Json -Depth 8))
+        $observed = [string]$text
+        if ($observed.Length -gt 131072) {
+          $omitted = "`n[combined log middle omitted]`n"
+          $tail = 65536 - $omitted.Length
+          $observed = $observed.Substring(0, 65536) + $omitted + $observed.Substring($observed.Length - $tail)
+        }
+        [IO.File]::WriteAllText("$stem.log", $observed)
+        Write-Host "INFO  surfaces: diagnostic evidence $stem.json; poll ended $breakReason"
+      } catch { Write-Host "INFO  surfaces: diagnostic evidence could not be saved: $_" }
+    }
   }
 }
 
