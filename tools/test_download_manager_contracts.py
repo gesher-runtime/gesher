@@ -2,8 +2,8 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 """Run the production DownloadManager provider, queue and transfer on a host JVM.
 
-DownloadRequests, DownloadQueue, DownloadTransfer and DeviceConstraints are compiled
-unchanged. AOSP's
+DownloadRequests, DownloadQueue, DownloadTransfer, DeviceConstraints and the internal
+SharedStorageOwnership check are compiled unchanged. AOSP's
 SQLiteQueryBuilder and SQLiteTokenizer (android-16.0.0_r4, pinned by SHA-256) provide
 the strict query building the provider relies on; SQL runs in a real SQLite engine
 (sqlite-jdbc, pinned by SHA-256) behind a thin SQLiteDatabase stand-in. HTTP goes over
@@ -28,7 +28,8 @@ import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION = ('DownloadTransfer', 'DownloadRequests', 'DownloadQueue', 'DeviceConstraints')
+PRODUCTION = ('DownloadTransfer', 'DownloadRequests', 'DownloadQueue', 'DeviceConstraints',
+              'SharedStorageOwnership')
 INPUTS = {
     'sqlite-jdbc-3.46.1.3.jar': (
         'https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar',
@@ -89,6 +90,10 @@ def main() -> None:
             print(f'{name}.java does not exist at {args.source_ref}', flush=True)
             continue
         if source is None:
+            if name == 'SharedStorageOwnership':
+                print(f'FAIL {name}.java does not exist at {args.source_ref}: '
+                      'no internal MediaStore ownership check', flush=True)
+                sys.exit(1)
             print(f'FAIL {name}.java does not exist at {args.source_ref}: no content://downloads '
                   'provider, so DownloadManager.enqueue fails with IllegalArgumentException '
                   '"Unknown URL content://downloads/my_downloads"', flush=True)
@@ -111,11 +116,14 @@ def main() -> None:
         files = [str(p) for p in (work / 'src').rglob('*.java')]
         files += [str(p) for p in (ROOT / 'tests/downloads/standins').rglob('*.java')]
         files.append(str(ROOT / 'tests/downloads/DownloadManagerHost.java'))
+        files.append(str(ROOT / 'tests/storage-ownership/SharedStorageOwnershipTest.java'))
         classes = work / 'classes'
         subprocess.run([executable('javac'), '-nowarn', '-encoding', 'UTF-8', '-proc:none',
                         '-d', str(classes), '-cp', str(jar), *files], check=True, timeout=180)
         subprocess.run([executable('java'), '-cp', os.pathsep.join((str(classes), str(jar))),
                         'com.gesher.server.DownloadManagerHost'], check=True, timeout=180)
+        subprocess.run([executable('java'), '-cp', str(classes),
+                        'com.gesher.server.SharedStorageOwnershipTest'], check=True, timeout=30)
 
 
 if __name__ == '__main__':
