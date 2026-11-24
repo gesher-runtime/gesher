@@ -175,6 +175,7 @@ public final class SpeechRecognitionContracts {
         nativesAbsent();
         recognitionFlow();
         partialsOnlyWhenRequested();
+        resultRequestLimits();
         permissionRefusals();
         languageRefusals();
         startFailures();
@@ -305,6 +306,30 @@ public final class SpeechRecognitionContracts {
         check(l.flow().equals(List.of("ready", "begin", "end", "results:[final]")),
                 "no onPartialResults unless EXTRA_PARTIAL_RESULTS " + l.flow());
         check(backend.starts.equals(List.of("en-US/16000/false/1")), "EXTRA_MAX_RESULTS reaches Windows");
+    }
+
+    static void resultRequestLimits() throws Exception {
+        int[] requests = {Integer.MIN_VALUE, 0, 1, 64, 65, Integer.MAX_VALUE};
+        int[] expected = {1, 1, 1, 64, 64, 64};
+        for (int index = 0; index < requests.length; index++) {
+            FakeBackend backend = new FakeBackend();
+            backend.languages = windowsLanguages();
+            backend.script = r -> r.onWrite = n -> r.emit(RecognizerBackend.RECOGNITION, "result");
+            WindowsRecognitionService s = service(backend);
+            AudioRecord.reset();
+            AudioRecord.feed(20, chunk(1600, 500));
+            Listener l = new Listener();
+            Intent request = intent();
+            request.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, requests[index]);
+            s.startListening(request, l, CALLER);
+            l.await();
+            settle();
+            check(backend.starts.equals(List.of("en-US/16000/false/" + expected[index])),
+                    "EXTRA_MAX_RESULTS " + requests[index] + " has bounded backend storage: "
+                            + backend.starts);
+            check(l.flow().contains("results:[result]"),
+                    "a large result limit still returns the recognizer's actual result");
+        }
     }
 
     static void permissionRefusals() throws Exception {
