@@ -1099,7 +1099,56 @@ public final class AuthServiceContracts {
         check(events.isEmpty() && host.pending() == 0, "no prompt or callback came out of these calls");
     }
 
+    static void keyRequestCancellation() {
+        AtomicInteger starts = new AtomicInteger();
+        HelloKeyBackend.Result absentOwner = WindowsHelloKey.startOwned(0, () -> {
+            starts.incrementAndGet();
+            return 7;
+        }).await();
+        check(absentOwner.status == HelloKeyBackend.NOT_FOREGROUND && starts.get() == 0,
+                "a key signature without a captured owner never starts an unwatched native prompt");
+        AtomicInteger cancels = new AtomicInteger(), releases = new AtomicInteger();
+        byte[] signature = {1, 2, 3};
+        WindowsHelloKey.Request[] pending = new WindowsHelloKey.Request[1];
+        pending[0] = new WindowsHelloKey.Request(() -> {
+            // The owner watch or the app cancels while nativeAwait is finishing.
+            pending[0].cancel();
+            return new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, signature);
+        }, cancels::incrementAndGet, releases::incrementAndGet);
+        HelloKeyBackend.Result result = pending[0].await();
+        pending[0].cancel();
+        check(result.status == HelloKeyBackend.USER_CANCELED && result.data == null
+                        && Arrays.equals(signature, new byte[3]),
+                "a canceled native key request discards a late successful signature");
+        check(cancels.get() == 1 && releases.get() == 1,
+                "a canceled native key request cancels and releases exactly once");
+
+        cancels.set(0);
+        releases.set(0);
+        WindowsHelloKey.Request completed = new WindowsHelloKey.Request(
+                () -> new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, new byte[] {4}),
+                cancels::incrementAndGet, releases::incrementAndGet);
+        result = completed.await();
+        completed.cancel();
+        check(result.status == HelloKeyBackend.SUCCESS && result.data[0] == 4
+                        && cancels.get() == 0 && releases.get() == 1,
+                "a completed native key request keeps its result and is never canceled after release");
+
+        WindowsHelloKey.Request failed = new WindowsHelloKey.Request(() -> {
+            throw new IllegalStateException("native wait failed");
+        }, cancels::incrementAndGet, releases::incrementAndGet);
+        boolean threw = false;
+        try {
+            failed.await();
+        } catch (IllegalStateException expected) {
+            threw = true;
+        }
+        check(threw && releases.get() == 2,
+                "a failed native key wait still releases its request");
+    }
+
     public static void main(String[] args) throws Exception {
+        keyRequestCancellation();
         unavailable();
         available();
         keystore();
@@ -1337,6 +1386,10 @@ final class Intent {
 }
 
 // PRODUCTION_WINDOWS_HELLO
+
+// PRODUCTION_HELLO_KEY_BACKEND
+
+// PRODUCTION_KEY_NATIVE
 
 // PRODUCTION_BACKEND
 
