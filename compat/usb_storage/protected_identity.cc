@@ -448,11 +448,12 @@ DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_se
   TOKEN_MANDATORY_LABEL integrity{{medium, SE_GROUP_INTEGRITY}};
   if (!SetTokenInformation(identity->token_, TokenIntegrityLevel, &integrity,
       static_cast<DWORD>(sizeof(integrity)) + GetLengthSid(medium))) return GetLastError();
-  // A manually started virtual-account token holder does not establish a
-  // loaded interactive user profile. Provision the local profile for the
-  // exact verified TokenUser SID before loading its hive for AppContainer
-  // profile APIs. The bare name is the profile directory's base name, not a
-  // replacement identity; LoadUserProfile still receives the pinned token.
+  // SCM may hold its own service-account profile load. Provision the local
+  // profile for the exact verified TokenUser SID and retain our independent
+  // LoadUserProfile/UnloadUserProfile pair for the AppContainer API lifetime.
+  // Releasing our pair does not prove SCM's or another component's references
+  // are gone. The bare name is only the profile directory's base name;
+  // LoadUserProfile still receives the pinned token.
   stage("identity.profile-sid");
   wchar_t* sid_text = nullptr;
   if (!ConvertSidToStringSidW(identity->sid(), &sid_text)) return GetLastError();

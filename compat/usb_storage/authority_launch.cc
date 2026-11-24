@@ -69,8 +69,8 @@ struct Identity {
   PSID Integrity() const {
     return integrity.value.Label.Sid;
   }
-  bool MatchesDesktop(const AuthorityLaunchSpec& spec) const {
-    return stats.TokenType == TokenPrimary && session == spec.desktop_session &&
+  bool MatchesDesktop(const AuthorityLaunchSpec& spec, TOKEN_TYPE type = TokenPrimary) const {
+    return stats.TokenType == type && session == spec.desktop_session &&
         !elevated && !ui_access && EqualSid(User(), spec.desktop_user) &&
         !IsWellKnownSid(User(), WinLocalSystemSid) && !IsWellKnownSid(User(), WinLocalServiceSid) &&
         !IsWellKnownSid(User(), WinNetworkServiceSid) && !IsWellKnownSid(User(), WinAnonymousSid);
@@ -227,6 +227,90 @@ bool HasOnlyTraversePrivilege(HANDLE token) {
       !LookupPrivilegeValueW(nullptr, L"SeChangeNotifyPrivilege", &traverse)) return false;
   const LUID& only = privileges->Privileges[0].Luid;
   return only.LowPart == traverse.LowPart && only.HighPart == traverse.HighPart;
+}
+
+DWORD CreatePrivateQueryContext(HANDLE primary, const Identity& expected, const AuthorityLaunchSpec& spec,
+                                PACL default_acl, Handle* result, TOKEN_STATISTICS* statistics,
+                                const char** startup_stage) {
+  const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+  stage("lowbox.impersonation-policy");
+  wchar_t* raw_sid = nullptr;
+  if (!ConvertSidToStringSidW(spec.desktop_user, &raw_sid)) return GetLastError();
+  const LocalMemory sid_owner(raw_sid);
+  // The private identity may query this disposable thread-context token. All
+  // other token rights remain with SYSTEM; neither token nor authority handles
+  // are handed to the guest. Use token-specific masks for object ACL readback,
+  // independently of the unchanged TokenDefaultDacl for newly created objects.
+  static_assert(TOKEN_ALL_ACCESS == 0x000f01ff && TOKEN_QUERY == 0x00000008);
+  const std::wstring policy = std::wstring(L"D:P(D;;WDWO;;;OW)(A;;0x000f01ff;;;SY)(A;;0x00000008;;;") + raw_sid + L")";
+  LocalMemory descriptor;
+  DWORD status = MakeDescriptor(policy.c_str(), &descriptor);
+  if (status != ERROR_SUCCESS) return status;
+  PACL expected_acl = GetAcl(descriptor.get());
+  if (!expected_acl) return ERROR_INVALID_ACL;
+  SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
+  HANDLE raw = nullptr;
+  stage("lowbox.create-impersonation-context");
+  if (!DuplicateTokenEx(primary, TOKEN_QUERY | TOKEN_IMPERSONATE | READ_CONTROL, &security,
+      SecurityImpersonation, TokenImpersonation, &raw)) return GetLastError();
+  Handle token(raw);
+  Identity identity;
+  SECURITY_IMPERSONATION_LEVEL level{};
+  stage("lowbox.impersonation-identity");
+  if (!identity.Read(raw)) return ERROR_INVALID_DATA;
+  if (!Query(raw, TokenImpersonationLevel, &level)) return GetLastError();
+  if (!identity.MatchesDesktop(spec, TokenImpersonation) || level != SecurityImpersonation || identity.contained ||
+      !IsWellKnownSid(identity.Integrity(), WinMediumLabelSid) || !HasOnlyTraversePrivilege(raw) ||
+      identity.stats.AuthenticationId.HighPart != expected.stats.AuthenticationId.HighPart ||
+      identity.stats.AuthenticationId.LowPart != expected.stats.AuthenticationId.LowPart) return ERROR_ACCESS_DENIED;
+  stage("lowbox.impersonation-object-acl");
+  PSID owner = nullptr;
+  PACL acl = nullptr;
+  PSECURITY_DESCRIPTOR object_descriptor = nullptr;
+  status = GetSecurityInfo(raw, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+      &owner, nullptr, &acl, nullptr, &object_descriptor);
+  const LocalMemory object_owner(object_descriptor);
+  if (status != ERROR_SUCCESS) return status;
+  SECURITY_DESCRIPTOR_CONTROL control = 0;
+  DWORD revision = 0;
+  // Duplication under SYSTEM can default the token object owner to its
+  // Administrators owner SID. This exception applies only to this token;
+  // VerifyObject still requires SYSTEM for every actual process and thread.
+  if (!owner || (!IsWellKnownSid(owner, WinLocalSystemSid) && !IsWellKnownSid(owner, WinBuiltinAdministratorsSid)) ||
+      !SameAcl(expected_acl, acl) || !GetSecurityDescriptorControl(object_descriptor, &control, &revision) ||
+      !(control & SE_DACL_PROTECTED)) return ERROR_ACCESS_DENIED;
+  stage("lowbox.impersonation-default-acl");
+  alignas(TOKEN_DEFAULT_DACL) BYTE defaults[256]{};
+  if (!Query(raw, TokenDefaultDacl, defaults, sizeof(defaults))) return GetLastError();
+  if (!SameAcl(default_acl, reinterpret_cast<const TOKEN_DEFAULT_DACL*>(defaults)->DefaultDacl)) return ERROR_ACCESS_DENIED;
+  *statistics = identity.stats;
+  result->reset(token.release());
+  return ERROR_SUCCESS;
+}
+
+DWORD VerifyPrivateQueryAccess(const TOKEN_STATISTICS& expected) {
+  HANDLE raw = nullptr;
+  if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, FALSE, &raw)) return GetLastError();
+  const Handle query(raw);
+  TOKEN_STATISTICS actual{};
+  if (!Query(raw, TokenStatistics, &actual)) return GetLastError();
+  if (actual.TokenId.HighPart != expected.TokenId.HighPart || actual.TokenId.LowPart != expected.TokenId.LowPart) {
+    return ERROR_ACCESS_DENIED;
+  }
+  // Check each non-query right independently. A denial of a combined mask
+  // would only establish that at least one right was unavailable.
+  constexpr DWORD denied[] = {TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY_SOURCE,
+      TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_GROUPS, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_SESSIONID,
+      DELETE, READ_CONTROL, WRITE_DAC, WRITE_OWNER};
+  for (DWORD access : denied) {
+    HANDLE forbidden = nullptr;
+    const BOOL opened = OpenThreadToken(GetCurrentThread(), access, FALSE, &forbidden);
+    const DWORD error = opened ? ERROR_SUCCESS : GetLastError();
+    if (forbidden && forbidden != INVALID_HANDLE_VALUE) CloseHandle(forbidden);
+    if (opened) return ERROR_ACCESS_DENIED;
+    if (error != ERROR_ACCESS_DENIED) return error ? error : ERROR_GEN_FAILURE;
+  }
+  return ERROR_SUCCESS;
 }
 
 DWORD VerifyCapabilities(HANDLE token, const SECURITY_CAPABILITIES& expected) {
@@ -426,13 +510,26 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   const auto create_lowbox = reinterpret_cast<CreateLowbox>(
       reinterpret_cast<void*>(GetProcAddress(kernelbase, "CreateAppContainerToken")));
   if (!create_lowbox) return ERROR_PROC_NOT_FOUND;
+  Handle query_context;
+  TOKEN_STATISTICS context_statistics{};
+  status = CreatePrivateQueryContext(restricted, desktop, spec, default_acl,
+      &query_context, &context_statistics, startup_stage);
+  if (status != ERROR_SUCCESS) return status;
   SECURITY_CAPABILITIES capabilities = spec.capabilities;
   HANDLE raw_lowbox = nullptr;
   stage("lowbox.impersonate-target");
-  if (!ImpersonateLoggedOnUser(restricted)) return GetLastError();
-  stage("lowbox.create-token");
-  const BOOL converted = create_lowbox(restricted, &capabilities, &raw_lowbox);
-  const DWORD conversion_error = converted ? ERROR_SUCCESS : GetLastError();
+  if (!SetThreadToken(nullptr, query_context.get())) return GetLastError();
+  stage("lowbox.verify-query-only-context");
+  const DWORD context_error = VerifyPrivateQueryAccess(context_statistics);
+  BOOL converted = FALSE;
+  DWORD conversion_error = context_error;
+  if (context_error == ERROR_SUCCESS) {
+    stage("lowbox.create-token");
+    // The original restricted primary remains the lowbox input. The separate
+    // queryable impersonation object supplies only this thread's user context.
+    converted = create_lowbox(restricted, &capabilities, &raw_lowbox);
+    conversion_error = converted ? ERROR_SUCCESS : GetLastError();
+  }
   if (!RevertToSelf()) {
     stage("lowbox.restore-authority-context");
     if (raw_lowbox && raw_lowbox != INVALID_HANDLE_VALUE) CloseHandle(raw_lowbox);
