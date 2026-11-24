@@ -348,6 +348,23 @@ final class Installer {
     }
 
     /**
+     * Logs the expansion (OBB) files a bundle carries. Android keeps them in shared storage,
+     * {@code Android/obb/<package>/}, where Google Play or an XAPK installer copies them; a
+     * package install does not, and this one leaves them in the archive.
+     */
+    private static void reportExpansions(File archive, String pkg) throws IOException {
+        List<String> obbs;
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            obbs = PackageBundles.expansions(zip);
+        }
+        if (!obbs.isEmpty()) {
+            SystemServer.log("install " + pkg + ": " + archive.getName() + " also holds expansion files,"
+                    + " which were not installed (Android/obb/" + pkg + "/ is left as it is): "
+                    + String.join(", ", obbs));
+        }
+    }
+
+    /**
      * Whether the installed splits are {@code splits}, by name and content: installing
      * an .xapk over the same base.apk installed alone adds its splits (its ABI split's
      * native libraries), so it is not "unchanged". Only a standalone base APK may
@@ -443,12 +460,23 @@ final class Installer {
                 source = extractBundle(source, tempDir, splits);
                 incomingSplits = splits.toArray(new File[0]);
             } else {
+                if (source.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".apkm")
+                        && !PackageBundles.isZip(source)) {
+                    // APKMirror's encrypted format: Gesher has no key for it and does not guess.
+                    throw new IllegalArgumentException("INSTALL_FAILED_INVALID_APK: " + source.getName()
+                            + " is not a ZIP of APKs but an encrypted APKMirror bundle, which Gesher"
+                            + " cannot open; use an unencrypted .apkm, .apks or .xapk of the app");
+                }
                 incomingSplits = companionSplits(source);
             }
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
             ContactsProviderSupport.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
-            if (tempDir == null) incomingSplits = companionsOf(pkg, incomingSplits);
+            if (tempDir == null) {
+                incomingSplits = companionsOf(pkg, incomingSplits);
+            } else {
+                reportExpansions(original, pkg);
+            }
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
                 ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(

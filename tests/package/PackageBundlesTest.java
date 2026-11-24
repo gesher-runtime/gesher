@@ -52,6 +52,8 @@ public final class PackageBundlesTest {
         detection(work);
         apkSet(work);
         universalSet(work);
+        xapkManifest(work);
+        encrypted(work);
         System.out.println("PackageBundlesTest all passed: " + checks + " checks");
     }
 
@@ -280,5 +282,69 @@ public final class PackageBundlesTest {
             expect(PackageBundles.select(zip, PackageBundles.Device.gesher(36)),
                     "Without toc.pb every APK entry is the install", "base.apk", "split_config.x86_64.apk");
         }
+    }
+
+    /** APKPure's XAPK: manifest.json lists the APKs to install and the expansion files. */
+    private static void xapkManifest(File work) throws Exception {
+        Map<String, byte[]> files = entries("com.example.apk", "config.arm64_v8a.apk", "config.xxhdpi.apk",
+                "unlisted.apk", "icon.png", "Android/obb/com.example/main.7.com.example.obb");
+        files.put("manifest.json", ("{\"xapk_version\": 2, \"package_name\": \"com.example\","
+                + " \"split_configs\": [\"config.arm64_v8a\", \"config.xxhdpi\"], \"split_apks\": ["
+                + "{\"file\": \"com.example.apk\", \"id\": \"base\"},"
+                + "{\"file\": \"config.arm64_v8a.apk\", \"id\": \"config.arm64_v8a\"},"
+                + "{\"file\": \"config.xxhdpi.apk\", \"id\": \"config.xxhdpi\"}],"
+                + " \"expansions\": [{\"file\": \"Android/obb/com.example/main.7.com.example.obb\","
+                + " \"install_location\": \"EXTERNAL_STORAGE\", \"install_path\":"
+                + " \"Android/obb/com.example/main.7.com.example.obb\"}], \"name\": \"Ex\\u00e9mple \\\"q\\\"\"}")
+                .getBytes(StandardCharsets.UTF_8));
+        File xapk = zip(work, "listed.xapk", files);
+        try (ZipFile zip = new ZipFile(xapk)) {
+            expect(PackageBundles.select(zip, PackageBundles.Device.gesher(36)),
+                    "manifest.json's split_apks are the install", "com.example.apk", "config.arm64_v8a.apk",
+                    "config.xxhdpi.apk");
+            expect(PackageBundles.expansions(zip), "The expansion file is reported once",
+                    "Android/obb/com.example/main.7.com.example.obb");
+        }
+        Map<String, byte[]> single = entries("com.example.apk", "icon.png");
+        single.put("manifest.json", "{\"xapk_version\": 1, \"package_name\": \"com.example\"}"
+                .getBytes(StandardCharsets.UTF_8));
+        try (ZipFile zip = new ZipFile(zip(work, "single.xapk", single))) {
+            expect(PackageBundles.select(zip, PackageBundles.Device.gesher(36)),
+                    "Without split_apks every APK entry is the install", "com.example.apk");
+            check(PackageBundles.expansions(zip).isEmpty(), "No expansion files invented");
+        }
+        Map<String, byte[]> missing = entries("com.example.apk");
+        missing.put("manifest.json", "{\"split_apks\": [{\"file\": \"gone.apk\"}]}".getBytes(StandardCharsets.UTF_8));
+        try (ZipFile zip = new ZipFile(zip(work, "missing.xapk", missing))) {
+            PackageBundles.select(zip, PackageBundles.Device.gesher(36));
+            throw new AssertionError("manifest.json naming a missing APK was accepted");
+        } catch (IOException expected) {
+            check(expected.getMessage().contains("gone.apk"), "missing listed APK named: " + expected.getMessage());
+        }
+        Map<String, byte[]> broken = entries("com.example.apk");
+        broken.put("manifest.json", "{\"split_apks\": [".getBytes(StandardCharsets.UTF_8));
+        try (ZipFile zip = new ZipFile(zip(work, "broken.xapk", broken))) {
+            PackageBundles.select(zip, PackageBundles.Device.gesher(36));
+            throw new AssertionError("A broken manifest.json was ignored");
+        } catch (IOException expected) {
+            check(expected.getMessage().contains("manifest.json"), "broken manifest.json reported");
+        }
+    }
+
+    /** An encrypted ZIP (as APKMirror's encrypted .apkm) is neither a bundle nor an APK ZIP. */
+    private static void encrypted(File work) throws Exception {
+        File file = zip(work, "encrypted.apkm", entries("info.json", "base.apk"));
+        check(PackageBundles.isZip(file), "The fixture is a ZIP before its entries are marked encrypted");
+        byte[] bytes = Files.readAllBytes(file.toPath());
+        // Set bit 0 (encrypted) of every local and central header's general purpose flags.
+        for (int i = 0; i + 4 <= bytes.length; i++) {
+            int signature = (bytes[i] & 0xff) | (bytes[i + 1] & 0xff) << 8 | (bytes[i + 2] & 0xff) << 16
+                    | (bytes[i + 3] & 0xff) << 24;
+            if (signature == 0x04034b50) bytes[i + 6] |= 1;
+            if (signature == 0x02014b50) bytes[i + 8] |= 1;
+        }
+        Files.write(file.toPath(), bytes);
+        check(!PackageBundles.isZip(file), "An encrypted ZIP was readable");
+        check(!PackageBundles.isBundle(file), "An encrypted ZIP was classified as a bundle");
     }
 }
