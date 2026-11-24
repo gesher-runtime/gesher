@@ -954,6 +954,9 @@ public final class TelephonyService {
         String setUserEnabled(boolean enabled) {
             boolean before, after;
             synchronized (mSetLock) {
+                // Windows may have changed since the last reading (polling and query reads keep
+                // a reading for seconds): decide from a fresh one.
+                mCellular.refresh();
                 // Without a known mode there is nothing to change from: refused, as roaming is.
                 if (mode() == null) return "Windows' connection mode is unknown";
                 before = userEnabled();
@@ -978,6 +981,7 @@ public final class TelephonyService {
          */
         String setRoamingEnabled(boolean enabled) {
             synchronized (mSetLock) {
+                mCellular.refresh();  // a fresh reading, as for the user switch
                 String mode = mode();
                 if (mode == null) return "Windows' connection mode is unknown";
                 if (!WindowsCellular.MODE_MANUAL.equals(mode) && roamingEnabled() != enabled) {

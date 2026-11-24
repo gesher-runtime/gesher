@@ -92,7 +92,15 @@ public final class MobileDataCommands {
         return applied && !stillUp ? 0 : 1;
     }
 
-    /** Waits up to ten seconds for Windows' connection to go down. */
+    /**
+     * Waits up to ten seconds for Windows' connection to go down. The phone service answers
+     * from its reading of the modem, which the setter has just refreshed and which a query
+     * re-reads once it is seven seconds old (TelephonyService.Cellular), so within the ten
+     * seconds the answer comes from at least one reading taken after WwanSvc had time to
+     * complete the disconnect. Polling every half second between readings only costs
+     * cached answers; it lets the command return as soon as such a reading shows the
+     * connection down.
+     */
     static boolean disconnected(ITelephony phone, int subId) throws RemoteException {
         for (int i = 0; ; i++) {
             int state = phone.getDataStateForSubId(subId);

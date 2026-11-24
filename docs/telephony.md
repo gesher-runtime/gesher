@@ -239,7 +239,9 @@ With a modem:
   As `DataSettingsManager.setUserDataEnabled` does nothing for an unchanged switch, a switch
   that already has the requested value writes nothing to Windows: a connection made by hand
   in Windows while the mode is `manual` survives a repeated off, and a connection dropped by
-  hand is not reconnected by a repeated on.
+  hand is not reconnected by a repeated on. Each setter first reads the modem afresh, so a change
+  made in Windows moments before (which the last reading cannot show yet) is what the
+  switch's current value is compared with.
   `setDataRoamingEnabled()` needs `MODIFY_PHONE_STATE`
   (`SecurityException("setDataRoamingEnabled")`): with data on it writes `auto` or
   `auto-home` (and Windows disconnects while roaming); with data off it keeps Android's
@@ -333,7 +335,8 @@ false.
   schema position when absent), disconnect and connect by mode and registration, refused
   updates, disconnects and connection-state reads (which restore the previous mode), a
   refused restore (reported as such), refused connects, an unchanged mode (no write, no
-  connect or disconnect), partner networks as roaming, no connect while unregistered,
+  connect or disconnect), partner networks as roaming (auto connects there, auto-home
+  does not), no connect while unregistered, a write by ICCID when the IMSI is unreadable,
   profile selection by `SubscriberID` or `SimIccID`, prefixed elements, the sixteen-profile
   bound, and that a snapshot never writes. Seven negative controls (leaked capability
   strings, uninitializing a foreign apartment, swapped radio states, keeping the new mode

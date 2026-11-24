@@ -198,13 +198,21 @@ struct Span { size_t open = 0, start = 0, end = 0, close = 0; };
 
 Found Locate(const Text& xml, const char* name, Span* span) {
   Text open = Wide("<") + Wide(name), close = Wide("</") + Wide(name) + Wide(">");
-  // "<prefix:Name": the element under a namespace prefix, which this edit does not read.
+  // "<prefix:Name" or "</prefix:Name": the element under a namespace prefix, which this
+  // edit does not read. Only a tag counts: the prefix is a name right after "<" or "</",
+  // so text such as "http://h/x:Name" in a value is not one.
+  auto nameChar = [](WCHAR c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+        || c == '-' || c == '_' || c == '.';
+  };
   for (size_t at = xml.find(Wide(":") + Wide(name)); at != Text::npos;
        at = xml.find(Wide(":") + Wide(name), at + 1)) {
     size_t start = at;
-    while (start > 0 && xml[start - 1] != '<' && xml[start - 1] != '/' && !Space(xml[start - 1])) start--;
+    while (start > 0 && nameChar(xml[start - 1])) start--;
     size_t after = at + 1 + std::char_traits<char>::length(name);
-    bool tag = start > 0 && (xml[start - 1] == '<' || xml[start - 1] == '/')
+    bool opens = start > 0 && xml[start - 1] == '<';
+    bool closes = start > 1 && xml[start - 1] == '/' && xml[start - 2] == '<';
+    bool tag = start < at && (opens || closes)
         && after < xml.size() && (xml[after] == '>' || Space(xml[after]) || xml[after] == '/');
     if (tag) return Found::kMalformed;
   }

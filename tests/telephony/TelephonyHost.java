@@ -1047,6 +1047,43 @@ public final class TelephonyHost {
         source.set(spec);
         cellular.refresh();
 
+        // Windows changed outside Gesher moments before a setter, while the model still holds
+        // the earlier reading (it re-reads only after seven seconds): the setter decides from
+        // a fresh reading, in both directions and for roaming.
+        callers.current = SWITCHER;
+        String[][] staleCases = {
+                // reading, Windows now, switch, value, expected Windows mode afterwards
+                {"auto", "manual", "data", "on", "auto"},
+                {"manual", "auto", "data", "off", "manual"},
+                {"auto", "auto-home", "roaming", "on", "auto"},
+                {"auto-home", "auto", "roaming", "off", "auto-home"}};
+        for (String[] c : staleCases) {
+            spec.mode = c[0];
+            spec.activation = c[0].equals("manual") ? WindowsCellular.ACTIVATION_DEACTIVATED
+                    : WindowsCellular.ACTIVATION_ACTIVATED;
+            source.set(spec);
+            cellular.refresh();
+            spec.mode = c[1];
+            spec.activation = c[1].equals("manual") ? WindowsCellular.ACTIVATION_DEACTIVATED
+                    : WindowsCellular.ACTIVATION_ACTIVATED;
+            source.set(spec);  // not read yet
+            writes = source.writes.size();
+            boolean on = c[3].equals("on");
+            if (c[2].equals("data")) {
+                t.phone.setDataEnabledForReason(1, user, on, SWITCHER.name);
+                equal(t.phone.isUserDataEnabled(1), on, "Data " + c[3] + " after Windows changed to " + c[1]);
+            } else {
+                t.phone.setDataRoamingEnabled(1, on);
+                equal(t.phone.isDataRoamingEnabled(1), on, "Roaming " + c[3] + " after Windows changed to " + c[1]);
+            }
+            equal(source.writes.size(), writes + 1, "Written to Windows: " + String.join(" ", c));
+            equal(spec.mode, c[4], "Windows' mode: " + String.join(" ", c));
+        }
+        spec.mode = "auto";
+        spec.activation = WindowsCellular.ACTIVATION_ACTIVATED;
+        source.set(spec);
+        cellular.refresh();
+
         // An unchanged switch changes nothing (DataSettingsManager): in manual mode a
         // connection made by hand in Windows survives a repeated off, and in auto mode a
         // connection dropped by hand is not reconnected by a repeated on.

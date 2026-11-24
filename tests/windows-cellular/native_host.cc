@@ -125,6 +125,7 @@ struct Spec {
   std::u16string device = u"356938035643809", manufacturer = u"Fixture", model = u"WWAN 1",
                  firmware = u"FW 1.0";
   std::u16string imsi = u"425010123456789", iccid = u"8997201000000000001F";
+  bool imsi_readable = true;
   std::vector<std::u16string> numbers = {u"+972501234567"};
   std::u16string home_id = u"42501", home_name = u"פלאפון";
   ULONG register_state = 3, data_class = 0x20, signal_value = 20, signal_error = 99, activation = 1;
@@ -135,7 +136,11 @@ struct Spec {
 struct Subscriber : Object<mbn::SubscriberInformation> {
   const Spec& s;
   explicit Subscriber(const Spec& s) : s(s) { }
-  HRESULT STDMETHODCALLTYPE get_SubscriberID(BSTR* out) override { *out = make(s.imsi); return S_OK; }
+  HRESULT STDMETHODCALLTYPE get_SubscriberID(BSTR* out) override {
+    if (!s.imsi_readable) return static_cast<HRESULT>(0x80548210);  // E_MBN_FAILURE
+    *out = make(s.imsi);
+    return S_OK;
+  }
   HRESULT STDMETHODCALLTYPE get_SimIccID(BSTR* out) override { *out = make(s.iccid); return S_OK; }
   HRESULT STDMETHODCALLTYPE get_TelephoneNumbers(SAFEARRAY** out) override {
     *out = new SAFEARRAY{false, {}, s.numbers};
@@ -455,6 +460,11 @@ int main() {
   const SelectionCase selections[] = {
       {{noSubscriber}, "auto-home", "SimIccID (without its F padding) when there is no SubscriberID"},
       {{profile(u"auto", u"999990000000001")}, "", "Another SubscriberID with the same SimIccID is not this SIM's"},
+      {{u"<MBNProfileExt><Name>e</Name><IsDefault>true</IsDefault><SimIccID>8997201000000000002</SimIccID>"
+        u"<ConnectionMode>auto</ConnectionMode></MBNProfileExt>"}, "", "Another SimIccID is not this SIM's"},
+      {{u"<MBNProfile><Name>p</Name><Description>http://h/x:Name more</Description><IsDefault>true</IsDefault>"
+        u"<SubscriberID>425010123456789</SubscriberID><ConnectionMode>auto</ConnectionMode></MBNProfile>"},
+       "auto", "A colon in text is not a prefixed element"},
       {{u"<v1:MBNProfile xmlns:v1=\"x\"><v1:Name>p</v1:Name><v1:IsDefault>true</v1:IsDefault>"
         u"<v1:SubscriberID>425010123456789</v1:SubscriberID><v1:ConnectionMode>auto</v1:ConnectionMode>"
         u"</v1:MBNProfile>"}, "-", "Prefixed elements are unreadable, not absent"},
@@ -567,6 +577,32 @@ int main() {
     modems.push_back(partner);
   }
   check(configure(api, id.c_str(), u"auto-home") == "ok\tdisconnect\t00000000", "A partner network is roaming");
+  balanced();
+  // auto connects on a partner network (registered, roaming); auto-home does not.
+  reset();
+  {
+    Spec partner;
+    partner.register_state = 5;
+    partner.activation = 3;
+    modems.push_back(partner);
+  }
+  profiles[id] = {profile(u"manual")};
+  check(configure(api, id.c_str(), u"auto") == "ok\tconnect\t00000000", "auto connects on a partner network");
+  profiles[id] = {profile(u"manual")};
+  connects.clear();
+  check(configure(api, id.c_str(), u"auto-home") == "ok\tnone\t00000000" && connects.empty(),
+        "auto-home does not connect on a partner network");
+  balanced();
+
+  // A SIM whose IMSI cannot be read is still matched by its ICCID for a write.
+  reset();
+  {
+    Spec noImsi;
+    noImsi.imsi_readable = false;
+    modems.push_back(noImsi);
+  }
+  profiles[id] = {noSubscriber};
+  check(configure(api, id.c_str(), u"manual") == "ok\tdisconnect\t00000000", "Written by ICCID without an IMSI");
   balanced();
   reset();
   {
