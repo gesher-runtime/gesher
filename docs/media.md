@@ -9,6 +9,11 @@ RGBA and PRIVATE `ImageReader` surfaces accept Canvas, NDK and EGL producers
 through the in-process `QueueSurface`; a PRIVATE reader (what Flutter's
 platform views create: `ImageReader.Builder`, PRIVATE, `GPU_SAMPLED_IMAGE`)
 is drawn into with `lockHardwareCanvas`, `lockCanvas` or EGL like an RGBA one.
+Every `unlockCanvasAndPost` of a hardware canvas is a frame with its own
+`onImageAvailable`, however soon after the last: hwui's one-frame-per-vsync
+skip (a frame within 2 ms of the last swap) applies to window surfaces only,
+not to a surface that does not queue to the window composer
+(`patches/frameworks/base/0787`).
 Its images report the reader's PRIVATE format and have no CPU planes
 (`getPlanes()` is empty, as Android's). Their pixels are RGBA whatever
 produced them: a drawn frame, a camera frame (converted from NV12) or a

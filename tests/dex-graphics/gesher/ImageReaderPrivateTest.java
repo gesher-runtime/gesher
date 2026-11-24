@@ -163,6 +163,28 @@ public final class ImageReaderPrivateTest {
                         "a closed HardwareBuffer is not imported");
             }
 
+            // --- consecutive lockHardwareCanvas frames on one reader (Flutter's
+            // PlatformViewWrapper.draw does this for every frame) ----
+            try (ImageReader reader = privateReader(2)) {
+                final int[] colors = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA, Color.CYAN,
+                        0xff804020, 0xff102030, Color.RED, Color.WHITE};
+                final int[] seen = new int[1];
+                CountDownLatch[] latch = {new CountDownLatch(1)};
+                reader.setOnImageAvailableListener(r -> { seen[0]++; latch[0].countDown(); }, handler);
+                for (int frame = 0; frame < colors.length; frame++) {
+                    latch[0] = new CountDownLatch(1);
+                    Canvas canvas = reader.getSurface().lockHardwareCanvas();
+                    canvas.drawColor(colors[frame]);
+                    reader.getSurface().unlockCanvasAndPost(canvas);
+                    Image image = next(reader, latch[0], "hardware frame " + frame);
+                    int c = colors[frame];
+                    int px = (c & 0xff00ff00) | ((c & 0xff) << 16) | ((c >> 16) & 0xff);
+                    inspect(image, new int[] {px, px, px, px}, false, "hardware frame " + frame);
+                    image.close();
+                }
+                check(seen[0] == colors.length, "one notification per frame (" + seen[0] + ")");
+            }
+
             // --- software Canvas (a Surface does not mix it with lockHardwareCanvas) ----
             try (ImageReader reader = privateReader(2)) {
                 CountDownLatch[] latch = {new CountDownLatch(1)};
