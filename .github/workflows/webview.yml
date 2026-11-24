@@ -13,7 +13,7 @@ name: webview
 # downloaded by the test and package jobs.
 on:
   push:
-    branches: ['wip/webview']
+    branches: ['wip/webview', 'palmoni5/webview-runtime-qualification']
     paths:
       - 'compat/webview/**'
       - 'probes/webview/**'
@@ -178,7 +178,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tests/windows/webview
+          sparse-checkout: tests/windows
 
       - uses: actions/download-artifact@v4
         with:
@@ -209,3 +209,20 @@ jobs:
           $p = Start-Process 'dist/webview_owned_stream_test.exe' -NoNewWindow -PassThru
           if (-not $p.WaitForExit(60000)) { $p.Kill($true); throw 'Owned stream COM gate timed out' }
           if ($p.ExitCode -ne 0) { throw "Owned stream COM gate failed: $($p.ExitCode)" }
+
+      - name: Live storage registry and worker response qualification
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Dir = (Resolve-Path 'dist').Path
+          $script:failed = 0
+          . './tests/windows/helpers/CloseProcessReaders.ps1'
+          $plan = & './tests/windows/helpers/Get-TestTrackPlan.ps1' -Shard windowing
+          foreach ($definition in $plan.Helpers) {
+            . ([scriptblock]::Create($definition))
+          }
+          . './tests/windows/webview/QuotaRegistry.ps1'
+          . './tests/windows/webview/WorkerResponse.ps1'
+          if ($script:failed -gt 0) { throw "WebView runtime qualification failures: $script:failed" }
+          exit 0
