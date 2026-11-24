@@ -3,6 +3,7 @@
 #include <psapi.h>
 #include "translator.h"
 #include <algorithm>
+#include <cfenv>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -69,6 +70,14 @@ class Env;
 thread_local Env* t_env_raw = nullptr;
 std::mutex g_envs_mutex;
 std::vector<Env*> g_envs;
+// The translator's scope that keeps the caller's floating-point environment.
+class HostFenvScope {
+ public:
+  HostFenvScope() { std::fegetenv(&saved_); }
+  ~HostFenvScope() { std::fesetenv(&saved_); }
+ private:
+  std::fenv_t saved_;
+};
 // Thread-directed signal registry (gesher_arm64_interrupt_thread).
 std::mutex g_attached_mutex;
 std::unordered_map<DWORD, Env*> g_attached;
@@ -134,7 +143,10 @@ void TestMethods() {
   ApiTlsPublish(first, image1, sizeof(image1), 8192);
   auto* active = new Env;
   profile = 1;
+  std::feclearexcept(FE_ALL_EXCEPT);
   active->Attach();
+  Check(std::fetestexcept(FE_ALL_EXCEPT) == 0,
+        "attachment leaves no floating-point flags in the caller's environment");
   unsigned publications = 1;
   CheckStackPublication(active, publications, "first attachment publishes its actual stack and guard");
   Check(g_tls_blocks.size() == 1 && g_envs.size() == 1, "publish only attached Env");

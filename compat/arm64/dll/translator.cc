@@ -708,6 +708,9 @@ class Env final : public A64::UserCallbacks {
     tid_ = GetCurrentThreadId();
     signal_interrupt_.store(false, std::memory_order_relaxed);
     {
+      // unordered_map's load-factor arithmetic must not leave flags in the
+      // caller's (native or guest) floating-point environment.
+      HostFenvScope fenv;
       std::lock_guard<std::mutex> lock(g_attached_mutex);
       g_attached.insert_or_assign(tid_, this);
     }
@@ -732,6 +735,7 @@ class Env final : public A64::UserCallbacks {
   // The thread is exiting. Afterwards the Env may be pooled for another thread.
   void Detach() {
     {
+      HostFenvScope fenv;  // as in Attach()
       std::lock_guard<std::mutex> lock(g_attached_mutex);
       auto found = g_attached.find(tid_);
       if (found != g_attached.end() && found->second == this) g_attached.erase(found);
