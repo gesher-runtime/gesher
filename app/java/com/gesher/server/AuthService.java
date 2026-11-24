@@ -10,10 +10,18 @@ import android.hardware.biometrics.BiometricConstants;
 import android.hardware.biometrics.BiometricEnrollmentStatusInternal;
 import android.hardware.biometrics.BiometricManager;
 import android.hardware.biometrics.BiometricManager.Authenticators;
+import android.hardware.biometrics.AuthenticationStateListener;
 import android.hardware.biometrics.BiometricPrompt;
 import android.hardware.biometrics.IAuthService;
+import android.hardware.biometrics.IBiometricEnabledOnKeyguardCallback;
 import android.hardware.biometrics.IBiometricServiceReceiver;
+import android.hardware.biometrics.IIdentityCheckStateListener;
+import android.hardware.biometrics.IInvalidationCallback;
+import android.hardware.biometrics.ITestSession;
+import android.hardware.biometrics.ITestSessionCallback;
+import android.hardware.biometrics.IdentityCheckStatus;
 import android.hardware.biometrics.PromptInfo;
+import android.hardware.biometrics.SensorPropertiesInternal;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.RemoteException;
@@ -46,6 +54,10 @@ import java.util.List;
  * ends the current one with BIOMETRIC_ERROR_CANCELED, the client's death ends it without a
  * callback, and each request gets exactly one terminal callback. Work after the binder
  * call runs on {@link Host#post}, as BiometricService's handler.
+ *
+ * <p>Every IAuthService method is overridden, so none falls through to StandIn's default
+ * answer without AOSP's permission check: AuthService enforces it, then answers as
+ * BiometricService does with no sensor registered.
  */
 public final class AuthService extends IAuthService.Default {
     /** What the service asks of the rest of the system server. */
@@ -138,6 +150,40 @@ public final class AuthService extends IAuthService.Default {
 
     // --- binder calls ---------------------------------------------------------------------
 
+    /** BiometricService.createTestSession: no sensor has {@code sensorId}, so null. */
+    @Override
+    public ITestSession createTestSession(int sensorId, ITestSessionCallback callback,
+            String opPackageName) {
+        enforce(TEST_BIOMETRIC);
+        return null;
+    }
+
+    /**
+     * BiometricService applies the status to its Identity Check settings for a test. Gesher
+     * has no Identity Check setting to apply it to, so the call is refused rather than
+     * accepted with no effect.
+     */
+    @Override
+    public void setIdentityCheckTestStatus(IdentityCheckStatus identityCheckStatus) {
+        enforce(TEST_BIOMETRIC);
+        throw new UnsupportedOperationException("Identity Check is not supported");
+    }
+
+    /** BiometricService.getSensorProperties with no sensor: an empty list. */
+    @Override
+    public List<SensorPropertiesInternal> getSensorProperties(String opPackageName) {
+        enforce(TEST_BIOMETRIC);
+        return new ArrayList<>();
+    }
+
+    /** config_biometric_prompt_ui_package, as AOSP's AuthService reads it. */
+    @Override
+    public String getUiPackage() {
+        enforce(TEST_BIOMETRIC);
+        CharSequence name = mHost.string("config_biometric_prompt_ui_package");
+        return name == null ? null : name.toString();
+    }
+
     @Override
     public long authenticate(IBinder token, long operationId, int userId,
             IBiometricServiceReceiver receiver, String opPackageName, PromptInfo promptInfo) {
@@ -211,6 +257,61 @@ public final class AuthService extends IAuthService.Default {
         enforce(SET_BIOMETRIC_DIALOG_ADVANCED);
         if (userId != UserHandle.getCallingUserId()) enforce(USE_BIOMETRIC_INTERNAL);
         return new ArrayList<>();  // no fingerprint or face service
+    }
+
+    /**
+     * BiometricService keeps the callback and reports the biometric-on-keyguard setting of
+     * each user. Gesher has no such setting and no sensor, so there is nothing to report.
+     */
+    @Override
+    public void registerEnabledOnKeyguardCallback(IBiometricEnabledOnKeyguardCallback callback) {
+        enforce(USE_BIOMETRIC_INTERNAL);
+    }
+
+    /** AOSP forwards these to the fingerprint and face services; there are none. */
+    @Override
+    public void registerAuthenticationStateListener(AuthenticationStateListener listener) {
+        enforce(USE_BIOMETRIC_INTERNAL);
+    }
+
+    @Override
+    public void unregisterAuthenticationStateListener(AuthenticationStateListener listener) {
+        enforce(USE_BIOMETRIC_INTERNAL);
+    }
+
+    /** Identity Check never changes state here (it is never active), so none is reported. */
+    @Override
+    public void registerIdentityCheckStateListener(IIdentityCheckStateListener listener) {
+        enforce(USE_BIOMETRIC_INTERNAL);
+    }
+
+    @Override
+    public void unregisterIdentityCheckStateListener(IIdentityCheckStateListener listener) {
+        enforce(USE_BIOMETRIC_INTERNAL);
+    }
+
+    /** InvalidationTracker with no sensor to invalidate: onCompleted at once. */
+    @Override
+    public void invalidateAuthenticatorIds(int userId, int fromSensorId,
+            IInvalidationCallback callback) {
+        enforce(USE_BIOMETRIC_INTERNAL);
+        try {
+            callback.onCompleted();
+        } catch (RemoteException e) {
+            SystemServer.log("auth: invalidation callback not delivered: " + e);
+        }
+    }
+
+    /** No sensor is locked out, and none can request a reset. */
+    @Override
+    public void resetLockoutTimeBound(IBinder token, String opPackageName, int fromSensorId,
+            int userId, byte[] hardwareAuthToken) {
+        enforce(USE_BIOMETRIC_INTERNAL);
+    }
+
+    @Override
+    public void resetLockout(int userId, byte[] hardwareAuthToken) {
+        enforce(USE_BIOMETRIC_INTERNAL);
     }
 
     @Override

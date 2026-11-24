@@ -4,13 +4,15 @@
 The Android and system-server boundaries are stand-ins with android-16.0.0_r4's
 constant values; AuthService, WindowsHelloBackend, DeviceCredential,
 ConfirmCredential and OwnerWatch are compiled unchanged apart from their package,
-imports and public class visibility. Tests cover the sensor-less AOSP answers with
+imports and public class visibility; StandIn, the dispatch the service's Binder
+uses, is compiled the same way. Tests cover the sensor-less AOSP answers with
 no Windows Hello backend, and, with an isolated test double only, the
 device-credential confirmation outcomes, cancellation, replacement, client death
 and callback ordering; the one availability decision (natives, Windows build
 22000, Windows Hello's answer at start and now) behind canAuthenticate, prompts
-and the confirm-credential intent; that intent's results; and when a prompt's
-owner counts as having left the foreground.
+and the confirm-credential intent; that intent's results; when a prompt's
+owner counts as having left the foreground; and AOSP's permission on every
+IAuthService method through the Binder-facing path.
 Use --source-ref to run the contracts against another revision of the sources.
 """
 from __future__ import annotations
@@ -35,6 +37,9 @@ SOURCES = {
                             "final class OwnerWatch", "final class OwnerWatch"),
     "// PRODUCTION_CONFIRM": ("app/java/com/gesher/server/ConfirmCredential.java",
                               "final class ConfirmCredential", "final class ConfirmCredential"),
+    # The Binder-facing dispatch: every IAuthService call an app makes goes through it.
+    "// PRODUCTION_STANDIN": ("app/java/com/gesher/server/StandIn.java",
+                              "public final class StandIn", "final class StandIn"),
 }
 
 
