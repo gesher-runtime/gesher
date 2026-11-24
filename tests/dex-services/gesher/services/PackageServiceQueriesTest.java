@@ -102,8 +102,8 @@ public final class PackageServiceQueriesTest {
                         && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_NETWORK, 0)
                         && !service.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS, 0),
                 "Location features do not match the network-only provider");
-        // FEATURE_MICROPHONE follows the audio input exactly; without the runtime
-        // natives (this process) there is no input to report.
+        // FEATURE_MICROPHONE follows the audio input exactly, as this process's
+        // AudioSystem reports it (none where its natives are unavailable).
         boolean input;
         try {
             android.util.IntArray inputs = new android.util.IntArray();
