@@ -4,6 +4,7 @@
 package com.gesher.app;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -22,7 +23,10 @@ import java.util.Set;
  * ({@code VariantMatcher}), its install-time modules with their dependencies, the APKs of
  * those modules whose targeting matches ({@code ApkMatcher}), and the install-time asset
  * slices. Each targeting dimension follows bundletool's matcher of that name
- * (github.com/google/bundletool, {@code com.android.tools.build.bundletool.device}).
+ * (github.com/google/bundletool, {@code com.android.tools.build.bundletool.device}), with
+ * the device tier, country set and device group the set names as its defaults, as
+ * {@code extract-apks} fills them into a device spec that has none
+ * ({@code ExtractApksCommand.applyDefaultsToDeviceSpec}).
  *
  * <p>The protobuf wire format is read directly: the fields below are those of bundletool's
  * {@code commands.proto} and {@code targeting.proto}.
@@ -30,8 +34,11 @@ import java.util.Set;
 final class ApkSetToc {
     private ApkSetToc() {}
 
-    // BuildApksResult
-    private static final int RESULT_VARIANT = 1, RESULT_ASSET_SLICE_SET = 3;
+    // BuildApksResult, Bundletool, DefaultTargetingValue, SplitDimension.Value
+    private static final int RESULT_VARIANT = 1, RESULT_BUNDLETOOL = 2, RESULT_ASSET_SLICE_SET = 3,
+            RESULT_DEFAULT_TARGETING = 7;
+    private static final int BUNDLETOOL_VERSION = 2, DEFAULT_DIMENSION = 1, DEFAULT_VALUE = 2;
+    private static final int DIMENSION_DEVICE_TIER = 6, DIMENSION_COUNTRY_SET = 7, DIMENSION_DEVICE_GROUP = 9;
     // Variant, VariantTargeting
     private static final int VARIANT_TARGETING = 1, VARIANT_APK_SET = 2;
     private static final int VT_SDK = 1, VT_ABI = 2, VT_DENSITY = 3, VT_MULTI_ABI = 4, VT_SDK_RUNTIME = 6;
@@ -47,7 +54,7 @@ final class ApkSetToc {
     private static final int AT_ABI = 1, AT_LANGUAGE = 3, AT_DENSITY = 4, AT_SDK = 5, AT_TCF = 6,
             AT_MULTI_ABI = 7, AT_DEVICE_TIER = 9, AT_COUNTRY_SET = 10, AT_DEVICE_GROUP = 11;
     // Every *Targeting message: repeated value = 1, alternatives = 2 (DeviceTierTargeting: 3, 4).
-    private static final int VALUE = 1, ALTERNATIVES = 2;
+    private static final int VALUE = 1, ALTERNATIVES = 2, TIER_VALUE = 3, TIER_ALTERNATIVES = 4;
     private static final int INSTALL_TIME = 1;  // DeliveryType.INSTALL_TIME
 
     /** Abi.AbiAlias in enum order, which is also bundletool's ARCHITECTURE_ORDERING. */
@@ -57,27 +64,107 @@ final class ApkSetToc {
     private static final int[] DENSITY_DPI = {0, 0xffff, 120, 160, 213, 240, 320, 480, 640};
     private static final int DEFAULT_DENSITY = 0, ANY_DENSITY = 0xfffe, MDPI = 160;
 
+    /**
+     * The most protobuf fields read from one toc.pb, counting those of every nested message
+     * read. Selection reads the chosen variant's modules and APK targeting: tens of thousands
+     * of fields for a set of 60 modules with every ABI, density and 90 language splits in 4
+     * variants. The cap keeps a small, highly compressible archive from making the installer
+     * build millions of objects.
+     */
+    static final int MAX_DECODED_FIELDS = 500_000;
+
+    /**
+     * Bundletool's device spec beyond {@link PackageBundles.Device}: Gesher's device defines
+     * no device tier, country set or device group, so these are the set's own defaults, or
+     * tier 0 and no country set or group, as {@code extract-apks} fills them in.
+     */
+    private static final class Spec {
+        final PackageBundles.Device device;
+        final int tier;
+        final String countrySet;
+        final String group;
+        /**
+         * Whether modules carry delivery types (bundletool 0.10.2 and later) or only the
+         * deprecated on-demand flag; null when the set names no readable version.
+         */
+        final Boolean deliveryTypes;
+
+        Spec(PackageBundles.Device device, Msg result) throws IOException {
+            this.device = device;
+            int tier = 0;
+            String countrySet = "", group = "";
+            for (Msg value : result.messages(RESULT_DEFAULT_TARGETING)) {
+                String text = value.string(DEFAULT_VALUE);
+                if (text.isEmpty()) continue;
+                long dimension = value.varint(DEFAULT_DIMENSION);
+                if (dimension == DIMENSION_DEVICE_TIER) {
+                    try {
+                        tier = Integer.parseInt(text);
+                    } catch (NumberFormatException e) {
+                        throw new IOException("Invalid toc.pb: default device tier " + text);
+                    }
+                } else if (dimension == DIMENSION_COUNTRY_SET) {
+                    countrySet = text;
+                } else if (dimension == DIMENSION_DEVICE_GROUP) {
+                    group = text;
+                }
+            }
+            this.tier = tier;
+            this.countrySet = countrySet;
+            this.group = group;
+            int[] version = version(result.message(RESULT_BUNDLETOOL).string(BUNDLETOOL_VERSION));
+            deliveryTypes = version == null ? null : compareVersions(version, new int[] {0, 10, 2}) >= 0;
+        }
+    }
+
     /** The paths, inside the APK set, of the APKs {@code device} gets. */
     static List<String> select(byte[] toc, PackageBundles.Device device) throws IOException {
-        Msg result = Msg.parse(toc);
-        List<String> paths = new ArrayList<>();
-        Msg variant = variant(result.messages(RESULT_VARIANT), device);
-        Set<String> modules = installTimeModules(variant, device);
-        for (Msg set : variant.messages(VARIANT_APK_SET)) {
-            if (!modules.contains(set.message(SET_MODULE).string(MODULE_NAME))) continue;
-            for (Msg apk : set.messages(SET_APK)) {
-                checkCompatible(apk.message(APK_TARGETING), device);
-                if (matches(apk.message(APK_TARGETING), device)) paths.add(apk.string(APK_PATH));
+        try {
+            Msg result = Msg.parse(toc, new int[] {MAX_DECODED_FIELDS});
+            Spec spec = new Spec(device, result);
+            List<String> paths = new ArrayList<>();
+            Msg variant = variant(result.messages(RESULT_VARIANT), spec);
+            Set<String> modules = installTimeModules(variant, spec);
+            for (Msg set : variant.messages(VARIANT_APK_SET)) {
+                if (!modules.contains(set.message(SET_MODULE).string(MODULE_NAME))) continue;
+                for (Msg apk : set.messages(SET_APK)) {
+                    checkCompatible(apk.message(APK_TARGETING), spec);
+                    if (matches(apk.message(APK_TARGETING), spec)) paths.add(apk.string(APK_PATH));
+                }
+            }
+            for (Msg slices : result.messages(RESULT_ASSET_SLICE_SET)) {
+                // Asset packs: install-time ones only (ApkMatcher.getUpfrontAssetModules).
+                if (slices.message(SLICES_MODULE).varint(ASSET_DELIVERY_TYPE) != INSTALL_TIME) continue;
+                for (Msg apk : slices.messages(SLICES_APK)) {
+                    if (matches(apk.message(APK_TARGETING), spec)) paths.add(apk.string(APK_PATH));
+                }
+            }
+            return paths;
+        } catch (UncheckedIOException invalid) {
+            throw invalid.getCause();
+        }
+    }
+
+    /** The numeric components of a bundletool version ("1.18.3", "0.10.2-dev"), or null. */
+    private static int[] version(String text) {
+        String[] parts = text.split("[.-]");
+        if (parts.length < 3) return null;
+        int[] version = new int[3];
+        for (int i = 0; i < 3; i++) {
+            try {
+                version[i] = Integer.parseInt(parts[i]);
+            } catch (NumberFormatException e) {
+                return null;
             }
         }
-        for (Msg slices : result.messages(RESULT_ASSET_SLICE_SET)) {
-            // Asset packs: install-time ones only (ApkMatcher.getUpfrontAssetModules).
-            if (slices.message(SLICES_MODULE).varint(ASSET_DELIVERY_TYPE) != INSTALL_TIME) continue;
-            for (Msg apk : slices.messages(SLICES_APK)) {
-                if (matches(apk.message(APK_TARGETING), device)) paths.add(apk.string(APK_PATH));
-            }
+        return version;
+    }
+
+    private static int compareVersions(int[] a, int[] b) {
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) return Integer.compare(a[i], b[i]);
         }
-        return paths;
+        return 0;
     }
 
     /**
@@ -85,7 +172,8 @@ final class ApkSetToc {
      * not one that requires the SDK runtime (Gesher has none), and matching every dimension
      * the device defines.
      */
-    private static Msg variant(List<Msg> variants, PackageBundles.Device device) throws IOException {
+    private static Msg variant(List<Msg> variants, Spec spec) throws IOException {
+        PackageBundles.Device device = spec.device;
         List<Msg> matching = new ArrayList<>();
         for (Msg variant : variants) {
             if (isInstant(variant)) continue;
@@ -111,26 +199,27 @@ final class ApkSetToc {
         return matching.get(0);
     }
 
+    /** Every APK instant (VariantMatcher.isVariantInstant): so is a variant without APKs. */
     private static boolean isInstant(Msg variant) {
-        boolean any = false;
         for (Msg set : variant.messages(VARIANT_APK_SET)) {
             for (Msg apk : set.messages(SET_APK)) {
                 if (!apk.has(APK_INSTANT)) return false;
-                any = true;
             }
         }
-        return any;
+        return true;
     }
 
     /**
      * The install-time modules whose conditions the device meets, with every module they
      * depend on ({@code ApkMatcher.getInstallTimeAndRequestedModulesWithDependencies}; every
      * module depends on base). A set from bundletool before 0.10.2 has no delivery type and
-     * marks on-demand modules with the deprecated flag instead. Device features and OpenGL
+     * marks on-demand modules with the deprecated flag instead. A module conditioned on device
+     * groups is installed for the set's default group only. Device features and OpenGL
      * versions are conditions Gesher's device spec does not list, so, as bundletool does for
      * a spec without them, they do not exclude a module.
      */
-    private static Set<String> installTimeModules(Msg variant, PackageBundles.Device device) {
+    private static Set<String> installTimeModules(Msg variant, Spec spec) {
+        PackageBundles.Device device = spec.device;
         Map<String, List<String>> dependencies = new HashMap<>();
         Set<String> modules = new LinkedHashSet<>();
         for (Msg set : variant.messages(VARIANT_APK_SET)) {
@@ -140,11 +229,13 @@ final class ApkSetToc {
             needs.add("base");
             dependencies.put(name, needs);
             long delivery = module.varint(MODULE_DELIVERY_TYPE);
-            boolean installTime = delivery != 0 ? delivery == INSTALL_TIME
+            // As bundletool by the set's version; without one, a delivery type where there is one.
+            boolean types = spec.deliveryTypes != null ? spec.deliveryTypes : delivery != 0;
+            boolean installTime = types ? delivery == INSTALL_TIME
                     : module.varint(MODULE_ON_DEMAND_DEPRECATED) == 0;
             Msg targeting = module.message(MODULE_TARGETING);
             if (installTime && sdkMatches(targeting.message(MT_SDK), device)
-                    && targeting.message(MT_DEVICE_GROUP).strings(VALUE).isEmpty()) {
+                    && groupMatches(targeting.message(MT_DEVICE_GROUP), spec)) {
                 modules.add(name);
             }
         }
@@ -158,24 +249,24 @@ final class ApkSetToc {
     }
 
     /** ApkMatcher.matchesApkTargeting over the dimensions an APK can be targeted by. */
-    private static boolean matches(Msg t, PackageBundles.Device device) throws IOException {
-        if (!t.message(AT_DEVICE_TIER).isEmpty()) {
-            // DeviceTierApkMatcher requires the spec to name a tier; Gesher's device has none.
-            throw new IOException("The APK set targets device tiers, which this device does not define");
-        }
+    private static boolean matches(Msg t, Spec spec) {
+        PackageBundles.Device device = spec.device;
         return sdkMatches(t.message(AT_SDK), device)
                 && abiMatches(t.message(AT_ABI), device)
                 && multiAbiMatches(t.message(AT_MULTI_ABI), device)
                 && (device.densityDpi == 0 || densityMatches(t.message(AT_DENSITY), device))
                 && (device.languages == null || languageMatches(t.message(AT_LANGUAGE), device))
                 && tcfMatches(t.message(AT_TCF))
-                && t.message(AT_DEVICE_GROUP).strings(VALUE).isEmpty()
-                && countrySetMatches(t.message(AT_COUNTRY_SET));
+                && groupMatches(t.message(AT_DEVICE_GROUP), spec)
+                && tierMatches(t.message(AT_DEVICE_TIER), spec)
+                && countrySetMatches(t.message(AT_COUNTRY_SET), spec);
     }
 
-    private static void checkCompatible(Msg t, PackageBundles.Device device) throws IOException {
-        checkSdkCompatible(t.message(AT_SDK), device);
-        checkAbiCompatible(t.message(AT_ABI), device);
+    private static void checkCompatible(Msg t, Spec spec) throws IOException {
+        checkSdkCompatible(t.message(AT_SDK), spec.device);
+        checkAbiCompatible(t.message(AT_ABI), spec.device);
+        checkTierCompatible(t.message(AT_DEVICE_TIER), spec);
+        checkCountrySetCompatible(t.message(AT_COUNTRY_SET), spec);
     }
 
     // --- SdkVersionMatcher ---------------------------------------------------------------
@@ -322,7 +413,8 @@ final class ApkSetToc {
         return ((2 * lower) - desired) * higher > desired * desired ? 1 : -1;
     }
 
-    // --- LanguageMatcher, TextureCompressionFormatMatcher, CountrySetApkMatcher ----------
+    // --- LanguageMatcher, TextureCompressionFormatMatcher, CountrySetApkMatcher,
+    //     DeviceTierApkMatcher, DeviceGroupApkMatcher, DeviceGroupModuleMatcher ------------
 
     private static boolean languageMatches(Msg t, PackageBundles.Device device) {
         if (t.isEmpty()) return true;
@@ -340,9 +432,44 @@ final class ApkSetToc {
         return t.isEmpty() || (t.messages(VALUE).isEmpty() && !t.messages(ALTERNATIVES).isEmpty());
     }
 
-    /** Gesher's device names no country set: only untargeted or fallback APKs. */
-    private static boolean countrySetMatches(Msg t) {
-        return t.isEmpty() || (t.strings(VALUE).isEmpty() && !t.strings(ALTERNATIVES).isEmpty());
+    /**
+     * The set's default country set; without one, only untargeted or fallback APKs, as
+     * Gesher's device names no country set of its own.
+     */
+    private static boolean countrySetMatches(Msg t, Spec spec) {
+        if (t.isEmpty()) return true;
+        if (spec.countrySet.isEmpty()) return t.strings(VALUE).isEmpty() && !t.strings(ALTERNATIVES).isEmpty();
+        return t.strings(VALUE).contains(spec.countrySet);
+    }
+
+    private static void checkCountrySetCompatible(Msg t, Spec spec) throws IOException {
+        if (t.isEmpty() || spec.countrySet.isEmpty()) return;
+        if (t.strings(VALUE).contains(spec.countrySet) || t.strings(ALTERNATIVES).contains(spec.countrySet)) return;
+        throw new IOException("The APK set's default country set " + spec.countrySet
+                + " is none of those its splits target");
+    }
+
+    /** The set's default device tier (0 without one): only the APKs for that tier. */
+    private static boolean tierMatches(Msg t, Spec spec) {
+        if (t.isEmpty()) return true;
+        for (Msg value : t.messages(TIER_VALUE)) if ((int) value.varint(1) == spec.tier) return true;
+        return false;
+    }
+
+    private static void checkTierCompatible(Msg t, Spec spec) throws IOException {
+        if (t.isEmpty()) return;
+        List<Msg> all = new ArrayList<>(t.messages(TIER_VALUE));
+        all.addAll(t.messages(TIER_ALTERNATIVES));
+        for (Msg value : all) if ((int) value.varint(1) == spec.tier) return;
+        throw new IOException("The APK set's device tier " + spec.tier + " is none of those its splits target");
+    }
+
+    /**
+     * An APK or conditional module targeted at device groups matches only when it names the
+     * set's default group (the empty group without one): Gesher's device is in no group.
+     */
+    private static boolean groupMatches(Msg t, Spec spec) {
+        return t.isEmpty() || t.strings(VALUE).contains(spec.group);
     }
 
     /** bundletool's ResourcesUtils.convertLocaleToLanguage: the language, in its legacy code. */
@@ -358,43 +485,77 @@ final class ApkSetToc {
 
     // --- protobuf wire format ------------------------------------------------------------
 
-    /** A decoded message: each field's values, varints as Long, length-delimited as byte[]. */
+    /**
+     * A message read in place from the toc's bytes: each field's number and its varint (or
+     * fixed) value or, length-delimited, its offset and length. A nested message is read
+     * once, when first asked for, and every field read counts against one budget for the
+     * whole toc ({@link #MAX_DECODED_FIELDS}).
+     */
     private static final class Msg {
-        static final Msg EMPTY = new Msg();
-        private final Map<Integer, List<Object>> fields = new HashMap<>();
+        static final Msg EMPTY = new Msg(new byte[0], new int[1]);
+        private final byte[] bytes;
+        private final int[] budget;
+        private int count;
+        /** Field number << 1, | 1 when length-delimited. */
+        private int[] keys = new int[0];
+        /** The varint or fixed value, or offset << 32 | length. */
+        private long[] values = new long[0];
+        private Msg[] decoded;
 
-        static Msg parse(byte[] bytes) throws IOException {
-            Msg msg = new Msg();
-            int[] at = {0};
-            while (at[0] < bytes.length) {
-                long key = varint(bytes, at);
-                int field = (int) (key >>> 3);
-                Object value;
+        private Msg(byte[] bytes, int[] budget) {
+            this.bytes = bytes;
+            this.budget = budget;
+        }
+
+        static Msg parse(byte[] bytes, int[] budget) throws IOException {
+            return parse(bytes, 0, bytes.length, budget);
+        }
+
+        private static Msg parse(byte[] bytes, int start, int end, int[] budget) throws IOException {
+            Msg msg = new Msg(bytes, budget);
+            int[] at = {start};
+            while (at[0] < end) {
+                if (--budget[0] < 0) {
+                    throw new IOException("toc.pb has more than " + MAX_DECODED_FIELDS + " fields");
+                }
+                long key = varint(bytes, at, end);
+                long field = key >>> 3;
+                if (field < 1 || field > Integer.MAX_VALUE >> 1) throw new IOException("Invalid toc.pb");
+                long value;
+                boolean delimited = false;
                 switch ((int) (key & 7)) {
-                    case 0: value = varint(bytes, at); break;
-                    case 1: value = fixed(bytes, at, 8); break;
+                    case 0: value = varint(bytes, at, end); break;
+                    case 1: value = fixed(bytes, at, end, 8); break;
                     case 2: {
-                        long length = varint(bytes, at);
-                        if (length < 0 || length > bytes.length - at[0]) throw new IOException("Invalid toc.pb");
-                        byte[] data = new byte[(int) length];
-                        System.arraycopy(bytes, at[0], data, 0, data.length);
-                        at[0] += data.length;
-                        value = data;
+                        long length = varint(bytes, at, end);
+                        if (length < 0 || length > end - at[0]) throw new IOException("Invalid toc.pb");
+                        value = ((long) at[0] << 32) | length;
+                        at[0] += (int) length;
+                        delimited = true;
                         break;
                     }
-                    case 5: value = fixed(bytes, at, 4); break;
+                    case 5: value = fixed(bytes, at, end, 4); break;
                     default: throw new IOException("Invalid toc.pb");
                 }
-                if (field < 1) throw new IOException("Invalid toc.pb");
-                msg.fields.computeIfAbsent(field, f -> new ArrayList<>()).add(value);
+                msg.add(((int) field << 1) | (delimited ? 1 : 0), value);
             }
             return msg;
         }
 
-        private static long varint(byte[] bytes, int[] at) throws IOException {
+        private void add(int key, long value) {
+            if (count == keys.length) {
+                int capacity = Math.max(2, count * 2);
+                keys = java.util.Arrays.copyOf(keys, capacity);
+                values = java.util.Arrays.copyOf(values, capacity);
+            }
+            keys[count] = key;
+            values[count++] = value;
+        }
+
+        private static long varint(byte[] bytes, int[] at, int end) throws IOException {
             long value = 0;
             for (int shift = 0; shift < 64; shift += 7) {
-                if (at[0] >= bytes.length) throw new IOException("Invalid toc.pb");
+                if (at[0] >= end) throw new IOException("Invalid toc.pb");
                 byte b = bytes[at[0]++];
                 value |= (long) (b & 0x7f) << shift;
                 if (b >= 0) return value;
@@ -402,25 +563,39 @@ final class ApkSetToc {
             throw new IOException("Invalid toc.pb");
         }
 
-        private static long fixed(byte[] bytes, int[] at, int size) throws IOException {
-            if (bytes.length - at[0] < size) throw new IOException("Invalid toc.pb");
+        private static long fixed(byte[] bytes, int[] at, int end, int size) throws IOException {
+            if (end - at[0] < size) throw new IOException("Invalid toc.pb");
             long value = 0;
             for (int i = size - 1; i >= 0; i--) value = (value << 8) | (bytes[at[0] + i] & 0xff);
             at[0] += size;
             return value;
         }
 
-        boolean isEmpty() { return fields.isEmpty(); }
-        boolean has(int field) { return fields.containsKey(field); }
+        boolean isEmpty() { return count == 0; }
+
+        boolean has(int field) {
+            for (int i = 0; i < count; i++) if (keys[i] >>> 1 == field) return true;
+            return false;
+        }
 
         List<Msg> messages(int field) {
             List<Msg> list = new ArrayList<>();
-            for (Object value : fields.getOrDefault(field, Collections.emptyList())) {
-                try {
-                    list.add(value instanceof byte[] ? parse((byte[]) value) : EMPTY);
-                } catch (IOException e) {
-                    throw new IllegalArgumentException("Invalid toc.pb", e);
+            for (int i = 0; i < count; i++) {
+                if (keys[i] >>> 1 != field) continue;
+                if ((keys[i] & 1) == 0) {
+                    list.add(EMPTY);
+                    continue;
                 }
+                if (decoded == null) decoded = new Msg[count];
+                if (decoded[i] == null) {
+                    int offset = (int) (values[i] >>> 32);
+                    try {
+                        decoded[i] = parse(bytes, offset, offset + (int) values[i], budget);
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                }
+                list.add(decoded[i]);
             }
             return list;
         }
@@ -431,15 +606,17 @@ final class ApkSetToc {
         }
 
         long varint(int field) {
-            List<Object> values = fields.get(field);
-            Object last = values == null ? null : values.get(values.size() - 1);
-            return last instanceof Long ? (Long) last : 0;
+            for (int i = count - 1; i >= 0; i--) {
+                if (keys[i] >>> 1 == field) return (keys[i] & 1) == 0 ? values[i] : 0;
+            }
+            return 0;
         }
 
         List<String> strings(int field) {
             List<String> list = new ArrayList<>();
-            for (Object value : fields.getOrDefault(field, Collections.emptyList())) {
-                if (value instanceof byte[]) list.add(new String((byte[]) value, StandardCharsets.UTF_8));
+            for (int i = 0; i < count; i++) {
+                if (keys[i] != ((field << 1) | 1)) continue;
+                list.add(new String(bytes, (int) (values[i] >>> 32), (int) values[i], StandardCharsets.UTF_8));
             }
             return list;
         }

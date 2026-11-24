@@ -29,11 +29,17 @@ an XAPK lists its APKs in `manifest.json`.
    `com.gesher.app.ApkSetToc` reads `toc.pb` and follows bundletool's
    `ApkMatcher` and `VariantMatcher`, a matcher per targeting dimension, with
    Gesher's device: its SDK level, its ABIs in order (`NativeLibs.SUPPORTED`:
-   x86_64, then arm64-v8a), no SDK runtime, no texture compression formats,
-   device groups or country set, and no device tier (a set that targets tiers is
-   refused, as bundletool refuses it without a tier in the device spec). Device
+   x86_64, then arm64-v8a), no SDK runtime and no texture compression formats.
+   Gesher's device defines no device tier, country set or device group, so, as
+   `bundletool extract-apks` and `install-apks` fill a device spec without them
+   (`ExtractApksCommand.applyDefaultsToDeviceSpec`), it takes the set's own
+   defaults from `toc.pb`: its default device tier or tier 0, its default country
+   set or none (the fallback splits), its default device group or none. Device
    features and OpenGL versions, which Gesher's spec does not list, do not
-   exclude a conditional module, as in bundletool for such a spec.
+   exclude a conditional module, as in bundletool for such a spec; this is a
+   known limitation, since Play would leave out a module whose required feature
+   the PC lacks. Decoding `toc.pb` is bounded by a number of fields, so a small,
+   highly compressible archive cannot exhaust the installer's memory.
 3. **Every density and language split of the chosen modules is installed.**
    The matcher implements both dimensions, but Gesher's device leaves them out:
    its density is set per launch (`GESHER_DISPLAY`), its languages follow
@@ -48,11 +54,16 @@ an XAPK lists its APKs in `manifest.json`.
    the archive called them.
 6. **What is not an APK is reported, not invented.** Expansion files are logged
    as not installed; an encrypted APKM is refused with a message saying so.
+   A `manifest.json` that starts with a UTF-8 byte order mark is read as the
+   JSON after it.
 
 ## Consequences
 
 - An `.apks` from `bundletool build-apks` (default or universal mode) installs.
   Its standalone APKs install only when no split variant fits the SDK level.
+- An app with asset packs targeted at device tiers, country sets or device
+  groups gets the slices for the set's defaults, as `install-apks` gives them
+  without a device spec naming them.
 - An app that needs a density or language split installed later, as Play
   would add it, already has it.
 - Disk use is that of all density and language splits of the chosen modules.

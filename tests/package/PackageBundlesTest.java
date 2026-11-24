@@ -51,6 +51,9 @@ public final class PackageBundlesTest {
         Files.createDirectories(work.toPath());
         detection(work);
         apkSet(work);
+        deviceDefaults(work);
+        deliveryTypes(work);
+        limits(work);
         universalSet(work);
         xapkManifest(work);
         encrypted(work);
@@ -261,13 +264,152 @@ public final class PackageBundlesTest {
         rejects(missing, PackageBundles.Device.gesher(36), "does not hold", "A toc naming a missing APK was accepted");
         File truncated = apkSetFile(work, "truncated.apks", Arrays.copyOf(toc, toc.length - 3), names);
         rejects(truncated, PackageBundles.Device.gesher(36), "toc.pb", "A truncated toc.pb was accepted");
-        P tiered = new P().m(1, new P().m(1, new P().m(1, sdk(21)))
-                .m(2, new P().m(1, module("base", 1))
-                        .m(2, apk("splits/base-master.apk", new P(), false))
-                        .m(2, apk("splits/base-tier_1.apk", new P().m(9, new P().m(3, new P().v(1, 1))), false))));
-        File tiers = apkSetFile(work, "tiers.apks", tiered.out.toByteArray(),
-                List.of("splits/base-master.apk", "splits/base-tier_1.apk"));
-        rejects(tiers, PackageBundles.Device.gesher(36), "device tiers", "Device tier targeting was guessed");
+    }
+
+    /** ApkDescription without recording it in NAMED. */
+    private static P split(String path, P targeting) {
+        return new P().m(1, targeting).s(2, path).m(3, new P().s(1, "x"));
+    }
+    /** google.protobuf.Int32Value: 0 is the empty message, as protobuf writes it. */
+    private static P int32(int value) {
+        return value == 0 ? new P() : new P().v(1, value);
+    }
+    /** BuildApksResult.default_targeting_value: SplitDimension.Value and its default. */
+    private static P defaultValue(int dimension, String value) {
+        return new P().v(1, dimension).s(2, value);
+    }
+    private static final int DEVICE_TIER = 6, COUNTRY_SET = 7, DEVICE_GROUP = 9;
+    /** Three splits targeted at {@code values} in turn (each with the others as alternatives) and a fallback. */
+    private static List<P> targeted(int field, String prefix, String... values) {
+        List<P> splits = new ArrayList<>();
+        for (String value : values) {
+            P t = new P().s(1, value);
+            for (String other : values) if (!other.equals(value)) t.s(2, other);
+            splits.add(split("splits/base-" + prefix + "_" + value + ".apk", new P().m(field, t)));
+        }
+        P fallback = new P();
+        for (String value : values) fallback.s(2, value);
+        splits.add(split("splits/base-" + prefix + "_other.apk", new P().m(field, fallback)));
+        return splits;
+    }
+    private static List<String> paths(String... paths) {
+        return Arrays.asList(paths);
+    }
+
+    /**
+     * Device tier, country set and device group: Gesher's device defines none, so the set's
+     * own defaults apply, as bundletool extract-apks / install-apks fill them in
+     * (ExtractApksCommand.applyDefaultsToDeviceSpec): tier 0, the fallback country split and
+     * no group without defaults.
+     */
+    private static void deviceDefaults(File work) throws Exception {
+        P base = new P().m(1, module("base", 1)).m(2, split("splits/base-master.apk", new P()));
+        List<String> files = new ArrayList<>(List.of("splits/base-master.apk", "splits/hq-master.apk",
+                "asset-slices/pack-tier_0.apk", "asset-slices/pack-tier_1.apk", "asset-slices/pack-tier_2.apk"));
+        for (int tier = 0; tier < 3; tier++) {
+            P t = new P().m(3, int32(tier));
+            for (int other = 0; other < 3; other++) if (other != tier) t.m(4, int32(other));
+            base.m(2, split("splits/base-tier_" + tier + ".apk", new P().m(9, t)));
+            files.add("splits/base-tier_" + tier + ".apk");
+        }
+        for (P p : targeted(10, "countries", "latam", "sea")) base.m(2, p);
+        for (P p : targeted(11, "group", "high", "low")) base.m(2, p);
+        for (String name : new String[] {"countries_latam", "countries_sea", "countries_other",
+                "group_high", "group_low", "group_other"}) {
+            files.add("splits/base-" + name + ".apk");
+        }
+        // A conditional module for the "high" device group (ModuleTargeting.device_group_targeting).
+        P hq = new P().m(1, module("hq", 1).m(5, new P().m(5, new P().s(1, "high"))))
+                .m(2, split("splits/hq-master.apk", new P()));
+        P pack = new P().m(1, new P().s(1, "pack").v(4, 1));
+        for (int tier = 0; tier < 3; tier++) {
+            P t = new P().m(3, int32(tier));
+            for (int other = 0; other < 3; other++) if (other != tier) t.m(4, int32(other));
+            pack.m(2, split("asset-slices/pack-tier_" + tier + ".apk", new P().m(9, t)));
+        }
+        byte[] variants = new P().m(1, new P().m(1, new P().m(1, sdk(21))).m(2, base).m(2, hq)).out.toByteArray();
+        PackageBundles.Device gesher = PackageBundles.Device.gesher(36);
+
+        P plain = new P();
+        plain.out.writeBytes(variants);
+        plain.m(3, pack);
+        expect(select(apkSetFile(work, "no-defaults.apks", plain.out.toByteArray(), files), gesher),
+                "Without defaults: tier 0, the fallback country split, no device group",
+                "splits/base-master.apk", "splits/base-tier_0.apk", "splits/base-countries_other.apk",
+                "asset-slices/pack-tier_0.apk");
+
+        P named = new P();
+        named.out.writeBytes(variants);
+        named.m(3, pack).m(7, defaultValue(DEVICE_TIER, "2")).m(7, defaultValue(COUNTRY_SET, "latam"))
+                .m(7, defaultValue(DEVICE_GROUP, "high"));
+        expect(select(apkSetFile(work, "defaults.apks", named.out.toByteArray(), files), gesher),
+                "The set's defaults: tier 2, latam, the high group and its conditional module",
+                "splits/base-master.apk", "splits/base-tier_2.apk", "splits/base-countries_latam.apk",
+                "splits/base-group_high.apk", "splits/hq-master.apk", "asset-slices/pack-tier_2.apk");
+
+        P unknownTier = new P();
+        unknownTier.out.writeBytes(variants);
+        unknownTier.m(7, defaultValue(DEVICE_TIER, "5"));
+        rejects(apkSetFile(work, "unknown-tier.apks", unknownTier.out.toByteArray(), files), gesher,
+                "device tier 5", "A default tier no split targets was accepted");
+        P badTier = new P();
+        badTier.out.writeBytes(variants);
+        badTier.m(7, defaultValue(DEVICE_TIER, "high"));
+        rejects(apkSetFile(work, "bad-tier.apks", badTier.out.toByteArray(), files), gesher,
+                "default device tier", "A default tier that is not a number was accepted");
+    }
+
+    /**
+     * Module delivery as bundletool reads it by the set's version: delivery_type from 0.10.2
+     * (an unknown one is not install-time), the deprecated on-demand flag before it.
+     */
+    private static void deliveryTypes(File work) throws Exception {
+        List<String> files = List.of("splits/base-master.apk", "splits/unknown-master.apk",
+                "splits/flagged-master.apk");
+        for (String version : new String[] {"0.9.0", "1.18.3"}) {
+            P variant = new P().m(1, new P().m(1, sdk(21)))
+                    .m(2, new P().m(1, module("base", 1)).m(2, split("splits/base-master.apk", new P())))
+                    .m(2, new P().m(1, new P().s(1, "unknown")).m(2, split("splits/unknown-master.apk", new P())))
+                    .m(2, new P().m(1, new P().s(1, "flagged").v(2, 1).v(6, 1))
+                            .m(2, split("splits/flagged-master.apk", new P())));
+            P result = new P().m(1, variant).m(2, new P().s(2, version));
+            List<String> picked = select(apkSetFile(work, "delivery-" + version + ".apks",
+                    result.out.toByteArray(), files), PackageBundles.Device.gesher(36));
+            if (version.equals("0.9.0")) {
+                expect(picked, "bundletool 0.9.0: the on-demand flag decides",
+                        "splits/base-master.apk", "splits/unknown-master.apk");
+            } else {
+                expect(picked, "bundletool 1.18.3: the delivery type decides",
+                        "splits/base-master.apk", "splits/flagged-master.apk");
+            }
+        }
+    }
+
+    /** toc.pb and manifest.json are bounded in size, and toc.pb in fields decoded. */
+    private static void limits(File work) throws Exception {
+        PackageBundles.Device gesher = PackageBundles.Device.gesher(36);
+        // About 600,000 empty variants in 1.2 MB, which deflates to a few kilobytes.
+        P many = new P();
+        byte[] empty = new P().b(1, new byte[0]).out.toByteArray();
+        for (int i = 0; i < ApkSetToc.MAX_DECODED_FIELDS + 100_000; i++) many.out.writeBytes(empty);
+        long start = System.nanoTime();
+        rejects(apkSetFile(work, "complex.apks", many.out.toByteArray(), List.of()), gesher,
+                "fields", "A toc.pb with more fields than the budget was decoded");
+        check(System.nanoTime() - start < 10_000_000_000L, "Rejecting a complex toc.pb took too long");
+        rejects(apkSetFile(work, "oversized.apks", new byte[PackageBundles.MAX_TOC + 1], List.of()), gesher,
+                "too large", "An oversized toc.pb was read");
+        Map<String, byte[]> big = entries("com.example.apk");
+        byte[] manifest = new byte[PackageBundles.MAX_MANIFEST + 1];
+        Arrays.fill(manifest, (byte) ' ');
+        manifest[0] = '{';
+        manifest[manifest.length - 1] = '}';
+        big.put("manifest.json", manifest);
+        try (ZipFile zip = new ZipFile(zip(work, "big-manifest.xapk", big))) {
+            PackageBundles.select(zip, gesher);
+            throw new AssertionError("An oversized manifest.json was read");
+        } catch (IOException expected) {
+            check(expected.getMessage().contains("too large"), "oversized manifest.json: " + expected.getMessage());
+        }
     }
 
     /** build-apks --mode=universal: one standalone variant, universal.apk. */
@@ -312,6 +454,16 @@ public final class PackageBundlesTest {
             expect(PackageBundles.select(zip, PackageBundles.Device.gesher(36)),
                     "Without split_apks every APK entry is the install", "com.example.apk");
             check(PackageBundles.expansions(zip).isEmpty(), "No expansion files invented");
+        }
+        // Some tools write a UTF-8 byte order mark before the JSON.
+        Map<String, byte[]> bom = entries("com.example.apk", "config.x86_64.apk", "unlisted.apk");
+        bom.put("manifest.json", ("\uFEFF{\"package_name\": \"com.example\", \"split_apks\": ["
+                + "{\"file\": \"com.example.apk\", \"id\": \"base\"},"
+                + " {\"file\": \"config.x86_64.apk\", \"id\": \"config.x86_64\"}]}").getBytes(StandardCharsets.UTF_8));
+        try (ZipFile zip = new ZipFile(zip(work, "bom.xapk", bom))) {
+            expect(PackageBundles.select(zip, PackageBundles.Device.gesher(36)),
+                    "A manifest.json after a byte order mark names the install", "com.example.apk",
+                    "config.x86_64.apk");
         }
         Map<String, byte[]> missing = entries("com.example.apk");
         missing.put("manifest.json", "{\"split_apks\": [{\"file\": \"gone.apk\"}]}".getBytes(StandardCharsets.UTF_8));

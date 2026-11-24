@@ -96,8 +96,14 @@ public final class PackageBundles {
         }
     }
 
-    /** The most a toc.pb or manifest.json is read into memory (they are kilobytes). */
-    private static final int MAX_TOC = 16 * 1024 * 1024;
+    /**
+     * The most of a toc.pb read into memory. Each language split lists every other language
+     * as an alternative, so a set of 60 modules with 90 languages in 4 variants takes about
+     * 11 MiB; selection reads only a small part of it, within ApkSetToc.MAX_DECODED_FIELDS.
+     */
+    static final int MAX_TOC = 16 * 1024 * 1024;
+    /** The most of an XAPK's manifest.json read into memory (it is kilobytes). */
+    static final int MAX_MANIFEST = 1024 * 1024;
 
     /**
      * The archive paths of the APKs that make up the install from bundle {@code zip}: for a
@@ -109,13 +115,7 @@ public final class PackageBundles {
     public static List<String> select(ZipFile zip, Device device) throws IOException {
         ZipEntry toc = zip.getEntry("toc.pb");
         if (toc != null) {
-            List<String> paths;
-            try {
-                paths = ApkSetToc.select(read(zip, toc), device);
-            } catch (IllegalArgumentException invalid) {
-                throw new IOException("Invalid toc.pb", invalid);
-            }
-            return held(zip, paths, "toc.pb");
+            return held(zip, ApkSetToc.select(read(zip, toc, MAX_TOC), device), "toc.pb");
         }
         Map<?, ?> manifest = xapkManifest(zip);
         if (manifest != null && manifest.get("split_apks") instanceof List) {
@@ -159,13 +159,13 @@ public final class PackageBundles {
         return new ArrayList<>(paths);
     }
 
-    private static byte[] read(ZipFile zip, ZipEntry entry) throws IOException {
-        if (entry.getSize() > MAX_TOC) throw new IOException(entry.getName() + " is too large");
+    private static byte[] read(ZipFile zip, ZipEntry entry, int max) throws IOException {
+        if (entry.getSize() > max) throw new IOException(entry.getName() + " is too large");
         byte[] bytes;
         try (InputStream in = zip.getInputStream(entry)) {
-            bytes = in.readNBytes(MAX_TOC + 1);
+            bytes = in.readNBytes(max + 1);
         }
-        if (bytes.length > MAX_TOC) throw new IOException(entry.getName() + " is too large");
+        if (bytes.length > max) throw new IOException(entry.getName() + " is too large");
         return bytes;
     }
 
@@ -185,8 +185,11 @@ public final class PackageBundles {
         ZipEntry entry = zip.getEntry("manifest.json");
         if (entry == null || entry.isDirectory()) return null;
         Object value;
+        String text = new String(read(zip, entry, MAX_MANIFEST), StandardCharsets.UTF_8);
+        // A byte order mark, which some tools write before UTF-8 JSON, is not part of it.
+        if (!text.isEmpty() && text.charAt(0) == '\uFEFF') text = text.substring(1);
         try {
-            value = new Json(new String(read(zip, entry), StandardCharsets.UTF_8)).document();
+            value = new Json(text).document();
         } catch (IllegalArgumentException invalid) {
             throw new IOException("Invalid manifest.json", invalid);
         }
