@@ -354,9 +354,9 @@ jboolean WindowsHost_hasUrlHandler(JNIEnv* env, jclass, jstring scheme) {
   std::u16string s = Str(env, scheme);
   if (env->ExceptionCheck() || s.empty()) return JNI_FALSE;
   long hr = 0;
-  dev::UrlHandler handler =
-      dev::QueryUrlHandler(reinterpret_cast<const wchar_t*>(s.c_str()), &hr);
-  return handler == dev::UrlHandler::kRegistered ? JNI_TRUE : JNI_FALSE;
+  ::dev::UrlHandler handler =
+      ::dev::QueryUrlHandler(reinterpret_cast<const wchar_t*>(s.c_str()), &hr);
+  return handler == ::dev::UrlHandler::kRegistered ? JNI_TRUE : JNI_FALSE;
 }
 
 jstring WindowsHost_pickFolder(JNIEnv* env, jclass, jstring title) {
@@ -382,6 +382,23 @@ bool DocumentIsActive(void* context) {
   if (activity->env->ExceptionCheck()) return false;
   bool result = activity->env->CallBooleanMethod(activity->active, activity->get) == JNI_TRUE;
   return !activity->env->ExceptionCheck() && result;
+}
+
+jboolean WindowsHost_confirmDial(JNIEnv* env, jclass, jstring package_name, jstring number,
+                                jint owner_pid, jobject active) {
+  if (!active) return JNI_FALSE;
+  jclass cls = env->GetObjectClass(active);
+  if (!cls) return JNI_FALSE;
+  jmethodID get = env->GetMethodID(cls, "getAsBoolean", "()Z");
+  env->DeleteLocalRef(cls);
+  if (!get) return JNI_FALSE;
+  std::u16string pkg = Str(env, package_name);
+  std::u16string phone = Str(env, number);
+  if (env->ExceptionCheck()) return JNI_FALSE;
+  DocumentActivity lifetime{env, active, get};
+  return ::dev::ConfirmDial(reinterpret_cast<const wchar_t*>(pkg.c_str()),
+      reinterpret_cast<const wchar_t*>(phone.c_str()), static_cast<unsigned long>(owner_pid),
+      DocumentIsActive, &lifetime) ? JNI_TRUE : JNI_FALSE;
 }
 
 jobjectArray WindowsHost_pickDocuments(JNIEnv* env, jclass, jint mode, jstring title,
@@ -514,6 +531,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeFullPath", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_fullPath)},
     {"nativeOpenUrl", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_openUrl)},
     {"nativeHasUrlHandler", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_hasUrlHandler)},
+    {"nativeConfirmDial", "(" DEVSVC_STRING DEVSVC_STRING
+        "ILjava/util/function/BooleanSupplier;)Z", GESHER_JNI(WindowsHost_confirmDial)},
     {"nativePickFolder", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFolder)},
     {"nativePickFile", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFile)},
     {"nativePickDocuments", "(I" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING
