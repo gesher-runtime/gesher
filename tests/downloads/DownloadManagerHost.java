@@ -235,7 +235,7 @@ public final class DownloadManagerHost {
                 /** WindowsHost.jobIdleMillis: display-off time without input, 0 while on. */
                 public long idleMillis() {
                     long since = displayOffSince;
-                    if (since < 0) return 0;
+                    if (since < 0) return DeviceConstraints.NOT_OFF;
                     long reading = displayOffReading;
                     return reading >= 0 ? reading : Math.max(0, clock.now() - since);
                 }

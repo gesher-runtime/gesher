@@ -15,6 +15,13 @@ final class DeviceConstraints {
     /** config_jobSchedulerInactivityIdleThreshold (core/res/res/values/config.xml). */
     static final long IDLE_AFTER_MS = 31 * 60_000;
 
+    /**
+     * The idle reading while the session display is on, dimmed or its state is not known.
+     * Distinct from 0, which is a display that has just gone off: Windows can deliver the
+     * OFF event before any display-off time has accumulated.
+     */
+    static final long NOT_OFF = -1;
+
     private DeviceConstraints() {}
 
     /** BatteryStateTracker.isPowerConnected: AC power is online. */
@@ -39,6 +46,10 @@ final class DeviceConstraints {
                 && ((power[1] & (128 | 8)) != 0 || power[2] == 100);
     }
 
+    /**
+     * Idle readings are display-off milliseconds, or {@link #NOT_OFF}; the display-off time
+     * is never inferred from a 0.
+     */
     /** DeviceIdlenessTracker: the screen has been off for the inactivity threshold. */
     static boolean idle(long idleMillis) {
         return idleMillis >= IDLE_AFTER_MS;
@@ -46,9 +57,10 @@ final class DeviceConstraints {
 
     /**
      * How long until {@link #idle} can hold without another display change, or -1 when the
-     * display is on (a display change is reported first) or the device is already idle.
+     * display is not off ({@link #NOT_OFF}; a display change is reported first) or the
+     * device is already idle. A display that went off at 0 ms waits the whole threshold.
      */
     static long untilIdle(long idleMillis) {
-        return idleMillis > 0 && idleMillis < IDLE_AFTER_MS ? IDLE_AFTER_MS - idleMillis : -1;
+        return idleMillis >= 0 && idleMillis < IDLE_AFTER_MS ? IDLE_AFTER_MS - idleMillis : -1;
     }
 }

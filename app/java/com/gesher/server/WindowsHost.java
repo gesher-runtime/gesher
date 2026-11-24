@@ -278,6 +278,16 @@ public final class WindowsHost {
         catch (UnsatisfiedLinkError unavailable) { return 0; }
     }
 
+    /**
+     * Display-off time without input as {@link #jobIdleMillis()} reads it, or
+     * {@link DeviceConstraints#NOT_OFF} unless Windows reported the session display OFF. Unlike
+     * jobIdleMillis, a display that has just gone off (0) is told apart from one that is on.
+     */
+    public static long jobIdleReading() {
+        if (sessionDisplayState() != DISPLAY_STATE_OFF) return DeviceConstraints.NOT_OFF;
+        return jobIdleMillis();
+    }
+
     /** Bits: 1 connected, 2 internet, 4 metered; -1 if unknown. */
     public static int networkState() {
         return available() ? nativeNetworkState() : -1;

@@ -447,7 +447,7 @@ public final class DownloadProvider extends ContentProvider {
         /** The power status JobSchedulerService's charging constraint reads. */
         @Override public int[] powerStatus() { return WindowsHost.powerStatus(); }
         /** The display-off inactivity JobSchedulerService's idle constraint reads. */
-        @Override public long idleMillis() { return WindowsHost.jobIdleMillis(); }
+        @Override public long idleMillis() { return WindowsHost.jobIdleReading(); }
         /** The events JobSchedulerService re-evaluates those constraints on. */
         @Override public void listen(Runnable listener) {
             WindowsHost.addListener(events -> {

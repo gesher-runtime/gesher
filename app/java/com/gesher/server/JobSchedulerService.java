@@ -1180,7 +1180,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     private static long hostPollAt(long now, int inputs, ConstraintState state) {
         if (inputs == 0) return Long.MAX_VALUE;
         long delay = CONSTRAINT_POLL_MS;
-        if (state.idleMillis > 0 && state.idleMillis < IDLE_AFTER_MS) {
+        if (state.idleMillis >= 0 && state.idleMillis < IDLE_AFTER_MS) {
             delay = Math.min(delay, IDLE_AFTER_MS - state.idleMillis);
         }
         return now + delay;
@@ -1320,7 +1320,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         com.gesher.net.WindowsNetworks.Snapshot networks;
         Map<android.net.NetworkRequest, android.net.Network> networkMatches;
         int[] power;
-        long idleMillis;
+        long idleMillis = DeviceConstraints.NOT_OFF;
         boolean storageNotLow;
         String topPackage;
     }
@@ -1353,7 +1353,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
         if ((inputs & OBSERVE_IDLE) != 0) {
             Long idle = mIdleMillisOverride;
-            state.idleMillis = idle != null ? idle : WindowsHost.jobIdleMillis();
+            state.idleMillis = idle != null ? idle : WindowsHost.jobIdleReading();
         }
         if ((inputs & OBSERVE_TOP) != 0) state.topPackage = mAtm.topResumedPackage();
         if ((inputs & OBSERVE_STORAGE) != 0) {

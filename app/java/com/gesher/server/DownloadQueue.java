@@ -57,7 +57,7 @@ final class DownloadQueue {
         long elapsedRealtime();
         /** WindowsHost.powerStatus(), as {@link DeviceConstraints} reads it; null if unknown. */
         int[] powerStatus();
-        /** WindowsHost.jobIdleMillis(): display-off time without input; 0 while in use. */
+        /** WindowsHost.jobIdleReading(): display-off ms without input; DeviceConstraints.NOT_OFF (-1) unless off. */
         long idleMillis();
         /** Calls {@code listener} when Windows reports a power status or display change. */
         void listen(Runnable listener);
