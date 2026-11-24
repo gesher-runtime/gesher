@@ -10,7 +10,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <wchar.h>
+#include <string.h>
 
 #include <string>
 
@@ -35,8 +35,8 @@ static HWND Window(HWND owner) {
 
 // Child mode: a hidden window owned by the parent's window; its handle goes to
 // stdout, and it lives until the parent closes this process's stdin.
-static int Child(const wchar_t* owner_text) {
-  HWND owner = reinterpret_cast<HWND>(static_cast<UINT_PTR>(_wcstoui64(owner_text, nullptr, 10)));
+static int Child(const char* owner_text) {
+  HWND owner = reinterpret_cast<HWND>(static_cast<UINT_PTR>(strtoull(owner_text, nullptr, 10)));
   HWND window = Window(owner);
   printf("%llu\n", static_cast<unsigned long long>(reinterpret_cast<UINT_PTR>(window)));
   fflush(stdout);
@@ -101,8 +101,8 @@ static void StopChild(ChildProcess* child) {
   if (child->from_child != nullptr) CloseHandle(child->from_child);
 }
 
-int wmain(int argc, wchar_t** argv) {
-  if (argc == 3 && wcscmp(argv[1], L"--owned") == 0) return Child(argv[2]);
+int main(int argc, char** argv) {
+  if (argc == 3 && strcmp(argv[1], "--owned") == 0) return Child(argv[2]);
 
   int build = hello::WindowsBuild();
   printf("Windows build %d\n", build);
