@@ -47,6 +47,10 @@ def timestamp(value):
     return result
 
 
+def portable_name(parts):
+    return f'gesher-{version_string(parts)}-portable.zip'
+
+
 def release_catalog(read):
     seen = set()
     for page in range(1, 101):

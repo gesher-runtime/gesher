@@ -34,13 +34,12 @@ final class IconApks implements AutoCloseable {
         }
         File dir = Files.createTempDirectory("gesher-icon-").toFile();
         try (ZipFile zip = new ZipFile(source)) {
+            // The APKs the installer would install, not an APK set's alternatives.
             List<ZipEntry> entries = new ArrayList<>();
-            for (java.util.Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements();) {
-                ZipEntry entry = e.nextElement();
-                String leaf = new File(entry.getName()).getName();
-                if (entry.isDirectory() || !leaf.endsWith(".apk")) continue;
+            for (String path : PackageBundles.select(zip,
+                    PackageBundles.Device.gesher(android.os.Build.VERSION.SDK_INT))) {
                 if (entries.size() >= 512) throw new IOException("too many APKs in " + source);
-                entries.add(entry);
+                entries.add(zip.getEntry(path));
             }
             List<String> paths = new ArrayList<>();
             String base = null;
