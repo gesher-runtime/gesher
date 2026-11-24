@@ -83,6 +83,9 @@ final class AuthServiceHost implements AuthService.Host {
             case "screen_lock_dialog_default_subtitle":
                 return res.getString(
                         com.android.internal.R.string.screen_lock_dialog_default_subtitle);
+            case "config_biometric_prompt_ui_package":
+                return res.getString(
+                        com.android.internal.R.string.config_biometric_prompt_ui_package);
             default:
                 throw new IllegalArgumentException("auth string " + name);
         }
