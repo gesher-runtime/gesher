@@ -2144,7 +2144,7 @@ $btnOpenStore.Add_Click({
 $btnInstallApk.Add_Click({
     if ($script:IsBusy) { return }
     $ofd = [Microsoft.Win32.OpenFileDialog]::new()
-    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk)|*.apk;*.apks;*.xapk|All Files (*.*)|*.*"
+    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk;*.apkm;*.apk+)|*.apk;*.apks;*.xapk;*.apkm;*.apk+|All Files (*.*)|*.*"
     if ($ofd.ShowDialog() -eq $true) {
         $file = $ofd.FileName
         $fileName = [System.IO.Path]::GetFileName($file)
@@ -2158,7 +2158,7 @@ $window.Add_Drop({
     if ($script:IsBusy) { return }
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
-        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk' })
+        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk', '.apkm', '.apk+' })
         if ($packages.Count) {
             [void](Start-PanelAction 'Install' @{ Files = $packages } (Get-GesherText 'cp_installing' @([IO.Path]::GetFileName($packages[0]))))
         }
