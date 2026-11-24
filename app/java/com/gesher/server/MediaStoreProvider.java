@@ -78,6 +78,11 @@ final class MediaStoreProvider extends ContentProvider {
      */
     static MediaStoreProvider create(ActivityManagerService am, PackageManagerService pm,
             File stateDir) {
+        // An installed provider that cannot initialize is not an absent media index.
+        // Keep existing-file registration denied until the complete startup succeeds.
+        SharedStorageOwnership.register(file -> {
+            throw new IllegalStateException("MediaStore ownership index is not available");
+        });
         SQLiteDatabase db;
         if (stateDir != null) {
             if (!(stateDir.isDirectory() || stateDir.mkdirs())) {
@@ -92,6 +97,7 @@ final class MediaStoreProvider extends ContentProvider {
         am.providers().setMedia(provider);
         am.addSystemReceiver(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, provider::onScanFileBroadcast);
         provider.start();
+        SharedStorageOwnership.register(provider.mIndex::ownerOf);
         return provider;
     }
 
@@ -103,8 +109,8 @@ final class MediaStoreProvider extends ContentProvider {
         mCallers = am.callers();
         mInfo = providerInfo();
         registration = new ContentProviders.RegisteredProvider(mInfo, getIContentProvider());
-        am.providers().registerProvider(registration);
         mIndex = new MediaStoreIndex(db, new Host());
+        am.providers().registerProvider(registration);
     }
 
     /** The manifest declaration of AOSP's MediaProvider (exported, URI grants, no permission). */
