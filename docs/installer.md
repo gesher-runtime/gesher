@@ -292,7 +292,8 @@ standalone or `universal.apk` only when no split variant fits; the install-time
 modules with their dependencies; their splits for the preferred ABI; and the
 install-time asset packs. It keeps every density and language split of those
 modules: Gesher's density is set per launch and its languages follow Windows
-and per-app locales, and no store delivers a missing split later. A set that
+and per-app locales, and no store delivers a missing split later
+([ADR 0091](decisions/0091-apk-bundle-selection.md)). A set that
 targets device tiers is refused, as Gesher's device defines none. An XAPK
 (APKPure's format) whose `manifest.json` lists `split_apks` installs those
 files; any other archive without a `toc.pb` (`.apkm`, `.apk+`, an older
