@@ -102,6 +102,22 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Launch failure text with native Windows direction classification
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX tests/native/launch_failure_text_test.cc /Fe:launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
+          & .\launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
+      - name: Shared media log byte snapshots on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/test-shared-log-bytes.ps1
+      - name: Shared media log byte snapshots on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: tests/windows/test-shared-log-bytes.ps1
       - name: Build actual UIA query cancellation and lifecycle controls
         if: ${{ !cancelled() }}
         shell: cmd
@@ -205,6 +221,13 @@ jobs:
         timeout-minutes: 2
         shell: powershell
         run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: Portable profiles, add-on routing and complete package contracts
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          tests/windows/shell/PortableModeChecks.ps1
+          python tools/tests/test_portable_package.py
+          if ($LASTEXITCODE -ne 0) { throw 'Portable package contracts failed' }
       - name: API 37 report gate failure and selection contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -547,6 +570,12 @@ jobs:
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
+
+      - name: Portable code relocation, shell ownership and native profile selection
+        run: |
+          python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_shell.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_launcher.py
 
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
@@ -1191,6 +1220,11 @@ jobs:
           "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
           Get-ChildItem installer
 
+      - name: Build portable ZIP from the same verified runtime
+        shell: pwsh
+        run: |
+          tools/package/package-portable.ps1 -BuildDir "$PWD/dist" -OutDir "$PWD/installer" -Version $env:GESHER_PACKAGE_VERSION
+
       # Uploaded before the checks below: the e2e job tests this installer even when one
       # of them fails.
       - name: Upload tested installer artifact
@@ -1199,6 +1233,8 @@ jobs:
           name: gesher-setup
           path: |
             installer/*.exe
+            installer/*-portable.zip
+            installer/*-portable.zip.sha256
             installer/SHA256SUMS.txt
 
       - name: Install, run Hello, uninstall
@@ -1230,6 +1266,9 @@ jobs:
             throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
           }
           'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Test the release ZIP and portable Setup while the standard install
+          # exists, so accidental deletion/overwrite of its registration fails.
+          tests/windows/shell/PortableRuntimeChecks.ps1 -ZipPath "installer/gesher-${env:GESHER_PACKAGE_VERSION}-portable.zip" -InstallerPath $setup -Version $env:GESHER_PACKAGE_VERSION -InstalledRuntimeDirectory $app -ComponentsApk "$PWD/dist/components.apk"
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
           $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
@@ -1894,6 +1933,14 @@ jobs:
           Remove-Item $sentinel
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Preserve portable Windows runtime and Setup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-runtime-windows-2022
+          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+          if-no-files-found: warn
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
   # clean runner runs real, unmodified open-source apps from F-Droid
