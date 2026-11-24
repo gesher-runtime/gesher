@@ -678,23 +678,9 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     }
                     if (f.callbacks.terminal()) continue;
                     if (timing != null) timing.advance(CaptureTiming.METADATA);
-                    int afState = CameraMetadata.CONTROL_AF_STATE_INACTIVE;
-                    boolean lensMoving = false;
-                    if (mAutoFocus != null) {
-                        Integer afMode = f.request.settings.get(CaptureRequest.CONTROL_AF_MODE);
-                        Integer trigger = f.request.settings.get(
-                                CaptureRequest.CONTROL_AF_TRIGGER);
-                        afState = mAutoFocus.frame(
-                                afMode != null ? afMode : CameraMetadata.CONTROL_AF_MODE_OFF,
-                                trigger != null ? trigger
-                                        : CameraMetadata.CONTROL_AF_TRIGGER_IDLE,
-                                SystemClock.uptimeMillis(),
-                                CameraAutoFocus.sharpness(nv12, mCapture.width,
-                                        mCapture.height));
-                        lensMoving = mAutoFocus.lensMoving();
-                    }
-                    CameraMetadataNative result = result(f.request.settings, timestamp, afState,
-                            lensMoving);
+                    int af = autoFocusFrame(f.request.settings, nv12);
+                    CameraMetadataNative result = result(f.request.settings, timestamp,
+                            af & AF_STATE_MASK, (af & AF_LENS_MOVING) != 0);
                     if (timing != null) timing.advance(CaptureTiming.RESULT);
                     f.callbacks.onResultReceived(CameraMetadataInfo.metadata(result), extras,
                             new PhysicalCaptureResultInfo[0]);
@@ -758,7 +744,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             WindowsCamera.Capture old = mCapture;
             mCapture = null;
             mCaptureFor = null;
-            mAutoFocus = null;
+            stopAutoFocus();
             old.close();
         }
         try {
@@ -775,9 +761,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 size.getHeight());
         mCapture = capture;
         mCaptureFor = size;
-        // A new source starts the AF state machine again (mode applied on the next frame).
-        mAutoFocus = mDevice.autofocus
-                ? new CameraAutoFocus(CameraAutoFocus.lensOf(capture, mCameraId)) : null;
+        startAutoFocus(capture);
         CameraService.log("camera " + mCameraId + " (" + mDevice.name + ") capturing at "
                 + capture.width + "x" + capture.height + " (opened in "
                 + (SystemClock.elapsedRealtime() - start) + " ms)");
@@ -815,6 +799,36 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 errorStreamId, null, frameNumber /* lastCompletedRegularFrameNumber */,
                 -1 /* lastCompletedReprocessFrameNumber */, -1 /* lastCompletedZslFrameNumber */,
                 false, 0);
+    }
+
+    /** {@link #autoFocusFrame}'s answer: the CONTROL_AF_STATE bits, and the lens moving. */
+    private static final int AF_STATE_MASK = 0xff, AF_LENS_MOVING = 0x100;
+
+    /** A new source starts the AF state machine again (mode applied on the next frame). */
+    private void startAutoFocus(WindowsCamera.Capture capture) {
+        mAutoFocus = mDevice.autofocus
+                ? new CameraAutoFocus(CameraAutoFocus.lensOf(capture, mCameraId)) : null;
+    }
+
+    private void stopAutoFocus() {
+        mAutoFocus = null;
+    }
+
+    /**
+     * One frame through the AF state machine for the request's AF mode and trigger: the
+     * CONTROL_AF_STATE, with {@link #AF_LENS_MOVING} while the lens moves. INACTIVE and
+     * stationary for a fixed-focus camera.
+     */
+    private int autoFocusFrame(CameraMetadataNative settings, byte[] nv12) {
+        if (mAutoFocus == null) return CameraMetadata.CONTROL_AF_STATE_INACTIVE;
+        Integer afMode = settings.get(CaptureRequest.CONTROL_AF_MODE);
+        Integer trigger = settings.get(CaptureRequest.CONTROL_AF_TRIGGER);
+        int state = mAutoFocus.frame(
+                afMode != null ? afMode : CameraMetadata.CONTROL_AF_MODE_OFF,
+                trigger != null ? trigger : CameraMetadata.CONTROL_AF_TRIGGER_IDLE,
+                SystemClock.uptimeMillis(),
+                CameraAutoFocus.sharpness(nv12, mCapture.width, mCapture.height));
+        return state | (mAutoFocus.lensMoving() ? AF_LENS_MOVING : 0);
     }
 
     /** The result of a frame of a fixed-focus camera (AF INACTIVE, the lens stationary). */
