@@ -37,6 +37,10 @@ class ProtectedIdentity {
   HANDLE token() const { return token_; }
   PSID sid() const { return const_cast<BYTE*>(sid_.data()); }
   DWORD session() const { return session_; }
+  // Borrowed non-inheritable native Directory handle for the exact selected
+  // session's BaseNamedObjects. Only query/traverse/read-control are retained;
+  // this authority-side identity must outlive every launch that borrows it.
+  HANDLE session_objects() const { return session_objects_; }
   // Windows needs these per-user paths when creating a lowbox process. Derive
   // only the required values from this exact loaded profile, never the caller.
   DWORD AppendProfileEnvironment(std::vector<std::wstring>* environment) const;
@@ -47,6 +51,7 @@ class ProtectedIdentity {
   explicit ProtectedIdentity(ProtectedIdentityCleanup* cleanup) : cleanup_(cleanup) {}
   HANDLE token_ = nullptr;
   HANDLE profile_ = nullptr;
+  HANDLE session_objects_ = nullptr;
   DWORD session_ = 0;
   ProtectedIdentityCleanup* cleanup_;
   bool unload_attempted_ = false;

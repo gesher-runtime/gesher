@@ -7,6 +7,7 @@
 
 #include <aclapi.h>
 #include <sddl.h>
+#include <winternl.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -89,6 +90,45 @@ bool LocalSystemWorker() {
   alignas(TOKEN_USER) BYTE info[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
   return Query(token, TokenUser, info, sizeof(info)) &&
       IsWellKnownSid(reinterpret_cast<const TOKEN_USER*>(info)->User.Sid, WinLocalSystemSid);
+}
+
+DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, Handle* retained) {
+  DWORD flags = 0;
+  if (!GetHandleInformation(spec.session_objects, &flags)) return GetLastError();
+  if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
+  using OpenDirectory = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+  using NativeError = ULONG(NTAPI*)(NTSTATUS);
+  using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
+  const HMODULE native = GetModuleHandleW(L"ntdll.dll");
+  const HMODULE base = GetModuleHandleW(L"kernelbase.dll");
+  if (!native || !base) return ERROR_MOD_NOT_FOUND;
+  const auto open = reinterpret_cast<OpenDirectory>(GetProcAddress(native, "NtOpenDirectoryObject"));
+  const auto error = reinterpret_cast<NativeError>(GetProcAddress(native, "RtlNtStatusToDosError"));
+  const auto compare = reinterpret_cast<Compare>(GetProcAddress(base, "CompareObjectHandles"));
+  if (!open || !error || !compare) return ERROR_PROC_NOT_FOUND;
+  std::wstring path = L"\\Sessions\\" + std::to_wstring(spec.desktop_session) + L"\\BaseNamedObjects";
+  if (path.size() >= 128) return ERROR_INVALID_PARAMETER;
+  UNICODE_STRING name{};
+  name.Buffer = path.data();
+  name.Length = static_cast<USHORT>(path.size() * sizeof(wchar_t));
+  name.MaximumLength = static_cast<USHORT>(name.Length + sizeof(wchar_t));
+  OBJECT_ATTRIBUTES attributes{};
+  attributes.Length = sizeof(attributes);
+  attributes.ObjectName = &name;
+  attributes.Attributes = 0x00001000;  // OBJ_DONT_REPARSE
+  HANDLE opened = nullptr;
+  const NTSTATUS status = open(&opened, READ_CONTROL | 0x0001 | 0x0002, &attributes);
+  Handle directory(opened == INVALID_HANDLE_VALUE ? nullptr : opened);
+  if (status < 0) {
+    const DWORD result = error(status);
+    return result ? result : ERROR_GEN_FAILURE;
+  }
+  if (!directory) return ERROR_INVALID_HANDLE;
+  // A typed open rejects a path/link/type substitution. The comparison also
+  // rejects an otherwise valid handle for a different Windows session/root.
+  if (!compare(spec.session_objects, directory.get())) return ERROR_NOT_SAME_OBJECT;
+  retained->reset(directory.release());
+  return ERROR_SUCCESS;
 }
 
 bool AbsolutePath(std::wstring_view path) {
@@ -497,6 +537,13 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   status = SortedEnvironment(spec.environment, &environment);
   if (status != ERROR_SUCCESS) return status;
 
+  Handle session_objects_before;
+  if (spec.session_objects) {
+    stage("lowbox.verify-session-namespace");
+    status = VerifySessionObjects(spec, &session_objects_before);
+    if (status != ERROR_SUCCESS) return status;
+  }
+
   // The KernelBase wrapper creates the lowbox namespace as well as its token.
   // Keep that per-user work in the verified target context, separate from the
   // SYSTEM-only process creation. There is no non-lowbox fallback.
@@ -538,6 +585,12 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   const Handle lowbox(raw_lowbox == INVALID_HANDLE_VALUE ? nullptr : raw_lowbox);
   if (!converted) return conversion_error ? conversion_error : ERROR_GEN_FAILURE;
   if (!raw_lowbox || raw_lowbox == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
+  Handle session_objects_after;
+  if (spec.session_objects) {
+    stage("lowbox.recheck-session-namespace");
+    status = VerifySessionObjects(spec, &session_objects_after);
+    if (status != ERROR_SUCCESS) return status;
+  }
   status = SealAndVerifyToken(raw_lowbox, desktop, spec, default_acl, startup_stage, false);
   if (status != ERROR_SUCCESS) return status;
 

@@ -102,6 +102,21 @@ struct EquivalentTokenEvidence {
   NamespaceEvidence object_namespace;
   char stage[64] = "not-attempted";
 };
+constexpr DWORD kSessionMutationMasks[] = {0x0004, 0x0008, DELETE, WRITE_DAC, WRITE_OWNER};
+struct SessionMutationEvidence {
+  DWORD before = 0, after = 0, real_open_status = ERROR_NOT_READY, real_opened = 0;
+};
+struct SessionSubjectEvidence {
+  DWORD attempted = 0, checked = 0;
+  SessionMutationEvidence mutations[std::size(kSessionMutationMasks)]{};
+};
+struct SessionObjectsEvidence {
+  DWORD captured = 0, same_object = 0, granted_access = 0, exact_sd_delta = 0;
+  DWORD private_read_called = 0, private_read_status = ERROR_NOT_READY;
+  DWORD wrong_type_rejected = 0, wrong_session_rejected = 0;
+  // Actual private, filtered desktop, suspended guest, alternate-package token.
+  SessionSubjectEvidence subjects[4]{};
+};
 struct Evidence {
   DWORD magic = 0x47504c54;
   DWORD status = ERROR_SUCCESS;
@@ -113,6 +128,7 @@ struct Evidence {
   DWORD target_token_access = ERROR_NOT_READY;
   DWORD private_caller_token_access = ERROR_NOT_READY;
   DWORD system_caller_token_access = ERROR_NOT_READY;
+  SessionObjectsEvidence session_objects;
   lowbox_trace::LowboxIatTraceEvidence lowbox_trace;
   EquivalentTokenEvidence equivalent;
   profile_control::ScmProfileControlEvidence scm_control;
@@ -994,6 +1010,268 @@ class ScopedLowboxTrace final {
   Evidence* evidence_ = nullptr;
   DWORD restored_ = ERROR_SUCCESS;
 };
+struct SessionObjectsSnapshot {
+  Handle object;
+  Local before, after;
+  std::wstring path;
+};
+OpenDiagnosticDirectory SessionDirectoryOpen() {
+  const HMODULE module = GetModuleHandleW(L"ntdll.dll");
+  const auto open = module ? reinterpret_cast<OpenDiagnosticDirectory>(
+      reinterpret_cast<void*>(GetProcAddress(module, "NtOpenDirectoryObject"))) : nullptr;
+  Require(open != nullptr, "session-objects-open-export", ERROR_PROC_NOT_FOUND);
+  return open;
+}
+auto SessionObjectQuery() {
+  const HMODULE module = GetModuleHandleW(L"ntdll.dll");
+  const auto query = module ? reinterpret_cast<decltype(&NtQueryObject)>(
+      reinterpret_cast<void*>(GetProcAddress(module, "NtQueryObject"))) : nullptr;
+  Require(query != nullptr, "session-objects-query-export", ERROR_PROC_NOT_FOUND);
+  return query;
+}
+bool SameSessionObject(HANDLE first, HANDLE second) {
+  const HMODULE module = GetModuleHandleW(L"kernelbase.dll");
+  const auto compare = module ? reinterpret_cast<decltype(&CompareObjectHandles)>(
+      reinterpret_cast<void*>(GetProcAddress(module, "CompareObjectHandles"))) : nullptr;
+  Require(compare != nullptr, "session-objects-compare-export", ERROR_PROC_NOT_FOUND);
+  return compare(first, second) != FALSE;
+}
+std::wstring SessionObjectText(HANDLE object, OBJECT_INFORMATION_CLASS information) {
+  alignas(PUBLIC_OBJECT_TYPE_INFORMATION) BYTE buffer[4096]{};
+  ULONG returned = 0;
+  Require(SessionObjectQuery()(object, information, buffer, sizeof(buffer), &returned) >= 0 &&
+      returned >= sizeof(UNICODE_STRING) && returned <= sizeof(buffer),
+      "session-objects-query-text", ERROR_INVALID_DATA);
+  const auto& text = *reinterpret_cast<const UNICODE_STRING*>(buffer);
+  const auto base = reinterpret_cast<ULONG_PTR>(buffer);
+  const auto start = reinterpret_cast<ULONG_PTR>(text.Buffer);
+  Require(text.Buffer && text.Length && !(text.Length % sizeof(wchar_t)) &&
+      text.Length <= text.MaximumLength && start >= base && start - base <= returned &&
+      text.Length <= returned - (start - base), "session-objects-query-text-bounds", ERROR_INVALID_DATA);
+  return {text.Buffer, text.Length / sizeof(wchar_t)};
+}
+DWORD SessionObjectAccess(HANDLE object) {
+  PUBLIC_OBJECT_BASIC_INFORMATION information{};
+  ULONG returned = 0;
+  Require(SessionObjectQuery()(object, ObjectBasicInformation, &information, sizeof(information), &returned) >= 0,
+      "session-objects-query-access", ERROR_INVALID_HANDLE);
+  return information.GrantedAccess;
+}
+Handle OpenSessionDirectory(const std::wstring& path, DWORD access, HANDLE subject, DWORD* observed) {
+  Require(!path.empty() && path.size() < kNamespacePathCharacters, "session-objects-path-bound", ERROR_INVALID_NAME);
+  const auto open = SessionDirectoryOpen();
+  UNICODE_STRING name{};
+  name.Buffer = const_cast<wchar_t*>(path.data());
+  name.Length = static_cast<USHORT>(path.size() * sizeof(wchar_t));
+  name.MaximumLength = name.Length;
+  OBJECT_ATTRIBUTES attributes{};
+  attributes.Length = sizeof(attributes);
+  attributes.ObjectName = &name;
+  // OBJ_DONT_REPARSE: this positive control must be the named directory itself.
+  attributes.Attributes = OBJ_CASE_INSENSITIVE | 0x00001000;
+  if (subject) Require(ImpersonateLoggedOnUser(subject), "session-objects-impersonate-subject");
+  HANDLE raw = nullptr;
+  const LONG status = open(&raw, access, &attributes);
+  if (subject && !RevertToSelf()) std::abort();
+  Handle result(raw);
+  *observed = static_cast<DWORD>(status);
+  Require((status >= 0) == static_cast<bool>(result), "session-objects-open-result", ERROR_INVALID_DATA);
+  return Handle(result.release());
+}
+Local SessionObjectSecurity(HANDLE object) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  Check(GetSecurityInfo(object, SE_KERNEL_OBJECT,
+      OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+      nullptr, nullptr, nullptr, nullptr, &descriptor), "session-objects-security-snapshot");
+  Local owned(descriptor);
+  Require(descriptor && IsValidSecurityDescriptor(descriptor) && GetSecurityDescriptorLength(descriptor) <= 65536,
+      "session-objects-security-bound", ERROR_INVALID_SECURITY_DESCR);
+  return owned;
+}
+SessionObjectsSnapshot CaptureSessionObjects(DWORD session, SessionObjectsEvidence* evidence) {
+  SessionObjectsSnapshot snapshot;
+  snapshot.path = L"\\Sessions\\" + std::to_wstring(session) + L"\\BaseNamedObjects";
+  DWORD status = 0;
+  snapshot.object = OpenSessionDirectory(snapshot.path, 0x00020003, nullptr, &status);
+  Require(status == 0 && snapshot.object, "session-objects-capture-open", ERROR_ACCESS_DENIED);
+  Require(SessionObjectText(snapshot.object.get(), ObjectTypeInformation) == L"Directory" &&
+      SessionObjectText(snapshot.object.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == snapshot.path,
+      "session-objects-capture-identity", ERROR_NOT_SAME_OBJECT);
+  snapshot.before = SessionObjectSecurity(snapshot.object.get());
+  evidence->captured = 1;
+  return snapshot;
+}
+std::vector<std::vector<BYTE>> SessionAclBytes(PACL acl) {
+  std::vector<std::vector<BYTE>> result;
+  if (!acl) return result;
+  Require(IsValidAcl(acl) && acl->AceCount <= 128, "session-objects-acl-bound", ERROR_INVALID_ACL);
+  for (DWORD i = 0; i < acl->AceCount; ++i) {
+    void* raw = nullptr;
+    Require(GetAce(acl, i, &raw), "session-objects-get-ace");
+    const auto* header = static_cast<const ACE_HEADER*>(raw);
+    Require(header->AceSize >= sizeof(ACE_HEADER), "session-objects-ace-bound", ERROR_INVALID_ACL);
+    const auto* bytes = static_cast<const BYTE*>(raw);
+    result.emplace_back(bytes, bytes + header->AceSize);
+  }
+  return result;
+}
+bool SessionReadGrant(const std::vector<BYTE>& bytes, PSID subject) {
+  if (bytes.size() < offsetof(ACCESS_ALLOWED_ACE, SidStart) + 8) return false;
+  const auto* ace = reinterpret_cast<const ACCESS_ALLOWED_ACE*>(bytes.data());
+  PSID sid = const_cast<DWORD*>(&ace->SidStart);
+  return ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == 0 &&
+      ace->Mask == 0x00020003 && BoundedSid(bytes.data(), static_cast<DWORD>(bytes.size()), sid) &&
+      bytes.size() == offsetof(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(sid) && EqualSid(sid, subject);
+}
+void VerifySessionObjectDelta(SessionObjectsSnapshot* snapshot, PSID subject, SessionObjectsEvidence* evidence) {
+  snapshot->after = SessionObjectSecurity(snapshot->object.get());
+  SECURITY_DESCRIPTOR_CONTROL before_control{}, after_control{};
+  DWORD before_revision = 0, after_revision = 0;
+  Require(GetSecurityDescriptorControl(snapshot->before.get(), &before_control, &before_revision) &&
+      GetSecurityDescriptorControl(snapshot->after.get(), &after_control, &after_revision) &&
+      before_control == after_control && before_revision == after_revision,
+      "session-objects-control-preserved", ERROR_INVALID_SECURITY_DESCR);
+  for (const bool owner : {true, false}) {
+    PSID before = nullptr, after = nullptr;
+    BOOL before_default = FALSE, after_default = FALSE;
+    const BOOL first = owner ? GetSecurityDescriptorOwner(snapshot->before.get(), &before, &before_default) :
+        GetSecurityDescriptorGroup(snapshot->before.get(), &before, &before_default);
+    const BOOL second = owner ? GetSecurityDescriptorOwner(snapshot->after.get(), &after, &after_default) :
+        GetSecurityDescriptorGroup(snapshot->after.get(), &after, &after_default);
+    Require(first && second && before && after && IsValidSid(before) && IsValidSid(after) &&
+        EqualSid(before, after) && before_default == after_default,
+        "session-objects-owner-group-preserved", ERROR_INVALID_SECURITY_DESCR);
+  }
+  PACL before_label = nullptr, after_label = nullptr, before_acl = nullptr, after_acl = nullptr;
+  BOOL before_present = FALSE, after_present = FALSE, before_default = FALSE, after_default = FALSE;
+  Require(GetSecurityDescriptorSacl(snapshot->before.get(), &before_present, &before_label, &before_default) &&
+      GetSecurityDescriptorSacl(snapshot->after.get(), &after_present, &after_label, &after_default) &&
+      before_present == after_present && before_default == after_default &&
+      (before_label == nullptr) == (after_label == nullptr) &&
+      (!before_label || before_label->AclRevision == after_label->AclRevision) &&
+      SessionAclBytes(before_label) == SessionAclBytes(after_label),
+      "session-objects-label-preserved", ERROR_INVALID_SECURITY_DESCR);
+  Require(GetSecurityDescriptorDacl(snapshot->before.get(), &before_present, &before_acl, &before_default) &&
+      GetSecurityDescriptorDacl(snapshot->after.get(), &after_present, &after_acl, &after_default) &&
+      before_present && after_present && before_acl && after_acl && before_default == after_default &&
+      before_acl->AclRevision == after_acl->AclRevision,
+      "session-objects-dacl-preserved", ERROR_INVALID_ACL);
+  const auto before = SessionAclBytes(before_acl);
+  const auto after = SessionAclBytes(after_acl);
+  size_t original = 0;
+  DWORD before_grants = 0, after_grants = 0;
+  for (const auto& ace : before) if (SessionReadGrant(ace, subject)) ++before_grants;
+  for (const auto& ace : after) {
+    if (SessionReadGrant(ace, subject)) {
+      ++after_grants;
+      if (!before_grants) continue;
+    }
+    Require(original < before.size() && ace == before[original++],
+        "session-objects-unrelated-aces-preserved", ERROR_INVALID_ACL);
+  }
+  Require(original == before.size() && before_grants <= 1 && after_grants == 1 &&
+      after.size() == before.size() + (before_grants ? 0 : 1),
+      "session-objects-only-private-read-grant", ERROR_INVALID_ACL);
+  evidence->exact_sd_delta = 1;
+}
+DWORD SessionAllowed(PSECURITY_DESCRIPTOR descriptor, HANDLE client, DWORD mask) {
+  PACL acl = nullptr;
+  BOOL present = FALSE, defaulted = FALSE;
+  Require(GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted) && present && acl,
+      "session-objects-access-dacl", ERROR_INVALID_ACL);
+  for (const auto& bytes : SessionAclBytes(acl)) {
+    const auto* header = reinterpret_cast<const ACE_HEADER*>(bytes.data());
+    if (header->AceFlags & INHERIT_ONLY_ACE) continue;
+    Require((header->AceType == ACCESS_ALLOWED_ACE_TYPE || header->AceType == ACCESS_DENIED_ACE_TYPE) &&
+        bytes.size() >= offsetof(ACCESS_ALLOWED_ACE, SidStart), "session-objects-access-ace-kind", ERROR_NOT_SUPPORTED);
+    Require(!(reinterpret_cast<const ACCESS_ALLOWED_ACE*>(bytes.data())->Mask &
+        (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL)),
+        "session-objects-specific-access-masks", ERROR_GENERIC_NOT_MAPPED);
+  }
+  GENERIC_MAPPING mapping{};  // Requested and effective ACE masks are specific.
+  struct Privileges { PRIVILEGE_SET set; LUID_AND_ATTRIBUTES extra[7]; } privileges{};
+  DWORD size = sizeof(privileges), granted = 0;
+  BOOL authorized = FALSE;
+  Require(AccessCheck(descriptor, client, mask, &mapping, &privileges.set, &size, &granted, &authorized),
+      "session-objects-accesscheck");
+  Require(!authorized || granted == mask, "session-objects-accesscheck-mask", ERROR_INVALID_DATA);
+  return authorized ? granted : 0;
+}
+void VerifySessionSubject(SessionObjectsSnapshot& snapshot, HANDLE subject, DWORD session, SessionSubjectEvidence* evidence) {
+  evidence->attempted = 1;
+  const auto user = User(subject);
+  storage::AuthorityLaunchSpec identity{};
+  identity.desktop_user = const_cast<BYTE*>(user.data());
+  identity.desktop_session = session;
+  DWORD error = ERROR_NOT_READY;
+  const Handle client = DirectoryAccessContext(subject, identity, &error);
+  Check(error, "session-objects-exact-access-client");
+  Require(static_cast<bool>(client), "session-objects-access-client-handle", ERROR_INVALID_HANDLE);
+  DWORD source_lowbox = 0, client_lowbox = 0, returned = 0;
+  Require(GetTokenInformation(subject, TokenIsAppContainer, &source_lowbox, sizeof(source_lowbox), &returned) &&
+      GetTokenInformation(client.get(), TokenIsAppContainer, &client_lowbox, sizeof(client_lowbox), &returned) &&
+      source_lowbox == client_lowbox, "session-objects-client-lowbox-preserved", ERROR_INVALID_DATA);
+  for (size_t i = 0; i < std::size(kSessionMutationMasks); ++i) {
+    auto& observed = evidence->mutations[i];
+    const DWORD mask = kSessionMutationMasks[i];
+    observed.before = SessionAllowed(snapshot.before.get(), client.get(), mask);
+    observed.after = SessionAllowed(snapshot.after.get(), client.get(), mask);
+    Require((observed.after & ~observed.before) == 0, "session-objects-no-new-mutation-right", ERROR_ACCESS_DENIED);
+    const Handle opened = OpenSessionDirectory(snapshot.path, mask, subject, &observed.real_open_status);
+    observed.real_opened = static_cast<DWORD>(static_cast<bool>(opened));
+    if (opened) {
+      Require(observed.before == mask && observed.after == mask &&
+          SameSessionObject(snapshot.object.get(), opened.get()) && SessionObjectAccess(opened.get()) == mask,
+          "session-objects-live-open-not-new", ERROR_ACCESS_DENIED);
+    } else {
+      Require(observed.real_open_status == 0xc0000022, "session-objects-live-denial-status", ERROR_INVALID_DATA);
+    }
+    ++evidence->checked;
+  }
+}
+void VerifySessionLease(SessionObjectsSnapshot* snapshot, storage::ProtectedIdentity& identity, SessionObjectsEvidence* evidence) {
+  const HANDLE borrowed = identity.session_objects();
+  DWORD flags = 0;
+  Require(borrowed && GetHandleInformation(borrowed, &flags) && !(flags & HANDLE_FLAG_INHERIT) &&
+      SessionObjectText(borrowed, ObjectTypeInformation) == L"Directory" &&
+      SessionObjectText(borrowed, static_cast<OBJECT_INFORMATION_CLASS>(1)) == snapshot->path &&
+      SameSessionObject(snapshot->object.get(), borrowed), "session-objects-borrowed-exact-object", ERROR_NOT_SAME_OBJECT);
+  evidence->same_object = 1;
+  evidence->granted_access = SessionObjectAccess(borrowed);
+  Require(evidence->granted_access == 0x00020003, "session-objects-borrowed-exact-rights", ERROR_ACCESS_DENIED);
+  VerifySessionObjectDelta(snapshot, identity.sid(), evidence);
+  evidence->private_read_called = 1;
+  const Handle opened = OpenSessionDirectory(snapshot->path, 0x00020003, identity.token(), &evidence->private_read_status);
+  Require(evidence->private_read_status == 0 && opened && SameSessionObject(snapshot->object.get(), opened.get()) &&
+      SessionObjectAccess(opened.get()) == 0x00020003,
+      "session-objects-private-real-read", ERROR_ACCESS_DENIED);
+  VerifySessionSubject(*snapshot, identity.token(), identity.session(), &evidence->subjects[0]);
+}
+void PrintSessionObjects(const SessionObjectsEvidence& evidence) {
+  std::printf("Protected session objects: captured=%lu same-object=%lu granted=0x%08lx exact-owner-group-label-control-ace-delta=%lu private-read-called=%lu private-read-ntstatus=0x%08lx wrong-type-rejected=%lu wrong-session-root-rejected=%lu\n",
+      static_cast<unsigned long>(evidence.captured), static_cast<unsigned long>(evidence.same_object),
+      static_cast<unsigned long>(evidence.granted_access), static_cast<unsigned long>(evidence.exact_sd_delta),
+      static_cast<unsigned long>(evidence.private_read_called), static_cast<unsigned long>(evidence.private_read_status),
+      static_cast<unsigned long>(evidence.wrong_type_rejected), static_cast<unsigned long>(evidence.wrong_session_rejected));
+  constexpr const char* subjects[] = {"actual-private", "filtered-desktop", "actual-suspended-lowbox", "alternate-package-token-boundary-only-no-wrapper-or-guest"};
+  std::puts("Protected session objects: baseline-and-current AccessCheck are DACL checks; real opens use the actual subject token; access probes create/delete no objects and do not change security");
+  for (size_t actor = 0; actor < std::size(subjects); ++actor) {
+    const auto& subject = evidence.subjects[actor];
+    Require(subject.attempted <= 1 && subject.checked <= std::size(kSessionMutationMasks),
+        "session-objects-evidence-bound", ERROR_INVALID_DATA);
+    std::printf("Protected session objects: subject=%s attempted=%lu checked=%lu\n", subjects[actor],
+        static_cast<unsigned long>(subject.attempted), static_cast<unsigned long>(subject.checked));
+    for (DWORD i = 0; subject.attempted && i < std::size(kSessionMutationMasks); ++i) {
+      const auto& mutation = subject.mutations[i];
+      Require(mutation.real_opened <= 1, "session-objects-open-evidence-bound", ERROR_INVALID_DATA);
+      std::printf("Protected session objects: subject=%s mask=0x%08lx completed=%lu before=0x%08lx after=0x%08lx real-open-ntstatus=0x%08lx opened=%lu\n",
+          subjects[actor], static_cast<unsigned long>(kSessionMutationMasks[i]), static_cast<unsigned long>(i < subject.checked),
+          static_cast<unsigned long>(mutation.before),
+          static_cast<unsigned long>(mutation.after), static_cast<unsigned long>(mutation.real_open_status),
+          static_cast<unsigned long>(mutation.real_opened));
+    }
+  }
+}
 Evidence RunSystem() {
   Evidence evidence;
   bool installed = false;
@@ -1001,6 +1279,7 @@ Evidence RunSystem() {
   storage::ProtectedIdentityCleanup cleanup;
   std::unique_ptr<storage::ProtectedIdentity> identity;
   std::unique_ptr<storage::AuthorityLaunch> child;
+  SessionObjectsSnapshot session_objects;
   container::Sid package, capability;
   std::wstring package_name;
   const char* stage = "system.begin";
@@ -1018,10 +1297,12 @@ Evidence RunSystem() {
     // This protected marker is written only after proving there is no earlier
     // profile. The controller can finish owned cleanup after a service timeout.
     WriteNew(config.directory + L"\\profile.sid", sid.data(), static_cast<DWORD>(sid.size()));
+    session_objects = CaptureSessionObjects(config.session, &evidence.session_objects);
     const DWORD identity_status = storage::ProtectedIdentity::Create(config.image, config.session, &identity, &stage, &cleanup);
     Check(identity_status, stage);
     evidence.profile_identity_created = 1;
     Require(EqualSid(identity->sid(), sid.data()), "actual-private-token-user", ERROR_ACCESS_DENIED);
+    VerifySessionLease(&session_objects, *identity, &evidence.session_objects);
     HANDLE raw = nullptr;
     Require(WTSQueryUserToken(config.session, &raw), "actual-wts-desktop-token");
     const Handle desktop(raw);
@@ -1033,6 +1314,7 @@ Evidence RunSystem() {
     Require(CreateRestrictedToken(desktop.get(), DISABLE_MAX_PRIVILEGE, 1, &disabled,
         0, nullptr, 0, nullptr, &filtered_raw), "filter-ordinary-desktop-token");
     const Handle filtered(filtered_raw);
+    VerifySessionSubject(session_objects, filtered.get(), config.session, &evidence.session_objects.subjects[1]);
     auto desktop_sid = User(desktop.get());
     PSID desktop_user = desktop_sid.data();
     Require(!EqualSid(desktop_user, identity->sid()), "distinct-desktop-and-runtime-user", ERROR_ACCESS_DENIED);
@@ -1101,7 +1383,8 @@ Evidence RunSystem() {
     SID_AND_ATTRIBUTES caps[] = {{capability.value, SE_GROUP_ENABLED}};
     const std::wstring arguments = L"--guest " + Quote(profile_path);
     const storage::AuthorityLaunchSpec spec{config.image.c_str(), config.directory.c_str(), arguments,
-        environment, {package.value, caps, 1, 0}, identity->sid(), config.session, &cleanup.profile_error, service_job.get()};
+        environment, {package.value, caps, 1, 0}, identity->sid(), config.session, &cleanup.profile_error,
+        service_job.get(), identity->session_objects()};
     std::wstring shadowed_environment = environment;
     shadowed_environment.pop_back();
     shadowed_environment.append(L"systemroot=C:\\untrusted").append(2, L'\0');
@@ -1109,6 +1392,37 @@ Evidence RunSystem() {
     shadowed.environment = shadowed_environment;
     Require(storage::AuthorityLaunch::Create(identity->token(), shadowed, &child) == ERROR_INVALID_PARAMETER && !child,
         "deny-case-insensitive-environment-shadow", ERROR_INVALID_DATA);
+    const Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    Require(static_cast<bool>(event), "session-objects-wrong-type-event");
+    storage::AuthorityLaunchSpec wrong = spec;
+    wrong.session_objects = event.get();
+    DWORD rejected = storage::AuthorityLaunch::Create(identity->token(), wrong, &child, &stage);
+    Require(rejected == ERROR_NOT_SAME_OBJECT && !child && stage &&
+        std::strcmp(stage, "lowbox.verify-session-namespace") == 0,
+        "deny-session-objects-wrong-type-before-wrapper", ERROR_INVALID_DATA);
+    evidence.session_objects.wrong_type_rejected = 1;
+    DWORD worker_session = 0, other_status = 0;
+    Require(ProcessIdToSessionId(GetCurrentProcessId(), &worker_session) && worker_session != config.session,
+        "session-objects-distinct-worker-session", ERROR_INVALID_DATA);
+    // The prior actual namespace probe established this worker-session root.
+    // This is a wrong-session/root Directory, not a claim that session0 has
+    // an unaliased BaseNamedObjects leaf with the selected-session spelling.
+    const std::wstring other_path = L"\\Sessions\\" + std::to_wstring(worker_session) + L"\\AppContainerNamedObjects";
+    const Handle other_session = OpenSessionDirectory(other_path, 0x00020003, nullptr, &other_status);
+    DWORD other_flags = 0;
+    Require(other_status == 0 && other_session &&
+        GetHandleInformation(other_session.get(), &other_flags) && !(other_flags & HANDLE_FLAG_INHERIT) &&
+        SessionObjectText(other_session.get(), ObjectTypeInformation) == L"Directory" &&
+        SessionObjectText(other_session.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == other_path &&
+        SessionObjectAccess(other_session.get()) == 0x00020003 &&
+        !SameSessionObject(session_objects.object.get(), other_session.get()),
+        "session-objects-other-session-root-control", ERROR_NOT_SAME_OBJECT);
+    wrong.session_objects = other_session.get();
+    rejected = storage::AuthorityLaunch::Create(identity->token(), wrong, &child, &stage);
+    Require(rejected == ERROR_NOT_SAME_OBJECT && !child && stage &&
+        std::strcmp(stage, "lowbox.verify-session-namespace") == 0,
+        "deny-session-objects-wrong-session-before-wrapper", ERROR_INVALID_DATA);
+    evidence.session_objects.wrong_session_rejected = 1;
     ObserveLaunchAccess(identity->token(), &evidence);
     production_attempted = true;
     ScopedLowboxTrace observer(config.lowbox_iat_trace, config.session, &evidence);
@@ -1127,6 +1441,33 @@ Evidence RunSystem() {
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;
     Require(IsProcessInJob(child->process(), service_job.get(), &contained) && contained, "inherited-lowbox-job");
+    HANDLE guest_token_raw = nullptr;
+    Require(OpenProcessToken(child->process(), TOKEN_QUERY | TOKEN_DUPLICATE, &guest_token_raw),
+        "session-objects-actual-suspended-lowbox-token");
+    const Handle guest_token(guest_token_raw);
+    VerifyNamespaceToken(guest_token.get(), identity->token(), spec);
+    VerifySessionObjectDelta(&session_objects, identity->sid(), &evidence.session_objects);
+    VerifySessionSubject(session_objects, guest_token.get(), config.session, &evidence.session_objects.subjects[2]);
+    // Token-only negative: a distinct package derived from the same actual
+    // private identity and capabilities. No wrapper, namespace preparation,
+    // profile creation or alternate guest is executed for this control.
+    container::Sid other_package;
+    const HRESULT other_derived = DeriveAppContainerSidFromAppContainerName((package_name + L".Other").c_str(), &other_package.value);
+    Require(SUCCEEDED(other_derived) && other_package.value && !EqualSid(other_package.value, package.value),
+        "session-objects-alternate-package-sid", HRESULT_CODE(other_derived));
+    auto other_capabilities = spec.capabilities;
+    other_capabilities.AppContainerSid = other_package.value;
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto native_lowbox = ntdll ? reinterpret_cast<CreateDiagnosticNativeLowbox>(
+        reinterpret_cast<void*>(GetProcAddress(ntdll, "NtCreateLowBoxToken"))) : nullptr;
+    Handle other_token;
+    const auto other_created = ObserveNativeLowbox(native_lowbox, identity->token(), other_capabilities, &other_token);
+    Require(other_created.called && other_created.succeeded && other_created.returned_token && other_token,
+        "session-objects-alternate-package-token-only", ERROR_ACCESS_DENIED);
+    auto other_spec = spec;
+    other_spec.capabilities = other_capabilities;
+    VerifyNamespaceToken(other_token.get(), identity->token(), other_spec);
+    VerifySessionSubject(session_objects, other_token.get(), config.session, &evidence.session_objects.subjects[3]);
     const DWORD mutations[] = {PROCESS_VM_WRITE, PROCESS_VM_OPERATION, PROCESS_DUP_HANDLE,
         PROCESS_TERMINATE, PROCESS_SUSPEND_RESUME, PROCESS_CREATE_THREAD, WRITE_DAC, WRITE_OWNER};
     for (DWORD access : mutations) {
@@ -1370,6 +1711,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
     worker_profile_release_verified = evidence.cleanup == ERROR_SUCCESS && evidence.profile_identity_created == 1 &&
         evidence.profile_unload_attempted == 1 && evidence.profile_unload_status == ERROR_SUCCESS &&
         evidence.profile_privilege_restore_status == ERROR_SUCCESS;
+    PrintSessionObjects(evidence.session_objects);
     if (explicit_lowbox_trace) {
       std::puts("Protected lowbox IAT trace: trigger=explicit-opt-in scope=single-production-launch-call");
       lowbox_trace::PrintLowboxIatTrace(evidence.lowbox_trace);

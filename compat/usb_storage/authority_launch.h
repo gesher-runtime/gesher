@@ -27,6 +27,10 @@ struct AuthorityLaunchSpec {
   // Optional authority-owned job. Associate it atomically at process creation;
   // no job handle is inherited or supplied through a guest request.
   HANDLE job = nullptr;
+  // Optional borrowed Directory from ProtectedIdentity. Pin the selected
+  // session's object namespace across the private lowbox conversion. This is
+  // authority-owned input, never a guest-supplied or inherited handle.
+  HANDLE session_objects = nullptr;
 };
 
 class AuthorityLaunch {
