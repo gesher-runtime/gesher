@@ -1183,7 +1183,9 @@ public final class ApkPackage {
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
 
-        // A long-lived PM record must not publish a cached graph after XML/jar updates.
+        // A long-lived PM record must not publish a stale graph after XML/jar updates:
+        // the registry's snapshot is checked against the files' metadata and the graph
+        // comes from it, without reading or hashing again while they are unchanged.
         // Ordinary packages keep the cheap immutable empty graph path.
         try {
             SharedLibraryGraph graph = SharedLibraryRegistry.usesNone(parsed) ? sharedLibraries
