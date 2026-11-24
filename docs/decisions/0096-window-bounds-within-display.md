@@ -1,4 +1,4 @@
-# 0091: An app window is never larger than its display
+# 0096: An app window is never larger than its display
 
 Status: proposed (issue #426). Amends the resizing parts of ADR 0029, ADR 0053
 and ADR 0088; the display stays the decided 400x800@160 default.
