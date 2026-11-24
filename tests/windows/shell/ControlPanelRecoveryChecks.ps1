@@ -1,5 +1,6 @@
 param([string] $PanelPath = (Join-Path $PSScriptRoot '../../../tools/package/gesher-control-panel.ps1'))
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName PresentationCore
 
 # Deliberately omit notifications. Real production parsers, app projection,
 # signatures, stamps and scheduling must recover every consumed metadata input.
@@ -9,7 +10,8 @@ $ast = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath
 if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($name in 'Get-SeparateWindowApps','Get-InstalledApps','Get-FileStamp','Get-StateStamp','Get-AppFilesStamp',
         'Update-AppsView','Test-PanelMetadataVisible','Request-PanelMetadataRefresh','Update-PanelMetadataWatch',
-        'Refresh-Dashboard','Invoke-LiveRefreshTick') {
+        'Refresh-Dashboard','Invoke-LiveRefreshTick',
+        'ConvertTo-ProxyValue','Read-ProxyProperties','ConvertFrom-PropertiesEscapes','Get-ProxySettings','Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $false))
@@ -52,6 +54,7 @@ $conventional = Join-Path $root 'data/data/fixture.app/gesher-shell/icon.ico'
 $external = Join-Path $fixture 'external/late.ico'
 $custom = Join-Path $root 'custom/late.ico'
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
+$script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 $icoFile = Join-Path $fixture 'panel-default.ico'
 $appsList = [pscustomobject]@{ ItemsSource = @() }
 $window = @{ IsVisible = $true; WindowState = 'Normal' }
@@ -64,7 +67,7 @@ try {
     # Each explicitly watched state input must also change the fallback stamp.
     foreach ($path in @((Join-Path $root 'data/system/gesher-device.ready'), $packages,
             (Join-Path $root 'microg.enabled'), (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk'),
-            $script:AppWindowsFile)) {
+            $script:AppWindowsFile, $script:ProxyFile)) {
         $before = Get-StateStamp
         Write-Metadata $path 'metadata fixture'
         Assert-Recovery ($before -ne (Get-StateStamp)) "Creation is absent from recovery stamp: $path"
@@ -82,6 +85,16 @@ try {
     [IO.File]::Delete($script:AppWindowsFile)
     Recover-Visible
     Assert-Recovery (-not $appsList.ItemsSource[0].SeparateWindows) 'Missed preference deletion retained the old separate-window state'
+
+    $launchMarker = Join-Path $root 'data/data/fixture.app/gesher-shell/no-launcher-activity'
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Visible) 'Initial launcher eligibility was lost'
+    Assert-Recovery ($script:ViewState.AppFiles -contains $launchMarker) 'Launcher metadata is absent from recovery inputs'
+    Write-Metadata $launchMarker 'no launcher'
+    Recover-Visible
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Collapsed) 'Missed marker creation kept Launch visible'
+    [IO.File]::Delete($launchMarker)
+    Recover-Visible
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Visible) 'Missed marker removal kept Launch hidden'
 
     Write-Metadata $shortcut "label=Fixture`nicon=$external`n"
     Write-Metadata $conventional 'declared conventional image'

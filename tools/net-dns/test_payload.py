@@ -17,13 +17,16 @@ import payload
 class DnsEvidenceTest(unittest.TestCase):
     def setUp(self):
         self.canonical = dict(source='a' * 40, run='9', attempt='1',
-                              repository='gesher-runtime/gesher', repository_id='1426153186')
+                              repository='gesher-runtime/gesher', repository_id='1426153186',
+                              event='push', supplier_head='a' * 40, head_repository_id='1426153186')
         self.diagnostic = dict(self.canonical, repository='yom-chadash/gesher', repository_id='1460486951',
                                evidence_scope='fork-diagnostic', canonical_authority=False,
                                event='workflow_dispatch', ref='refs/heads/diagnostic/test', workflow='ci',
                                workflow_sha='a' * 40,
                                workflow_ref='yom-chadash/gesher/.github/workflows/ci.yml@refs/heads/diagnostic/test',
                                upstream_repository='gesher-runtime/gesher', upstream_repository_id='1426153186')
+        # Fork diagnostics retain their independent schema and identity fields.
+        del self.diagnostic['supplier_head'], self.diagnostic['head_repository_id']
         self.temp = tempfile.TemporaryDirectory(prefix='dns-metadata-only-')
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
@@ -34,6 +37,7 @@ class DnsEvidenceTest(unittest.TestCase):
         # The actual manifest/member/compiler/ABI/reference verifier runs below.
         patch.object(payload, 'execution_context', side_effect=lambda value:
                      self.canonical if value is None else self.diagnostic).start()
+        patch.object(payload.producer_context, 'authenticate', return_value=self.canonical).start()
         patch.object(payload, 'source_inventory', return_value={
             'synthetic-metadata-only': {'mode': '100644', 'git_blob': 'b' * 40}}).start()
         for abi, machine in (('x86_64', 62), ('arm64-v8a', 183)):
@@ -166,7 +170,9 @@ class DnsEvidenceTest(unittest.TestCase):
 
     def test_default_context_itself_remains_canonical_only(self):
         env = dict(GITHUB_ACTIONS='true', GITHUB_SHA='a' * 40, GITHUB_RUN_ID='9', GITHUB_RUN_ATTEMPT='1',
-                   GITHUB_REPOSITORY='gesher-runtime/gesher', GITHUB_REPOSITORY_ID='1426153186')
+                   GITHUB_REPOSITORY='gesher-runtime/gesher', GITHUB_REPOSITORY_ID='1426153186',
+                   GITHUB_WORKFLOW='ci', GITHUB_EVENT_NAME='push', GITHUB_EVENT_PATH=str(self.folder / 'event.json'))
+        (self.folder / 'event.json').write_text('{}')
         with patch.dict(os.environ, env, clear=True), \
                 patch.object(payload.subprocess, 'check_output', return_value='a' * 40 + '\n'):
             self.assertEqual(payload.context(), self.canonical)

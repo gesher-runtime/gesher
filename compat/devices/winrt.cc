@@ -97,6 +97,13 @@ HRESULT GetActivationFactory(const wchar_t* className, const IID& iid, void** fa
   return GetApi().RoGetActivationFactory(name.get(), iid, factory);
 }
 
+HRESULT CreateString(const wchar_t* s, UINT32 length, HSTRING* out) {
+  *out = nullptr;
+  const Api& api = GetApi();
+  if (!api.ok) return E_NOTIMPL;
+  return api.WindowsCreateString(s, length, out);
+}
+
 std::wstring StringOf(HSTRING s) {
   const Api& api = GetApi();
   if (s == nullptr || !api.ok) return std::wstring();
