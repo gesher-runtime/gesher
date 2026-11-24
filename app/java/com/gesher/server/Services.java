@@ -279,8 +279,7 @@ public final class Services {
                 persistentAccounts
                         ? java.nio.file.Path.of(Device.dataDir(), "system", "activity-usage.bin")
                         : null);
-        usageStats.setActivityManager(am);
-        atm.setUsageStats(usageStats);
+        if (persistentAccounts) atm.setUsageStats(usageStats);
         services.put(Context.USAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IUsageStatsManager.class, usageStats).asBinder());
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
