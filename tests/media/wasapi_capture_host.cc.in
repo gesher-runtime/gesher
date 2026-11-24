@@ -33,16 +33,21 @@ class ClientBoundary final : public IAudioClient {
   bool running = false;
   int starts = 0, stops = 0, resets = 0, initializes = 0;
   DWORD initialize_flags = 0;
+  REFERENCE_TIME initialize_duration = -1;
   HANDLE event_handle = nullptr;
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
   ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
   ULONG STDMETHODCALLTYPE Release() override { return 1; }
-  HRESULT STDMETHODCALLTYPE Initialize(AUDCLNT_SHAREMODE mode, DWORD flags, REFERENCE_TIME, REFERENCE_TIME periodicity,
+  HRESULT STDMETHODCALLTYPE Initialize(AUDCLNT_SHAREMODE mode, DWORD flags, REFERENCE_TIME duration, REFERENCE_TIME periodicity,
                                         const WAVEFORMATEX*, LPCGUID) override {
     ++initializes;
     initialize_flags = flags;
+    initialize_duration = duration;
     // Shared mode takes no explicit period, with or without event callbacks.
     if (mode != AUDCLNT_SHAREMODE_SHARED || periodicity != 0) return E_INVALIDARG;
+    // Shared event-driven streams require both durations to be zero. Reject
+    // invalid production parameters instead of hiding a needless fallback.
+    if ((flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) != 0 && duration != 0) return E_INVALIDARG;
     // An endpoint that rejects event callbacks rejects the flag, not the stream.
     if ((flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) != 0 && FAILED(initialize_result)) return initialize_result;
     return (flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) != 0 ? S_OK : polled_result;
@@ -117,6 +122,7 @@ void Events() {
     source.device_ = &device; source.client_ = &client; source.loopback_ = loopback;
     Check(SUCCEEDED(source.InitializeStream()), "event callback initialization succeeds");
     Check(client.initializes == 1 && device.activations == 0, "an accepting endpoint is initialized once, on its own client");
+    Check(client.initialize_duration == 0, "shared event mode uses the engine-selected buffer duration");
     Check((client.initialize_flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) != 0 &&
               ((client.initialize_flags & AUDCLNT_STREAMFLAGS_LOOPBACK) != 0) == loopback,
           "event callback flag is added to, not replacing, the loopback flag");
@@ -169,6 +175,7 @@ void Events() {
     Check(SUCCEEDED(source.InitializeStream()), "a rejected event mode falls back to polled initialization");
     Check(rejected.initializes == 1 && polled.initializes == 1 && device.activations == 1,
           "the fallback initializes a freshly activated client, not the failed one");
+    Check(polled.initialize_duration == 2000000, "only the polled fallback requests a 200 ms buffer");
     Check((polled.initialize_flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) == 0 &&
               (polled.initialize_flags & AUDCLNT_STREAMFLAGS_LOOPBACK) != 0,
           "the polled client keeps the loopback flag and has no event flag");
