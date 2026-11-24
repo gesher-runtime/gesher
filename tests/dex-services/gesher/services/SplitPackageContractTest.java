@@ -123,10 +123,10 @@ public final class SplitPackageContractTest {
                 && Arrays.equals(info.splitNames, ai.splitNames),
                 "Split names came from filenames or did not survive PackageInfo generation");
         require(ai.splitSourceDirs.length == 2
-                && ai.splitSourceDirs[0].endsWith("/split_z_core.apk")
-                && ai.splitSourceDirs[1].endsWith("/split_a_entry.apk")
+                && ai.splitSourceDirs[0].endsWith("/split_feature.core.apk")
+                && ai.splitSourceDirs[1].endsWith("/split_feature.entry.apk")
                 && Arrays.equals(ai.splitSourceDirs, ai.splitPublicSourceDirs),
-                "Split paths were not aligned with sorted manifest names");
+                "Split paths were not the manifest-named files aligned with sorted split names");
         require(Arrays.equals(ai.splitClassLoaderNames, new String[]{"dalvik.system.PathClassLoader",
                 "dalvik.system.DelegateLastClassLoader"}) && ai.requestsIsolatedSplitLoading(),
                 "Isolated split class-loader policy was discarded");
@@ -310,7 +310,8 @@ public final class SplitPackageContractTest {
         arbitraryNames.put("apks/application.apk", inputs.get("base"));
         File renamed = cluster(data, "renamed", ".apk+", arbitraryNames);
         result = (String[]) install.invoke(installer, renamed.getPath());
-        require("updated".equals(result[1]), "APK+ did not install the manifest-identified cluster");
+        // Files are named by their manifests, so other archive names are the same install.
+        require("unchanged".equals(result[1]), "APK+ entry names changed the manifest-identified cluster");
         ApplicationInfo renamedInfo = pm.get(PACKAGE).applicationInfo(0);
         require(Arrays.equals(renamedInfo.splitNames, new String[]{"feature.core", "feature.entry"}),
                 "Arbitrary archive names dropped required feature splits");

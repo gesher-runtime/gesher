@@ -301,7 +301,12 @@ public final class ApkPackage {
 
     /** Identify the base APK from the manifest before assembling a package cluster. */
     public static boolean isBaseApk(File file) throws IOException {
-        return codeApkLite(file).getSplitName() == null;
+        return splitName(file) == null;
+    }
+
+    /** The manifest's {@code split} name of {@code file}; null for a base APK. */
+    public static String splitName(File file) throws IOException {
+        return codeApkLite(file).getSplitName();
     }
 
     private static ApkLite codeApkLite(File file) throws IOException {
