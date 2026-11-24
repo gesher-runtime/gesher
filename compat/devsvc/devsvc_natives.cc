@@ -351,7 +351,7 @@ jboolean WindowsHost_openUrl(JNIEnv* env, jclass, jstring url) {
 
 jstring WindowsHost_homeRegion(JNIEnv* env, jclass) {
   char16_t region[3] = {};
-  if (!dev::HomeRegion(region, nullptr)) return nullptr;
+  if (!::dev::HomeRegion(region, nullptr)) return nullptr;
   return JStr(env, std::u16string(region, 2));
 }
 
