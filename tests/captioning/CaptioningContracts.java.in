@@ -207,9 +207,31 @@ public final class CaptioningContracts {
         equal(1, windows.unwatched, "stop twice");
     }
 
+    static void changeDuringSubscription() {
+        TestSecure secure = new TestSecure();
+        CaptioningBridge.Backend windows = new CaptioningBridge.Backend() {
+            private final int[] values = windowsDefaults();
+
+            @Override public int[] read() { return values.clone(); }
+
+            @Override public Runnable watch(Runnable change) {
+                // Windows changes after the old initial read but before notifications
+                // are subscribed. The completed start must still publish this value.
+                values[CaptioningSettings.FONT_SIZE] = 3;
+                return () -> { };
+            }
+        };
+        CaptioningBridge bridge = new CaptioningBridge(windows, secure);
+        bridge.start();
+        equal("1.5", secure.table.get(Secure.ACCESSIBILITY_CAPTIONING_FONT_SCALE),
+                "a change during subscription is included in the initial snapshot");
+        bridge.stop();
+    }
+
     public static void main(String[] args) {
         mapping();
         bridge();
+        changeDuringSubscription();
         System.out.println("captioning contracts: " + sChecks + " checks passed");
     }
 }
