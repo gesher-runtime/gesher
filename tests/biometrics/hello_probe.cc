@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <atomic>
 #include <thread>
 
 #include "hello_win.h"
