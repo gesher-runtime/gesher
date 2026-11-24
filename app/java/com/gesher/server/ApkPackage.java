@@ -304,6 +304,11 @@ public final class ApkPackage {
         return splitName(file) == null;
     }
 
+    /** The manifest's package name of {@code file}, a base or a split APK. */
+    public static String packageName(File file) throws IOException {
+        return codeApkLite(file).getPackageName();
+    }
+
     /** The manifest's {@code split} name of {@code file}; null for a base APK. */
     public static String splitName(File file) throws IOException {
         return codeApkLite(file).getSplitName();

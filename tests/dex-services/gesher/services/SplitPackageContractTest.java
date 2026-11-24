@@ -421,6 +421,13 @@ public final class SplitPackageContractTest {
         metadata(pm.get(PACKAGE));
         require(base.length() == baseLength && base.lastModified() == baseTimestamp,
                 "Cache regression accidentally modified the base source");
+        // Another app's split beside the base (a shared Downloads folder) is not a companion.
+        File unrelated = new File(source, "config.unrelated.apk");
+        Files.write(unrelated.toPath(), inputs.get("foreign"));
+        result = (String[]) install.invoke(installer, base.getPath());
+        require("unchanged".equals(result[1]), "Another package's split beside the base joined its install");
+        metadata(pm.get(PACKAGE));
+        Files.delete(unrelated.toPath());
 
         Files.delete(core.toPath());
         Files.delete(entry.toPath());

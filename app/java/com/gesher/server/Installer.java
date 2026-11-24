@@ -328,6 +328,26 @@ final class Installer {
     }
 
     /**
+     * The companions of {@code pkg} among a loose APK's {@code companions}: a folder such as
+     * Downloads also holds other apps' split_*.apk and config.*.apk files, which are not part
+     * of this install and are left out rather than failing it.
+     */
+    private static File[] companionsOf(String pkg, File[] companions) throws IOException {
+        if (companions == null) return null;
+        List<File> own = new ArrayList<>();
+        for (File companion : companions) {
+            String owner = ApkPackage.packageName(companion);
+            if (pkg.equals(owner)) {
+                own.add(companion);
+            } else {
+                SystemServer.log("install " + pkg + ": ignoring " + companion.getName()
+                        + " beside it, an APK of " + owner);
+            }
+        }
+        return own.toArray(new File[0]);
+    }
+
+    /**
      * Whether the installed splits are {@code splits}, by name and content: installing
      * an .xapk over the same base.apk installed alone adds its splits (its ABI split's
      * native libraries), so it is not "unchanged". Only a standalone base APK may
@@ -428,6 +448,7 @@ final class Installer {
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
             ContactsProviderSupport.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
+            if (tempDir == null) incomingSplits = companionsOf(pkg, incomingSplits);
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
                 ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
