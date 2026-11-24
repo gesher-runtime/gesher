@@ -7,6 +7,10 @@ Speech Recognition** (`app/gesher-stt`, package `com.gesher.stt`). Windows' SAPI
 recognizers do the recognizing. The audio is captured by Android's `AudioRecord`, which is
 Gesher's microphone path, on behalf of the calling app.
 
+`EXTRA_MAX_RESULTS` is an upper bound: this provider returns at most 64 real
+alternatives, even when an app asks for more. Both the Java service and the native
+SAPI allocation enforce this limit; the default stays five results.
+
 ```
 app ── SpeechRecognizer ──Binder──> system server: SpeechRecognitionManagerService (#157)
                                          └─ binds com.gesher.stt/.WindowsRecognitionService
