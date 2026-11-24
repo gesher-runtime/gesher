@@ -137,30 +137,25 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             return;
         }
         Provider provider = mBackend.resolve(selected);
-        if (provider == null) {
-            call(() -> callback.onError(SpeechRecognizer.ERROR_CLIENT));
-            return;
-        }
-        // Android checks the UID's active session limit before reusing a
-        // provider connection for a new session token.
-        if (atConnectionLimit(owner.uid())) {
+        // Android checks the UID's remote-connection limit before reusing a
+        // provider for a new session. Session tokens alone have no such cap.
+        if (provider == null || atConnectionLimit(owner.uid())) {
             call(() -> callback.onError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS));
             return;
         }
         Session session = new Session(owner, selected, token);
-        mSessions.put(token, session);
-        mConnectionsByUid.computeIfAbsent(owner.uid(), uid -> new HashMap<>())
-                .merge(selected, 1, Integer::sum);
         try {
             token.linkToDeath(session.clientDeath, 0);
             if (session.processDeathLink != null) {
                 session.processDeathLink.linkToDeath(session.clientDeath, 0);
             }
         } catch (RemoteException failure) {
-            session.close();
-            call(() -> callback.onError(SpeechRecognizer.ERROR_CLIENT));
+            unlink(token, session.clientDeath);
             return;
         }
+        mSessions.put(token, session);
+        mConnectionsByUid.computeIfAbsent(owner.uid(), uid -> new HashMap<>())
+                .merge(selected, 1, Integer::sum);
         session.callbacks.add(callback);
         session.connect(provider);
     }
@@ -585,13 +580,7 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
         // A delivered endpoint retains its logical connection reservation
         // across provider loss. Only final session retirement releases it.
         Map<ComponentName, Integer> connections = mConnectionsByUid.get(uid);
-        if (connections == null) return false;
-        int active = 0;
-        for (int count : connections.values()) {
-            active += count;
-            if (active >= MAX_CONNECTIONS_PER_UID) return true;
-        }
-        return false;
+        return connections != null && connections.size() >= MAX_CONNECTIONS_PER_UID;
     }
 
     private void attach(Session session, Provider selected) {
