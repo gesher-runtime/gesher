@@ -50,7 +50,7 @@ struct ProfileDeletionEvidence {
   DWORD api_status = ERROR_NOT_READY;
   DWORD hive_status = ERROR_NOT_READY;
 };
-enum class Trustee : DWORD { unknown, private_user, system, administrators, owner_rights, everyone, authenticated, logon, other };
+enum class Trustee : DWORD { unknown, private_user, system, administrators, owner_rights, everyone, authenticated, logon, other, private_logon };
 struct TokenAceEvidence { DWORD type = 0, flags = 0, mask = 0; Trustee trustee = Trustee::unknown; };
 struct TokenObjectEvidence {
   DWORD status = ERROR_NOT_READY;
@@ -73,16 +73,21 @@ struct NamespacePathEvidence {
   wchar_t path[kNamespacePathCharacters]{};
 };
 struct DirectoryCallEvidence { DWORD called = 0, status = 0, returned_handle = 0; };
+struct DirectoryAccessEvidence {
+  DWORD setup_status = ERROR_NOT_READY, called = 0, status = ERROR_NOT_READY, authorized = 0, granted = 0;
+};
 struct NamespaceDirectoryEvidence {
   // Bits: 1=absolute API result, 2=worker-session candidate, 4=token-session
   // candidate. Shared ancestors retain every applicable candidate bit.
   DWORD candidates = 0, depth = 0, impersonate = ERROR_NOT_READY;
   wchar_t path[kNamespacePathCharacters]{};
   DirectoryCallEvidence system_query, system_security, private_query, private_security;
+  DirectoryAccessEvidence private_create_subdirectory;
   TokenObjectEvidence security;
 };
 struct NamespaceEvidence {
   DWORD token_validation = ERROR_NOT_READY;
+  DWORD private_logon_status = ERROR_NOT_READY, access_context_status = ERROR_NOT_READY;
   DWORD status = ERROR_NOT_READY, worker_session = 0, token_session = 0, private_impersonate = ERROR_NOT_READY;
   DWORD directory_export = ERROR_NOT_READY, source_private = 0, count = 0;
   NamespacePathEvidence system_path, private_path;
@@ -357,9 +362,10 @@ void ObserveLaunchAccess(HANDLE token, Evidence* evidence) {
   // These observations distinguish access checks; the test never requires a
   // hypothesized cause of an earlier failure. All real launch assertions follow.
 }
-Trustee ClassifyTrustee(PSID sid, PSID private_user) {
+Trustee ClassifyTrustee(PSID sid, PSID private_user, PSID private_logon = nullptr) {
   if (!sid || !IsValidSid(sid)) return Trustee::unknown;
   if (EqualSid(sid, private_user)) return Trustee::private_user;
+  if (private_logon && EqualSid(sid, private_logon)) return Trustee::private_logon;
   if (IsWellKnownSid(sid, WinLocalSystemSid)) return Trustee::system;
   if (IsWellKnownSid(sid, WinBuiltinAdministratorsSid)) return Trustee::administrators;
   if (IsWellKnownSid(sid, WinCreatorOwnerRightsSid)) return Trustee::owner_rights;
@@ -368,7 +374,7 @@ Trustee ClassifyTrustee(PSID sid, PSID private_user) {
   if (IsWellKnownSid(sid, WinLogonIdsSid)) return Trustee::logon;
   return Trustee::other;
 }
-TokenObjectEvidence ObserveTokenObject(HANDLE token, PSID private_user) {
+TokenObjectEvidence ObserveTokenObject(HANDLE token, PSID private_user, PSID private_logon = nullptr) {
   TokenObjectEvidence result;
   PSID owner = nullptr;
   PACL acl = nullptr;
@@ -377,7 +383,7 @@ TokenObjectEvidence ObserveTokenObject(HANDLE token, PSID private_user) {
       &owner, nullptr, &acl, nullptr, &descriptor);
   const Local release(descriptor);
   if (result.status != ERROR_SUCCESS) return result;
-  result.owner = ClassifyTrustee(owner, private_user);
+  result.owner = ClassifyTrustee(owner, private_user, private_logon);
   SECURITY_DESCRIPTOR_CONTROL control = 0;
   DWORD revision = 0;
   BOOL present = FALSE, defaulted = FALSE;
@@ -413,7 +419,7 @@ TokenObjectEvidence ObserveTokenObject(HANDLE token, PSID private_user) {
       return result;
     }
     observed.mask = ace->Mask;
-    observed.trustee = ClassifyTrustee(sid, private_user);
+    observed.trustee = ClassifyTrustee(sid, private_user, private_logon);
   }
   if (result.recorded != result.count) result.status = ERROR_MORE_DATA;
   return result;
@@ -560,6 +566,94 @@ void AddNamespaceCandidate(std::wstring path, DWORD candidate, NamespaceEvidence
     path.resize(separator);
   }
 }
+bool BoundedSid(const void* buffer, DWORD bytes, PSID value) {
+  const auto first = reinterpret_cast<std::uintptr_t>(buffer);
+  const auto sid = reinterpret_cast<std::uintptr_t>(value);
+  if (!value || sid < first || sid - first > bytes || bytes - (sid - first) < 8) return false;
+  const size_t sid_bytes = 8 + static_cast<size_t>(*GetSidSubAuthorityCount(value)) * sizeof(DWORD);
+  return sid_bytes <= bytes - (sid - first) && IsValidSid(value);
+}
+DWORD PrivateLogonSid(HANDLE token, void* output, DWORD capacity) {
+  struct LogonBuffer { TOKEN_GROUPS groups; BYTE storage[SECURITY_MAX_SID_SIZE]; } buffer{};
+  DWORD bytes = 0;
+  if (!GetTokenInformation(token, TokenLogonSid, &buffer, sizeof(buffer), &bytes)) return GetLastError();
+  if (bytes < sizeof(TOKEN_GROUPS) || bytes > sizeof(buffer) || buffer.groups.GroupCount != 1 ||
+      (buffer.groups.Groups[0].Attributes & SE_GROUP_LOGON_ID) != SE_GROUP_LOGON_ID ||
+      !BoundedSid(&buffer, bytes, buffer.groups.Groups[0].Sid)) return ERROR_INVALID_DATA;
+  PSID sid = buffer.groups.Groups[0].Sid;
+  if (!CopySid(capacity, output, sid)) return GetLastError();
+  return ERROR_SUCCESS;
+}
+Handle DirectoryAccessContext(HANDLE private_primary, const storage::AuthorityLaunchSpec& spec, DWORD* status) {
+  try {
+    HANDLE raw = nullptr;
+    Require(DuplicateTokenEx(private_primary, TOKEN_QUERY, nullptr, SecurityImpersonation,
+        TokenImpersonation, &raw), "directory-access-client-duplicate");
+    Handle token(raw);
+    const auto user = User(raw);
+    TOKEN_STATISTICS expected{}, actual{};
+    DWORD bytes = 0, session = 0;
+    Require(GetTokenInformation(private_primary, TokenStatistics, &expected, sizeof(expected), &bytes) &&
+        GetTokenInformation(raw, TokenStatistics, &actual, sizeof(actual), &bytes) &&
+        GetTokenInformation(raw, TokenSessionId, &session, sizeof(session), &bytes), "directory-access-client-query");
+    Require(actual.TokenType == TokenImpersonation && actual.ImpersonationLevel == SecurityImpersonation &&
+        EqualSid(const_cast<BYTE*>(user.data()), spec.desktop_user) && session == spec.desktop_session &&
+        actual.AuthenticationId.HighPart == expected.AuthenticationId.HighPart &&
+        actual.AuthenticationId.LowPart == expected.AuthenticationId.LowPart &&
+        actual.GroupCount == expected.GroupCount && actual.PrivilegeCount == expected.PrivilegeCount,
+        "directory-access-client-identity", ERROR_ACCESS_DENIED);
+    *status = ERROR_SUCCESS;
+    return token;
+  } catch (const Failure& failure) { *status = failure.status; }
+  catch (...) { *status = ERROR_NOT_ENOUGH_MEMORY; }
+  return {};
+}
+DirectoryAccessEvidence ObserveDirectoryCreateAccess(HANDLE directory, HANDLE private_client) {
+  DirectoryAccessEvidence result;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  PACL acl = nullptr;
+  result.setup_status = GetSecurityInfo(directory, SE_KERNEL_OBJECT,
+      OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+      nullptr, nullptr, &acl, nullptr, &descriptor);
+  const Local release(descriptor);
+  if (result.setup_status != ERROR_SUCCESS) return result;
+  if (!IsValidSecurityDescriptor(descriptor) || (acl && !IsValidAcl(acl))) {
+    result.setup_status = ERROR_INVALID_SECURITY_DESCR;
+    return result;
+  }
+  if (acl && acl->AceCount > 128) { result.setup_status = ERROR_MORE_DATA; return result; }
+  for (DWORD i = 0; acl && i < acl->AceCount; ++i) {
+    void* raw = nullptr;
+    if (!GetAce(acl, i, &raw)) { result.setup_status = GetLastError(); return result; }
+    const auto* header = static_cast<const ACE_HEADER*>(raw);
+    if (header->AceFlags & INHERIT_ONLY_ACE) continue;
+    if ((header->AceType != ACCESS_ALLOWED_ACE_TYPE && header->AceType != ACCESS_DENIED_ACE_TYPE) ||
+        header->AceSize < offsetof(ACCESS_ALLOWED_ACE, SidStart)) {
+      result.setup_status = ERROR_NOT_SUPPORTED;
+      return result;
+    }
+    if (static_cast<const ACCESS_ALLOWED_ACE*>(raw)->Mask & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL)) {
+      // Only specific effective ACE masks are evaluated. Do not guess a native
+      // object's generic mapping or turn an unsupported form into denial.
+      result.setup_status = ERROR_GENERIC_NOT_MAPPED;
+      return result;
+    }
+  }
+  constexpr DWORD create_subdirectory = 0x0008;
+  GENERIC_MAPPING mapping{};  // No requested or effective ACE mask is generic.
+  struct Privileges { PRIVILEGE_SET header; LUID_AND_ATTRIBUTES extra[7]; } privileges{};
+  DWORD privilege_bytes = sizeof(privileges), granted = 0;
+  BOOL authorized = FALSE;
+  const BOOL ok = AccessCheck(descriptor, private_client, create_subdirectory, &mapping,
+      &privileges.header, &privilege_bytes, &granted, &authorized);
+  result.called = 1;
+  result.status = ok ? ERROR_SUCCESS : GetLastError();
+  if (ok) {
+    result.authorized = static_cast<DWORD>(authorized != FALSE);
+    result.granted = granted;
+  }
+  return result;
+}
 void VerifyNamespaceToken(HANDLE lowbox, HANDLE private_primary, const storage::AuthorityLaunchSpec& spec) {
   Require(lowbox && lowbox != INVALID_HANDLE_VALUE, "diagnostic-namespace-lowbox-handle", ERROR_INVALID_HANDLE);
   const auto user = User(lowbox);
@@ -578,14 +672,11 @@ void VerifyNamespaceToken(HANDLE lowbox, HANDLE private_primary, const storage::
   struct PackageBuffer { TOKEN_APPCONTAINER_INFORMATION information; BYTE sid[SECURITY_MAX_SID_SIZE]; } package{};
   Require(GetTokenInformation(lowbox, TokenAppContainerSid, &package, sizeof(package), &bytes),
       "diagnostic-namespace-lowbox-package-query");
-  const auto first = reinterpret_cast<std::uintptr_t>(&package);
-  const auto sid = reinterpret_cast<std::uintptr_t>(package.information.TokenAppContainer);
-  Require(bytes >= sizeof(package.information) && bytes <= sizeof(package) && sid >= first && sid - first <= bytes &&
-      bytes - (sid - first) >= 8, "diagnostic-namespace-lowbox-package-bounds", ERROR_INVALID_SID);
+  Require(bytes >= sizeof(package.information) && bytes <= sizeof(package) &&
+      BoundedSid(&package, bytes, package.information.TokenAppContainer),
+      "diagnostic-namespace-lowbox-package-bounds", ERROR_INVALID_SID);
   PSID actual_package = package.information.TokenAppContainer;
-  const size_t sid_bytes = 8 + static_cast<size_t>(*GetSidSubAuthorityCount(actual_package)) * sizeof(DWORD);
-  Require(sid_bytes <= bytes - (sid - first) && IsValidSid(actual_package) &&
-      EqualSid(actual_package, spec.capabilities.AppContainerSid), "diagnostic-namespace-lowbox-package", ERROR_INVALID_SID);
+  Require(EqualSid(actual_package, spec.capabilities.AppContainerSid), "diagnostic-namespace-lowbox-package", ERROR_INVALID_SID);
 }
 void ObserveNamespace(HANDLE lowbox, HANDLE private_primary, const storage::AuthorityLaunchSpec& spec, NamespaceEvidence* observed) {
   try {
@@ -594,6 +685,12 @@ void ObserveNamespace(HANDLE lowbox, HANDLE private_primary, const storage::Auth
     // this identity-checked read-only query and is closed by the caller.
     VerifyNamespaceToken(lowbox, private_primary, spec);
     observed->token_validation = ERROR_SUCCESS;
+    std::array<DWORD, SECURITY_MAX_SID_SIZE / sizeof(DWORD)> logon_sid{};
+    observed->private_logon_status = PrivateLogonSid(private_primary, logon_sid.data(), sizeof(logon_sid));
+    PSID private_logon = observed->private_logon_status == ERROR_SUCCESS ? logon_sid.data() : nullptr;
+    // AccessCheck receives a query-only retained impersonation-token handle;
+    // this duplicate is never set on a thread, assigned, or handed to a child.
+    const Handle access_client = DirectoryAccessContext(private_primary, spec, &observed->access_context_status);
     DWORD bytes = 0;
     Require(ProcessIdToSessionId(GetCurrentProcessId(), &observed->worker_session), "diagnostic-worker-session");
     Require(GetTokenInformation(lowbox, TokenSessionId, &observed->token_session, sizeof(observed->token_session), &bytes),
@@ -631,7 +728,10 @@ void ObserveNamespace(HANDLE lowbox, HANDLE private_primary, const storage::Auth
       const size_t length = std::wcslen(directory.path);
       const Handle query = ObserveDirectoryOpen(open, directory.path, length, query_traverse, &directory.system_query);
       const Handle security = ObserveDirectoryOpen(open, directory.path, length, READ_CONTROL, &directory.system_security);
-      if (security) directory.security = ObserveTokenObject(security.get(), spec.desktop_user);
+      if (security) {
+        directory.security = ObserveTokenObject(security.get(), spec.desktop_user, private_logon);
+        if (access_client) directory.private_create_subdirectory = ObserveDirectoryCreateAccess(security.get(), access_client.get());
+      }
       if (!ImpersonateLoggedOnUser(private_primary)) { directory.impersonate = GetLastError(); continue; }
       directory.impersonate = ERROR_SUCCESS;
       {
@@ -718,6 +818,7 @@ const char* TrusteeName(Trustee value) {
     case Trustee::everyone: return "everyone";
     case Trustee::authenticated: return "authenticated";
     case Trustee::logon: return "logon";
+    case Trustee::private_logon: return "exact-private-logon";
     case Trustee::other: return "other";
     default: return "unclassified";
   }
@@ -782,6 +883,8 @@ void PrintDirectoryCall(DWORD index, const char* operation, const DirectoryCallE
 void PrintNamespace(const NamespaceEvidence& observed) {
   std::printf("Protected launch: namespace-query-source=diagnostic-native-lowbox package-argument=null token-validation-win32=%lu caller-contexts=system,legacy-private-primary\n",
       static_cast<unsigned long>(observed.token_validation));
+  std::printf("Protected launch: namespace-private-logon-query-win32=%lu accesscheck-client-validation-win32=%lu\n",
+      static_cast<unsigned long>(observed.private_logon_status), static_cast<unsigned long>(observed.access_context_status));
   std::printf("Protected launch: namespace-observation win32=%lu worker-session=%lu token-session=%lu private-impersonation-win32=%lu directory-export-win32=%lu source-private=%lu count=%lu\n",
       static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.worker_session),
       static_cast<unsigned long>(observed.token_session), static_cast<unsigned long>(observed.private_impersonate),
@@ -795,7 +898,8 @@ void PrintNamespace(const NamespaceEvidence& observed) {
     const wchar_t* end = std::wmemchr(directory.path, L'\0', std::size(directory.path));
     valid = end && SafeNamespacePath({directory.path, static_cast<size_t>(end - directory.path)}) &&
         directory.path[0] == L'\\' && directory.candidates != 0 && (directory.candidates & ~7u) == 0 && directory.depth <= 3 &&
-        directory.security.recorded <= std::size(directory.security.aces) && directory.security.recorded <= directory.security.count;
+        directory.security.recorded <= std::size(directory.security.aces) && directory.security.recorded <= directory.security.count &&
+        directory.private_create_subdirectory.called <= 1 && directory.private_create_subdirectory.authorized <= 1;
   }
   if (!valid) {
     // Malformed optional observations must not replace the earlier production
@@ -814,6 +918,10 @@ void PrintNamespace(const NamespaceEvidence& observed) {
     PrintDirectoryCall(i, "system-read-control", directory.system_security);
     PrintDirectoryCall(i, "private-query-traverse", directory.private_query);
     PrintDirectoryCall(i, "private-read-control", directory.private_security);
+    const auto& access = directory.private_create_subdirectory;
+    std::printf("Protected launch: namespace-directory=%lu private-create-subdirectory-accesscheck setup-win32=%lu called=%lu api-win32=%lu authorized=%lu granted=0x%08lx requested=0x00000008 scope=object-dacl-only\n",
+        static_cast<unsigned long>(i), static_cast<unsigned long>(access.setup_status), static_cast<unsigned long>(access.called),
+        static_cast<unsigned long>(access.status), static_cast<unsigned long>(access.authorized), static_cast<unsigned long>(access.granted));
     const auto& object = directory.security;
     std::printf("Protected launch: namespace-directory=%lu system-security-query-win32=%lu owner=%s control=0x%04lx dacl-present=%lu defaulted=%lu null=%lu aces=%lu recorded=%lu\n",
         static_cast<unsigned long>(i), static_cast<unsigned long>(object.status), TrusteeName(object.owner),
