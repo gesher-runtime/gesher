@@ -304,6 +304,14 @@ invalidated), SecurityDeviceLocked, UserPrefersPassword, UnknownError and any HR
 binding is a success.
 
 A cancel (`cancelAuthentication`, or the client's death) asks Windows to close the prompt.
+Key-backed authentication also uses the plain verifier's owner-window watch, so losing
+the foreground or destroying the owner's window cancels signature prompts, including the
+signature required to finish enrollment. Key creation keeps its synchronous lifetime;
+if the following enrollment signature fails, enrollment deletes the unbound key.
+Cancellation ends the authorization even if Windows subsequently returns a successful
+signature: the request drops those bytes and the authorization session does not unlock
+timed keys or release an operation's key. An AuthService callback filter alone would be
+too late, because those authorizations are committed before its callback runs.
 As for ADR 0094's verifier, the wait for Windows is then bounded: when Windows has not
 ended the request 5 s after the cancel (its `IAsyncInfo::Cancel` failed, or it ignores
 the request), the request is abandoned and reported as UserCanceled. An abandoned
