@@ -24,6 +24,7 @@
     "compat/posix/src/unistd.cc": "5c846b3d85050f19f4e7e881a75d354896e3126be4f325bc7bf8181fcc4d4772",
     "compat/posix/src/unix_rights.cc": "d3c39bbc3d9ae6a9c4c443eb9e060e6eaa7697becbb968cb13b32f696891a0d5",
     "tests/art-temp/entry_test.cc": "c71deedb50bc6dd7f18a7e0813b5b15348ece60aa3c15546406d82cb969c62fe",
+    "tests/native/ofd_transfer_host_test.cc.in": "9ba122f235f23cfac06b1617be776bbc3adcc3ce60c7b16f1d4b3ceca20fa1a6",
     "tools/test_environment_lookup_contracts.py": "1035fe5dccc1ccc8f79882c975b2510756766ffb33346eb7022ce7a20082abb7",
     "tools/test_temp_directory.py": "9b3a0f4e0da6df60fce9000d2a97c750b5ed41fbd11ff9e34e1fe906e8956d91"
   },
@@ -103,7 +104,7 @@
     "compat/usb_storage/protected_usb_observation.h": "068ae1a67e1343352a1f61d4507269aa1983af72e59172329477bb9751445adf",
     "compat/usb_storage/usb_authority_service.cc": "937725d0662556497cef66f55b6b2d34ce3908c332d12f93b0552027d1d0f2df"
   },
-  "patch_sha256": "7505d1cbcce7d33ceb04040dc448e11e626d487581b134aa905596a2d4d77753",
+  "patch_sha256": "3fadeda6b16088995755ccd900013f5c62e250973465d41e47f8e3b7c0857b76",
   "path_bases": {
     "compat/bionic/process_bionic.cc": "af2a394d0f5399f954aa00aeaf37011d42b96623",
     "compat/elf/exec/exec_spawn.h": "af2a394d0f5399f954aa00aeaf37011d42b96623",
@@ -111,6 +112,7 @@
     "compat/libcore/process.cc": "af2a394d0f5399f954aa00aeaf37011d42b96623",
     "compat/posix/src/binder_file_descriptions.h": "af2a394d0f5399f954aa00aeaf37011d42b96623",
     "compat/posix/src/binder_wire.h": "af2a394d0f5399f954aa00aeaf37011d42b96623",
+    "tests/native/ofd_transfer_host_test.cc.in": "af2a394d0f5399f954aa00aeaf37011d42b96623",
     "tools/test_environment_lookup_contracts.py": "af2a394d0f5399f954aa00aeaf37011d42b96623"
   }
 }

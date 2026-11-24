@@ -409,9 +409,10 @@ USB_BLOCK_PATH_BASES = dict.fromkeys((
  'compat/libcore/process.cc',
  'compat/posix/src/binder_file_descriptions.h',
  'compat/posix/src/binder_wire.h',
+ 'tests/native/ofd_transfer_host_test.cc.in',
  'tools/test_environment_lookup_contracts.py',
 ), 'af2a394d0f5399f954aa00aeaf37011d42b96623')
-USB_BLOCK_TRANSITION_SHA256 = '2b7b6549c35c0ba7197591b41d1f9d9d44ae35e5f1bb6b987f70c616a5ce1cc1'
+USB_BLOCK_TRANSITION_SHA256 = 'd6b6145821fbfbd11c5ab94fcbfaaa006e79549c707ac7e74b307b4ec95c589a'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
@@ -437,6 +438,7 @@ USB_BLOCK_TRANSITION_PATHS = (
  'compat/posix/src/unistd.cc',
  'compat/posix/src/unix_rights.cc',
  'tests/art-temp/entry_test.cc',
+ 'tests/native/ofd_transfer_host_test.cc.in',
  'tools/test_environment_lookup_contracts.py',
  'tools/test_temp_directory.py',
 )

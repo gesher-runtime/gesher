@@ -1498,6 +1498,65 @@ index 6b226dd4..a2144c7f 100644
 +                 flag, L"private-name", L"17", L"4", L"Main"}) == EXIT_FAILURE && vm_calls == 0,
 +            "duplicate routing must not silently replace a native security decision");
 +#endif
+diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
+index 30d03bc8..d183da9d 100644
+--- a/tests/native/ofd_transfer_host_test.cc.in
++++ b/tests/native/ofd_transfer_host_test.cc.in
+@@ -515,0 +516,6 @@ bool VisitEnvironment(void (*visit)(const char*, void*), void* context) {
++namespace gesher::usb_storage {
++// The ordinary OFD corpus has no protected authority. A single routing check
++// enables this explicit boundary and verifies the service refusal is final.
++static bool protected_runtime = false;
++static bool ProtectedRuntimeEnabled() { return protected_runtime; }
++}
+@@ -539,0 +546,16 @@ struct ChildFd { int fd; HANDLE handle; gesher::DescriptorSnapshotPtr snapshot{}
++static unsigned protected_calls;
++static const Launch* protected_launch;
++static const wchar_t* protected_environment;
++static const std::vector<ChildFd>* protected_fds;
++static PROCESS_INFORMATION* protected_info;
++static DWORD SpawnProtectedCommand(const Launch& launch, const wchar_t* environment,
++                                   const std::wstring& cwd, const std::vector<ChildFd>& fds,
++                                   PROCESS_INFORMATION* info, DWORD flags) {
++  ++protected_calls;
++  host::Require(gesher::usb_storage::protected_runtime && &launch == protected_launch &&
++      environment == protected_environment && &fds == protected_fds && info == protected_info &&
++      cwd == L"protected-fixture" && flags == DETACHED_PROCESS);
++  // No capability or child is invented by this fixture. Exact production
++  // authority identity/admission is covered by the separate Windows tests.
++  return ERROR_ACCESS_DENIED;
++}
+@@ -681,0 +704,28 @@ static void PeCapabilities() {
++static void ProtectedRouting() {
++  gesher::exec::Launch launch{L"not-an-installed-image.exe", L"arbitrary guest command"};
++  // A high raw descriptor must never reach ordinary handle inheritance after
++  // a protected authority denial, even when the ordinary builder could reject
++  // it independently. The exact production SpawnWithFds chooses this route.
++  const std::vector<gesher::exec::ChildFd> fds{{7100, INVALID_HANDLE_VALUE, {}}};
++  static constexpr wchar_t environment[] = L"GESHER_OFD_TRANSFER_ENV=protected-route\0";
++  PROCESS_INFORMATION info{};
++  info.dwProcessId = 123;
++  gesher::exec::protected_launch = &launch;
++  gesher::exec::protected_environment = environment;
++  gesher::exec::protected_fds = &fds;
++  gesher::exec::protected_info = &info;
++  const auto processes = host::create_process_calls;
++  const auto handles = host::owned.size();
++  gesher::usb_storage::protected_runtime = true;
++  Check("protected launch routes once to authority and retains its refusal",
++      gesher::exec::SpawnWithFds(launch, environment, L"protected-fixture", fds, &info, DETACHED_PROCESS) ==
++          ERROR_ACCESS_DENIED && gesher::exec::protected_calls == 1);
++  Check("protected refusal never falls back to ordinary CreateProcess or exports handles",
++      host::create_process_calls == processes && host::owned.size() == handles && info.dwProcessId == 123);
++  gesher::usb_storage::protected_runtime = false;
++  gesher::exec::protected_launch = nullptr;
++  gesher::exec::protected_environment = nullptr;
++  gesher::exec::protected_fds = nullptr;
++  gesher::exec::protected_info = nullptr;
++}
++
+@@ -684,0 +735 @@ int main(int argc, char** argv) {
++  ProtectedRouting();
 diff --git a/tools/test_environment_lookup_contracts.py b/tools/test_environment_lookup_contracts.py
 index f2407351..51b3d5b5 100755
 --- a/tools/test_environment_lookup_contracts.py
