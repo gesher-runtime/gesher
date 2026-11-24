@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Gesher (devices track, ADR 0091): com.gesher.server.WindowsHello's natives over
+// Gesher (devices track, ADR 0094): com.gesher.server.WindowsHello's natives over
 // hello_win.h. Registered by register_gesher_devices (devices_jni.cc).
 // docs/research/windows-hello-native-spec.md section 3. No callbacks into Java and
 // no attached native threads: WindowsHello's own daemon thread blocks in await.

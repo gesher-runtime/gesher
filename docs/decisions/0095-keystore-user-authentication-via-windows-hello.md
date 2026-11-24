@@ -1,6 +1,6 @@
-# 0092: AndroidKeyStore user authentication enforced through a Windows Hello key
+# 0095: AndroidKeyStore user authentication enforced through a Windows Hello key
 
-Status: proposed. Phase 3 of [0091](0091-biometric-and-device-credential-via-windows-hello.md).
+Status: proposed. Phase 3 of [0094](0094-biometric-and-device-credential-via-windows-hello.md).
 Nothing here has run on Windows yet; see "Not verified".
 
 ## Context
@@ -9,7 +9,7 @@ Nothing here has run on Windows yet; see "Not verified".
 material is written unencrypted to `<data dir>/.gesher-keystore`, and
 `KeyGenParameterSpec` authorizations are not enforced. A key made with
 `setUserAuthenticationRequired(true)` is created and then works without any
-authentication: the app is told something that is not true. Because of that, ADR 0091
+authentication: the app is told something that is not true. Because of that, ADR 0094
 made `AuthService` refuse every crypto-bound prompt (`operationId != 0` →
 `BIOMETRIC_ERROR_HW_UNAVAILABLE`), and with plain keys `CryptoObject.getOpId()` throws in
 the app anyway.
@@ -252,7 +252,7 @@ key generation fail (`ProviderException`; `KeyStoreException` on import).
 - Therefore nothing is claimed beyond software: a future `KeyInfo` must answer
   `SECURITY_LEVEL_SOFTWARE` and `isInsideSecureHardware() == false`; key attestation
   stays unavailable; StrongBox stays unavailable; no biometric class is reported
-  (ADR 0091 decision 2 is unchanged).
+  (ADR 0094 decision 2 is unchanged).
 
 ### 4. Android semantics
 
@@ -297,14 +297,14 @@ the binding's signature (`KeystoreOperations.authorize`) instead of UserConsentV
 Windows Hello prompt, and `onAuthenticationSucceeded` only when the operation got its
 key. Any other operation id still ends with `BIOMETRIC_ERROR_HW_UNAVAILABLE`.
 
-Windows' `KeyCredentialStatus` maps as ADR 0091's table: UserCanceled (and a caller that
+Windows' `KeyCredentialStatus` maps as ADR 0094's table: UserCanceled (and a caller that
 lost the foreground) → `BIOMETRIC_ERROR_USER_CANCELED`; NotFound (the binding is then
 invalidated), SecurityDeviceLocked, UserPrefersPassword, UnknownError and any HRESULT →
 `BIOMETRIC_ERROR_HW_UNAVAILABLE`. Nothing but Success with a signature that opens the
 binding is a success.
 
 A cancel (`cancelAuthentication`, or the client's death) asks Windows to close the prompt.
-As for ADR 0091's verifier, the wait for Windows is then bounded: when Windows has not
+As for ADR 0094's verifier, the wait for Windows is then bounded: when Windows has not
 ended the request 5 s after the cancel (its `IAsyncInfo::Cancel` failed, or it ignores
 the request), the request is abandoned and reported as UserCanceled. An abandoned
 request's result is never read, so a signature the user's later answer to the leftover
@@ -341,7 +341,7 @@ an older Gesher.
 On its own, this change decides "a secure lock screen" from `KeyCredentialManager.IsSupportedAsync`
 while #366's `trust` answers `isDeviceSecure` = false: an app could make a key that requires
 user authentication on a device it is told is not secure, which Android never allows
-(`getRootSid` above). Combined with phase 2b, one `DeviceCredential` (ADR 0091 decision 7)
+(`getRootSid` above). Combined with phase 2b, one `DeviceCredential` (ADR 0094 decision 7)
 decides both:
 
 - `KeystoreAuthorization.availability()` and `seal` answer `UNAVAILABLE` unless

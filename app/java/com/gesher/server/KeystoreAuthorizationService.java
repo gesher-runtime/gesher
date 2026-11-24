@@ -15,7 +15,7 @@ import java.util.Map;
 
 /**
  * {@code gesher.keystore}: {@link KeystoreAuthorization} for the AndroidKeyStore provider
- * in each app's process (ADR 0092), as keystore2 is to AOSP's provider. A plain Binder
+ * in each app's process (ADR 0095), as keystore2 is to AOSP's provider. A plain Binder
  * with its own transaction codes, called by {@link Client} (no AIDL interface of the
  * framework fits: Gesher has no keystore2 service).
  *

@@ -71,10 +71,10 @@ import javax.security.auth.x500.X500Principal;
  * it, nothing binds it to the hardware. A key that requires user authentication
  * (KeyGenParameterSpec or KeyProtection {@code setUserAuthenticationRequired(true)}) is
  * there only as a blob sealed by the system server to a Windows Hello key, and is used
- * through {@link AndroidKeyStoreAuth} under Android's rules (ADR 0092); when that cannot
+ * through {@link AndroidKeyStoreAuth} under Android's rules (ADR 0095); when that cannot
  * be done, making the key fails as on a device without a secure lock screen or without
  * an enrolled biometric. The other authorizations in the spec (purposes, validity dates,
- * StrongBox, attestation) are not enforced. Keys from before ADR 0092 did not record
+ * StrongBox, attestation) are not enforced. Keys from before ADR 0095 did not record
  * whether they required user authentication; they stay as they were, marked as such.
  * Before the app's Application exists, keys are kept in memory and written to the file
  * once it does.
@@ -122,7 +122,7 @@ public final class AndroidKeyStore extends Provider {
     private static final int SECRET = 1;
     private static final int PRIVATE = 2;
     private static final int TRUSTED = 3;
-    private static final int MAGIC = 0x474b5331;   // "GKS1": before ADR 0092
+    private static final int MAGIC = 0x474b5331;   // "GKS1": before ADR 0095
     private static final int MAGIC2 = 0x474b5332;  // "GKS2"
     private static final int FLAG_SEALED = 1;
     private static final int FLAG_LEGACY = 2;
@@ -134,7 +134,7 @@ public final class AndroidKeyStore extends Provider {
         final Certificate[] chain;   // PRIVATE: the key's chain; TRUSTED: the certificate
         final Date created;
         final String algorithm;      // the key's; "" for TRUSTED
-        /** A key that requires user authentication: its blob (ADR 0092), else null. */
+        /** A key that requires user authentication: its blob (ADR 0095), else null. */
         final byte[] sealed;
         final int authTimeout;       // seconds; 0: every use is authorized
         final int authType;          // KeyProperties.AUTH_*

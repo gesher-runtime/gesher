@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Windows host contracts for compat/devices/hello_win.cc (ADR 0091, phase 2), run
+// Windows host contracts for compat/devices/hello_win.cc (ADR 0094, phase 2), run
 // without showing any UI:
 //  - against the real UserConsentVerifier: availability is one of Windows' five values
 //    (a runner usually has no Hello), and a verification for a process that owns no

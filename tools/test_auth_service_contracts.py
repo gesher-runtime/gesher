@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the production auth (IAuthService) contracts of ADR 0091 on a host JVM.
+"""Run the production auth (IAuthService) contracts of ADR 0094 on a host JVM.
 
 The Android and system-server boundaries are stand-ins with android-16.0.0_r4's
 constant values; AuthService, WindowsHello, WindowsHelloBackend, DeviceCredential,

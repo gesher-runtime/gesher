@@ -88,7 +88,7 @@ public final class WindowManagerService extends IWindowManager.Default {
     /**
      * KeyguardManager.isKeyguardSecure: PhoneWindowManager answers whether the user has a
      * secure lock screen (or a locked SIM, which Gesher has not). The same decision as
-     * {@code trust}'s isDeviceSecure ({@link DeviceCredential}, ADR 0091). As AOSP's, another
+     * {@code trust}'s isDeviceSecure ({@link DeviceCredential}, ADR 0094). As AOSP's, another
      * user's state needs INTERACT_ACROSS_USERS, which only the system holds here.
      */
     @Override

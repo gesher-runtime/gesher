@@ -304,7 +304,7 @@ public final class Services {
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class,
                 new DeviceServices.TelephonyRegistryService()).asBinder());
-        // The device credential (ADR 0091): Windows Hello, where Gesher can confirm it.
+        // The device credential (ADR 0094): Windows Hello, where Gesher can confirm it.
         // trust, the window manager's isKeyguardSecure, auth, the confirm-credential
         // activity and FEATURE_SECURE_LOCK_SCREEN all read this one decision.
         DeviceCredential credential = DeviceCredential.system();
@@ -314,7 +314,7 @@ public final class Services {
                                 == android.content.pm.PackageManager.PERMISSION_GRANTED));
         services.put(Context.TRUST_SERVICE, trust.asBinder());
         // gesher.keystore: AndroidKeyStore keys that require user authentication are sealed
-        // to a Windows Hello key and released under Android's rules (ADR 0092). Without the
+        // to a Windows Hello key and released under Android's rules (ADR 0095). Without the
         // natives there is no such service, and making such a key fails in the app as on a
         // device without a secure lock screen; so does it while the device credential that
         // trust reports is not there.

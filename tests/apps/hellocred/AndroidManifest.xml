@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A test app for device-credential confirmation (ADR 0091, tests/windows/tracks/61-hello-credential.ps1,
+<!-- A test app for device-credential confirmation (ADR 0094, tests/windows/tracks/61-hello-credential.ps1,
      and by hand: HUMAN_TEST.md of the change): what BiometricManager, BiometricPrompt,
      KeyguardManager and the confirm-credential intent answer an ordinary app. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"

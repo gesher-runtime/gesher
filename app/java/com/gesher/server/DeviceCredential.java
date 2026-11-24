@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * Whether the user has a device credential Gesher can confirm (ADR 0091, phase 2b): the one
+ * Whether the user has a device credential Gesher can confirm (ADR 0094, phase 2b): the one
  * decision behind {@code trust}'s {@code isDeviceSecure}, the window manager's
  * {@code isKeyguardSecure}, {@code auth}'s {@code canAuthenticate(DEVICE_CREDENTIAL)}, the
  * confirm-credential activity and {@code FEATURE_SECURE_LOCK_SCREEN}, so they cannot disagree.
@@ -46,7 +46,7 @@ package com.gesher.server;
 final class DeviceCredential {
     /** Microsoft's minimum build for RequestVerificationForWindowAsync (Windows 11). */
     static final int MINIMUM_WINDOWS_BUILD = 22000;
-    /** How long a transient answer keeps the last definite one (decision 7 of ADR 0091). */
+    /** How long a transient answer keeps the last definite one (decision 7 of ADR 0094). */
     static final long BUSY_TRUST_MS = 10 * 60 * 1000;
     /** Re-asks at start when Windows answers busy or fails, before FEATURE_SECURE_LOCK_SCREEN. */
     private static final int START_RETRIES = 3;

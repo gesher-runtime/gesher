@@ -1,5 +1,5 @@
 /* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
-// Host contracts for com.gesher.server.AuthService (ADR 0091). The production
+// Host contracts for com.gesher.server.AuthService (ADR 0094). The production
 // AuthService, WindowsHello, WindowsHelloBackend and StandIn are inserted unchanged apart from
 // their package, imports and public class visibility; everything else here is a
 // boundary stand-in with android-16.0.0_r4's constant values. FakeBackend is an
@@ -435,7 +435,7 @@ public final class AuthServiceContracts {
         check(!events.toString().contains("succeeded(2)"), "AUTHENTICATION_RESULT_TYPE_BIOMETRIC is never reported");
     }
 
-    // --- keystore operations (ADR 0092): isolated test double of KeystoreOperations --------
+    // --- keystore operations (ADR 0095): isolated test double of KeystoreOperations --------
 
     static final class FakeKeys implements KeystoreOperations {
         final Map<Long, Integer> pending = new HashMap<>();

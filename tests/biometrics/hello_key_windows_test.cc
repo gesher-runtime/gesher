@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Windows host contracts for compat/devices/hello_key_win.cc (ADR 0092), run against
+// Windows host contracts for compat/devices/hello_key_win.cc (ADR 0095), run against
 // the real KeyCredentialManager without showing any UI:
 //  - IsSupportedAsync answers (a runner usually has no Windows Hello);
 //  - a key that does not exist is NotFound, for OpenAsync and for deleting it;

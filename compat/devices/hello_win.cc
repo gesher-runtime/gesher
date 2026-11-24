@@ -1,7 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 // Gesher (devices track): Windows Hello user-consent verification through its
-// ABI (docs/research/windows-hello-native-spec.md, ADR 0091).
+// ABI (docs/research/windows-hello-native-spec.md, ADR 0094).
 
 #include "hello_win.h"
 

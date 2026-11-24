@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Gesher (devices track): Windows Hello keys through their ABI
 // (Windows.Security.Credentials.KeyCredentialManager and KeyCredential), for
-// com.gesher.server.WindowsHelloKey (ADR 0092). A key lives in Windows under a
+// com.gesher.server.WindowsHelloKey (ADR 0095). A key lives in Windows under a
 // name; a signature is whatever Windows returns after the user's Windows Hello
 // gesture. Nothing here signs, or reports Success, on its own.
 #pragma once

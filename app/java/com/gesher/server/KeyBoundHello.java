@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * The credential confirmation that also releases keystore keys with a timeout (ADR 0092).
+ * The credential confirmation that also releases keystore keys with a timeout (ADR 0095).
  * On a device a confirmed credential adds an auth token to keystore, which keys with a
  * user-authentication timeout then accept. Here such keys are released only by a
  * signature of the keystore binding's Windows Hello key, so while the binding has such

@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * {@link HelloKeyBackend} over Windows' KeyCredentialManager (ADR 0092;
+ * {@link HelloKeyBackend} over Windows' KeyCredentialManager (ADR 0095;
  * compat/devices/hello_key_jni.cc and hello_key_win.cc). Every status, public key and
  * signature is Windows' own; a prompt is owned by the requesting app's foreground window.
  *

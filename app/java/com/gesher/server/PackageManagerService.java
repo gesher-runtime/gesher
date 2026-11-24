@@ -1208,7 +1208,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     /**
      * FEATURE_SECURE_LOCK_SCREEN when Windows has a credential verifier Gesher can use
      * (Windows Hello on build 22000 or later, set up by the user or not), decided once
-     * when the system server starts ({@link DeviceCredential#supported}, ADR 0091).
+     * when the system server starts ({@link DeviceCredential#supported}, ADR 0094).
      */
     static void addSecureLockScreenFeature(
             android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,

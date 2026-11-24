@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the AndroidKeyStore user-authentication contracts of ADR 0092 on a host JVM.
+"""Run the AndroidKeyStore user-authentication contracts of ADR 0095 on a host JVM.
 
 The production classes are compiled unchanged, in their own packages, against
 stand-ins of the Android boundary (tests/keystore/standins, android-16.0.0_r4

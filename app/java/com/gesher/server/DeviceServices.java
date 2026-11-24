@@ -299,7 +299,7 @@ final class DeviceServices {
 
     /**
      * {@code trust}: ITrustManager, what KeyguardManager.isDeviceSecure/isDeviceLocked and
-     * BiometricService's PreAuthInfo ({@code credentialAvailable}) ask (ADR 0091).
+     * BiometricService's PreAuthInfo ({@code credentialAvailable}) ask (ADR 0094).
      *
      * <p>The device is secure when the user has a credential Gesher can confirm
      * ({@link DeviceCredential}: Windows Hello, on Windows build 22000 or later). It is never

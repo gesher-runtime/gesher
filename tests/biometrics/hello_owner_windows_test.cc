@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Windows host contracts for compat/devices/hello_owner.cc (ADR 0091, phase 2b), run
+// Windows host contracts for compat/devices/hello_owner.cc (ADR 0094, phase 2b), run
 // without showing any UI: Windows' build number, and how a window is classified
 // relative to the window that owns Windows Hello's prompt. The windows are real and
 // never shown: this process's own, one that a child process creates with this

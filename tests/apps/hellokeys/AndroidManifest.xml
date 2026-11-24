@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- A test app for AndroidKeyStore keys that require user authentication on the combined
-     Windows Hello head (ADR 0091 + ADR 0092, tests/windows/tracks/62-hello-keys.ps1, and by
+     Windows Hello head (ADR 0094 + ADR 0095, tests/windows/tracks/62-hello-keys.ps1, and by
      hand: HUMAN_TEST.md of the change): key creation, use without authentication,
      BiometricPrompt with a CryptoObject, and a time-bound key after a confirm-credential. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"

@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Manual Windows probe for compat/devices/hello_owner.cc (ADR 0091, phase 2b): what
+// Manual Windows probe for compat/devices/hello_owner.cc (ADR 0094, phase 2b): what
 // Windows' foreground window is, relative to the prompt's owner, while the real
 // Windows Hello prompt shows. It answers the question the host test cannot: is the
 // prompt a window of another process that the app's window owns?

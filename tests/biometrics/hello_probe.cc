@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Manual Windows probe for compat/devices/hello_win.cc (ADR 0091, phase 2).
+// Manual Windows probe for compat/devices/hello_win.cc (ADR 0094, phase 2).
 // It drives the production functions against the real Windows Hello:
 //
 //   hello_probe availability           CheckAvailabilityAsync only; shows no UI

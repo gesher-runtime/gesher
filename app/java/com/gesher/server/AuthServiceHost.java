@@ -15,7 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * {@link AuthService.Host} in the system server (ADR 0091): permissions and app ops from
+ * {@link AuthService.Host} in the system server (ADR 0094): permissions and app ops from
  * the package and activity managers, the foreground from Windows' foreground process (as
  * the clipboard's), the device credential from {@code trust} (as AOSP's PreAuthInfo), and
  * BiometricService's handler as one daemon thread.

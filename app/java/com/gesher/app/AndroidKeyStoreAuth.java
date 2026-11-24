@@ -51,7 +51,7 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * AndroidKeyStore keys that require user authentication (ADR 0092): their key objects and
+ * AndroidKeyStore keys that require user authentication (ADR 0095): their key objects and
  * the Cipher, Signature and Mac that use them.
  *
  * <p>Such a key is in the app's key store only as a blob sealed by the system server's

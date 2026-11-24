@@ -1,4 +1,4 @@
-# Windows Hello backend: native specification (ADR 0091, phase 2)
+# Windows Hello backend: native specification (ADR 0094, phase 2)
 
 What a Windows implementer builds so `com.gesher.server.AuthService` can confirm a
 device credential. The Java side (AuthService, the `WindowsHelloBackend` interface,
@@ -97,7 +97,7 @@ same lock unless released. No JNI callbacks into Java, no attached native thread
   Verified (PIN, 19.5 s) and Canceled (3.1 s, the cancel at 3 s). The fallback for a
   build that refuses it (`E_INVALIDARG`/`E_ACCESSDENIED`: run the call in the app's
   process through a Gesher-internal binder call, keeping the session in the system
-  server) stays a design note in ADR 0091, decision 11.
+  server) stays a design note in ADR 0094, decision 11.
 - While the prompt is up, if the owner process exits, cancel (the Java side also
   cancels on binder death). Losing foreground during the prompt: Windows keeps its
   dialog modal to the owner; phase 2 may add a 250 ms foreground check in the await

@@ -39,7 +39,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * The user-authentication half of AndroidKeyStore (ADR 0092): what keystore2's
+ * The user-authentication half of AndroidKeyStore (ADR 0095): what keystore2's
  * enforcement and auth-token table do on a device, over a Windows Hello key.
  *
  * <p>An app's key that requires user authentication is stored by the app's keystore

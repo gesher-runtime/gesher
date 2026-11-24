@@ -13,7 +13,7 @@ import java.util.function.IntConsumer;
 
 /**
  * {@code ACTION_CONFIRM_DEVICE_CREDENTIAL}, the intent of
- * {@code KeyguardManager.createConfirmDeviceCredentialIntent} (ADR 0091, phase 2b). On
+ * {@code KeyguardManager.createConfirmDeviceCredentialIntent} (ADR 0094, phase 2b). On
  * Android, Settings' ConfirmDeviceCredentialActivity answers it: a BiometricPrompt for
  * {@code DEVICE_CREDENTIAL | BIOMETRIC_WEAK} with the intent's title and description, which
  * finishes with {@code RESULT_OK} when the user confirmed and {@code RESULT_CANCELED}

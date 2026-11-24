@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * Decides when a Windows Hello prompt's owner has left the foreground (ADR 0091, phase 2b).
+ * Decides when a Windows Hello prompt's owner has left the foreground (ADR 0094, phase 2b).
  * SystemUI closes a BiometricPrompt as a user cancel when its client is no longer the top
  * app (AuthController.cancelIfOwnerIsNotInForeground); {@link WindowsHello} samples where
  * Windows' foreground window is relative to the prompt's owner and asks this.

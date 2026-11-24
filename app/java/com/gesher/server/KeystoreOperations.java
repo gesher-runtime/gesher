@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * Keystore operations that wait for the user (ADR 0092): what keystore2 is to
+ * Keystore operations that wait for the user (ADR 0095): what keystore2 is to
  * BiometricService for {@code BiometricPrompt.CryptoObject}. Implemented by
  * {@link KeystoreAuthorization}.
  */

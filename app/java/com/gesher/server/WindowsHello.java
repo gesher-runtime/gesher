@@ -8,7 +8,7 @@ import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 
 /**
- * {@link WindowsHelloBackend} over Windows' UserConsentVerifier (ADR 0091, phase 2;
+ * {@link WindowsHelloBackend} over Windows' UserConsentVerifier (ADR 0094, phase 2;
  * compat/devices/hello_jni.cc and hello_win.cc, docs/research/windows-hello-native-spec.md).
  * Every result is Windows' own: a prompt owned by the requesting app's foreground window,
  * Verified only when Windows says so.

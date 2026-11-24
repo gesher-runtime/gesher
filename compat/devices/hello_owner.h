@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Gesher (devices track, ADR 0091 phase 2b): what com.gesher.server.WindowsHello
+// Gesher (devices track, ADR 0094 phase 2b): what com.gesher.server.WindowsHello
 // needs besides the verification itself: Windows' build number, and where the
 // foreground window is relative to the window that owns Windows Hello's prompt.
 #pragma once

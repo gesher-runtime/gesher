@@ -1,4 +1,4 @@
-# 0091: Biometric and device-credential authentication over Windows Hello (auth track)
+# 0094: Biometric and device-credential authentication over Windows Hello (auth track)
 
 Status: proposed. Phases 1, 2 (natives) and 2b (the device credential reaches apps,
 section "Phase 2b") are implemented; keystore binding and any biometric class wait for

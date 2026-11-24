@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * What {@link KeystoreAuthorization} asks of Windows Hello's key store (ADR 0092):
+ * What {@link KeystoreAuthorization} asks of Windows Hello's key store (ADR 0095):
  * {@code Windows.Security.Credentials.KeyCredentialManager} and {@code KeyCredential}. A
  * key lives in Windows, under a name, for the signed-in Windows user; every signature needs
  * the user's Windows Hello gesture (PIN or a biometric, Windows does not say which). The

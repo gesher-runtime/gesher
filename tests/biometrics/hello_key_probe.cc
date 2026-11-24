@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Manual Windows probe for compat/devices/hello_key_win.cc (ADR 0092). It drives the
+// Manual Windows probe for compat/devices/hello_key_win.cc (ADR 0095). It drives the
 // production functions against the real Windows Hello and answers the questions the
 // design depends on:
 //

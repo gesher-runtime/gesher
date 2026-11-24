@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * What {@link AuthService} asks of Windows Hello (ADR 0091): whether the signed-in user can
+ * What {@link AuthService} asks of Windows Hello (ADR 0094): whether the signed-in user can
  * confirm a credential, and that confirmation. The values are Windows' own
  * ({@code Windows.Security.Credentials.UI.UserConsentVerifierAvailability} and
  * {@code UserConsentVerificationResult}); the native implementation is specified in

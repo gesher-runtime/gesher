@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Gesher (devices track): Windows Hello keys through their ABI (ADR 0092).
+// Gesher (devices track): Windows Hello keys through their ABI (ADR 0095).
 // Interfaces, IIDs and vtable orders are those of the Windows SDK's
 // windows.security.credentials.idl, windows.storage.streams.idl and
 // windows.security.cryptography.idl (as in microsoft/win32metadata and

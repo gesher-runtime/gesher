@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Gesher (devices track, ADR 0092): com.gesher.server.WindowsHelloKey's natives over
+// Gesher (devices track, ADR 0095): com.gesher.server.WindowsHelloKey's natives over
 // hello_key_win.h. Registered by register_gesher_devices (devices_jni.cc). No callbacks
 // into Java and no attached native threads: WindowsHelloKey's own thread blocks in await.
 

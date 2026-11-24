@@ -1,6 +1,6 @@
 // Gesher (devices track): Windows Hello user-consent verification through its
 // ABI (Windows.Security.Credentials.UI.UserConsentVerifier and
-// IUserConsentVerifierInterop), for com.gesher.server.WindowsHello (ADR 0091,
+// IUserConsentVerifierInterop), for com.gesher.server.WindowsHello (ADR 0094,
 // docs/research/windows-hello-native-spec.md). Nothing here reports success
 // without Windows' own Verified.
 #pragma once

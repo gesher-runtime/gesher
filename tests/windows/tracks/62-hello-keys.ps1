@@ -1,5 +1,5 @@
 # AndroidKeyStore keys that require the device credential on the combined Windows Hello
-# head (ADR 0091 + ADR 0092): what an ordinary app (tests/apps/hellokeys) is answered when
+# head (ADR 0094 + ADR 0095): what an ordinary app (tests/apps/hellokeys) is answered when
 # it makes such keys, across Binder and gesher.keystore on the Gesher device. Dot-sourced
 # by run-tests.ps1, using NoDrive, $Dir, $root and $failed from there and DevRun/DevCheck
 # from 58-devices.ps1.

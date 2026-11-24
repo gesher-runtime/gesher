@@ -31,7 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code auth}: IAuthService, what BiometricManager and BiometricPrompt talk to (ADR 0091).
+ * {@code auth}: IAuthService, what BiometricManager and BiometricPrompt talk to (ADR 0094).
  *
  * <p>AOSP's SystemServer starts AuthService and BiometricService on every device, sensors
  * or not, so this service is always registered. Gesher registers no biometric sensor:
@@ -248,7 +248,7 @@ public final class AuthService extends IAuthService.Default {
     @Override
     public long getLastAuthenticationTime(int userId, int authenticators) {
         checkUser(userId);
-        // No gatekeeper secure user id and no keystore auth tokens (ADR 0091 phase 3):
+        // No gatekeeper secure user id and no keystore auth tokens (ADR 0094 phase 3):
         // BiometricService's answer for a user without one.
         return BiometricManager.BIOMETRIC_NO_AUTHENTICATION;
     }
@@ -419,7 +419,7 @@ public final class AuthService extends IAuthService.Default {
                 WindowsHelloBackend.Completion completion =
                         result -> mHost.post(() -> verified(session, result));
                 // A keystore operation is confirmed by the signature that releases its key:
-                // one Windows Hello prompt, and success only with the key (ADR 0092). Any
+                // one Windows Hello prompt, and success only with the key (ADR 0095). Any
                 // other confirmation may also release keys with a timeout (KeyBoundHello).
                 session.verification = session.operationId != 0
                         ? mKeys.authorize(session.request, session.operationId, completion)
@@ -435,7 +435,7 @@ public final class AuthService extends IAuthService.Default {
     /**
      * Why a credential confirmation cannot be offered, or BIOMETRIC_SUCCESS. A request bound
      * to a keystore operation is honoured only for an operation of the caller that the
-     * keystore authorization holds (ADR 0092); any other operation id cannot be authorized,
+     * keystore authorization holds (ADR 0095); any other operation id cannot be authorized,
      * so it is never reported as confirmed.
      */
     private int unavailable(Session session) {
@@ -527,7 +527,7 @@ public final class AuthService extends IAuthService.Default {
 
     // --- AOSP's rules ---------------------------------------------------------------------
 
-    /** Windows' result → BiometricConstants (ADR 0091's table). */
+    /** Windows' result → BiometricConstants (ADR 0094's table). */
     static int toError(int result) {
         switch (result) {
             case WindowsHelloBackend.CANCELED:

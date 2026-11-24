@@ -1,4 +1,4 @@
-# Device-credential confirmation (ADR 0091, phase 2b): what an ordinary app
+# Device-credential confirmation (ADR 0094, phase 2b): what an ordinary app
 # (tests/apps/hellocred) is answered by BiometricManager, BiometricPrompt,
 # KeyguardManager and the confirm-credential intent, across Binder on the Gesher
 # device. Dot-sourced by run-tests.ps1, using NoDrive, $Dir, $root and $failed from

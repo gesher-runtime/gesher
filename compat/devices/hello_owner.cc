@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Gesher (devices track, ADR 0091 phase 2b): see hello_owner.h.
+// Gesher (devices track, ADR 0094 phase 2b): see hello_owner.h.
 
 #include "hello_owner.h"
 

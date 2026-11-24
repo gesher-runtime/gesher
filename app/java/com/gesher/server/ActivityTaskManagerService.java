@@ -372,7 +372,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Accepted system Settings requests, including queued/headless windows. Guarded by this. */
     private final java.util.Set<ExactAlarmSettingsSession> mExactAlarmSettingsSessions = new java.util.HashSet<>();
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
-    private volatile AuthService mAuth; // confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0091)
+    private volatile AuthService mAuth; // confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0094)
     private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
@@ -1356,7 +1356,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         updateTopResumed();
     }
 
-    /** The auth service that confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0091). */
+    /** The auth service that confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0094). */
     void setAuthService(AuthService auth) {
         mAuth = auth;
     }
@@ -2600,7 +2600,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /**
-     * ACTION_CONFIRM_DEVICE_CREDENTIAL (ConfirmCredential, ADR 0091): Windows Hello's prompt
+     * ACTION_CONFIRM_DEVICE_CREDENTIAL (ConfirmCredential, ADR 0094): Windows Hello's prompt
      * over the calling activity, owned by the calling process's window, RESULT_OK only
      * when Windows verified the user. The request ends as canceled when its caller goes
      * away, which also closes Windows' prompt.
