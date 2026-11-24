@@ -71,9 +71,11 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
     stdin, as root-check libraries (RootShell, libsuperuser, libsu) do.
 - **The exec log**: `gesher: exec <program> (<kind>) started as pid <pid>`
   and `gesher: exec <program> failed: error=<errno>, <text>` end with
-  `, args: <argv[1..]>` when there are arguments: shell words, control bytes
-  escaped, at most 200 bytes of argument text, `... [truncated]` beyond. The
-  child's stdin is never logged. `gesher: exec pid <pid> exited with status
+  `, <n> args` when there are arguments. Arguments can carry tokens or
+  personal data and these logs are attached to bug reports, so the arguments
+  themselves are logged only with `GESHER_TRACE_EXEC=1`: `, args: <argv[1..]>`,
+  shell words, control bytes escaped, at most 200 bytes of argument text,
+  `... [truncated]` beyond. The child's stdin is never logged. `gesher: exec pid <pid> exited with status
   <n>` is unchanged; match it to the start line by pid.
 - **Loader additions** (`gesher/elf_loader.h`, additive): `GetExecutableInfo`
   (entry point, program headers, `PT_INTERP`), `SetInitArguments` (what init

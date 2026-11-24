@@ -151,6 +151,15 @@ void CloseIf(HANDLE* h) {
   *h = nullptr;
 }
 
+// GESHER_TRACE_EXEC=1 adds the arguments themselves to the exec log lines.
+bool TraceExecArguments() {
+  static const bool trace = [] {
+    const char* value = getenv("GESHER_TRACE_EXEC");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return trace;
+}
+
 jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_block, jint argc,
                          jbyteArray env_block, jint envc, jbyteArray dir_bytes, jintArray std_fds,
                          jboolean redirect_error_stream) {
@@ -159,7 +168,10 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
   t_program = program.c_str();
   std::vector<std::string> argv{program};
   for (std::string& a : Strings(ByteString(env, arg_block), argc)) argv.push_back(std::move(a));
-  t_arguments = ExecLogArguments(argv);
+  // Arguments can carry tokens or personal data and these logs are shared in
+  // bug reports, so only their count is logged unless GESHER_TRACE_EXEC is set.
+  t_arguments = TraceExecArguments() ? ExecLogArguments(argv)
+      : argv.size() > 1 ? ", " + std::to_string(argv.size() - 1) + " args" : std::string();
   std::string dir = ByteString(env, dir_bytes);
   if (!dir.empty() && dir.back() == '\0') dir.pop_back();
 
