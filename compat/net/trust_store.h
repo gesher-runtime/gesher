@@ -76,6 +76,10 @@ struct UserSyncResult {
 UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
                                    const std::vector<Der>& certificates);
 
+// Tests only: called with an entry's path just before it is moved into place,
+// to make a file appear there in between. Null otherwise.
+extern void (*g_before_user_entry_write)(const std::wstring& path);
+
 }  // namespace trust_store_internal
 
 }  // namespace gesher::net

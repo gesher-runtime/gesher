@@ -182,8 +182,9 @@ bool ReadWholeFile(const std::wstring& path, std::string* out) {
   return ok;
 }
 
-// The named stream that marks a user CA file as Gesher's: the SHA-256 of the
-// data Gesher wrote, in hex. Android reads only the file's data.
+// The named stream that marks a user CA file as Gesher's: the file's name and
+// the SHA-256 of the data Gesher wrote, in hex. Android reads only the file's
+// data.
 const wchar_t kOwnerStream[] = L"gesher-owner";
 
 // Writes dir\name whole: a temporary file in `staging` (on the same volume),
@@ -191,7 +192,7 @@ const wchar_t kOwnerStream[] = L"gesher-owner";
 // of the directory Conscrypt reads.
 bool WriteFileAtomically(const std::wstring& dir, const std::wstring& name,
                          const std::string& data, const std::wstring& staging,
-                         const std::string* owner_mark = nullptr) {
+                         const std::string* owner_mark = nullptr, bool replace = true) {
   std::wstring path = dir + L"\\" + name;
   wchar_t suffix[64];
   swprintf(suffix, 64, L".tmp-%lu-%lu", GetCurrentProcessId(), GetCurrentThreadId());
@@ -215,8 +216,14 @@ bool WriteFileAtomically(const std::wstring& dir, const std::wstring& name,
       CloseHandle(mark);
     }
   }
-  if (ok) ok = MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
-  if (!ok) DeleteFileW(tmp.c_str());
+  // Without `replace`, a file already at the name stays and the rename fails
+  // with ERROR_ALREADY_EXISTS, which the caller sees.
+  if (ok) ok = MoveFileExW(tmp.c_str(), path.c_str(), replace ? MOVEFILE_REPLACE_EXISTING : 0) != 0;
+  if (!ok) {
+    DWORD error = GetLastError();
+    DeleteFileW(tmp.c_str());
+    SetLastError(error);
+  }
   return ok;
 }
 
@@ -641,7 +648,11 @@ bool IsTombstone(const std::wstring& path) {
 // tombstones that end the hash's run are deleted (removeUnnecessaryTombstones).
 bool RemoveUserEntry(const std::wstring& dir, const std::wstring& name) {
   std::wstring path = dir + L"\\" + name;
-  HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING,
+  // Shared like Gesher's own file layer opens files, so a reader (another
+  // process, a scanner) does not keep the entry from being removed.
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         TRUNCATE_EXISTING,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
   if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
   CloseHandle(h);
@@ -688,6 +699,8 @@ std::string ManifestText(const std::map<std::wstring, Digest>& entries) {
 
 }  // namespace
 
+void (*g_before_user_entry_write)(const std::wstring& path) = nullptr;
+
 UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
                                    const std::vector<Der>& certificates) {
   UserSyncResult result;
@@ -714,6 +727,10 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   // record alone is enough, so a lost or unwritable manifest does not leave
   // an entry behind. Anything else in the directory is not Gesher's.
   std::map<std::wstring, Digest> owned;
+  // Manifest lines whose entry exists but cannot be read now (opened without
+  // sharing): kept as they are, so the entry stays recorded until a later
+  // sync can check and, if need be, remove it.
+  std::map<std::wstring, std::string> unreadable;
   std::string manifest;
   bool had_manifest = ReadWholeFile(manifest_path, &manifest);
   for (size_t at = 0; had_manifest && at < manifest.size();) {
@@ -726,7 +743,16 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
     std::wstring name(line.begin(), line.begin() + space);
     if (!IsCertFileName(name)) continue;
     Digest digest;
-    if (Holds(dir + L"\\" + name, line.substr(space + 1), &digest)) owned[name] = digest;
+    if (Holds(dir + L"\\" + name, line.substr(space + 1), &digest)) {
+      owned[name] = digest;
+      continue;
+    }
+    std::string ignored;
+    DWORD attributes = GetFileAttributesW((dir + L"\\" + name).c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+        !ReadWholeFile(dir + L"\\" + name, &ignored)) {
+      unreadable[name] = TrimLower(line.substr(space + 1));
+    }
   }
   WIN32_FIND_DATAW entry;
   HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &entry);
@@ -738,16 +764,23 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
         continue;
       }
       std::wstring path = dir + L"\\" + name;
+      // "<name> <sha-256>": a copy carrying the stream to another name (as
+      // Explorer and copy do) does not match it.
       std::string mark;
       Digest digest;
-      if (ReadWholeFile(path + L":" + kOwnerStream, &mark) && Holds(path, mark, &digest)) {
+      if (!ReadWholeFile(path + L":" + kOwnerStream, &mark)) continue;
+      mark = TrimLower(mark);
+      std::string lower_name = TrimLower(std::string(name.begin(), name.end()));
+      size_t space = mark.find(' ');
+      if (space != std::string::npos && mark.substr(0, space) == lower_name &&
+          Holds(path, mark.substr(space + 1), &digest)) {
         owned[name] = digest;
       }
     } while (FindNextFileW(find, &entry));
     FindClose(find);
   }
 
-  bool ok = true;
+  bool ok = unreadable.empty();
   // Gesher's entries that are no longer wanted: the root left Windows' store.
   for (auto it = owned.begin(); it != owned.end();) {
     if (wanted.count(it->second) != 0) {
@@ -767,47 +800,40 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   // TrustedCertificateStore.installCertificate adds one. A tombstone keeps its
   // index. Like its findCert, the run ends at the first index that is not a
   // file: an entry there would be unreachable, so a directory in the way is
-  // a failure, not a reason to go past it.
+  // a failure, not a reason to go past it. An entry that could not be
+  // removed stays where it is and does not hold up the others.
+  enum class Slot { kFree, kPresent, kBlocked };
+  std::set<std::wstring> planned;
+  auto find_slot = [&](unsigned long hash, const std::string& der, std::wstring* name) {
+    for (int index = 0;; index++) {
+      *name = UserCertName(hash, index);
+      if (planned.count(*name) != 0) continue;
+      std::wstring path = dir + L"\\" + *name;
+      DWORD attributes = GetFileAttributesW(path.c_str());
+      if (attributes == INVALID_FILE_ATTRIBUTES) return Slot::kFree;
+      if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return Slot::kBlocked;
+      std::string contents;
+      if (ReadWholeFile(path, &contents) && contents == der) return Slot::kPresent;
+    }
+  };
   struct Pending {
     std::wstring name;
     Digest digest;
+    unsigned long hash;
     const Der* der;
   };
   std::vector<Pending> pending;
-  std::set<std::wstring> planned;
-  // A failed removal stops additions (as before); a blocked certificate
-  // fails only itself.
-  const bool removed_all = ok;
   for (const auto& [digest, entry] : wanted) {
-    if (!removed_all) break;
     std::string der(entry.der->begin(), entry.der->end());
-    int index = 0;
-    bool present = false;
-    bool blocked = false;
-    for (;; index++) {
-      std::wstring name = UserCertName(entry.hash, index);
-      if (planned.count(name) != 0) continue;
-      std::wstring path = dir + L"\\" + name;
-      DWORD attributes = GetFileAttributesW(path.c_str());
-      if (attributes == INVALID_FILE_ATTRIBUTES) break;
-      if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-        blocked = true;
-        break;
-      }
-      std::string contents;
-      if (ReadWholeFile(path, &contents) && contents == der) {
-        present = true;
-        break;
-      }
-    }
-    if (present) continue;
-    if (blocked) {
+    std::wstring name;
+    Slot slot = find_slot(entry.hash, der, &name);
+    if (slot == Slot::kPresent) continue;
+    if (slot == Slot::kBlocked) {
       ok = false;
       continue;
     }
-    std::wstring name = UserCertName(entry.hash, index);
     planned.insert(name);
-    pending.push_back(Pending{name, digest, entry.der});
+    pending.push_back(Pending{name, digest, entry.hash, entry.der});
   }
 
   // The manifest names the entries before they are written, so one written
@@ -815,6 +841,9 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   // changes.
   auto write_manifest = [&](const std::map<std::wstring, Digest>& entries) {
     std::string listed = ManifestText(entries);
+    for (const auto& [name, hex] : unreadable) {
+      if (entries.count(name) == 0) listed += std::string(name.begin(), name.end()) + " " + hex + "\n";
+    }
     if (listed.empty()) return !had_manifest || DeleteFileW(manifest_path.c_str()) ||
                                GetLastError() == ERROR_FILE_NOT_FOUND;
     if (had_manifest && listed == manifest) return true;
@@ -834,19 +863,42 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
     result.ok = false;
     return result;
   }
+  // A new entry never replaces a file: one that appeared at its name since
+  // the scan is someone else's. The entry then takes the next free index,
+  // named in the manifest first like any other.
   bool wrote_all = true;
   for (const Pending& p : pending) {
     std::string der(p.der->begin(), p.der->end());
-    std::string mark = Hex(p.digest);
-    if (MakeDirectories(dir) && WriteFileAtomically(dir, p.name, der, user_dir, &mark)) {
-      owned[p.name] = p.digest;
-      result.written++;
-    } else {
-      wrote_all = false;
-      ok = false;
+    std::wstring name = p.name;
+    bool done = false;
+    for (int attempt = 0; attempt < 8 && !done; attempt++) {
+      std::string text(name.begin(), name.end());
+      std::string mark = text + " " + Hex(p.digest);
+      if (g_before_user_entry_write != nullptr) g_before_user_entry_write(dir + L"\\" + name);
+      if (MakeDirectories(dir) && WriteFileAtomically(dir, name, der, user_dir, &mark, false)) {
+        owned[name] = p.digest;
+        result.written++;
+        done = true;
+        break;
+      }
+      DWORD error = GetLastError();
+      if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) break;
+      intended.erase(name);
+      planned.erase(name);
+      Slot slot = find_slot(p.hash, der, &name);
+      if (slot == Slot::kPresent) {
+        done = true;  // Someone else's copy: not Gesher's, nothing to write.
+        break;
+      }
+      if (slot == Slot::kBlocked) break;
+      planned.insert(name);
+      intended[name] = p.digest;
+      if (!write_manifest(intended)) break;
     }
+    if (!done) wrote_all = false;
   }
-  if (!wrote_all && !write_manifest(owned)) ok = false;
+  if (!wrote_all) ok = false;
+  if (!write_manifest(owned)) ok = false;
   result.ok = ok;
   return result;
 }

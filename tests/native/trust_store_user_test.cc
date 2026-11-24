@@ -316,7 +316,7 @@ static void Recovery(const std::wstring& root) {
   // The entry carries its own owner mark.
   internal::UserSyncResult r = internal::SyncUserCaDirectory(user, {x});
   CHECK(r.ok && r.written == 1);
-  CHECK(Contents(mark) == HexSha256(x));
+  CHECK(Contents(mark) == Utf8(HashName(x, 0)) + " " + HexSha256(x));
 
   // Manifest lost, then the root leaves: the mark still names it.
   CHECK(DeleteFileW(manifest.c_str()));
@@ -362,7 +362,7 @@ static void Recovery(const std::wstring& root) {
   // the order was before the manifest went first): the mark names it.
   CHECK(DeleteFileW(manifest.c_str()));
   std::wstring ypath = added + L"\\" + HashName(y, 0);
-  CHECK(WriteBytes(ypath, AsString(y)) && WriteBytes(ypath + L":gesher-owner", HexSha256(y)));
+  CHECK(WriteBytes(ypath, AsString(y)) && WriteBytes(ypath + L":gesher-owner", Utf8(HashName(y, 0)) + " " + HexSha256(y)));
   r = internal::SyncUserCaDirectory(user, {x});
   CHECK(r.ok && r.removed == 1);
   CHECK(Contents(ypath) == "<missing>");
@@ -370,7 +370,7 @@ static void Recovery(const std::wstring& root) {
 
   // A mark that does not match the data is not Gesher's (the file was
   // replaced): kept.
-  CHECK(WriteBytes(ypath, AsString(y)) && WriteBytes(ypath + L":gesher-owner", HexSha256(x)));
+  CHECK(WriteBytes(ypath, AsString(y)) && WriteBytes(ypath + L":gesher-owner", Utf8(HashName(y, 0)) + " " + HexSha256(x)));
   r = internal::SyncUserCaDirectory(user, {x});
   CHECK(r.ok && r.removed == 0);
   CHECK(Contents(ypath) == AsString(y));
@@ -398,6 +398,87 @@ static void Recovery(const std::wstring& root) {
   CHECK(RemoveDirectoryW(xpath.c_str()));
   r = internal::SyncUserCaDirectory(user, {});
   CHECK(r.ok && r.removed == 1);
+  CHECK(List(added).empty());
+}
+
+static std::string g_appearing;  // what the hook puts at the entry's path, once
+
+static void AppearBeforeWrite(const std::wstring& path) {
+  if (g_appearing.empty()) return;
+  CHECK(WriteBytes(path, g_appearing));
+  g_appearing.clear();
+}
+
+// Others using the directory: a reader holding an entry open, a copy of an
+// entry, a file appearing at a new entry's name.
+static void SharedDirectory(const std::wstring& root) {
+  std::wstring user = root + L"\\misc\\user\\0";
+  std::wstring added = user + L"\\cacerts-added";
+  Der old_root = MakeRoot("Rotated");
+  Der new_root = MakeRoot("Rotated other");
+  std::wstring old_path = added + L"\\" + HashName(old_root, 0);
+  std::wstring new_path = added + L"\\" + HashName(new_root, 0);
+
+  // A reader (another process, a scanner) has the old root open, shared as
+  // Gesher's file layer opens files: the root rotates anyway.
+  internal::UserSyncResult r = internal::SyncUserCaDirectory(user, {old_root});
+  CHECK(r.ok && r.written == 1);
+  HANDLE reader = CreateFileW(old_path.c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(reader != INVALID_HANDLE_VALUE);
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(r.ok && r.removed == 1 && r.written == 1);
+  CloseHandle(reader);
+  CHECK(Contents(old_path) == "<missing>");
+  CHECK(Contents(new_path) == AsString(new_root));
+
+  // One that cannot be removed now (opened without sharing) stays Gesher's
+  // and goes later; it does not hold up the new root.
+  r = internal::SyncUserCaDirectory(user, {old_root});
+  CHECK(r.ok && r.removed == 1 && r.written == 1);
+  HANDLE exclusive = CreateFileW(old_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(exclusive != INVALID_HANDLE_VALUE);
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(!r.ok && r.removed == 0 && r.written == 1);
+  CHECK(Contents(new_path) == AsString(new_root));
+  // Unreadable now, it stays in the manifest (a volume without named streams
+  // would have no other record).
+  CHECK(Contents(user + L"\\.gesher-user-cacerts").find(Utf8(HashName(old_root, 0))) !=
+        std::string::npos);
+  CloseHandle(exclusive);
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(r.ok && r.removed == 1 && r.written == 0);
+  CHECK(Contents(old_path) == "<missing>");
+
+  // A copy of Gesher's entry, which carries its stream (as Explorer and copy
+  // do), at another name is not Gesher's: it stays when the root goes.
+  std::wstring copy = added + L"\\" + HashName(new_root, 1);
+  CHECK(CopyFileW(new_path.c_str(), copy.c_str(), TRUE));
+  CHECK(Contents(copy + L":gesher-owner") != "<missing>");
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(Contents(new_path).empty());  // a tombstone: the copy after it stays reachable
+  CHECK(Contents(copy) == AsString(new_root));
+  CHECK(DeleteFileW(copy.c_str()) && DeleteFileW(new_path.c_str()));
+
+  // A file that appears at a new entry's name after the scan is not replaced:
+  // the entry takes the next index.
+  Der foreign = MakeRoot("Rotated");
+  internal::g_before_user_entry_write = AppearBeforeWrite;
+  g_appearing = AsString(foreign);
+  r = internal::SyncUserCaDirectory(user, {old_root});
+  internal::g_before_user_entry_write = nullptr;
+  CHECK(r.ok && r.written == 1);
+  CHECK(Contents(old_path) == AsString(foreign));
+  CHECK(Contents(added + L"\\" + HashName(old_root, 1)) == AsString(old_root));
+  // The foreign file is not Gesher's; the entry is.
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(Contents(old_path) == AsString(foreign));
+  CHECK(Contents(added + L"\\" + HashName(old_root, 1)) == "<missing>");
+  CHECK(DeleteFileW(old_path.c_str()));
   CHECK(List(added).empty());
 }
 
@@ -495,6 +576,7 @@ int main() {
   Classification();
   Directory(root + L"\\fixture");
   Recovery(root + L"\\recovery");
+  SharedDirectory(root + L"\\shared");
   ThisMachine(root + L"\\machine");
 
   RemoveTree(root);
