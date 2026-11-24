@@ -1206,8 +1206,10 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
                      reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
   }
   // A signal another thread directs at this one interrupts the wait, as on
-  // Linux: its handler runs here, then the wait restarts (SA_RESTART; a
-  // relative timeout counts on from the original start) or fails with EINTR.
+  // Linux: its handler runs here; then an untimed wait restarts if every
+  // handler that ran has SA_RESTART, and a timed one fails with EINTR (the
+  // kernel's -ERESTART_RESTARTBLOCK ignores SA_RESTART). An interruption that
+  // ran no handler restarts (a relative timeout counts from the start).
   const bool relative = command == FUTEX_WAIT && host_timeout != nullptr;
   const __int128 deadline = relative ? MonotonicNanos() +
       static_cast<__int128>(converted.tv_sec) * 1000000000 + converted.tv_nsec : 0;
@@ -1217,12 +1219,21 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
                        static_cast<int>(a3), host_timeout,
                        reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
     const int error = errno;
-    if (cell != nullptr) DetachSignalInterrupt();
-    if (r != -1 || error != EINTR || cell == nullptr) {
+    if (cell == nullptr) {
       errno = error;
       return r;
     }
-    if (!DeliverAfterInterrupt()) return errno = kEINTR, -1;
+    DetachSignalInterrupt();
+    // Also after a wake or timeout: a wake can overtake an interrupt request,
+    // and the signal it was for must not wait for some later delivery point.
+    const int ran = DeliverAfterInterrupt();
+    if (r != -1 || error != EINTR) {
+      errno = error;
+      return r;
+    }
+    if (ran == kHandlersWithoutRestart || (ran != kNoHandler && host_timeout != nullptr)) {
+      return errno = kEINTR, -1;
+    }
     if (relative) {
       const __int128 left = deadline - MonotonicNanos();
       if (left <= 0) return errno = kETIMEDOUT, -1;

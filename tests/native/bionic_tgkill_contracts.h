@@ -156,6 +156,68 @@ static int TkWaitRuns(int runs) {
   return 0;
 }
 
+// Two threads hand a token back and forth through futex waits and wakes
+// while signals keep arriving at one of them: every interrupted wait must
+// still see its wake, and every host call in the loop still return.
+static int g_tk_token, g_tk_pong_done;
+static long g_tk_pong_sum[2];
+enum { kTkRounds = 20000 };
+static void* TkPong(void* arg) {
+  const int me = (int)(intptr_t)arg;
+  if (me == 1) __atomic_store_n(&g_tk_worker_tid, gettid(), __ATOMIC_RELEASE);
+  const pid_t pid = getpid();
+  long sum = 0;
+  for (int round = 0; round < kTkRounds; ++round) {
+    int token;
+    while ((token = __atomic_load_n(&g_tk_token, __ATOMIC_ACQUIRE)) % 2 != me) {
+      syscall(SYS_futex, &g_tk_token, FUTEX_WAIT_PRIVATE, token, NULL, NULL, 0);
+    }
+    sum += getpid() == pid;  // a host call each round
+    __atomic_add_fetch(&g_tk_token, 1, __ATOMIC_RELEASE);
+    syscall(SYS_futex, &g_tk_token, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+  }
+  g_tk_pong_sum[me] = sum;
+  __atomic_add_fetch(&g_tk_pong_done, 1, __ATOMIC_RELEASE);
+  return (void*)(intptr_t)(sum == kTkRounds);
+}
+
+// A 2 s relative futex wait, with the time it took and its result.
+static int g_tk_timed_errno;
+static long g_tk_timed_ms;
+static void* TkTimedWaiter(void* arg) {
+  (void)arg;
+  volatile int marker = 0;
+  __atomic_store_n(&g_tk_frame, (uintptr_t)&marker, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_tk_worker_tid, gettid(), __ATOMIC_RELEASE);
+  static int word = 0;
+  struct timespec timeout = {2, 0}, start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  long r = syscall(SYS_futex, &word, FUTEX_WAIT_PRIVATE, 0, &timeout, NULL, 0);
+  g_tk_timed_errno = r == -1 ? errno : 0;
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  g_tk_timed_ms = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
+  return NULL;
+}
+
+// Blocks SIGURG, then waits in an untimed futex wait until the word is set,
+// counting EINTR returns; unblocks it afterwards.
+static void* TkBlockedWaiter(void* arg) {
+  (void)arg;
+  sigset_t set;
+  sigemptyset(&set);
+  sigaddset(&set, SIGURG);
+  pthread_sigmask(SIG_BLOCK, &set, NULL);
+  volatile int marker = 0;
+  __atomic_store_n(&g_tk_frame, (uintptr_t)&marker, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_tk_worker_tid, gettid(), __ATOMIC_RELEASE);
+  while (__atomic_load_n(&g_tk_futex_word, __ATOMIC_ACQUIRE) == 0) {
+    long r = syscall(SYS_futex, &g_tk_futex_word, FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0);
+    if (r == -1 && errno == EINTR) __atomic_fetch_add(&g_tk_futex_eintr, 1, __ATOMIC_RELEASE);
+  }
+  pthread_sigmask(SIG_UNBLOCK, &set, NULL);  // takes it now
+  return NULL;
+}
+
 static void* TkExit(void* arg) {
   *(pid_t*)arg = gettid();
   return NULL;
@@ -308,6 +370,88 @@ static int BionicTgkillContracts(void) {
             pthread_join(waiter, NULL) == 0);
   } else {
     TkCheck("pthread_create(condition waiter)", 0);
+  }
+
+  {
+    // Ping-pong under a stream of signals (SA_RESTART, as Chromium's).
+    sigaction(SIGURG, &info, NULL);
+    pthread_t a, b;
+    g_tk_token = 0;
+    g_tk_pong_done = 0;
+    g_tk_worker_tid = 0;
+    g_tk_pong_sum[0] = g_tk_pong_sum[1] = 0;
+    if (pthread_create(&a, NULL, TkPong, (void*)0) == 0 &&
+        pthread_create(&b, NULL, TkPong, (void*)1) == 0) {
+      while (__atomic_load_n(&g_tk_worker_tid, __ATOMIC_ACQUIRE) == 0) usleep(1000);
+      const pid_t target = g_tk_worker_tid;
+      g_tk_runs = 0;
+      int sent = 0;
+      for (int i = 0; i < 10000 && __atomic_load_n(&g_tk_pong_done, __ATOMIC_ACQUIRE) < 2; ++i) {
+        if (tgkill(pid, target, SIGURG) == 0) ++sent;
+        usleep(1000);
+      }
+      const int done = __atomic_load_n(&g_tk_pong_done, __ATOMIC_ACQUIRE);
+      TkCheck("ping-pong through futex waits completes under a stream of signals",
+              done == 2 && sent > 0);
+      if (done == 2) {
+        void* ok_a = NULL;
+        void* ok_b = NULL;
+        pthread_join(a, &ok_a);
+        pthread_join(b, &ok_b);
+        TkCheck("every host call in the interrupted loops returned its result",
+                ok_a == (void*)1 && ok_b == (void*)1 && g_tk_pong_sum[1] == kTkRounds);
+        // Standard signals coalesce while pending: at most one run per send.
+        TkCheck("the handlers ran on the signalled thread",
+                g_tk_runs > 0 && g_tk_runs <= sent && g_tk_tid == target);
+      }
+    } else {
+      TkCheck("pthread_create(ping-pong)", 0);
+    }
+  }
+
+  {
+    // A timed futex wait fails with EINTR after a handler, even SA_RESTART.
+    pthread_t timed;
+    g_tk_worker_tid = 0;
+    g_tk_timed_errno = -1;
+    if (pthread_create(&timed, NULL, TkTimedWaiter, NULL) == 0) {
+      while (__atomic_load_n(&g_tk_worker_tid, __ATOMIC_ACQUIRE) == 0) usleep(1000);
+      usleep(100000);
+      g_tk_runs = 0;
+      tgkill(pid, g_tk_worker_tid, SIGURG);
+      pthread_join(timed, NULL);
+      TkCheck("a timed futex wait returns EINTR after an SA_RESTART handler",
+              g_tk_runs == 1 && g_tk_timed_errno == EINTR && g_tk_timed_ms < 1500);
+    } else {
+      TkCheck("pthread_create(timed waiter)", 0);
+    }
+  }
+
+  {
+    // A blocked signal does not interrupt the wait; unblocking delivers it.
+    sigaction(SIGURG, &plain, NULL);
+    pthread_t blocked_waiter;
+    g_tk_worker_tid = 0;
+    g_tk_futex_word = 0;
+    g_tk_futex_eintr = 0;
+    if (pthread_create(&blocked_waiter, NULL, TkBlockedWaiter, NULL) == 0) {
+      while (__atomic_load_n(&g_tk_worker_tid, __ATOMIC_ACQUIRE) == 0) usleep(1000);
+      const pid_t target = g_tk_worker_tid;
+      usleep(50000);
+      g_tk_runs = 0;
+      tgkill(pid, target, SIGURG);
+      usleep(200000);
+      TkCheck("a blocked signal neither runs nor interrupts the futex wait",
+              g_tk_runs == 0 && __atomic_load_n(&g_tk_futex_eintr, __ATOMIC_ACQUIRE) == 0);
+      __atomic_store_n(&g_tk_futex_word, 1, __ATOMIC_RELEASE);
+      syscall(SYS_futex, &g_tk_futex_word, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+      pthread_join(blocked_waiter, NULL);
+      TkCheck("unblocking it then runs the handler on that thread",
+              g_tk_runs == 1 && g_tk_tid == target);
+    } else {
+      TkCheck("pthread_create(blocked waiter)", 0);
+    }
+    sigaction(SIGURG, &info, NULL);
   }
 
 #if defined(__aarch64__)

@@ -18,10 +18,12 @@
 //    usleep, sleep, poll, select, epoll_wait, pause). A target running
 //    translated ARM64 code is also stopped at the translator's next block
 //    boundary to take it, as the kernel interrupts user code. A thread-
-//    directed signal also interrupts the target's futex wait (syscall(2)
-//    FUTEX_WAIT*: the handler runs, then the wait restarts with SA_RESTART or
-//    fails with EINTR) and the shim's pthread waits (mutex, condition
-//    variable, join, once: a spurious wake after the handler). It cannot
+//    directed signal the target does not block also interrupts its futex wait
+//    (syscall(2) FUTEX_WAIT*: the handler runs, then an untimed wait restarts
+//    if the handlers have SA_RESTART, else, and always for a timed wait as
+//    the kernel's -ERESTART_RESTARTBLOCK, it fails with EINTR) and the shim's
+//    pthread waits (mutex, condition variable, join, once: a spurious wake
+//    after the handler). It cannot
 //    interrupt x86-64 code or other blocking calls, which take it at their
 //    next delivery point. A handler of translated code leaves the
 //    interrupted code's FPCR/FPSR as they were, as sigreturn does.
@@ -236,6 +238,9 @@ struct ThreadState {
   // Interrupts this thread's futex and address waits (futex_interrupt.h) when
   // another thread directs a signal at it.
   gesher_futex_interrupt futex_cell = GESHER_FUTEX_INTERRUPT_INIT;
+  // Another thread has directed a signal at this one: its address waits then
+  // recheck once a second, for a wake that came just before they blocked.
+  std::atomic<bool> directed_target{false};
 };
 
 struct State {
@@ -257,6 +262,7 @@ State& S() {
 thread_local ThreadState* t_state = nullptr;
 // Whether a handler ran since DeliverAfterInterrupt began, and whether one of
 // them lacks SA_RESTART (the interrupted call then fails with EINTR).
+thread_local bool t_handler_ran = false;
 thread_local bool t_handler_no_restart = false;
 
 // Actual kernel-thread exit retires this exact identity without requiring a
@@ -464,6 +470,7 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
     Terminate(sig);
   }
   gesher::elf::SetupThreadTls();  // the handler is loaded code
+  t_handler_ran = true;
   if ((act.sa_flags & kSaRestart) == 0) t_handler_no_restart = true;
   uint64_t saved = self->mask;
 #if defined(__x86_64__)
@@ -762,6 +769,7 @@ int BIONIC_SYSV Sigqueue(int pid, int sig, uint64_t value) {
 // running translated guest code, that code is stopped at its next block
 // boundary to take it. Returns 0 or the error number.
 int SendToOtherThread(uint32_t tid, HANDLE lifetime, int sig) {
+  bool blocked = false;
   {
     std::lock_guard<std::mutex> lock(S().mutex);
     if (WaitForSingleObject(lifetime, 0) != WAIT_TIMEOUT) {
@@ -783,11 +791,16 @@ int SendToOtherThread(uint32_t tid, HANDLE lifetime, int sig) {
     slot->any_pending.store(true, std::memory_order_release);
     g_directed_pending.store(true, std::memory_order_seq_cst);
     S().sent.notify_all();
-    // A futex or address wait of the target ends to take it, as on Linux.
-    // The state (and its cell) is not freed while this lock is held.
-    gesher_futex_interrupt_request(&slot->futex_cell);
+    // A blocked signal waits for the target to unblock it, which delivers it.
+    blocked = (slot->mask & Bit(sig)) != 0;
+    if (!blocked) {
+      // A futex or address wait of the target ends to take it, as on Linux.
+      // The state (and its cell) is not freed while this lock is held.
+      slot->directed_target.store(true, std::memory_order_seq_cst);
+      gesher_futex_interrupt_request(&slot->futex_cell);
+    }
   }
-  InterruptGuestThread(tid);
+  if (!blocked) InterruptGuestThread(tid);
   return 0;
 }
 
@@ -1125,10 +1138,18 @@ gesher_futex_interrupt* AttachSignalInterrupt() {
 
 void DetachSignalInterrupt() { gesher_futex_interrupt_attach(nullptr); }
 
-bool DeliverAfterInterrupt() {
+int DeliverAfterInterrupt() {
+  // A handler's own interrupted wait nests in an outer delivery: its handlers
+  // ran during the outer call too.
+  const bool outer_ran = t_handler_ran, outer_no_restart = t_handler_no_restart;
+  t_handler_ran = false;
   t_handler_no_restart = false;
   DeliverPendingSignals();
-  return !t_handler_no_restart;
+  const int result = !t_handler_ran ? kNoHandler
+                     : t_handler_no_restart ? kHandlersWithoutRestart : kHandlersRestart;
+  t_handler_ran = t_handler_ran || outer_ran;
+  t_handler_no_restart = t_handler_no_restart || outer_no_restart;
+  return result;
 }
 
 bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
@@ -1150,9 +1171,9 @@ bool InterruptibleAddressWait(volatile void* address, const void* compare, size_
       left = elapsed >= ms ? 0 : static_cast<DWORD>(ms - elapsed);
     }
     // A request between the check above and the wait below wakes no one:
-    // once a process directs signals at threads, a blocked wait rechecks
-    // every second instead of sleeping on such a lost wake indefinitely.
-    const bool sliced = left > 1000 && g_directed_pending.load(std::memory_order_seq_cst);
+    // once another thread has directed a signal at this one, a blocked wait
+    // rechecks every second instead of sleeping on such a lost wake.
+    const bool sliced = left > 1000 && self->directed_target.load(std::memory_order_seq_cst);
     const DWORD slice = sliced ? 1000 : left;
     if (WaitOnAddress(address, const_cast<void*>(compare), size, slice) ||
         GetLastError() != ERROR_TIMEOUT) {
@@ -1165,11 +1186,10 @@ bool InterruptibleAddressWait(volatile void* address, const void* compare, size_
   AcquireSRWLockExclusive(&cell->lock);
   cell->address = nullptr;
   ReleaseSRWLockExclusive(&cell->lock);
-  if (InterlockedExchange(&cell->requested, 0) != 0) {
-    // As a futex wait a handler interrupted: the caller rechecks its word.
-    DeliverAfterInterrupt();
-    woke = true;
-  }
+  // As a futex wait a handler interrupted: the caller rechecks its word. A
+  // signal whose request a real wake overtook is delivered here too.
+  if (InterlockedExchange(&cell->requested, 0) != 0) woke = true;
+  if (DeliverAfterInterrupt() != kNoHandler) woke = true;
   return woke;
 }
 

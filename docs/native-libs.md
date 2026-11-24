@@ -702,10 +702,12 @@ see "After that" for what is left._
   take a signal queued for it, and an ARM64 `SA_SIGINFO` handler gets Bionic's
   arm64 `ucontext_t` with the guest registers there (as Chromium's SIGURG
   stack sampler reads them; its FPCR/FPSR changes do not reach the interrupted
-  code). A thread-directed signal also interrupts the target's futex wait
-  (`syscall(SYS_futex, FUTEX_WAIT*)`: the handler runs, then the wait restarts
-  under `SA_RESTART` or returns `EINTR`) and the shim's pthread waits (a
-  spurious wake after the handler), through `gesher/futex_interrupt.h`. x86-64
+  code). A thread-directed signal the target does not block also interrupts
+  its futex wait (`syscall(SYS_futex, FUTEX_WAIT*)`: the handler runs, then an
+  untimed wait restarts under `SA_RESTART`; a timed one, or one whose handler
+  lacks `SA_RESTART`, returns `EINTR`, as Linux's restart rules give) and the
+  shim's pthread waits (a spurious wake after the handler), through
+  `gesher/futex_interrupt.h`. x86-64
   code cannot be interrupted, and other blocking calls take the signal only at
   a delivery point. Not done: **synchronous signals from faults** (`SIGSEGV`,
   `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGTRAP`) do not reach the `.so`'s handlers

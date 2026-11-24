@@ -1140,16 +1140,19 @@ class Env final : public A64::UserCallbacks {
       const Dynarmic::HaltReason halt = jit->Run();
       running_jit_.store(saved_jit, std::memory_order_relaxed);
       t_guest_running = saved_running;
-      if (Dynarmic::Has(halt, kSignalHalt)) {
-        jit->ClearHalt(kSignalHalt);
-        if (signal_interrupt_.exchange(false, std::memory_order_seq_cst)) TakeSignals(jit);
-        // Stopped only for the signal: carry on with the guest code.
-        if (halt == kSignalHalt && pending_call_.fn == nullptr && !pending_call_.syscall) continue;
-      }
       // SVC saves its following PC; NoExecuteFault saves X30. Returning from
       // Run restores host MXCSR before executing arbitrary native host code.
       // A fresh dispatch then uses the actual (possibly changed) guest FPCR.
-      PendingHostCall pending = pending_call_;
+      // Taken before a signal handler runs: its nested guest code reuses
+      // pending_call_, and the call this block queued must still be made.
+      const PendingHostCall pending = pending_call_;
+      if (Dynarmic::Has(halt, kSignalHalt)) {
+        jit->ClearHalt(kSignalHalt);
+        if (signal_interrupt_.exchange(false, std::memory_order_seq_cst)) TakeSignals(jit);
+        pending_call_ = pending;
+        // Stopped only for the signal: carry on with the guest code.
+        if (halt == kSignalHalt && pending.fn == nullptr && !pending.syscall) continue;
+      }
       if (pending.syscall) {
         HostFenvScope host_fenv;
         uint64_t args[6];
