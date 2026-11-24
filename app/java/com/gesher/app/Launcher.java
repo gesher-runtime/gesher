@@ -142,15 +142,23 @@ public final class Launcher {
                 case "INSTALL_FAILED_MISSING_SPLIT":
                     return text("install_missing_split", detail);
                 case "INSTALL_FAILED_NO_MATCHING_ABIS": {
-                    int hasNative = detail.indexOf(" has native code only for ");
-                    if (hasNative >= 0) {
-                        String name = detail.substring(0, hasNative).trim();
-                        String rest = detail.substring(hasNative + " has native code only for ".length());
-                        int semi = rest.indexOf(';');
-                        String abis = semi >= 0 ? rest.substring(0, semi).trim() : rest.trim();
-                        return text("install_no_matching_abis", name, abis);
+                    // Installer includes the filename and ZIP entry ABI names in its
+                    // diagnostic. Either can contain our delimiters: translate the
+                    // structured form only when the boundary is unambiguous.
+                    String marker = " has native code only for ";
+                    int hasNative = detail.indexOf(marker);
+                    int supported = detail.lastIndexOf("; Gesher runs ");
+                    if (hasNative > 0 && hasNative == detail.lastIndexOf(marker)
+                            && supported > hasNative + marker.length()) {
+                        String name = detail.substring(0, hasNative);
+                        String abis = detail.substring(hasNative + marker.length(), supported);
+                        if (abis.matches("[A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*")) {
+                            return text("install_no_matching_abis", name, abis);
+                        }
                     }
-                    return detail.isEmpty() ? code : text("install_no_matching_abis", detail, "32-bit");
+                    // A missing or unfamiliar detail does not establish a filename,
+                    // an ABI, or its bitness. Preserve it without inventing any.
+                    return text("install_no_matching_abis_details", detail.isEmpty() ? code : detail);
                 }
                 case "INSTALL_FAILED_BAD_DEX_METADATA":
                     // Its text already says what is wrong.

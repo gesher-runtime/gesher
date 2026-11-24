@@ -23,7 +23,7 @@ function Assert-Install([bool] $condition, [string] $message) {
 $catalog = Get-Content -LiteralPath $UiMessagesPath -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($key in 'launch_failed', 'install_update_incompatible', 'install_bad_signature',
                  'install_bad_split_signature', 'install_missing_split', 'install_no_matching_abis',
-                 'cp_install_failed') {
+                 'install_no_matching_abis_details', 'cp_install_failed') {
     $entry = $catalog.messages.PSObject.Properties[$key]
     Assert-Install ($null -ne $entry) "ui-messages.json has '$key'"
     foreach ($lang in 'en', 'he') {

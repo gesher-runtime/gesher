@@ -51,6 +51,7 @@
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
 #include "../windows/host_dialog_theme.h"
+#include "launch_failure_text.h"
 
 #include <algorithm>
 #include <cstring>
@@ -187,23 +188,12 @@ std::wstring TakeErrorText(const std::wstring& path) {
   return text;
 }
 
-// Returns true if s contains right-to-left characters (Hebrew or Arabic).
-static inline bool HasRtlCharacters(const std::wstring& s) {
-  for (wchar_t c : s) {
-    if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFEFC)) return true;
-  }
-  return false;
-}
-
 // Shows the launcher's failure: nobody reads its output when Explorer started the
 // launch, and without this the splash would only close, as if the app had crashed.
 void ShowLaunchFailure(const std::wstring& reason) {
   if (reason.empty()) return;
   const auto language = GesherUiCurrentLanguage();
-  std::wstring formatted = reason;
-  if (GesherUiRtl(language) && !HasRtlCharacters(reason)) {
-    formatted = L"\u202A" + reason + L"\u202C";
-  }
+  const std::wstring formatted = GesherFormatLaunchFailureReason(reason, GesherUiRtl(language));
   std::wstring text = GesherUiText(language, "launch_failed");
   const size_t at = text.find(L"{0}");
   if (at != std::wstring::npos) text.replace(at, 3, formatted);

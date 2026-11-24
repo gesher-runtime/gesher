@@ -216,6 +216,10 @@
       "en": "The application {0} has native code only for {1}; Gesher runs x86_64 and arm64-v8a.\n\nUse the app's arm64-v8a, x86_64 or universal APK.",
       "he": "היישום ‪{0}‬ כולל קוד מקומי (Native) עבור ‪{1}‬ בלבד; גשר תומך ב־‪x86_64‬ וב־‪arm64-v8a‬.\n\nיש להשתמש בקובץ התקנה (APK) עבור ‪arm64-v8a‬, ‪x86_64‬ או בגרסה אוניברסלית."
     },
+    "install_no_matching_abis_details": {
+      "en": "The application cannot be installed because its native code is not compatible with Gesher.\n\nDetails: ‪{0}‬",
+      "he": "אי אפשר להתקין את היישום משום שהקוד המקומי (Native) שלו אינו תואם לגשר.\n\nפרטים: ‪{0}‬"
+    },
     "uninstalled": {
       "en": "uninstalled {0}",
       "he": "היישום {0} הוסר"

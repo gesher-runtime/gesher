@@ -102,6 +102,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Launch failure text with native Windows direction classification
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX tests/native/launch_failure_text_test.cc /Fe:launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
+          & .\launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
       - name: Build actual UIA query cancellation and lifecycle controls
         if: ${{ !cancelled() }}
         shell: cmd
