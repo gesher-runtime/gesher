@@ -470,8 +470,12 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
     Terminate(sig);
   }
   gesher::elf::SetupThreadTls();  // the handler is loaded code
+  // Whether the call this handler interrupts restarts is decided by this
+  // handler's SA_RESTART, as when Linux sets up its frame; calls interrupted
+  // inside the handler (its own waits) decide their own and do not leak here.
   t_handler_ran = true;
   if ((act.sa_flags & kSaRestart) == 0) t_handler_no_restart = true;
+  const bool restart_ran = t_handler_ran, restart_no_restart = t_handler_no_restart;
   uint64_t saved = self->mask;
 #if defined(__x86_64__)
   // The interrupted guest code gets its FPCR/FPSR back, whatever the handler
@@ -494,6 +498,8 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
     reinterpret_cast<void(BIONIC_SYSV*)(int, BionicSiginfo*, void*)>(act.handler)(sig, &copy,
                                                                                     &frame);
     self->mask = saved;
+    t_handler_ran = restart_ran;
+    t_handler_no_restart = restart_no_restart;
     if (guest_fp_saved) GuestFp(1, guest_fp);
     return;
   }
@@ -517,6 +523,8 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
     reinterpret_cast<void(BIONIC_SYSV*)(int)>(act.handler)(sig);
   }
   self->mask = saved;
+  t_handler_ran = restart_ran;
+  t_handler_no_restart = restart_no_restart;
 #if defined(__x86_64__)
   if (guest_fp_saved) GuestFp(1, guest_fp);
 #endif
@@ -1139,16 +1147,16 @@ gesher_futex_interrupt* AttachSignalInterrupt() {
 void DetachSignalInterrupt() { gesher_futex_interrupt_attach(nullptr); }
 
 int DeliverAfterInterrupt() {
-  // A handler's own interrupted wait nests in an outer delivery: its handlers
-  // ran during the outer call too.
+  // A handler's own interrupted wait nests in an outer delivery: its result
+  // is its own, and the outer delivery's flags come back unchanged.
   const bool outer_ran = t_handler_ran, outer_no_restart = t_handler_no_restart;
   t_handler_ran = false;
   t_handler_no_restart = false;
   DeliverPendingSignals();
   const int result = !t_handler_ran ? kNoHandler
                      : t_handler_no_restart ? kHandlersWithoutRestart : kHandlersRestart;
-  t_handler_ran = t_handler_ran || outer_ran;
-  t_handler_no_restart = t_handler_no_restart || outer_no_restart;
+  t_handler_ran = outer_ran;
+  t_handler_no_restart = outer_no_restart;
   return result;
 }
 

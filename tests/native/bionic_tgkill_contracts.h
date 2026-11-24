@@ -218,6 +218,21 @@ static void* TkBlockedWaiter(void* arg) {
   return NULL;
 }
 
+// SIGUSR1 (SA_RESTART) runs on a thread in an untimed futex wait and itself
+// waits; SIGUSR2 (no SA_RESTART) interrupts that inner wait. The inner wait
+// fails with EINTR; the outer one restarts, as SIGUSR1's SA_RESTART decides.
+static int g_tk_inner_word, g_tk_inner_entered, g_tk_inner_errno, g_tk_usr2_runs;
+static void TkWaitingHandler(int sig) {
+  (void)sig;
+  __atomic_store_n(&g_tk_inner_entered, 1, __ATOMIC_RELEASE);
+  long r = syscall(SYS_futex, &g_tk_inner_word, FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0);
+  __atomic_store_n(&g_tk_inner_errno, r == -1 ? errno : 0, __ATOMIC_RELEASE);
+}
+static void TkUsr2Handler(int sig) {
+  (void)sig;
+  __atomic_fetch_add(&g_tk_usr2_runs, 1, __ATOMIC_RELEASE);
+}
+
 static void* TkExit(void* arg) {
   *(pid_t*)arg = gettid();
   return NULL;
@@ -452,6 +467,49 @@ static int BionicTgkillContracts(void) {
       TkCheck("pthread_create(blocked waiter)", 0);
     }
     sigaction(SIGURG, &info, NULL);
+  }
+
+  {
+    struct sigaction waiting, usr2, old1, old2;
+    memset(&waiting, 0, sizeof(waiting));
+    waiting.sa_handler = TkWaitingHandler;
+    waiting.sa_flags = SA_RESTART;
+    memset(&usr2, 0, sizeof(usr2));
+    usr2.sa_handler = TkUsr2Handler;
+    sigaction(SIGUSR1, &waiting, &old1);
+    sigaction(SIGUSR2, &usr2, &old2);
+    pthread_t outer;
+    g_tk_worker_tid = 0;
+    g_tk_futex_word = 0;
+    g_tk_futex_eintr = 0;
+    g_tk_inner_word = 0;
+    g_tk_inner_entered = 0;
+    g_tk_inner_errno = -1;
+    g_tk_usr2_runs = 0;
+    if (pthread_create(&outer, NULL, TkFutexWaiter, NULL) == 0) {
+      while (__atomic_load_n(&g_tk_worker_tid, __ATOMIC_ACQUIRE) == 0) usleep(1000);
+      const pid_t target = g_tk_worker_tid;
+      usleep(50000);
+      tgkill(pid, target, SIGUSR1);
+      for (int i = 0; i < 5000 && !__atomic_load_n(&g_tk_inner_entered, __ATOMIC_ACQUIRE); ++i)
+        usleep(1000);
+      usleep(50000);
+      tgkill(pid, target, SIGUSR2);
+      for (int i = 0; i < 5000 && __atomic_load_n(&g_tk_inner_errno, __ATOMIC_ACQUIRE) == -1; ++i)
+        usleep(1000);
+      usleep(50000);
+      TkCheck("nested: the handler's own futex wait fails with EINTR (no SA_RESTART)",
+              g_tk_usr2_runs == 1 && __atomic_load_n(&g_tk_inner_errno, __ATOMIC_ACQUIRE) == EINTR);
+      TkCheck("nested: the interrupted outer wait restarts (its handler's SA_RESTART)",
+              __atomic_load_n(&g_tk_futex_eintr, __ATOMIC_ACQUIRE) == 0);
+      __atomic_store_n(&g_tk_futex_word, 1, __ATOMIC_RELEASE);
+      syscall(SYS_futex, &g_tk_futex_word, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+      pthread_join(outer, NULL);
+    } else {
+      TkCheck("pthread_create(nested waiter)", 0);
+    }
+    sigaction(SIGUSR1, &old1, NULL);
+    sigaction(SIGUSR2, &old2, NULL);
   }
 
 #if defined(__aarch64__)
