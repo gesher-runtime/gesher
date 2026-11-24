@@ -80,17 +80,27 @@ jint WindowsLocation_getFix(JNIEnv* env, jclass, jboolean high, jlong maxAgeMs, 
   return S_OK;
 }
 
+jboolean WindowsLocation_hasGnss(JNIEnv* env, jclass, jintArray hrOut) {
+  HRESULT hr = S_OK;
+  bool present = loc::HasGnssReceiver(&hr);
+  SetResult(env, hrOut, hr);
+  return present ? JNI_TRUE : JNI_FALSE;
+}
+
 const JNINativeMethod gWindowsLocationMethods[] = {
     {"nativeAccess", "([I)I", GESHER_JNI(WindowsLocation_access)},
     {"nativeStatus", "([I)I", GESHER_JNI(WindowsLocation_status)},
     {"nativeGetFix", "(ZJJ[D)I", GESHER_JNI(WindowsLocation_getFix)},
+    {"nativeHasGnss", "([I)Z", GESHER_JNI(WindowsLocation_hasGnss)},
 };
 
 // --- com.gesher.server.WindowsCamera: the capture devices (camera_mf.h) ----------------
 
 namespace cam = gesher::devices::camera;
 
-// One string per device: "id\tname\tWxH,WxH,...".
+// One string per device: "id\tname\tWxH,WxH,...\tflags", flags a comma-separated
+// list of what the device really has: "af" when its focus runs automatically and
+// can be locked (camera_mf.h's Device::autofocus), else empty.
 jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
   const std::vector<cam::Device>& devices = cam::List(nullptr);
   jclass string = env->FindClass("java/lang/String");
@@ -102,6 +112,8 @@ jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
       if (k > 0) line += ",";
       line += std::to_string(d.sizes[k].first) + "x" + std::to_string(d.sizes[k].second);
     }
+    line += "\t";
+    if (d.autofocus) line += "af";
     ScopedLocalRef<jstring> s(env, env->NewStringUTF(line.c_str()));
     env->SetObjectArrayElement(result, static_cast<jsize>(i), s.get());
   }
@@ -165,11 +177,26 @@ void WindowsCamera_close(JNIEnv*, jclass, jlong handle) {
   LogCameraDeliveryTrace();
 }
 
+// Focus control (camera_mf.h's FocusOp): 0 or the failure's HRESULT; out[0..1] = the
+// lens position and the driver's flags afterwards.
+jint WindowsCamera_focus(JNIEnv* env, jclass, jlong handle, jint op, jintArray out) {
+  auto* capture = reinterpret_cast<cam::Capture*>(handle);
+  if (capture == nullptr) return E_INVALIDARG;
+  long value = 0, flags = 0;
+  HRESULT hr = capture->Focus(op, &value, &flags);
+  if (out != nullptr && env->GetArrayLength(out) >= 2) {
+    jint values[2] = {static_cast<jint>(value), static_cast<jint>(flags)};
+    env->SetIntArrayRegion(out, 0, 2, values);
+  }
+  return static_cast<jint>(hr);
+}
+
 const JNINativeMethod gWindowsCameraMethods[] = {
     {"nativeList", "()[Ljava/lang/String;", GESHER_JNI(WindowsCamera_list)},
     {"nativeStatus", "()Ljava/lang/String;", GESHER_JNI(WindowsCamera_status)},
     {"nativeOpen", "(Ljava/lang/String;II[I)J", GESHER_JNI(WindowsCamera_open)},
     {"nativeRead", "(J[B)I", GESHER_JNI(WindowsCamera_read)},
+    {"nativeFocus", "(JI[I)I", GESHER_JNI(WindowsCamera_focus)},
     {"nativeClose", "(J)V", GESHER_JNI(WindowsCamera_close)},
 };
 
@@ -179,12 +206,14 @@ int register_gesher_sensors(JNIEnv* env);  // sensors_jni.cc
 int register_gesher_camera_metadata(JNIEnv* env);  // camera_metadata_jni.cc
 int register_gesher_camera_frames(JNIEnv* env);  // camera_frames.cc
 int register_gesher_bluetooth(JNIEnv* env);  // bluetooth_jni.cc
+int register_gesher_hello(JNIEnv* env);  // hello_jni.cc
 
 int register_gesher_devices(JNIEnv* env) {
   register_gesher_sensors(env);
   register_gesher_camera_metadata(env);
   register_gesher_camera_frames(env);
   register_gesher_bluetooth(env);
+  register_gesher_hello(env);
   RegisterGesherNatives(env, "com/gesher/server/WindowsCamera", gWindowsCameraMethods,
                         NELEM(gWindowsCameraMethods));
   RegisterGesherNatives(env, "com/gesher/server/WindowsLocation", gWindowsLocationMethods,

@@ -105,6 +105,10 @@ class Planner:
         self.plan = Plan()
         self.done = {}  # (name, bundle) -> True
         self.root = None  # the library being built
+        # Libraries the build's --classpath already supplies, compiled (the
+        # framework's classes for a shared library built against it): not
+        # planned again as compile-only sources.
+        self.provided = set()
         self.hidl_roots = {}
         for mod in modules.by_name.values():
             if mod.type == 'hidl_package_root':
@@ -135,6 +139,9 @@ class Planner:
             self.root = name
         key = (name, bundle)
         if key in self.done or (name, True) in self.done:
+            return
+        if name in self.provided and name != self.root:
+            self.done[key] = True
             return
         self.done[key] = True
         mod = self.modules.get(name)
@@ -253,8 +260,13 @@ class Planner:
         # before anything its sources reach (an AIDL interface's
         # additional_libs, say). Other libraries' own sources rank first.
         is_root = mod.name == self.root
+        # The library being built, a java_sdk_library's implementation, also
+        # compiles against its impl_only_libs (android.test.runner against
+        # android.test.base's and android.test.mock's implementations). A
+        # dependency is reached through its API and keeps only its `libs`.
+        libs = as_list(props.get('libs'))
         if is_root:
-            for dep in as_list(props.get('libs')):
+            for dep in libs + as_list(props.get('impl_only_libs')):
                 self.library(dep, False, mod.name)
         excluded = set(self.expand(ctx, as_list(props.get('exclude_srcs')), collect=False))
         for item in self.expand(ctx, as_list(props.get('srcs')) + as_list(props.get('device_common_srcs'))):
@@ -287,7 +299,7 @@ class Planner:
         # `libs` before static libraries: a static library's own `libs` are
         # not this module's class path (they only rank after it).
         if not is_root:
-            for dep in as_list(props.get('libs')):
+            for dep in libs:
                 self.library(dep, False, mod.name)
         for dep in as_list(props.get('static_libs')):
             self.library(dep, bundle, mod.name)
