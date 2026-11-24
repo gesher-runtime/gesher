@@ -148,8 +148,14 @@ final class DownloadQueue {
         return false;
     }
 
-    /** The network changed: requests waiting for one are evaluated again. */
+    /** Recheck running and waiting requests when the network or its cost changes. */
     void networkChanged() {
+        List<DownloadTransfer> running;
+        synchronized (this) {
+            if (mStopped) return;
+            running = new java.util.ArrayList<>(mRunning.values());
+        }
+        for (DownloadTransfer transfer : running) transfer.networkChanged();
         reevaluateWaiting();
     }
 
