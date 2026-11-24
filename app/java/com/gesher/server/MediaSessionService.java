@@ -29,6 +29,7 @@ import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.DeadObjectException;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.RemoteCallbackList;
@@ -222,7 +223,7 @@ public final class MediaSessionService extends ISessionManager.Default {
         return false;
     }
 
-    private boolean mediaButton(Session s, String pkg, KeyEvent event) {
+    private boolean mediaButton(Session s, String pkg, KeyEvent event) throws RemoteException {
         if (s == null || event == null || !KeyEvent.isMediaSessionKey(event.getKeyCode()))
             return false;
         synchronized (mLock) {
@@ -233,7 +234,7 @@ public final class MediaSessionService extends ISessionManager.Default {
             s.callback.onMediaButtonFromController(pkg, Binder.getCallingPid(),
                     Binder.getCallingUid(),
                     new Intent(Intent.ACTION_MEDIA_BUTTON).putExtra(Intent.EXTRA_KEY_EVENT, event));
-        } catch (RemoteException e) {
+        } catch (DeadObjectException e) {
             s.destroySession();
             return false;
         }
@@ -244,9 +245,11 @@ public final class MediaSessionService extends ISessionManager.Default {
     @Override
     public void dispatchMediaKeyEvent(String pkg, boolean system, KeyEvent event, boolean wakeLock)
             throws RemoteException {
+        if (event == null || !KeyEvent.isMediaSessionKey(event.getKeyCode()))
+            return;
         while (true) {
             Session s = selected();
-            if (s == null || mediaButton(s, pkg, event) || !s.destroyed)
+            if (s == null || mediaButton(s, pkg, event))
                 return;
         }
     }
@@ -263,7 +266,7 @@ public final class MediaSessionService extends ISessionManager.Default {
             try {
                 session.controller.adjustVolume(pkg, opPkg, delta, flags);
                 return;
-            } catch (RemoteException e) {
+            } catch (DeadObjectException e) {
                 session.destroySession();
             }
         }
@@ -297,7 +300,7 @@ public final class MediaSessionService extends ISessionManager.Default {
             try {
                 session.controller.adjustVolume(pkg, opPkg, direction, 0);
                 return;
-            } catch (RemoteException e) {
+            } catch (DeadObjectException e) {
                 session.destroySession();
             }
         }
