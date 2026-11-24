@@ -1263,7 +1263,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ParceledListSlice<android.content.pm.FeatureInfo> getSystemAvailableFeatures() {
-        return new ParceledListSlice<>(new ArrayList<>(FEATURES.values()));
+        // As AOSP's: the named features, then an unnamed one carrying the OpenGL ES
+        // version (ro.opengles.version), which PackageManager.getSystemAvailableFeatures
+        // callers read as reqGlEsVersion.
+        ArrayList<android.content.pm.FeatureInfo> features = new ArrayList<>(FEATURES.size() + 1);
+        features.addAll(FEATURES.values());
+        android.content.pm.FeatureInfo gles = new android.content.pm.FeatureInfo();
+        gles.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version",
+                android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED);
+        features.add(gles);
+        return new ParceledListSlice<>(features);
     }
 
     @Override
