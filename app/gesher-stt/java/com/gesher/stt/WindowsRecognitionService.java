@@ -20,6 +20,8 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Log;
 
+import com.gesher.server.WindowsSpeechRecognition;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -226,8 +228,9 @@ public final class WindowsRecognitionService extends RecognitionService {
                 mInput = input;
                 if (mCanceled) return;
                 boolean partials = intent.getBooleanExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
-                int maxResults = Math.max(1, intent.getIntExtra(RecognizerIntent.EXTRA_MAX_RESULTS,
-                        DEFAULT_MAX_RESULTS));
+                int maxResults = Math.min(WindowsSpeechRecognition.MAX_ALTERNATES,
+                        Math.max(1, intent.getIntExtra(RecognizerIntent.EXTRA_MAX_RESULTS,
+                                DEFAULT_MAX_RESULTS)));
                 try {
                     recognition = mBackend.start(tag, input.sampleRate(), partials, maxResults);
                 } catch (RecognizerBackend.StartFailure e) {
