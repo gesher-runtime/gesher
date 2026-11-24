@@ -54,6 +54,8 @@ void Log(const char* call, HRESULT hr) {
   fprintf(stderr, "gesher hello: %s failed: 0x%08lx\n", call, static_cast<unsigned long>(hr));
 }
 
+}  // namespace
+
 // The foreground top-level window of `pid`, checked as ForegroundProcess
 // (clipboard_access.cc) does: owner alive and unchanged across the query.
 HWND ForegroundWindowOf(DWORD pid) {
@@ -73,8 +75,6 @@ HWND ForegroundWindowOf(DWORD pid) {
   HWND root = GetAncestor(window, GA_ROOTOWNER);
   return root != nullptr ? root : window;
 }
-
-}  // namespace
 
 struct Verification {
   IAsyncOperation<int>* operation = nullptr;

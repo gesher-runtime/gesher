@@ -311,10 +311,25 @@ public final class Services {
         // device; no biometric sensor, the device credential as trust reports it. A
         // credential is confirmed by Windows Hello (WindowsHello, null without its natives);
         // while trust reports no secure device, no prompt reaches it.
+        // gesher.keystore: AndroidKeyStore keys that require user authentication are sealed
+        // to a Windows Hello key and released under Android's rules (ADR 0092). Without the
+        // natives there is no such service, and making such a key fails in the app as on a
+        // device without a secure lock screen.
+        WindowsHelloBackend hello = WindowsHello.create();
+        WindowsHelloKey helloKey = WindowsHelloKey.create();
+        KeystoreAuthorization keystore = helloKey == null ? null : new KeystoreAuthorization(
+                helloKey, new java.io.File(Device.dataDir(), "system/gesher-keystore-binding"),
+                android.os.SystemClock::elapsedRealtime);
+        if (keystore != null) {
+            services.put(KeystoreAuthorizationService.NAME,
+                    new KeystoreAuthorizationService(keystore));
+            // A confirmation also releases keys with a timeout, as an auth token does.
+            if (hello != null) hello = new KeyBoundHello(hello, keystore);
+        }
         services.put(Context.AUTH_SERVICE, StandIn.of(
                 android.hardware.biometrics.IAuthService.class,
                 new AuthService(new AuthServiceHost(am, atm, pm, trust.asInterface()),
-                        WindowsHello.create())).asBinder());
+                        hello, keystore)).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
                 new DeviceServices.ShortcutService(pm, am.callers())).asBinder());

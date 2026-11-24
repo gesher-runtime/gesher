@@ -297,6 +297,12 @@ the binding's signature (`KeystoreOperations.authorize`) instead of UserConsentV
 Windows Hello prompt, and `onAuthenticationSucceeded` only when the operation got its
 key. Any other operation id still ends with `BIOMETRIC_ERROR_HW_UNAVAILABLE`.
 
+Windows' `KeyCredentialStatus` maps as ADR 0091's table: UserCanceled (and a caller that
+lost the foreground) → `BIOMETRIC_ERROR_USER_CANCELED`; NotFound (the binding is then
+invalidated), SecurityDeviceLocked, UserPrefersPassword, UnknownError and any HRESULT →
+`BIOMETRIC_ERROR_HW_UNAVAILABLE`. Nothing but Success with a signature that opens the
+binding is a success.
+
 For keys with a timeout an ordinary confirmation (no operation) has to release them too.
 `AuthService` is not changed for that: `KeyBoundHello` wraps the `WindowsHelloBackend`
 given to it, and while the binding has keys with a timeout it performs the confirmation

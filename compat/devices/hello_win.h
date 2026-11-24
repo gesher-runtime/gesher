@@ -15,6 +15,10 @@ namespace gesher::devices::hello {
 // query failed (*hr says why).
 int Availability(HRESULT* hr);
 
+// The foreground top-level window when process `pid` owns it, else null: the
+// owner of a prompt shown for that process (also used by hello_key_win.cc).
+HWND ForegroundWindowOf(DWORD pid);
+
 // Why Start returned no verification.
 enum class StartFailure { kNone, kNotForeground, kWindows };
 
