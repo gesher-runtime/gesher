@@ -11,6 +11,31 @@ typedef struct {
   HFONT heading_font;
 } ExactAlarmDialogState;
 
+static BOOL ExactAlarmCreateControls(HWND dialog, ExactAlarmDialogState* state) {
+  BOOL rtl = GesherUiRtl(state->language);
+  DWORD reading = rtl ? WS_EX_RTLREADING : 0;
+  DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
+  HWND heading = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "exact_alarm_title"),
+      alignment, -1, 16, 12, 258, 24);
+  HWND label = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_app"),
+      alignment, -1, 16, 43, 258, 14);
+  HWND packages = PermissionControl(dialog, WS_EX_LTRREADING, L"COMBOBOX", L"",
+      CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, EXACT_ALARM_PACKAGES, 16, 60, 258, 100);
+  HWND allowed = PermissionControl(dialog, reading, L"BUTTON", GesherUiText(state->language, "exact_alarm_allow"),
+      BS_AUTOCHECKBOX | WS_TABSTOP | (rtl ? BS_RIGHTBUTTON : 0), EXACT_ALARM_ALLOWED, 16, 92, 258, 24);
+  HWND details = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language,
+      state->count == 0 ? "exact_alarm_empty" : "exact_alarm_detail"), alignment, -1, 16, 124, 258, 52);
+  HWND close = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "exact_alarm_close"),
+      BS_DEFPUSHBUTTON | WS_TABSTOP, IDCANCEL, 108, 186, 76, 22);
+  HWND apply = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "exact_alarm_apply"),
+      BS_PUSHBUTTON | WS_TABSTOP, IDOK, 192, 186, 82, 22);
+  if (!heading || !label || !packages || !allowed || !details || !close || !apply) {
+    return FALSE;
+  }
+  GesherHostSetFont(heading, &state->heading_font, 140, FW_SEMIBOLD);
+  return TRUE;
+}
+
 static INT_PTR CALLBACK ExactAlarmDialogProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
   ExactAlarmDialogState* state = (ExactAlarmDialogState*)GetWindowLongPtrW(dialog, DWLP_USER);
   if (message == WM_INITDIALOG) {
@@ -18,27 +43,13 @@ static INT_PTR CALLBACK ExactAlarmDialogProc(HWND dialog, UINT message, WPARAM w
     SetLastError(0);
     LONG_PTR previous = SetWindowLongPtrW(dialog, DWLP_USER, (LONG_PTR)state);
     if (previous == 0 && GetLastError() != 0) { EndDialog(dialog, IDCANCEL); return FALSE; }
-    BOOL rtl = GesherUiRtl(state->language);
-    DWORD reading = rtl ? WS_EX_RTLREADING : 0;
-    DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
-    HWND heading = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "exact_alarm_title"),
-        alignment, -1, 16, 12, 258, 24);
-    HWND label = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_app"),
-        alignment, -1, 16, 43, 258, 14);
-    HWND packages = PermissionControl(dialog, WS_EX_LTRREADING, L"COMBOBOX", L"",
-        CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, EXACT_ALARM_PACKAGES, 16, 60, 258, 100);
-    HWND allowed = PermissionControl(dialog, reading, L"BUTTON", GesherUiText(state->language, "exact_alarm_allow"),
-        BS_AUTOCHECKBOX | WS_TABSTOP | (rtl ? BS_RIGHTBUTTON : 0), EXACT_ALARM_ALLOWED, 16, 92, 258, 24);
-    HWND details = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language,
-        state->count == 0 ? "exact_alarm_empty" : "exact_alarm_detail"), alignment, -1, 16, 124, 258, 52);
-    HWND close = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "exact_alarm_close"),
-        BS_DEFPUSHBUTTON | WS_TABSTOP, IDCANCEL, 108, 186, 76, 22);
-    HWND apply = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "exact_alarm_apply"),
-        BS_PUSHBUTTON | WS_TABSTOP, IDOK, 192, 186, 82, 22);
-    if (!heading || !label || !packages || !allowed || !details || !close || !apply) {
+    if (!ExactAlarmCreateControls(dialog, state)) {
       EndDialog(dialog, IDCANCEL); return FALSE;
     }
-    GesherHostSetFont(heading, &state->heading_font, 140, FW_SEMIBOLD);
+    HWND packages = GetDlgItem(dialog, EXACT_ALARM_PACKAGES);
+    HWND allowed = GetDlgItem(dialog, EXACT_ALARM_ALLOWED);
+    HWND apply = GetDlgItem(dialog, IDOK);
+    HWND close = GetDlgItem(dialog, IDCANCEL);
     for (int i = 0; i < state->count; ++i) {
       if (SendMessageW(packages, CB_ADDSTRING, 0, (LPARAM)state->packages[i]) < 0) {
         EndDialog(dialog, IDCANCEL); return FALSE;

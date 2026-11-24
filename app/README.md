@@ -289,6 +289,10 @@ existing bounded delivery holds; these deliveries do not restart the idle clock.
   dependencies survive installation and registry reload. Split package names,
   full version codes, signatures and dependencies are checked before replacing
   a working package. See [split package contracts](../docs/research/package-split-contracts-2026-11-08.md).
+  A bundle (a ZIP of APKs, recognized by content) installs the APKs described in
+  [docs/installer.md](../docs/installer.md) and
+  [ADR 0091](../docs/decisions/0091-apk-bundle-selection.md): a bundletool APK
+  set's `toc.pb` or an XAPK's `manifest.json` names them.
 - `launch` installs or updates the APK, then plays the launcher: `startActivityAndWait`
   with the MAIN/LAUNCHER intent from no app process. The system server starts the
   package's process: a dalvikvm with its own runtime options running
