@@ -164,7 +164,13 @@ void* dlopen(const char* filename, int flags) {
   } else {
     module = LoadLibraryExW(path.c_str(), nullptr, load_flags);
   }
-  if (module == nullptr) SetError("dlopen", filename);
+  if (module == nullptr) {
+    const DWORD error = GetLastError();
+    SetError("dlopen", filename);
+    // Safe bare-name lookup reports a real missing module, rather than the
+    // invalid-parameter error from using DLL_LOAD_DIR without a full path.
+    if (error == ERROR_MOD_NOT_FOUND) last_error += ": library not found";
+  }
   return module;
 }
 

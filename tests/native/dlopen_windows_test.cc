@@ -19,6 +19,7 @@ enum class PathControl { kNone, kFailure, kInsufficient, kEqualCapacity, kChange
 PathControl path_control = PathControl::kNone;
 unsigned path_calls = 0;
 unsigned load_calls = 0;
+DWORD load_error = ERROR_SUCCESS;
 std::wstring next_directory;
 bool changed_directory = false;
 
@@ -45,6 +46,10 @@ DWORD WINAPI FullPath(LPCWSTR path, DWORD capacity, LPWSTR output, LPWSTR* part)
 
 HMODULE WINAPI Load(LPCWSTR path, HANDLE file, DWORD flags) {
   ++load_calls;
+  if (load_error != ERROR_SUCCESS) {
+    SetLastError(load_error);
+    return nullptr;
+  }
   return LoadLibraryExW(path, file, flags);
 }
 }  // namespace dlopen_test
@@ -91,6 +96,7 @@ void ResetControl(PathControl control = PathControl::kNone) {
   path_control = control;
   path_calls = 0;
   load_calls = 0;
+  load_error = ERROR_SUCCESS;
   changed_directory = false;
   while (dlerror() != nullptr) {}
 }
@@ -179,6 +185,12 @@ void Run(const std::wstring& source, const std::wstring& root) {
   Check(bare == nullptr, "bare names do not search the current directory");
   if (bare != nullptr) dlclose(bare);
   Check(path_calls == 0, "bare names preserve the safe loader search");
+  const char* bare_error = dlerror();
+  Check(bare_error != nullptr && strstr(bare_error, "gesher-dlopen-fixture.dll") != nullptr &&
+            strstr(bare_error, "Windows error 126") != nullptr &&
+            strstr(bare_error, "library not found") != nullptr,
+        "missing bare library reports its name and real missing-module error");
+  Check(dlerror() == nullptr, "missing-library error is consumed once");
   CheckLoad(".\\gesher-dlopen-fixture.dll", root_path,
             "explicit current-directory path loads the fixture bare-name search excluded");
   CheckLoad(relative, plugin_path, "relative backslash path loads with sibling dependency");
@@ -206,6 +218,18 @@ void Run(const std::wstring& source, const std::wstring& root) {
   Check(system != nullptr && dlsym(system, "GetCurrentProcessId") != nullptr,
         "symbol lookup on a real system DLL succeeds");
   if (system != nullptr) Check(dlclose(system) == 0, "system DLL reference closes");
+  ResetControl();
+  load_error = ERROR_INVALID_PARAMETER;
+  void* invalid = dlopen("kernel32.dll", RTLD_NOW);
+  Check(invalid == nullptr && path_calls == 0 && load_calls == 1,
+        "injected bare-name loader failure reaches the Windows API boundary");
+  const char* invalid_error = dlerror();
+  Check(invalid_error != nullptr && strstr(invalid_error, "Windows error 87") != nullptr &&
+            strstr(invalid_error, "library not found") == nullptr,
+        "genuine invalid-parameter failure is not relabeled as a missing library");
+  Check(dlerror() == nullptr, "invalid-parameter error is consumed once");
+  if (invalid != nullptr) dlclose(invalid);
+  ResetControl();
   DLL_DIRECTORY_COOKIE directory = AddDllDirectory(plugins.c_str());
   Check(directory != nullptr, "register an explicit user DLL directory");
   if (directory != nullptr) {
