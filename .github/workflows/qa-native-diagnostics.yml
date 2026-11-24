@@ -13,7 +13,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2025]
+        include:
+          - os: windows-2022
+            msvc_arch: x64
+            target_arch: x64
+          - os: windows-2025
+            msvc_arch: x64
+            target_arch: x64
+          - os: windows-11-arm
+            msvc_arch: amd64_arm64
+            target_arch: arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -32,7 +41,7 @@ jobs:
       - name: Check out the reviewed network fixes
         uses: actions/checkout@v4
         with:
-          ref: c010ea13e0d84cd5d6ab3d49d3b2db69b14e45a7
+          ref: 03177d669f07aeebc67f6d4a718d9c42778e2326
           path: network
           persist-credentials: false
       - name: Verify the exact source revisions
@@ -46,8 +55,15 @@ jobs:
           Write-Host "Network source: $networkRevision"
           if ($captionRevision -ne '86d9ff39c6483ade80c880d6e0457b3737800d21') { throw 'Unexpected caption source' }
           if ($captionBaseline -ne 'd1861c8322a690fc4aaae06bd0fc38bf613128d5') { throw 'Unexpected caption regression baseline' }
-          if ($networkRevision -ne 'c010ea13e0d84cd5d6ab3d49d3b2db69b14e45a7') { throw 'Unexpected network source' }
+          if ($networkRevision -ne '03177d669f07aeebc67f6d4a718d9c42778e2326') { throw 'Unexpected network source' }
       - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+      - name: Verify the compiler target architecture
+        shell: pwsh
+        run: |
+          Write-Host "Compiler target: $env:VSCMD_ARG_TGT_ARCH; runner: $env:RUNNER_ARCH"
+          if ($env:VSCMD_ARG_TGT_ARCH -ne '${{ matrix.target_arch }}') { throw 'Unexpected compiler target' }
       - name: Compile the caption regression against the old reader
         id: caption_baseline_build
         shell: cmd
@@ -63,6 +79,8 @@ jobs:
           if ($code -ne 1 -or ($result -join "`n") -notmatch 'FAIL default colors and opacities: Read returns S_OK') {
             throw 'The baseline did not fail for the expected caption regression'
           }
+          # GitHub's pwsh epilogue otherwise propagates the expected native exit 1.
+          exit 0
       - name: Compile the caption regression against the fixed reader
         id: caption_regression_build
         if: ${{ !cancelled() }}
