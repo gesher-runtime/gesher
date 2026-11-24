@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -84,15 +85,39 @@ final class AppDataStorage {
         this.metadata = metadata;
     }
 
-    static AppDataStorage installed(File dataRoot, String packageName) {
+    private static void requirePackageName(String packageName) {
         if (packageName == null
                 || !packageName.matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+")) {
             throw new IllegalArgumentException("Invalid application package name");
         }
+    }
+
+    static AppDataStorage installed(File dataRoot, String packageName) {
+        requirePackageName(packageName);
         Path root = dataRoot.toPath().toAbsolutePath().normalize();
         return new AppDataStorage(root, root.resolve("data").resolve(packageName),
                 root.resolve("user_de/0").resolve(packageName),
                 root.resolve("system/app-data-layout").resolve(packageName));
+    }
+
+    static List<Path> externalDirectories(Path dataRoot, String packageName) {
+        requirePackageName(packageName);
+        Path android = dataRoot.resolve("media/0/Android");
+        return List.of(android.resolve("data").resolve(packageName),
+                android.resolve("obb").resolve(packageName),
+                android.resolve("media").resolve(packageName));
+    }
+
+    static List<Path> prepareExternalDirectories(File dataRoot, String packageName)
+            throws IOException {
+        AppDataStorage layout = installed(dataRoot, packageName);
+        List<Path> directories = externalDirectories(layout.boundary, packageName);
+        for (Path directory : directories) {
+            layout.checkDirectory(directory);
+            Files.createDirectories(directory);
+            layout.checkDirectory(directory);
+        }
+        return directories;
     }
 
     /** --data-dir keeps its old CE path; DE and the migration journal are siblings. */

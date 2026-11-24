@@ -38,9 +38,7 @@ final class PackageRemovalStorage {
         }
         add(apk);
         add(root.resolve("data").resolve(name));
-        for (String kind : new String[]{"data", "obb", "media"}) {
-            add(root.resolve("media/0/Android").resolve(kind).resolve(name));
-        }
+        for (Path external : AppDataStorage.externalDirectories(root, name)) add(external);
         // Keep the original item-0..4 mapping forever. Named additions remain
         // unambiguous when different runtime versions recover the same journal.
         add(root.resolve("user_de/0").resolve(name), "device-protected-data");
