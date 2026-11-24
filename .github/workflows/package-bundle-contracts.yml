@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'app/java/com/gesher/app/PackageBundles.java'
+      - 'app/java/com/gesher/app/ApkSetToc.java'
+      - 'app/java/com/gesher/app/NativeLibs.java'
       - 'tests/package/PackageBundlesTest.java'
       - 'tools/test_package_bundles.py'
       - '.github/workflows/package-bundle-contracts.yml'
@@ -11,6 +13,8 @@ on:
     branches: [main]
     paths:
       - 'app/java/com/gesher/app/PackageBundles.java'
+      - 'app/java/com/gesher/app/ApkSetToc.java'
+      - 'app/java/com/gesher/app/NativeLibs.java'
       - 'tests/package/PackageBundlesTest.java'
       - 'tools/test_package_bundles.py'
       - '.github/workflows/package-bundle-contracts.yml'

@@ -769,16 +769,19 @@ final class Installer {
         File base = null;
         byte[] buffer = new byte[64 * 1024];
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            // An APK set holds alternatives (variants, standalones, other devices' splits):
+            // only the APKs this device gets are installed.
             List<java.util.zip.ZipEntry> apks = new ArrayList<>();
+            for (String path : PackageBundles.select(zip,
+                    PackageBundles.Device.gesher(android.os.Build.VERSION.SDK_INT))) {
+                apks.add(zip.getEntry(path));
+            }
             Map<String, java.util.zip.ZipEntry> dexMetadata = new LinkedHashMap<>();
             java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
                 java.util.zip.ZipEntry entry = entries.nextElement();
-                if (entry.isDirectory()) continue;
                 String name = entry.getName();
-                if (name.endsWith(".apk")) {
-                    apks.add(entry);
-                } else if (name.endsWith(".dm")) {
+                if (!entry.isDirectory() && name.endsWith(".dm")) {
                     dexMetadata.put(name.substring(0, name.length() - 3), entry);
                 }
             }

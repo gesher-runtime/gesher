@@ -21,7 +21,8 @@ def main() -> None:
         parser.error("JDK 17+ is required")
     with tempfile.TemporaryDirectory(prefix="gesher-package-bundles-") as directory:
         work = Path(directory)
-        sources = sorted(str(p) for p in (ROOT / "app/java/com/gesher/app").glob("PackageBundles*.java"))
+        sources = [str(ROOT / "app/java/com/gesher/app" / name)
+                   for name in ("PackageBundles.java", "ApkSetToc.java", "NativeLibs.java")]
         subprocess.run([javac, "--release", "17", "-d", str(work / "classes"), *sources,
                         str(ROOT / "tests/package/PackageBundlesTest.java")], check=True)
         subprocess.run([java, "-cp", str(work / "classes"), "com.gesher.app.PackageBundlesTest",

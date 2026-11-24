@@ -283,9 +283,21 @@ gone.
 
 Open an APK or bundle from Explorer or use the Control Center's install
 dialog. Bundle formats supported here are ZIP archives containing one base
-APK, its companion split APKs and optional dex metadata. Installers that
-produce an APK set with multiple alternative bases need to export a single
-matching set first. Game expansion files (`.obb`) are outside this install path.
+APK, its companion split APKs and optional dex metadata, and bundletool APK
+sets (`bundletool build-apks` output, `.apks` with a `toc.pb`). From an APK set
+the installer takes what `bundletool install-apks` would install on Gesher's
+device (`com.gesher.app.ApkSetToc`, after bundletool's `ApkMatcher`): the one
+variant matching its SDK level and ABIs (x86_64, then arm64-v8a), so a
+standalone or `universal.apk` only when no split variant fits; the install-time
+modules with their dependencies; their splits for the preferred ABI; and the
+install-time asset packs. It keeps every density and language split of those
+modules: Gesher's density is set per launch and its languages follow Windows
+and per-app locales, and no store delivers a missing split later. A set that
+targets device tiers is refused, as Gesher's device defines none. Without a
+`toc.pb` every `.apk` in the archive is part of the install. Installed files are
+named from their manifests (`base.apk`, `split_<split name>.apk`), as Android's
+package installer names them, whatever the archive calls them. Game expansion
+files (`.obb`) are outside this install path.
 
 Apps using Android's system file or folder picker can select Windows files and
 folders through the [Storage Access Framework](services.md#storage-access-framework-documents).
