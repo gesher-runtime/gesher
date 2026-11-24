@@ -2146,11 +2146,62 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private static byte[] readAll(InputStream in) {
         if (in == null) return new byte[0];
         try (InputStream s = in) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = s.read(buf)) > 0) out.write(buf, 0, n);
-            return out.toByteArray();
+            int maxArray = Integer.MAX_VALUE - 8;
+            ArrayList<byte[]> chunks = null;
+            int total = 0;
+            byte[] chunk;
+            int chunkPos = 0;
+            int avail = 0;
+            try {
+                avail = s.available();
+            } catch (java.io.IOException ignored) {
+            }
+            if (avail > 0 && avail <= 16 * 1024 * 1024) {
+                byte[] first = new byte[avail];
+                int pos = 0;
+                while (pos < first.length) {
+                    int n = s.read(first, pos, first.length - pos);
+                    if (n <= 0) return pos == 0 ? new byte[0] : Arrays.copyOf(first, pos);
+                    pos += n;
+                }
+                byte[] probe = new byte[1];
+                int extra = s.read(probe, 0, 1);
+                if (extra <= 0) return first;
+                chunks = new ArrayList<>();
+                chunks.add(first);
+                chunk = new byte[16384];
+                chunk[0] = probe[0];
+                chunkPos = 1;
+                total = pos + 1;
+            } else {
+                chunk = new byte[16384];
+            }
+            while (true) {
+                if (chunkPos == chunk.length) {
+                    if (chunks == null) chunks = new ArrayList<>();
+                    chunks.add(chunk);
+                    chunk = new byte[65536];
+                    chunkPos = 0;
+                }
+                int n = s.read(chunk, chunkPos, chunk.length - chunkPos);
+                if (n <= 0) break;
+                if (total > maxArray - n) throw new OutOfMemoryError("Stream exceeds max array size");
+                chunkPos += n;
+                total += n;
+            }
+            if (chunks == null) {
+                return chunkPos == 0 ? new byte[0]
+                        : (chunkPos == chunk.length ? chunk : Arrays.copyOf(chunk, chunkPos));
+            }
+            byte[] out = new byte[total];
+            int outPos = 0;
+            for (int i = 0, size = chunks.size(); i < size; i++) {
+                byte[] c = chunks.get(i);
+                System.arraycopy(c, 0, out, outPos, c.length);
+                outPos += c.length;
+            }
+            if (chunkPos > 0) System.arraycopy(chunk, 0, out, outPos, chunkPos);
+            return out;
         } catch (Exception e) {
             return new byte[0];
         }

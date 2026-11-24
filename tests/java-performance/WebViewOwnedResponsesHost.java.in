@@ -728,6 +728,51 @@ public final class WebViewOwnedResponsesHost {
         failure.mHost.failRespond = true;
         try { answer(failure, 12, BASE, CONTEXT_DOCUMENT); throw new AssertionError("native failure swallowed"); }
         catch (IllegalStateException expected) { check(failure.pendingBody() != null, "a failed response dropped the published document"); }
+        // Streams whose available() under-reports (16 B for 40 KiB, 16 B for 17 B / 16400 B),
+        // over-reports (4096 B for 10 B and 0 B), or returns 0 across multi-chunk growth.
+        for (int bodyLen : new int[] {40 * 1024, 17, 16 + 16384}) {
+            byte[] underBody = new byte[bodyLen];
+            for (int i = 0; i < underBody.length; ++i) underBody[i] = (byte) (i * 31 + 5);
+            AtomicInteger underCloses = new AtomicInteger();
+            InputStream underStream = new ByteArrayInputStream(underBody) {
+                @Override public synchronized int available() { return Math.min(16, super.available()); }
+                @Override public void close() throws IOException { underCloses.incrementAndGet(); super.close(); }
+            };
+            WebViewOwnedResponsesHost under = new WebViewOwnedResponsesHost();
+            under.mInterceptsRequests = true;
+            under.mClient.response = () -> new WebResourceResponse("application/octet-stream", null, underStream);
+            answer(under, 13, "https://under.example/", CONTEXT_DOCUMENT);
+            check(underCloses.get() == 1 && Arrays.equals(last(under).body, underBody),
+                    "under-reporting available() stream corrupted bytes or skipped close (len=" + bodyLen + ")");
+        }
+        for (int bodyLen : new int[] {10, 0}) {
+            byte[] overBody = new byte[bodyLen];
+            for (int i = 0; i < overBody.length; ++i) overBody[i] = (byte) (0xa0 + i);
+            AtomicInteger overCloses = new AtomicInteger();
+            InputStream overStream = new ByteArrayInputStream(overBody) {
+                @Override public synchronized int available() { return 4096; }
+                @Override public void close() throws IOException { overCloses.incrementAndGet(); super.close(); }
+            };
+            WebViewOwnedResponsesHost over = new WebViewOwnedResponsesHost();
+            over.mInterceptsRequests = true;
+            over.mClient.response = () -> new WebResourceResponse("application/octet-stream", null, overStream);
+            answer(over, 14, "https://over.example/", CONTEXT_DOCUMENT);
+            check(overCloses.get() == 1 && Arrays.equals(last(over).body, overBody),
+                    "over-reporting available() stream corrupted bytes or skipped close (len=" + bodyLen + ")");
+        }
+        byte[] zeroAvailBody = new byte[90 * 1024 + 7];
+        for (int i = 0; i < zeroAvailBody.length; ++i) zeroAvailBody[i] = (byte) (i * 17 + 3);
+        AtomicInteger zeroAvailCloses = new AtomicInteger();
+        InputStream zeroAvailStream = new ByteArrayInputStream(zeroAvailBody) {
+            @Override public synchronized int available() { return 0; }
+            @Override public void close() throws IOException { zeroAvailCloses.incrementAndGet(); super.close(); }
+        };
+        WebViewOwnedResponsesHost zeroAvail = new WebViewOwnedResponsesHost();
+        zeroAvail.mInterceptsRequests = true;
+        zeroAvail.mClient.response = () -> new WebResourceResponse("application/octet-stream", null, zeroAvailStream);
+        answer(zeroAvail, 15, "https://zeroavail.example/", CONTEXT_DOCUMENT);
+        check(zeroAvailCloses.get() == 1 && Arrays.equals(last(zeroAvail).body, zeroAvailBody),
+                "zero-available multi-chunk stream corrupted bytes or skipped close");
     }
     private static void fallback(WebViewOwnedResponsesHost provider) {
         provider.mInterceptsRequests = true;
@@ -819,9 +864,35 @@ public final class WebViewOwnedResponsesHost {
         System.out.println("WebView owned response: bytes=" + length + " allocated_bytes=" + allocated
                 + " original_private_array=" + (response.body == privateBody)
                 + " (unchanged native JNI/COM copies excluded)");
+        WebViewOwnedResponsesHost streamWarm = new WebViewOwnedResponsesHost();
+        streamWarm.mInterceptsRequests = true;
+        streamWarm.mHost.nativeCopy = false;
+        streamWarm.mClient.response = () -> new WebResourceResponse("application/octet-stream", null,
+                new ByteArrayInputStream(bytes("warmup-stream")));
+        answer(streamWarm, 2, "https://stream.example/warm", CONTEXT_DOCUMENT);
+        int streamLength = 2 * 1024 * 1024;
+        byte[] streamExpected = new byte[streamLength];
+        for (int i = 0; i < streamLength; ++i) streamExpected[i] = (byte) (i * 29 + 7);
+        WebViewOwnedResponsesHost streamProvider = new WebViewOwnedResponsesHost();
+        streamProvider.mInterceptsRequests = true;
+        streamProvider.mHost.nativeCopy = false;
+        streamProvider.mHost.deliveries.ensureCapacity(4);
+        WebResourceResponse streamResponse = new WebResourceResponse(
+                "application/octet-stream", null, new ByteArrayInputStream(streamExpected));
+        streamProvider.mClient.response = () -> streamResponse;
+        long streamBefore = bean.getThreadAllocatedBytes(Thread.currentThread().getId());
+        answer(streamProvider, 3, "https://stream.example/body", CONTEXT_DOCUMENT);
+        long streamAllocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - streamBefore;
+        Delivery streamReply = last(streamProvider);
+        check(Arrays.equals(streamReply.body, streamExpected), "2 MiB stream response bytes changed");
+        System.out.println("WebView stream readAll: bytes=" + streamLength
+                + " allocated_bytes=" + streamAllocated
+                + " (unchanged native JNI/COM copies excluded)");
         if (gate) {
             check(response.body == privateBody, "owned private response was copied through an InputStream");
             check(allocated < 64 * 1024, "owned response allocated full-body aggregation storage");
+            check(streamAllocated < streamLength + 64 * 1024,
+                    "2 MiB ByteArrayInputStream readAll allocated intermediate copy buffers: " + streamAllocated);
         }
     }
     public static void main(String[] args) throws Exception {

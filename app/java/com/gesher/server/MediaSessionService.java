@@ -72,14 +72,26 @@ public final class MediaSessionService extends ISessionManager.Default {
             if (callback != null)
                 mList.unregister(callback);
         }
+        synchronized boolean hasAny() {
+            return mList.getRegisteredCallbackCount() > 0;
+        }
         void send(RemoteCall<T> call) {
-            List<T> targets = new ArrayList<>();
+            List<T> targets;
             synchronized (this) {
+                if (mList.getRegisteredCallbackCount() == 0)
+                    return;
                 int n = mList.beginBroadcast();
-                for (int i = 0; i < n; i++) targets.add(mList.getBroadcastItem(i));
-                mList.finishBroadcast();
+                try {
+                    if (n == 0)
+                        return;
+                    targets = new ArrayList<>(n);
+                    for (int i = 0; i < n; i++) targets.add(mList.getBroadcastItem(i));
+                } finally {
+                    mList.finishBroadcast();
+                }
             }
-            for (T target : targets) {
+            for (int i = 0, size = targets.size(); i < size; i++) {
+                T target = targets.get(i);
                 try {
                     call.run(target);
                 } catch (RemoteException e) {
@@ -135,6 +147,8 @@ public final class MediaSessionService extends ISessionManager.Default {
     }
 
     private Session find(MediaSession.Token token) {
+        if (token == null)
+            return null;
         synchronized (mLock) {
             for (Session s : mSessions)
                 if (!s.destroyed && s.token.equals(token))
@@ -144,12 +158,16 @@ public final class MediaSessionService extends ISessionManager.Default {
     }
 
     private void changed() {
-        List<MediaSession.Token> tokens = getSessions(null, UserHandle.USER_ALL);
-        mListeners.send(c -> c.onActiveSessionsChanged(tokens));
-        Session s = selected();
-        mKeySessions.send(c
-                -> c.onMediaKeyEventSessionChanged(
-                        s != null ? s.pkg : "", s != null ? s.token : null));
+        if (mListeners.hasAny()) {
+            List<MediaSession.Token> tokens = getSessions(null, UserHandle.USER_ALL);
+            mListeners.send(c -> c.onActiveSessionsChanged(tokens));
+        }
+        if (mKeySessions.hasAny()) {
+            Session s = selected();
+            mKeySessions.send(c
+                    -> c.onMediaKeyEventSessionChanged(
+                            s != null ? s.pkg : "", s != null ? s.token : null));
+        }
     }
 
     @Override
@@ -174,6 +192,8 @@ public final class MediaSessionService extends ISessionManager.Default {
     @Override
     public void addOnMediaKeyEventSessionChangedListener(
             IOnMediaKeyEventSessionChangedListener listener, String pkg) {
+        if (listener == null)
+            return;
         mKeySessions.add(listener);
         Session s = selected();
         try {
@@ -202,18 +222,33 @@ public final class MediaSessionService extends ISessionManager.Default {
         return false;
     }
 
-    private boolean mediaButton(Session s, String pkg, KeyEvent event) throws RemoteException {
+    private boolean mediaButton(Session s, String pkg, KeyEvent event) {
         if (s == null || event == null || !KeyEvent.isMediaSessionKey(event.getKeyCode()))
             return false;
-        s.callback.onMediaButtonFromController(pkg, Binder.getCallingPid(), Binder.getCallingUid(),
-                new Intent(Intent.ACTION_MEDIA_BUTTON).putExtra(Intent.EXTRA_KEY_EVENT, event));
-        mKeyEvents.send(c -> c.onMediaKeyEventDispatched(event, s.pkg, s.token));
+        synchronized (mLock) {
+            if (s.destroyed)
+                return false;
+        }
+        try {
+            s.callback.onMediaButtonFromController(pkg, Binder.getCallingPid(),
+                    Binder.getCallingUid(),
+                    new Intent(Intent.ACTION_MEDIA_BUTTON).putExtra(Intent.EXTRA_KEY_EVENT, event));
+        } catch (RemoteException e) {
+            s.destroySession();
+            return false;
+        }
+        if (mKeyEvents.hasAny())
+            mKeyEvents.send(c -> c.onMediaKeyEventDispatched(event, s.pkg, s.token));
         return true;
     }
     @Override
     public void dispatchMediaKeyEvent(String pkg, boolean system, KeyEvent event, boolean wakeLock)
             throws RemoteException {
-        mediaButton(selected(), pkg, event);
+        while (true) {
+            Session s = selected();
+            if (s == null || mediaButton(s, pkg, event) || !s.destroyed)
+                return;
+        }
     }
     @Override
     public boolean dispatchMediaKeyEventToSessionAsSystemService(
@@ -221,8 +256,22 @@ public final class MediaSessionService extends ISessionManager.Default {
         return mediaButton(find(token), pkg, event);
     }
 
-    private void volumeKey(Session session, String pkg, String opPkg, KeyEvent event, int stream)
-            throws RemoteException {
+    private void adjustSelectedVolume(
+            String pkg, String opPkg, int stream, int delta, int flags) throws RemoteException {
+        Session session;
+        while ((session = selected()) != null) {
+            try {
+                session.controller.adjustVolume(pkg, opPkg, delta, flags);
+                return;
+            } catch (RemoteException e) {
+                session.destroySession();
+            }
+        }
+        mAudio.adjustSuggestedStreamVolume(delta, stream, flags);
+    }
+
+    private void volumeKey(MediaSession.Token token, boolean targeted, String pkg, String opPkg,
+            KeyEvent event, int stream) throws RemoteException {
         if (event == null || event.getAction() != KeyEvent.ACTION_DOWN)
             return;
         int direction;
@@ -239,32 +288,38 @@ public final class MediaSessionService extends ISessionManager.Default {
             default:
                 return;
         }
-        if (session != null)
-            session.controller.adjustVolume(pkg, opPkg, direction, 0);
-        else
-            mAudio.adjustSuggestedStreamVolume(direction, stream, 0);
+        if (!targeted) {
+            adjustSelectedVolume(pkg, opPkg, stream, direction, 0);
+            return;
+        }
+        Session session = find(token);
+        if (session != null) {
+            try {
+                session.controller.adjustVolume(pkg, opPkg, direction, 0);
+                return;
+            } catch (RemoteException e) {
+                session.destroySession();
+            }
+        }
+        mAudio.adjustSuggestedStreamVolume(direction, stream, 0);
     }
 
     @Override
     public void dispatchVolumeKeyEvent(String pkg, String opPkg, boolean system, KeyEvent event,
             int stream, boolean musicOnly) throws RemoteException {
-        volumeKey(selected(), pkg, opPkg, event, stream);
+        volumeKey(null, false, pkg, opPkg, event, stream);
     }
 
     @Override
     public void dispatchVolumeKeyEventToSessionAsSystemService(String pkg, String opPkg,
             KeyEvent event, MediaSession.Token token) throws RemoteException {
-        volumeKey(find(token), pkg, opPkg, event, AudioSystem.STREAM_MUSIC);
+        volumeKey(token, true, pkg, opPkg, event, AudioSystem.STREAM_MUSIC);
     }
 
     @Override
     public void dispatchAdjustVolume(String pkg, String opPkg, int stream, int delta, int flags)
             throws RemoteException {
-        Session s = selected();
-        if (s != null)
-            s.controller.adjustVolume(pkg, opPkg, delta, flags);
-        else
-            mAudio.adjustSuggestedStreamVolume(delta, stream, flags);
+        adjustSelectedVolume(pkg, opPkg, stream, delta, flags);
     }
 
     public final class Session extends ISession.Default implements IBinder.DeathRecipient {
@@ -338,12 +393,14 @@ public final class MediaSessionService extends ISessionManager.Default {
             } catch (java.util.NoSuchElementException
                             e) { /* Owner died before linkToDeath completed. */
             }
-            observers.send(ISessionControllerCallback::onSessionDestroyed);
+            if (observers.hasAny())
+                observers.send(ISessionControllerCallback::onSessionDestroyed);
             changed();
         }
         @Override
         public void sendEvent(String name, Bundle data) {
-            observers.send(c -> c.onEvent(name, copy(data)));
+            if (observers.hasAny())
+                observers.send(c -> c.onEvent(name, copy(data)));
         }
         @Override
         public void setLaunchPendingIntent(PendingIntent value) {
@@ -356,21 +413,26 @@ public final class MediaSessionService extends ISessionManager.Default {
             synchronized (mLock) {
                 metadata = value;
             }
-            observers.send(c -> c.onMetadataChanged(value));
+            if (observers.hasAny())
+                observers.send(c -> c.onMetadataChanged(value));
         }
         @Override
         public void setPlaybackState(PlaybackState value) {
             synchronized (mLock) {
                 playback = value;
             }
-            observers.send(c -> c.onPlaybackStateChanged(value));
+            if (observers.hasAny())
+                observers.send(c -> c.onPlaybackStateChanged(value));
         }
         private void queue(List<MediaSession.QueueItem> value) {
             synchronized (mLock) {
                 queue = value != null ? new ArrayList<>(value) : null;
             }
-            observers.send(
-                    c -> c.onQueueChanged(value != null ? new ParceledListSlice<>(value) : null));
+            if (observers.hasAny()) {
+                observers.send(c
+                        -> c.onQueueChanged(
+                                value != null ? new ParceledListSlice<>(value) : null));
+            }
         }
         @Override
         public void resetQueue() {
@@ -385,14 +447,16 @@ public final class MediaSessionService extends ISessionManager.Default {
             synchronized (mLock) {
                 queueTitle = value;
             }
-            observers.send(c -> c.onQueueTitleChanged(value));
+            if (observers.hasAny())
+                observers.send(c -> c.onQueueTitleChanged(value));
         }
         @Override
         public void setExtras(Bundle value) {
             synchronized (mLock) {
                 extras = copy(value);
             }
-            observers.send(c -> c.onExtrasChanged(copy(value)));
+            if (observers.hasAny())
+                observers.send(c -> c.onExtrasChanged(copy(value)));
         }
         @Override
         public void setRatingType(int value) {
@@ -425,7 +489,8 @@ public final class MediaSessionService extends ISessionManager.Default {
                 attributes = value;
                 volumeType = MediaController.PlaybackInfo.PLAYBACK_TYPE_LOCAL;
             }
-            observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
+            if (observers.hasAny())
+                observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
         }
         @Override
         public void setPlaybackToRemote(int control, int max, String id) {
@@ -435,14 +500,16 @@ public final class MediaSessionService extends ISessionManager.Default {
                 maxVolume = max;
                 volumeId = id;
             }
-            observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
+            if (observers.hasAny())
+                observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
         }
         @Override
         public void setCurrentVolume(int value) {
             synchronized (mLock) {
                 volume = Math.max(0, Math.min(value, maxVolume));
             }
-            observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
+            if (observers.hasAny())
+                observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
         }
 
         public final class Controller extends ISessionController.Default {
@@ -456,6 +523,8 @@ public final class MediaSessionService extends ISessionManager.Default {
             @Override
             public void registerCallback(String pkg, ISessionControllerCallback cb)
                     throws RemoteException {
+                if (cb == null)
+                    return;
                 boolean ended;
                 synchronized (mLock) {
                     ended = destroyed;
@@ -651,7 +720,8 @@ public final class MediaSessionService extends ISessionManager.Default {
                 }
                 if (stream >= 0) {
                     mAudio.adjustStreamVolume(stream, direction, flags, opPkg);
-                    observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
+                    if (observers.hasAny())
+                        observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
                     return;
                 }
                 call(c
@@ -669,7 +739,8 @@ public final class MediaSessionService extends ISessionManager.Default {
                 }
                 if (stream >= 0) {
                     mAudio.setStreamVolume(stream, value, flags, opPkg);
-                    observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
+                    if (observers.hasAny())
+                        observers.send(c -> c.onVolumeInfoChanged(volumeInfo()));
                     return;
                 }
                 call(c

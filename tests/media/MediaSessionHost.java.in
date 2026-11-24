@@ -1,0 +1,1229 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+// Declared Android Binder/MediaSession/AudioService host boundaries for the exact
+// unchanged production MediaSessionService and StandIn Java units.
+// The runner splits FILE sections into javac compilation units; no production
+// session lifecycle, key/volume dispatch or callback broadcast logic is replaced.
+// Real Binder IPC and Android framework Parcel marshaling run in Windows/ART fixtures.
+
+// FILE: android/app/PendingIntent.java
+package android.app;
+public final class PendingIntent {}
+
+// FILE: android/content/ComponentName.java
+package android.content;
+public final class ComponentName {
+    private final String mPkg, mCls;
+    public ComponentName(String pkg, String cls) { mPkg = pkg; mCls = cls; }
+    public String getPackageName() { return mPkg; }
+    public String getClassName() { return mCls; }
+}
+
+// FILE: android/content/Intent.java
+package android.content;
+import java.util.HashMap;
+import java.util.Map;
+public class Intent {
+    public static final String ACTION_MEDIA_BUTTON = "android.intent.action.MEDIA_BUTTON";
+    public static final String EXTRA_KEY_EVENT = "android.intent.extra.KEY_EVENT";
+    private final String mAction;
+    private final Map<String, Object> mExtras = new HashMap<>();
+    public Intent(String action) { mAction = action; }
+    public String getAction() { return mAction; }
+    public Intent putExtra(String name, Object value) { mExtras.put(name, value); return this; }
+    public Object getExtra(String name) { return mExtras.get(name); }
+}
+
+// FILE: android/content/pm/ParceledListSlice.java
+package android.content.pm;
+import java.util.List;
+public class ParceledListSlice<T> {
+    private final List<T> mValues;
+    public ParceledListSlice(List<T> values) { mValues = values; }
+    public List<T> getList() { return mValues; }
+}
+
+// FILE: android/media/AudioAttributes.java
+package android.media;
+public final class AudioAttributes {
+    public static final int USAGE_MEDIA = 1;
+    public static final int USAGE_VOICE_COMMUNICATION = 2;
+    public static final int USAGE_ALARM = 4;
+    public static final int USAGE_NOTIFICATION = 5;
+    private final int mUsage;
+    private AudioAttributes(int usage) { mUsage = usage; }
+    public int getUsage() { return mUsage; }
+    public static int toLegacyStreamType(AudioAttributes aa) {
+        if (aa == null) return AudioSystem.STREAM_MUSIC;
+        switch (aa.mUsage) {
+            case USAGE_VOICE_COMMUNICATION: return AudioSystem.STREAM_VOICE_CALL;
+            case USAGE_ALARM: return AudioSystem.STREAM_ALARM;
+            case USAGE_NOTIFICATION: return AudioSystem.STREAM_NOTIFICATION;
+            default: return AudioSystem.STREAM_MUSIC;
+        }
+    }
+    public static final class Builder {
+        private int mUsage = USAGE_MEDIA;
+        public Builder setUsage(int usage) { mUsage = usage; return this; }
+        public AudioAttributes build() { return new AudioAttributes(mUsage); }
+    }
+}
+
+// FILE: android/media/AudioManager.java
+package android.media;
+public final class AudioManager {
+    public static final int ADJUST_LOWER = -1;
+    public static final int ADJUST_SAME = 0;
+    public static final int ADJUST_RAISE = 1;
+    public static final int ADJUST_MUTE = -100;
+    public static final int ADJUST_UNMUTE = 100;
+    public static final int ADJUST_TOGGLE_MUTE = 101;
+}
+
+// FILE: android/media/AudioSystem.java
+package android.media;
+public final class AudioSystem {
+    public static final int STREAM_VOICE_CALL = 0;
+    public static final int STREAM_SYSTEM = 1;
+    public static final int STREAM_RING = 2;
+    public static final int STREAM_MUSIC = 3;
+    public static final int STREAM_ALARM = 4;
+    public static final int STREAM_NOTIFICATION = 5;
+}
+
+// FILE: android/media/MediaMetadata.java
+package android.media;
+public final class MediaMetadata {}
+
+// FILE: android/media/Rating.java
+package android.media;
+public final class Rating {}
+
+// FILE: android/media/VolumeProvider.java
+package android.media;
+public abstract class VolumeProvider {
+    public static final int VOLUME_CONTROL_FIXED = 0;
+    public static final int VOLUME_CONTROL_RELATIVE = 1;
+    public static final int VOLUME_CONTROL_ABSOLUTE = 2;
+}
+
+// FILE: android/net/Uri.java
+package android.net;
+public final class Uri {}
+
+// FILE: android/os/IInterface.java
+package android.os;
+public interface IInterface {
+    IBinder asBinder();
+}
+
+// FILE: android/os/RemoteException.java
+package android.os;
+public class RemoteException extends Exception {
+    public RemoteException() {}
+    public RemoteException(String message) { super(message); }
+}
+
+// FILE: android/os/DeadObjectException.java
+package android.os;
+public class DeadObjectException extends RemoteException {
+    public DeadObjectException() {}
+    public DeadObjectException(String message) { super(message); }
+}
+
+// FILE: android/os/Parcel.java
+package android.os;
+public final class Parcel {}
+
+// FILE: android/os/IBinder.java
+package android.os;
+public interface IBinder {
+    int FIRST_CALL_TRANSACTION = 1;
+    interface DeathRecipient {
+        void binderDied();
+    }
+    void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException;
+    boolean unlinkToDeath(DeathRecipient recipient, int flags);
+}
+
+// FILE: android/os/Binder.java
+package android.os;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.NoSuchElementException;
+public class Binder implements IBinder {
+    public static int sCallingPid = 1000;
+    public static int sCallingUid = 10000;
+    private final List<DeathRecipient> mDeaths = new ArrayList<>();
+    private boolean mDead;
+    public static int getCallingPid() { return sCallingPid; }
+    public static int getCallingUid() { return sCallingUid; }
+    public void attachInterface(IInterface owner, String descriptor) {}
+    @Override
+    public synchronized void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException {
+        if (mDead) throw new DeadObjectException("Binder already dead");
+        mDeaths.add(recipient);
+    }
+    @Override
+    public synchronized boolean unlinkToDeath(DeathRecipient recipient, int flags) {
+        if (!mDeaths.remove(recipient)) throw new NoSuchElementException("DeathRecipient not linked");
+        return true;
+    }
+    public synchronized boolean isDead() { return mDead; }
+    public synchronized int deathRecipientCount() { return mDeaths.size(); }
+    public synchronized void markDeadWithoutCallback() { mDead = true; }
+    public void dieNow() {
+        List<DeathRecipient> snapshot;
+        synchronized (this) {
+            mDead = true;
+            snapshot = new ArrayList<>(mDeaths);
+            mDeaths.clear();
+        }
+        for (DeathRecipient d : snapshot) d.binderDied();
+    }
+}
+
+// FILE: android/os/Bundle.java
+package android.os;
+import java.util.HashMap;
+import java.util.Map;
+public final class Bundle {
+    private final Map<String, Object> mValues = new HashMap<>();
+    public Bundle() {}
+    public Bundle(Bundle copy) { if (copy != null) mValues.putAll(copy.mValues); }
+    public void putString(String key, String value) { mValues.put(key, value); }
+    public String getString(String key) { return (String) mValues.get(key); }
+}
+
+// FILE: android/os/ResultReceiver.java
+package android.os;
+public class ResultReceiver {}
+
+// FILE: android/os/UserHandle.java
+package android.os;
+public final class UserHandle {
+    public static final int USER_ALL = -1;
+}
+
+// FILE: android/os/RemoteCallbackList.java
+package android.os;
+import java.util.LinkedHashMap;
+import java.util.Map;
+public class RemoteCallbackList<E extends IInterface> {
+    private final Map<IBinder, Entry> mCallbacks = new LinkedHashMap<>();
+    private Object[] mActiveBroadcast;
+    private int mBroadcastCount = -1;
+    public RuntimeException failBroadcastItem;
+
+    private final class Entry implements IBinder.DeathRecipient {
+        final E callback;
+        Entry(E callback) { this.callback = callback; }
+        @Override public void binderDied() {
+            synchronized (mCallbacks) { mCallbacks.remove(callback.asBinder()); }
+            onCallbackDied(callback);
+        }
+    }
+
+    public void onCallbackDied(E callback) {}
+
+    public boolean register(E callback) {
+        if (callback == null) throw new NullPointerException("callback");
+        IBinder binder = callback.asBinder();
+        synchronized (mCallbacks) {
+            Entry entry = new Entry(callback);
+            try {
+                binder.linkToDeath(entry, 0);
+            } catch (RemoteException e) {
+                return false;
+            }
+            Entry previous = mCallbacks.put(binder, entry);
+            if (previous != null) {
+                try { binder.unlinkToDeath(previous, 0); } catch (RuntimeException ignored) {}
+            }
+            return true;
+        }
+    }
+
+    public boolean unregister(E callback) {
+        if (callback == null) return false;
+        IBinder binder = callback.asBinder();
+        synchronized (mCallbacks) {
+            Entry entry = mCallbacks.remove(binder);
+            if (entry != null) {
+                try { binder.unlinkToDeath(entry, 0); } catch (RuntimeException ignored) {}
+                return true;
+            }
+            return false;
+        }
+    }
+
+    public int getRegisteredCallbackCount() {
+        synchronized (mCallbacks) { return mCallbacks.size(); }
+    }
+
+    public int beginBroadcast() {
+        synchronized (mCallbacks) {
+            if (mBroadcastCount > 0 || mActiveBroadcast != null) {
+                throw new IllegalStateException("beginBroadcast() called while already in a broadcast");
+            }
+            int count = mCallbacks.size();
+            Object[] active = new Object[count];
+            int i = 0;
+            for (Entry entry : mCallbacks.values()) active[i++] = entry.callback;
+            mActiveBroadcast = active;
+            mBroadcastCount = count;
+            return count;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public E getBroadcastItem(int index) {
+        RuntimeException failure = failBroadcastItem;
+        if (failure != null) {
+            failBroadcastItem = null;
+            throw failure;
+        }
+        return (E) mActiveBroadcast[index];
+    }
+
+    public void finishBroadcast() {
+        synchronized (mCallbacks) {
+            if (mBroadcastCount < 0 && mActiveBroadcast == null) {
+                throw new IllegalStateException("finishBroadcast() called outside of a broadcast");
+            }
+            mActiveBroadcast = null;
+            mBroadcastCount = -1;
+        }
+    }
+}
+
+// FILE: android/view/KeyEvent.java
+package android.view;
+public final class KeyEvent {
+    public static final int ACTION_DOWN = 0;
+    public static final int ACTION_UP = 1;
+    public static final int KEYCODE_VOLUME_UP = 24;
+    public static final int KEYCODE_VOLUME_DOWN = 25;
+    public static final int KEYCODE_A = 29;
+    public static final int KEYCODE_HEADSETHOOK = 79;
+    public static final int KEYCODE_MEDIA_PLAY_PAUSE = 85;
+    public static final int KEYCODE_MEDIA_STOP = 86;
+    public static final int KEYCODE_MEDIA_NEXT = 87;
+    public static final int KEYCODE_MEDIA_PREVIOUS = 88;
+    public static final int KEYCODE_MEDIA_REWIND = 89;
+    public static final int KEYCODE_MEDIA_FAST_FORWARD = 90;
+    public static final int KEYCODE_MEDIA_PLAY = 126;
+    public static final int KEYCODE_MEDIA_PAUSE = 127;
+    public static final int KEYCODE_VOLUME_MUTE = 164;
+    private final int mAction, mKeyCode;
+    public KeyEvent(int action, int code) { mAction = action; mKeyCode = code; }
+    public int getAction() { return mAction; }
+    public int getKeyCode() { return mKeyCode; }
+    public static boolean isMediaSessionKey(int keyCode) {
+        switch (keyCode) {
+            case KEYCODE_HEADSETHOOK:
+            case KEYCODE_MEDIA_PLAY:
+            case KEYCODE_MEDIA_PAUSE:
+            case KEYCODE_MEDIA_PLAY_PAUSE:
+            case KEYCODE_MEDIA_STOP:
+            case KEYCODE_MEDIA_NEXT:
+            case KEYCODE_MEDIA_PREVIOUS:
+            case KEYCODE_MEDIA_REWIND:
+            case KEYCODE_MEDIA_FAST_FORWARD:
+                return true;
+            default:
+                return false;
+        }
+    }
+}
+
+// FILE: android/media/session/MediaSession.java
+package android.media.session;
+import java.util.Objects;
+public final class MediaSession {
+    public static final class Token {
+        private final int mUid;
+        private final ISessionController mBinder;
+        public Token(int uid, ISessionController binder) { mUid = uid; mBinder = binder; }
+        public int getUid() { return mUid; }
+        public ISessionController getBinder() { return mBinder; }
+        @Override public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (!(obj instanceof Token)) return false;
+            Token other = (Token) obj;
+            return mUid == other.mUid && Objects.equals(
+                    mBinder != null ? mBinder.asBinder() : null,
+                    other.mBinder != null ? other.mBinder.asBinder() : null);
+        }
+        @Override public int hashCode() {
+            return Objects.hash(mUid, mBinder != null ? mBinder.asBinder() : null);
+        }
+    }
+    public static final class QueueItem {}
+}
+
+// FILE: android/media/session/MediaController.java
+package android.media.session;
+import android.media.AudioAttributes;
+public final class MediaController {
+    public static final class PlaybackInfo {
+        public static final int PLAYBACK_TYPE_LOCAL = 1;
+        public static final int PLAYBACK_TYPE_REMOTE = 2;
+        private final int mVolumeType, mVolumeControl, mMaxVolume, mCurrentVolume;
+        private final AudioAttributes mAudioAttrs;
+        private final String mVolumeControlId;
+        public PlaybackInfo(int type, int control, int max, int current,
+                AudioAttributes attrs, String volumeControlId) {
+            mVolumeType = type; mVolumeControl = control; mMaxVolume = max;
+            mCurrentVolume = current; mAudioAttrs = attrs; mVolumeControlId = volumeControlId;
+        }
+        public int getPlaybackType() { return mVolumeType; }
+        public int getVolumeControl() { return mVolumeControl; }
+        public int getMaxVolume() { return mMaxVolume; }
+        public int getCurrentVolume() { return mCurrentVolume; }
+        public AudioAttributes getAudioAttributes() { return mAudioAttrs; }
+        public String getVolumeControlId() { return mVolumeControlId; }
+    }
+}
+
+// FILE: android/media/session/PlaybackState.java
+package android.media.session;
+public final class PlaybackState {}
+
+// FILE: android/media/session/ParcelableListBinder.java
+package android.media.session;
+import android.os.Binder;
+import java.util.List;
+import java.util.function.Consumer;
+public final class ParcelableListBinder<T> extends Binder {
+    private final Consumer<List<T>> mConsumer;
+    public ParcelableListBinder(Class<T> clazz, Consumer<List<T>> consumer) { mConsumer = consumer; }
+    public void accept(List<T> list) { mConsumer.accept(list); }
+}
+
+// FILE: android/media/session/IActiveSessionsListener.java
+package android.media.session;
+import android.os.IInterface;
+import android.os.RemoteException;
+import java.util.List;
+public interface IActiveSessionsListener extends IInterface {
+    void onActiveSessionsChanged(List<MediaSession.Token> sessions) throws RemoteException;
+}
+
+// FILE: android/media/session/IOnMediaKeyEventDispatchedListener.java
+package android.media.session;
+import android.os.IInterface;
+import android.os.RemoteException;
+import android.view.KeyEvent;
+public interface IOnMediaKeyEventDispatchedListener extends IInterface {
+    void onMediaKeyEventDispatched(KeyEvent event, String packageName,
+            MediaSession.Token sessionToken) throws RemoteException;
+}
+
+// FILE: android/media/session/IOnMediaKeyEventSessionChangedListener.java
+package android.media.session;
+import android.os.IInterface;
+import android.os.RemoteException;
+public interface IOnMediaKeyEventSessionChangedListener extends IInterface {
+    void onMediaKeyEventSessionChanged(String packageName,
+            MediaSession.Token sessionToken) throws RemoteException;
+}
+
+// FILE: android/media/session/ISessionCallback.java
+package android.media.session;
+import android.content.Intent;
+import android.media.Rating;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.IInterface;
+import android.os.RemoteException;
+import android.os.ResultReceiver;
+public interface ISessionCallback extends IInterface {
+    void onCommand(String packageName, int pid, int uid, String command, Bundle args,
+            ResultReceiver cb) throws RemoteException;
+    void onMediaButtonFromController(String packageName, int pid, int uid, Intent mediaButtonIntent)
+            throws RemoteException;
+    void onPrepare(String packageName, int pid, int uid) throws RemoteException;
+    void onPrepareFromMediaId(String packageName, int pid, int uid, String mediaId, Bundle extras)
+            throws RemoteException;
+    void onPrepareFromSearch(String packageName, int pid, int uid, String query, Bundle extras)
+            throws RemoteException;
+    void onPrepareFromUri(String packageName, int pid, int uid, Uri uri, Bundle extras)
+            throws RemoteException;
+    void onPlay(String packageName, int pid, int uid) throws RemoteException;
+    void onPlayFromMediaId(String packageName, int pid, int uid, String mediaId, Bundle extras)
+            throws RemoteException;
+    void onPlayFromSearch(String packageName, int pid, int uid, String query, Bundle extras)
+            throws RemoteException;
+    void onPlayFromUri(String packageName, int pid, int uid, Uri uri, Bundle extras)
+            throws RemoteException;
+    void onSkipToTrack(String packageName, int pid, int uid, long id) throws RemoteException;
+    void onPause(String packageName, int pid, int uid) throws RemoteException;
+    void onStop(String packageName, int pid, int uid) throws RemoteException;
+    void onNext(String packageName, int pid, int uid) throws RemoteException;
+    void onPrevious(String packageName, int pid, int uid) throws RemoteException;
+    void onFastForward(String packageName, int pid, int uid) throws RemoteException;
+    void onRewind(String packageName, int pid, int uid) throws RemoteException;
+    void onSeekTo(String packageName, int pid, int uid, long pos) throws RemoteException;
+    void onRate(String packageName, int pid, int uid, Rating rating) throws RemoteException;
+    void onSetPlaybackSpeed(String packageName, int pid, int uid, float speed)
+            throws RemoteException;
+    void onCustomAction(String packageName, int pid, int uid, String action, Bundle args)
+            throws RemoteException;
+    void onAdjustVolume(String packageName, int pid, int uid, int direction) throws RemoteException;
+    void onSetVolumeTo(String packageName, int pid, int uid, int value) throws RemoteException;
+}
+
+// FILE: android/media/session/ISessionControllerCallback.java
+package android.media.session;
+import android.content.pm.ParceledListSlice;
+import android.media.MediaMetadata;
+import android.os.Bundle;
+import android.os.IInterface;
+import android.os.RemoteException;
+public interface ISessionControllerCallback extends IInterface {
+    void onEvent(String event, Bundle extras) throws RemoteException;
+    void onSessionDestroyed() throws RemoteException;
+    void onPlaybackStateChanged(PlaybackState state) throws RemoteException;
+    void onMetadataChanged(MediaMetadata metadata) throws RemoteException;
+    void onQueueChanged(ParceledListSlice queue) throws RemoteException;
+    void onQueueTitleChanged(CharSequence title) throws RemoteException;
+    void onExtrasChanged(Bundle extras) throws RemoteException;
+    void onVolumeInfoChanged(MediaController.PlaybackInfo info) throws RemoteException;
+}
+
+// FILE: android/media/session/ISession.java
+package android.media.session;
+import android.app.PendingIntent;
+import android.media.AudioAttributes;
+import android.media.MediaMetadata;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.IInterface;
+import android.os.RemoteException;
+public interface ISession extends IInterface {
+    ISessionController getController() throws RemoteException;
+    void setFlags(int flags) throws RemoteException;
+    void setActive(boolean active) throws RemoteException;
+    void destroySession() throws RemoteException;
+    void sendEvent(String event, Bundle data) throws RemoteException;
+    void setLaunchPendingIntent(PendingIntent pi) throws RemoteException;
+    void setMetadata(MediaMetadata metadata, long duration, String mediaDescription)
+            throws RemoteException;
+    void setPlaybackState(PlaybackState state) throws RemoteException;
+    void resetQueue() throws RemoteException;
+    IBinder getBinderForSetQueue() throws RemoteException;
+    void setQueueTitle(CharSequence title) throws RemoteException;
+    void setExtras(Bundle extras) throws RemoteException;
+    void setRatingType(int type) throws RemoteException;
+    void setPlaybackToLocal(AudioAttributes attributes) throws RemoteException;
+    void setPlaybackToRemote(int control, int max, String controlId) throws RemoteException;
+    void setCurrentVolume(int currentVolume) throws RemoteException;
+
+    class Default implements ISession {
+        @Override public IBinder asBinder() { return null; }
+        @Override public ISessionController getController() throws RemoteException { return null; }
+        @Override public void setFlags(int flags) throws RemoteException {}
+        @Override public void setActive(boolean active) throws RemoteException {}
+        @Override public void destroySession() throws RemoteException {}
+        @Override public void sendEvent(String event, Bundle data) throws RemoteException {}
+        @Override public void setLaunchPendingIntent(PendingIntent pi) throws RemoteException {}
+        @Override public void setMetadata(MediaMetadata metadata, long duration,
+                String mediaDescription) throws RemoteException {}
+        @Override public void setPlaybackState(PlaybackState state) throws RemoteException {}
+        @Override public void resetQueue() throws RemoteException {}
+        @Override public IBinder getBinderForSetQueue() throws RemoteException { return null; }
+        @Override public void setQueueTitle(CharSequence title) throws RemoteException {}
+        @Override public void setExtras(Bundle extras) throws RemoteException {}
+        @Override public void setRatingType(int type) throws RemoteException {}
+        @Override public void setPlaybackToLocal(AudioAttributes attributes) throws RemoteException {}
+        @Override public void setPlaybackToRemote(int control, int max, String controlId)
+                throws RemoteException {}
+        @Override public void setCurrentVolume(int currentVolume) throws RemoteException {}
+    }
+
+    abstract class Stub extends Binder implements ISession {
+        public static final String DESCRIPTOR = "android.media.session.ISession";
+        @Override public IBinder asBinder() { return this; }
+    }
+}
+
+// FILE: android/media/session/ISessionController.java
+package android.media.session;
+import android.app.PendingIntent;
+import android.content.pm.ParceledListSlice;
+import android.media.MediaMetadata;
+import android.media.Rating;
+import android.net.Uri;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.IInterface;
+import android.os.RemoteException;
+import android.os.ResultReceiver;
+import android.view.KeyEvent;
+public interface ISessionController extends IInterface {
+    void registerCallback(String packageName, ISessionControllerCallback cb) throws RemoteException;
+    void unregisterCallback(ISessionControllerCallback cb) throws RemoteException;
+    String getPackageName() throws RemoteException;
+    String getTag() throws RemoteException;
+    Bundle getSessionInfo() throws RemoteException;
+    PendingIntent getLaunchPendingIntent() throws RemoteException;
+    long getFlags() throws RemoteException;
+    MediaMetadata getMetadata() throws RemoteException;
+    PlaybackState getPlaybackState() throws RemoteException;
+    ParceledListSlice getQueue() throws RemoteException;
+    CharSequence getQueueTitle() throws RemoteException;
+    Bundle getExtras() throws RemoteException;
+    int getRatingType() throws RemoteException;
+    MediaController.PlaybackInfo getVolumeAttributes() throws RemoteException;
+    boolean sendMediaButton(String packageName, KeyEvent mediaButton) throws RemoteException;
+    void sendCommand(String packageName, String command, Bundle args, ResultReceiver cb)
+            throws RemoteException;
+    void prepare(String packageName) throws RemoteException;
+    void prepareFromMediaId(String packageName, String mediaId, Bundle extras)
+            throws RemoteException;
+    void prepareFromSearch(String packageName, String query, Bundle extras) throws RemoteException;
+    void prepareFromUri(String packageName, Uri uri, Bundle extras) throws RemoteException;
+    void play(String packageName) throws RemoteException;
+    void playFromMediaId(String packageName, String mediaId, Bundle extras) throws RemoteException;
+    void playFromSearch(String packageName, String query, Bundle extras) throws RemoteException;
+    void playFromUri(String packageName, Uri uri, Bundle extras) throws RemoteException;
+    void skipToQueueItem(String packageName, long id) throws RemoteException;
+    void pause(String packageName) throws RemoteException;
+    void stop(String packageName) throws RemoteException;
+    void next(String packageName) throws RemoteException;
+    void previous(String packageName) throws RemoteException;
+    void fastForward(String packageName) throws RemoteException;
+    void rewind(String packageName) throws RemoteException;
+    void seekTo(String packageName, long pos) throws RemoteException;
+    void rate(String packageName, Rating rating) throws RemoteException;
+    void setPlaybackSpeed(String packageName, float speed) throws RemoteException;
+    void sendCustomAction(String packageName, String action, Bundle args) throws RemoteException;
+    void adjustVolume(String packageName, String opPackageName, int direction, int flags)
+            throws RemoteException;
+    void setVolumeTo(String packageName, String opPackageName, int value, int flags)
+            throws RemoteException;
+
+    class Default implements ISessionController {
+        @Override public IBinder asBinder() { return null; }
+        @Override public void registerCallback(String packageName, ISessionControllerCallback cb)
+                throws RemoteException {}
+        @Override public void unregisterCallback(ISessionControllerCallback cb)
+                throws RemoteException {}
+        @Override public String getPackageName() throws RemoteException { return null; }
+        @Override public String getTag() throws RemoteException { return null; }
+        @Override public Bundle getSessionInfo() throws RemoteException { return null; }
+        @Override public PendingIntent getLaunchPendingIntent() throws RemoteException { return null; }
+        @Override public long getFlags() throws RemoteException { return 0; }
+        @Override public MediaMetadata getMetadata() throws RemoteException { return null; }
+        @Override public PlaybackState getPlaybackState() throws RemoteException { return null; }
+        @Override public ParceledListSlice getQueue() throws RemoteException { return null; }
+        @Override public CharSequence getQueueTitle() throws RemoteException { return null; }
+        @Override public Bundle getExtras() throws RemoteException { return null; }
+        @Override public int getRatingType() throws RemoteException { return 0; }
+        @Override public MediaController.PlaybackInfo getVolumeAttributes()
+                throws RemoteException { return null; }
+        @Override public boolean sendMediaButton(String packageName, KeyEvent mediaButton)
+                throws RemoteException { return false; }
+        @Override public void sendCommand(String packageName, String command, Bundle args,
+                ResultReceiver cb) throws RemoteException {}
+        @Override public void prepare(String packageName) throws RemoteException {}
+        @Override public void prepareFromMediaId(String packageName, String mediaId, Bundle extras)
+                throws RemoteException {}
+        @Override public void prepareFromSearch(String packageName, String query, Bundle extras)
+                throws RemoteException {}
+        @Override public void prepareFromUri(String packageName, Uri uri, Bundle extras)
+                throws RemoteException {}
+        @Override public void play(String packageName) throws RemoteException {}
+        @Override public void playFromMediaId(String packageName, String mediaId, Bundle extras)
+                throws RemoteException {}
+        @Override public void playFromSearch(String packageName, String query, Bundle extras)
+                throws RemoteException {}
+        @Override public void playFromUri(String packageName, Uri uri, Bundle extras)
+                throws RemoteException {}
+        @Override public void skipToQueueItem(String packageName, long id) throws RemoteException {}
+        @Override public void pause(String packageName) throws RemoteException {}
+        @Override public void stop(String packageName) throws RemoteException {}
+        @Override public void next(String packageName) throws RemoteException {}
+        @Override public void previous(String packageName) throws RemoteException {}
+        @Override public void fastForward(String packageName) throws RemoteException {}
+        @Override public void rewind(String packageName) throws RemoteException {}
+        @Override public void seekTo(String packageName, long pos) throws RemoteException {}
+        @Override public void rate(String packageName, Rating rating) throws RemoteException {}
+        @Override public void setPlaybackSpeed(String packageName, float speed)
+                throws RemoteException {}
+        @Override public void sendCustomAction(String packageName, String action, Bundle args)
+                throws RemoteException {}
+        @Override public void adjustVolume(String packageName, String opPackageName, int direction,
+                int flags) throws RemoteException {}
+        @Override public void setVolumeTo(String packageName, String opPackageName, int value,
+                int flags) throws RemoteException {}
+    }
+
+    abstract class Stub extends Binder implements ISessionController {
+        public static final String DESCRIPTOR = "android.media.session.ISessionController";
+        @Override public IBinder asBinder() { return this; }
+    }
+}
+
+// FILE: android/media/session/ISessionManager.java
+package android.media.session;
+import android.content.ComponentName;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.IInterface;
+import android.os.RemoteException;
+import android.view.KeyEvent;
+import java.util.List;
+public interface ISessionManager extends IInterface {
+    ISession createSession(String packageName, ISessionCallback cb, String tag, Bundle sessionInfo,
+            int userId) throws RemoteException;
+    List<MediaSession.Token> getSessions(ComponentName compName, int userId) throws RemoteException;
+    MediaSession.Token getMediaKeyEventSession(String packageName) throws RemoteException;
+    String getMediaKeyEventSessionPackageName(String packageName) throws RemoteException;
+    void addSessionsListener(IActiveSessionsListener listener, ComponentName compName, int userId)
+            throws RemoteException;
+    void removeSessionsListener(IActiveSessionsListener listener) throws RemoteException;
+    void addOnMediaKeyEventSessionChangedListener(
+            IOnMediaKeyEventSessionChangedListener listener, String packageName)
+            throws RemoteException;
+    void removeOnMediaKeyEventSessionChangedListener(
+            IOnMediaKeyEventSessionChangedListener listener) throws RemoteException;
+    void addOnMediaKeyEventDispatchedListener(IOnMediaKeyEventDispatchedListener listener)
+            throws RemoteException;
+    void removeOnMediaKeyEventDispatchedListener(IOnMediaKeyEventDispatchedListener listener)
+            throws RemoteException;
+    boolean isGlobalPriorityActive() throws RemoteException;
+    void dispatchMediaKeyEvent(String packageName, boolean asSystemService, KeyEvent keyEvent,
+            boolean needWakeLock) throws RemoteException;
+    boolean dispatchMediaKeyEventToSessionAsSystemService(String packageName, KeyEvent keyEvent,
+            MediaSession.Token sessionToken) throws RemoteException;
+    void dispatchVolumeKeyEvent(String packageName, String opPackageName, boolean asSystemService,
+            KeyEvent keyEvent, int stream, boolean musicOnly) throws RemoteException;
+    void dispatchVolumeKeyEventToSessionAsSystemService(String packageName, String opPackageName,
+            KeyEvent keyEvent, MediaSession.Token sessionToken) throws RemoteException;
+    void dispatchAdjustVolume(String packageName, String opPackageName, int suggestedStream,
+            int delta, int flags) throws RemoteException;
+
+    class Default implements ISessionManager {
+        @Override public IBinder asBinder() { return null; }
+        @Override public ISession createSession(String packageName, ISessionCallback cb, String tag,
+                Bundle sessionInfo, int userId) throws RemoteException { return null; }
+        @Override public List<MediaSession.Token> getSessions(ComponentName compName, int userId)
+                throws RemoteException { return null; }
+        @Override public MediaSession.Token getMediaKeyEventSession(String packageName)
+                throws RemoteException { return null; }
+        @Override public String getMediaKeyEventSessionPackageName(String packageName)
+                throws RemoteException { return null; }
+        @Override public void addSessionsListener(IActiveSessionsListener listener,
+                ComponentName compName, int userId) throws RemoteException {}
+        @Override public void removeSessionsListener(IActiveSessionsListener listener)
+                throws RemoteException {}
+        @Override public void addOnMediaKeyEventSessionChangedListener(
+                IOnMediaKeyEventSessionChangedListener listener, String packageName)
+                throws RemoteException {}
+        @Override public void removeOnMediaKeyEventSessionChangedListener(
+                IOnMediaKeyEventSessionChangedListener listener) throws RemoteException {}
+        @Override public void addOnMediaKeyEventDispatchedListener(
+                IOnMediaKeyEventDispatchedListener listener) throws RemoteException {}
+        @Override public void removeOnMediaKeyEventDispatchedListener(
+                IOnMediaKeyEventDispatchedListener listener) throws RemoteException {}
+        @Override public boolean isGlobalPriorityActive() throws RemoteException { return false; }
+        @Override public void dispatchMediaKeyEvent(String packageName, boolean asSystemService,
+                KeyEvent keyEvent, boolean needWakeLock) throws RemoteException {}
+        @Override public boolean dispatchMediaKeyEventToSessionAsSystemService(String packageName,
+                KeyEvent keyEvent, MediaSession.Token sessionToken) throws RemoteException {
+            return false;
+        }
+        @Override public void dispatchVolumeKeyEvent(String packageName, String opPackageName,
+                boolean asSystemService, KeyEvent keyEvent, int stream, boolean musicOnly)
+                throws RemoteException {}
+        @Override public void dispatchVolumeKeyEventToSessionAsSystemService(String packageName,
+                String opPackageName, KeyEvent keyEvent, MediaSession.Token sessionToken)
+                throws RemoteException {}
+        @Override public void dispatchAdjustVolume(String packageName, String opPackageName,
+                int suggestedStream, int delta, int flags) throws RemoteException {}
+    }
+
+    abstract class Stub extends Binder implements ISessionManager {
+        public static final String DESCRIPTOR = "android.media.session.ISessionManager";
+        @Override public IBinder asBinder() { return this; }
+    }
+}
+
+// FILE: com/gesher/server/AudioService.java
+package com.gesher.server;
+import android.media.AudioManager;
+import android.media.AudioSystem;
+import java.util.ArrayList;
+import java.util.List;
+/** Controlled host AudioService boundary: records suggested/stream volume operations. */
+public final class AudioService {
+    static final int[] MAX = {5, 7, 7, 15, 7, 7, 15, 7, 15, 15, 15, 15};
+    private final int[] mVolumes = {3, 4, 4, 8, 4, 4, 8, 4, 8, 8, 8, 8};
+    public final List<String> calls = new ArrayList<>();
+
+    public int getStreamMaxVolume(int stream) {
+        return stream >= 0 && stream < MAX.length ? MAX[stream] : 15;
+    }
+
+    public int getStreamVolume(int stream) {
+        return stream >= 0 && stream < mVolumes.length ? mVolumes[stream] : 0;
+    }
+
+    public void adjustStreamVolume(int stream, int direction, int flags, String callingPackage) {
+        calls.add("adjustStream:" + stream + ":" + direction + ":" + flags + ":" + callingPackage);
+        if (stream >= 0 && stream < mVolumes.length) {
+            if (direction == AudioManager.ADJUST_RAISE) mVolumes[stream] = Math.min(MAX[stream], mVolumes[stream] + 1);
+            else if (direction == AudioManager.ADJUST_LOWER) mVolumes[stream] = Math.max(0, mVolumes[stream] - 1);
+        }
+    }
+
+    public void setStreamVolume(int stream, int index, int flags, String callingPackage) {
+        calls.add("setStream:" + stream + ":" + index + ":" + flags + ":" + callingPackage);
+        if (stream >= 0 && stream < mVolumes.length) mVolumes[stream] = index;
+    }
+
+    public void adjustSuggestedStreamVolume(int direction, int suggestedStreamType, int flags) {
+        calls.add("adjustSuggested:" + direction + ":" + suggestedStreamType + ":" + flags);
+        int target = suggestedStreamType >= 0 && suggestedStreamType < MAX.length
+                ? suggestedStreamType : AudioSystem.STREAM_MUSIC;
+        adjustStreamVolume(target, direction, flags, null);
+    }
+
+    public void clear() { calls.clear(); }
+}
+
+// FILE: com/gesher/server/MediaSessionHost.java
+package com.gesher.server;
+
+import android.content.Intent;
+import android.media.AudioManager;
+import android.media.AudioSystem;
+import android.media.MediaMetadata;
+import android.media.Rating;
+import android.media.VolumeProvider;
+import android.media.session.IActiveSessionsListener;
+import android.media.session.IOnMediaKeyEventDispatchedListener;
+import android.media.session.IOnMediaKeyEventSessionChangedListener;
+import android.media.session.ISession;
+import android.media.session.ISessionCallback;
+import android.media.session.ISessionController;
+import android.media.session.ISessionControllerCallback;
+import android.media.session.MediaController;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
+import android.net.Uri;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.DeadObjectException;
+import android.os.IBinder;
+import android.os.RemoteCallbackList;
+import android.os.RemoteException;
+import android.os.ResultReceiver;
+import android.os.UserHandle;
+import android.view.KeyEvent;
+import java.lang.management.ManagementFactory;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/** Host contract and steady-state allocation tests for production MediaSessionService. */
+public final class MediaSessionHost {
+    private static int checks;
+
+    private static void check(boolean ok, String reason) {
+        if (!ok) throw new AssertionError(reason);
+        checks++;
+    }
+
+    private static class SessionCallbackStub implements ISessionCallback {
+        final Binder binder = new Binder();
+        final List<KeyEvent> mediaButtons = new ArrayList<>();
+        final List<Integer> volumeDirections = new ArrayList<>();
+        boolean deadRemote;
+
+        private void ensureAlive() throws RemoteException {
+            if (deadRemote || binder.isDead()) throw new DeadObjectException("remote session owner died");
+        }
+
+        @Override public IBinder asBinder() { return binder; }
+        @Override public void onMediaButtonFromController(String pkg, int pid, int uid, Intent intent)
+                throws RemoteException {
+            ensureAlive();
+            mediaButtons.add((KeyEvent) intent.getExtra(Intent.EXTRA_KEY_EVENT));
+        }
+        @Override public void onAdjustVolume(String pkg, int pid, int uid, int direction)
+                throws RemoteException {
+            ensureAlive();
+            volumeDirections.add(direction);
+        }
+        @Override public void onSetVolumeTo(String pkg, int pid, int uid, int value)
+                throws RemoteException { ensureAlive(); }
+        @Override public void onCommand(String pkg, int pid, int uid, String command, Bundle args,
+                ResultReceiver cb) throws RemoteException { ensureAlive(); }
+        @Override public void onPrepare(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onPrepareFromMediaId(String pkg, int pid, int uid, String id, Bundle extras)
+                throws RemoteException { ensureAlive(); }
+        @Override public void onPrepareFromSearch(String pkg, int pid, int uid, String q, Bundle extras)
+                throws RemoteException { ensureAlive(); }
+        @Override public void onPrepareFromUri(String pkg, int pid, int uid, Uri uri, Bundle extras)
+                throws RemoteException { ensureAlive(); }
+        @Override public void onPlay(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onPlayFromMediaId(String pkg, int pid, int uid, String id, Bundle extras)
+                throws RemoteException { ensureAlive(); }
+        @Override public void onPlayFromSearch(String pkg, int pid, int uid, String q, Bundle extras)
+                throws RemoteException { ensureAlive(); }
+        @Override public void onPlayFromUri(String pkg, int pid, int uid, Uri uri, Bundle extras)
+                throws RemoteException { ensureAlive(); }
+        @Override public void onSkipToTrack(String pkg, int pid, int uid, long id) throws RemoteException { ensureAlive(); }
+        @Override public void onPause(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onStop(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onNext(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onPrevious(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onFastForward(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onRewind(String pkg, int pid, int uid) throws RemoteException { ensureAlive(); }
+        @Override public void onSeekTo(String pkg, int pid, int uid, long pos) throws RemoteException { ensureAlive(); }
+        @Override public void onRate(String pkg, int pid, int uid, Rating rating) throws RemoteException { ensureAlive(); }
+        @Override public void onSetPlaybackSpeed(String pkg, int pid, int uid, float speed) throws RemoteException { ensureAlive(); }
+        @Override public void onCustomAction(String pkg, int pid, int uid, String action, Bundle args) throws RemoteException { ensureAlive(); }
+    }
+
+    private static final class ControllerObserver implements ISessionControllerCallback {
+        final Binder binder = new Binder();
+        int destroyedCount, metadataCount, playbackCount;
+        @Override public IBinder asBinder() { return binder; }
+        @Override public void onSessionDestroyed() { destroyedCount++; }
+        @Override public void onMetadataChanged(MediaMetadata metadata) { metadataCount++; }
+        @Override public void onPlaybackStateChanged(PlaybackState state) { playbackCount++; }
+        @Override public void onEvent(String event, Bundle extras) {}
+        @Override public void onQueueChanged(android.content.pm.ParceledListSlice queue) {}
+        @Override public void onQueueTitleChanged(CharSequence title) {}
+        @Override public void onExtrasChanged(Bundle extras) {}
+        @Override public void onVolumeInfoChanged(MediaController.PlaybackInfo info) {}
+    }
+
+    private static final class DispatchedRecorder implements IOnMediaKeyEventDispatchedListener {
+        final Binder binder = new Binder();
+        final List<String> packages = new ArrayList<>();
+        final List<MediaSession.Token> tokens = new ArrayList<>();
+        @Override public IBinder asBinder() { return binder; }
+        @Override public void onMediaKeyEventDispatched(KeyEvent event, String pkg,
+                MediaSession.Token token) {
+            packages.add(pkg);
+            tokens.add(token);
+        }
+    }
+
+    private static final class ActiveRecorder implements IActiveSessionsListener {
+        final Binder binder = new Binder();
+        int calls;
+        List<MediaSession.Token> latest = Collections.emptyList();
+        @Override public IBinder asBinder() { return binder; }
+        @Override public void onActiveSessionsChanged(List<MediaSession.Token> sessions) {
+            calls++;
+            latest = new ArrayList<>(sessions);
+        }
+    }
+
+    private static final class KeySessionRecorder implements IOnMediaKeyEventSessionChangedListener {
+        final Binder binder = new Binder();
+        int calls;
+        String latestPkg;
+        MediaSession.Token latestToken;
+        @Override public IBinder asBinder() { return binder; }
+        @Override public void onMediaKeyEventSessionChanged(String pkg, MediaSession.Token token) {
+            calls++;
+            latestPkg = pkg;
+            latestToken = token;
+        }
+    }
+
+    private static MediaSessionService.Session unwrapSession(ISession owner) throws Exception {
+        InvocationHandler handler = Proxy.getInvocationHandler(owner);
+        Field impl = StandIn.class.getDeclaredField("mImpl");
+        impl.setAccessible(true);
+        return (MediaSessionService.Session) impl.get(handler);
+    }
+
+    private static void testNullGuards() throws Exception {
+        AudioService audio = new AudioService();
+        MediaSessionService service = new MediaSessionService(audio);
+        // Null listener with no active session and with an active session must not NPE.
+        service.addOnMediaKeyEventSessionChangedListener(null, "com.example.caller");
+
+        SessionCallbackStub cb = new SessionCallbackStub();
+        ISession session = service.createSession("com.example.player", cb, "main", null, 0);
+        session.setActive(true);
+        service.addOnMediaKeyEventSessionChangedListener(null, "com.example.caller");
+
+        ISessionController controller = session.getController();
+        // Null callback on active session must not NPE.
+        controller.registerCallback("com.example.ui", null);
+
+        // Null callback on destroyed session must not NPE on ended -> cb.onSessionDestroyed().
+        session.destroySession();
+        controller.registerCallback("com.example.ui", null);
+        checks += 4;
+    }
+
+    private static void testDeadMediaKeyDispatchAndFailover() throws Exception {
+        AudioService audio = new AudioService();
+        MediaSessionService service = new MediaSessionService(audio);
+        DispatchedRecorder dispatched = new DispatchedRecorder();
+        ActiveRecorder activeListener = new ActiveRecorder();
+        KeySessionRecorder keySessionListener = new KeySessionRecorder();
+        service.addOnMediaKeyEventDispatchedListener(dispatched);
+        service.addSessionsListener(activeListener, null, UserHandle.USER_ALL);
+        service.addOnMediaKeyEventSessionChangedListener(keySessionListener, "com.example.sysui");
+
+        SessionCallbackStub liveCb = new SessionCallbackStub();
+        ISession liveSession = service.createSession("com.example.live", liveCb, "live", null, 0);
+        liveSession.setActive(true);
+        MediaSession.Token liveToken = service.getMediaKeyEventSession("com.example.sysui");
+
+        SessionCallbackStub deadTopCb = new SessionCallbackStub();
+        ISession deadTopSession = service.createSession("com.example.deadtop", deadTopCb, "top", null, 0);
+        ControllerObserver deadTopObserver = new ControllerObserver();
+        deadTopSession.getController().registerCallback("com.example.sysui", deadTopObserver);
+        deadTopSession.setActive(true);
+
+        check(service.getSessions(null, UserHandle.USER_ALL).size() == 2, "two active sessions before death");
+        check("com.example.deadtop".equals(service.getMediaKeyEventSessionPackageName("caller")),
+                "top session selected before death");
+
+        // Owner dies before async binderDied arrives; media key dispatch hits DeadObjectException.
+        deadTopCb.deadRemote = true;
+        KeyEvent play = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+        service.dispatchMediaKeyEvent("com.example.caller", false, play, false);
+
+        check(deadTopCb.mediaButtons.isEmpty(), "dead top session did not receive button");
+        check(deadTopObserver.destroyedCount == 1, "dead top session notified controller onSessionDestroyed");
+        check(deadTopCb.binder.deathRecipientCount() == 0, "dead top session unlinked death recipient");
+        check(liveCb.mediaButtons.size() == 1 && liveCb.mediaButtons.get(0) == play,
+                "dispatchMediaKeyEvent automatically failed over to live session underneath");
+        check(dispatched.packages.equals(Collections.singletonList("com.example.live"))
+                && dispatched.tokens.equals(Collections.singletonList(liveToken)),
+                "mKeyEvents fired only for live session, never for dead session");
+        check(service.getSessions(null, UserHandle.USER_ALL).equals(Collections.singletonList(liveToken)),
+                "dead top session removed from active sessions");
+        check("com.example.live".equals(keySessionListener.latestPkg)
+                && liveToken.equals(keySessionListener.latestToken),
+                "key-event session listener updated to surviving live session");
+
+        // Non-media key and null event on a live session return cleanly without retiring it.
+        service.dispatchMediaKeyEvent("com.example.caller", false,
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A), false);
+        service.dispatchMediaKeyEvent("com.example.caller", false, null, false);
+        check(service.getSessions(null, UserHandle.USER_ALL).size() == 1 && liveCb.mediaButtons.size() == 1,
+                "non-media/null key events leave live session intact");
+
+        // Dead targeted session on dispatchMediaKeyEventToSessionAsSystemService retires and returns false.
+        SessionCallbackStub targetedDeadCb = new SessionCallbackStub();
+        ISession targetedDead = service.createSession("com.example.targeted", targetedDeadCb, "targeted", null, 0);
+        targetedDead.setActive(true);
+        MediaSession.Token targetedToken = service.getMediaKeyEventSession("caller");
+        targetedDeadCb.deadRemote = true;
+        dispatched.packages.clear();
+        boolean delivered = service.dispatchMediaKeyEventToSessionAsSystemService(
+                "com.example.sysui", play, targetedToken);
+        check(!delivered, "dead targeted session returns false without throwing");
+        check(dispatched.packages.isEmpty(), "dead targeted session did not emit mKeyEvents");
+        check(service.getSessions(null, UserHandle.USER_ALL).equals(Collections.singletonList(liveToken)),
+                "dead targeted session retired from active sessions");
+
+        // Live targeted session returns true and emits mKeyEvents.
+        boolean liveDelivered = service.dispatchMediaKeyEventToSessionAsSystemService(
+                "com.example.sysui", play, liveToken);
+        check(liveDelivered && liveCb.mediaButtons.size() == 2 && dispatched.packages.size() == 1,
+                "live targeted session receives media key and emits mKeyEvents");
+    }
+
+    private static void testDeadRemoteVolumeFailoverAndAudioFallback() throws Exception {
+        AudioService audio = new AudioService();
+        MediaSessionService service = new MediaSessionService(audio);
+        KeyEvent volUp = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_VOLUME_UP);
+        KeyEvent volDown = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_VOLUME_DOWN);
+
+        // Case A: Dead remote-volume top session fails over to live remote-volume session underneath.
+        SessionCallbackStub liveRemoteCb = new SessionCallbackStub();
+        ISession liveRemote = service.createSession("com.example.liveremote", liveRemoteCb, "r1", null, 0);
+        liveRemote.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_RELATIVE, 20, "cast-1");
+        liveRemote.setActive(true);
+
+        SessionCallbackStub deadRemoteCb = new SessionCallbackStub();
+        ISession deadRemote = service.createSession("com.example.deadremote", deadRemoteCb, "r2", null, 0);
+        deadRemote.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_ABSOLUTE, 20, "cast-dead");
+        deadRemote.setActive(true);
+        deadRemoteCb.deadRemote = true;
+
+        audio.clear();
+        service.dispatchVolumeKeyEvent("com.example.caller", "com.example.caller", false,
+                volUp, AudioSystem.STREAM_RING, false);
+        check(deadRemoteCb.volumeDirections.isEmpty(), "dead remote session did not receive volume key");
+        check(liveRemoteCb.volumeDirections.equals(Collections.singletonList(AudioManager.ADJUST_RAISE)),
+                "dispatchVolumeKeyEvent retired dead top session and adjusted next live session");
+        check(audio.calls.isEmpty(), "live session handled volume without falling through to AudioService");
+        check(service.getSessions(null, UserHandle.USER_ALL).size() == 1,
+                "dead remote session removed from active sessions");
+
+        // Case B: When the remaining remote session also dies, dispatchVolumeKeyEvent falls back to AudioService.
+        liveRemoteCb.deadRemote = true;
+        audio.clear();
+        service.dispatchVolumeKeyEvent("com.example.caller", "com.example.caller", false,
+                volDown, AudioSystem.STREAM_ALARM, false);
+        check(service.getSessions(null, UserHandle.USER_ALL).isEmpty(),
+                "last dead remote session retired on volume key");
+        check(audio.calls.size() == 2
+                && ("adjustSuggested:" + AudioManager.ADJUST_LOWER + ":" + AudioSystem.STREAM_ALARM + ":0")
+                        .equals(audio.calls.get(0)),
+                "dispatchVolumeKeyEvent fell back to mAudio.adjustSuggestedStreamVolume with requested stream");
+
+        // Case C: dispatchAdjustVolume retires dead top session -> next live session -> AudioService fallback.
+        SessionCallbackStub liveAdjustCb = new SessionCallbackStub();
+        ISession liveAdjust = service.createSession("com.example.liveadj", liveAdjustCb, "a1", null, 0);
+        liveAdjust.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_RELATIVE, 10, "adj-live");
+        liveAdjust.setActive(true);
+
+        SessionCallbackStub deadAdjustCb = new SessionCallbackStub();
+        ISession deadAdjust = service.createSession("com.example.deadadj", deadAdjustCb, "a2", null, 0);
+        deadAdjust.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_RELATIVE, 10, "adj-dead");
+        deadAdjust.setActive(true);
+        deadAdjustCb.deadRemote = true;
+
+        audio.clear();
+        service.dispatchAdjustVolume("pkg", "opPkg", AudioSystem.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 4);
+        check(liveAdjustCb.volumeDirections.equals(Collections.singletonList(AudioManager.ADJUST_RAISE))
+                && audio.calls.isEmpty()
+                && service.getSessions(null, UserHandle.USER_ALL).size() == 1,
+                "dispatchAdjustVolume retired dead top session and dispatched to next live session");
+
+        liveAdjustCb.deadRemote = true;
+        audio.clear();
+        service.dispatchAdjustVolume("pkg", "opPkg", AudioSystem.STREAM_RING, AudioManager.ADJUST_LOWER, 7);
+        check(service.getSessions(null, UserHandle.USER_ALL).isEmpty()
+                && audio.calls.size() == 2
+                && ("adjustSuggested:" + AudioManager.ADJUST_LOWER + ":" + AudioSystem.STREAM_RING + ":7")
+                        .equals(audio.calls.get(0)),
+                "dispatchAdjustVolume fell back to mAudio.adjustSuggestedStreamVolume with stream and flags");
+
+        // Case D: dispatchVolumeKeyEventToSessionAsSystemService targeting a dead remote session
+        // retires that session and falls back to STREAM_MUSIC (not another session).
+        SessionCallbackStub bystanderCb = new SessionCallbackStub();
+        ISession bystander = service.createSession("com.example.bystander", bystanderCb, "b", null, 0);
+        bystander.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_RELATIVE, 10, "bystander");
+        bystander.setActive(true);
+
+        SessionCallbackStub targetedVolCb = new SessionCallbackStub();
+        ISession targetedVol = service.createSession("com.example.targetvol", targetedVolCb, "tv", null, 0);
+        targetedVol.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_RELATIVE, 10, "target");
+        targetedVol.setActive(true);
+        MediaSession.Token targetedToken = service.getMediaKeyEventSession("caller");
+        targetedVolCb.deadRemote = true;
+
+        audio.clear();
+        service.dispatchVolumeKeyEventToSessionAsSystemService("pkg", "opPkg", volUp, targetedToken);
+        check(bystanderCb.volumeDirections.isEmpty(), "targeted volume dispatch did not hit unrelated session");
+        check(service.getSessions(null, UserHandle.USER_ALL).size() == 1,
+                "dead targeted volume session retired");
+        check(audio.calls.size() == 2
+                && ("adjustSuggested:" + AudioManager.ADJUST_RAISE + ":" + AudioSystem.STREAM_MUSIC + ":0")
+                        .equals(audio.calls.get(0)),
+                "dead targeted volume dispatch fell back to STREAM_MUSIC with flags=0");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void testBroadcastFinallyBalance() throws Exception {
+        AudioService audio = new AudioService();
+        MediaSessionService service = new MediaSessionService(audio);
+        ActiveRecorder listener = new ActiveRecorder();
+        service.addSessionsListener(listener, null, UserHandle.USER_ALL);
+
+        Field listenersField = MediaSessionService.class.getDeclaredField("mListeners");
+        listenersField.setAccessible(true);
+        Object callbacksBox = listenersField.get(service);
+        Field listField = callbacksBox.getClass().getDeclaredField("mList");
+        listField.setAccessible(true);
+        RemoteCallbackList<IActiveSessionsListener> rcl =
+                (RemoteCallbackList<IActiveSessionsListener>) listField.get(callbacksBox);
+
+        SessionCallbackStub cb = new SessionCallbackStub();
+        ISession session = service.createSession("com.example.broadcast", cb, "b", null, 0);
+
+        rcl.failBroadcastItem = new IllegalStateException("simulated getBroadcastItem failure");
+        boolean threw = false;
+        try {
+            session.setActive(true);
+        } catch (IllegalStateException expected) {
+            threw = "simulated getBroadcastItem failure".equals(expected.getMessage());
+        }
+        check(threw, "injected getBroadcastItem runtime exception propagated");
+
+        // If finishBroadcast() was balanced in finally, the next broadcast succeeds cleanly.
+        session.setActive(false);
+        session.setActive(true);
+        check(listener.calls == 2 && listener.latest.size() == 1,
+                "finishBroadcast() remained balanced after getBroadcastItem exception");
+    }
+
+    private static void measureZeroListenerSteadyState(boolean gate) throws Exception {
+        AudioService audio = new AudioService();
+        MediaSessionService service = new MediaSessionService(audio);
+        SessionCallbackStub cb = new SessionCallbackStub();
+        ISession owner = service.createSession("com.example.steady", cb, "steady", null, 0);
+        MediaSessionService.Session session = unwrapSession(owner);
+        MediaMetadata metadata = new MediaMetadata();
+        PlaybackState state = new PlaybackState();
+
+        com.sun.management.ThreadMXBean bean =
+                (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+        if (!bean.isThreadAllocatedMemorySupported()) {
+            throw new AssertionError("Thread allocation accounting unsupported");
+        }
+        bean.setThreadAllocatedMemoryEnabled(true);
+
+        for (int i = 0; i < 500; i++) {
+            session.setMetadata(metadata, 180_000L, "track");
+            session.setPlaybackState(state);
+            session.setActive(true);
+        }
+
+        final int iterations = 2000;
+        long before = bean.getCurrentThreadAllocatedBytes();
+        long startNs = System.nanoTime();
+        for (int i = 0; i < iterations; i++) {
+            session.setMetadata(metadata, 180_000L, "track");
+            session.setPlaybackState(state);
+            session.setActive(true);
+        }
+        long elapsedNs = System.nanoTime() - startNs;
+        long allocated = bean.getCurrentThreadAllocatedBytes() - before;
+
+        System.out.println("MediaSession zero-listener steady state: iterations=" + iterations
+                + " allocated_bytes=" + allocated + " elapsed_ns=" + elapsedNs);
+        if (gate) {
+            check(allocated <= 4096,
+                    "Zero-listener setMetadata/setPlaybackState/setActive allocated " + allocated + " bytes");
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        boolean measureOnly = args.length > 0 && "--measure-only".equals(args[0]);
+        if (measureOnly) {
+            measureZeroListenerSteadyState(false);
+            return;
+        }
+        testNullGuards();
+        testDeadMediaKeyDispatchAndFailover();
+        testDeadRemoteVolumeFailoverAndAudioFallback();
+        testBroadcastFinallyBalance();
+        measureZeroListenerSteadyState(true);
+        System.out.println("MediaSessionHost all passed: " + checks + " checks");
+        System.out.flush();
+    }
+}
