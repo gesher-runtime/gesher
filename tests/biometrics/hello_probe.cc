@@ -6,8 +6,8 @@
 //   hello_probe availability           CheckAvailabilityAsync only; shows no UI
 //   hello_probe verify                 a window of this process asks for verification
 //   hello_probe cancel                 the same, canceled by the "app" after 3 s
-//   hello_probe host                   shows a window for 30 s and prints its pid: the
-//                                      "app" of the two modes below
+//   hello_probe host [seconds]         shows a window (30 s by default) and prints its
+//                                      pid: the "app" of the two modes below
 //   hello_probe foreign-verify <pid>   this process (the "system server") asks for
 //   hello_probe foreign-cancel <pid>   verification owned by the foreground window of
 //                                      process <pid>: the cross-process owner Gesher uses
@@ -68,7 +68,8 @@ int main(int argc, char** argv) {
     printf("host pid=%lu foreground=%s\n", (unsigned long)GetCurrentProcessId(),
            GetForegroundWindow() == w ? "yes" : "no");
     fflush(stdout);
-    for (DWORD end = GetTickCount() + 30000; GetTickCount() < end;) {
+    DWORD seconds = argc > 2 ? strtoul(argv[2], nullptr, 10) : 30;
+    for (DWORD end = GetTickCount() + seconds * 1000; GetTickCount() < end;) {
       Pump();
       Sleep(20);
     }
