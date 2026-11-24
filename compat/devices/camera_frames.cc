@@ -850,9 +850,9 @@ void LegacyCamera_release(JNIEnv* env, jobject thiz) {
   LegacyVoid(env, "release", "(" LEGACY_CAMERA ")V", thiz);
 }
 
-// unlock, lock, reconnect, cancelAutoFocus, stopSmoothZoom, stopFaceDetection,
-// setDisplayOrientation, enableFocusMoveCallback, setPreviewCallbackSurface: nothing to
-// do for an open camera (one process, fixed focus, frames are not rotated).
+// unlock, lock, reconnect, stopSmoothZoom, stopFaceDetection, setDisplayOrientation,
+// enableFocusMoveCallback, setPreviewCallbackSurface: nothing to do for an open camera
+// (one process, no focus-move callbacks, frames are not rotated).
 void LegacyCamera_check(JNIEnv* env, jobject thiz) {
   LegacyVoid(env, "check", "(" LEGACY_CAMERA ")V", thiz);
 }
@@ -896,6 +896,10 @@ void LegacyCamera_addCallbackBuffer(JNIEnv* env, jobject thiz, jbyteArray buffer
 
 void LegacyCamera_autoFocus(JNIEnv* env, jobject thiz) {
   LegacyVoid(env, "autoFocus", "(" LEGACY_CAMERA ")V", thiz);
+}
+
+void LegacyCamera_cancelAutoFocus(JNIEnv* env, jobject thiz) {
+  LegacyVoid(env, "cancelAutoFocus", "(" LEGACY_CAMERA ")V", thiz);
 }
 
 void LegacyCamera_takePicture(JNIEnv* env, jobject thiz, jint msgType) {
@@ -959,7 +963,7 @@ const JNINativeMethod gLegacyCameraMethods[] = {
     {"setPreviewCallbackSurface", "(Landroid/view/Surface;)V",
      GESHER_JNI(LegacyCamera_checkObject)},
     {"native_autoFocus", "()V", GESHER_JNI(LegacyCamera_autoFocus)},
-    {"native_cancelAutoFocus", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"native_cancelAutoFocus", "()V", GESHER_JNI(LegacyCamera_cancelAutoFocus)},
     {"enableFocusMoveCallback", "(I)V", GESHER_JNI(LegacyCamera_checkInt)},
     {"native_takePicture", "(I)V", GESHER_JNI(LegacyCamera_takePicture)},
     {"startSmoothZoom", "(I)V", GESHER_JNI(LegacyCamera_startSmoothZoom)},

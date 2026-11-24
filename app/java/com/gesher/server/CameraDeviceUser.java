@@ -172,6 +172,11 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private WindowsCamera.Capture mCapture;
     /** The size {@link #mCapture} was opened for (the largest stream's then). */
     private Size mCaptureFor;
+    /**
+     * The AF state machine over {@link #mCapture}'s focus control, for a camera with real
+     * autofocus (null for a fixed-focus one); the capture thread's alone.
+     */
+    private CameraAutoFocus mAutoFocus;
 
     CameraDeviceUser(CameraService service, String cameraId, WindowsCamera.Device device,
             ICameraDeviceCallbacks callbacks) {
@@ -673,7 +678,23 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     }
                     if (f.callbacks.terminal()) continue;
                     if (timing != null) timing.advance(CaptureTiming.METADATA);
-                    CameraMetadataNative result = result(f.request.settings, timestamp);
+                    int afState = CameraMetadata.CONTROL_AF_STATE_INACTIVE;
+                    boolean lensMoving = false;
+                    if (mAutoFocus != null) {
+                        Integer afMode = f.request.settings.get(CaptureRequest.CONTROL_AF_MODE);
+                        Integer trigger = f.request.settings.get(
+                                CaptureRequest.CONTROL_AF_TRIGGER);
+                        afState = mAutoFocus.frame(
+                                afMode != null ? afMode : CameraMetadata.CONTROL_AF_MODE_OFF,
+                                trigger != null ? trigger
+                                        : CameraMetadata.CONTROL_AF_TRIGGER_IDLE,
+                                SystemClock.uptimeMillis(),
+                                CameraAutoFocus.sharpness(nv12, mCapture.width,
+                                        mCapture.height));
+                        lensMoving = mAutoFocus.lensMoving();
+                    }
+                    CameraMetadataNative result = result(f.request.settings, timestamp, afState,
+                            lensMoving);
                     if (timing != null) timing.advance(CaptureTiming.RESULT);
                     f.callbacks.onResultReceived(CameraMetadataInfo.metadata(result), extras,
                             new PhysicalCaptureResultInfo[0]);
@@ -737,6 +758,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             WindowsCamera.Capture old = mCapture;
             mCapture = null;
             mCaptureFor = null;
+            mAutoFocus = null;
             old.close();
         }
         try {
@@ -753,6 +775,9 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 size.getHeight());
         mCapture = capture;
         mCaptureFor = size;
+        // A new source starts the AF state machine again (mode applied on the next frame).
+        mAutoFocus = mDevice.autofocus
+                ? new CameraAutoFocus(CameraAutoFocus.lensOf(capture, mCameraId)) : null;
         CameraService.log("camera " + mCameraId + " (" + mDevice.name + ") capturing at "
                 + capture.width + "x" + capture.height + " (opened in "
                 + (SystemClock.elapsedRealtime() - start) + " ms)");
@@ -792,18 +817,25 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 false, 0);
     }
 
-    /** The result of a frame: the request's settings and what the camera did. */
+    /** The result of a frame of a fixed-focus camera (AF INACTIVE, the lens stationary). */
     static CameraMetadataNative result(CameraMetadataNative settings, long timestamp) {
+        return result(settings, timestamp, CameraMetadata.CONTROL_AF_STATE_INACTIVE, false);
+    }
+
+    /** The result of a frame: the request's settings and what the camera did. */
+    static CameraMetadataNative result(CameraMetadataNative settings, long timestamp,
+            int afState, boolean lensMoving) {
         CameraMetadataNative m = new CameraMetadataNative(settings);
         m.set(CaptureResult.SENSOR_TIMESTAMP, timestamp);
         m.set(CaptureResult.SENSOR_EXPOSURE_TIME, CameraService.FRAME_DURATION_NS);
         m.set(CaptureResult.SENSOR_FRAME_DURATION, CameraService.FRAME_DURATION_NS);
         m.set(CaptureResult.REQUEST_PIPELINE_DEPTH, (byte) 1);
         m.set(CaptureResult.CONTROL_AE_STATE, CameraMetadata.CONTROL_AE_STATE_CONVERGED);
-        m.set(CaptureResult.CONTROL_AF_STATE, CameraMetadata.CONTROL_AF_STATE_INACTIVE);
+        m.set(CaptureResult.CONTROL_AF_STATE, afState);
         m.set(CaptureResult.CONTROL_AWB_STATE, CameraMetadata.CONTROL_AWB_STATE_CONVERGED);
         m.set(CaptureResult.FLASH_STATE, CameraMetadata.FLASH_STATE_UNAVAILABLE);
-        m.set(CaptureResult.LENS_STATE, CameraMetadata.LENS_STATE_STATIONARY);
+        m.set(CaptureResult.LENS_STATE, lensMoving ? CameraMetadata.LENS_STATE_MOVING
+                : CameraMetadata.LENS_STATE_STATIONARY);
         return m;
     }
 }

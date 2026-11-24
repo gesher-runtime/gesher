@@ -98,7 +98,9 @@ const JNINativeMethod gWindowsLocationMethods[] = {
 
 namespace cam = gesher::devices::camera;
 
-// One string per device: "id\tname\tWxH,WxH,...".
+// One string per device: "id\tname\tWxH,WxH,...\tflags", flags a comma-separated
+// list of what the device really has: "af" when its focus runs automatically and
+// can be locked (camera_mf.h's Device::autofocus), else empty.
 jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
   const std::vector<cam::Device>& devices = cam::List(nullptr);
   jclass string = env->FindClass("java/lang/String");
@@ -110,6 +112,8 @@ jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
       if (k > 0) line += ",";
       line += std::to_string(d.sizes[k].first) + "x" + std::to_string(d.sizes[k].second);
     }
+    line += "\t";
+    if (d.autofocus) line += "af";
     ScopedLocalRef<jstring> s(env, env->NewStringUTF(line.c_str()));
     env->SetObjectArrayElement(result, static_cast<jsize>(i), s.get());
   }
@@ -168,6 +172,20 @@ jint WindowsCamera_read(JNIEnv* env, jclass, jlong handle, jbyteArray frame) {
   return static_cast<jint>(hr);
 }
 
+// Focus control (camera_mf.h's FocusOp): 0 or the failure's HRESULT; out[0..1] = the
+// lens position and the driver's flags afterwards.
+jint WindowsCamera_focus(JNIEnv* env, jclass, jlong handle, jint op, jintArray out) {
+  auto* capture = reinterpret_cast<cam::Capture*>(handle);
+  if (capture == nullptr) return E_INVALIDARG;
+  long value = 0, flags = 0;
+  HRESULT hr = capture->Focus(op, &value, &flags);
+  if (out != nullptr && env->GetArrayLength(out) >= 2) {
+    jint values[2] = {static_cast<jint>(value), static_cast<jint>(flags)};
+    env->SetIntArrayRegion(out, 0, 2, values);
+  }
+  return static_cast<jint>(hr);
+}
+
 void WindowsCamera_close(JNIEnv*, jclass, jlong handle) {
   delete reinterpret_cast<cam::Capture*>(handle);
   LogCameraDeliveryTrace();
@@ -178,6 +196,7 @@ const JNINativeMethod gWindowsCameraMethods[] = {
     {"nativeStatus", "()Ljava/lang/String;", GESHER_JNI(WindowsCamera_status)},
     {"nativeOpen", "(Ljava/lang/String;II[I)J", GESHER_JNI(WindowsCamera_open)},
     {"nativeRead", "(J[B)I", GESHER_JNI(WindowsCamera_read)},
+    {"nativeFocus", "(JI[I)I", GESHER_JNI(WindowsCamera_focus)},
     {"nativeClose", "(J)V", GESHER_JNI(WindowsCamera_close)},
 };
 
