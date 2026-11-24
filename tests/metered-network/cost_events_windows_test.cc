@@ -9,7 +9,7 @@
 //
 //   cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00
 //      compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc
-//      /Fe:cost-events-test.exe ole32.lib
+//      /Fe:cost-events-test.exe ole32.lib uuid.lib
 #include "../../compat/net/cost_events_win.h"
 
 #include <objbase.h>

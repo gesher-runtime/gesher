@@ -209,8 +209,21 @@ List Manager whether it reaches the internet, is metered (fixed or variable
 cost), roaming or congested. The active network is the one Windows routes
 8.8.8.8 (or 2001:4860:4860::8888) through, a VPN's when one is up.
 `NotifyIpInterfaceChange`, `NotifyUnicastIpAddressChange` and
-`NotifyRouteChange2` wake its watcher (and every 15 s it looks again, for the
-Network List Manager's verdicts); each new snapshot goes to its listeners. Its
+`NotifyRouteChange2` wake its watcher, and so does the Network List Manager's
+`INetworkConnectionCostEvents` (`compat/net/cost_events_win.cc`: a connection's
+cost or data plan changed, which moves no interface, address or route, e.g. the
+"Metered connection" setting of a network that stays connected). Every 15 s it
+also looks again (the fallback where the Network List Manager has no cost event
+connection point). Each new snapshot goes to its listeners; a callback then hears
+`onCapabilitiesChanged` for NET_CAPABILITY_NOT_METERED, and a polling
+`isActiveNetworkMetered` sees the new cost (the watcher owns the shared snapshot while
+there are listeners).
+
+`getRestrictBackgroundStatus` is RESTRICT_BACKGROUND_STATUS_DISABLED, as on a device
+without Data Saver: Android's ENABLED means the app is blocked from background data on
+metered networks, which Gesher does not do, so Windows' "Background data" limit
+(`ConnectionCost.BackgroundDataUsageRestricted`) is not reported as it. It should be
+reported only together with that enforcement. Its
 binder interface is `com.gesher.net.IConnectivity` (written as AIDL would
 generate it).
 
@@ -241,16 +254,6 @@ FOREGROUND, NOT_VCN_MANAGED; NOT_VPN unless a VPN; INTERNET with a gateway
 (or the internet route, or a VPN); VALIDATED when the Network List Manager
 reaches the internet through it; NOT_METERED, NOT_ROAMING, NOT_CONGESTED from
 its cost; bandwidths from the link speeds; a VPN's underlying networks.
-
-**Restrict background.** `getRestrictBackgroundStatus` is
-RESTRICT_BACKGROUND_STATUS_ENABLED while Windows restricts background data on the
-internet connection (its data limit setting "Background data";
-`ConnectionCost.BackgroundDataUsageRestricted`, the snapshot's `background` line,
-`compat/net/background_data_win.cc`), DISABLED otherwise or when Windows cannot say;
-never WHITELISTED (no per-app allowance exists). It needs ACCESS_NETWORK_STATE, as
-ConnectivityService.getRestrictBackgroundStatusByCaller. Gesher does not itself block a
-background app's sockets (Windows' setting is advice to apps, as Android's status is to
-an app that reads it), and ACTION_RESTRICT_BACKGROUND_CHANGED is not sent yet.
 
 **Permissions.** `ConnectivityService` refuses callers whose package does not
 request ACCESS_NETWORK_STATE (SecurityException, as ConnectivityService).

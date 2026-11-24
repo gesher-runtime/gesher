@@ -400,16 +400,8 @@ public class ConnectivityManager {
         return n != null && !n.metered ? MULTIPATH_PREFERENCE_UNMETERED : 0;
     }
 
-    /**
-     * Windows' background-data restriction on the internet connection (Settings, Network,
-     * data usage: "Background data"; ConnectionCost.BackgroundDataUsageRestricted) is the
-     * device's restriction: ENABLED while Windows restricts it (Gesher has no per-app
-     * "unrestricted data" allowance, so no app is WHITELISTED), DISABLED otherwise or when
-     * Windows cannot say.
-     */
     public int getRestrictBackgroundStatus() {
-        // ACCESS_NETWORK_STATE, as ConnectivityService.getRestrictBackgroundStatusByCaller.
-        return snapshot().restrictBackgroundStatus();
+        return RESTRICT_BACKGROUND_STATUS_DISABLED;
     }
 
     @Deprecated
