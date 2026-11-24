@@ -81,7 +81,8 @@ public final class Zygote {
             String display, String[] capabilities, long pin, int uid);
     private static native int nativeRunPinnedCohost(String command, String container,
             String display, String[] capabilities, long pin, int uid,
-            CohostPermissionHost permissions, String credential, String device, int[] streams,
+            CohostPermissionHost permissions, String credential, String device,
+            String[] external, int[] streams,
             String buildProp, String frameworkRes);
     static native boolean nativeCohostPermissionLive(long lease);
     static native boolean nativeCohostMatchesProcess(long lease, long pid, long birth);
@@ -145,10 +146,10 @@ public final class Zygote {
 
         int runCohost(String command, String container, String display, String[] capabilities,
                 int uid, CohostPermissionHost permissions, String credential, String device,
-                int[] streams, String buildProp, String frameworkRes) {
+                String[] external, int[] streams, String buildProp, String frameworkRes) {
             if (!isOpen()) throw new IllegalStateException("Standalone code lease is closed");
             return nativeRunPinnedCohost(command, container, display, capabilities, pin, uid,
-                    permissions, credential, device, streams, buildProp, frameworkRes);
+                    permissions, credential, device, external, streams, buildProp, frameworkRes);
         }
 
         @Override public void close() {

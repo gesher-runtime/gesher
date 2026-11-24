@@ -8,6 +8,7 @@ import android.Manifest;
 import android.app.AppOpsManager;
 import android.content.pm.PackageManager;
 
+import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -58,6 +59,9 @@ final class CohostPermissionHost implements AutoCloseable {
         // The layout journal belongs to the host. Only the two actual data
         // trees take part in the private storage broker.
         code.prepareDataDirectories();
+        String[] external = AppDataStorage.prepareExternalDirectories(new File(Device.dataDir()),
+                code.packageName).stream().map(path -> Zygote.windowsPath(path.toString()))
+                .toArray(String[]::new);
         AppSandbox.prepareStandaloneRuntime();
         String profile = "Gesher.Cohost." + UUID.randomUUID();
         if (Zygote.nativeEnsureAppContainer(profile, code.packageName) != 0) {
@@ -100,7 +104,7 @@ final class CohostPermissionHost implements AutoCloseable {
             return input().runCohost(command, profile, code.packageName,
                     capabilities.toArray(String[]::new), code.uid(), this,
                     Zygote.windowsPath(code.credentialProtectedDataDir()),
-                    Zygote.windowsPath(code.deviceProtectedDataDir()), streams, buildProp, frameworkRes);
+                    Zygote.windowsPath(code.deviceProtectedDataDir()), external, streams, buildProp, frameworkRes);
         } finally {
             Zygote.nativeDeleteAppContainer(profile);
         }

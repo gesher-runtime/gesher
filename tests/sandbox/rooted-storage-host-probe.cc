@@ -119,6 +119,22 @@ int Guest(const wchar_t* name, const wchar_t* host_path, const wchar_t* volume_t
   file.reset();
   if (!CheckCapacity(name, _wcstoui64(volume_total, nullptr, 10))) return 1;
 
+  request.source_area = wire::kFirstExternalArea;
+  connection = Connect(name);
+  if (!Check(connection && Request(connection.get(), request, L"proof", &reply) && reply.status == 0 &&
+             reply.handle != 0 && CompleteOpen(connection.get()), "admitted external root supplies a real handle")) return 1;
+  connection.reset();
+  file.reset(gesher::binder_bootstrap::DecodeHandle(reply.handle));
+  if (!Check(WriteFile(file.get(), "external", 8, &count, nullptr) && count == 8,
+             "external proof writes through the bound scope")) return 1;
+  file.reset();
+  connection = Connect(name);
+  request.source_area = wire::kFirstExternalArea + 1;
+  if (!Check(connection && Request(connection.get(), request, L"proof", &reply) &&
+             reply.status != 0 && reply.handle == 0, "unadmitted external root cannot supply a handle")) return 1;
+  connection.reset();
+  request.source_area = wire::kCredential;
+
   connection = Connect(name);
   if (!Check(connection && Request(connection.get(), request, L"../outside", &reply) &&
              reply.status == EINVAL && reply.handle == 0,
@@ -189,7 +205,7 @@ OwnedHandle Pin(const fs::path& path) {
 }
 
 bool Host(const fs::path& dir, const fs::path& executable, const std::wstring& profile) {
-  for (const auto* area : {L"ce", L"de"}) fs::create_directories(dir / area);
+  for (const auto* area : {L"ce", L"de", L"external"}) fs::create_directories(dir / area);
   std::ofstream(dir / L"ce/seed", std::ios::binary) << "original";
   fs::copy_file(executable, dir / executable.filename());
   fs::path fixture = dir / executable.filename();
@@ -199,8 +215,9 @@ bool Host(const fs::path& dir, const fs::path& executable, const std::wstring& p
     return false;
   }
   OwnedHandle root_ce = Pin(dir / L"ce"), root_de = Pin(dir / L"de");
-  if (!root_ce || !root_de) return false;
-  storage::Server server({root_ce.get(), root_de.get()});
+  OwnedHandle root_external = Pin(dir / L"external");
+  if (!root_ce || !root_de || !root_external) return false;
+  storage::Server server({root_ce.get(), root_de.get(), {root_external.get()}});
   struct statvfs legacy{};
   if (statvfs("/data", &legacy) != 0) return false;
   const auto arguments = L" \"" + server.name() + L"\" \"" + (dir / L"ce/seed").wstring() + L"\" " +
@@ -217,7 +234,10 @@ bool Host(const fs::path& dir, const fs::path& executable, const std::wstring& p
   if (!denied && outside.process) TerminateProcess(outside.process.get(), 1);
   std::ifstream actual(dir / L"ce/proof", std::ios::binary);
   std::string bytes{std::istreambuf_iterator<char>(actual), std::istreambuf_iterator<char>()};
-  return Check(denied && guest_ok && bytes == "owned" && !fs::exists(dir / L"ce/unauthorized") &&
+  std::ifstream external(dir / L"external/proof", std::ios::binary);
+  std::string external_bytes{std::istreambuf_iterator<char>(external), std::istreambuf_iterator<char>()};
+  return Check(denied && guest_ok && bytes == "owned" && external_bytes == "external" &&
+               !fs::exists(dir / L"ce/unauthorized") &&
                !fs::exists(dir / L"de/proof"), "production rooted host serves only exact scope and selected area");
 }
 }  // namespace
