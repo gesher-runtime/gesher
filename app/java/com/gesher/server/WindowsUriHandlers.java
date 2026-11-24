@@ -34,6 +34,8 @@ import java.util.function.Predicate;
  * DIAL of tel), a mail composer (VIEW and SENDTO of mailto) and a maps viewer (VIEW of geo).
  * Nothing of an app runs in this package: ActivityTaskManagerService hands
  * {@link #windowsUri(Intent)} to Windows' handler (WindowsHost.openUrl, ShellExecuteExW).
+ * ACTION_DIAL first shows Gesher's cancellable number confirmation; Windows' handler
+ * may place the call as soon as it receives tel:, so its own confirmation is not assumed.
  *
  * <p>Not handled: ACTION_CALL (it places a call without the user's confirmation, which a
  * Windows handler does not promise), ACTION_DIAL without a number, mms/mmsto, and
@@ -250,6 +252,28 @@ public final class WindowsUriHandlers {
         ri.nonLocalizedLabel = handler.label;
         result.add(ri);
         return result;
+    }
+
+    /**
+     * Whether the activity selected for this intent can handle the intent Windows will
+     * receive. A selector chooses the activity; it does not replace the outer intent's
+     * action, data or extras. Require both to name the same handler before delegation.
+     */
+    public boolean canDelegate(Intent intent, String resolvedType, long flags) {
+        if (intent == null) return false;
+        Intent target = intent.getComponent() == null && intent.getSelector() != null
+                ? intent.getSelector() : intent;
+        List<ResolveInfo> matches = queryIntentActivities(target, resolvedType, flags);
+        if (matches.isEmpty()) return false;
+        if (target == intent) return true;
+
+        ActivityInfo selected = matches.get(0).activityInfo;
+        Intent launch = new Intent(intent);
+        launch.setSelector(null);
+        launch.setComponent(new ComponentName(selected.packageName, selected.name));
+        // resolvedType describes resolution through the selector. The launched payload
+        // has its own type, just as it has its own action and data.
+        return !queryIntentActivities(launch, intent.getType(), flags).isEmpty();
     }
 
     /**
