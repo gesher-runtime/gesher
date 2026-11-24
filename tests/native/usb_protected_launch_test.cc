@@ -108,7 +108,12 @@ std::vector<BYTE> RuntimeSid() {
   SID_NAME_USE use{};
   Require(LookupAccountNameW(nullptr, storage::kRuntimeIdentityAccount, result.data(), &bytes,
       domain, &domain_bytes, &use), "lookup-runtime-sid");
-  result.resize(bytes);
+  Require(IsValidSid(result.data()), "validate-runtime-sid", ERROR_INVALID_SID);
+  // cbSid is an input capacity; its documented output is the required length
+  // on an insufficient buffer. Serialize the validated SID, not spare capacity.
+  const DWORD length = GetLengthSid(result.data());
+  Require(length >= 8 && length <= result.size(), "runtime-sid-length", ERROR_INVALID_SID);
+  result.resize(length);
   return result;
 }
 std::wstring SidText(PSID sid) {
@@ -278,6 +283,26 @@ Evidence RunSystem() {
     DWORD profile_size = static_cast<DWORD>(std::size(profile_buffer));
     Require(GetUserProfileDirectoryW(identity->token(), profile_buffer, &profile_size), "independent-private-profile-path");
     const std::wstring profile_path(profile_buffer);
+    const std::wstring package_sid = SidText(package.value);
+    PWSTR container_path = nullptr;
+    Require(ImpersonateLoggedOnUser(identity->token()), "impersonate-container-folder");
+    const HRESULT folder_status = GetAppContainerFolderPath(package_sid.c_str(), &container_path);
+    DWORD folder_error = folder_status == S_OK ? ERROR_SUCCESS : HRESULT_CODE(folder_status);
+    DWORD folder_attributes = INVALID_FILE_ATTRIBUTES;
+    if (folder_status == S_OK && container_path) {
+      folder_attributes = GetFileAttributesW(container_path);
+      if (folder_attributes == INVALID_FILE_ATTRIBUTES) folder_error = GetLastError();
+    }
+    if (!RevertToSelf()) std::abort();
+    const auto free_folder = [](wchar_t* path) { CoTaskMemFree(path); };
+    const std::unique_ptr<wchar_t, decltype(free_folder)> own_folder(container_path, free_folder);
+    Require(folder_status == S_OK && container_path && folder_attributes != INVALID_FILE_ATTRIBUTES &&
+        (folder_attributes & FILE_ATTRIBUTE_DIRECTORY), "private-appcontainer-folder", folder_error ? folder_error : ERROR_INVALID_DATA);
+    const std::wstring_view folder(container_path);
+    Require(folder.size() > profile_path.size() && folder[profile_path.size()] == L'\\' &&
+        CompareStringOrdinal(folder.data(), static_cast<int>(profile_path.size()), profile_path.data(),
+            static_cast<int>(profile_path.size()), TRUE) == CSTR_EQUAL,
+        "appcontainer-folder-matches-private-profile", ERROR_ACCESS_DENIED);
     bool matched_profile = false;
     for (const auto& value : values) {
       if (value == L"USERPROFILE=" + profile_path) matched_profile = true;
@@ -292,6 +317,13 @@ Evidence RunSystem() {
     const std::wstring arguments = L"--guest " + Quote(profile_path);
     const storage::AuthorityLaunchSpec spec{config.image.c_str(), config.directory.c_str(), arguments,
         environment, {package.value, caps, 1, 0}, identity->sid(), config.session, &cleanup.profile_error, service_job.get()};
+    std::wstring shadowed_environment = environment;
+    shadowed_environment.pop_back();
+    shadowed_environment.append(L"systemroot=C:\\untrusted").append(2, L'\0');
+    storage::AuthorityLaunchSpec shadowed = spec;
+    shadowed.environment = shadowed_environment;
+    Require(storage::AuthorityLaunch::Create(identity->token(), shadowed, &child) == ERROR_INVALID_PARAMETER && !child,
+        "deny-case-insensitive-environment-shadow", ERROR_INVALID_DATA);
     const DWORD created = storage::AuthorityLaunch::Create(identity->token(), spec, &child, &stage);
     Check(created, stage);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
@@ -545,14 +577,19 @@ DWORD Controller() {
   }
   if (own_directory && worker_stopped && job_empty) {
     const DWORD removed = storage::UninstallRuntimeIdentityService(image);
-    if (removed != ERROR_SUCCESS && removed != ERROR_SERVICE_DOES_NOT_EXIST && cleanup_error == ERROR_SUCCESS) cleanup_error = removed;
-    const DWORD profile = DeleteOwnedProfile(directory);
-    if (profile != ERROR_SUCCESS && cleanup_error == ERROR_SUCCESS) cleanup_error = profile;
-    DeleteFileW((directory + L"\\private-data\\guest.bin").c_str());
-    RemoveDirectoryW((directory + L"\\private-data").c_str());
-    DeleteFileW((directory + L"\\result.bin").c_str());
-    if (!DeleteFileW(image.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
-    if (!RemoveDirectoryW(directory.c_str()) && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
+    if (removed != ERROR_SUCCESS && removed != ERROR_SERVICE_DOES_NOT_EXIST) {
+      if (cleanup_error == ERROR_SUCCESS) cleanup_error = removed;
+    } else {
+      // The holder is a separate SCM process outside the desktop job. Keep
+      // the owned profile marker and files if its removal is unconfirmed.
+      const DWORD profile = DeleteOwnedProfile(directory);
+      if (profile != ERROR_SUCCESS && cleanup_error == ERROR_SUCCESS) cleanup_error = profile;
+      DeleteFileW((directory + L"\\private-data\\guest.bin").c_str());
+      RemoveDirectoryW((directory + L"\\private-data").c_str());
+      DeleteFileW((directory + L"\\result.bin").c_str());
+      if (!DeleteFileW(image.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
+      if (!RemoveDirectoryW(directory.c_str()) && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
+    }
   }
   if (cleanup_error != ERROR_SUCCESS) std::fprintf(stderr, "Protected launch: controller-cleanup=%lu\n", static_cast<unsigned long>(cleanup_error));
   if (result == ERROR_SUCCESS) result = cleanup_error;

@@ -8,7 +8,9 @@
 #include <aclapi.h>
 #include <sddl.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <string>
@@ -104,6 +106,46 @@ bool CompleteEnvironment(std::span<const wchar_t> environment) {
     }
   }
   return false;
+}
+
+DWORD SortedEnvironment(std::span<const wchar_t> input, std::vector<wchar_t>* output) {
+  if (!CompleteEnvironment(input)) return ERROR_INVALID_PARAMETER;
+  struct Entry { std::wstring_view name, value; };
+  std::vector<Entry> entries;
+  for (size_t start = 0; start < input.size() && input[start] != L'\0';) {
+    const std::wstring_view remaining(input.data() + start, input.size() - start);
+    const size_t end = remaining.find(L'\0');
+    if (end == std::wstring_view::npos) return ERROR_INVALID_PARAMETER;
+    const auto entry = remaining.substr(0, end);
+    const size_t equal = entry.find(L'=');
+    if (equal == 0 || equal == std::wstring_view::npos) return ERROR_INVALID_PARAMETER;
+    entries.push_back({entry.substr(0, equal), entry});
+    start += entry.size() + 1;
+  }
+  const auto compare = [](std::wstring_view left, std::wstring_view right) {
+    const int order = CompareStringOrdinal(left.data(), static_cast<int>(left.size()),
+        right.data(), static_cast<int>(right.size()), TRUE);
+    if (!order) throw GetLastError();
+    return order;
+  };
+  try {
+    // Win32 requires case-insensitive Unicode name order, independent of the
+    // current locale. Duplicate names must not shadow a trusted setting.
+    std::sort(entries.begin(), entries.end(), [&](const Entry& left, const Entry& right) {
+      return compare(left.name, right.name) == CSTR_LESS_THAN;
+    });
+    for (size_t i = 1; i < entries.size(); ++i) {
+      if (compare(entries[i - 1].name, entries[i].name) == CSTR_EQUAL) return ERROR_INVALID_PARAMETER;
+    }
+  } catch (DWORD status) { return status ? status : ERROR_GEN_FAILURE; }
+  output->reserve(input.size());
+  for (const auto& entry : entries) {
+    output->insert(output->end(), entry.value.begin(), entry.value.end());
+    output->push_back(L'\0');
+  }
+  if (entries.empty()) output->push_back(L'\0');
+  output->push_back(L'\0');
+  return ERROR_SUCCESS;
 }
 
 bool ValidSpec(const AuthorityLaunchSpec& spec) {
@@ -315,12 +357,29 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   std::wstring command = std::wstring(L"\"") + spec.executable + L"\"";
   if (!spec.arguments.empty()) command.append(L" ").append(spec.arguments);
   if (command.size() >= 32767) return ERROR_INVALID_PARAMETER;
-  std::vector<wchar_t> environment(spec.environment.begin(), spec.environment.end());
+  std::vector<wchar_t> environment;
+  stage("launch.environment-order");
+  status = SortedEnvironment(spec.environment, &environment);
+  if (status != ERROR_SUCCESS) return status;
+  // AppContainer profiles are per-user. Resolve their resources in the exact
+  // validated target identity, then restore the authority before inspecting
+  // or handing off the still-suspended child. No caller context is inherited.
+  stage("launch.impersonate-target");
+  if (!ImpersonateLoggedOnUser(restricted)) return GetLastError();
   stage("launch.create-process-as-user");
-  if (!CreateProcessAsUserW(restricted, spec.executable, command.data(), &private_objects,
+  const BOOL created = CreateProcessAsUserW(restricted, spec.executable, command.data(), &private_objects,
           &private_objects, FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
           CREATE_SUSPENDED | CREATE_NO_WINDOW, environment.data(), spec.directory,
-          &startup.StartupInfo, &launch->guest_)) return GetLastError();
+          &startup.StartupInfo, &launch->guest_);
+  const DWORD creation_status = created ? ERROR_SUCCESS : GetLastError();
+  if (!RevertToSelf()) {
+    stage("launch.restore-authority-context");
+    // Continuing an authority worker under the guest identity is forbidden.
+    // Stop any created suspended child before terminating the authority.
+    launch->Stop(5000);
+    std::abort();
+  }
+  if (!created) return creation_status;
 
   if (spec.job) {
     stage("launch.verify-job");
