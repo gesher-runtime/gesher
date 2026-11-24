@@ -412,7 +412,7 @@ USB_BLOCK_PATH_BASES = dict.fromkeys((
  'tests/native/ofd_transfer_host_test.cc.in',
  'tools/test_environment_lookup_contracts.py',
 ), 'af2a394d0f5399f954aa00aeaf37011d42b96623')
-USB_BLOCK_TRANSITION_SHA256 = '296065dd8c5b98d7f75d5562a77c39c29459b66a5fa06978db8da5e804aec3dc'
+USB_BLOCK_TRANSITION_SHA256 = '7fe88ca1a44fadf7b6219a97f03d9c53f8dc31630ebc800424ba6ac166c8851a'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

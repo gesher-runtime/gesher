@@ -42,7 +42,13 @@ struct Evidence {
   DWORD magic = 0x47504c54;
   DWORD status = ERROR_SUCCESS;
   DWORD cleanup = ERROR_SUCCESS;
+  DWORD image_access = ERROR_NOT_READY;
+  DWORD directory_access = ERROR_NOT_READY;
+  DWORD target_token_access = ERROR_NOT_READY;
+  DWORD private_caller_token_access = ERROR_NOT_READY;
+  DWORD system_caller_token_access = ERROR_NOT_READY;
   char stage[96] = "complete";
+  char cleanup_stage[64] = "none";
 };
 struct Configuration { std::wstring name, image, directory; DWORD session = 0; } config;
 SERVICE_STATUS_HANDLE service_status = nullptr;
@@ -211,6 +217,41 @@ void DesktopHelper(HANDLE desktop, HANDLE job, PSID user, PSID capability) {
   Require(GetExitCodeProcess(child.get(), &code), "desktop-helper-exit");
   Check(code, "desktop-helper-result");
 }
+void ObserveLaunchAccess(HANDLE token, Evidence* evidence) {
+  // Observe the exact private identity supplied to Create. The launcher still
+  // derives its restricted token and sealed default DACL independently.
+  const auto error = [](bool success) {
+    const DWORD status = success ? ERROR_SUCCESS : GetLastError();
+    return success || status ? status : ERROR_GEN_FAILURE;
+  };
+  Require(ImpersonateLoggedOnUser(token), "impersonate-launch-preflight");
+  const HANDLE image = CreateFileW(config.image.c_str(), GENERIC_READ | GENERIC_EXECUTE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  evidence->image_access = error(image != INVALID_HANDLE_VALUE);
+  if (image != INVALID_HANDLE_VALUE) CloseHandle(image);
+  const HANDLE directory = CreateFileW(config.directory.c_str(), GENERIC_READ | GENERIC_EXECUTE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  evidence->directory_access = error(directory != INVALID_HANDLE_VALUE);
+  if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
+  HANDLE duplicate = nullptr;
+  evidence->target_token_access = error(DuplicateTokenEx(token,
+      TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY, nullptr,
+      SecurityImpersonation, TokenPrimary, &duplicate) != FALSE);
+  if (duplicate) CloseHandle(duplicate);
+  HANDLE caller = nullptr;
+  evidence->private_caller_token_access = error(OpenProcessToken(GetCurrentProcess(),
+      TOKEN_DUPLICATE | TOKEN_IMPERSONATE, &caller) != FALSE);
+  if (caller) CloseHandle(caller);
+  if (!RevertToSelf()) std::abort();
+  caller = nullptr;
+  evidence->system_caller_token_access = error(OpenProcessToken(GetCurrentProcess(),
+      TOKEN_DUPLICATE | TOKEN_IMPERSONATE, &caller) != FALSE);
+  if (caller) CloseHandle(caller);
+  // These observations distinguish access checks; the test never requires a
+  // hypothesized cause of an earlier failure. All real launch assertions follow.
+}
 Evidence RunSystem() {
   Evidence evidence;
   bool installed = false, owns_profile = false;
@@ -221,6 +262,7 @@ Evidence RunSystem() {
   std::wstring package_name;
   const char* stage = "system.begin";
   try {
+    Check(static_cast<DWORD>(RegDisablePredefinedCacheEx()), "disable-predefined-registry-cache");
     AbsentRuntimeService();
     Check(storage::InstallRuntimeIdentityService(config.image), "install-owned-runtime-holder");
     installed = true;
@@ -324,6 +366,7 @@ Evidence RunSystem() {
     shadowed.environment = shadowed_environment;
     Require(storage::AuthorityLaunch::Create(identity->token(), shadowed, &child) == ERROR_INVALID_PARAMETER && !child,
         "deny-case-insensitive-environment-shadow", ERROR_INVALID_DATA);
+    ObserveLaunchAccess(identity->token(), &evidence);
     const DWORD created = storage::AuthorityLaunch::Create(identity->token(), spec, &child, &stage);
     Check(created, stage);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
@@ -350,33 +393,39 @@ Evidence RunSystem() {
     evidence.status = failure.status;
     std::snprintf(evidence.stage, sizeof(evidence.stage), "%s", failure.stage);
   } catch (...) { evidence.status = ERROR_NOT_ENOUGH_MEMORY; }
+  const auto record_cleanup = [&evidence](DWORD error, const char* operation) {
+    if (error != ERROR_SUCCESS && evidence.cleanup == ERROR_SUCCESS) {
+      evidence.cleanup = error;
+      std::snprintf(evidence.cleanup_stage, sizeof(evidence.cleanup_stage), "%s", operation);
+    }
+  };
   if (child) {
     const DWORD stopped = child->Stop(10000);
-    if (stopped != ERROR_SUCCESS) evidence.cleanup = stopped;
+    record_cleanup(stopped, "stop-exact-child");
     child.reset();
   }
-  if (cleanup.profile_error.load() != ERROR_SUCCESS && evidence.cleanup == ERROR_SUCCESS) {
-    evidence.cleanup = cleanup.profile_error.load();
-  }
+  record_cleanup(cleanup.profile_error.load(), "recorded-child-stop");
   if (package.value && identity && evidence.cleanup == ERROR_SUCCESS) {
     if (ImpersonateLoggedOnUser(identity->token())) {
       const DWORD deleted = container::DeleteContainerProfile(package_name);
       if (!RevertToSelf()) std::abort();
-      if (deleted != ERROR_SUCCESS) evidence.cleanup = deleted;
-    } else evidence.cleanup = GetLastError();
+      record_cleanup(deleted, "delete-appcontainer");
+    } else record_cleanup(GetLastError(), "impersonate-profile-cleanup");
   }
   if (identity) {
     const DWORD unloaded = identity->UnloadProfile(evidence.cleanup);
-    if (unloaded != ERROR_SUCCESS && evidence.cleanup == ERROR_SUCCESS) evidence.cleanup = unloaded;
+    record_cleanup(unloaded, "unload-private-profile");
     identity.reset();
   }
   if (installed) {
     const DWORD removed = storage::UninstallRuntimeIdentityService(config.image);
-    if (removed != ERROR_SUCCESS && evidence.cleanup == ERROR_SUCCESS) evidence.cleanup = removed;
+    record_cleanup(removed, "remove-runtime-holder");
   }
-  if (owns_profile && evidence.cleanup == ERROR_SUCCESS) evidence.cleanup = DeleteOwnedProfile(config.directory);
-  if (cleanup.profile_error.load() != ERROR_SUCCESS) evidence.cleanup = cleanup.profile_error.load();
-  if (cleanup.privilege_restore_error != ERROR_SUCCESS) evidence.cleanup = cleanup.privilege_restore_error;
+  if (owns_profile && evidence.cleanup == ERROR_SUCCESS) {
+    record_cleanup(DeleteOwnedProfile(config.directory), "delete-owned-profile");
+  }
+  record_cleanup(cleanup.profile_error.load(), "recorded-profile-cleanup");
+  record_cleanup(cleanup.privilege_restore_error, "restore-profile-privileges");
   return evidence;
 }
 void Report(DWORD state, DWORD error = ERROR_SUCCESS) {
@@ -530,23 +579,35 @@ DWORD Controller() {
     Require(data.size() == sizeof(Evidence), "complete-test-evidence", ERROR_INVALID_DATA);
     Evidence evidence{};
     std::memcpy(&evidence, data.data(), sizeof(evidence));
-    Require(evidence.magic == 0x47504c54 && std::memchr(evidence.stage, 0, sizeof(evidence.stage)),
+    Require(evidence.magic == 0x47504c54 && std::memchr(evidence.stage, 0, sizeof(evidence.stage)) &&
+        std::memchr(evidence.cleanup_stage, 0, sizeof(evidence.cleanup_stage)),
         "validate-test-evidence", ERROR_INVALID_DATA);
-    std::printf("Protected launch: stage=%s win32=%lu cleanup_win32=%lu\n", evidence.stage,
-        static_cast<unsigned long>(evidence.status), static_cast<unsigned long>(evidence.cleanup));
+    std::printf("Protected launch: private-token-preflight-image=%lu directory=%lu target-token=%lu caller-as-private=%lu caller-as-system=%lu\n",
+        static_cast<unsigned long>(evidence.image_access), static_cast<unsigned long>(evidence.directory_access),
+        static_cast<unsigned long>(evidence.target_token_access), static_cast<unsigned long>(evidence.private_caller_token_access),
+        static_cast<unsigned long>(evidence.system_caller_token_access));
+    std::printf("Protected launch: stage=%s win32=%lu cleanup_win32=%lu cleanup_stage=%s\n", evidence.stage,
+        static_cast<unsigned long>(evidence.status), static_cast<unsigned long>(evidence.cleanup), evidence.cleanup_stage);
     result = evidence.status ? evidence.status : evidence.cleanup;
   } catch (const Failure& failure) {
     std::fprintf(stderr, "Protected launch: stage=%s win32=%lu\n", failure.stage, static_cast<unsigned long>(failure.status));
     result = failure.status;
   } catch (...) { result = ERROR_NOT_ENOUGH_MEMORY; }
   DWORD cleanup_error = ERROR_SUCCESS;
+  const char* cleanup_stage = "none";
+  const auto record_cleanup = [&](DWORD error, const char* operation) {
+    if (error != ERROR_SUCCESS && cleanup_error == ERROR_SUCCESS) {
+      cleanup_error = error;
+      cleanup_stage = operation;
+    }
+  };
   bool worker_stopped = !service;
   if (service) {
     SERVICE_STATUS state{};
     ControlService(service.get(), SERVICE_CONTROL_STOP, &state);
     if (process && WaitForSingleObject(process.get(), 5000) != WAIT_OBJECT_0) {
-      if (!TerminateProcess(process.get(), ERROR_TIMEOUT)) cleanup_error = GetLastError();
-      else if (WaitForSingleObject(process.get(), 5000) != WAIT_OBJECT_0) cleanup_error = ERROR_TIMEOUT;
+      if (!TerminateProcess(process.get(), ERROR_TIMEOUT)) record_cleanup(GetLastError(), "terminate-system-worker");
+      else if (WaitForSingleObject(process.get(), 5000) != WAIT_OBJECT_0) record_cleanup(ERROR_TIMEOUT, "wait-terminated-system-worker");
     }
     if (process) worker_stopped = WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0;
     else {
@@ -555,43 +616,47 @@ DWORD Controller() {
       worker_stopped = QueryServiceStatusEx(service.get(), SC_STATUS_PROCESS_INFO,
           reinterpret_cast<BYTE*>(&final), sizeof(final), &bytes) && final.dwCurrentState == SERVICE_STOPPED;
     }
-    if (!worker_stopped && cleanup_error == ERROR_SUCCESS) cleanup_error = ERROR_TIMEOUT;
-    if (!DeleteService(service.get()) && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
+    if (!worker_stopped) record_cleanup(ERROR_TIMEOUT, "wait-system-worker");
+    if (!DeleteService(service.get())) record_cleanup(GetLastError(), "delete-system-service");
     service.reset();
     process.reset();
   }
   bool job_empty = !job;
   if (job) {
-    if (!TerminateJobObject(job.get(), ERROR_OPERATION_ABORTED) && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
+    if (!TerminateJobObject(job.get(), ERROR_OPERATION_ABORTED)) record_cleanup(GetLastError(), "terminate-desktop-job");
     const ULONGLONG deadline = GetTickCount64() + 10000;
     do {
       JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
       if (!QueryInformationJobObject(job.get(), JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr)) {
-        if (cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
+        record_cleanup(GetLastError(), "query-desktop-job");
         break;
       }
       if (accounting.ActiveProcesses == 0) { job_empty = true; break; }
       Sleep(25);
     } while (GetTickCount64() < deadline);
-    if (!job_empty && cleanup_error == ERROR_SUCCESS) cleanup_error = ERROR_TIMEOUT;
+    if (!job_empty) record_cleanup(ERROR_TIMEOUT, "wait-empty-desktop-job");
   }
   if (own_directory && worker_stopped && job_empty) {
     const DWORD removed = storage::UninstallRuntimeIdentityService(image);
     if (removed != ERROR_SUCCESS && removed != ERROR_SERVICE_DOES_NOT_EXIST) {
-      if (cleanup_error == ERROR_SUCCESS) cleanup_error = removed;
+      record_cleanup(removed, "remove-runtime-holder");
     } else {
       // The holder is a separate SCM process outside the desktop job. Keep
       // the owned profile marker and files if its removal is unconfirmed.
       const DWORD profile = DeleteOwnedProfile(directory);
-      if (profile != ERROR_SUCCESS && cleanup_error == ERROR_SUCCESS) cleanup_error = profile;
+      record_cleanup(profile, "delete-owned-profile");
       DeleteFileW((directory + L"\\private-data\\guest.bin").c_str());
       RemoveDirectoryW((directory + L"\\private-data").c_str());
       DeleteFileW((directory + L"\\result.bin").c_str());
-      if (!DeleteFileW(image.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
-      if (!RemoveDirectoryW(directory.c_str()) && cleanup_error == ERROR_SUCCESS) cleanup_error = GetLastError();
+      if (!DeleteFileW(image.c_str())) {
+        const DWORD error = GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND) record_cleanup(error, "delete-fixture-image");
+      }
+      if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
     }
   }
-  if (cleanup_error != ERROR_SUCCESS) std::fprintf(stderr, "Protected launch: controller-cleanup=%lu\n", static_cast<unsigned long>(cleanup_error));
+  if (cleanup_error != ERROR_SUCCESS) std::fprintf(stderr, "Protected launch: controller-cleanup=%lu cleanup-stage=%s\n",
+      static_cast<unsigned long>(cleanup_error), cleanup_stage);
   if (result == ERROR_SUCCESS) result = cleanup_error;
   if (result == ERROR_SUCCESS) std::puts("PASS: actual private SCM identity, profile environment, lowbox child, desktop denial and bounded cleanup");
   return result;

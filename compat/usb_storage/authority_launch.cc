@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <string>
@@ -361,25 +360,18 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   stage("launch.environment-order");
   status = SortedEnvironment(spec.environment, &environment);
   if (status != ERROR_SUCCESS) return status;
-  // AppContainer profiles are per-user. Resolve their resources in the exact
-  // validated target identity, then restore the authority before inspecting
-  // or handing off the still-suspended child. No caller context is inherited.
-  stage("launch.impersonate-target");
-  if (!ImpersonateLoggedOnUser(restricted)) return GetLastError();
+  // Per-user profile APIs run under the target identity during preparation.
+  // Process creation stays in the authority context: CreateProcessAsUser also
+  // needs access to its caller's primary token, which is never granted to the
+  // target account. The explicit target token and environment select the guest.
   stage("launch.create-process-as-user");
-  const BOOL created = CreateProcessAsUserW(restricted, spec.executable, command.data(), &private_objects,
+  if (!CreateProcessAsUserW(restricted, spec.executable, command.data(), &private_objects,
           &private_objects, FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
           CREATE_SUSPENDED | CREATE_NO_WINDOW, environment.data(), spec.directory,
-          &startup.StartupInfo, &launch->guest_);
-  const DWORD creation_status = created ? ERROR_SUCCESS : GetLastError();
-  if (!RevertToSelf()) {
-    stage("launch.restore-authority-context");
-    // Continuing an authority worker under the guest identity is forbidden.
-    // Stop any created suspended child before terminating the authority.
-    launch->Stop(5000);
-    std::abort();
+          &startup.StartupInfo, &launch->guest_)) {
+    const DWORD error = GetLastError();
+    return error ? error : ERROR_GEN_FAILURE;
   }
-  if (!created) return creation_status;
 
   if (spec.job) {
     stage("launch.verify-job");

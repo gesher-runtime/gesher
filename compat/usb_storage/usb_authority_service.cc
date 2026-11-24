@@ -566,6 +566,9 @@ DWORD WINAPI HandleServiceControl(DWORD control, DWORD, void*, void* context) {
 }
 
 void WINAPI ServiceMain(DWORD argc, wchar_t** argv) {
+  // Per-user profile APIs impersonate the selected identity. A cached HKCU
+  // handle must not retain a previous identity or keep its hive open.
+  const LSTATUS registry_error = RegDisablePredefinedCacheEx();
   ScopedHandle stop(CreateEventW(nullptr, TRUE, FALSE, nullptr));
   const DWORD event_error = stop.get() ? ERROR_SUCCESS : GetLastError();
   ServiceContext service{nullptr, stop.get()};
@@ -616,7 +619,8 @@ void WINAPI ServiceMain(DWORD argc, wchar_t** argv) {
   }
   const bool valid_arguments = argc == 1 || desktop_session != 0 || protected_android;
   std::wstring image, directory;
-  DWORD status = event_error != ERROR_SUCCESS ? event_error :
+  DWORD status = registry_error != ERROR_SUCCESS ? static_cast<DWORD>(registry_error) :
+      event_error != ERROR_SUCCESS ? event_error :
       (valid_arguments && IsLocalSystem() ? TrustedImage(&image, &directory) : ERROR_ACCESS_DENIED);
   if (status == ERROR_SUCCESS) status = ValidateRuntime(directory);
   if (status == ERROR_SUCCESS) status = ClearInterruptedBootstrapQueries();

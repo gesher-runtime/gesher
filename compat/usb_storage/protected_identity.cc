@@ -241,17 +241,55 @@ DWORD UninstallRuntimeIdentityService(const std::wstring& executable) {
   SERVICE_STATUS_PROCESS state{};
   status = QueryService(service.get(), &state);
   if (status != ERROR_SUCCESS) return status;
+  const ULONGLONG deadline = GetTickCount64() + 15000;
+  Handle holder;
+  DWORD holder_pid = 0;
+  const auto valid_pid_state = [](DWORD value) {
+    return value == SERVICE_RUNNING || value == SERVICE_PAUSE_PENDING ||
+        value == SERVICE_PAUSED || value == SERVICE_CONTINUE_PENDING;
+  };
+  if (state.dwCurrentState != SERVICE_STOPPED) {
+    // SCM does not promise a valid PID in START/STOP_PENDING. Do not open a
+    // stale PID or claim that an unverified process has finished.
+    if (!valid_pid_state(state.dwCurrentState)) return ERROR_BUSY;
+    holder_pid = state.dwProcessId;
+    if (!holder_pid) return ERROR_INVALID_DATA;
+    holder.reset(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, holder_pid));
+    if (!holder) return GetLastError();
+    std::wstring image(32768, L'\0');
+    DWORD length = static_cast<DWORD>(image.size());
+    if (!QueryFullProcessImageNameW(holder.get(), 0, image.data(), &length)) return GetLastError();
+    image.resize(length);
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(holder.get(), &created, &exited, &kernel, &user)) return GetLastError();
+    if (!Same(image, executable) || (!created.dwLowDateTime && !created.dwHighDateTime)) return ERROR_ACCESS_DENIED;
+    // The handle pins this creation, independently of any later PID reuse.
+    status = QueryService(service.get(), &state);
+    if (status != ERROR_SUCCESS) return status;
+    if (state.dwCurrentState == SERVICE_START_PENDING ||
+        (valid_pid_state(state.dwCurrentState) && state.dwProcessId != holder_pid)) return ERROR_PROCESS_ABORTED;
+  }
   if (state.dwCurrentState != SERVICE_STOPPED) {
     SERVICE_STATUS stopping{};
-    if (!ControlService(service.get(), SERVICE_CONTROL_STOP, &stopping) &&
+    if (state.dwCurrentState != SERVICE_STOP_PENDING &&
+        !ControlService(service.get(), SERVICE_CONTROL_STOP, &stopping) &&
         GetLastError() != ERROR_SERVICE_NOT_ACTIVE) return GetLastError();
-    const ULONGLONG deadline = GetTickCount64() + 15000;
     do {
       if (GetTickCount64() >= deadline) return ERROR_TIMEOUT;
       Sleep(25);
       status = QueryService(service.get(), &state);
       if (status != ERROR_SUCCESS) return status;
+      if (state.dwCurrentState == SERVICE_START_PENDING ||
+          (valid_pid_state(state.dwCurrentState) && state.dwProcessId != holder_pid)) return ERROR_PROCESS_ABORTED;
     } while (state.dwCurrentState != SERVICE_STOPPED);
+  }
+  if (holder) {
+    // SERVICE_STOPPED can precede Main's return and release of its last token
+    // references. Wait on the retained object before allowing profile cleanup.
+    const ULONGLONG now = GetTickCount64();
+    const DWORD remaining = now < deadline ? static_cast<DWORD>(deadline - now) : 0;
+    const DWORD waited = WaitForSingleObject(holder.get(), remaining);
+    if (waited != WAIT_OBJECT_0) return waited == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
   }
   return DeleteService(service.get()) ? ERROR_SUCCESS : GetLastError();
 }
