@@ -103,6 +103,8 @@ public final class LegacyCamera {
         Thread preview;
         volatile boolean previewing;
         WindowsCamera.Capture capture;
+        /** The source the app's user chose (PC camera or a selected image), kept until release. */
+        final WindowsCamera.Choice sourceChoice = new WindowsCamera.Choice();
         int audioRestriction;
         /** The AF trigger for the preview's next frame (CONTROL_AF_TRIGGER_*). */
         int afTrigger = AF_TRIGGER_IDLE;
@@ -390,7 +392,8 @@ public final class LegacyCamera {
 
     private static WindowsCamera.Capture open(Session s, Size size) {
         try {
-            return WindowsCamera.open(s.device.id, size.getWidth(), size.getHeight());
+            return WindowsCamera.open(s.device.id, size.getWidth(), size.getHeight(),
+                    s.sourceChoice);
         } catch (WindowsCamera.OpenException e) {
             log(e.getMessage());
             return null;
@@ -645,22 +648,11 @@ public final class LegacyCamera {
             // The frame comes from a capture at the picture size; the preview stops, as
             // a picture ends it on Android.
             boolean keepFocus;
-            java.io.File prevImage;
             synchronized (s) {
                 keepFocus = s.device.autofocus && s.focusLocked;
-                prevImage = s.capture != null ? s.capture.imageFile : null;
             }
             stop(s);
-            WindowsCamera.Capture c;
-            if (prevImage != null) {
-                try {
-                    c = WindowsCamera.openImage(prevImage, picture.getWidth(), picture.getHeight());
-                } catch (WindowsCamera.OpenException e) {
-                    c = null;
-                }
-            } else {
-                c = open(s, picture);
-            }
+            WindowsCamera.Capture c = open(s, picture);
             if (c == null) {
                 post(s, MSG_ERROR, 1, 0, null);
                 return;

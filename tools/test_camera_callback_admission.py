@@ -113,6 +113,8 @@ STUBS = {
  java.util.concurrent.CountDownLatch gate=readRelease;if(gate!=null){readEntered.countDown();try{gate.await();}catch(InterruptedException e){throw new RuntimeException(e);}}
  return failRead?-1:0;}
  void close(){synchronized(WindowsCamera.class){closes++;}}}
+ static final class Choice{}
+ static Capture open(String id,int w,int h,Choice c)throws OpenException{return open(id,w,h);}
  static Capture open(String id,int w,int h)throws OpenException{return new Capture();} }''',
 }
 

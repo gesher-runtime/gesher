@@ -121,6 +121,12 @@ public final class CameraImagePickerHost {
         check(DocumentPicker.resolves(capture, null), "ACTION_IMAGE_CAPTURE must resolve when enabled");
         check(DocumentPicker.offers(capture), "ACTION_IMAGE_CAPTURE must be offered when enabled");
         check(DocumentPicker.handles(secureCapture), "ACTION_IMAGE_CAPTURE_SECURE must be handled when enabled");
+        // An app that resolved the capture and starts it by the reported package reaches the picker.
+        check(DocumentPicker.handles(new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                .setPackage(DocumentPicker.IMAGE_CAPTURE_PACKAGE)),
+                "ACTION_IMAGE_CAPTURE for the picker's reported package must be handled");
+        check(!DocumentPicker.handles(new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                .setPackage("com.example.camera")), "Another app's camera keeps ordinary routing");
 
         File chosenImage = new File(tempRoot, "picked.jpg");
         byte[] chosenBytes = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9};
@@ -135,20 +141,23 @@ public final class CameraImagePickerHost {
             @Override public boolean isLocal(String windowsPath) { return true; }
         };
 
-        // Case 1: EXTRA_OUTPUT with file:// URI.
+        // Case 1: EXTRA_OUTPUT with a file:// URI and no app identity to write it with: the
+        // system server must not write an app-supplied path with its own access.
         File outFile = new File(tempRoot, "capture-out.jpg");
         Intent extraOutIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
                 .putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(outFile));
         DocumentPicker.Request extraOutReq = new DocumentPicker.Request(extraOutIntent, null, 36);
         check(extraOutReq.imageCapture, "Request.imageCapture must be true");
         check(!extraOutReq.multiple && extraOutReq.maxItems == 1, "Image capture must be single-item");
-        DocumentPicker.Result extraOutRes = DocumentPicker.select(
-                extraOutReq, new String[]{chosenImage.getPath()}, provider, backend, null);
-        check(extraOutRes != null, "EXTRA_OUTPUT select must return a Result");
-        check(Uri.fromFile(outFile).equals(extraOutRes.intent.getData()),
-                "EXTRA_OUTPUT result intent data must match EXTRA_OUTPUT URI");
-        check(Arrays.equals(chosenBytes, Files.readAllBytes(outFile.toPath())),
-                "EXTRA_OUTPUT file must receive JPEG bytes");
+        boolean refused = false;
+        try {
+            DocumentPicker.select(extraOutReq, new String[]{chosenImage.getPath()}, provider,
+                    backend, null);
+        } catch (java.io.IOException expected) {
+            refused = true;
+        }
+        check(refused, "file:// EXTRA_OUTPUT without the app's resolver must fail");
+        check(!outFile.exists(), "The system server must not write an app-supplied file:// path");
 
         // Case 2: EXTRA_OUTPUT with content:// URI via ContentResolver.
         Uri contentOutUri = Uri.parse("content://test.authority/capture.jpg");
@@ -220,6 +229,28 @@ public final class CameraImagePickerHost {
             check(capture.read(frame) == 0x80004004, "Capture.read after close must return E_ABORT");
             check(capture.focus(WindowsCamera.Capture.FOCUS_GET, null) == 0x80004004,
                     "Capture.focus after close must return E_ABORT");
+        } finally {
+            WindowsCamera.sImageSource = null;
+        }
+
+        // A client's choice is kept: reopening (another size, a picture, a new preview)
+        // reuses the selected image instead of asking again.
+        int[] picks = {0};
+        WindowsCamera.sImageSource = () -> {
+            picks[0]++;
+            return new String[]{streamImage.getPath()};
+        };
+        try {
+            WindowsCamera.Choice choice = new WindowsCamera.Choice();
+            WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 64, 48, choice).close();
+            WindowsCamera.Capture reopened =
+                    WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 32, 24, choice);
+            check(reopened.width == 32 && reopened.height == 24, "Reopen must use the new size");
+            check(streamImage.equals(reopened.imageFile), "Reopen must keep the selected image");
+            reopened.close();
+            check(picks[0] == 1, "A client must be asked for an image once, not on each reopen");
+            WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 64, 48, new WindowsCamera.Choice()).close();
+            check(picks[0] == 2, "A new client must be asked again");
         } finally {
             WindowsCamera.sImageSource = null;
         }

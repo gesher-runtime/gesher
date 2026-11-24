@@ -247,7 +247,8 @@ public final class Intent {
     public static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 64;
     public static final int FLAG_GRANT_PREFIX_URI_PERMISSION = 128;
 
-    private String action, type;
+    private String action, type, pkg;
+    private ComponentName component;
     private Uri data;
     private int flags;
     private final Map<String, Object> extras = new HashMap<>();
@@ -257,12 +258,15 @@ public final class Intent {
     public Intent(Intent o) {
         this.action = o.action; this.type = o.type; this.data = o.data;
         this.flags = o.flags; this.extras.putAll(o.extras);
+        this.pkg = o.pkg; this.component = o.component;
     }
     public String getAction() { return action; }
     public String getType() { return type; }
     public Uri getData() { return data; }
-    public Object getComponent() { return null; }
-    public String getPackage() { return null; }
+    public ComponentName getComponent() { return component; }
+    public String getPackage() { return pkg; }
+    public Intent setPackage(String pkg) { this.pkg = pkg; return this; }
+    public Intent setComponent(ComponentName component) { this.component = component; return this; }
     public int getFlags() { return flags; }
     public Intent setData(Uri data) { this.data = data; return this; }
     public Intent setDataAndType(Uri data, String type) { this.data = data; this.type = type; return this; }
@@ -291,6 +295,15 @@ public final class Intent {
         Object v = extras.get(name);
         return clazz.isInstance(v) ? clazz.cast(v) : null;
     }
+}
+""",
+    'android/content/ComponentName.java': """\
+package android.content;
+public final class ComponentName {
+    private final String pkg, cls;
+    public ComponentName(String pkg, String cls) { this.pkg = pkg; this.cls = cls; }
+    public String getPackageName() { return pkg; }
+    public String getClassName() { return cls; }
 }
 """,
     'android/provider/MediaStore.java': """\

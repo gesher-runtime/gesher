@@ -289,8 +289,50 @@ public final class WindowsCamera {
         }
     }
 
+    /**
+     * The source the user chose for one camera client (from the app's open to its close):
+     * the PC camera or a selected image. Asked once; reopening for another size, a picture
+     * or a new preview keeps the choice instead of asking again.
+     */
+    public static final class Choice {
+        private boolean mDecided;
+        private File mImage;
+
+        synchronized boolean decided() {
+            return mDecided;
+        }
+
+        synchronized File image() {
+            return mImage;
+        }
+
+        synchronized void record(Capture capture) {
+            mDecided = true;
+            mImage = capture.imageFile;
+        }
+    }
+
     /** Opens {@code id} at its offered size nearest to {@code width} x {@code height}. */
     public static Capture open(String id, int width, int height) throws OpenException {
+        return open(id, width, height, null);
+    }
+
+    /**
+     * As {@link #open(String, int, int)}, for a client whose earlier choice ({@code choice},
+     * when not null) between the PC camera and a selected image is kept.
+     */
+    public static Capture open(String id, int width, int height, Choice choice)
+            throws OpenException {
+        if (choice != null && choice.decided()) {
+            File image = choice.image();
+            return image != null ? openImage(image, width, height) : openDevice(id, width, height);
+        }
+        Capture capture = choose(id, width, height);
+        if (choice != null) choice.record(capture);
+        return capture;
+    }
+
+    private static Capture choose(String id, int width, int height) throws OpenException {
         if (IMAGE_PICKER_ID.equals(id)) {
             return openImagePicker(id, width, height);
         }
@@ -305,6 +347,11 @@ public final class WindowsCamera {
                 throw new OpenException(id, 0x800704C7);
             }
         }
+        return openDevice(id, width, height);
+    }
+
+    /** Opens the physical device {@code id}, without asking for a source. */
+    private static Capture openDevice(String id, int width, int height) throws OpenException {
         int[] out = new int[3];
         long handle;
         try {

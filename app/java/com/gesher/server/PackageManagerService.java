@@ -700,12 +700,12 @@ public final class PackageManagerService extends IPackageManager.Default {
                 && CameraImageFallback.enabled() && result.isEmpty()) {
             ResolveInfo ri = new ResolveInfo();
             ri.activityInfo = new ActivityInfo();
-            ri.activityInfo.packageName = "com.gesher.documents";
-            ri.activityInfo.name = "com.gesher.documents.ImageCapturePicker";
+            ri.activityInfo.packageName = DocumentPicker.IMAGE_CAPTURE_PACKAGE;
+            ri.activityInfo.name = DocumentPicker.IMAGE_CAPTURE_ACTIVITY;
             ri.activityInfo.exported = true;
             ri.activityInfo.enabled = true;
             ri.activityInfo.applicationInfo = new ApplicationInfo();
-            ri.activityInfo.applicationInfo.packageName = "com.gesher.documents";
+            ri.activityInfo.applicationInfo.packageName = DocumentPicker.IMAGE_CAPTURE_PACKAGE;
             ri.activityInfo.applicationInfo.enabled = true;
             ri.activityInfo.applicationInfo.flags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_INSTALLED;
             ri.nonLocalizedLabel = "Choose image (Windows file picker)";

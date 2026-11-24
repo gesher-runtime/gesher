@@ -15,6 +15,27 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
+COLLABORATOR_STUBS = {
+    'CameraImageFallback.java': 'package com.gesher.server; final class CameraImageFallback {'
+        ' static boolean enabled() { return false; }'
+        ' static byte[] toNv12(java.io.File f, int w, int h) throws java.io.IOException {'
+        ' throw new java.io.IOException("stub"); } }',
+    'IntentChooser.java': 'package com.gesher.server; final class IntentChooser {'
+        ' interface Dialog { boolean available(); int choose(String r, String t, String[] l,'
+        ' boolean[] e, java.util.function.BooleanSupplier a); }'
+        ' static final Dialog HOST = new Dialog() { public boolean available() { return false; }'
+        ' public int choose(String r, String t, String[] l, boolean[] e,'
+        ' java.util.function.BooleanSupplier a) { return -1; } }; }',
+    'DocumentPicker.java': 'package com.gesher.server; final class DocumentPicker { static final int OPEN = 0; }',
+    'WindowsHost.java': 'package com.gesher.server; final class WindowsHost {'
+        ' static String[] pickDocuments(int m, String t, String s, String i, String f, String x,'
+        ' boolean mu, boolean l, int p, java.util.function.BooleanSupplier a) { return null; } }',
+    'Zygote.java': 'package com.gesher.server; final class Zygote {'
+        ' static String fromWindowsPath(String p) { return p; } }',
+    'Process.java': 'package android.os; public final class Process {'
+        ' public static int myPid() { return 0; } }',
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -40,9 +61,17 @@ def main() -> None:
         source = work / 'WindowsCamera.java'; source.write_text(production, encoding='utf-8')
         size = work / 'Size.java'
         size.write_text('package android.util; public final class Size { public Size(int w, int h) {} }', encoding='utf-8')
+        # The image-picker source's collaborators (CameraImageFallback setting off): the
+        # lifetime gates open no device and never reach them.
+        stubs = []
+        for name, text in COLLABORATOR_STUBS.items():
+            stub = work / name
+            stub.write_text(text, encoding='utf-8')
+            stubs.append(str(stub))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-source', '11',
                         '-target', '11', '-Xlint:-options', '-encoding', 'UTF-8', '-d', str(work),
-                        str(source), str(size), str(ROOT / 'tests/java-performance/CameraCaptureLifetimeHost.java')],
+                        str(source), str(size), *stubs,
+                        str(ROOT / 'tests/java-performance/CameraCaptureLifetimeHost.java')],
                        check=True, timeout=60)
         subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData', '-Xmx24m',
                         '-cp', str(work), 'com.gesher.server.CameraCaptureLifetimeHost'],

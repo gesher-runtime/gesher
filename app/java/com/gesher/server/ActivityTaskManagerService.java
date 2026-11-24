@@ -2702,6 +2702,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             int launchTaskId, boolean shareIdentity, ActivityRecord[] started, AppTaskRecord requiredTask) {
         if (intent != null && DocumentPicker.isImageCaptureAction(intent.getAction())
+                && intent.getComponent() == null && intent.getPackage() == null
                 && DocumentPicker.handles(intent)) {
             boolean hasCameraApp;
             synchronized (mPm) {
@@ -3436,7 +3437,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // The Windows default browser (BrowserPackageSupport) has no activity to run: the
         // start delegates the URL to Windows, as when nothing resolves it.
         if (BrowserPackageSupport.isBrowserPackage(info.packageName)) return null;
-        if ("com.gesher.documents".equals(info.packageName)) return null;
+        // The image-capture picker's PackageManager entry (CameraImageFallback) has no APK.
+        if (DocumentPicker.IMAGE_CAPTURE_PACKAGE.equals(info.packageName)) return null;
         info = new ActivityInfo(info);
         if (info.applicationInfo == null) {
             info.applicationInfo = mPm.getApplicationInfo(info.packageName, flags, 0);

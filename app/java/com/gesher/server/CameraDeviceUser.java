@@ -170,6 +170,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private Thread mThread;
     private CameraCallbacks.Retained mProducerLifetime;
     private WindowsCamera.Capture mCapture;
+    /** The source this client chose (PC camera or a selected image), kept across reopens. */
+    private final WindowsCamera.Choice mSourceChoice = new WindowsCamera.Choice();
     /** The size {@link #mCapture} was opened for (the largest stream's then). */
     private Size mCaptureFor;
     /**
@@ -739,10 +741,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
      */
     private void openForConfiguration() {
         Size size = configuredSize();
-        java.io.File prevImage = null;
         if (mCapture != null) {
             if (size.equals(mCaptureFor)) return;
-            prevImage = mCapture.imageFile;
             WindowsCamera.Capture old = mCapture;
             mCapture = null;
             mCaptureFor = null;
@@ -750,18 +750,17 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             old.close();
         }
         try {
-            open(size, prevImage);
+            open(size);
         } catch (WindowsCamera.OpenException e) {
             CameraService.log(e.getMessage());
         }
     }
 
     /** Opens the device at its offered size nearest to {@code size}, as mCapture. */
-    private void open(Size size, java.io.File prevImage) throws WindowsCamera.OpenException {
+    private void open(Size size) throws WindowsCamera.OpenException {
         long start = SystemClock.elapsedRealtime();
-        WindowsCamera.Capture capture = prevImage != null
-                ? WindowsCamera.openImage(prevImage, size.getWidth(), size.getHeight())
-                : WindowsCamera.open(mDevice.id, size.getWidth(), size.getHeight());
+        WindowsCamera.Capture capture = WindowsCamera.open(mDevice.id, size.getWidth(),
+                size.getHeight(), mSourceChoice);
         mCapture = capture;
         mCaptureFor = size;
         startAutoFocus(capture);

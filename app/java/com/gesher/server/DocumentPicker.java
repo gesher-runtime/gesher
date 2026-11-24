@@ -57,13 +57,34 @@ final class DocumentPicker {
         }
     };
 
+    private static boolean targetsImageCapturePicker(Intent intent) {
+        android.content.ComponentName component = intent.getComponent();
+        if (component != null) {
+            return IMAGE_CAPTURE_PACKAGE.equals(component.getPackageName())
+                    && IMAGE_CAPTURE_ACTIVITY.equals(component.getClassName());
+        }
+        return IMAGE_CAPTURE_PACKAGE.equals(intent.getPackage());
+    }
+
+    /**
+     * The package PackageManager names for the image-capture picker while
+     * {@link CameraImageFallback} is on (it has no APK). An app that resolves the capture
+     * intent and then starts it by that package or component reaches the same picker.
+     */
+    static final String IMAGE_CAPTURE_PACKAGE = "com.gesher.documents";
+    static final String IMAGE_CAPTURE_ACTIVITY = "com.gesher.documents.ImageCapturePicker";
+
     static boolean isImageCaptureAction(String action) {
         return MediaStore.ACTION_IMAGE_CAPTURE.equals(action)
                 || MediaStore.ACTION_IMAGE_CAPTURE_SECURE.equals(action);
     }
 
     static boolean handles(Intent intent) {
-        if (intent == null || intent.getComponent() != null || intent.getPackage() != null) return false;
+        if (intent == null) return false;
+        if (isImageCaptureAction(intent.getAction()) && targetsImageCapturePicker(intent)) {
+            return CameraImageFallback.enabled();
+        }
+        if (intent.getComponent() != null || intent.getPackage() != null) return false;
         String action = intent.getAction();
         return Intent.ACTION_OPEN_DOCUMENT.equals(action) || Intent.ACTION_CREATE_DOCUMENT.equals(action)
                 || Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) || Intent.ACTION_GET_CONTENT.equals(action)
@@ -347,10 +368,9 @@ final class DocumentPicker {
                     } catch (android.os.RemoteException e) {
                         throw new IOException("Could not write EXTRA_OUTPUT: " + request.extraOutput, e);
                     }
-                } else if ("file".equals(request.extraOutput.getScheme())
-                        && request.extraOutput.getPath() != null) {
-                    Files.write(new File(request.extraOutput.getPath()).toPath(), jpeg);
                 } else {
+                    // Only through the requesting app's identity: the system server never
+                    // writes an app-supplied path (file://) with its own access.
                     throw new IOException("No ContentResolver for EXTRA_OUTPUT: " + request.extraOutput);
                 }
                 return new Result(new Intent().setData(request.extraOutput), List.of(), null, null);
