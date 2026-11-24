@@ -17,6 +17,38 @@ enum class LowboxTraceApi : DWORD {
 inline constexpr DWORD kLowboxTraceSymbolCount = static_cast<DWORD>(LowboxTraceApi::count);
 inline constexpr DWORD kLowboxTraceRecordCount = 64;
 
+enum class LowboxSnapshotState : DWORD {
+  not_observed, not_requested, absent, null_acl, complete, unreadable,
+  invalid, truncated, incomplete,
+};
+template <SIZE_T Capacity>
+struct LowboxTraceBytes {
+  LowboxSnapshotState state = LowboxSnapshotState::not_observed;
+  DWORD bytes = 0, copied = 0;
+  BYTE data[Capacity]{};
+};
+struct LowboxDirectorySecurity {
+  // Capture the first DirectoryEx input; count later calls without replacing
+  // this evidence. These are input bytes, not the final object's descriptor.
+  DWORD observations = 0, sequence = 0;
+  LowboxSnapshotState state = LowboxSnapshotState::not_observed;
+  DWORD descriptor_present = 0, revision = 0, control = 0;
+  DWORD native_status = 0, returned_handle = 0;
+  ULONG_PTR root = 0, shadow = 0, result = 0;
+  LowboxTraceBytes<SECURITY_MAX_SID_SIZE> owner, group;
+  LowboxTraceBytes<1024> dacl;
+  LowboxTraceBytes<256> sacl;
+};
+struct LowboxSecurityQuery {
+  // The most recent successful DACL-only query before the captured creation.
+  // Correlation uses its sequence/source and the DirectoryEx shadow handle;
+  // no object handle is retained and numeric equality is not lifetime proof.
+  DWORD observations = 0, sequence = 0, information = 0;
+  DWORD buffer_length = 0, returned_length = 0, native_status = 0;
+  ULONG_PTR source = 0;
+  LowboxTraceBytes<1536> descriptor;
+};
+
 struct LowboxTraceSymbolEvidence {
   DWORD imported = 0, patched = 0, restored = 0;
   DWORD status = ERROR_NOT_FOUND;
@@ -38,11 +70,11 @@ struct LowboxTraceCall {
   // Keep the total text budget bounded while retaining more final calls.
   // Original byte lengths and independent flags disclose either truncation;
   // shortened text never establishes an exact object or link-target identity.
-  wchar_t name[128]{};
+  wchar_t name[96]{};
   wchar_t target[64]{};
 };
 struct LowboxIatTraceEvidence {
-  DWORD version = 2;
+  DWORD version = 3;
   // Caller may set ONLY this metadata field before Begin. It is an expected
   // target session, not a claim that every recorded call had that token/session.
   DWORD expected_target_session = 0;
@@ -54,6 +86,8 @@ struct LowboxIatTraceEvidence {
   DWORD total_calls = 0, record_count = 0, overflow = 0;
   DWORD page_restore_status = ERROR_NOT_READY;
   LowboxTraceSymbolEvidence symbols[kLowboxTraceSymbolCount]{};
+  LowboxDirectorySecurity directory_security;
+  LowboxSecurityQuery security_query;
   // A bounded ring retains the last calls closest to the actual result.
   // sequence and overflow explicitly disclose overwritten earlier records.
   LowboxTraceCall records[kLowboxTraceRecordCount]{};

@@ -95,9 +95,18 @@ bool Readable(DWORD protection) {
   return access == PAGE_READONLY || access == PAGE_READWRITE || access == PAGE_WRITECOPY ||
       access == PAGE_EXECUTE_READ || access == PAGE_EXECUTE_READWRITE || access == PAGE_EXECUTE_WRITECOPY;
 }
-// All snapshots happen BEFORE forwarding. Guarded, bounded copying accepts no
-// guard/no-access pages and catches a concurrent unmap. This POD-only function
-// uses Windows SEH (MinGW Clang requires -fms-extensions for this test unit).
+// This POD-only copy makes no Windows call. Successful native query output is
+// copied only within its supplied and returned sizes. SEH catches a concurrent
+// unmap; Forward restores both captured error slots even after an exception.
+bool RawSnapshot(void* destination, const void* source, SIZE_T size) noexcept {
+  if (!size) return true;
+  if (!source || size > 4096 || reinterpret_cast<ULONG_PTR>(source) >
+      (std::numeric_limits<ULONG_PTR>::max)() - size) return false;
+  __try { std::memcpy(destination, source, size); return true; }
+  __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// Input snapshots happen BEFORE forwarding. Check page accessibility as well
+// as guarding the bounded copy. MinGW Clang requires -fms-extensions for SEH.
 bool Snapshot(void* destination, const void* source, SIZE_T size) noexcept {
   if (!size) return true;
   if (!source || size > 4096) return false;
@@ -115,8 +124,111 @@ bool Snapshot(void* destination, const void* source, SIZE_T size) noexcept {
     current = (std::min)(end, base + info.RegionSize);
   }
   if (current != end) return false;
-  __try { std::memcpy(destination, source, size); return true; }
-  __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+  return RawSnapshot(destination, source, size);
+}
+using SnapshotState = LowboxSnapshotState;
+
+template <SIZE_T Capacity>
+void ComponentSnapshot(const void* source, DWORD bytes, LowboxTraceBytes<Capacity>* output) noexcept {
+  output->bytes = bytes;
+  const DWORD copied = (std::min)(bytes, static_cast<DWORD>(Capacity));
+  if (!Snapshot(output->data, source, copied)) { output->state = SnapshotState::unreadable; return; }
+  output->copied = copied;
+  output->state = copied == bytes ? SnapshotState::complete : SnapshotState::truncated;
+}
+void SidSnapshot(const void* source, LowboxTraceBytes<SECURITY_MAX_SID_SIZE>* output) noexcept {
+  if (!source) { output->state = SnapshotState::absent; return; }
+  struct Header { BYTE revision, count; SID_IDENTIFIER_AUTHORITY authority; } header{};
+  static_assert(sizeof(Header) == 8);
+  if (!Snapshot(&header, source, sizeof(header))) { output->state = SnapshotState::unreadable; return; }
+  if (header.revision != SID_REVISION || header.count > SID_MAX_SUB_AUTHORITIES) {
+    output->state = SnapshotState::invalid; return;
+  }
+  ComponentSnapshot(source, static_cast<DWORD>(sizeof(header)) + header.count * sizeof(DWORD), output);
+}
+template <SIZE_T Capacity>
+void AclSnapshot(const void* source, bool present, LowboxTraceBytes<Capacity>* output) noexcept {
+  if (!present) { output->state = SnapshotState::absent; return; }
+  if (!source) { output->state = SnapshotState::null_acl; return; }
+  ACL header{};
+  if (!Snapshot(&header, source, sizeof(header))) { output->state = SnapshotState::unreadable; return; }
+  if (header.AclSize < sizeof(header) ||
+      (header.AclRevision != ACL_REVISION && header.AclRevision != ACL_REVISION_DS)) {
+    output->state = SnapshotState::invalid; return;
+  }
+  ComponentSnapshot(source, header.AclSize, output);
+}
+bool RelativeComponent(const void* descriptor, DWORD offset, const void** output) noexcept {
+  if (!offset) { *output = nullptr; return true; }
+  const ULONG_PTR base = reinterpret_cast<ULONG_PTR>(descriptor);
+  if (offset < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || base > (std::numeric_limits<ULONG_PTR>::max)() - offset) return false;
+  *output = reinterpret_cast<const void*>(base + offset);
+  return true;
+}
+bool CompleteComponent(SnapshotState state) noexcept {
+  return state == SnapshotState::complete || state == SnapshotState::absent || state == SnapshotState::null_acl;
+}
+void DescriptorSnapshot(const void* source, LowboxDirectorySecurity* output) noexcept {
+  if (!source) { output->state = SnapshotState::absent; return; }
+  output->descriptor_present = 1;
+  struct Header { BYTE revision, reserved; SECURITY_DESCRIPTOR_CONTROL control; } header{};
+  static_assert(sizeof(Header) == 4);
+  if (!Snapshot(&header, source, sizeof(header))) { output->state = SnapshotState::unreadable; return; }
+  output->revision = header.revision; output->control = header.control;
+  if (header.revision != SECURITY_DESCRIPTOR_REVISION) { output->state = SnapshotState::invalid; return; }
+  const void *owner = nullptr, *group = nullptr, *dacl = nullptr, *sacl = nullptr;
+  if (header.control & SE_SELF_RELATIVE) {
+    SECURITY_DESCRIPTOR_RELATIVE relative{};
+    if (!Snapshot(&relative, source, sizeof(relative))) { output->state = SnapshotState::unreadable; return; }
+    if (relative.Revision != header.revision || relative.Control != header.control) {
+      output->state = SnapshotState::invalid; return;
+    }
+    if (!RelativeComponent(source, relative.Owner, &owner) || !RelativeComponent(source, relative.Group, &group) ||
+        ((header.control & SE_DACL_PRESENT) && !RelativeComponent(source, relative.Dacl, &dacl)) ||
+        ((header.control & SE_SACL_PRESENT) && !RelativeComponent(source, relative.Sacl, &sacl))) {
+      output->state = SnapshotState::invalid; return;
+    }
+  } else {
+    SECURITY_DESCRIPTOR absolute{};
+    if (!Snapshot(&absolute, source, sizeof(absolute))) { output->state = SnapshotState::unreadable; return; }
+    if (absolute.Revision != header.revision || absolute.Control != header.control) {
+      output->state = SnapshotState::invalid; return;
+    }
+    owner = absolute.Owner; group = absolute.Group; dacl = absolute.Dacl; sacl = absolute.Sacl;
+  }
+  SidSnapshot(owner, &output->owner); SidSnapshot(group, &output->group);
+  AclSnapshot(dacl, (header.control & SE_DACL_PRESENT) != 0, &output->dacl);
+  AclSnapshot(sacl, (header.control & SE_SACL_PRESENT) != 0, &output->sacl);
+  output->state = CompleteComponent(output->owner.state) && CompleteComponent(output->group.state) &&
+      CompleteComponent(output->dacl.state) && CompleteComponent(output->sacl.state)
+      ? SnapshotState::complete : SnapshotState::incomplete;
+}
+struct SecurityQueryOutput {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  ULONG length = 0;
+  PULONG returned = nullptr;
+};
+void QuerySnapshot(const LowboxTraceCall& call, SecurityQueryOutput output, LowboxSecurityQuery* evidence) noexcept {
+  const DWORD count = evidence->observations;
+  *evidence = {};
+  evidence->observations = count == MAXDWORD ? count : count + 1;
+  evidence->sequence = call.sequence; evidence->source = call.source;
+  evidence->information = call.security_information; evidence->native_status = call.status;
+  evidence->buffer_length = output.length;
+  auto& bytes = evidence->descriptor;
+  // The native success contract writes returned length and descriptor bytes.
+  // No API, token operation, handle duplication or name lookup runs here.
+  if (!RawSnapshot(&evidence->returned_length, output.returned, sizeof(ULONG))) {
+    bytes.state = SnapshotState::unreadable; return;
+  }
+  bytes.bytes = evidence->returned_length;
+  if (bytes.bytes < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || bytes.bytes > output.length) {
+    bytes.state = SnapshotState::invalid; return;
+  }
+  const DWORD copied = (std::min)(bytes.bytes, static_cast<DWORD>(sizeof(bytes.data)));
+  if (!RawSnapshot(bytes.data, output.descriptor, copied)) { bytes.state = SnapshotState::unreadable; return; }
+  bytes.copied = copied;
+  bytes.state = copied == bytes.bytes ? SnapshotState::complete : SnapshotState::truncated;
 }
 template <class T> T ImageValue(DWORD rva) {
   T value{};
@@ -163,14 +275,26 @@ void UnicodeSnapshot(PCUNICODE_STRING source, wchar_t (&text)[Capacity], DWORD* 
   *copied_characters = copied;
   *truncated = copied != characters;
 }
-void ObjectSnapshot(LowboxTraceCall* call, POBJECT_ATTRIBUTES source) noexcept {
-  if (!source) return;
+void ObjectSnapshot(LowboxTraceCall* call, POBJECT_ATTRIBUTES source,
+    LowboxDirectorySecurity* security) noexcept {
+  if (!source) {
+    if (security) {
+      security->state = SnapshotState::invalid;
+      call->input_snapshot_status = ERROR_INVALID_PARAMETER;
+    }
+    return;
+  }
   OBJECT_ATTRIBUTES object{};
   if (!Snapshot(&object, source, sizeof(object)) || object.Length != sizeof(object)) {
+    if (security) security->state = SnapshotState::invalid;
     call->input_snapshot_status = ERROR_INVALID_DATA; return;
   }
   call->object_attributes = object.Attributes;
   call->root = reinterpret_cast<ULONG_PTR>(object.RootDirectory);
+  if (security) {
+    security->root = call->root;
+    DescriptorSnapshot(object.SecurityDescriptor, security);
+  }
   if (!object.ObjectName) return;
   UnicodeSnapshot(object.ObjectName, call->name, &call->name_bytes, &call->name_characters,
       &call->name_truncated, &call->input_snapshot_status);
@@ -178,7 +302,8 @@ void ObjectSnapshot(LowboxTraceCall* call, POBJECT_ATTRIBUTES source) noexcept {
 
 template <class Result = NTSTATUS, class Invoke>
 Result Forward(LowboxTraceApi api, LowboxTraceCall input, POBJECT_ATTRIBUTES object,
-    PHANDLE output, void* caller, Invoke invoke, PCUNICODE_STRING target = nullptr) noexcept {
+    PHANDLE output, void* caller, Invoke invoke, PCUNICODE_STRING target = nullptr,
+    SecurityQueryOutput query = {}) noexcept {
   const DWORD entry_error = GetLastError();
   const NTSTATUS entry_status = state.last_status();
   const bool record = GetCurrentThreadId() == state.thread &&
@@ -192,6 +317,7 @@ Result Forward(LowboxTraceApi api, LowboxTraceCall input, POBJECT_ATTRIBUTES obj
   auto& evidence = *state.evidence;
   const DWORD sequence = evidence.total_calls;
   LowboxTraceCall* call = nullptr;
+  LowboxDirectorySecurity* security = nullptr;
   if (sequence != MAXDWORD) {
     ++evidence.total_calls;
     evidence.record_count = (std::min)(evidence.total_calls, kLowboxTraceRecordCount);
@@ -201,7 +327,14 @@ Result Forward(LowboxTraceApi api, LowboxTraceCall input, POBJECT_ATTRIBUTES obj
     const ULONG_PTR address = reinterpret_cast<ULONG_PTR>(caller);
     if (address >= state.base && address - state.base < state.image_size)
       call->caller_rva = static_cast<DWORD>(address - state.base);
-    ObjectSnapshot(call, object);
+    if (api == LowboxTraceApi::create_directory_ex) {
+      auto& selected = evidence.directory_security;
+      if (selected.observations != MAXDWORD) ++selected.observations;
+      if (selected.observations == 1) {
+        security = &selected; security->sequence = sequence; security->shadow = input.shadow;
+      }
+    }
+    ObjectSnapshot(call, object, security);
     if (api == LowboxTraceApi::create_symbolic_link) {
       UnicodeSnapshot(target, call->target, &call->target_bytes, &call->target_characters,
           &call->target_truncated, &call->target_snapshot_status);
@@ -212,21 +345,32 @@ Result Forward(LowboxTraceApi api, LowboxTraceCall input, POBJECT_ATTRIBUTES obj
   state.set_status(entry_status); SetLastError(entry_error);
   const Result result = invoke();
   const DWORD returned_error = GetLastError();
+  // The TEB slot is independent of the API's NTSTATUS return. Preserve the
+  // actual post-call slot, including when a guarded output copy takes SEH.
+  const NTSTATUS returned_slot = state.last_status();
   if (call) {
     call->status = static_cast<DWORD>(result);
     // On NT_SUCCESS the native contract has just written this caller-owned
-    // output slot. KernelBase retains its arguments until this return. No API,
-    // token query, allocation or name resolution runs after forwarding.
+    // output slot. KernelBase retains its arguments until this return. Apart
+    // from error-slot preservation, output observation makes no Windows call.
     if constexpr (std::is_same_v<Result, NTSTATUS>) {
       if (result >= 0 && output) {
         HANDLE value = nullptr; std::memcpy(&value, output, sizeof(value));
         call->result = reinterpret_cast<ULONG_PTR>(value);
         call->returned_handle = value && value != INVALID_HANDLE_VALUE;
       }
+      if (security) {
+        security->native_status = call->status;
+        security->result = call->result; security->returned_handle = call->returned_handle;
+      }
+      if (result >= 0 && api == LowboxTraceApi::query_security &&
+          call->security_information == DACL_SECURITY_INFORMATION && !evidence.directory_security.observations) {
+        QuerySnapshot(*call, query, &evidence.security_query);
+      }
     }
   }
+  state.set_status(returned_slot); SetLastError(returned_error);
   observing = false;
-  SetLastError(returned_error);
   return result;
 }
 template <class T> T Original(LowboxTraceApi api) noexcept {
@@ -288,10 +432,9 @@ TRACE_NOINLINE NTSTATUS NTAPI HookQuerySecurity(HANDLE object, SECURITY_INFORMAT
     PSECURITY_DESCRIPTOR descriptor, ULONG length, PULONG needed) noexcept {
   LowboxTraceCall in{}; in.source = reinterpret_cast<ULONG_PTR>(object);
   in.security_information = information; in.buffer_length = length;
-  // Record only the request's class/size. No security or token contents are
-  // read, and no output buffer is inspected after the original native call.
   return Forward(LowboxTraceApi::query_security, in, nullptr, nullptr, TRACE_CALLER(),
-      [&] { return Original<QuerySecurity>(LowboxTraceApi::query_security)(object, information, descriptor, length, needed); });
+      [&] { return Original<QuerySecurity>(LowboxTraceApi::query_security)(object, information, descriptor, length, needed); },
+      nullptr, {descriptor, length, needed});
 }
 TRACE_NOINLINE NTSTATUS NTAPI HookSetSecurity(HANDLE object, SECURITY_INFORMATION information,
     PSECURITY_DESCRIPTOR descriptor) noexcept {
@@ -525,6 +668,149 @@ DWORD Restore(LowboxIatTraceEvidence* evidence) noexcept {
   if (result && !state.restore_failure) state.restore_failure = result;
   return state.restore_failure;
 }
+const char* SnapshotName(SnapshotState value) noexcept {
+  switch (value) {
+    case SnapshotState::not_observed: return "not-observed";
+    case SnapshotState::not_requested: return "not-requested";
+    case SnapshotState::absent: return "absent";
+    case SnapshotState::null_acl: return "present-null-acl";
+    case SnapshotState::complete: return "complete";
+    case SnapshotState::unreadable: return "unreadable";
+    case SnapshotState::invalid: return "invalid";
+    case SnapshotState::truncated: return "truncated";
+    case SnapshotState::incomplete: return "incomplete";
+  }
+  return "invalid-state";
+}
+template <SIZE_T Capacity>
+bool ValidBytes(const LowboxTraceBytes<Capacity>& value) noexcept {
+  if (value.copied > Capacity || value.copied > value.bytes) return false;
+  switch (value.state) {
+    case SnapshotState::not_observed:
+    case SnapshotState::not_requested:
+    case SnapshotState::absent:
+    case SnapshotState::null_acl: return !value.bytes && !value.copied;
+    case SnapshotState::complete: return value.bytes && value.copied == value.bytes;
+    case SnapshotState::unreadable:
+    case SnapshotState::invalid: return !value.copied;
+    case SnapshotState::truncated: return value.bytes > Capacity && value.copied == Capacity;
+    case SnapshotState::incomplete: return false;
+  }
+  return false;
+}
+bool ValidSecurity(const LowboxIatTraceEvidence& evidence) noexcept {
+  const auto& input = evidence.directory_security;
+  const auto& query = evidence.security_query;
+  return static_cast<DWORD>(input.state) <= static_cast<DWORD>(SnapshotState::incomplete) &&
+      input.descriptor_present <= 1 && input.returned_handle <= 1 && input.observations <= evidence.total_calls &&
+      (!input.observations || input.sequence < evidence.total_calls) &&
+      ValidBytes(input.owner) && ValidBytes(input.group) && ValidBytes(input.dacl) && ValidBytes(input.sacl) &&
+      query.observations <= evidence.total_calls && ValidBytes(query.descriptor) &&
+      (!query.observations || (query.sequence < evidence.total_calls && query.information == DACL_SECURITY_INFORMATION &&
+          static_cast<NTSTATUS>(query.native_status) >= 0 && (!input.observations || query.sequence < input.sequence)));
+}
+template <SIZE_T Capacity>
+void PrintBytes(const char* component, const LowboxTraceBytes<Capacity>& value) noexcept {
+  std::printf("Protected lowbox security: component=%s state=%s bytes=%lu copied=%lu capacity=%zu hex=",
+      component, SnapshotName(value.state), static_cast<unsigned long>(value.bytes),
+      static_cast<unsigned long>(value.copied), Capacity);
+  for (DWORD i = 0; i < value.copied; ++i) std::printf("%02x", static_cast<unsigned>(value.data[i]));
+  std::putchar('\n');
+}
+void PrintSid(const char* component, const BYTE* bytes, DWORD size) noexcept {
+  if (size < 8 || bytes[0] != SID_REVISION || bytes[1] > SID_MAX_SUB_AUTHORITIES ||
+      size != 8 + static_cast<DWORD>(bytes[1]) * sizeof(DWORD)) return;
+  unsigned long long authority = 0;
+  for (DWORD i = 2; i < 8; ++i) authority = (authority << 8) | bytes[i];
+  std::printf("Protected lowbox security: component=%s sid=S-%u-%llu", component,
+      static_cast<unsigned>(bytes[0]), authority);
+  for (DWORD i = 0; i < bytes[1]; ++i) {
+    DWORD sub = 0; std::memcpy(&sub, bytes + 8 + i * sizeof(DWORD), sizeof(sub));
+    std::printf("-%lu", static_cast<unsigned long>(sub));
+  }
+  std::putchar('\n');
+}
+void PrintAcl(const char* component, const BYTE* bytes, DWORD size) noexcept {
+  ACL acl{};
+  if (size < sizeof(acl)) return;
+  std::memcpy(&acl, bytes, sizeof(acl));
+  bool valid = acl.AclSize == size && (acl.AclRevision == ACL_REVISION || acl.AclRevision == ACL_REVISION_DS);
+  DWORD cursor = sizeof(acl);
+  for (DWORD i = 0; valid && i < acl.AceCount; ++i) {
+    ACE_HEADER ace{};
+    if (cursor > size || size - cursor < sizeof(ace)) { valid = false; break; }
+    std::memcpy(&ace, bytes + cursor, sizeof(ace));
+    if (ace.AceSize < sizeof(ace) || ace.AceSize > size - cursor) { valid = false; break; }
+    std::printf("Protected lowbox security: component=%s ace=%lu type=%u flags=0x%02x bytes=%u",
+        component, static_cast<unsigned long>(i), static_cast<unsigned>(ace.AceType),
+        static_cast<unsigned>(ace.AceFlags), static_cast<unsigned>(ace.AceSize));
+    const bool simple = ace.AceType == ACCESS_ALLOWED_ACE_TYPE || ace.AceType == ACCESS_DENIED_ACE_TYPE ||
+        ace.AceType == SYSTEM_AUDIT_ACE_TYPE || ace.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE;
+    if (simple && ace.AceSize >= 8) {
+      DWORD mask = 0; std::memcpy(&mask, bytes + cursor + sizeof(ace), sizeof(mask));
+      std::printf(" mask=0x%08lx\n", static_cast<unsigned long>(mask));
+      PrintSid(component, bytes + cursor + 8, ace.AceSize - 8);
+    } else std::putchar('\n');
+    cursor += ace.AceSize;
+  }
+  std::printf("Protected lowbox security: component=%s acl-structural-validation=%s revision=%u ace-count=%u\n",
+      component, valid ? "complete" : "invalid", static_cast<unsigned>(acl.AclRevision), static_cast<unsigned>(acl.AceCount));
+}
+void PrintSecurity(const LowboxIatTraceEvidence& evidence) noexcept {
+  const auto& input = evidence.directory_security;
+  const auto& query = evidence.security_query;
+  std::puts("Protected lowbox security: scope=first-DirectoryEx-input-and-last-prior-successful-DACL-only-query; input is not final inherited/object security; no handle is retained");
+  std::printf("Protected lowbox security: DirectoryEx-calls=%lu input-seq=%lu state=%s descriptor-present=%lu revision=%lu control=0x%04lx root=0x%llx shadow=0x%llx native-ntstatus=0x%08lx returned=%lu result=0x%llx\n",
+      static_cast<unsigned long>(input.observations), static_cast<unsigned long>(input.sequence), SnapshotName(input.state),
+      static_cast<unsigned long>(input.descriptor_present), static_cast<unsigned long>(input.revision),
+      static_cast<unsigned long>(input.control), static_cast<unsigned long long>(input.root),
+      static_cast<unsigned long long>(input.shadow), static_cast<unsigned long>(input.native_status),
+      static_cast<unsigned long>(input.returned_handle), static_cast<unsigned long long>(input.result));
+  PrintBytes("input-owner", input.owner); PrintBytes("input-group", input.group);
+  PrintBytes("input-dacl", input.dacl); PrintBytes("input-sacl", input.sacl);
+  if (input.owner.state == SnapshotState::complete) PrintSid("input-owner", input.owner.data, input.owner.copied);
+  if (input.group.state == SnapshotState::complete) PrintSid("input-group", input.group.data, input.group.copied);
+  if (input.dacl.state == SnapshotState::complete) PrintAcl("input-dacl", input.dacl.data, input.dacl.copied);
+  if (input.sacl.state == SnapshotState::complete) PrintAcl("input-sacl", input.sacl.data, input.sacl.copied);
+  const bool correlation = input.observations && query.observations && query.source == input.shadow;
+  std::printf("Protected lowbox security: query-observations=%lu query-seq=%lu source=0x%llx information=0x%08lx buffer-length=%lu returned-length=%lu native-ntstatus=0x%08lx shadow-numeric-match=%u owner=not-requested group=not-requested sacl-label=not-requested\n",
+      static_cast<unsigned long>(query.observations), static_cast<unsigned long>(query.sequence),
+      static_cast<unsigned long long>(query.source), static_cast<unsigned long>(query.information),
+      static_cast<unsigned long>(query.buffer_length), static_cast<unsigned long>(query.returned_length),
+      static_cast<unsigned long>(query.native_status), static_cast<unsigned>(correlation));
+  PrintBytes("queried-descriptor", query.descriptor);
+  // Decode only the requested DACL, from the captured bounded self-relative
+  // buffer, after all import slots have been restored. Other components were
+  // not requested; zero offsets do not establish absent owner/group/label.
+  if (query.descriptor.state != SnapshotState::complete) return;
+  SECURITY_DESCRIPTOR_RELATIVE descriptor{};
+  if (query.descriptor.copied < sizeof(descriptor)) return;
+  std::memcpy(&descriptor, query.descriptor.data, sizeof(descriptor));
+  if (descriptor.Revision != SECURITY_DESCRIPTOR_REVISION || !(descriptor.Control & SE_SELF_RELATIVE)) {
+    std::puts("Protected lowbox security: queried-dacl state=invalid-descriptor"); return;
+  }
+  if (!(descriptor.Control & SE_DACL_PRESENT) || !descriptor.Dacl) {
+    std::printf("Protected lowbox security: queried-dacl state=%s control=0x%04x\n",
+        descriptor.Control & SE_DACL_PRESENT ? "present-null-acl" : "absent", static_cast<unsigned>(descriptor.Control));
+    return;
+  }
+  const DWORD size = query.descriptor.copied;
+  const DWORD offset = descriptor.Dacl;
+  ACL acl{};
+  if (offset < sizeof(descriptor) || offset > size || size - offset < sizeof(acl)) {
+    std::puts("Protected lowbox security: queried-dacl state=invalid-offset"); return;
+  }
+  std::memcpy(&acl, query.descriptor.data + offset, sizeof(acl));
+  if (acl.AclSize < sizeof(acl) || acl.AclSize > size - offset) {
+    std::puts("Protected lowbox security: queried-dacl state=invalid-size"); return;
+  }
+  PrintAcl("queried-dacl", query.descriptor.data + offset, acl.AclSize);
+  if (correlation && input.dacl.state == SnapshotState::complete) {
+    const bool same = input.dacl.copied == acl.AclSize &&
+        std::memcmp(input.dacl.data, query.descriptor.data + offset, acl.AclSize) == 0;
+    std::printf("Protected lowbox security: input-versus-queried-dacl-byte-equal=%u source-causality=not-established\n", static_cast<unsigned>(same));
+  }
+}
 }  // namespace
 
 DWORD BeginLowboxIatTrace(LowboxIatTraceEvidence* evidence) noexcept {
@@ -575,10 +861,10 @@ DWORD EndLowboxIatTrace(LowboxIatTraceEvidence* evidence) noexcept {
 }
 
 void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
-  bool valid = e.version == 2 && e.attempted <= 1 && e.delay_imports_present <= 1 &&
+  bool valid = e.version == 3 && e.attempted <= 1 && e.delay_imports_present <= 1 &&
       e.record_count <= kLowboxTraceRecordCount && e.slot_count <= kSlots &&
       e.page_count <= kPages && e.missing_symbols <= kLowboxTraceSymbolCount && e.record_count <= e.total_calls &&
-      e.overflow == e.total_calls - e.record_count;
+      e.overflow == e.total_calls - e.record_count && ValidSecurity(e);
   for (const auto& symbol : e.symbols) valid = valid && symbol.imported <= kSlots && symbol.patched <= symbol.imported && symbol.restored <= symbol.patched;
   const DWORD first = valid ? e.total_calls - e.record_count : 0;
   for (DWORD i = 0; valid && i < e.record_count; ++i) {
@@ -601,6 +887,9 @@ void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
       static_cast<unsigned long>(e.image_checksum), static_cast<unsigned long>(e.image_size));
   std::puts("Protected lowbox IAT: scope=one-complete-AuthorityLaunch::Create ordinary-KernelBase-imports-only, including intentional token-right denials; relative names retain raw root handles; missing records do not prove missing calls");
   std::puts("Protected lowbox IAT: names and link targets have separate byte lengths/truncation flags; truncated text is not exact identity; numeric handle values can be reused after close");
+  std::printf("Protected lowbox IAT: name-capacity=%zu link-target-capacity=%zu records-capacity=%lu evidence-bytes=%zu\n",
+      std::size(e.records[0].name), std::size(e.records[0].target),
+      static_cast<unsigned long>(kLowboxTraceRecordCount), sizeof(e));
   for (DWORD i = 0; i < kLowboxTraceSymbolCount; ++i) {
     const auto& s = e.symbols[i];
     std::printf("Protected lowbox IAT: api=%s imported=%lu patched=%lu restored=%lu coverage-win32=%lu\n", kNames[i],
@@ -624,5 +913,6 @@ void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
         static_cast<unsigned long>(r.target_snapshot_status), static_cast<unsigned long>(r.target_bytes),
         static_cast<unsigned long>(r.target_characters), static_cast<unsigned long>(r.target_truncated), r.target);
   }
+  PrintSecurity(e);
 }
 }  // namespace gesher::usb_storage::test
