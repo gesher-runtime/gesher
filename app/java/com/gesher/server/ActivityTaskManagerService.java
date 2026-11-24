@@ -371,7 +371,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Accepted system Settings requests, including queued/headless windows. Guarded by this. */
     private final java.util.Set<ExactAlarmSettingsSession> mExactAlarmSettingsSessions = new java.util.HashSet<>();
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
-    private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
+    private final Set<NativeConsentActivity> mNativeConsentActivities = new HashSet<>();
+    private DialRequests mDialRequests = new DialRequests(); // server-local dialog injection for tests
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedPublication = new ThreadLocal<>();
@@ -2476,13 +2477,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /** A native consent activity covers the app and keeps a headless device alive. */
-    private final class BluetoothActivity {
+    private final class NativeConsentActivity {
         final ActivityRecord covered;
         final ProcessRecord coveredProcess;
         final boolean needsPause;
 
         // Constructed under the activity monitor; only completion releases the reservation.
-        BluetoothActivity(ActivityRecord source) {
+        NativeConsentActivity(ActivityRecord source) {
             ActivityRecord top = source == null ? focusedTaskTopLocked() : topOf(source.taskId);
             covered = top != null && top.app != null ? top : null;
             coveredProcess = covered == null ? null : covered.app;
@@ -2492,7 +2493,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 covered.nativeUiCount++;
                 covered.resumeAfterNativeUi = true;
             }
-            mBluetoothActivities.add(this);
+            mNativeConsentActivities.add(this);
             updateIdle();
         }
 
@@ -2502,7 +2503,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             synchronized (ActivityTaskManagerService.this) {
                 // A detached result callback may already have finished its caller.
                 // Admit the pause atomically and retain this process's thread.
-                if (!needsPause || !mBluetoothActivities.contains(this) || covered.finishing
+                if (!needsPause || !mNativeConsentActivities.contains(this) || covered.finishing
                         || !mActivities.contains(covered) || !activityEnabled(covered)
                         || covered.app != coveredProcess || coveredProcess == null
                         || processByPid(coveredProcess.pid) != coveredProcess
@@ -2518,7 +2519,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             try { thread.scheduleTransaction(transaction); }
             catch (RemoteException failure) {
-                SystemServer.log("Bluetooth consent pause failed: " + failure);
+                SystemServer.log("Native consent pause failed: " + failure);
             }
         }
 
@@ -2526,7 +2527,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (covered == null) return;
             synchronized (ActivityTaskManagerService.this) {
                 long until = SystemClock.uptimeMillis() + 500;
-                while (mBluetoothActivities.contains(this) && covered.app == coveredProcess
+                while (mNativeConsentActivities.contains(this) && covered.app == coveredProcess
                         && covered.state == State.PAUSING) {
                     long left = until - SystemClock.uptimeMillis();
                     if (left <= 0) break;
@@ -2542,7 +2543,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         void finish(Runnable deliver) {
             boolean resumeCovered = false;
             synchronized (ActivityTaskManagerService.this) {
-                if (!mBluetoothActivities.remove(this)) return;
+                if (!mNativeConsentActivities.remove(this)) return;
                 if (covered != null && --covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
                         && covered.state != State.PAUSING) {
                     covered.resumeAfterNativeUi = false;
@@ -2576,22 +2577,64 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final BluetoothRequests requests = mBluetoothRequests;
         // Validate before consuming a forwarded result route or scheduling host work.
         requests.validate(action, pkg, captured);
+        return requestNativeConsent(intent, callingProcess, internalCreator, delegated, publication,
+                resultToToken, resultWho, requestCode, (ownerPid, lifetime, beforeWork, completion) ->
+                        requests.request(action, pkg, captured, lifetime, beforeWork, completion));
+    }
+
+    private int requestDial(Intent intent, String resolvedType, String verifiedCaller,
+            ProcessRecord callingProcess, boolean internalCreator,
+            java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode) {
+        final String pkg = verifiedCaller == null ? "android" : verifiedCaller;
+        final ApkPackage captured = mPm.get(pkg);
+        if (captured == null && !"android".equals(pkg)) {
+            throw new SecurityException("Dial request requires an installed caller");
+        }
+        final Intent launch = new Intent(intent);
+        return requestNativeConsent(launch, callingProcess, internalCreator, delegated, publication,
+                resultToToken, resultWho, requestCode, (ownerPid, lifetime, beforeWork, completion) -> {
+                    java.util.function.BooleanSupplier current = () -> lifetime.getAsBoolean()
+                            && (captured == null || mPm.get(pkg) == captured
+                                && !mPm.isRemovalPending(pkg) && captured.matchesEnabledApplication(0));
+                    mDialRequests.request(launch, pkg, ownerPid, current,
+                            () -> canDelegateExternalUrl(launch, resolvedType), beforeWork,
+                            opened -> {
+                                SystemServer.log("startActivity: Windows dial request "
+                                        + (opened ? "opened" : "canceled or unavailable"));
+                                // The confirmation is finished; shell acceptance is not a call result.
+                                completion.accept(android.app.Activity.RESULT_CANCELED);
+                            });
+                });
+    }
+
+    @FunctionalInterface
+    private interface NativeConsentRequest {
+        void enqueue(int ownerPid, java.util.function.BooleanSupplier lifetime,
+                Runnable beforeWork, java.util.function.IntConsumer completion);
+    }
+
+    private int requestNativeConsent(Intent intent, ProcessRecord callingProcess,
+            boolean internalCreator, java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode, NativeConsentRequest request) {
         final ActivityRecord source, recipient;
         final ProcessRecord sourceProcess, expectedProcess;
         final String targetWho;
         final int targetCode;
         final boolean forwarded, cancelResult;
-        final BluetoothActivity activity;
+        final NativeConsentActivity activity;
         synchronized (this) {
             source = resultToToken == null ? null : forToken(resultToToken);
             if (resultToToken != null && (source == null || source.app == null
                     || source.finishing || source.state == State.DESTROYED || !activityEnabled(source)
                     || (internalCreator ? publication == null || !publication.getAsBoolean()
                             : callingProcess == null || source.app != callingProcess))) {
-                throw new SecurityException("Bluetooth result must belong to its live caller activity");
+                throw new SecurityException("Native consent result must belong to its live caller activity");
             }
             if (requestCode >= 0 && source == null) {
-                throw new SecurityException("Bluetooth result requires a live activity");
+                throw new SecurityException("Native consent result requires a live activity");
             }
             sourceProcess = source == null ? null : source.app;
             forwarded = source != null && (intent.getFlags() & Intent.FLAG_ACTIVITY_FORWARD_RESULT) != 0;
@@ -2621,7 +2664,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             cancelResult = recipient != null && ((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
                     || source.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE);
-            activity = new BluetoothActivity(source);
+            activity = new NativeConsentActivity(source);
         }
         // After a result is forwarded/detached (or none was requested), the system UI
         // owns its work. A trampoline may finish or die without canceling that request.
@@ -2654,7 +2697,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             activity.pauseCovered((intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
             updateTopResumed();
-            requests.request(action, pkg, captured, lifetime, activity::awaitPause, completion);
+            // A detached request may outlive its source process. Do not attach its
+            // later dialog to a recycled PID's window; Gesher owns that dialog.
+            int ownerPid = !detached && sourceProcess != null ? sourceProcess.pid : 0;
+            request.enqueue(ownerPid, lifetime, activity::awaitPause, completion);
         } catch (SecurityException revoked) {
             // Permission may be revoked after admission consumed a forwarded route.
             // That accepted launch must finish with cancellation, not lose its result.
@@ -2798,7 +2844,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             throw new SecurityException("Initial launch does not match the attached process package");
         }
         if (info == null) {
-            if (requiredTask == null && BluetoothRequests.handles(intent, resolvedType)) {
+            boolean bluetoothRequest = BluetoothRequests.handles(intent, resolvedType);
+            boolean dialRequest = DialRequests.handles(intent) && canDelegateExternalUrl(intent, resolvedType);
+            if (requiredTask == null && (bluetoothRequest || dialRequest)) {
                 // Standalone services share the APK's PID and UID. Local Binder calls
                 // are normally trusted control-plane work, but must not turn that
                 // admitted APK (or a retired admission) into the Android system caller.
@@ -2817,18 +2865,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                     && !originalProcess.enabledProcessLifetime.getAsBoolean()
                                 || caller == null || originalProcess.thread == null
                                 || !originalProcess.thread.asBinder().equals(caller.asBinder())) {
-                            throw new SecurityException("Bluetooth request requires its live standalone admission");
+                            throw new SecurityException("Native consent request requires its live standalone admission");
                         }
                         ApkPackage claimed = mPm.get(callingPackage);
                         if (!owner.packageName.equals(callingPackage)
                                 && (claimed == null || claimed.uid() != owner.uid())) {
-                            throw new SecurityException("Bluetooth caller cannot act for another package");
+                            throw new SecurityException("Native consent caller cannot act for another package");
                         }
                         verifiedCaller = owner.packageName;
                     }
                 }
-                return requestBluetoothState(intent, verifiedCaller, originalProcess,
-                        internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
+                return bluetoothRequest
+                        ? requestBluetoothState(intent, verifiedCaller, originalProcess,
+                                internalCreator, delegated, publication, resultToToken, resultWho, requestCode)
+                        : requestDial(intent, resolvedType, verifiedCaller, originalProcess,
+                                internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
             }
             if (DocumentPicker.handles(intent)) {
                 return startDocumentPicker(caller, originalName, intent, resolvedType,
@@ -3444,10 +3495,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (WindowsUriHandlers.handlesScheme(intent.getScheme())) {
             // Only what PackageManager resolves to Windows' handler: Windows has one
             // registered for the scheme now, and the request names that activity or
-            // matches its filter (WindowsUriHandlers.queryIntentActivities).
+            // matches its filter. A selector may choose the activity, but the outer
+            // intent's payload must belong to that same handler.
             return mPm.get(WindowsUriHandlers.PACKAGE) == null
-                    && !mPm.uriHandlers().queryIntentActivities(target, resolvedType,
-                            PackageManager.MATCH_DEFAULT_ONLY).isEmpty();
+                    && mPm.uriHandlers().canDelegate(intent, resolvedType,
+                            PackageManager.MATCH_DEFAULT_ONLY);
         }
         return mPm.get(BrowserPackageSupport.PACKAGE) == null
                 && !BrowserPackageSupport.queryIntentActivities(target, resolvedType,
@@ -3845,7 +3897,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
         if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mAccountChoosers.isEmpty()
                 || !mExactAlarmSettingsSessions.isEmpty() || !mDocumentPickers.isEmpty()
-                || !mBluetoothActivities.isEmpty()) {
+                || !mNativeConsentActivities.isEmpty()) {
             mIdleSince = 0;
         } else if (mIdleSince == 0) {
             mIdleSince = SystemClock.uptimeMillis();
