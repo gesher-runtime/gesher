@@ -298,7 +298,7 @@ index 57385c1d..85c47001 100644
 +  E("sbrk", Sbrk);
 +  E("brk", Brk);
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index d693bd9f..a03256ce 100644
+index d02d0421..7a53e410 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
 @@ -9,0 +10,5 @@
@@ -315,13 +315,15 @@ index d693bd9f..a03256ce 100644
 +         name == "/bin/su";
 +}
 +
-@@ -92,2 +103,3 @@ std::string ToolName(const std::string& name) {
+@@ -92,3 +103,4 @@ std::string ToolName(const std::string& name) {
 -  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
--                                       "ps",      "pm", "am", "kill",   "sleep", "toybox"};
+-                                       "ps",      "pm", "am", "kill",   "sleep", "toybox",
+-                                       "which",   "mount"};
 +  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
 +                                       "dd", "basename", "tr", "ps", "pm", "am", "kill",
-+                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync", "umount"};
-@@ -107,0 +120,22 @@ std::string ToolName(const std::string& name) {
++                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync",
++                                       "umount", "which", "mount"};
+@@ -112,0 +125,22 @@ std::string ToolName(const std::string& name) {
 +std::wstring FilesystemTool(const std::string& name) {
 +  if (!gesher::usb_storage::ProtectedRuntimeEnabled()) return {};
 +  std::string base = name;
@@ -344,15 +346,15 @@ index d693bd9f..a03256ce 100644
 +  return directory + L"filesystem-tools\\bin\\" + file;
 +}
 +
-@@ -165,0 +200 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
+@@ -170,0 +205 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
 +    if (!CanLoadExecutableElf(path)) return kEACCES;
-@@ -366 +401,4 @@ std::wstring LauncherPath() {
+@@ -371 +406,4 @@ std::wstring LauncherPath() {
 -  const char* env = gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
 +  // The protected authority starts its own installed executable. A guest
 +  // setting cannot redirect that route to a different native image.
 +  const char* env = gesher::usb_storage::ProtectedRuntimeEnabled()
 +                        ? nullptr : gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
-@@ -380,0 +419,14 @@ std::wstring LauncherPath() {
+@@ -385,0 +424,14 @@ std::wstring LauncherPath() {
 +bool CanLoadExecutableElf(const std::wstring& path) {
 +  const bool protected_runtime = gesher::usb_storage::ProtectedRuntimeEnabled();
 +  if (!protected_runtime) return true;
@@ -367,7 +369,7 @@ index d693bd9f..a03256ce 100644
 +  return gesher::usb_storage::ProtectedElfPolicy(path, runtime, protected_runtime, credentials, uid, gid);
 +}
 +
-@@ -385,0 +438,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
+@@ -390,0 +443,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
 +  if (IsSuName(prog) && gesher::usb_storage::ProtectedRuntimeEnabled()) {
 +    launch->kind = "su";
 +    launch->application = LauncherPath();
@@ -377,7 +379,7 @@ index d693bd9f..a03256ce 100644
 +    AppendArgs(&launch->command_line, argv, 1);
 +    return Finish(launch);
 +  }
-@@ -394,0 +456,10 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
+@@ -399,0 +461,10 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
 +  if (const std::wstring file = FilesystemTool(prog); !file.empty()) {
 +    std::string head;
 +    const int error = Probe(file, &head);
@@ -388,12 +390,43 @@ index d693bd9f..a03256ce 100644
 +    // Missing tools remain ENOENT; no format/check success is synthesized.
 +    return LaunchFile(file, head, argv, dir, depth, launch);
 +  }
-@@ -460,0 +532,4 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
+@@ -465,0 +537,4 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
 +  if (const std::wstring file = FilesystemTool(name); !file.empty()) {
 +    std::string head;
 +    return Probe(file, &head) == 0 ? file : std::wstring{};
 +  }
-@@ -489,0 +565,96 @@ bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
+@@ -484,0 +560,30 @@ std::vector<std::string> FindAllInPath(const std::string& name, const std::strin
++  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
++    // These names bypass PATH in PrepareProgram. Discovery must use the same
++    // aliases and admission, and cannot substitute a PATH file when a sealed
++    // helper is missing, malformed or denied for the authenticated identity.
++    if (IsSuName(name)) {
++      uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
++      if (gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) &&
++          !gesher::usb_storage::ProtectedRuntimeIsSystemServer()) {
++        found.push_back(name.find('/') == std::string::npos ? "/system/bin/" + name : name);
++      }
++      // This reports the protected route's existence only. The authority
++      // validates live media consent when it actually launches a su child.
++      return found;
++    }
++    if (!FilesystemTool(name).empty()) {
++      Launch launch;
++      if (PrepareProgram(name, {name}, "", 0, false, &launch, nullptr) == 0 && launch.kind == "elf") {
++        found.push_back(name.find('/') == std::string::npos ? "/system/bin/" + name : name);
++      }
++      return found;
++    }
++  }
++  // An explicit path is tested directly, as PrepareProgram does. In
++  // particular, do not append it to PATH after a failed direct lookup.
++  if (name.find_first_of("/\\") != std::string::npos) {
++    DWORD attributes = GetFileAttributesW(WindowsPath(name).c_str());
++    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
++      found.push_back(name);
++    return found;
++  }
+@@ -516,0 +622,96 @@ bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 +namespace {
 +
 +DWORD DescriptorError() {
@@ -490,20 +523,24 @@ index d693bd9f..a03256ce 100644
 +
 +}  // namespace
 +
-@@ -512,0 +684,3 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -539,0 +741,3 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 +  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
 +    return SpawnProtectedCommand(launch, environment, cwd, fds, info, extra_flags);
 +  }
 diff --git a/compat/elf/exec/exec_spawn.h b/compat/elf/exec/exec_spawn.h
-index 194e9f9a..af68411c 100644
+index dd088ea5..7697edd4 100644
 --- a/compat/elf/exec/exec_spawn.h
 +++ b/compat/elf/exec/exec_spawn.h
-@@ -63,0 +64,5 @@ std::wstring LauncherPath();
+@@ -64,0 +65,5 @@ std::wstring LauncherPath();
 +// Every ELF entry, including an in-process exec/spawn transition, checks the
 +// authenticated protected UID/GID. Root commands may load only the six sealed
 +// installed filesystem helpers. Ordinary Android process execution is unchanged.
 +bool CanLoadExecutableElf(const std::wstring& path);
 +
+@@ -88,0 +94,3 @@ std::wstring FindInPath(const std::string& name, const std::string& path);
++// Supported explicit paths are resolved directly. In an authenticated protected
++// process, reserved su/filesystem aliases use their actual protected route;
++// an unavailable sealed helper never falls back to a different PATH executable.
 diff --git a/compat/elf/exec/gesher_exec.cc b/compat/elf/exec/gesher_exec.cc
 index cd785799..d84fe784 100644
 --- a/compat/elf/exec/gesher_exec.cc
@@ -597,7 +634,7 @@ index cd785799..d84fe784 100644
 -  for (int i = 1; i < argc; ++i) args.push_back(ex::Narrow(wargv[i]));
 -  LocalFree(wargv);
 diff --git a/compat/elf/exec/gesher_shell.cc b/compat/elf/exec/gesher_shell.cc
-index 383bc7e3..75960223 100644
+index c685d5cd..f5bf8b07 100644
 --- a/compat/elf/exec/gesher_shell.cc
 +++ b/compat/elf/exec/gesher_shell.cc
 @@ -29,0 +30 @@
@@ -606,7 +643,7 @@ index 383bc7e3..75960223 100644
 +#include <dirent.h>
 @@ -34,0 +37 @@
 +#include <sys/stat.h>
-@@ -1636,0 +1640,8 @@ void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out) {
+@@ -1648,0 +1652,8 @@ void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out) {
 +std::string ShellPath(const Shell& shell, const std::string& path) {
 +  if (path.empty() || path.front() == '/' || path.front() == '\\' ||
 +      gesher::reserved_names::DriveRoot(path.c_str()) || shell.cwd.empty()) {
@@ -615,7 +652,7 @@ index 383bc7e3..75960223 100644
 +  return shell.cwd + "/" + path;
 +}
 +
-@@ -1690,21 +1701,16 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
+@@ -1702,21 +1713,16 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
 -      std::wstring wdir = WindowsPath(dir, sh->cwd);
 -      WIN32_FIND_DATAW fd;
 -      HANDLE h = FindFirstFileW((wdir + L"\\*").c_str(), &fd);
@@ -654,7 +691,7 @@ index 383bc7e3..75960223 100644
 +        }
 +        next.push_back(std::move(joined));
 diff --git a/compat/elf/exec/shell_execute.inc b/compat/elf/exec/shell_execute.inc
-index 348f6938..2b1ced3e 100644
+index e11b0310..e44309e2 100644
 --- a/compat/elf/exec/shell_execute.inc
 +++ b/compat/elf/exec/shell_execute.inc
 @@ -163,0 +164,8 @@ int StartSubshell(const Shell& sh, const std::string& src, const Io& io,
@@ -666,7 +703,7 @@ index 348f6938..2b1ced3e 100644
 +    return Start(sh, {"sh", "--gesher-script-text", SubshellSource(sh, src),
 +        std::to_string(sh.shell_pid), sh.pos.empty() ? "sh" : sh.pos[0]}, io, process);
 +  }
-@@ -291,9 +299,2 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
+@@ -315,9 +323,2 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
 -  WIN32_FILE_ATTRIBUTE_DATA data;
 -  if (!GetFileAttributesExW(WindowsPath(arg, sh->cwd).c_str(),
 -                            GetFileExInfoStandard, &data))
@@ -678,7 +715,7 @@ index 348f6938..2b1ced3e 100644
 -    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 +  const std::string path = ShellPath(*sh, arg);
 +  struct stat info{};
-@@ -301,3 +302,9 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
+@@ -325,3 +326,9 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
 -    return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 -  if (op == "-w") return (data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0;
 -  if (op == "-s") return data.nFileSizeHigh != 0 || data.nFileSizeLow != 0;
@@ -692,15 +729,15 @@ index 348f6938..2b1ced3e 100644
 +  if (op == "-f") return S_ISREG(info.st_mode);
 +  if (op == "-s") return info.st_size != 0;
 diff --git a/compat/libcore/process.cc b/compat/libcore/process.cc
-index 190155ca..7bc891f4 100644
+index e2968332..7155e09a 100644
 --- a/compat/libcore/process.cc
 +++ b/compat/libcore/process.cc
-@@ -45,0 +46,2 @@
+@@ -46,0 +47,2 @@
 +#include "../usb_storage/protected_runtime_client.h"
 +
-@@ -262,0 +265 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
+@@ -331,0 +334 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
 +  uint64_t creation = 0;
-@@ -265 +268,7 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
+@@ -334 +337,7 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
 -    if (g_children.find(pid) == g_children.end()) return;
 +    const auto child = g_children.find(pid);
 +    if (child == g_children.end()) return;
@@ -709,11 +746,11 @@ index 190155ca..7bc891f4 100644
 +      if (!GetProcessTimes(child->second, &created, &exited, &kernel, &user)) return;
 +      creation = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
 +    }
-@@ -267 +276,2 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
+@@ -336 +345,2 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
 -  gesher_kill_other(pid, kSigterm);
 +  if (creation) gesher::usb_storage::ProtectedSignal(static_cast<uint32_t>(pid), creation, kSigterm);
 +  else gesher_kill_other(pid, kSigterm);
-@@ -273,3 +283,14 @@ void JNICALL DestroyProcessForcibly(JNIEnv*, jclass, jint pid) {
+@@ -342,3 +352,14 @@ void JNICALL DestroyProcessForcibly(JNIEnv*, jclass, jint pid) {
 -  std::lock_guard<std::mutex> lock(g_mutex);
 -  auto it = g_children.find(pid);
 -  if (it != g_children.end()) TerminateProcess(it->second, 0x80 + kSigkill);
@@ -1122,15 +1159,15 @@ index ee975dc8..d7a649e8 100644
 +    return fd;
 +  }
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index a3bc4dfd..ad04b557 100644
+index 2f1b7477..11da4d09 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -40,0 +41 @@
 +#include "usb_block_internal.h"
-@@ -367,0 +369,2 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -371,0 +373,2 @@ int ioctl(int fd, unsigned long request, ...) {
 +  int block_result;
 +  if (gesher::usb_block::Ioctl(snapshot, request, argp, &block_result)) return block_result;
-@@ -369,0 +373,5 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -373,0 +377,5 @@ int ioctl(int fd, unsigned long request, ...) {
 +  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
 +    if (request != FIONREAD) return errno = ENOTTY, -1;
 +    *argp = 0;
@@ -1558,7 +1595,7 @@ index 30d03bc8..d183da9d 100644
 @@ -684,0 +735 @@ int main(int argc, char** argv) {
 +  ProtectedRouting();
 diff --git a/tools/test_environment_lookup_contracts.py b/tools/test_environment_lookup_contracts.py
-index f2407351..51b3d5b5 100755
+index f2407351..51b3d5b5 100644
 --- a/tools/test_environment_lookup_contracts.py
 +++ b/tools/test_environment_lookup_contracts.py
 @@ -4,3 +4,4 @@

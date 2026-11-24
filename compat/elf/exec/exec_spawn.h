@@ -15,7 +15,8 @@
 //     without "#!", as Linux's execvp does) run in gesher-exec's shell; other
 //     "#!" interpreters are looked up like programs;
 //   - Android's /system/bin programs gesher-exec provides (IsToolName: ls,
-//     cat, id, ps, getprop, setprop, logcat, pm, kill, sleep), as a bare name
+//     cat, id, ps, getprop, setprop, logcat, pm, am, kill, sleep, which,
+//     mount, toybox), as a bare name
 //     or a /system/bin path, run as `gesher-exec --tool <name>`;
 //   - a static executable (ET_EXEC) is ENOEXEC (ADR 0055).
 //
@@ -87,6 +88,18 @@ int PrepareLaunchInPath(const std::vector<std::string>& argv, const std::string&
 // finds it), or "" if there is none. Tools and sh are not files: "".
 std::wstring FindInPath(const std::string& name, const std::string& path);
 
+// Every file a bare name matches in `path`, in search order, each spelled as
+// its PATH entry followed by the name (and the Windows executable extension
+// matched, if any). Unlike FindInPath, tools and sh are not excluded here.
+// Supported explicit paths are resolved directly. In an authenticated protected
+// process, reserved su/filesystem aliases use their actual protected route;
+// an unavailable sealed helper never falls back to a different PATH executable.
+std::vector<std::string> FindAllInPath(const std::string& name, const std::string& path);
+
+// Whether `name` is one of the names exec runs in gesher-exec's own shell
+// (sh, /system/bin/sh, /bin/sh, /system/xbin/sh, /vendor/bin/sh).
+bool IsShellName(const std::string& name);
+
 // The same for exec*(path, argv): `program` is the file to run (found in PATH
 // when `search_path` and it has no '/', as execvp; else a path, as execv),
 // `argv` what it gets, argv[0] included.
@@ -101,7 +114,8 @@ int PrepareLaunchProgramInPath(const std::string& program, const std::vector<std
 
 // Whether `name` (a bare name or /system/bin/<name>, /system/xbin/<name>) is
 // one of the Android programs gesher-exec provides itself (`--tool`):
-// getprop, setprop, logcat, ls, cat, id, ps, pm, am, kill, sleep, toybox.
+// getprop, setprop, logcat, ls, cat, id, ps, pm, am, kill, sleep, toybox,
+// which, mount.
 bool IsToolName(const std::string& name);
 
 // gesher-exec --tool: runs the built-in program `name` with `args` (argv[1..]).

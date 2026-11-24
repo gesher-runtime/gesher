@@ -31,9 +31,11 @@ using LocalMemory = std::unique_ptr<void, Local>;
 using Service = std::unique_ptr<std::remove_pointer_t<SC_HANDLE>, ServiceClose>;
 
 constexpr ACCESS_MASK kSessionObjectRead = READ_CONTROL | 0x0001 | 0x0002;
+constexpr ACCESS_MASK kAppContainerObjectAccess = 0x0001 | 0x0002 | 0x0004 | 0x0008;
 constexpr DWORD kNamespaceSecurityLimit = 65536;
 constexpr DWORD kNamespaceAclLimit = 16384;
 constexpr DWORD kNamespaceAceLimit = 128;
+enum class SessionObjectRoot { kBase, kAppContainer };
 
 // Use the native Directory type, never a filesystem path or a DOS-device link.
 // NtOpenDirectoryObject and NtQuery/SetSecurityObject have documented native
@@ -49,11 +51,27 @@ struct SessionDirectory {
   SetSecurity set = nullptr;
   Error error = nullptr;
   Compare compare = nullptr;
+  ACCESS_MASK private_access = 0;
   std::wstring path;
   UNICODE_STRING name{};
   OBJECT_ATTRIBUTES attributes{};
 
-  DWORD Initialize(DWORD session) {
+  DWORD Initialize(DWORD session, SessionObjectRoot root) {
+    const wchar_t* leaf = nullptr;
+    switch (root) {
+      case SessionObjectRoot::kBase:
+        leaf = L"BaseNamedObjects";
+        private_access = kSessionObjectRead;
+        break;
+      case SessionObjectRoot::kAppContainer:
+        leaf = L"AppContainerNamedObjects";
+        // The Windows wrapper requests these four Directory-specific rights.
+        // No READ_CONTROL or standard mutation right is added to this grant.
+        private_access = kAppContainerObjectAccess;
+        break;
+      default:
+        return ERROR_INVALID_PARAMETER;
+    }
     const HMODULE native = GetModuleHandleW(L"ntdll.dll");
     const HMODULE base = GetModuleHandleW(L"kernelbase.dll");
     if (!native || !base) return ERROR_MOD_NOT_FOUND;
@@ -63,7 +81,7 @@ struct SessionDirectory {
     error = reinterpret_cast<Error>(GetProcAddress(native, "RtlNtStatusToDosError"));
     compare = reinterpret_cast<Compare>(GetProcAddress(base, "CompareObjectHandles"));
     if (!open || !query || !set || !error || !compare) return ERROR_PROC_NOT_FOUND;
-    path = L"\\Sessions\\" + std::to_wstring(session) + L"\\BaseNamedObjects";
+    path = L"\\Sessions\\" + std::to_wstring(session) + L"\\" + leaf;
     if (!session || path.size() >= 128) return ERROR_INVALID_PARAMETER;
     name.Length = static_cast<USHORT>(path.size() * sizeof(wchar_t));
     name.MaximumLength = static_cast<USHORT>(name.Length + sizeof(wchar_t));
@@ -153,7 +171,8 @@ bool SameNamespaceSecurity(const NamespaceSecurity& before, const NamespaceSecur
       before.control == after.control && SameNamespaceAcl(before.label, after.label) &&
       SameNamespaceAcl(expected_dacl, after.dacl);
 }
-DWORD ValidateNamespacePolicy(const NamespaceSecurity& security, PSID private_user, bool* granted) {
+DWORD ValidateNamespacePolicy(const NamespaceSecurity& security, PSID private_user,
+                              ACCESS_MASK private_access, bool* granted) {
   *granted = false;
   if (!IsWellKnownSid(security.owner, WinLocalSystemSid) &&
       !IsWellKnownSid(security.owner, WinBuiltinAdministratorsSid)) return ERROR_ACCESS_DENIED;
@@ -167,8 +186,8 @@ DWORD ValidateNamespacePolicy(const NamespaceSecurity& security, PSID private_us
     if (!NamespaceSidWithin(sid, static_cast<const BYTE*>(raw), ace->Header.AceSize)) return ERROR_INVALID_ACL;
     if (EqualSid(sid, private_user)) {
       if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE || ace->Header.AceFlags ||
-          (ace->Mask & ~kSessionObjectRead)) return ERROR_ACCESS_DENIED;
-      if (ace->Mask == kSessionObjectRead) *granted = true;
+          (ace->Mask & ~private_access)) return ERROR_ACCESS_DENIED;
+      if (ace->Mask == private_access) *granted = true;
     }
     // Selected-session desktop/logon principals may already have broader
     // Windows namespace rights. Preserve that ambient policy; only the exact
@@ -183,10 +202,12 @@ struct NamespaceGrantLock {
   NamespaceGrantLock() { AcquireSRWLockExclusive(&namespace_grant_lock); }
   ~NamespaceGrantLock() { ReleaseSRWLockExclusive(&namespace_grant_lock); }
 };
-DWORD PrepareSessionObjects(HANDLE token, PSID private_user, DWORD session, HANDLE* result,
-                            const char** startup_stage) {
-  const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
-  stage("identity.session-namespace-authority");
+DWORD PrepareSessionObjects(HANDLE token, PSID private_user, DWORD session, SessionObjectRoot root,
+                            HANDLE* result, const char** startup_stage) {
+  const auto stage = [startup_stage, root](const char* base, const char* app_container) {
+    if (startup_stage) *startup_stage = root == SessionObjectRoot::kBase ? base : app_container;
+  };
+  stage("identity.session-namespace-authority", "identity.appcontainer-namespace-authority");
   HANDLE impersonation = nullptr;
   if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &impersonation)) {
     CloseHandle(impersonation);
@@ -196,7 +217,7 @@ DWORD PrepareSessionObjects(HANDLE token, PSID private_user, DWORD session, HAND
   DWORD actual_session = 0, bytes = 0, contained = 0;
   TOKEN_TYPE type{};
   struct TokenUserBuffer { TOKEN_USER value; BYTE sid[SECURITY_MAX_SID_SIZE]; } actual{};
-  stage("identity.session-namespace-token");
+  stage("identity.session-namespace-token", "identity.appcontainer-namespace-token");
   if (!GetTokenInformation(token, TokenUser, &actual, sizeof(actual), &bytes) ||
       !GetTokenInformation(token, TokenSessionId, &actual_session, sizeof(actual_session), &bytes) ||
       !GetTokenInformation(token, TokenType, &type, sizeof(type), &bytes) ||
@@ -205,22 +226,22 @@ DWORD PrepareSessionObjects(HANDLE token, PSID private_user, DWORD session, HAND
       !EqualSid(actual.value.User.Sid, private_user) || !session || actual_session != session ||
       type != TokenPrimary || contained) return ERROR_ACCESS_DENIED;
   SessionDirectory api;
-  stage("identity.session-namespace-api");
-  DWORD status = api.Initialize(session);
+  stage("identity.session-namespace-api", "identity.appcontainer-namespace-api");
+  DWORD status = api.Initialize(session, root);
   if (status != ERROR_SUCCESS) return status;
   NamespaceGrantLock lock;
   HANDLE opened = nullptr;
-  stage("identity.session-namespace-open");
+  stage("identity.session-namespace-open", "identity.appcontainer-namespace-open");
   status = api.OpenHandle(kSessionObjectRead | WRITE_DAC, &opened);
   if (status != ERROR_SUCCESS) return status;
   const Handle directory(opened);
   NamespaceSecurity before;
-  stage("identity.session-namespace-security");
+  stage("identity.session-namespace-security", "identity.appcontainer-namespace-security");
   status = before.Read(api, opened);
   if (status != ERROR_SUCCESS) return status;
   bool granted = false;
-  stage("identity.session-namespace-policy");
-  status = ValidateNamespacePolicy(before, private_user, &granted);
+  stage("identity.session-namespace-policy", "identity.appcontainer-namespace-policy");
+  status = ValidateNamespacePolicy(before, private_user, api.private_access, &granted);
   if (status != ERROR_SUCCESS) return status;
   if (!granted) {
     ACL_SIZE_INFORMATION information{};
@@ -236,9 +257,9 @@ DWORD PrepareSessionObjects(HANDLE token, PSID private_user, DWORD session, HAND
       if (!GetAce(before.dacl, i, &ace) ||
           !AddAce(updated, before.dacl->AclRevision, MAXDWORD, ace, static_cast<ACE_HEADER*>(ace)->AceSize)) return GetLastError();
     }
-    if (!AddAccessAllowedAceEx(updated, before.dacl->AclRevision, 0, kSessionObjectRead, private_user)) return GetLastError();
+    if (!AddAccessAllowedAceEx(updated, before.dacl->AclRevision, 0, api.private_access, private_user)) return GetLastError();
     NamespaceSecurity current;
-    stage("identity.session-namespace-reread");
+    stage("identity.session-namespace-reread", "identity.appcontainer-namespace-reread");
     status = current.Read(api, opened);
     if (status != ERROR_SUCCESS) return status;
     if (!SameNamespaceSecurity(before, current, before.dacl)) return ERROR_RETRY;
@@ -248,28 +269,30 @@ DWORD PrepareSessionObjects(HANDLE token, PSID private_user, DWORD session, HAND
         !SetSecurityDescriptorDacl(&descriptor, TRUE, updated, (before.control & SE_DACL_DEFAULTED) != 0) ||
         !SetSecurityDescriptorControl(&descriptor, copied,
             static_cast<SECURITY_DESCRIPTOR_CONTROL>(before.control & copied))) return GetLastError();
-    stage("identity.session-namespace-grant");
+    stage("identity.session-namespace-grant", "identity.appcontainer-namespace-grant");
     status = api.Status(api.set(opened, DACL_SECURITY_INFORMATION, &descriptor));
     if (status != ERROR_SUCCESS) return status;
     NamespaceSecurity after;
-    stage("identity.session-namespace-readback");
+    stage("identity.session-namespace-readback", "identity.appcontainer-namespace-readback");
     status = after.Read(api, opened);
     if (status != ERROR_SUCCESS) return status;
     if (!SameNamespaceSecurity(before, after, updated)) return ERROR_ACCESS_DENIED;
   }
-  // This one non-inheriting read grant lasts for the selected Windows session
-  // object. We never restore a stale whole DACL on teardown. Our lock serializes
-  // our grants; the immediate rereads do not claim an OS-wide atomic ACL merge.
-  stage("identity.session-namespace-private-open");
+  // Each fixed, non-inheriting grant lasts for its Windows session object.
+  // Only the private wrapper needs creation rights on the AppContainer root;
+  // both borrowed authority handles below remain read-only. We never restore a
+  // stale whole DACL on teardown. Our lock serializes our grants; the immediate
+  // rereads do not claim an OS-wide atomic ACL merge.
+  stage("identity.session-namespace-private-open", "identity.appcontainer-namespace-private-open");
   if (!ImpersonateLoggedOnUser(token)) return GetLastError();
   HANDLE private_open = nullptr;
-  status = api.OpenHandle(kSessionObjectRead, &private_open);
+  status = api.OpenHandle(api.private_access, &private_open);
   const BOOL same = status == ERROR_SUCCESS && api.compare(opened, private_open);
   if (!RevertToSelf()) std::abort();
   const Handle private_directory(private_open);
   if (status != ERROR_SUCCESS) return status;
   if (!same) return ERROR_NOT_SAME_OBJECT;
-  stage("identity.session-namespace-retain");
+  stage("identity.session-namespace-retain", "identity.appcontainer-namespace-retain");
   HANDLE retained = nullptr;
   if (!DuplicateHandle(GetCurrentProcess(), opened, GetCurrentProcess(), &retained,
       kSessionObjectRead, FALSE, 0)) return GetLastError();
@@ -573,6 +596,7 @@ DWORD PrepareRuntimeDesktop(const wchar_t* runtime_sid, const wchar_t* capabilit
 
 ProtectedIdentity::~ProtectedIdentity() {
   UnloadProfile();
+  if (app_container_objects_) CloseHandle(app_container_objects_);
   if (session_objects_) CloseHandle(session_objects_);
   if (token_) CloseHandle(token_);
 }
@@ -734,8 +758,11 @@ DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_se
   stage("identity.restore-profile-privileges");
   status = privileges.Restore();
   if (status != ERROR_SUCCESS) return status;
-  status = PrepareSessionObjects(identity->token_, identity->sid(), desktop_session,
+  status = PrepareSessionObjects(identity->token_, identity->sid(), desktop_session, SessionObjectRoot::kBase,
       &identity->session_objects_, startup_stage);
+  if (status != ERROR_SUCCESS) return status;
+  status = PrepareSessionObjects(identity->token_, identity->sid(), desktop_session, SessionObjectRoot::kAppContainer,
+      &identity->app_container_objects_, startup_stage);
   if (status != ERROR_SUCCESS) return status;
   *result = std::move(identity);
   return ERROR_SUCCESS;

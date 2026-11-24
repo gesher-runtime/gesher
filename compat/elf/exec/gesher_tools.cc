@@ -11,6 +11,8 @@
 #include <gesher/logging.h>
 #include <gesher/reserved_names.h>
 
+#include <fcntl.h>
+#include <unistd.h>
 #include <windows.h>
 #include <tlhelp32.h>
 
@@ -912,13 +914,275 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
   return ExitStatus(code);
 }
 
+// --- which ---------------------------------------------------------------------
+//
+// toybox which [-a] NAME...: the file each NAME runs from, the first match
+// (-a: every match), exit 1 if any NAME has none. A name with a '/' is that
+// file if it is one. A bare name exec runs as Gesher's own /system/bin
+// program (sh, the tools here) is /system/bin/<name>, found first, as exec
+// finds it; otherwise $PATH is searched as exec searches it. FindAllInPath
+// also resolves the authenticated protected runtime's su/sealed-tool aliases.
+// Ordinary Android has no supplied su route. Discovery never grants media
+// access; the authority still requires live consent at the actual launch.
+
+int Which(const std::vector<std::string>& args) {
+  bool all = false, options = true;
+  std::vector<std::string> names;
+  for (const std::string& a : args) {
+    if (options && a == "--") { options = false; continue; }
+    if (options && a.size() > 1 && a[0] == '-') {
+      for (size_t i = 1; i < a.size(); ++i) {
+        if (a[i] != 'a') {
+          std::fprintf(stderr, "which: Unknown option '%s'\n", a.c_str());
+          return 1;
+        }
+        all = true;
+      }
+      continue;
+    }
+    names.push_back(a);
+  }
+  if (names.empty()) {
+    std::fprintf(stderr, "which: Need 1 argument\n");
+    return 1;
+  }
+  int status = 0;
+  for (const std::string& name : names) {
+    if (name.find_first_of("/\\") != std::string::npos) {
+      if (IsShellName(name) || IsToolName(name)) {
+        std::fprintf(stdout, "%s\n", name.c_str());
+        continue;
+      }
+    }
+    std::vector<std::string> found;
+    if (name.find_first_of("/\\") == std::string::npos && (IsShellName(name) || IsToolName(name)))
+      found.push_back("/system/bin/" + name);
+    for (std::string& path : FindAllInPath(name, EnvOr("PATH", ""))) found.push_back(std::move(path));
+    if (found.empty()) status = 1;
+    for (const std::string& path : found) {
+      std::fprintf(stdout, "%s\n", path.c_str());
+      if (!all) break;
+    }
+  }
+  std::fflush(stdout);
+  return status;
+}
+
+// --- mount ---------------------------------------------------------------------
+//
+// toybox mount as an app's uid (including the protected realm, where scoped
+// block access grants no host mount capability). With no device or
+// directory it lists /proc/mounts, the same table Gesher's /proc/mounts and
+// getmntent serve, as "DEVICE on DIR type TYPE (OPTIONS)". Mounting as
+// non-root goes through /etc/fstab first (toybox mount_main): a missing fstab,
+// an entry that is not there, or one not marked "user" fails with toybox's
+// message and status 1; a "user" entry reaches mount(2), which an app's
+// process may not call (EPERM).
+
+struct MountEntry {
+  std::string device, dir, type, opts;
+};
+
+// The entries of a mount table file (fstab(5)/proc mounts format, with
+// getmntent's \ooo escapes), or false with errno set if it cannot be read.
+bool ReadMountTable(const char* path, std::vector<MountEntry>* entries) {
+  int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return false;
+  std::string text;
+  char buffer[4096];
+  for (;;) {
+    int n = static_cast<int>(::read(fd, buffer, sizeof(buffer)));
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0) {
+      int saved = errno;
+      ::close(fd);
+      errno = saved;
+      return false;
+    }
+    if (n == 0) break;
+    text.append(buffer, static_cast<size_t>(n));
+  }
+  ::close(fd);
+  auto unescape = [](const std::string& field) {
+    std::string out;
+    for (size_t i = 0; i < field.size(); ++i) {
+      if (field[i] == '\\' && i + 3 < field.size() && field[i + 1] >= '0' && field[i + 1] <= '3' &&
+          field[i + 2] >= '0' && field[i + 2] <= '7' && field[i + 3] >= '0' && field[i + 3] <= '7') {
+        out += static_cast<char>(((field[i + 1] - '0') << 6) | ((field[i + 2] - '0') << 3) | (field[i + 3] - '0'));
+        i += 3;
+      } else {
+        out += field[i];
+      }
+    }
+    return out;
+  };
+  size_t start = 0;
+  while (start < text.size()) {
+    size_t end = text.find('\n', start);
+    if (end == std::string::npos) end = text.size();
+    std::string line = text.substr(start, end - start);
+    start = end + 1;
+    std::vector<std::string> fields;
+    size_t at = 0;
+    while (fields.size() < 4) {
+      at = line.find_first_not_of(" \t", at);
+      if (at == std::string::npos || line[at] == '#') break;
+      size_t stop = line.find_first_of(" \t", at);
+      if (stop == std::string::npos) stop = line.size();
+      fields.push_back(unescape(line.substr(at, stop - at)));
+      at = stop;
+    }
+    if (fields.size() < 3) continue;  // blank, comment or malformed
+    if (fields.size() == 3) fields.push_back("defaults");
+    entries->push_back({fields[0], fields[1], fields[2], fields[3]});
+  }
+  return true;
+}
+
+// Whether the comma-separated `opts` holds `option` (toybox comma_scan).
+bool HasOption(const std::string& opts, const std::string& option) {
+  size_t start = 0;
+  while (start <= opts.size()) {
+    size_t end = opts.find(',', start);
+    if (end == std::string::npos) end = opts.size();
+    if (opts.compare(start, end - start, option) == 0) return true;
+    start = end + 1;
+  }
+  return false;
+}
+
+int Mount(const std::vector<std::string>& args) {
+  bool all = false, fake = false;
+  std::string type, opts, only;
+  std::vector<std::string> operands;
+  auto add_opts = [&](const std::string& more) {
+    if (more.empty()) return;
+    if (!opts.empty()) opts += ',';
+    opts += more;
+  };
+  bool options = true;
+  for (size_t i = 0; i < args.size(); ++i) {
+    const std::string& a = args[i];
+    if (options && a == "--") { options = false; continue; }
+    // toybox's "?" option string: a --name is an argument (an -o option below).
+    if (!options || a.size() < 2 || a[0] != '-' || a[1] == '-') {
+      operands.push_back(a);
+      continue;
+    }
+    for (size_t c = 1; c < a.size(); ++c) {
+      char flag = a[c];
+      if (flag == 't' || flag == 'o' || flag == 'O') {
+        std::string value;
+        if (c + 1 < a.size()) value = a.substr(c + 1);
+        else if (i + 1 < args.size()) value = args[++i];
+        else {
+          std::fprintf(stderr, "mount: Missing argument to -%c\n", flag);
+          return 1;
+        }
+        if (flag == 't') type = value;
+        else if (flag == 'o') add_opts(value);
+        else only = value;
+        break;
+      }
+      if (flag == 'a') all = true;
+      else if (flag == 'f') fake = true;
+      else if (flag == 'r') add_opts("ro");
+      else if (flag == 'w') add_opts("rw");
+      else if (flag == 'R') add_opts("rbind");
+      else if (flag == 'n' || flag == 'v') {
+      } else {
+        // toybox passes an unknown -x through as an argument.
+        operands.push_back(a);
+        break;
+      }
+    }
+  }
+  std::string dev, dir;
+  for (const std::string& operand : operands) {
+    if (operand.size() > 2 && operand[0] == '-' && operand[1] == '-') add_opts(operand.substr(2));
+    else if (dev.empty()) dev = operand;
+    else if (dir.empty()) dir = operand;
+    else {
+      std::fprintf(stderr, "mount: Max 2 arguments\n");
+      return 1;
+    }
+  }
+  if (all && !dir.empty()) {
+    std::fprintf(stderr, "mount: -a with >1 arg\n");
+    return 1;
+  }
+  bool remount = HasOption(opts, "remount");
+  std::vector<MountEntry> mounted;
+  if (remount && !ReadMountTable("/proc/mounts", &mounted)) {
+    std::fprintf(stderr, "mount: bad /proc/mounts: %s\n", ErrorText(errno));
+    return 1;
+  }
+  if (!all && dev.empty()) {
+    // List the mounted file systems.
+    if (!ReadMountTable("/proc/mounts", &mounted)) {
+      std::fprintf(stderr, "mount: bad /proc/mounts: %s\n", ErrorText(errno));
+      return 1;
+    }
+    for (const MountEntry& m : mounted) {
+      if (!type.empty() && type != m.type) continue;
+      std::fprintf(stdout, "%s on %s type %s (%s)\n", m.device.c_str(), m.dir.c_str(), m.type.c_str(),
+                   m.opts.c_str());
+    }
+    std::fflush(stdout);
+    return 0;
+  }
+  // Not root: every mount is an /etc/fstab (or, remounting, /proc/mounts)
+  // entry the user may mount.
+  std::vector<MountEntry> table;
+  if (remount) {
+    table.assign(mounted.rbegin(), mounted.rend());
+  } else if (!ReadMountTable("/etc/fstab", &table)) {
+    std::fprintf(stderr, "mount: bad /etc/fstab: %s\n", ErrorText(errno));
+    return 1;
+  }
+  int status = 0;
+  bool matched = false;
+  for (const MountEntry& m : table) {
+    if (all) {
+      if (!dev.empty()) {
+        if (m.dir.compare(0, dev.size(), dev) != 0 || (m.dir.size() > dev.size() && m.dir[dev.size()] != '/'))
+          continue;
+      } else if (HasOption(m.opts, "noauto")) {
+        continue;
+      }
+      if (!type.empty() && type != m.type) continue;
+      if (!only.empty() && !HasOption(m.opts, only)) continue;
+    } else {
+      if (!dir.empty() && dir != m.dir) continue;
+      if (dev != m.device && (!dir.empty() || dev != m.dir)) continue;
+    }
+    matched = true;
+    if (!fake) {
+      if (!HasOption(m.opts, "user")) {
+        std::fprintf(stderr, "mount: '%s' not user mountable in fstab\n", m.device.c_str());
+      } else {
+        // mount(2) needs CAP_SYS_ADMIN, which an app's process never has.
+        std::fprintf(stderr, "mount: '%s'->'%s': %s\n", m.device.c_str(), m.dir.c_str(), ErrorText(EPERM));
+      }
+      status = 1;
+    }
+    if (!all) break;
+  }
+  if (!matched && !all) {
+    std::fprintf(stderr, "mount: '%s' not in %s\n", (dir.empty() ? dev : dir).c_str(),
+                 remount ? "/proc/mounts" : "fstab");
+    return 1;
+  }
+  return status;
+}
+
 }  // namespace
 
 int RunTool(const std::string& name, const std::vector<std::string>& args) {
   try {
   if (name == "toybox") {
     if (args.empty()) {
-      std::fprintf(stdout, "toybox (gesher)\nls cat dd grep awk sync umount blockdev basename tr id ps getprop setprop logcat kill sleep pm am\n");
+      std::fprintf(stdout, "toybox (gesher)\nls cat dd grep awk sync umount blockdev basename tr id ps getprop setprop logcat kill sleep pm am which mount\n");
       std::fflush(stdout);
       return 0;
     }
@@ -941,6 +1205,8 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "logcat") return Logcat(args);
   if (name == "kill") return Kill(args);
   if (name == "sleep") return Sleep_(args);
+  if (name == "which") return Which(args);
+  if (name == "mount") return Mount(args);
   if (name == "pm" || name == "am") return DeviceCommand(name, args);
   std::fprintf(stderr, "%s: not found\n", name.c_str());
   return 127;

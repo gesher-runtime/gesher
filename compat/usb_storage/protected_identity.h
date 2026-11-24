@@ -41,6 +41,10 @@ class ProtectedIdentity {
   // session's BaseNamedObjects. Only query/traverse/read-control are retained;
   // this authority-side identity must outlive every launch that borrows it.
   HANDLE session_objects() const { return session_objects_; }
+  // The corresponding AppContainerNamedObjects root is also retained with
+  // query/traverse/read-control only. Creation rights stay in the verified
+  // private account's access check, never in this borrowed handle.
+  HANDLE app_container_objects() const { return app_container_objects_; }
   // Windows needs these per-user paths when creating a lowbox process. Derive
   // only the required values from this exact loaded profile, never the caller.
   DWORD AppendProfileEnvironment(std::vector<std::wstring>* environment) const;
@@ -52,6 +56,7 @@ class ProtectedIdentity {
   HANDLE token_ = nullptr;
   HANDLE profile_ = nullptr;
   HANDLE session_objects_ = nullptr;
+  HANDLE app_container_objects_ = nullptr;
   DWORD session_ = 0;
   ProtectedIdentityCleanup* cleanup_;
   bool unload_attempted_ = false;

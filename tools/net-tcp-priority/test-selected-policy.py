@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'c85383129e374f4511efe091896a3ce62d536d3eeb58fc8a1588995e7e799e1c'
+OFD_QUALIFICATION_SHA256 = 'e9a3a82d50c901b6e6ea520c5a7dff9eab505755d226e8fdb539470dd51e0d2d'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -412,7 +412,18 @@ USB_BLOCK_PATH_BASES = dict.fromkeys((
  'tests/native/ofd_transfer_host_test.cc.in',
  'tools/test_environment_lookup_contracts.py',
 ), 'af2a394d0f5399f954aa00aeaf37011d42b96623')
-USB_BLOCK_TRANSITION_SHA256 = 'd140811dda30d3ca2c1905c442c7fc605a1ec60866b300a0106cd718cde6fcc9'
+# Main's native-fence ioctl and shell/exec repairs have their own updated OFD
+# receipt. Reverse USB changes in these overlapping files to that exact main
+# checkpoint, preserving those repairs before the original checks run.
+USB_BLOCK_PATH_BASES.update(dict.fromkeys((
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/exec_spawn.h',
+ 'compat/elf/exec/gesher_shell.cc',
+ 'compat/elf/exec/shell_execute.inc',
+ 'compat/libcore/process.cc',
+ 'compat/posix/src/system.cc',
+), '5b2af6e4e5de5525791c304de21c2c6a77aebcd2'))
+USB_BLOCK_TRANSITION_SHA256 = '4c522b49c4f719ee31170c866c16f333ade90e67c86cecc23ecb5bff28e11472'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
@@ -537,7 +548,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='5fe00fbb94e27fe5d5b5fe29e035b28f4ab3c3a2ac7fe0318ba3918e325d2433'
+REVIEWED_PATCH_SHA256='986c2c28f6e9517fdeae6a95ebe3908cf30ed4b7fe94cdbe31e1300fb9bb0c4c'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH

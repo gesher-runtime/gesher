@@ -84,10 +84,16 @@
 #emit EmitRuntimeFile(AddBackslash(BuildDir) + "framework-res.apk", "\system\framework")
 #emit EmitRuntimeFile(AddBackslash(BuildDir) + "org.apache.http.legacy.jar", "\system\framework")
 #emit EmitRuntimeFile(AddBackslash(BuildDir) + "com.android.location.provider.jar", "\system\framework")
+#emit EmitRuntimeFile(AddBackslash(BuildDir) + "android.test.base.jar", "\system\framework")
+#emit EmitRuntimeFile(AddBackslash(BuildDir) + "android.test.mock.jar", "\system\framework")
+#emit EmitRuntimeFile(AddBackslash(BuildDir) + "android.test.runner.jar", "\system\framework")
 
 // Shared-library declarations from this source checkout.
 #emit EmitRuntimeFile(AddBackslash(SourcePath) + "etc\permissions\org.apache.http.legacy.xml", "\system\etc\permissions")
 #emit EmitRuntimeFile(AddBackslash(SourcePath) + "etc\permissions\com.android.location.provider.xml", "\system\etc\permissions")
+#emit EmitRuntimeFile(AddBackslash(SourcePath) + "etc\permissions\android.test.base.xml", "\system\etc\permissions")
+#emit EmitRuntimeFile(AddBackslash(SourcePath) + "etc\permissions\android.test.mock.xml", "\system\etc\permissions")
+#emit EmitRuntimeFile(AddBackslash(SourcePath) + "etc\permissions\android.test.runner.xml", "\system\etc\permissions")
 
 // ICU data in its Android path.
 #emit EmitRuntimeFile(AddBackslash(BuildDir) + "icudt76l.dat", "\i18n\etc\icu")
@@ -139,6 +145,7 @@
 #emit EmitRuntimeFile(AddBackslash(BuildDir) + "NET-NOTICES.txt", "\licenses")
 
 // Notices from this source checkout.
+#emit EmitRuntimeFile(AddBackslash(SourcePath) + "licenses\JUNIT-CPL-NOTICES.txt", "\licenses")
 #emit EmitRuntimeFile(AddBackslash(SourcePath) + "licenses\APKSIG-LICENSE.txt", "\licenses")
 #emit EmitRuntimeFile(AddBackslash(SourcePath) + "licenses\BIONIC-GDTOA-NOTICES.txt", "\licenses")
 #emit EmitRuntimeFile(AddBackslash(SourcePath) + "licenses\ICU-CALENDAR-LICENSE.txt", "\licenses")

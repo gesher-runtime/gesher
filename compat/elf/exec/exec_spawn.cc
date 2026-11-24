@@ -102,7 +102,8 @@ bool IsSuName(const std::string& name) {
 std::string ToolName(const std::string& name) {
   static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
                                        "dd", "basename", "tr", "ps", "pm", "am", "kill",
-                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync", "umount"};
+                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync",
+                                       "umount", "which", "mount"};
   std::string base = name;
   for (const char* dir : {"/system/bin/", "/system/xbin/", "/bin/"}) {
     if (name.rfind(dir, 0) == 0) {
@@ -111,6 +112,10 @@ std::string ToolName(const std::string& name) {
     }
   }
   if (base == name && name.find('/') != std::string::npos) return "";
+  // Android's toybox installs which and mount in /system/bin only (/bin links
+  // there); /system/xbin/which is absent on a device without root tools, and
+  // root checks probe exactly that path.
+  if ((base == "which" || base == "mount") && name.rfind("/system/xbin/", 0) == 0) return "";
   for (const char* t : kTools) {
     if (base == t) return base;
   }
@@ -548,6 +553,58 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
   }
   return L"";
 }
+
+std::vector<std::string> FindAllInPath(const std::string& name, const std::string& path) {
+  std::vector<std::string> found;
+  if (name.empty()) return found;
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    // These names bypass PATH in PrepareProgram. Discovery must use the same
+    // aliases and admission, and cannot substitute a PATH file when a sealed
+    // helper is missing, malformed or denied for the authenticated identity.
+    if (IsSuName(name)) {
+      uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
+      if (gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) &&
+          !gesher::usb_storage::ProtectedRuntimeIsSystemServer()) {
+        found.push_back(name.find('/') == std::string::npos ? "/system/bin/" + name : name);
+      }
+      // This reports the protected route's existence only. The authority
+      // validates live media consent when it actually launches a su child.
+      return found;
+    }
+    if (!FilesystemTool(name).empty()) {
+      Launch launch;
+      if (PrepareProgram(name, {name}, "", 0, false, &launch, nullptr) == 0 && launch.kind == "elf") {
+        found.push_back(name.find('/') == std::string::npos ? "/system/bin/" + name : name);
+      }
+      return found;
+    }
+  }
+  // An explicit path is tested directly, as PrepareProgram does. In
+  // particular, do not append it to PATH after a failed direct lookup.
+  if (name.find_first_of("/\\") != std::string::npos) {
+    DWORD attributes = GetFileAttributesW(WindowsPath(name).c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+      found.push_back(name);
+    return found;
+  }
+  bool has_ext = !Extension(Widen(name)).empty();
+  static const char* const kExtensions[] = {"", ".exe", ".com", ".cmd", ".bat"};
+  for (const std::wstring& d : PathDirectories(Widen(path))) {
+    std::string dir = Narrow(d);
+    if (!dir.empty() && dir.back() != '\\' && dir.back() != '/')
+      dir += dir.find('\\') != std::string::npos ? '\\' : '/';
+    for (const char* e : kExtensions) {
+      if (has_ext && *e != 0) break;
+      std::string candidate = dir + name + e;
+      DWORD attributes = GetFileAttributesW(WindowsPath(candidate).c_str());
+      if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+        found.push_back(candidate);
+    }
+  }
+  return found;
+}
+
+bool IsShellName(const std::string& name) { return IsShName(name); }
 
 int PrepareLaunchProgram(const std::string& program, const std::vector<std::string>& argv,
                          const std::string& dir, bool search_path, Launch* launch) {

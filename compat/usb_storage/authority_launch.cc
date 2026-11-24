@@ -92,9 +92,24 @@ bool LocalSystemWorker() {
       IsWellKnownSid(reinterpret_cast<const TOKEN_USER*>(info)->User.Sid, WinLocalSystemSid);
 }
 
-DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, Handle* retained) {
+enum class SessionObjectRoot { kBase, kAppContainer };
+DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, SessionObjectRoot root, Handle* retained) {
+  HANDLE expected = nullptr;
+  const wchar_t* leaf = nullptr;
+  switch (root) {
+    case SessionObjectRoot::kBase:
+      expected = spec.session_objects;
+      leaf = L"BaseNamedObjects";
+      break;
+    case SessionObjectRoot::kAppContainer:
+      expected = spec.app_container_objects;
+      leaf = L"AppContainerNamedObjects";
+      break;
+    default:
+      return ERROR_INVALID_PARAMETER;
+  }
   DWORD flags = 0;
-  if (!GetHandleInformation(spec.session_objects, &flags)) return GetLastError();
+  if (!GetHandleInformation(expected, &flags)) return GetLastError();
   if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
   using OpenDirectory = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
   using NativeError = ULONG(NTAPI*)(NTSTATUS);
@@ -106,7 +121,7 @@ DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, Handle* retained) {
   const auto error = reinterpret_cast<NativeError>(GetProcAddress(native, "RtlNtStatusToDosError"));
   const auto compare = reinterpret_cast<Compare>(GetProcAddress(base, "CompareObjectHandles"));
   if (!open || !error || !compare) return ERROR_PROC_NOT_FOUND;
-  std::wstring path = L"\\Sessions\\" + std::to_wstring(spec.desktop_session) + L"\\BaseNamedObjects";
+  std::wstring path = L"\\Sessions\\" + std::to_wstring(spec.desktop_session) + L"\\" + leaf;
   if (path.size() >= 128) return ERROR_INVALID_PARAMETER;
   UNICODE_STRING name{};
   name.Buffer = path.data();
@@ -126,7 +141,7 @@ DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, Handle* retained) {
   if (!directory) return ERROR_INVALID_HANDLE;
   // A typed open rejects a path/link/type substitution. The comparison also
   // rejects an otherwise valid handle for a different Windows session/root.
-  if (!compare(spec.session_objects, directory.get())) return ERROR_NOT_SAME_OBJECT;
+  if (!compare(expected, directory.get())) return ERROR_NOT_SAME_OBJECT;
   retained->reset(directory.release());
   return ERROR_SUCCESS;
 }
@@ -540,7 +555,13 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   Handle session_objects_before;
   if (spec.session_objects) {
     stage("lowbox.verify-session-namespace");
-    status = VerifySessionObjects(spec, &session_objects_before);
+    status = VerifySessionObjects(spec, SessionObjectRoot::kBase, &session_objects_before);
+    if (status != ERROR_SUCCESS) return status;
+  }
+  Handle app_container_objects_before;
+  if (spec.app_container_objects) {
+    stage("lowbox.verify-appcontainer-namespace");
+    status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &app_container_objects_before);
     if (status != ERROR_SUCCESS) return status;
   }
 
@@ -588,7 +609,13 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   Handle session_objects_after;
   if (spec.session_objects) {
     stage("lowbox.recheck-session-namespace");
-    status = VerifySessionObjects(spec, &session_objects_after);
+    status = VerifySessionObjects(spec, SessionObjectRoot::kBase, &session_objects_after);
+    if (status != ERROR_SUCCESS) return status;
+  }
+  Handle app_container_objects_after;
+  if (spec.app_container_objects) {
+    stage("lowbox.recheck-appcontainer-namespace");
+    status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &app_container_objects_after);
     if (status != ERROR_SUCCESS) return status;
   }
   status = SealAndVerifyToken(raw_lowbox, desktop, spec, default_acl, startup_stage, false);

@@ -165,11 +165,14 @@ public final class GmsPackageSupport {
             ai.flags |= ApplicationInfo.FLAG_HAS_CODE;
         }
         ai.publicSourceDir = ai.sourceDir;
-        ai.dataDir = "/data/data/" + packageName;
-        // LoadedApk's class loader adds it as a native path (new File(nativeLibraryDir)):
-        // without one, the package context's getClassLoader throws a NullPointerException
-        // (Gmail's ProviderInstaller: "Failed to install provider").
-        ai.nativeLibraryDir = "/data/app/" + packageName + "/lib";
+        // The data areas an installed package of this name has under $ANDROID_DATA,
+        // never created: not "/data/data/...", which on Windows is a folder at the
+        // root of the current drive (C:\data\data\...) outside Gesher's data. The
+        // native library directory is set too: LoadedApk's class loader adds it as a
+        // native path (new File(nativeLibraryDir)), and without one the package
+        // context's getClassLoader throws a NullPointerException (Gmail's
+        // ProviderInstaller: "Failed to install provider").
+        ApklessDataDirs.describe(ai);
         return ai;
     }
 

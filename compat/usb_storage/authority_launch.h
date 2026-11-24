@@ -31,6 +31,9 @@ struct AuthorityLaunchSpec {
   // session's object namespace across the private lowbox conversion. This is
   // authority-owned input, never a guest-supplied or inherited handle.
   HANDLE session_objects = nullptr;
+  // The selected session's AppContainerNamedObjects root, under the same
+  // authority-only ownership and lifetime rules. Retained access is read-only.
+  HANDLE app_container_objects = nullptr;
 };
 
 class AuthorityLaunch {

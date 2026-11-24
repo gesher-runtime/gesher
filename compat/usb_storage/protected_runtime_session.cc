@@ -710,7 +710,7 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
   const std::wstring& working = entry->working_directory.empty() ? runtime_ : entry->working_directory;
   const AuthorityLaunchSpec spec{binary.c_str(), working.c_str(), arguments, environment,
       capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
-      identity_->session_objects()};
+      identity_->session_objects(), identity_->app_container_objects()};
   status = AuthorityLaunch::Create(identity_->token(), spec, &entry->launch, launch_stage);
   if (status != ERROR_SUCCESS) return status;
   entry->start_time = CreationTime(entry->launch->process());
@@ -1216,7 +1216,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   const std::wstring broker_arguments = L"--gesher-protected-binder " + registration + L" " + listeners + L" " + binder_data_;
   const AuthorityLaunchSpec broker_spec{broker_image.c_str(), runtime_.c_str(), broker_arguments,
       environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
-      identity_->session_objects()};
+      identity_->session_objects(), identity_->app_container_objects()};
   startup_stage_ = "runtime.create-binder-broker";
   status = AuthorityLaunch::Create(identity_->token(), broker_spec, &broker_, &launch_stage_);
   if (status != ERROR_SUCCESS) return status;
@@ -1233,7 +1233,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
       std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(options_.desktop_session);
   const AuthorityLaunchSpec manager_spec{manager_image.c_str(), runtime_.c_str(), manager_arguments,
       environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
-      identity_->session_objects()};
+      identity_->session_objects(), identity_->app_container_objects()};
   startup_stage_ = "runtime.create-service-manager";
   status = AuthorityLaunch::Create(identity_->token(), manager_spec, &manager_, &launch_stage_);
   if (status == ERROR_SUCCESS) status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);

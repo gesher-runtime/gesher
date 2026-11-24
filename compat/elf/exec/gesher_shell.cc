@@ -419,6 +419,8 @@ struct Token {
   bool heredoc_expand = true;
   int io_number = -1;  // a redirection's explicit fd, or -1
   bool incomplete = false;
+  // mksh's &>, &>>, &>| and &>&: the redirection, then 2>&<its fd>.
+  bool and_stderr = false;
 };
 
 // Scans one raw word from src[*i], honouring '', "", \, and the $(...), ${...},
@@ -595,7 +597,7 @@ std::vector<Token> Tokenize(const std::string& src) {
       }
       continue;
     }
-    if (c == '&') {
+    if (c == '&' && !(i + 1 < n && src[i + 1] == '>')) {
       if (i + 1 < n && src[i + 1] == '&') {
         out.push_back({Tok::Op, "&&", false, "", true, -1});
         i += 2;
@@ -620,12 +622,14 @@ std::vector<Token> Tokenize(const std::string& src) {
       ++i;
       continue;
     }
-    // A redirection, possibly with a leading fd number.
+    // A redirection, possibly with a leading fd number. As in mksh (lex.c),
+    // "&>" starts one: [n]&>file is [n]>file 2>&n, as are &>>, &>| and &>&.
     size_t j = i;
     std::string digits;
     while (j < n && IsDigitC(src[j])) digits += src[j++];
-    if (j < n && (src[j] == '<' || src[j] == '>')) {
-      size_t k = j;
+    bool and_stderr = j + 1 < n && src[j] == '&' && src[j + 1] == '>';
+    if (j < n && (src[j] == '<' || src[j] == '>' || and_stderr)) {
+      size_t k = and_stderr ? j + 1 : j;
       std::string op = ScanRedirOp(src, &k);
       if (!op.empty()) {
         i = k;
@@ -639,6 +643,7 @@ std::vector<Token> Tokenize(const std::string& src) {
           pending_heredocs.push_back(out.size() - 1);
         } else {
           Token t{Tok::Op, op, false, "", true, ionum};
+          t.and_stderr = and_stderr;
           out.push_back(t);
         }
         continue;
@@ -903,6 +908,13 @@ struct Parser {
         advance();
       }
       redirs->push_back(r);
+      if (rt.and_stderr) {
+        Redir dup;
+        dup.fd = 2;
+        dup.op = ">&";
+        dup.target = std::to_string(r.fd);
+        redirs->push_back(dup);
+      }
     }
   }
 
