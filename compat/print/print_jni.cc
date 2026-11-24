@@ -1,6 +1,8 @@
 // Gesher (print): com.gesher.server.WindowsPrint's natives (gesher-app.jar),
 // registered by android_runtime.cc. The Win32 side is print_win32.cc.
 
+#include "print_win32.h"  // opt into GDI before JNI helpers can load Windows headers
+
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
 
@@ -9,7 +11,6 @@
 #include <vector>
 
 #include "core_jni_helpers.h"
-#include "print_win32.h"
 
 namespace android {
 

@@ -269,7 +269,7 @@ static void ordinary_handler(int sig) {
   ordinary_mask = sigismember(&active, sig) == 1 && sigismember(&active, SIGUSR2) == 1;
   ordinary_calls += 1;
 }
-#if !defined(_WIN32) && !defined(__aarch64__)
+#if !defined(_WIN32)
 static volatile sig_atomic_t info_calls, info_value, info_code, info_pid, info_return_mask, info_pc;
 static void siginfo_handler(int sig, siginfo_t* info, void* raw) {
   ucontext_t* context = (ucontext_t*)raw;
@@ -279,7 +279,11 @@ static void siginfo_handler(int sig, siginfo_t* info, void* raw) {
   info_pid = info->si_pid == getpid();
   info_return_mask = sigismember(&context->uc_sigmask, sig) == 1 &&
                      sigismember(&context->uc_sigmask, SIGUSR2) == 1;
+#if defined(__aarch64__)
+  info_pc = context->uc_mcontext.pc != 0 && context->uc_mcontext.sp != 0;
+#else
   info_pc = context->uc_mcontext.gregs[REG_RIP] != 0 && context->uc_mcontext.gregs[REG_RSP] != 0;
+#endif
 }
 // The guest shim runs SA_SIGINFO handlers on the ordinary stack with the
 // queued record and the thread's actual context at the delivery point.
@@ -316,13 +320,13 @@ static void capabilities(void) {
   sigset_t temporary;
   sigfillset(&temporary);
   sigdelset(&temporary, sig);
-#if defined(_WIN32) || defined(__aarch64__)
-  // The host layer reports asynchronous SA_SIGINFO unsupported, and so does the
-  // guest shim for an ARM64 program run by the x86-64 translator (how this
-  // suite runs the arm64-v8a fixture): it has no ARM64 frame to report.
+#if defined(_WIN32)
+  // The host layer reports asynchronous SA_SIGINFO unsupported.
   const int first_mode = 0;
 #else
-  const int first_mode = 1;  // the x86-64 guest shim delivers SA_SIGINFO (siginfo_delivery below)
+  // The guest shim delivers SA_SIGINFO (siginfo_delivery below), for an ARM64
+  // program run by the x86-64 translator too, with the guest's registers.
+  const int first_mode = 1;
 #endif
   for (int mode = first_mode; mode < 2; ++mode) {
     memset(&action, 0, sizeof(action));
@@ -358,7 +362,7 @@ static void capabilities(void) {
   }
   check(ordinary_calls == 0 && handler_value == 0,
         "unsupported delivery never invokes a handler with an invented context or stack");
-#if !defined(_WIN32) && !defined(__aarch64__)
+#if !defined(_WIN32)
   siginfo_delivery(sig, &temporary);
   sigaction(sig, &action, NULL);  // the unsupported SA_ONSTACK disposition again
 #endif

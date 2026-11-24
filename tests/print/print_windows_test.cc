@@ -3,14 +3,12 @@
 // (present on GitHub's Windows runners). Prints a generated PDF to a file
 // through that printer and checks Windows wrote it.
 //
-// cl /nologo /std:c++17 /EHsc /W4 /D_WIN32_WINNT=0x0A00 /Icompat\devices
+// cl /nologo /std:c++17 /EHsc /W4 /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /Icompat\devices
 //    compat\print\print_win32.cc compat\devices\winrt.cc tests\print\print_windows_test.cc
 //    /Fe:print-windows-test.exe winspool.lib comdlg32.lib gdi32.lib user32.lib ole32.lib
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
+// Exercise the production header's GDI opt-in before any Windows header loads.
+#include "../../compat/print/print_win32.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -21,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "../../compat/print/print_win32.h"
 #include "test_pdf.h"
 
 namespace pr = gesher::print;

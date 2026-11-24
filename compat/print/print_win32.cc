@@ -3,8 +3,9 @@
 
 #include "print_win32.h"
 
+#include <objbase.h>  // PrintDlgEx declarations require COM's STDMETHOD macros
 #include <commdlg.h>
-#include <objbase.h>
+#include <cderr.h>
 #include <wincodec.h>
 #include <winspool.h>
 
