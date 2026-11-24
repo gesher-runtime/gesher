@@ -52,6 +52,8 @@ public final class Downloads {
         public static final String COLUMN_FAILED_CONNECTIONS = "numfailed";
         public static final String COLUMN_ALLOW_WRITE = "allow_write";
         public static final String COLUMN_FLAGS = "flags";
+        public static final int FLAG_REQUIRES_CHARGING = 1 << 0;
+        public static final int FLAG_REQUIRES_DEVICE_IDLE = 1 << 1;
         public static final int DESTINATION_EXTERNAL = 0, DESTINATION_CACHE_PARTITION = 1,
                 DESTINATION_CACHE_PARTITION_PURGEABLE = 2, DESTINATION_CACHE_PARTITION_NOROAMING = 3,
                 DESTINATION_FILE_URI = 4, DESTINATION_SYSTEMCACHE_PARTITION = 5,

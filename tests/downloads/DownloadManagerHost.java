@@ -163,6 +163,14 @@ public final class DownloadManagerHost {
         final AtomicInteger changes = new AtomicInteger();
         volatile DownloadQueue.NetworkState network = new DownloadQueue.NetworkState(false, false);
         volatile boolean cleartext = true;
+        /**
+         * WindowsHost.powerStatus(): {ACLineStatus, BatteryFlag, BatteryLifePercent,
+         * SystemStatusFlag}. A desktop without a battery by default: on AC, flag 128.
+         */
+        volatile int[] power = {1, 128, 255, 0};
+        /** When the session display went off (test clock); -1 while it is on. */
+        volatile long displayOffSince = -1;
+        volatile Runnable conditionsListener;
         SQLiteDatabase db;
         DownloadRequests requests;
         DownloadQueue queue;
@@ -216,6 +224,14 @@ public final class DownloadManagerHost {
                 @Override public String userAgent() { return "AndroidDownloadManager/16 (Linux; U; Android 16)"; }
                 @Override public long currentTimeMillis() { return clock.now(); }
                 @Override public long elapsedRealtime() { return System.nanoTime() / 1_000_000; }
+                // The device conditions JobScheduler's charging and idle constraints read.
+                public int[] powerStatus() { return power; }
+                /** WindowsHost.jobIdleMillis: display-off time without input, 0 while on. */
+                public long idleMillis() {
+                    long since = displayOffSince;
+                    return since < 0 ? 0 : Math.max(0, clock.now() - since);
+                }
+                public void listen(Runnable listener) { conditionsListener = listener; }
             });
             holder[0] = queue;
         }
@@ -264,6 +280,14 @@ public final class DownloadManagerHost {
                 Thread.sleep(10);
             }
             queue.awaitIdle(5_000);
+        }
+
+        /** Windows reported a power status or session display change. */
+        boolean conditionsChanged() {
+            Runnable listener = conditionsListener;
+            if (listener == null) return false;
+            listener.run();
+            return true;
         }
 
         List<Broadcast> broadcastsFor(long id) {
@@ -355,6 +379,24 @@ public final class DownloadManagerHost {
             server.handlers.put("/attach", (r, out) -> respond(out, "200 OK",
                     "Content-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"report.txt\""
                             + "\r\nContent-Length: 5\r\nConnection: close\r\n", "hello".getBytes(StandardCharsets.US_ASCII)));
+            AtomicInteger slowStarted = new AtomicInteger();
+            server.handlers.put("/slow", (r, out) -> {
+                // 300 KB in 4 KB pieces, 40 ms apart: a transfer that is still running.
+                String range = r.header("Range");
+                long from = range == null ? 0 : Long.parseLong(range.replace("bytes=", "").replace("-", ""));
+                byte[] rest = Arrays.copyOfRange(body, (int) from, body.length);
+                out.write(((range == null ? "HTTP/1.1 200 OK" : "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes "
+                        + from + "-" + (body.length - 1) + "/" + body.length)
+                        + "\r\nContent-Type: application/octet-stream\r\nContent-Length: " + rest.length
+                        + "\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                out.flush();
+                slowStarted.incrementAndGet();
+                for (int at = 0; at < rest.length; at += 4096) {
+                    out.write(rest, at, Math.min(4096, rest.length - at));
+                    out.flush();
+                    try { Thread.sleep(40); } catch (InterruptedException e) { return; }
+                }
+            });
             server.handlers.put("/unknown-length", (r, out) -> respond(out, "200 OK",
                     "Content-Type: application/octet-stream\r\n", "partial".getBytes(StandardCharsets.US_ASCII)));
             int half = body.length / 2;
@@ -562,6 +604,115 @@ public final class DownloadManagerHost {
             f.requests.delete(app, Downloads.Impl.CONTENT_URI, "(_id = ? )", new String[] {Long.toString(first)});
             check(f.requests.info(first) == null && !firstFile.exists() && f.revokes.contains(Long.toString(first)),
                     "remove deletes the row, the file and the URI grant");
+
+            // 12. setRequiresCharging / setRequiresDeviceIdle (Helpers.scheduleJob passes them to
+            // JobInfo; BatteryController and IdleController decide), from Windows' real state.
+            f.power = new int[] {0, 0, 80, 0};  // on battery, discharging
+            int chargingBefore = server.requests("/file.bin").size();
+            ContentValues charging = request(server.url("/file.bin"), appFile(f, "charging.bin"));
+            charging.put(Downloads.Impl.COLUMN_FLAGS, Downloads.Impl.FLAG_REQUIRES_CHARGING);
+            long needsPower = enqueue(f, app, charging);
+            Thread.sleep(300);
+            check(f.status(needsPower) == Downloads.Impl.STATUS_PENDING
+                    && server.requests("/file.bin").size() == chargingBefore,
+                    "setRequiresCharging(true) on battery: nothing is requested and the row stays pending");
+            f.power = new int[] {1, 8 | 4, 3, 0};  // plugged in and charging, but critically low
+            check(f.conditionsChanged(), "the queue listens to Windows power and display changes");
+            Thread.sleep(300);
+            check(f.status(needsPower) == Downloads.Impl.STATUS_PENDING,
+                    "a plugged-in battery that is still low is not stable power; the download waits");
+            f.power = new int[] {1, 8, 80, 0};  // plugged in and charging
+            f.conditionsChanged();
+            f.await(needsPower, Downloads.Impl.STATUS_SUCCESS);
+            check(f.status(needsPower) == Downloads.Impl.STATUS_SUCCESS,
+                    "it starts when the power status changes to charging");
+            f.power = new int[] {1, 128, 255, 0};  // a PC without a battery, on AC
+            ContentValues desktop = request(server.url("/file.bin"), appFile(f, "desktop.bin"));
+            desktop.put(Downloads.Impl.COLUMN_FLAGS, Downloads.Impl.FLAG_REQUIRES_CHARGING);
+            long onMains = enqueue(f, app, desktop);
+            f.await(onMains, Downloads.Impl.STATUS_SUCCESS);
+            check(f.status(onMains) == Downloads.Impl.STATUS_SUCCESS,
+                    "a PC without a battery on AC power satisfies the charging requirement");
+            f.power = null;  // Windows did not answer
+            ContentValues unknownPower = request(server.url("/file.bin"), appFile(f, "unknownpower.bin"));
+            unknownPower.put(Downloads.Impl.COLUMN_FLAGS, Downloads.Impl.FLAG_REQUIRES_CHARGING);
+            long powerUnknown = enqueue(f, app, unknownPower);
+            Thread.sleep(300);
+            check(f.status(powerUnknown) == Downloads.Impl.STATUS_PENDING,
+                    "an unknown power status does not satisfy the charging requirement");
+            f.power = new int[] {1, 8, 80, 0};
+            f.conditionsChanged();
+            f.await(powerUnknown, Downloads.Impl.STATUS_SUCCESS);
+
+            // Losing the requirement stops a running transfer, as JobScheduler's onStopJob does;
+            // it keeps its bytes and starts again once charging and its retry delay allow.
+            ContentValues stopping = request(server.url("/slow"), appFile(f, "stopping.bin"));
+            stopping.put(Downloads.Impl.COLUMN_FLAGS, Downloads.Impl.FLAG_REQUIRES_CHARGING);
+            long unplugged = enqueue(f, app, stopping);
+            long startWait = System.currentTimeMillis() + 10_000;
+            while (slowStarted.get() == 0 && System.currentTimeMillis() < startWait) Thread.sleep(10);
+            Thread.sleep(400);
+            f.power = new int[] {0, 0, 80, 0};
+            f.conditionsChanged();
+            f.await(unplugged, Downloads.Impl.STATUS_WAITING_TO_RETRY, Downloads.Impl.STATUS_SUCCESS);
+            DownloadRequests.Info stopped = f.requests.info(unplugged);
+            check(stopped.status == Downloads.Impl.STATUS_WAITING_TO_RETRY && stopped.currentBytes > 0
+                    && stopped.currentBytes < body.length,
+                    "unplugging stops the running transfer with a retryable status and keeps its bytes");
+            int slowRequests = server.requests("/slow").size();
+            clock.offset.addAndGet(3_600_000);  // past the retry delay
+            f.queue.schedule(unplugged);
+            Thread.sleep(300);
+            check(f.status(unplugged) == Downloads.Impl.STATUS_WAITING_TO_RETRY
+                    && server.requests("/slow").size() == slowRequests,
+                    "after its retry delay it still waits while on battery");
+            f.power = new int[] {1, 8, 80, 0};
+            f.conditionsChanged();
+            f.await(unplugged, Downloads.Impl.STATUS_SUCCESS);
+            List<Request> resumed = server.requests("/slow");
+            check(f.status(unplugged) == Downloads.Impl.STATUS_SUCCESS
+                    && resumed.get(resumed.size() - 1).header("Range") != null
+                    && Arrays.equals(Files.readAllBytes(new File(Uri.parse(appFile(f, "stopping.bin")).getPath()).toPath()), body),
+                    "plugged in again, it resumes with a Range request and completes exactly");
+
+            // Device idle: the session display has been off without input for the AOSP
+            // inactivity threshold (config_jobSchedulerInactivityIdleThreshold, 31 minutes).
+            f.displayOffSince = -1;  // the user is active
+            int idleBefore = server.requests("/file.bin").size();
+            ContentValues idle = request(server.url("/file.bin"), appFile(f, "idle.bin"));
+            idle.put(Downloads.Impl.COLUMN_FLAGS, Downloads.Impl.FLAG_REQUIRES_DEVICE_IDLE);
+            long needsIdle = enqueue(f, app, idle);
+            Thread.sleep(300);
+            check(f.status(needsIdle) == Downloads.Impl.STATUS_PENDING
+                    && server.requests("/file.bin").size() == idleBefore,
+                    "setRequiresDeviceIdle(true) while the user is active: the row stays pending");
+            f.displayOffSince = clock.now() - 60_000;  // display off for a minute
+            f.conditionsChanged();
+            Thread.sleep(300);
+            check(f.status(needsIdle) == Downloads.Impl.STATUS_PENDING,
+                    "a display that went off a minute ago is not yet idle");
+            f.displayOffSince = clock.now() - (31 * 60_000 - 700);  // idle in 0.7 s, with no further event
+            f.conditionsChanged();
+            Thread.sleep(200);
+            check(f.status(needsIdle) == Downloads.Impl.STATUS_PENDING, "it waits for the rest of the threshold");
+            f.await(needsIdle, Downloads.Impl.STATUS_SUCCESS);
+            check(f.status(needsIdle) == Downloads.Impl.STATUS_SUCCESS,
+                    "it starts once the inactivity threshold passes, without another change notification");
+            f.displayOffSince = -1;
+            ContentValues both = request(server.url("/file.bin"), appFile(f, "both.bin"));
+            both.put(Downloads.Impl.COLUMN_FLAGS,
+                    Downloads.Impl.FLAG_REQUIRES_CHARGING | Downloads.Impl.FLAG_REQUIRES_DEVICE_IDLE);
+            long needsBoth = enqueue(f, app, both);
+            f.displayOffSince = clock.now() - 31 * 60_000;
+            f.power = new int[] {0, 0, 80, 0};
+            f.conditionsChanged();
+            Thread.sleep(300);
+            check(f.status(needsBoth) == Downloads.Impl.STATUS_PENDING, "idle on battery does not satisfy both requirements");
+            f.power = new int[] {1, 8, 80, 0};
+            f.conditionsChanged();
+            f.await(needsBoth, Downloads.Impl.STATUS_SUCCESS);
+            check(f.status(needsBoth) == Downloads.Impl.STATUS_SUCCESS, "idle and charging together start it");
+            f.displayOffSince = -1;
 
             // 11. Persistence and resumption across a Gesher restart.
             long restart = enqueue(f, app, request(server.url("/flaky-restart"), appFile(f, "restart.bin")));
