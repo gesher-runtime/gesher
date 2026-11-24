@@ -349,11 +349,69 @@ public final class KeystoreAuthorization implements KeystoreOperations {
             t.start();
             return () -> { };
         }
-        final Binding signed = binding;
-        HelloKeyBackend.Operation operation = mBackend.sign(binding.name, request.pid,
-                message(binding), result -> completion.onResult(
-                        signed(signed, request.uid, operationId, result)));
-        return operation::cancel;
+        Authorization authorization = new Authorization(binding, request.uid, operationId,
+                completion);
+        authorization.start(request.pid);
+        return authorization;
+    }
+
+    /**
+     * Cancellation ends authorization independently of whether Windows closes its prompt.
+     * The native operation can finish successfully while a cancel is in flight; such a
+     * result must not release the operation's key or refresh the timed-key authorization.
+     */
+    private final class Authorization implements WindowsHelloBackend.Verification {
+        private final Binding mSigned;
+        private final int mUid;
+        private final long mOperationId;
+        private final WindowsHelloBackend.Completion mCompletion;
+        private HelloKeyBackend.Operation mOperation;
+        private boolean mCanceled;
+        private boolean mComplete;
+
+        Authorization(Binding binding, int uid, long operationId,
+                WindowsHelloBackend.Completion completion) {
+            mSigned = binding;
+            mUid = uid;
+            mOperationId = operationId;
+            mCompletion = completion;
+        }
+
+        synchronized void start(int pid) {
+            // Publish the handle before an asynchronous completion can use this session.
+            mOperation = mBackend.sign(mSigned.name, pid, message(mSigned), this::finished);
+        }
+
+        private void finished(HelloKeyBackend.Result result) {
+            int answer;
+            synchronized (this) {
+                if (mComplete) {
+                    wipe(result.data);
+                    return;
+                }
+                mComplete = true;
+                if (mCanceled) {
+                    // Cancellation can follow native release but precede this callback;
+                    // the native request's own wipe cannot cover that handoff.
+                    wipe(result.data);
+                    answer = WindowsHelloBackend.CANCELED;
+                } else {
+                    answer = signed(mSigned, mUid, mOperationId, result);
+                }
+            }
+            mCompletion.onResult(answer);
+        }
+
+        @Override
+        public void cancel() {
+            HelloKeyBackend.Operation operation;
+            synchronized (this) {
+                if (mCanceled || mComplete) return;
+                mCanceled = true;
+                operation = mOperation;
+            }
+            if (operation != null) operation.cancel();
+        }
     }
 
     /** A confirmation also releases keys with a timeout, as an auth token does. */
