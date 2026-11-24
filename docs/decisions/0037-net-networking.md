@@ -41,6 +41,31 @@ ConnectivityManager that said there was no network.
   follows changes to Windows' stores without a service. Android's set is kept
   because Windows fills its ROOT store lazily (roots are fetched on demand),
   so a root Windows has not needed yet may be missing from it.
+
+  **Amended 2026-11-24:** roots installed on this PC are also user-added CAs.
+  Chrome trusts its own root store plus Android's user-added CAs (`user:`
+  aliases of `AndroidCAStore`), not the system directory, so behind a filter
+  that re-signs TLS (NetFree) it failed with ERR_CERT_AUTHORITY_INVALID where a
+  phone, with the filter's root installed as a user CA, works; apps with
+  `<certificates src="user"/>` or targeting API 23 or lower saw the same gap.
+  The sync now also writes `$ANDROID_DATA/misc/user/0/cacerts-added`, laid out
+  as `TrustedCertificateStore` keeps it (DER `<hash>.<n>`, tombstones, only
+  Gesher's own entries changed, removed when Windows' root is), with the roots
+  of Windows' ROOT stores that are neither in Microsoft's root program (the
+  SHA-1 lists of Windows' AuthRoot certificate trust lists: the registry copy
+  automatic root update keeps and crypt32.dll's built-in one, and the roots it
+  marked as taken from such a list) nor in Android's set nor disallowed.
+  Microsoft's list, rather than the store or physical
+  store a root is in, is the rule: Windows' own shipped roots and the ones it
+  adds on demand share stores with an administrator's imports, and all of
+  them are listed. Without either list nothing is classified as local. The
+  system directory is unchanged, so such a root has a `system:` and a `user:`
+  alias. App processes set `TrustedCertificateStore`'s user directory to
+  `Environment.getUserConfigDirectory(userId)`, as `ActivityThread.main` does
+  (it was Conscrypt's `misc/keychain` default). Rejected: moving installed
+  roots out of the system directory (apps that trust only system CAs would
+  stop working behind the filter, which they do today), and classifying by
+  physical store or by properties alone (Windows' shipped roots carry none).
 - **ConnectivityService is Gesher's**, in the system server
   (`com.gesher.server.ConnectivityService`), with a small binder interface of
   its own (`com.gesher.net.IConnectivity`: snapshots and listeners), and
@@ -59,7 +84,7 @@ ConnectivityManager that said there was no network.
 ## Consequences
 - TLS, certificates and HTTP behave as on a phone, including the network
   security config (cleartext refused for new target SDKs) and roots a company
-  or a filter installed in Windows.
+  or a filter installed in Windows, which apps also see as user-added CAs.
 - core-libart.jar and the primary boot image are larger.
 - The Connectivity module's hidden API (netd, agents, keepalives, QoS) is
   absent; see docs/network.md's known gaps.

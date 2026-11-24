@@ -16,6 +16,7 @@ on a phone. Design: [ADR 0037](decisions/0037-net-networking.md). Branch:
                                                                  Network List Manager,
   system CAs: $ANDROID_ROOT/etc/security/cacerts ◄── Android's   NotifyIpInterfaceChange
               set + Windows' ROOT/CA stores (trust_store.cc)
+  user CAs:   $ANDROID_DATA/misc/user/0/cacerts-added ◄── roots installed on this PC
 ```
 
 ## Sockets and DNS
@@ -171,8 +172,82 @@ A manifest (`etc/security/.gesher-cacerts`, next to the directory rather than
 in it, so that cacerts holds only certificates, as Conscrypt expects) makes
 the check cheap when nothing changed; a
 named mutex serializes writers; `GESHER_WINDOWS_CERTS=0` leaves Windows'
-stores out; `GESHER_TRACE_CACERTS=1` reports what was written. User CAs
-(`$ANDROID_DATA/misc/keychain`) are Android's, unchanged.
+stores out; `GESHER_TRACE_CACERTS=1` reports what was written.
+
+### User-added CAs: roots installed on this PC
+
+On a phone, a CA its user or a device admin installs is a *user-added* CA:
+KeyChain writes it to `/data/misc/user/<user>/cacerts-added`, and
+`TrustedCertificateStore` (the `AndroidCAStore` KeyStore) lists it with a
+`user:` alias. Some apps trust only their own roots plus these: Chrome (its
+Chrome Root Store plus `X509Util.getUserAddedRoots`, the `user:` aliases),
+apps whose network security config has `<certificates src="user"/>`, and,
+by the default config, apps targeting API 23 or lower
+(`UserCertificateSource`, the same directory). Behind a content filter that
+re-signs TLS (NetFree) such apps fail with an unknown authority unless the
+filter's root is a user-added CA, as it is on a phone set up for it.
+
+So the same sync also writes `$ANDROID_DATA/misc/user/0/cacerts-added` (user 0:
+Gesher's device has one user) with the roots that were **installed on this
+PC**, by its user, an administrator, group policy, an enterprise or a program
+such as a content filter:
+
+- the roots of Windows' ROOT stores (the user's and the machine's, with their
+  group policy and enterprise parts) whose enhanced key usage allows server
+  authentication,
+- less those in Microsoft's root program: the SHA-1 thumbprints of Windows'
+  AuthRoot certificate trust lists, the one automatic root update keeps in
+  `HKLM\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate`
+  (`EncodedCtl`) and the one built into crypt32.dll (its `AUTHROOTSTL`
+  resource), taken together, and the roots automatic root update marked as
+  taken from such a list (their `CERT_AUTH_ROOT_SHA256_HASH_PROP_ID`
+  property);
+- less Android's own CA set (`cacerts\`) and Windows' Disallowed stores.
+
+Microsoft's list is what tells a distributed root from an installed one,
+wherever Windows keeps it: the roots automatic root update adds on demand go
+to the machine's AuthRoot store (part of the ROOT store) and are all listed,
+and so are the ones Windows ships in the machine's ROOT store (Microsoft Root
+Certificate Authority 2010/2011, the timestamping roots). The store a root is
+in does not tell (an administrator's import and Microsoft's own roots are both
+in `LocalMachine\ROOT\.Default`), and Windows' shipped roots carry no mark of
+their own. Two 1997
+Microsoft roots that are in neither list (`Copyright (c) 1997 Microsoft
+Corp.`, `Microsoft Authenticode(tm) Root Authority`) are limited to other
+purposes by their enhanced key usage and are left out of both stores. The CA
+stores' self-signed certificates (such as `Root Agency` and the TPM roots
+Windows keeps there) are not taken: Windows does not trust a root there either.
+If neither list can be read, no root can be told apart and none is user-added.
+The lists are not signature-checked: only an administrator can change the
+registry copy, and crypt32.dll is a system file.
+
+Such a root stays a system CA too (the system directory is as above), so apps
+that trust only system CAs keep working, and Android's network security
+config and `AndroidCAStore` now also see it as a user-added CA: both a
+`system:` and a `user:` alias. (Android's own KeyChain installs no user copy of
+a system CA; here the system copy is Gesher's import from Windows, and the
+`user:` alias is what tells apps it was installed locally.)
+
+The directory is laid out as `TrustedCertificateStore` keeps it: DER files
+`<subject hash>.<n>`, a new one after the last index of its hash, a removed
+one truncated to an empty tombstone while a later index exists and deleted,
+with the tombstones before it, otherwise. A root removed from Windows is
+removed at the next sync. The manifest `misc/user/0/.gesher-user-cacerts`
+(next to the directory) names the entries Gesher wrote and their SHA-256; an
+entry Gesher did not write, or whose contents changed since, is never touched.
+`cacerts-removed` (system CAs the user disabled) is Android's, unchanged.
+`GESHER_TRACE_CACERTS=1` lists the user-added roots.
+
+App processes look there as on Android: `ActivityThread.main` calls
+`TrustedCertificateStore.setDefaultUserDirectory(Environment.getUserConfigDirectory(userId))`;
+`GesherAppProcess`, which runs `main`'s steps itself, and gesher-app's
+in-process driver do the same (`GesherAppProcess.useUserCaCertificates`).
+Without it Conscrypt looked in `$ANDROID_DATA/misc/keychain` while the network
+security config's `UserCertificateSource` looked in `misc/user/0`. In the
+experimental AppContainer sandbox (docs/sandbox.md) the system server opens
+`misc/user/0` to the runtime files capability for reading. KeyChain, its
+Settings screens and `DevicePolicyManager.installCaCert` are not implemented:
+apps cannot add or remove user CAs.
 
 ### Native TLS clients
 
@@ -307,11 +382,22 @@ plain Java on the core boot class path) and `tests/apps/netapp`,
   (NativeBN), the JCA providers, digests, HMAC, AES-GCM, RSA and EC
   signatures, PBKDF2 (BouncyCastle), SecureRandom, the default SSLContext;
 - the system CA directory (Android's and Windows' certificates);
+- the user-added CAs (`tests/native/trust_store_user_test.cc`): synthetic roots in
+  temporary directories (a root in neither list is local, one in the root program list,
+  Android's set or Disallowed is not; DER `<hash>.<n>` files, tombstones and appends as
+  `TrustedCertificateStore` keeps them, entries Gesher did not write left alone, the
+  manifest), then the production sync against the machine's real stores in temporary
+  roots: every user-added root is in Windows' ROOT store, outside Microsoft's root
+  program and still a system CA, and `GESHER_WINDOWS_CERTS=0` removes them;
 - TCP and UDP echo by .NET servers;
 - a test root made by the script: an HTTPS server (SChannel) on 127.0.0.1 with
   a certificate for localhost from it is rejected, trusted once the root is in
   the machine's ROOT store, rejected with `GESHER_WINDOWS_CERTS=0`, and
-  rejected again once the root is removed;
+  rejected again once the root is removed; while it is there `AndroidCAStore`
+  (`NetTest cas`) lists it as `user:` and `system:`, and a root of the
+  machine's AuthRoot store (Microsoft's) as `system:` only; once removed, not at all.
+  netapp.apk (`NetApp user CA`), in its own process and in an app process of a
+  system server, finds it among its `user:` aliases;
 - netapp.apk's HTTPS check (`NetApp https`) goes to an HTTPS server of the script with a
   certificate from the test root, kept in the machine's ROOT store while the apps run
   (`$GESHER_NETAPP_HTTPS`; web3 track: ci 40240210807 had failed when example.com did not
