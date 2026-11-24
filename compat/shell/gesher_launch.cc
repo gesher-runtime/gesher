@@ -572,36 +572,41 @@ void TerminateProcessTree(DWORD pid) {
 
 bool g_cancelled = false;
 
+// GDI presentation only; launch/cancellation policy stays in SplashProc and its caller.
+void PaintSplash(HWND hwnd, const Splash* splash) {
+  PAINTSTRUCT ps;
+  HDC dc = BeginPaint(hwnd, &ps);
+  RECT client;
+  GetClientRect(hwnd, &client);
+  // Match the Control Center's light surface and semantic text hierarchy.
+  const bool high_contrast = GesherHostHighContrast() != FALSE;
+  FillRect(dc, &client, high_contrast ? GetSysColorBrush(COLOR_WINDOW)
+      : static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+  const int w = client.right, h = client.bottom;
+  const int size = std::min(kIconSize, w / 2);
+  const int top = std::max(16, h * 2 / 5 - size / 2);
+  if (splash->picture != nullptr) {
+    DrawIconEx(dc, (w - size) / 2, top, splash->picture, size, size, 0, nullptr, DI_NORMAL);
+  }
+  SetBkMode(dc, TRANSPARENT);
+  HGDIOBJ old = SelectObject(dc, splash->title_font);
+  SetTextColor(dc, high_contrast ? GetSysColor(COLOR_WINDOWTEXT) : RGB(16, 24, 40));
+  RECT label = {16, top + size + 24, w - 16, top + size + 24 + 64};
+  DrawTextW(dc, splash->label.c_str(), -1, &label,
+            DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+  SelectObject(dc, splash->text_font);
+  SetTextColor(dc, high_contrast ? GetSysColor(COLOR_GRAYTEXT) : RGB(102, 112, 133));
+  RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
+  const auto language = GesherUiCurrentLanguage();
+  DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
+            DT_CENTER | DT_SINGLELINE | DT_NOPREFIX | (GesherUiRtl(language) ? DT_RTLREADING : 0));
+  SelectObject(dc, old);
+  EndPaint(hwnd, &ps);
+}
+
 LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   if (msg == WM_PAINT && g_splash != nullptr) {
-    PAINTSTRUCT ps;
-    HDC dc = BeginPaint(hwnd, &ps);
-    RECT client;
-    GetClientRect(hwnd, &client);
-    // Match the Control Center's light surface and semantic text hierarchy.
-    const bool high_contrast = GesherHostHighContrast() != FALSE;
-    FillRect(dc, &client, high_contrast ? GetSysColorBrush(COLOR_WINDOW)
-        : static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
-    const int w = client.right, h = client.bottom;
-    const int size = std::min(kIconSize, w / 2);
-    const int top = std::max(16, h * 2 / 5 - size / 2);
-    if (g_splash->picture != nullptr) {
-      DrawIconEx(dc, (w - size) / 2, top, g_splash->picture, size, size, 0, nullptr, DI_NORMAL);
-    }
-    SetBkMode(dc, TRANSPARENT);
-    HGDIOBJ old = SelectObject(dc, g_splash->title_font);
-    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_WINDOWTEXT) : RGB(16, 24, 40));
-    RECT label = {16, top + size + 24, w - 16, top + size + 24 + 64};
-    DrawTextW(dc, g_splash->label.c_str(), -1, &label,
-              DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
-    SelectObject(dc, g_splash->text_font);
-    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_GRAYTEXT) : RGB(102, 112, 133));
-    RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
-    const auto language = GesherUiCurrentLanguage();
-    DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
-              DT_CENTER | DT_SINGLELINE | DT_NOPREFIX | (GesherUiRtl(language) ? DT_RTLREADING : 0));
-    SelectObject(dc, old);
-    EndPaint(hwnd, &ps);
+    PaintSplash(hwnd, g_splash);
     return 0;
   }
   if (msg == WM_CLOSE) {

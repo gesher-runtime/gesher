@@ -204,6 +204,7 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelLaunchChecks.ps1
           tests/windows/shell/ControlPanelProxyChecks.ps1
@@ -786,7 +787,7 @@ jobs:
           ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test window_frame_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
           ninja -C out font_environment_test
 
@@ -841,6 +842,7 @@ jobs:
           cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
+          cp -r out/dlopen-fixtures dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
@@ -1169,6 +1171,7 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
@@ -1251,9 +1254,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
           python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
           if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
-          foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1') {
+          foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1', 'gesher-panel-actions.ps1', 'gesher-panel-view.ps1', 'gesher-panel-dashboard.xaml', 'gesher-panel-confirm.xaml', 'gesher-panel-message.xaml') {
             if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "The installer left out $file" }
           }
+          powershell -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows/shell/ControlPanelPresentationChecks.ps1 -PackageDirectory $app
+          if ($LASTEXITCODE -ne 0) { throw 'Installed WPF presentation resource checks failed' }
           . (Join-Path $app 'gesher-update.ps1')
           $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
           if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
