@@ -51,6 +51,22 @@ Windows without them (no location service, no Media Foundation) gets clean
 - `ActivityManagerService.isIntentSenderTargetedToPackage` (as Android's): the
   client checks it before registering a PendingIntent.
 
+### Country (`country_detector`)
+
+`CountryDetectorService` answers `android.location.CountryDetector` (`ICountryDetector`)
+as AOSP's `ComprehensiveCountryDetector` does on a device without a mobile network, a
+SIM or a location-based country: the country of the system's locale settings, with
+source `Country.COUNTRY_SOURCE_LOCALE`. On Windows that setting is the user's "Country or
+region" (`GetUserDefaultGeoName`, or `GetUserGeoID` + `GetGeoInfoW(GEO_ISO2)` before
+Windows 10 1709), a preference rather than a detection, so it is never reported as
+NETWORK, LOCATION or SIM. When Windows has no two-letter code (a UN M.49 area such as
+`419`, or no natives), the answer is AOSP's own fallback: the default Locale's country.
+Location gives no country (there is no geocoder). Listeners get the current country when
+added and again when it changes (WM_SETTINGCHANGE, `WindowsHost.EVENT_SETTING_CHANGED`).
+Tests: `tools/test_country_detector_contracts.py` (host, AOSP classes from android-all),
+`tests/country-detector/home_region_windows_test.cc` (windows-host-contracts) and
+`gesher.services.CountryDetectorTest` (track 95-browser.ps1).
+
 ## Sensors
 
 - Windows.Devices.Sensors' default accelerometer, gyrometer, magnetometer,

@@ -15,6 +15,7 @@
 
 #include "core_jni_helpers.h"
 #include "devsvc_win32.h"
+#include "home_region_win.h"
 #include "../windows/clipboard_publication.h"
 #include <new>
 
@@ -348,6 +349,12 @@ jboolean WindowsHost_openUrl(JNIEnv* env, jclass, jstring url) {
   return dev::OpenUrl(Str(env, url)) ? JNI_TRUE : JNI_FALSE;
 }
 
+jstring WindowsHost_homeRegion(JNIEnv* env, jclass) {
+  char16_t region[3] = {};
+  if (!dev::HomeRegion(region, nullptr)) return nullptr;
+  return JStr(env, std::u16string(region, 2));
+}
+
 jstring WindowsHost_pickFolder(JNIEnv* env, jclass, jstring title) {
   std::u16string t = title != nullptr ? Str(env, title) : std::u16string();
   std::u16string path = dev::PickFolder(t);
@@ -502,6 +509,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},
     {"nativeFullPath", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_fullPath)},
     {"nativeOpenUrl", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_openUrl)},
+    {"nativeHomeRegion", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_homeRegion)},
     {"nativePickFolder", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFolder)},
     {"nativePickFile", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFile)},
     {"nativePickDocuments", "(I" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING
