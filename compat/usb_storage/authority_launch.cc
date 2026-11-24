@@ -174,11 +174,14 @@ bool HasOnlyTraversePrivilege(HANDLE token) {
 }
 
 DWORD SealAndVerifyChild(HANDLE process, const Identity& desktop, const AuthorityLaunchSpec& spec,
-                         PACL default_acl) {
+                         PACL default_acl, const char** startup_stage) {
+  const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+  stage("child.open-token");
   HANDLE found = nullptr;
   if (!OpenProcessToken(process, TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, &found)) return GetLastError();
   const Handle token(found);
   Identity child;
+  stage("child.token-identity");
   if (!child.Read(found)) return ERROR_INVALID_DATA;
   const LUID& actual = child.stats.AuthenticationId;
   const LUID& expected = desktop.stats.AuthenticationId;
@@ -189,14 +192,17 @@ DWORD SealAndVerifyChild(HANDLE process, const Identity& desktop, const Authorit
   }
   alignas(TOKEN_APPCONTAINER_INFORMATION)
       BYTE buffer[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE]{};
+  stage("child.appcontainer-sid");
   if (!Query(found, TokenAppContainerSid, buffer, sizeof(buffer))) return GetLastError();
   PSID package = reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(buffer)->TokenAppContainer;
   if (!package || !EqualSid(package, spec.capabilities.AppContainerSid)) return ERROR_ACCESS_DENIED;
   DWORD session = 0;
+  stage("child.desktop-session");
   if (!ProcessIdToSessionId(GetProcessId(process), &session)) return GetLastError();
   if (session != spec.desktop_session) return ERROR_ACCESS_DENIED;
 
   TOKEN_DEFAULT_DACL acl{default_acl};
+  stage("child.seal-default-dacl");
   if (!SetTokenInformation(found, TokenDefaultDacl, &acl, sizeof(acl))) return GetLastError();
   alignas(TOKEN_DEFAULT_DACL) BYTE installed[256]{};
   if (!Query(found, TokenDefaultDacl, installed, sizeof(installed))) return GetLastError();
@@ -235,22 +241,28 @@ DWORD AuthorityLaunch::Stop(DWORD timeout_milliseconds) {
 }
 
 DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& spec,
-                              std::unique_ptr<AuthorityLaunch>* result) try {
+                              std::unique_ptr<AuthorityLaunch>* result, const char** startup_stage) try {
+  const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+  stage("launch.arguments");
   if (!desktop_token || desktop_token == INVALID_HANDLE_VALUE || !result || *result ||
       !ValidSpec(spec)) return ERROR_INVALID_PARAMETER;
+  stage("launch.system-caller");
   if (!LocalSystemWorker()) return ERROR_ACCESS_DENIED;
 
   HANDLE restricted = nullptr;
+  stage("launch.restricted-token");
   if (!CreateRestrictedToken(desktop_token, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
                              0, nullptr, &restricted)) return GetLastError();
   const Handle private_token(restricted);
   Identity desktop;
+  stage("launch.parent-token-identity");
   if (!desktop.Read(restricted)) return ERROR_INVALID_DATA;
   if (!desktop.MatchesDesktop(spec) || desktop.contained ||
       !IsWellKnownSid(desktop.Integrity(), WinMediumLabelSid) ||
       !HasOnlyTraversePrivilege(restricted)) return ERROR_ACCESS_DENIED;
 
   LocalMemory object_descriptor, default_descriptor;
+  stage("launch.security-descriptors");
   DWORD status = MakeDescriptor(kObjectPolicy, &object_descriptor);
   if (status == ERROR_SUCCESS) status = MakeDescriptor(kDefaultPolicy, &default_descriptor);
   if (status != ERROR_SUCCESS) return status;
@@ -258,6 +270,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   PACL default_acl = GetAcl(default_descriptor.get());
   if (!object_acl || !default_acl) return ERROR_INVALID_ACL;
   TOKEN_DEFAULT_DACL default_dacl{default_acl};
+  stage("launch.parent-default-dacl");
   if (!SetTokenInformation(restricted, TokenDefaultDacl, &default_dacl, sizeof(default_dacl))) {
     return GetLastError();
   }
@@ -267,11 +280,13 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   launch->termination_error_ = spec.termination_error;
 
   SIZE_T needed = 0;
-  InitializeProcThreadAttributeList(nullptr, 2, 0, &needed);
+  stage("launch.attributes");
+  const DWORD attribute_count = spec.job ? 3 : 2;
+  InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &needed);
   if (!needed) return GetLastError();
   std::vector<std::byte> memory(needed);
   auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(memory.data());
-  if (!InitializeProcThreadAttributeList(attributes, 2, 0, &needed)) return GetLastError();
+  if (!InitializeProcThreadAttributeList(attributes, attribute_count, 0, &needed)) return GetLastError();
   const auto cleanup = [](LPPROC_THREAD_ATTRIBUTE_LIST list) { DeleteProcThreadAttributeList(list); };
   const std::unique_ptr<std::remove_pointer_t<LPPROC_THREAD_ATTRIBUTE_LIST>, decltype(cleanup)>
       release(attributes, cleanup);
@@ -284,6 +299,9 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
           &capabilities, sizeof(capabilities), nullptr, nullptr) ||
       !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
           &mitigations, sizeof(mitigations), nullptr, nullptr)) return GetLastError();
+  HANDLE jobs[] = {spec.job};
+  if (spec.job && !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+      jobs, sizeof(jobs), nullptr, nullptr)) return GetLastError();
   wchar_t desktop_name[] = L"winsta0\\default";
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
@@ -294,19 +312,32 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   if (!spec.arguments.empty()) command.append(L" ").append(spec.arguments);
   if (command.size() >= 32767) return ERROR_INVALID_PARAMETER;
   std::vector<wchar_t> environment(spec.environment.begin(), spec.environment.end());
+  stage("launch.create-process-as-user");
   if (!CreateProcessAsUserW(restricted, spec.executable, command.data(), &private_objects,
           &private_objects, FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
           CREATE_SUSPENDED | CREATE_NO_WINDOW, environment.data(), spec.directory,
           &startup.StartupInfo, &launch->guest_)) return GetLastError();
 
+  if (spec.job) {
+    stage("launch.verify-job");
+    BOOL assigned = FALSE;
+    if (!IsProcessInJob(launch->guest_.hProcess, spec.job, &assigned)) return GetLastError();
+    if (!assigned) return ERROR_ACCESS_DENIED;
+  }
+
+  stage("launch.verify-process-acl");
   status = VerifyObject(launch->guest_.hProcess, object_acl);
-  if (status == ERROR_SUCCESS) status = VerifyObject(launch->guest_.hThread, object_acl);
   if (status == ERROR_SUCCESS) {
+    stage("launch.verify-thread-acl");
+    status = VerifyObject(launch->guest_.hThread, object_acl);
+  }
+  if (status == ERROR_SUCCESS) {
+    stage("launch.verify-mitigation");
     PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY installed{};
     if (!GetProcessMitigationPolicy(launch->guest_.hProcess, ProcessExtensionPointDisablePolicy,
             &installed, sizeof(installed))) return GetLastError();
     if (!installed.DisableExtensionPoints) return ERROR_ACCESS_DENIED;
-    status = SealAndVerifyChild(launch->guest_.hProcess, desktop, spec, default_acl);
+    status = SealAndVerifyChild(launch->guest_.hProcess, desktop, spec, default_acl, startup_stage);
   }
   if (status != ERROR_SUCCESS) return status;
   *result = std::move(launch);

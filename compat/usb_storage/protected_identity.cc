@@ -7,11 +7,13 @@
 #include "../framework/app_container.h"
 #include <aclapi.h>
 #include <sddl.h>
+#include <shlobj.h>
 #include <userenv.h>
 #include <wtsapi32.h>
 
 #include <cstddef>
 #include <cstring>
+#include <cwchar>
 #include <iterator>
 #include <new>
 #include <string_view>
@@ -283,6 +285,36 @@ ProtectedIdentity::~ProtectedIdentity() {
   if (token_) CloseHandle(token_);
 }
 
+DWORD ProtectedIdentity::AppendProfileEnvironment(std::vector<std::wstring>* environment) const try {
+  if (!environment || !profile_ || unload_attempted_) return ERROR_INVALID_PARAMETER;
+  struct Folder { const wchar_t* name; const KNOWNFOLDERID* id; };
+  const Folder folders[] = {{L"USERPROFILE", &FOLDERID_Profile},
+      {L"LOCALAPPDATA", &FOLDERID_LocalAppData}, {L"APPDATA", &FOLDERID_RoamingAppData}};
+  std::vector<std::wstring> additions;
+  for (const auto& folder : folders) {
+    for (const auto& existing : *environment) {
+      const size_t equal = existing.find(L'=');
+      if (equal != std::wstring::npos && Same(std::wstring_view(existing).substr(0, equal), folder.name)) {
+        return ERROR_INVALID_PARAMETER;
+      }
+    }
+    PWSTR raw = nullptr;
+    const HRESULT result = SHGetKnownFolderPath(*folder.id, 0, token_, &raw);
+    const auto release = [](wchar_t* value) { CoTaskMemFree(value); };
+    const std::unique_ptr<wchar_t, decltype(release)> path_owner(raw, release);
+    if (result != S_OK) return HRESULT_CODE(result) ? HRESULT_CODE(result) : ERROR_GEN_FAILURE;
+    if (!raw) return ERROR_INVALID_DATA;
+    const size_t size = std::wcslen(raw);
+    if (size < 4 || size > 8192 || raw[1] != L':' || raw[2] != L'\\' ||
+        (raw[0] | 0x20) < L'a' || (raw[0] | 0x20) > L'z') return ERROR_INVALID_DATA;
+    const std::wstring path(raw, size);
+    if (path.find_first_of(L"\":/", 2) != std::wstring::npos) return ERROR_INVALID_DATA;
+    additions.push_back(std::wstring(folder.name) + L"=" + path);
+  }
+  environment->insert(environment->end(), additions.begin(), additions.end());
+  return ERROR_SUCCESS;
+} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
+
 DWORD ProtectedIdentity::UnloadProfile(DWORD users_stopped) {
   if (!profile_ || unload_attempted_) return cleanup_->profile_error.load();
   unload_attempted_ = true;
@@ -377,7 +409,7 @@ DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_se
   const LocalMemory medium_owner(medium);
   TOKEN_MANDATORY_LABEL integrity{{medium, SE_GROUP_INTEGRITY}};
   if (!SetTokenInformation(identity->token_, TokenIntegrityLevel, &integrity,
-      sizeof(integrity) + GetLengthSid(medium))) return GetLastError();
+      static_cast<DWORD>(sizeof(integrity)) + GetLengthSid(medium))) return GetLastError();
   // A manually started virtual-account token holder does not establish a
   // loaded interactive user profile. Provision the local profile for the
   // exact verified TokenUser SID before loading its hive for AppContainer

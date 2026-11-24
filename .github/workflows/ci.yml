@@ -209,6 +209,15 @@ jobs:
           cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_internal_disk_test.cc compat\usb_storage\host_disk.cc /Fe:usb_internal_disk_test.exe cfgmgr32.lib
           if errorlevel 1 exit /b 1
           usb_internal_disk_test.exe
+      - name: Actual protected runtime identity, AppContainer launch and bounded cleanup
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_protected_launch_test.cc compat\usb_storage\protected_identity.cc compat\usb_storage\authority_launch.cc compat\framework\app_container.cc /Fe:usb_protected_launch_test.exe advapi32.lib userenv.lib wtsapi32.lib user32.lib ole32.lib shell32.lib uuid.lib
+          if errorlevel 1 exit /b 1
+          usb_protected_launch_test.exe
+          exit /b %errorlevel%
       - name: Protected Binder bootstrap and data-pipe identity
         if: ${{ !cancelled() }}
         shell: pwsh

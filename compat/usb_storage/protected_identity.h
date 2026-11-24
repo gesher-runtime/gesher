@@ -37,6 +37,9 @@ class ProtectedIdentity {
   HANDLE token() const { return token_; }
   PSID sid() const { return const_cast<BYTE*>(sid_.data()); }
   DWORD session() const { return session_; }
+  // Windows needs these per-user paths when creating a lowbox process. Derive
+  // only the required values from this exact loaded profile, never the caller.
+  DWORD AppendProfileEnvironment(std::vector<std::wstring>* environment) const;
   // Call after every process using the profile has stopped. A failed bounded
   // teardown is reported and must not be mistaken for a successful unload.
   DWORD UnloadProfile(DWORD users_stopped = ERROR_SUCCESS);

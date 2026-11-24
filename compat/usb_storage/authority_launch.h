@@ -24,6 +24,9 @@ struct AuthorityLaunchSpec {
   // Optional trusted caller status, which must outlive the launch. This also
   // records cleanup of a suspended child if Create fails before enrollment.
   std::atomic<DWORD>* termination_error = nullptr;
+  // Optional authority-owned job. Associate it atomically at process creation;
+  // no job handle is inherited or supplied through a guest request.
+  HANDLE job = nullptr;
 };
 
 class AuthorityLaunch {
@@ -32,7 +35,8 @@ class AuthorityLaunch {
   // for its authenticated, selected session. No handles or environment are
   // inherited from the service. The process remains suspended on success.
   static DWORD Create(HANDLE desktop_token, const AuthorityLaunchSpec& spec,
-                      std::unique_ptr<AuthorityLaunch>* result);
+                      std::unique_ptr<AuthorityLaunch>* result,
+                      const char** startup_stage = nullptr);
   ~AuthorityLaunch();
   AuthorityLaunch(const AuthorityLaunch&) = delete;
   AuthorityLaunch& operator=(const AuthorityLaunch&) = delete;

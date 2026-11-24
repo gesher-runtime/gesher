@@ -196,7 +196,7 @@ DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
 // Do not accept a caller-selected filename, export resources, or change the
 // actual startup result if writing diagnostics fails.
 void RecordStartup(const std::wstring& directory, const char* stage, DWORD status,
-                   const ProtectedIdentityCleanup& cleanup = {}) noexcept {
+                   const ProtectedIdentityCleanup& cleanup = {}, const char* launch_stage = "none") noexcept {
   struct PreserveError {
     DWORD value = GetLastError();
     ~PreserveError() { SetLastError(value); }
@@ -234,9 +234,9 @@ void RecordStartup(const std::wstring& directory, const char* stage, DWORD statu
     }
     char record[256]{};
     const int length = std::snprintf(record, sizeof(record),
-        "Gesher protected startup: stage=%s win32=%lu profile_cleanup_win32=%lu privilege_restore_win32=%lu\r\n",
+        "Gesher protected startup: stage=%s win32=%lu profile_cleanup_win32=%lu privilege_restore_win32=%lu launch_stage=%s\r\n",
         stage, static_cast<unsigned long>(status), static_cast<unsigned long>(cleanup.profile_error.load()),
-        static_cast<unsigned long>(cleanup.privilege_restore_error));
+        static_cast<unsigned long>(cleanup.privilege_restore_error), launch_stage);
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(record)) return;
     LARGE_INTEGER zero{};
     if (!SetFilePointerEx(file.get(), zero, nullptr, FILE_BEGIN) || !SetEndOfFile(file.get())) return;
@@ -396,11 +396,12 @@ class Session {
   }
   DWORD Run(const std::wstring& executable, std::unique_ptr<HostDisk> selected);
   const char* startup_stage() const { return startup_stage_; }
+  const char* launch_stage() const { return launch_stage_; }
  private:
   DWORD PrepareData(HANDLE desktop, const std::wstring& executable);
   DWORD CreateProfile(const std::wstring& name, std::shared_ptr<Profile>* profile);
   DWORD StartEntry(std::unique_ptr<Entry> entry, const std::wstring& binary, std::wstring arguments,
-                   std::vector<std::wstring> additions, Entry** created);
+                   std::vector<std::wstring> additions, Entry** created, const char** launch_stage = nullptr);
   void Serve(Entry& entry);
   void Reap();
   DWORD TerminateTree(Entry& entry, DWORD code);
@@ -448,6 +449,7 @@ class Session {
   uint64_t next_id_ = 3;
   bool application_started_ = false;
   const char* startup_stage_ = "runtime.begin";
+  const char* launch_stage_ = "none";
 };
 
 DWORD Session::CreateProfile(const std::wstring& name, std::shared_ptr<Profile>* profile) {
@@ -678,7 +680,7 @@ DWORD Session::MakeLogs(Entry& entry) {
 }
 
 DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& binary,
-    std::wstring arguments, std::vector<std::wstring> additions, Entry** created) {
+    std::wstring arguments, std::vector<std::wstring> additions, Entry** created, const char** launch_stage) {
   // Admission and reaping share mutex_. Bound live Windows objects independently
   // of how often an app starts short shell commands.
   if (processes_.size() >= 128) return ERROR_NOT_ENOUGH_QUOTA;
@@ -708,7 +710,7 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
   const std::wstring& working = entry->working_directory.empty() ? runtime_ : entry->working_directory;
   const AuthorityLaunchSpec spec{binary.c_str(), working.c_str(), arguments, environment,
       capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error};
-  status = AuthorityLaunch::Create(identity_->token(), spec, &entry->launch);
+  status = AuthorityLaunch::Create(identity_->token(), spec, &entry->launch, launch_stage);
   if (status != ERROR_SUCCESS) return status;
   entry->start_time = CreationTime(entry->launch->process());
   if (!entry->start_time) return ERROR_INVALID_DATA;
@@ -1196,12 +1198,15 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   startup_stage_ = "runtime.windows-directory";
   const UINT length = GetWindowsDirectoryW(windows, MAX_PATH);
   if (!length || length >= MAX_PATH) return ERROR_PATH_NOT_FOUND;
-  const std::vector<std::wstring> base = {
+  std::vector<std::wstring> base = {
       L"PATH=" + runtime_ + L";" + windows + L"\\System32", L"SystemRoot=" + std::wstring(windows),
       L"WINDIR=" + std::wstring(windows), L"ANDROID_ROOT=" + GuestPath(runtime_ + L"\\system"),
       L"ANDROID_ART_ROOT=" + GuestPath(runtime_ + L"\\art"), L"ANDROID_I18N_ROOT=" + GuestPath(runtime_ + L"\\i18n"),
       L"ANDROID_TZDATA_ROOT=" + GuestPath(runtime_ + L"\\tzdata"), L"ANDROID_DATA=" + GuestPath(data_),
       L"GESHER_LOGS=" + GuestPath(root_ + L"\\logs"), L"GESHER_BINDER=protected-" + binder_data_.substr(binder_data_.size() - 32)};
+  startup_stage_ = "runtime.private-profile-environment";
+  status = identity_->AppendProfileEnvironment(&base);
+  if (status != ERROR_SUCCESS) return status;
   for (const auto& value : base) { base_environment_ += value; base_environment_.push_back(L'\0'); }
   const std::wstring environment = Environment(1000, {}, root_ + L"\\tmp\\server");
   SID_AND_ATTRIBUTES caps[] = {{runtime_capability_.value, SE_GROUP_ENABLED}};
@@ -1211,7 +1216,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   const AuthorityLaunchSpec broker_spec{broker_image.c_str(), runtime_.c_str(), broker_arguments,
       environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error};
   startup_stage_ = "runtime.create-binder-broker";
-  status = AuthorityLaunch::Create(identity_->token(), broker_spec, &broker_);
+  status = AuthorityLaunch::Create(identity_->token(), broker_spec, &broker_, &launch_stage_);
   if (status != ERROR_SUCCESS) return status;
   PSID packages[] = {service_profile_->sid.value};
   startup_stage_ = "runtime.binder-listener-factory";
@@ -1227,7 +1232,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   const AuthorityLaunchSpec manager_spec{manager_image.c_str(), runtime_.c_str(), manager_arguments,
       environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error};
   startup_stage_ = "runtime.create-service-manager";
-  status = AuthorityLaunch::Create(identity_->token(), manager_spec, &manager_);
+  status = AuthorityLaunch::Create(identity_->token(), manager_spec, &manager_, &launch_stage_);
   if (status == ERROR_SUCCESS) status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);
   if (status == ERROR_SUCCESS) status = manager_->Resume();
   if (status != ERROR_SUCCESS) return status;
@@ -1244,7 +1249,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   {
     std::lock_guard lock(mutex_);
     startup_stage_ = "runtime.create-system-server";
-    status = StartEntry(std::move(system), runtime_ + L"\\dalvikvm.exe", arguments, {}, &server);
+    status = StartEntry(std::move(system), runtime_ + L"\\dalvikvm.exe", arguments, {}, &server, &launch_stage_);
   }
   if (status != ERROR_SUCCESS) return status;
   RecordStartup(directory_, "runtime.system-server-created", ERROR_SUCCESS);
@@ -1547,6 +1552,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
   }
   ProtectedIdentityCleanup cleanup;
   const char* stage = "runtime.import-selection";
+  const char* launch_stage = "none";
   DWORD status = ERROR_SUCCESS;
   try {
     std::unique_ptr<HostDisk> selected;
@@ -1555,6 +1561,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
       Session session(directory, options, stop, cleanup);
       status = session.Run(executable, std::move(selected));
       stage = session.startup_stage();
+      launch_stage = session.launch_stage();
     }  // Guest teardown and profile unload finish before reporting the status.
   } catch (const std::bad_alloc&) {
     stage = "runtime.allocation-failure";
@@ -1564,7 +1571,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
     status = ERROR_NOT_READY;
   }
   if (status != ERROR_SUCCESS || cleanup.profile_error.load() != ERROR_SUCCESS ||
-      cleanup.privilege_restore_error != ERROR_SUCCESS) RecordStartup(directory, stage, status, cleanup);
+      cleanup.privilege_restore_error != ERROR_SUCCESS) RecordStartup(directory, stage, status, cleanup, launch_stage);
   if (status != ERROR_SUCCESS) return status;
   const DWORD profile_error = cleanup.profile_error.load();
   return profile_error != ERROR_SUCCESS ? profile_error : cleanup.privilege_restore_error;
