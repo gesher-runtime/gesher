@@ -58,6 +58,8 @@ public final class PackageServiceQueriesTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // getSystemAvailableFeatures reads ro.opengles.version (SystemProperties' natives).
+        System.loadLibrary("android_runtime");
         Field singleton = Unsafe.class.getDeclaredField("theUnsafe");
         singleton.setAccessible(true);
         Unsafe unsafe = (Unsafe) singleton.get(null);

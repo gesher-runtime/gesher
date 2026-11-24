@@ -231,8 +231,8 @@ EGLDisplay DefaultDisplay() {
       }
       if (d != EGL_NO_DISPLAY) {
         MS(eglTerminate)(d);
-        Log("Direct3D 11 hardware device offers no OpenGL ES 3 (feature level 10_0); "
-            "trying WARP");
+        Log("Direct3D 11 hardware device offers no OpenGL ES 3 configs (ANGLE gives a "
+            "feature level 10_0 adapter ES 2 alone); trying WARP");
       } else {
         Log("Direct3D 11 hardware device failed; trying WARP");
       }
