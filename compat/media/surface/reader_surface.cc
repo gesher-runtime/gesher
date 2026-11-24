@@ -23,7 +23,10 @@ struct Buffer {
   void* ahb;  // a reference
   int width, height;
   Buffer(void* b, int w, int h) : ahb(b), width(w), height(h) { gesher::bionic::ahb::RetainRgbaBuffer(b); }
-  ~Buffer() { gesher::bionic::ahb::ReleaseRgbaBuffer(ahb); }
+  ~Buffer() {
+    gesher::bionic::ahb::NoteRgbaAppReleased(ahb);  // the app's draws so far: the buffer's release fence
+    gesher::bionic::ahb::ReleaseRgbaBuffer(ahb);
+  }
 };
 jclass buffer_class;
 jmethodID buffer_constructor;

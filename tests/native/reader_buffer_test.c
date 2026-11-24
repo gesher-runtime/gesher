@@ -384,3 +384,22 @@ JNIEXPORT void JNICALL Java_gesher_ImageReaderPrivateTest_nativeDropKept(JNIEnv*
   (void)clazz;
   drop_kept();
 }
+
+// nativeFinish(): glFinish on the current context (the app's draws are done).
+JNIEXPORT void JNICALL Java_gesher_ImageReaderPrivateTest_nativeFinish(JNIEnv* env, jclass clazz) {
+  (void)env;
+  (void)clazz;
+  glFinish();
+}
+
+// nativeFenceStats(which): Gesher's gesher_ahb_fence_stats(which), found with dlsym: how
+// many rewrites of a reader buffer waited on its release fence (0) and how many of
+// those found it not signalled yet (1); -1 where the symbol is missing.
+void* dlsym(void* handle, const char* symbol);
+JNIEXPORT jlong JNICALL Java_gesher_ImageReaderPrivateTest_nativeFenceStats(JNIEnv* env, jclass clazz,
+                                                                          jint which) {
+  (void)env;
+  (void)clazz;
+  unsigned long long (*stats)(int) = (unsigned long long (*)(int))dlsym((void*)0, "gesher_ahb_fence_stats");
+  return stats != NULL ? (jlong)stats(which) : -1;
+}

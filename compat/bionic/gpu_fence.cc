@@ -93,14 +93,13 @@ std::shared_ptr<NativeFence> CreateCurrentFence(void* display, int* egl_error) {
   return fence;
 }
 
-bool WaitAngleDeviceIdle(unsigned timeout_ms) {
+std::shared_ptr<NativeFence> CreateAngleFence() {
   auto dispatch = AngleDispatch();
-  if (!dispatch) return false;
+  if (!dispatch) return nullptr;
   Submission submission;
-  if (!dispatch(Submit, &submission) || FAILED(submission.result) || !submission.event) return false;
-  const bool done = WaitForSingleObject(submission.event, timeout_ms) == WAIT_OBJECT_0;
-  CloseHandle(submission.event);
-  return done;
+  if (!dispatch(Submit, &submission) || FAILED(submission.result) || !submission.event) return nullptr;
+  // The fence owns the event: a caller that gives up waiting leaves it alive for DXGI.
+  return NativeFenceFromEvent(submission.device.Get(), submission.event);
 }
 
 bool WaitCurrentFence(const std::shared_ptr<NativeFence>& fence, int* egl_error) {

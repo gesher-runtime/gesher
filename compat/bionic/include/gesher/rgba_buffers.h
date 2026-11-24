@@ -12,9 +12,9 @@
 // GPU form (the texture those EGLImages share) when a consumer next takes the
 // buffer (FlushRgbaToGpu, from Image.getHardwareBuffer), on the GPU thread in
 // order with the compositor, not for frames that are dropped. That write waits
-// for ANGLE's device to finish the draws the app already issued (the texture is
-// shared between the two devices without a keyed mutex), and the reader writes
-// the buffer released longest ago, so a rewrite is also far from its last use.
+// for the buffer's release fence (the draws the app issued before it let go; the
+// texture is shared between the two devices without a keyed mutex), which has
+// normally signalled long ago: the reader writes the buffer released longest ago.
 #pragma once
 
 #include <stdint.h>
@@ -38,7 +38,14 @@ uint8_t* RgbaBufferPixels(void* buffer);
 // The CPU wrote RgbaBufferPixels: the GPU form, if any, is older until FlushRgbaToGpu.
 void MarkRgbaWritten(void* buffer);
 // Brings an existing GPU form up to date with the memory (before an app samples it).
+// If an app sampled the buffer, waits for the buffer's release fence first.
 void FlushRgbaToGpu(void* buffer);
+// An app-facing holder of the buffer (an Image, a Java HardwareBuffer) is about to
+// let go of it: if the app made an EGLImage of it, queues a fence on ANGLE's device
+// (what the app drew so far) and keeps it on the buffer as its release fence, as
+// Android hands an acquire/release fence with a slot. Takes ANGLE's lock: never
+// call it under the reader's mutex.
+void NoteRgbaAppReleased(void* buffer);
 // AHardwareBuffer_getId and the usage AHardwareBuffer_describe reports.
 uint64_t RgbaBufferId(void* buffer);
 uint64_t RgbaBufferUsage(void* buffer);

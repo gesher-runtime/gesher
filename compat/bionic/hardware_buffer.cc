@@ -278,6 +278,10 @@ struct Buffer {
   bool gpu_written = false;   // an app image exists or existed: the texture may be newer
   bool has_texture = false;   // gpu.texture exists (also readable off the GPU thread)
   int app_images = 0;         // the app's EGLImages of it
+  // A reader buffer's release fence: ANGLE's work up to the last time an app
+  // holder let go of it (NoteRgbaAppReleased); the next rewrite waits for it.
+  std::shared_ptr<NativeFence> release_fence;
+  uint64_t fence_requested = 0, fence_stored = 0;  // ordering of concurrent releases
   GpuState gpu;               // GPU thread only
 
   size_t row_bytes() const { return static_cast<size_t>(desc.stride) * format->bytes; }
@@ -850,6 +854,15 @@ int BIONIC_SYSV Unlock(AHardwareBuffer* buffer, int32_t* fence) {
   return 0;
 }
 
+// Waits on release fences, and those that had not signalled yet (a rewrite that
+// really waited for the GPU); read through gesher_ahb_fence_stats.
+std::atomic<uint64_t> g_fence_waits{0}, g_fence_waits_pending{0};
+// gesher_ahb_fence_stats(0): release-fence waits by rewrites of reader buffers;
+// (1): those that found the fence not yet signalled (the GPU was waited for).
+uint64_t BIONIC_SYSV FenceStats(int which) {
+  return which == 0 ? g_fence_waits.load() : g_fence_waits_pending.load();
+}
+
 int BIONIC_SYSV GetId(const AHardwareBuffer* buffer, uint64_t* out_id) {
   Buffer* b = FromApp(buffer);
   if (b == nullptr || out_id == nullptr) return kBadValue;
@@ -991,6 +1004,7 @@ void Register() {
       E("AHardwareBuffer_lockPlanes", LockPlanes),
       E("AHardwareBuffer_unlock", Unlock),
       E("AHardwareBuffer_getId", GetId),
+      E("gesher_ahb_fence_stats", FenceStats),
       E("AHardwareBuffer_sendHandleToUnixSocket", SendHandle),
       E("AHardwareBuffer_recvHandleFromUnixSocket", RecvHandle),
   };
@@ -1002,7 +1016,7 @@ void Register() {
 
 }  // namespace
 
-constexpr unsigned kAngleIdleTimeoutMs = 2000;
+constexpr uint64_t kReleaseFenceTimeoutNs = 2000ull * 1000 * 1000;
 
 void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
   AHardwareBuffer_Desc desc{};
@@ -1054,14 +1068,35 @@ void MarkRgbaWritten(void* buffer) {
   b->memory_newer = true;
 }
 
+void NoteRgbaAppReleased(void* buffer) {
+  Buffer* b = FromApp(buffer);
+  uint64_t request;
+  {
+    std::lock_guard<std::mutex> lock(b->mutex);
+    if (!b->gpu_written) return;  // no app EGLImage: nothing it drew can sample the texture
+    request = ++b->fence_requested;
+  }
+  // Outside the buffer's lock: this takes ANGLE's.
+  std::shared_ptr<NativeFence> fence = gpu::CreateAngleFence();
+  if (fence == nullptr) return;
+  std::lock_guard<std::mutex> lock(b->mutex);
+  if (request > b->fence_stored) {  // a later release's fence covers an earlier one's
+    b->fence_stored = request;
+    b->release_fence = std::move(fence);
+  }
+}
+
 void FlushRgbaToGpu(void* buffer) {
   Buffer* b = FromApp(buffer);
-  bool upload, app_read;
+  bool upload;
+  std::shared_ptr<NativeFence> fence;
   {
     std::lock_guard<std::mutex> lock(b->mutex);
     upload = b->has_texture && b->memory_newer;
-    app_read = b->gpu_written;  // an app image exists or existed: it may have sampled the texture
-    if (upload) b->memory_newer = false;
+    if (upload) {
+      b->memory_newer = false;
+      fence = b->release_fence;
+    }
   }
   // A texture made before (an app's EGLImage of this buffer) gets the new pixels
   // here, on the GPU thread in order with the compositor. Without a texture the
@@ -1070,13 +1105,22 @@ void FlushRgbaToGpu(void* buffer) {
   // Ordering: the texture is shared between the GPU thread's device and ANGLE's
   // with no keyed mutex, so the upload is not ordered after draws the app already
   // issued that sample it (an app may close the Image and HardwareBuffer right
-  // after drawing, keeping the EGLImage). ANGLE's device is therefore flushed and
-  // waited idle first: every draw the app made before this call has completed
-  // when the new pixels are written. Draws made after the call see them (the
-  // upload finishes before this returns).
-  if (upload && app_read && !gpu::WaitAngleDeviceIdle(kAngleIdleTimeoutMs)) {
-    static std::atomic<bool> said{false};
-    LogOnce(&said, "ANGLE's device did not report idle before a reader buffer was rewritten");
+  // after drawing, keeping the EGLImage). So the rewrite waits for the buffer's
+  // release fence, queued on ANGLE's device when the app's holder (Image,
+  // HardwareBuffer) let go: every draw the app made before then has completed when
+  // the new pixels are written, and the device is not drained of other work (the
+  // app's next frame). Normally the fence signalled long ago: the pool rewrites the
+  // buffer released longest ago. Draws made after this call see the new pixels (the
+  // upload finishes before it returns).
+  if (upload && fence != nullptr) {
+    g_fence_waits++;
+    if (NativeFenceStatus(fence) != FenceStatus::kSignaled) {
+      g_fence_waits_pending++;
+      if (WaitNativeFence(fence, kReleaseFenceTimeoutNs) != FenceStatus::kSignaled) {
+        static std::atomic<bool> said{false};
+        LogOnce(&said, "a reader buffer's release fence did not signal in time: it is rewritten unordered");
+      }
+    }
   }
   if (upload)
     gpu::Thread::Get()->Run([&] {

@@ -484,6 +484,10 @@ public final class SurfaceParcelTest {
         require(drawn.is(64, 32), "the producer draws " + drawn + " into the SurfaceTexture");
         require(frames.tryAcquire(5, TimeUnit.SECONDS), "no onFrameAvailable for the producer's frame");
         reader.close();
+        // Closing the reader frees its pooled frame buffer: back to the count before it.
+        require(memfds() == own - ownPool, "closing the reader left " + (memfds() - (own - ownPool))
+                + " of its descriptors open: its pooled buffer was not freed");
+        say("closing the reader frees its pooled buffer's descriptor");
         say("a SurfaceTexture's Surface read into the producer's releases the earlier one; its frames"
                 + " reach the SurfaceTexture");
 

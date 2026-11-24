@@ -327,6 +327,9 @@ Image* ImageOf(JNIEnv* env, jobject image) {
 }
 
 void ReleaseImage(const std::shared_ptr<Reader>& r, Image* i) {
+  // What the app drew with this buffer before closing the Image is what a rewrite
+  // must wait for. Not under the reader's mutex: this takes ANGLE's lock.
+  if (i->rgba != nullptr) gesher::bionic::ahb::NoteRgbaAppReleased(i->rgba);
   delete i;
   if (r == nullptr) return;
   {

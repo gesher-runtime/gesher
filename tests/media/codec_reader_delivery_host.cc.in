@@ -159,6 +159,7 @@ bool RgbaBufferReusable(void* buffer) {
 uint8_t* RgbaBufferPixels(void* buffer) { return static_cast<HostRgbaBuffer*>(buffer)->pixels.get(); }
 void MarkRgbaWritten(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->memory_newer = true; }
 void FlushRgbaToGpu(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->memory_newer = false; }
+void NoteRgbaAppReleased(void*) {}
 }  // namespace gesher::bionic::ahb
 
 namespace android {

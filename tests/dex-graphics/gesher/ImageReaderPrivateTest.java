@@ -45,6 +45,8 @@ public final class ImageReaderPrivateTest {
     private static native int nativeSampleKept(int[] probes, int[] out);
     private static native int nativeReadTarget(int[] probes, int[] out);
     private static native void nativeDropKept();
+    private static native void nativeFinish();
+    private static native long nativeFenceStats(int which);
 
     private static final int[] PROBES = {4, 4, 28, 4, 4, 20, 28, 20};
     // Indexes of nativeInspect's result.
@@ -359,6 +361,29 @@ public final class ImageReaderPrivateTest {
                                 + " 0x" + Integer.toHexString(now[i]));
                     secondBuffer.close();
                     secondImage.close();
+                    // Steady state: the rewrite waits for the buffer's release fence, not for the
+                    // device. With the app's draws finished (and the fence given a moment to
+                    // signal) before each next frame, none of these rewrites finds it pending.
+                    final int steady = 6;
+                    long waits = nativeFenceStats(0), pending = nativeFenceStats(1);
+                    check(waits >= 0 && pending >= 0, "gesher_ahb_fence_stats is available");
+                    int[] colors = {Color.RED, Color.BLUE, Color.YELLOW, Color.MAGENTA, Color.CYAN, Color.GREEN};
+                    for (int i = 0; i < steady; i++) {
+                        nativeFinish();
+                        Thread.sleep(50);
+                        kl[0] = new CountDownLatch(1);
+                        kc = keptReader.getSurface().lockHardwareCanvas();
+                        kc.drawColor(colors[i]);
+                        keptReader.getSurface().unlockCanvasAndPost(kc);
+                        try (Image frame = next(keptReader, kl[0], "steady frame " + i);
+                                HardwareBuffer frameBuffer = frame.getHardwareBuffer()) {
+                            check(frameBuffer.getId() == firstId, "steady frame " + i + " reuses the kept buffer");
+                        }
+                    }
+                    long waited = nativeFenceStats(0) - waits, blocked = nativeFenceStats(1) - pending;
+                    check(waited == steady, "each steady frame's rewrite waited on its release fence (" + waited + ")");
+                    check(blocked == 0, "no steady frame's rewrite found the fence pending, so none drained the "
+                            + "device (" + blocked + " of " + steady + ")");
                     nativeDropKept();
                 }
                 EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE,
