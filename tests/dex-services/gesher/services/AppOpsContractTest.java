@@ -329,6 +329,12 @@ public final class AppOpsContractTest {
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.ACCESS_COARSE_LOCATION, "default:0", 0);
         check(h.ops.checkOperationRaw(OP_GPS, UID, NAME, null) == MODE_FOREGROUND,
                 "Runtime switch aliases use the permission-derived mode");
+        int exempt = PackageManager.FLAGS_PERMISSION_RESTRICTION_ANY_EXEMPT, apply = PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+        check((h.pm.permissions().getPermissionFlags(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION, "default:0", 0)
+                & (exempt | apply)) == PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT,
+                "Admission records AOSP's default installer exemption instead of APPLY_RESTRICTION");
+        // An install that opted out of the restricted-permission allowlist.
+        flags(h, Manifest.permission.ACCESS_BACKGROUND_LOCATION, exempt | apply, apply);
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION, "default:0", 0);
         check(h.pm.permissions().checkPermission(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_DENIED,
                 "A hard-restricted permission is not granted before its restriction is removed");
@@ -354,8 +360,25 @@ public final class AppOpsContractTest {
         flags(h, Manifest.permission.READ_EXTERNAL_STORAGE, PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION,
                 PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION);
         check(h.pm.permissions().checkPermission(NAME, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, UID, NAME, null) == MODE_IGNORED,
-                "Soft restriction denies AppOps while retaining the runtime permission grant");
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, UID, NAME, null) == MODE_ALLOWED,
+                "From target Q a soft restriction keeps the storage AppOp (AOSP SoftRestrictedPermissionPolicy)");
+        // A pre-Q UID without an exemption holds the grant without its AppOp; an exemption restores it.
+        ApkPackage older = pkg("fixture.appops.storage.older", UID + 3, (byte)7, 28);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, older);
+        h.pm.permissions().updatePermissionFlags(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE,
+                exempt | apply, apply, true, "default:0", 0);
+        h.pm.permissions().grantRuntimePermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE, "default:0", 0);
+        check(h.pm.permissions().checkPermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_DENIED
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, older.uid(), older.packageName, null) == MODE_IGNORED,
+                "A restricted pre-Q UID cannot be granted storage or its AppOp");
+        h.pm.permissions().updatePermissionFlags(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE,
+                exempt | apply, PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT, true, "default:0", 0);
+        h.pm.permissions().grantRuntimePermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE, "default:0", 0);
+        check(h.pm.permissions().checkPermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, older.uid(), older.packageName, null) == MODE_ALLOWED,
+                "An allowlisted pre-Q UID holds storage with its AppOp");
+        h.pm.permissions().forgetPackage(older.packageName);
+        call(h.pm, "remove", new Class<?>[]{String.class}, older.packageName);
 
         ApkPackage shared = pkg("fixture.appops.shared", UID, (byte)7);
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, shared);

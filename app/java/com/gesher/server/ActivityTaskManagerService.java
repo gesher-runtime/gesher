@@ -2862,6 +2862,33 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 synchronized (mPm) {
                     settings = SettingsIntents.resolve(intent, pkg -> mPm.get(pkg) != null);
                 }
+                if (settings != null && settings.controlCenter && settings.packageName != null
+                        && android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS.equals(action)
+                        && !internalCreator && resultToToken != null) {
+                    // An app's own App info while one of its background permissions awaits
+                    // the user's choice (microG asks this way): on Android that page offers
+                    // the choice; here the background dialog does, and the result follows it.
+                    final ActivityRecord source = forToken(resultToToken);
+                    final ProcessRecord process = source == null ? null : source.app;
+                    final ApkPackage captured = mPm.get(settings.packageName);
+                    if (process != null && process.pid == originalPid && caller != null
+                            && caller.asBinder().equals(process.thread.asBinder())
+                            && settings.packageName.equals(source.info.packageName)
+                            && captured != null && captured.uid() == originalUid
+                            && mPermissionRequests.backgroundSettings(captured, () -> {
+                                synchronized (ActivityTaskManagerService.this) {
+                                    if (requestCode < 0 || source.app != process || source.finishing
+                                            || source.state == State.DESTROYED || !mActivities.contains(source)
+                                            || mPm.get(settings.packageName) != captured) return;
+                                }
+                                deliverResult(source, resultWho, requestCode,
+                                        android.app.Activity.RESULT_CANCELED, null);
+                            })) {
+                        SystemServer.log("startActivity: " + action + ": background permission choice for "
+                                + settings.packageName);
+                        return ActivityManager.START_SUCCESS;
+                    }
+                }
                 if (settings != null) {
                     boolean opened = settings.controlCenter
                             ? ControlCenter.open(settings.packageName)

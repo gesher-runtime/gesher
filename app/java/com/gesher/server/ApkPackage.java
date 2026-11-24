@@ -85,6 +85,9 @@ public final class ApkPackage {
     private long mInstallTime = System.currentTimeMillis();
     private long mUpdateTime = mInstallTime;
     private volatile PackageInstallSource mInstallSource = PackageInstallSource.UNKNOWN;
+    // The install request's restricted-permission allowlist (AOSP SessionParams), applied
+    // once when this generation is published. Null: no install request was recorded.
+    private volatile java.util.Set<String> mRestrictedPermissionAllowlist;
     private String mDataDir;
     private AppDataStorage mDataStorage;
     private String mNativeLibraryDir;  // null: <data dir>/lib
@@ -492,6 +495,17 @@ public final class ApkPackage {
     void setInstallSource(PackageInstallSource source) {
         mInstallSource = source;
     }
+
+    /**
+     * AOSP InstallPackageHelper: INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS ({@code null})
+     * allowlists every requested permission; otherwise exactly {@code permissions}.
+     */
+    void setRestrictedPermissionAllowlist(java.util.Collection<String> permissions) {
+        mRestrictedPermissionAllowlist = java.util.Set.copyOf(permissions == null
+                ? parsed.getRequestedPermissions() : permissions);
+    }
+
+    java.util.Set<String> restrictedPermissionAllowlist() { return mRestrictedPermissionAllowlist; }
 
     PackageInstallSource installSource() {
         PackageInstallSource source = mInstallSource;

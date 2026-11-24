@@ -248,12 +248,32 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 File stage = Files.createTempDirectory(root.toPath(), "session-").toFile();
                 int id = mIds.getAndIncrement();
                 created = new Session(id, owner, ownerCode, p.appPackageName, p.mode, p.sizeBytes,
-                        PackageInstallSource.category(p.packageSource), !"android".equals(actual), stage);
+                        PackageInstallSource.category(p.packageSource), !"android".equals(actual), stage,
+                        restrictedAllowlist(p));
                 mSessions.put(id, created);
             } catch (IOException e) { throw io(); }
         }
         notify(created, c -> c.onSessionCreated(created.id));
         return created.id;
+    }
+    /**
+     * AOSP SessionParams.setWhitelistedRestrictedPermissions: the default
+     * INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS (null here) allowlists every requested
+     * restricted permission; a session that clears it allowlists exactly its list, which
+     * may be empty (pm install --restrict-permissions).
+     */
+    private static List<String> restrictedAllowlist(PackageInstaller.SessionParams p) {
+        if ((p.installFlags & PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS) != 0) return null;
+        List<String> allowlist = new ArrayList<>();
+        if (p.whitelistedRestrictedPermissions != null) {
+            if (p.whitelistedRestrictedPermissions.size() > 1024) {
+                throw new IllegalArgumentException("Invalid restricted permission allowlist");
+            }
+            for (String name : p.whitelistedRestrictedPermissions) {
+                if (name != null && !allowlist.contains(name)) allowlist.add(name);
+            }
+        }
+        return List.copyOf(allowlist);
     }
     private Session owned(int id) {
         Session s; synchronized (mSessions) { s = mSessions.get(id); }
@@ -560,6 +580,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         final int packageSource;
         final boolean hasApplicationInitiator;
         final File stage;
+        final List<String> restrictedAllowlist; // null: all requested restricted permissions
         final IPackageInstallerSession binder;
         final Map<String, InstallFileBridge> writes = new HashMap<>();
         final Map<String, InstallSessionMetadata.Digests> checksums = new HashMap<>();
@@ -568,8 +589,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         float progress;
         long bytes;
         Session(int id, String owner, ApkPackage code, String pkg, int mode, long size, int packageSource,
-                boolean hasApplicationInitiator, File stage) {
+                boolean hasApplicationInitiator, File stage, List<String> restrictedAllowlist) {
             this.id = id; this.owner = owner; ownerCode = code; expectedPackage = pkg;
+            this.restrictedAllowlist = restrictedAllowlist;
             this.mode = mode; expectedSize = size;
             this.packageSource = packageSource;
             this.hasApplicationInitiator = hasApplicationInitiator;
@@ -609,6 +631,11 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             i.sizeBytes = expectedSize; i.appPackageName = expectedPackage;
             i.packageSource = packageSource;
             i.requireUserAction = PackageInstaller.SessionParams.USER_ACTION_REQUIRED;
+            if (restrictedAllowlist == null) {
+                i.installFlags |= PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS;
+            } else {
+                i.whitelistedRestrictedPermissions = new ArrayList<>(restrictedAllowlist);
+            }
             i.createdMillis = created; i.updatedMillis = created; return i;
         }
         @Override public synchronized void setClientProgress(float value) {
@@ -818,7 +845,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                     }
                     installed = mInstaller.install(new File(canonical, "base.apk").getPath(),
                             new InstallSessionMetadata(canonical), PackageInstallSource.fromSession(
-                                    hasApplicationInitiator ? ownerCode : null, packageSource));
+                                    hasApplicationInitiator ? ownerCode : null, packageSource),
+                            restrictedAllowlist);
                     if (!pkg.equals(installed[0]) || mPm.get(pkg) == null) throw new IllegalStateException("Not published");
                 }
                 String[] published = installed;
