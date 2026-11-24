@@ -480,6 +480,9 @@ jobs:
       - name: Actual wide conversion, pinned Android and guard-page contracts
         run: python3 tools/test_wide_ascii_contracts.py --sanitize
 
+      - name: Validate wide conversion measurement evidence
+        run: python3 tools/test_wide_ascii_performance_evidence.py
+
       - name: Filesystem metadata and media source ownership contracts
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
