@@ -99,6 +99,14 @@ an account-data wipe. Clear any explicit `GESHER_MICROG_SPOOF` override before
 relying on the marker's disabled state. Without an installed real GMS package,
 Gesher retains its synthetic GMS/dummy-account compatibility path. Synthetic
 sign-in, token and push tests are separate from real microG/Google results.
+The synthetic package's data areas are where an installed package of that name
+has them (`$ANDROID_DATA/data/<package>`, `user_de/0/<package>`); Gesher never
+creates them. While they do not exist, another app's
+`createPackageContext(...).getSharedPreferences(...)` reads nothing and cannot
+commit, as with another package's private directory on Android, and nothing
+reaches `/data/data/...`, which on Windows is a folder at the root of the current
+drive. Data that a disabled microG left there is protected from other apps only
+as any installed package's data is (see ADR 0090).
 
 ## APK verification and certificate compatibility
 

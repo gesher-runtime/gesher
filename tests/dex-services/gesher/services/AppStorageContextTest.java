@@ -165,6 +165,51 @@ public final class AppStorageContextTest {
                 "new LoadedApk/Context lost independently persisted areas");
     }
 
+    /**
+     * A package Gesher describes without an APK (Play services' stand-in, the Windows
+     * browser) has its data areas where an installed package of that name has them,
+     * under $ANDROID_DATA, and they are never created. Another app opening its
+     * context (AdvertisingIdClient: createPackageContext(gms).getSharedPreferences)
+     * cannot write there, as it cannot on Android, and nothing is created outside the
+     * device's data root ("/data/data/..." is the root of the current Windows drive).
+     */
+    private static void describedPackages(Context client, File data) throws Exception {
+        String gms = "com.google.android.gms";
+        File rootLegacy = new File("/data/data/" + gms);
+        boolean legacyExisted = rootLegacy.exists();
+        ApplicationInfo info = client.getPackageManager().getApplicationInfo(gms, 0);
+        File credential = new File(new File(data, "data"), gms);
+        File device = new File(new File(data, "user_de/0"), gms);
+        check(new File(info.dataDir).getCanonicalFile().equals(credential.getCanonicalFile())
+                        && info.dataDir.equals(info.credentialProtectedDataDir)
+                        && new File(info.deviceProtectedDataDir).getCanonicalFile()
+                                .equals(device.getCanonicalFile())
+                        && info.nativeLibraryDir != null
+                        && info.nativeLibraryDir.startsWith(info.dataDir),
+                "stand-in package data areas are not an installed package's under $ANDROID_DATA: "
+                        + info.dataDir + ", " + info.deviceProtectedDataDir + ", " + info.nativeLibraryDir);
+        check(!credential.exists() && !device.exists(),
+                "describing the stand-in package created its data areas");
+
+        Context other = client.createPackageContext(gms, 0);
+        check(other.getDataDir().getCanonicalFile().equals(credential.getCanonicalFile()),
+                "another package's context does not use its described data area");
+        android.content.SharedPreferences flags = other.getSharedPreferences("google_ads_flags", 0);
+        check(flags.getAll().isEmpty() && flags.getInt("value", -1) == -1,
+                "another package's absent preferences are not empty");
+        check(!flags.edit().putInt("value", 7).commit(),
+                "a client committed preferences into another package's private area");
+        check(!credential.exists() && !device.exists(),
+                "a client created another package's private data area");
+        check(legacyExisted || !rootLegacy.exists(),
+                "a client created " + rootLegacy + " at the root of the drive");
+
+        ApplicationInfo browser = client.getPackageManager().getApplicationInfo("com.gesher.browser", 0);
+        check(new File(browser.dataDir).getCanonicalFile().equals(
+                        new File(new File(data, "data"), "com.gesher.browser").getCanonicalFile()),
+                "the browser package's data area is outside $ANDROID_DATA: " + browser.dataDir);
+    }
+
     private static int databaseValue(Context context, String name) {
         try (SQLiteDatabase db = context.openOrCreateDatabase(name, 0, null);
                 Cursor cursor = db.rawQuery("SELECT value FROM values_table", null)) {
@@ -193,6 +238,7 @@ public final class AppStorageContextTest {
         exercise(MediaRouterContractTest.context(ordinary.packageName), ordinary, false);
         exercise(MediaRouterContractTest.context(requested.packageName), requested, false);
         exercise(MediaRouterContractTest.context(device.packageName), device, true);
+        describedPackages(MediaRouterContractTest.context(ordinary.packageName), data);
         System.out.println("AppStorageContextTest all passed: " + checks + " checks");
         System.exit(0);
     }
