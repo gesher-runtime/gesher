@@ -355,19 +355,23 @@ Phase 2b turns it on. Sources as above (`android-16.0.0_r4` GitHub mirrors;
      `DeviceNotPresent`) replaces what is remembered at once.
    - **Trust bound: 10 minutes** (`BUSY_TRUST_MS`) from the last definite answer. A device
      that is occupied for seconds is busy; one that does not answer for 10 minutes is a
-     failing Windows Hello, and Gesher can no longer say that a credential exists, so
-     `isDeviceSecure` becomes false then. AOSP has no "unknown" for it. This is the one
-     deliberate edge of the rule, and the bound is a constant, not a Windows fact.
-   - A prompt attempted while busy ends with `BIOMETRIC_ERROR_HW_UNAVAILABLE`
-     (`AuthService.unavailable`: `DeviceCredential.state()` is the live answer), with no
-     Windows prompt; a confirm-credential intent ends `RESULT_CANCELED`.
-   - At start, a busy or failed first answer is asked again 3 times, 250 ms apart, before
-     decision 8 reads it.
+     failing Windows Hello, and Gesher can no longer say that a credential exists.
+     `isDeviceSecure` becomes false because it has no unknown state. BiometricManager
+     reports temporary hardware unavailability when the verifier is supported but
+     enrollment is unknown.
+   - A prompt attempted while a previously enrolled verifier is busy, or while its
+     enrollment is unknown, ends with `BIOMETRIC_ERROR_HW_UNAVAILABLE`. It opens no
+     prompt and leaves any active verification running. A confirm-credential intent
+     ends `RESULT_CANCELED`.
+   - At start, a busy or failed first answer is queried again up to 3 times, 250 ms
+     apart. Retries refresh Windows' answer directly because the normal cache lasts
+     longer than the startup retry window.
 8. **`FEATURE_SECURE_LOCK_SCREEN` is decided once, when the system server starts**, as
-   Android fixes features at boot: declared when Windows then answers `Available` or
-   `NotConfiguredForUser` (Windows has a verifier; the user has or has not set it up, as
-   a phone's user has or has not set a screen lock), absent for `DeviceNotPresent`,
-   `DisabledByPolicy`, `DeviceBusy`, a failed query, Windows below 22000 or no natives.
+   Android fixes features at boot. `Available`, `NotConfiguredForUser` and `DeviceBusy`
+   establish that Windows has a verifier. A busy answer alone leaves enrollment unknown.
+   A final `DeviceNotPresent` or `DisabledByPolicy` takes precedence over an earlier
+   busy answer. Windows below 22000, missing natives and an entirely failed startup
+   query leave the feature unavailable.
    The user's later changes move only the state, never the feature:
    - set up → removed: the feature stays, `isDeviceSecure` becomes false (a phone whose
      user removed the lock);
@@ -375,8 +379,8 @@ Phase 2b turns it on. Sources as above (`android-16.0.0_r4` GitHub mirrors;
    - no feature at start → Windows Hello appears later: the device stays not secure
      until Gesher's system server restarts. This keeps AOSP's invariant that a device
      without the feature is never secure (LockSettingsService above), at the cost of a
-     restart; a `DeviceBusy` or failed query that lasts through the start-up retries (decision 7)
-     has the same cost.
+     restart;
+   - busy at startup → available: the existing feature becomes usable without a restart.
 9. **`ACTION_CONFIRM_DEVICE_CREDENTIAL` is answered by the activity manager**
    (`ConfirmCredential`, `ActivityTaskManagerService.confirmDeviceCredential`): Gesher has
    no Settings package, as for the Bluetooth consent activities. It matches the action

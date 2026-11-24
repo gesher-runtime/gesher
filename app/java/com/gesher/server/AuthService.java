@@ -91,6 +91,8 @@ public final class AuthService extends IAuthService.Default {
     private static final int BIOMETRIC_NO_HARDWARE = 2;
     private static final int CREDENTIAL_NOT_ENROLLED = 9;
     private static final int MANDATORY_BIOMETRIC_UNAVAILABLE_ERROR = 13;
+    // Local pre-authentication status when the verifier cannot answer about enrollment.
+    private static final int CREDENTIAL_TEMPORARILY_UNAVAILABLE = -1;
 
     /** How a confirm-credential request ends: exactly one call, on the service's thread. */
     public interface ConfirmationResult {
@@ -391,17 +393,17 @@ public final class AuthService extends IAuthService.Default {
             return;
         }
         // Only a device credential can be eligible here (there are no sensors).
+        int unavailable = unavailable(session);
+        if (unavailable != BiometricConstants.BIOMETRIC_SUCCESS) {
+            error(session, BiometricAuthenticator.TYPE_CREDENTIAL, unavailable);
+            return;
+        }
         Session previous;
         synchronized (mLock) {
             previous = mSession;
             mSession = null;
         }
         if (previous != null) end(previous, BiometricConstants.BIOMETRIC_ERROR_CANCELED);
-        int unavailable = unavailable(session);
-        if (unavailable != BiometricConstants.BIOMETRIC_SUCCESS) {
-            error(session, BiometricAuthenticator.TYPE_CREDENTIAL, unavailable);
-            return;
-        }
         if (session.receiver != null) {
             try {
                 session.receiver.asBinder().linkToDeath(session, 0);
@@ -549,8 +551,13 @@ public final class AuthService extends IAuthService.Default {
         boolean credential = (authenticators & Authenticators.DEVICE_CREDENTIAL) != 0;
         if (credential) {
             // With or without biometric bits: no sensor is eligible, the credential decides.
-            return new int[] {BiometricAuthenticator.TYPE_CREDENTIAL,
-                    mHost.isDeviceSecure(userId) ? AUTHENTICATOR_OK : CREDENTIAL_NOT_ENROLLED};
+            int credentialStatus = CREDENTIAL_NOT_ENROLLED;
+            if (mHost.isDeviceSecure(userId)) {
+                credentialStatus = AUTHENTICATOR_OK;
+            } else if (userId == UserHandle.USER_SYSTEM && mCredential.enrollmentUnknown()) {
+                credentialStatus = CREDENTIAL_TEMPORARILY_UNAVAILABLE;
+            }
+            return new int[] {BiometricAuthenticator.TYPE_CREDENTIAL, credentialStatus};
         }
         if (!biometric && authenticators == Authenticators.IDENTITY_CHECK) {
             // Identity Check is never active: Gesher has no setting or Strong biometric for it.

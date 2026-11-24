@@ -2,7 +2,7 @@
 """Run the production auth (IAuthService) contracts of ADR 0091 on a host JVM.
 
 The Android and system-server boundaries are stand-ins with android-16.0.0_r4's
-constant values; AuthService, WindowsHelloBackend, DeviceCredential,
+constant values; AuthService, WindowsHello, WindowsHelloBackend, DeviceCredential,
 ConfirmCredential and OwnerWatch are compiled unchanged apart from their package,
 imports and public class visibility; StandIn, the dispatch the service's Binder
 uses, is compiled the same way. Tests cover the sensor-less AOSP answers with
@@ -32,6 +32,8 @@ SOURCES = {
     "// PRODUCTION_KEY_OPERATIONS": ("app/java/com/gesher/server/KeystoreOperations.java",
                                      "public interface KeystoreOperations",
                                      "interface KeystoreOperations"),
+    "// PRODUCTION_WINDOWS_HELLO": ("app/java/com/gesher/server/WindowsHello.java",
+                                    "final class WindowsHello", "final class WindowsHello"),
     "// PRODUCTION_SERVICE": ("app/java/com/gesher/server/AuthService.java",
                               "public final class AuthService", "final class AuthService"),
     "// PRODUCTION_CREDENTIAL": ("app/java/com/gesher/server/DeviceCredential.java",

@@ -37,12 +37,11 @@ package com.gesher.server;
  *
  * <p>{@link #supported} is {@code FEATURE_SECURE_LOCK_SCREEN}, which Android fixes at boot.
  * It is decided once, from Windows' answer when the system server starts: {@code Available}
- * or {@code NotConfiguredForUser} (Windows has a verifier; the user may or may not have set
- * it up, as a phone's user may or may not have set a screen lock). Any other answer declares
- * no secure lock screen for this run, and then no credential is offered either, as on an
- * Android device without the feature, where no credential can be set. Removing Windows Hello
- * later only makes the device not secure; setting it up later makes it secure, when it was
- * supported at start.
+ * or {@code NotConfiguredForUser} establishes that Windows has a verifier. A
+ * {@code DeviceBusy} answer also establishes the verifier's presence, with enrollment unknown.
+ * After fresh retries, a definite answer takes precedence over a previous busy answer. Other
+ * answers that provide no evidence of a verifier leave the feature off for this run. A supported
+ * device can become secure later when Windows confirms that its verifier is available.
  */
 final class DeviceCredential {
     /** Microsoft's minimum build for RequestVerificationForWindowAsync (Windows 11). */
@@ -84,6 +83,7 @@ final class DeviceCredential {
     DeviceCredential(WindowsHelloBackend backend, int windowsBuild,
             java.util.function.LongSupplier clockMs, java.util.function.LongConsumer sleepMs) {
         mClockMs = clockMs;
+        boolean supported = false;
         if (backend == null) {
             mBackend = null;
             mStartState = WindowsHelloBackend.FAILED;
@@ -95,17 +95,21 @@ final class DeviceCredential {
         } else {
             mBackend = backend;
             int answer = backend.availability();
-            // A busy device or a failed query at start is usually brief, and the answer fixes
-            // FEATURE_SECURE_LOCK_SCREEN for the whole run: ask again before giving up.
+            boolean sawVerifier = answer == WindowsHelloBackend.DEVICE_BUSY;
+            // A retry needs a new Windows sample. The normal availability cache outlasts
+            // the entire startup retry window.
             for (int retry = 0; isTransient(answer) && retry < START_RETRIES; retry++) {
                 sleepMs.accept(START_RETRY_MS);
-                answer = backend.availability();
+                answer = backend.refreshAvailability();
+                sawVerifier |= answer == WindowsHelloBackend.DEVICE_BUSY;
             }
             mStartState = answer;
             remember(answer);
+            supported = answer == WindowsHelloBackend.AVAILABLE
+                    || answer == WindowsHelloBackend.NOT_CONFIGURED_FOR_USER
+                    || (isTransient(answer) && sawVerifier);
         }
-        mSupported = mBackend != null && (mStartState == WindowsHelloBackend.AVAILABLE
-                || mStartState == WindowsHelloBackend.NOT_CONFIGURED_FOR_USER);
+        mSupported = supported;
         if (mBackend != null && !mSupported) {
             SystemServer.log("auth: Windows Hello answered " + mStartState
                     + " at start: no secure lock screen for this run");
@@ -148,8 +152,21 @@ final class DeviceCredential {
         if (answer == WindowsHelloBackend.AVAILABLE) return true;
         if (!isTransient(answer)) return false;
         synchronized (mLock) {
-            return mKnown && mKnownEnrolled && mClockMs.getAsLong() - mKnownAtMs <= BUSY_TRUST_MS;
+            return mKnownEnrolled && hasRecentAnswer();
         }
+    }
+
+    /** A supported verifier did not answer whether the user is enrolled. */
+    boolean enrollmentUnknown() {
+        if (!mSupported || !isTransient(state())) return false;
+        synchronized (mLock) {
+            return !hasRecentAnswer();
+        }
+    }
+
+    /** Called under mLock. */
+    private boolean hasRecentAnswer() {
+        return mKnown && mClockMs.getAsLong() - mKnownAtMs <= BUSY_TRUST_MS;
     }
 
     /** DeviceBusy or a failed query: nothing is known about the credential right now. */

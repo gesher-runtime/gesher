@@ -34,6 +34,11 @@ public interface WindowsHelloBackend {
     /** The user's current availability (CheckAvailabilityAsync), one of the values above. */
     int availability();
 
+    /** A fresh availability check for startup retries, even when normal reads are cached. */
+    default int refreshAvailability() {
+        return availability();
+    }
+
     /**
      * Starts a verification owned by the requesting app's window. {@code completion} is
      * called exactly once, on any thread, with a result value above (CANCELED after
