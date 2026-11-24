@@ -309,10 +309,12 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `tests/native/surface_control_test.c` through
     `surface_control_host_test.exe`. `hardware_buffer_java.cc` adds
     `AHardwareBuffer_fromHardwareBuffer` for the HardwareBuffers of an
-    `ImageReader`'s images (the reader snapshots of
-    `compat/media/surface/reader_surface.cc`, [media.md](media.md)): an
-    RGBA8 AHardwareBuffer of the snapshot's pixels, made on first request and
-    owned by the snapshot, checked by `tests/native/reader_buffer_test.c`.
+    `ImageReader`'s images (the Java HardwareBuffers of
+    `compat/media/surface/reader_surface.cc`, [media.md](media.md)): the
+    image's pooled RGBA8 AHardwareBuffer (`gesher/rgba_buffers.h`, in
+    `hardware_buffer.cc`), checked by `tests/native/reader_buffer_test.c`; it
+    also registers `android.hardware.SyncFence`'s natives over the native
+    fences.
 
 - **NativeActivity** ([0032](decisions/0032-native-libs-native-activity.md),
   `compat/bionic/native_activity.cmake`: the OBJECT library
@@ -711,7 +713,7 @@ see "After that" for what is left._
   AChoreographer's vsync (a 60 Hz clock, not the display's). Not provided at
   all (they bind to the aborting stubs):
   `ASurfaceTexture_*`, `AHardwareBuffer_toHardwareBuffer` (the only Java
-  HardwareBuffers are ImageReader snapshots, which
+  HardwareBuffers are ImageReader images' buffers, which
   `AHardwareBuffer_fromHardwareBuffer` imports), `ASurfaceTransaction_fromJava`,
   `ASurfaceTransaction_setLuts`, `AThermal_*`,
   `ASharedMemory_dupFromJava`, `android_getaddrinfofornetwork` & co.
@@ -772,7 +774,7 @@ see "After that" for what is left._
 ### After that (not started)
 
 - The remaining shim gaps as real apps need them; `ASurfaceTexture`; Java
-  HardwareBuffer's natives beyond ImageReader snapshots (and
+  HardwareBuffer's natives beyond ImageReader images' buffers (and
   `AHardwareBuffer_toHardwareBuffer`); YUV
   hardware buffers (AImageReader); RGB_565 windows.
 - Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers

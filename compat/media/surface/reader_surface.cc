@@ -1,36 +1,33 @@
 #include "reader_surface.h"
 #include "queue_surface.h"
 #include <android_runtime/android_view_Surface.h>
+#include <gesher/rgba_buffers.h>
 #include <GraphicsJNI.h>
 #include <hwui/Bitmap.h>
 #include <nativehelper/JNIHelp.h>
 #include <atomic>
 #include <cstring>
-#include <mutex>
+#include <memory>
+
+namespace gesher::bionic {
+int RegisterSyncFenceNatives(JNIEnv* env);  // hardware_buffer_java.cc
+}
 
 namespace gesher::media {
 namespace {
-// These are host-memory snapshots, not Android GPU allocations. Their immutable
-// Bitmap conversion works on both Gesher's CPU and SkiaGL display pipelines.
+// A Java HardwareBuffer of a reader image holds a reference to the image's RGBA
+// AHardwareBuffer (<gesher/rgba_buffers.h>), which the reader's pool will not
+// write into while it is held. Its immutable Bitmap conversion works on both
+// Gesher's CPU and SkiaGL display pipelines.
 struct Buffer {
+  void* ahb;  // a reference
   int width, height;
-  uint64_t id;
-  std::vector<uint8_t> pixels;
-  std::mutex native_mutex;  // the native buffer below
-  void* native = nullptr;   // the NDK AHardwareBuffer of these pixels, made on demand
-  void (*release_native)(void*) = nullptr;
-  ~Buffer() {
-    if (native != nullptr) release_native(native);
-  }
-  Buffer(int w, int h) : width(w), height(h), id(next_id.fetch_add(1)),
-      pixels(static_cast<size_t>(w) * h * 4) {}
-  static std::atomic<uint64_t> next_id;
+  Buffer(void* b, int w, int h) : ahb(b), width(w), height(h) { gesher::bionic::ahb::RetainRgbaBuffer(b); }
+  ~Buffer() { gesher::bionic::ahb::ReleaseRgbaBuffer(ahb); }
 };
-std::atomic<uint64_t> Buffer::next_id{1};
 jclass buffer_class;
 jmethodID buffer_constructor;
 jfieldID buffer_pointer;
-constexpr jlong kSampledUsage = 0x100;
 Buffer* Of(jlong ptr) { return reinterpret_cast<Buffer*>(ptr); }
 void DeleteBuffer(void* ptr) { delete static_cast<Buffer*>(ptr); }
 jlong JNICALL Finalizer(JNIEnv*, jclass) { return reinterpret_cast<jlong>(&DeleteBuffer); }
@@ -38,10 +35,12 @@ jint JNICALL Width(JNIEnv*, jclass, jlong ptr) { return Of(ptr)->width; }
 jint JNICALL Height(JNIEnv*, jclass, jlong ptr) { return Of(ptr)->height; }
 jint JNICALL Format(JNIEnv*, jclass, jlong) { return 1; }
 jint JNICALL Layers(JNIEnv*, jclass, jlong) { return 1; }
-jlong JNICALL Usage(JNIEnv*, jclass, jlong) { return kSampledUsage; }
+jlong JNICALL Usage(JNIEnv*, jclass, jlong ptr) {
+  return static_cast<jlong>(gesher::bionic::ahb::RgbaBufferUsage(Of(ptr)->ahb));
+}
 // @CriticalNative omits JNIEnv and jclass; the accessors above are @FastNative.
-jlong JNICALL Id(jlong ptr) { return static_cast<jlong>(Of(ptr)->id); }
-jlong JNICALL Estimate(jlong ptr) { return static_cast<jlong>(Of(ptr)->pixels.size()); }
+jlong JNICALL Id(jlong ptr) { return static_cast<jlong>(gesher::bionic::ahb::RgbaBufferId(Of(ptr)->ahb)); }
+jlong JNICALL Estimate(jlong ptr) { return static_cast<jlong>(Of(ptr)->width) * Of(ptr)->height * 4; }
 jboolean JNICALL Supported(JNIEnv*, jclass, jint, jint, jint, jint, jlong) { return JNI_FALSE; }
 jlong JNICALL Create(JNIEnv* env, jclass, jint, jint, jint, jint, jlong) {
   jniThrowException(env, "java/lang/UnsupportedOperationException", "HardwareBuffer allocation is not supported; only reader snapshots are available");
@@ -73,7 +72,7 @@ jobject JNICALL Wrap(JNIEnv* env, jclass, jobject buffer, jlong color_space) {
     return nullptr;
   }
   for (int y = 0; y < data->height; y++)
-    memcpy(pixels.getAddr(0, y), data->pixels.data() + static_cast<size_t>(y) * data->width * 4,
+    memcpy(pixels.getAddr(0, y), gesher::bionic::ahb::RgbaBufferPixels(data->ahb) + static_cast<size_t>(y) * data->width * 4,
            static_cast<size_t>(data->width) * 4);
   pixels.setImmutable();
   auto bitmap = android::Bitmap::createFrom(info, *pixels.pixelRef());
@@ -93,27 +92,6 @@ const JNINativeMethod methods[] = {
 };
 const JNINativeMethod wrap_method[] = {
   {"nativeWrapHardwareBufferBitmap", "(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;", N(Wrap)},
-};
-// android.hardware.SyncFence, which Image.getFence() loads (Flutter waits on every
-// image's fence): every reader image is complete when it is queued, so its fence
-// is the empty one (Image.getFence() creates it without natives). A fence made from
-// a descriptor does not exist here, since sync files are not available.
-void JNICALL FenceFree(void*) {}
-jlong JNICALL FenceDestructor(JNIEnv*, jclass) { return reinterpret_cast<jlong>(&FenceFree); }
-jlong JNICALL FenceCreate(JNIEnv* env, jclass, jint) {
-  jniThrowException(env, "java/lang/UnsupportedOperationException", "sync file fences are not supported on Gesher");
-  return 0;
-}
-jboolean JNICALL FenceValid(JNIEnv*, jclass, jlong) { return JNI_FALSE; }
-jint JNICALL FenceFd(JNIEnv*, jclass, jlong) { return -1; }
-jboolean JNICALL FenceWait(JNIEnv*, jclass, jlong, jlong) { return JNI_FALSE; }
-jlong JNICALL FenceSignalTime(JNIEnv*, jclass, jlong) { return -1; }  // SIGNAL_TIME_INVALID
-void JNICALL FenceIncRef(JNIEnv*, jclass, jlong) {}
-const JNINativeMethod fence_methods[] = {
-  {"nGetDestructor", "()J", N(FenceDestructor)}, {"nCreate", "(I)J", N(FenceCreate)},
-  {"nIsValid", "(J)Z", N(FenceValid)}, {"nGetFd", "(J)I", N(FenceFd)},
-  {"nWait", "(JJ)Z", N(FenceWait)}, {"nGetSignalTime", "(J)J", N(FenceSignalTime)},
-  {"nIncRef", "(J)V", N(FenceIncRef)},
 };
 #undef N
 class NativeReaderSurface final : public ReaderSurface {
@@ -138,24 +116,14 @@ class NativeReaderSurface final : public ReaderSurface {
 std::shared_ptr<ReaderSurface> MakeReaderSurface(int width, int height, ReaderFrame listener) {
   return std::make_shared<NativeReaderSurface>(width, height, std::move(listener));
 }
-void* ReaderSnapshotNativeBuffer(JNIEnv* env, jobject buffer, void* (*make)(const ReaderSnapshot&),
-                                 void (*release)(void*)) {
+void* ReaderHardwareBufferNative(JNIEnv* env, jobject buffer) {
   if (buffer == nullptr || buffer_class == nullptr || !env->IsInstanceOf(buffer, buffer_class))
     return nullptr;
   jlong ptr = env->GetLongField(buffer, buffer_pointer);
-  if (ptr == 0) return nullptr;
-  Buffer* data = Of(ptr);
-  std::lock_guard<std::mutex> lock(data->native_mutex);
-  if (data->native == nullptr) {
-    ReaderSnapshot snapshot{data->width, data->height, data->pixels.data()};
-    data->native = make(snapshot);
-    data->release_native = release;
-  }
-  return data->native;
+  return ptr != 0 ? Of(ptr)->ahb : nullptr;
 }
-jobject ReaderHardwareBuffer(JNIEnv* env, const uint8_t* pixels, int width, int height) {
-  auto buffer = std::make_unique<Buffer>(width, height);
-  memcpy(buffer->pixels.data(), pixels, buffer->pixels.size());
+jobject ReaderHardwareBuffer(JNIEnv* env, void* rgba, int width, int height) {
+  auto buffer = std::make_unique<Buffer>(rgba, width, height);
   jobject result = env->NewObject(buffer_class, buffer_constructor, reinterpret_cast<jlong>(buffer.get()));
   if (result != nullptr && !env->ExceptionCheck()) buffer.release();
   return result;
@@ -171,13 +139,7 @@ int register_gesher_reader_buffers(JNIEnv* env) {
   buffer_pointer = env->GetFieldID(cls, "mNativeObject", "J");
   if (env->RegisterNatives(cls, methods, sizeof(methods) / sizeof(methods[0])) != 0) return -1;
   env->DeleteLocalRef(cls);
-  cls = env->FindClass("android/hardware/SyncFence");
-  if (cls == nullptr) {
-    env->ExceptionClear();
-  } else {
-    if (env->RegisterNatives(cls, fence_methods, sizeof(fence_methods) / sizeof(fence_methods[0])) != 0) return -1;
-    env->DeleteLocalRef(cls);
-  }
+  if (gesher::bionic::RegisterSyncFenceNatives(env) != 0) return -1;
   cls = env->FindClass("android/graphics/Bitmap");
   if (cls == nullptr) return -1;
   int result = env->RegisterNatives(cls, wrap_method, 1);

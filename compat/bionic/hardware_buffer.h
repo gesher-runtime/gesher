@@ -43,12 +43,6 @@ inline AHardwareBuffer* ToApp(Buffer* b) { return reinterpret_cast<AHardwareBuff
 void Acquire(Buffer* b);
 void Release(Buffer* b);
 
-// A new buffer (one reference, the caller's) of the given size, RGBA8888 with
-// GPU_SAMPLED_IMAGE | CPU_READ_OFTEN usage, holding `pixels` (tightly packed
-// rows of width * 4 bytes). Null when it cannot be allocated. For the Java
-// HardwareBuffer snapshots of an ImageReader's images (hardware_buffer_java.cc).
-Buffer* AllocateRgba(uint32_t width, uint32_t height, const uint8_t* pixels);
-
 // eglGetNativeClientBufferANDROID's EGLClientBuffer for a buffer (its
 // ANativeWindowBuffer, as on Android), and the buffer of one (null if none).
 void* ClientBuffer(Buffer* b);

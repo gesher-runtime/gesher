@@ -28,6 +28,7 @@
 #include "abi_types.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/rgba_buffers.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -1000,7 +1001,7 @@ void Register() {
 
 }  // namespace
 
-Buffer* AllocateRgba(uint32_t width, uint32_t height, const uint8_t* pixels) {
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height) {
   AHardwareBuffer_Desc desc{};
   desc.width = width;
   desc.height = height;
@@ -1008,17 +1009,33 @@ Buffer* AllocateRgba(uint32_t width, uint32_t height, const uint8_t* pixels) {
   desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
   desc.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
   AHardwareBuffer* app = nullptr;
-  if (Allocate(&desc, &app) != 0 || app == nullptr) return nullptr;
-  Buffer* b = FromApp(app);
-  if (b == nullptr) return nullptr;
-  // Stride equals width (Allocate), so the rows are the pixels' own.
-  std::memcpy(b->data, pixels, static_cast<size_t>(width) * height * 4);
+  if (Allocate(&desc, &app) != 0) return nullptr;
+  return app;  // stride == width (Allocate)
+}
+
+void RetainRgbaBuffer(void* buffer) { Acquire(FromApp(buffer)); }
+void ReleaseRgbaBuffer(void* buffer) { Release(FromApp(buffer)); }
+bool RgbaBufferUnshared(void* buffer) {
+  return FromApp(buffer)->refs.load(std::memory_order_acquire) == 1;
+}
+uint8_t* RgbaBufferPixels(void* buffer) { return FromApp(buffer)->data; }
+uint64_t RgbaBufferId(void* buffer) { return FromApp(buffer)->id; }
+uint64_t RgbaBufferUsage(void* buffer) { return FromApp(buffer)->desc.usage; }
+
+void PublishRgbaWrite(void* buffer) {
+  Buffer* b = FromApp(buffer);
+  bool has_texture;
   {
-    // The texture, made on first GPU use, must start from these bytes.
     std::lock_guard<std::mutex> lock(b->mutex);
-    b->memory_newer = true;
+    has_texture = b->has_texture;
+    if (!has_texture) b->memory_newer = true;
   }
-  return b;
+  // As AHardwareBuffer_unlock after a CPU write: an existing texture (an app's
+  // EGLImage of it) gets the new pixels before this returns.
+  if (has_texture)
+    gpu::Thread::Get()->Run([&] {
+      UploadRect(b, ARect{0, 0, static_cast<int32_t>(b->desc.width), static_cast<int32_t>(b->desc.height)});
+    });
 }
 
 }  // namespace gesher::bionic::ahb

@@ -9,28 +9,34 @@ RGBA and PRIVATE `ImageReader` surfaces accept Canvas, NDK and EGL producers
 through the in-process `QueueSurface`; a PRIVATE reader (what Flutter's
 platform views create: `ImageReader.Builder`, PRIVATE, `GPU_SAMPLED_IMAGE`)
 is drawn into with `lockHardwareCanvas`, `lockCanvas` or EGL like an RGBA one.
-Its images report the reader's PRIVATE format, have no CPU planes
-(`getPlanes()` is empty, as Android's), and `getHardwareBuffer()` gives the
-drawn RGBA pixels as a snapshot; a camera or decoder frame in a PRIVATE reader
-is opaque I420 and has no snapshot (`getHardwareBuffer()` is null), and camera
-frames still reach the reader by its Surface. Swapped frames supply the reader's image queue and
-availability notifications. `Image.getHardwareBuffer()` retains an independent
-CPU snapshot; `Bitmap.wrapHardwareBuffer()` converts it to an immutable software
-bitmap that remains drawable after the image or buffer closes. This supports
+Its images report the reader's PRIVATE format and have no CPU planes
+(`getPlanes()` is empty, as Android's). Their pixels are RGBA whatever
+produced them: a drawn frame, a camera frame (converted from NV12) or a
+decoder's output (a decoder renders to the reader's native window, so it
+arrives as a Surface frame). The reader keeps a small pool of RGBA
+AHardwareBuffers and writes each frame into one nothing else references, so
+the buffers, and their `AHardwareBuffer_getId`s, repeat across frames (an
+app's per-id texture caches keep hitting) and a buffer held by an Image, a
+`HardwareBuffer` or an EGLImage is never overwritten; a busy pool grows.
+`Image.getHardwareBuffer()` wraps the image's pooled buffer, holding a
+reference (`HardwareBuffer.getId()`/`getUsage()` agree with
+`AHardwareBuffer_getId`/`describe`); `Bitmap.wrapHardwareBuffer()` converts it
+to an immutable software bitmap that remains drawable after the image or buffer
+closes. `Image.getFence()` is the empty fence (the image is complete when
+queued); `SyncFence`'s natives work over Gesher's native fences. This supports
 Flutter's platform-view display path without changing the application's APK.
-An NDK library imports a snapshot with `AHardwareBuffer_fromHardwareBuffer`
-(`compat/bionic/hardware_buffer_java.cc`): an RGBA8888
-`GPU_SAMPLED_IMAGE | CPU_READ_OFTEN` AHardwareBuffer made from the snapshot's
-pixels on first request, kept with the snapshot, and no reference taken (it
-lives as long as the Java object, as the NDK says). It describes, locks and
+An NDK library imports a buffer with `AHardwareBuffer_fromHardwareBuffer`
+(`compat/bionic/hardware_buffer_java.cc`): the image's pooled AHardwareBuffer
+(RGBA8888, `GPU_SAMPLED_IMAGE | CPU_READ_OFTEN`), no reference taken (it lives
+as long as the Java object, as the NDK says). It describes, locks and
 becomes an EGLImage (`EGL_NATIVE_BUFFER_ANDROID`) like any other
 AHardwareBuffer, which is how Flutter's raster thread samples a platform view.
 `AHardwareBuffer_toHardwareBuffer` is not provided. Tested by
 `tests/dex-graphics/gesher/ImageReaderPrivateTest.java` with
 `tests/native/reader_buffer_test.c`.
-These snapshots do not implement general HardwareBuffer allocation, Android GPU
+These buffers do not implement general HardwareBuffer allocation, Android GPU
 imports, parcel transport or protected content. Other ImageReader formats retain
-the existing direct CameraFrames delivery path. See the
+the existing direct CameraFrames delivery path (YUV_420_888 as I420, JPEG bytes). See the
 [Otzaria regression evidence](research/otzaria-imagereader-validation-2026-11-07.json).
 
 ## Pieces

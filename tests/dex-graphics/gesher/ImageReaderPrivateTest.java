@@ -6,6 +6,7 @@ import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Paint;
 import android.hardware.HardwareBuffer;
+import android.hardware.SyncFence;
 import android.media.Image;
 import android.media.ImageReader;
 import android.opengl.EGL14;
@@ -27,7 +28,7 @@ import java.util.concurrent.TimeUnit;
  * (lockHardwareCanvas, lockCanvas, EGL), acquires the image and imports its
  * HardwareBuffer through the NDK (AHardwareBuffer_fromHardwareBuffer,
  * tests/native/reader_buffer_test.c, the library given as the argument). Camera
- * frames, which a PRIVATE reader also takes, keep their own path.
+ * frames, which a PRIVATE reader also takes, arrive as RGBA like drawn ones.
  */
 public final class ImageReaderPrivateTest {
     private static final int W = 32, H = 24;
@@ -39,7 +40,9 @@ public final class ImageReaderPrivateTest {
     private static final int[] PROBES = {4, 4, 28, 4, 4, 20, 28, 20};
     // Indexes of nativeInspect's result.
     private static final int STATUS = 0, WIDTH = 1, HEIGHT = 2, FORMAT = 3, USAGE = 4, SAME = 5,
-            IMAGE = 6, PIXELS = 7;
+            IMAGE = 6, ID_LO = 7, ID_HI = 8, USAGE_HI = 9, GL = 10, PIXELS = 11;
+    // nativeInspect's result: the fixed values, then the CPU pixels and the GL pixels of PROBES.
+    private static final int RESULT = PIXELS + PROBES.length;
 
     static void check(boolean value, String label) {
         if (!value) throw new AssertionError(label);
@@ -69,18 +72,30 @@ public final class ImageReaderPrivateTest {
                     && buffer.getFormat() == HardwareBuffer.RGBA_8888 && buffer.getLayers() == 1
                     && (buffer.getUsage() & HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE) != 0,
                     label + ": Java HardwareBuffer description");
-            int[] out = new int[PIXELS + PROBES.length / 2];
+            int[] out = new int[RESULT];
             check(nativeInspect(buffer, PROBES, out) == 0, label + ": AHardwareBuffer_fromHardwareBuffer");
             check(out[WIDTH] == W && out[HEIGHT] == H, label + ": AHardwareBuffer_describe size");
             check(out[FORMAT] == 1, label + ": AHardwareBuffer_describe format R8G8B8A8");
-            check((out[USAGE] & HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE) != 0
-                    && (out[USAGE] & HardwareBuffer.USAGE_CPU_READ_OFTEN) != 0,
-                    label + ": AHardwareBuffer_describe usage samples on the GPU");
+            check((out[USAGE] & 0xF) == 3 && (out[USAGE] & HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE) != 0,
+                    label + ": AHardwareBuffer_describe usage is CPU_READ_OFTEN | GPU_SAMPLED_IMAGE");
+            long nativeId = (out[ID_HI] & 0xffffffffL) << 32 | (out[ID_LO] & 0xffffffffL);
+            long nativeUsage = (out[USAGE_HI] & 0xffffffffL) << 32 | (out[USAGE] & 0xffffffffL);
+            check(buffer.getId() == nativeId && nativeId > 0,
+                    label + ": HardwareBuffer.getId() is AHardwareBuffer_getId (" + nativeId + ")");
+            check(buffer.getUsage() == nativeUsage,
+                    label + ": HardwareBuffer.getUsage() is AHardwareBuffer_describe's usage");
             check(out[SAME] == 1, label + ": a second fromHardwareBuffer is the same buffer");
             for (int i = 0; i < expect.length; i++)
                 check(out[PIXELS + i] == expect[i], label + ": pixel " + i + " 0x"
                         + Integer.toHexString(out[PIXELS + i]) + " is 0x" + Integer.toHexString(expect[i]));
-            if (gl) check(out[IMAGE] == 1, label + ": eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) of the buffer");
+            if (gl) {
+                check(out[IMAGE] == 1, label + ": eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) of the buffer");
+                check(out[GL] == 1, label + ": the EGLImage binds to a texture that a framebuffer reads");
+                for (int i = 0; i < expect.length; i++)
+                    check(out[PIXELS + PROBES.length / 2 + i] == expect[i], label + ": texture pixel " + i + " 0x"
+                            + Integer.toHexString(out[PIXELS + PROBES.length / 2 + i]) + " is 0x"
+                            + Integer.toHexString(expect[i]));
+            }
         }
     }
 
@@ -113,13 +128,18 @@ public final class ImageReaderPrivateTest {
                 check(image.getWidth() == W && image.getHeight() == H && image.getTimestamp() >= 0,
                         "image size");
                 check(image.getPlanes().length == 0, "a PRIVATE image has no CPU planes");
+                try (SyncFence fence = image.getFence()) {
+                    check(!fence.isValid(), "a reader image's fence is the empty one");
+                    fence.awaitForever();  // false for an empty fence, but it must return
+                    check(fence.getSignalTime() == SyncFence.SIGNAL_TIME_INVALID, "empty fence signal time");
+                }
                 inspect(image, new int[] {RED, BLUE, RED, BLUE}, false, "lockHardwareCanvas");
 
                 // The buffer keeps its own pixels: closing the image does not change what an
                 // imported buffer sees, and a later frame is another buffer.
                 HardwareBuffer held = image.getHardwareBuffer();
                 image.close();
-                int[] out = new int[PIXELS + PROBES.length / 2];
+                int[] out = new int[RESULT];
                 check(nativeInspect(held, PROBES, out) == 0 && out[PIXELS] == RED
                         && out[PIXELS + 1] == BLUE, "the buffer outlives its image");
                 latch[0] = new CountDownLatch(1);
@@ -131,6 +151,23 @@ public final class ImageReaderPrivateTest {
                 check(nativeInspect(held, PROBES, out) == 0 && out[PIXELS] == RED,
                         "the earlier buffer still holds its own frame");
                 image.close();
+                long heldId = held.getId();
+                // Buffers repeat across frames, but a held one is never overwritten.
+                java.util.HashSet<Long> ids = new java.util.HashSet<>();
+                for (int frame = 0; frame < 8; frame++) {
+                    latch[0] = new CountDownLatch(1);
+                    canvas = reader.getSurface().lockCanvas(null);
+                    canvas.drawColor(frame % 2 == 0 ? Color.YELLOW : Color.MAGENTA);
+                    reader.getSurface().unlockCanvasAndPost(canvas);
+                    try (Image frameImage = next(reader, latch[0], "pooled frame " + frame);
+                            HardwareBuffer frameBuffer = frameImage.getHardwareBuffer()) {
+                        check(frameBuffer.getId() != heldId, "frame " + frame + " is not the held buffer");
+                        ids.add(frameBuffer.getId());
+                    }
+                }
+                check(ids.size() <= 3, "buffer ids repeat across frames (" + ids.size() + " distinct in 8)");
+                check(nativeInspect(held, PROBES, out) == 0 && out[PIXELS] == RED,
+                        "the held buffer kept its frame while others were drawn");
                 held.close();
                 check(nativeInspect(held, PROBES, out) != 0,
                         "a closed HardwareBuffer is not imported");
@@ -185,8 +222,9 @@ public final class ImageReaderPrivateTest {
                     check(image != null && image.getTimestamp() == 4242L
                             && image.getFormat() == ImageFormat.PRIVATE
                             && image.getPlanes().length == 0, "camera PRIVATE image");
-                    check(image.getHardwareBuffer() == null,
-                            "a camera frame has no RGBA snapshot to hand out");
+                    // NV12 grey 128/128/128 as RGBA (BT.601 limited range): 130 each.
+                    inspect(image, new int[] {0xff828282, 0xff828282, 0xff828282, 0xff828282},
+                            false, "camera frame");
                 }
             }
         } finally {
