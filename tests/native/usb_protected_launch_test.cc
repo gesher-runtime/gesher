@@ -104,6 +104,8 @@ struct Evidence {
   DWORD magic = 0x47504c54;
   DWORD status = ERROR_SUCCESS;
   DWORD cleanup = ERROR_SUCCESS;
+  DWORD profile_identity_created = 0, profile_unload_attempted = 0;
+  DWORD profile_unload_status = ERROR_NOT_READY, profile_privilege_restore_status = ERROR_NOT_READY;
   DWORD image_access = ERROR_NOT_READY;
   DWORD directory_access = ERROR_NOT_READY;
   DWORD target_token_access = ERROR_NOT_READY;
@@ -972,6 +974,7 @@ Evidence RunSystem() {
     WriteNew(config.directory + L"\\profile.sid", sid.data(), static_cast<DWORD>(sid.size()));
     const DWORD identity_status = storage::ProtectedIdentity::Create(config.image, config.session, &identity, &stage, &cleanup);
     Check(identity_status, stage);
+    evidence.profile_identity_created = 1;
     Require(EqualSid(identity->sid(), sid.data()), "actual-private-token-user", ERROR_ACCESS_DENIED);
     HANDLE raw = nullptr;
     Require(WTSQueryUserToken(config.session, &raw), "actual-wts-desktop-token");
@@ -1114,7 +1117,11 @@ Evidence RunSystem() {
     } else record_cleanup(GetLastError(), "impersonate-profile-cleanup");
   }
   if (identity) {
+    // A successful Create owns a loaded profile, and this is its sole explicit
+    // unload call. Preserve the actual return separately from aggregate errors.
+    evidence.profile_unload_attempted = 1;
     const DWORD unloaded = identity->UnloadProfile(evidence.cleanup);
+    evidence.profile_unload_status = unloaded;
     record_cleanup(unloaded, "unload-private-profile");
     identity.reset();
   }
@@ -1126,6 +1133,7 @@ Evidence RunSystem() {
   // is deleted only after this profile-calling process has itself exited.
   record_cleanup(cleanup.profile_error.load(), "recorded-profile-cleanup");
   record_cleanup(cleanup.privilege_restore_error, "restore-profile-privileges");
+  evidence.profile_privilege_restore_status = cleanup.privilege_restore_error;
   if (config.scm_profile_control || (production_attempted && evidence.status != ERROR_SUCCESS)) {
     // This isolated comparison runs after the original worker cleanup. Its
     // separate result cannot change either the production or cleanup verdict.
@@ -1208,6 +1216,8 @@ DWORD Controller(bool explicit_scm_control) {
   Handle job;
   std::wstring directory, image;
   bool own_directory = false;
+  bool worker_profile_release_verified = false;
+  bool retained_windows_profile = false;
   profile_control::ScmProfileControlEvidence scm_control;
   try {
     BOOL admin = FALSE;
@@ -1292,7 +1302,9 @@ DWORD Controller(bool explicit_scm_control) {
     std::memcpy(&evidence, data.data(), sizeof(evidence));
     Require(evidence.magic == 0x47504c54 && std::memchr(evidence.stage, 0, sizeof(evidence.stage)) &&
         std::memchr(evidence.cleanup_stage, 0, sizeof(evidence.cleanup_stage)) &&
-        std::memchr(evidence.equivalent.stage, 0, sizeof(evidence.equivalent.stage)),
+        std::memchr(evidence.equivalent.stage, 0, sizeof(evidence.equivalent.stage)) &&
+        evidence.profile_identity_created <= 1 && evidence.profile_unload_attempted <= 1 &&
+        evidence.profile_unload_attempted <= evidence.profile_identity_created,
         "validate-test-evidence", ERROR_INVALID_DATA);
     std::printf("Protected launch: private-token-preflight-image=%lu directory=%lu target-token=%lu caller-as-private=%lu caller-as-system=%lu\n",
         static_cast<unsigned long>(evidence.image_access), static_cast<unsigned long>(evidence.directory_access),
@@ -1300,6 +1312,12 @@ DWORD Controller(bool explicit_scm_control) {
         static_cast<unsigned long>(evidence.system_caller_token_access));
     std::printf("Protected launch: stage=%s win32=%lu cleanup_win32=%lu cleanup_stage=%s\n", evidence.stage,
         static_cast<unsigned long>(evidence.status), static_cast<unsigned long>(evidence.cleanup), evidence.cleanup_stage);
+    std::printf("Protected launch: profile-identity-created=%lu own-unload-attempted=%lu own-unload-win32=%lu privilege-restore-win32=%lu\n",
+        static_cast<unsigned long>(evidence.profile_identity_created), static_cast<unsigned long>(evidence.profile_unload_attempted),
+        static_cast<unsigned long>(evidence.profile_unload_status), static_cast<unsigned long>(evidence.profile_privilege_restore_status));
+    worker_profile_release_verified = evidence.cleanup == ERROR_SUCCESS && evidence.profile_identity_created == 1 &&
+        evidence.profile_unload_attempted == 1 && evidence.profile_unload_status == ERROR_SUCCESS &&
+        evidence.profile_privilege_restore_status == ERROR_SUCCESS;
     PrintEquivalentToken(evidence.equivalent);
     scm_control = evidence.scm_control;
     result = evidence.status ? evidence.status : evidence.cleanup;
@@ -1404,24 +1422,48 @@ DWORD Controller(bool explicit_scm_control) {
       // the owned profile marker and files if its removal is unconfirmed.
       ProfileDeletionEvidence observed;
       const DWORD profile = DeleteOwnedProfile(directory, &observed);
-      record_cleanup(profile, "delete-owned-profile");
+      // The independent SCM-only control reproduces final DeleteProfile
+      // sharing/lock retention even without explicit profile loading. Classify
+      // only that exact API result, after our own unload and exact lifetimes
+      // are proved; an UnloadProfile or marker/provenance error stays fatal.
+      retained_windows_profile = worker_profile_release_verified && worker_exit_verified &&
+          cleanup_error == ERROR_SUCCESS && observed.attempts != 0 && profile == observed.api_status &&
+          (profile == ERROR_SHARING_VIOLATION || profile == ERROR_LOCK_VIOLATION);
+      if (!retained_windows_profile) record_cleanup(profile, "delete-owned-profile");
       std::printf("Protected launch: controller-profile-delete-attempts=%lu api=%lu hive=%lu\n",
           static_cast<unsigned long>(observed.attempts), static_cast<unsigned long>(observed.api_status),
           static_cast<unsigned long>(observed.hive_status));
-      DeleteFileW((directory + L"\\private-data\\guest.bin").c_str());
-      RemoveDirectoryW((directory + L"\\private-data").c_str());
-      DeleteFileW((directory + L"\\result.bin").c_str());
-      if (!DeleteFileW(image.c_str())) {
-        const DWORD error = GetLastError();
-        if (error != ERROR_FILE_NOT_FOUND) record_cleanup(error, "delete-fixture-image");
+      if (profile == ERROR_SUCCESS) {
+        const auto remove_file = [&](const std::wstring& path, const char* operation) {
+          if (!DeleteFileW(path.c_str())) {
+            const DWORD error = GetLastError();
+            if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) record_cleanup(error, operation);
+          }
+        };
+        remove_file(directory + L"\\private-data\\guest.bin", "delete-fixture-guest-file");
+        if (!RemoveDirectoryW((directory + L"\\private-data").c_str())) {
+          const DWORD error = GetLastError();
+          if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) record_cleanup(error, "delete-fixture-private-data");
+        }
+        remove_file(directory + L"\\result.bin", "delete-fixture-evidence");
+        remove_file(image, "delete-fixture-image");
+        if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
+      } else if (retained_windows_profile) {
+        // Keep the complete protected fixture directory, including profile.sid
+        // and result.bin, as ownership/evidence. Do not claim profile deletion
+        // or attempt RemoveDirectory on an intentionally retained marker.
+        std::printf("Protected launch: retained-windows-profile api-win32=%lu attempts=%lu own-unload=success exact-worker-job-holder-stop=verified protected-artifacts=%ls\n",
+            static_cast<unsigned long>(observed.api_status), static_cast<unsigned long>(observed.attempts), directory.c_str());
       }
-      if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
     }
   }
   if (cleanup_error != ERROR_SUCCESS) std::fprintf(stderr, "Protected launch: controller-cleanup=%lu cleanup-stage=%s\n",
       static_cast<unsigned long>(cleanup_error), cleanup_stage);
   if (result == ERROR_SUCCESS) result = cleanup_error;
-  if (result == ERROR_SUCCESS) std::puts("PASS: actual private SCM identity, profile environment, lowbox child, desktop denial and bounded cleanup");
+  if (result == ERROR_SUCCESS) {
+    std::puts("PASS: actual private SCM identity, profile environment, lowbox child, desktop denial, exact owned-process teardown and matching profile unload");
+    if (retained_windows_profile) std::puts("LIMITATION: Windows retained the owned service profile; final deletion failed with a recorded sharing/lock error and protected ownership artifacts remain.");
+  }
   return result;
 }
 }  // namespace
