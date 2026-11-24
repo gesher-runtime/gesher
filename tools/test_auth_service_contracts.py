@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
     "// PRODUCTION_BACKEND": ("app/java/com/gesher/server/WindowsHelloBackend.java",
                               "public interface WindowsHelloBackend", "interface WindowsHelloBackend"),
+    "// PRODUCTION_KEY_OPERATIONS": ("app/java/com/gesher/server/KeystoreOperations.java",
+                                     "public interface KeystoreOperations",
+                                     "interface KeystoreOperations"),
     "// PRODUCTION_SERVICE": ("app/java/com/gesher/server/AuthService.java",
                               "public final class AuthService", "final class AuthService"),
 }

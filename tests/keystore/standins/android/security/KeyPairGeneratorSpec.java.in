@@ -1,0 +1,48 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host stand-in of the Android boundary for tools/test_keystore_auth_contracts.py (ADR 0092):
+// only what the production classes under test call, with android-16.0.0_r4 values.
+package android.security;
+
+import java.math.BigInteger;
+import java.security.spec.AlgorithmParameterSpec;
+import java.util.Date;
+import javax.security.auth.x500.X500Principal;
+
+/** Never constructed by the tests; AndroidKeyStore's PairGenerator names its accessors. */
+@Deprecated
+public final class KeyPairGeneratorSpec implements AlgorithmParameterSpec {
+    private KeyPairGeneratorSpec() {
+    }
+
+    public String getKeyType() {
+        return null;
+    }
+
+    public String getKeystoreAlias() {
+        return null;
+    }
+
+    public int getKeySize() {
+        return -1;
+    }
+
+    public AlgorithmParameterSpec getAlgorithmParameterSpec() {
+        return null;
+    }
+
+    public X500Principal getSubjectDN() {
+        return null;
+    }
+
+    public BigInteger getSerialNumber() {
+        return null;
+    }
+
+    public Date getStartDate() {
+        return null;
+    }
+
+    public Date getEndDate() {
+        return null;
+    }
+}

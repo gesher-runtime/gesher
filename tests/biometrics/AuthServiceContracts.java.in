@@ -407,9 +407,97 @@ public final class AuthServiceContracts {
         check(!events.toString().contains("succeeded(2)"), "AUTHENTICATION_RESULT_TYPE_BIOMETRIC is never reported");
     }
 
+    // --- keystore operations (ADR 0092): isolated test double of KeystoreOperations --------
+
+    static final class FakeKeys implements KeystoreOperations {
+        final Map<Long, Integer> pending = new HashMap<>();
+        final List<String> authorizations = new ArrayList<>();
+        final List<WindowsHelloBackend.Completion> completions = new ArrayList<>();
+        final AtomicInteger cancels = new AtomicInteger();
+        public boolean isPending(int uid, long operationId) {
+            Integer owner = pending.get(operationId);
+            return owner != null && owner == uid;
+        }
+        public WindowsHelloBackend.Verification authorize(WindowsHelloBackend.Request request,
+                long operationId, WindowsHelloBackend.Completion completion) {
+            authorizations.add(request.uid + ":" + request.pid + ":" + operationId);
+            completions.add(completion);
+            return cancels::incrementAndGet;
+        }
+    }
+
+    static void keystore() {
+        fresh(true, true);
+        FakeKeys keys = new FakeKeys();
+        service = new AuthService(host, backend, keys);
+        Receiver r = new Receiver("a");
+        service.authenticate(new Token(), 0x1234L, 0, r, "com.example.bank", prompt(CRED));
+        host.drain();
+        check(backend.requests.isEmpty() && keys.authorizations.isEmpty()
+                        && r.calls.equals(List.of("error(1,1,0)")),
+                "an operation id the keystore does not hold is never confirmed: HW_UNAVAILABLE, no prompt");
+        keys.pending.put(0x1234L, 10999);
+        r = new Receiver("b");
+        service.authenticate(new Token(), 0x1234L, 0, r, "com.example.bank", prompt(CRED));
+        host.drain();
+        check(keys.authorizations.isEmpty() && r.calls.equals(List.of("error(1,1,0)")),
+                "another uid's operation is never confirmed: HW_UNAVAILABLE, no prompt");
+        keys.pending.put(0x1234L, 10123);
+        r = new Receiver("c");
+        service.authenticate(new Token(), 0x1234L, 0, r, "com.example.bank", prompt(STRONG));
+        host.drain();
+        check(keys.authorizations.isEmpty() && r.calls.equals(List.of("error(0,12,0)")),
+                "a biometric-only crypto prompt stays HW_NOT_PRESENT: no sensor, no prompt");
+        r = new Receiver("d");
+        service.authenticate(new Token(), 0x1234L, 0, r, "com.example.bank", prompt(STRONG | CRED));
+        host.drain();
+        check(keys.authorizations.equals(List.of("10123:4321:" + 0x1234L)) && backend.requests.isEmpty()
+                        && r.calls.isEmpty(),
+                "the caller's pending operation: one prompt, the key's, and not the verifier's too");
+        keys.completions.get(0).onResult(WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(r.calls.equals(List.of("succeeded(1)")),
+                "authorized operation: onAuthenticationSucceeded(DEVICE_CREDENTIAL), never BIOMETRIC");
+        int[][] outcomes = {{WindowsHelloBackend.CANCELED, 10}, {WindowsHelloBackend.FAILED, 1},
+                {-2, 1}, {WindowsHelloBackend.RETRIES_EXHAUSTED, 7}};
+        for (int[] outcome : outcomes) {
+            r = new Receiver("e");
+            service.authenticate(new Token(), 0x1234L, 0, r, "com.example.bank", prompt(CRED));
+            host.drain();
+            keys.completions.get(keys.completions.size() - 1).onResult(outcome[0]);
+            host.drain();
+            check(r.calls.equals(List.of("error(1," + outcome[1] + ",0)")),
+                    "key authorization result " + outcome[0] + " is error " + outcome[1] + ", never success");
+        }
+        r = new Receiver("f");
+        IBinder token = new Token();
+        long id = service.authenticate(token, 0x1234L, 0, r, "com.example.bank", prompt(CRED));
+        host.drain();
+        int before = keys.cancels.get();
+        service.cancelAuthentication(token, "com.example.bank", id);
+        host.drain();
+        check(keys.cancels.get() == before + 1 && r.calls.equals(List.of("error(1,5,0)")),
+                "cancelAuthentication closes the key's prompt and reports CANCELED");
+        keys.completions.get(keys.completions.size() - 1).onResult(WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(r.calls.size() == 1, "a late authorization after cancel is dropped");
+        // No verifier natives at all: the key path does not depend on them.
+        service = new AuthService(host, null, keys);
+        r = new Receiver("g");
+        service.authenticate(new Token(), 0x1234L, 0, r, "com.example.bank", prompt(CRED));
+        host.drain();
+        check(r.calls.isEmpty() && keys.authorizations.size() == 7,
+                "a pending operation is prompted for without the verifier backend");
+        r = new Receiver("h");
+        service.authenticate(new Token(), 0L, 0, r, "com.example.bank", prompt(CRED));
+        host.drain();
+        check(r.calls.equals(List.of("error(1,1,0)")), "and a plain prompt without the verifier stays HW_UNAVAILABLE");
+    }
+
     public static void main(String[] args) throws Exception {
         unavailable();
         available();
+        keystore();
         System.out.println(checks + " checks, " + failures + " failures");
         if (failures != 0) System.exit(1);
     }
@@ -544,5 +632,7 @@ interface IAuthService {
 }
 
 // PRODUCTION_BACKEND
+
+// PRODUCTION_KEY_OPERATIONS
 
 // PRODUCTION_SERVICE

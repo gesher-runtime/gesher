@@ -1,0 +1,16 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host stand-in of the Android boundary for tools/test_keystore_auth_contracts.py (ADR 0092):
+// only what the production classes under test call, with android-16.0.0_r4 values.
+package android.os;
+
+public interface IBinder {
+    int FIRST_CALL_TRANSACTION = 1;
+
+    interface DeathRecipient {
+        void binderDied();
+    }
+
+    boolean transact(int code, Parcel data, Parcel reply, int flags) throws RemoteException;
+
+    void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException;
+}

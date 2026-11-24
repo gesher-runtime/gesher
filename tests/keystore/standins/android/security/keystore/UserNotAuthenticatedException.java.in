@@ -1,0 +1,14 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host stand-in of the Android boundary for tools/test_keystore_auth_contracts.py (ADR 0092):
+// only what the production classes under test call, with android-16.0.0_r4 values.
+package android.security.keystore;
+
+import java.security.InvalidKeyException;
+
+public class UserNotAuthenticatedException extends InvalidKeyException {
+    private static final long serialVersionUID = 1L;
+
+    public UserNotAuthenticatedException() {
+        super("User not authenticated");
+    }
+}

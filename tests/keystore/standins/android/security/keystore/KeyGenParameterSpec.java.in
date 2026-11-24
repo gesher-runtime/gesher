@@ -1,0 +1,109 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host stand-in of the Android boundary for tools/test_keystore_auth_contracts.py (ADR 0092):
+// only what the production classes under test call, with android-16.0.0_r4 values.
+package android.security.keystore;
+
+import java.math.BigInteger;
+import java.security.spec.AlgorithmParameterSpec;
+import java.util.Date;
+import javax.security.auth.x500.X500Principal;
+
+/** The user-authentication part of the spec, with the Builder's AOSP defaults and mapping. */
+public final class KeyGenParameterSpec implements AlgorithmParameterSpec {
+    private final String mAlias;
+    private final int mKeySize;
+    private final boolean mAuthRequired;
+    private final int mTimeout;
+    private final int mType;
+
+    private KeyGenParameterSpec(Builder b) {
+        mAlias = b.mAlias;
+        mKeySize = b.mKeySize;
+        mAuthRequired = b.mAuthRequired;
+        mTimeout = b.mTimeout;
+        mType = b.mType;
+    }
+
+    public String getKeystoreAlias() {
+        return mAlias;
+    }
+
+    public int getKeySize() {
+        return mKeySize;
+    }
+
+    public AlgorithmParameterSpec getAlgorithmParameterSpec() {
+        return null;
+    }
+
+    public X500Principal getCertificateSubject() {
+        return new X500Principal("CN=fake");
+    }
+
+    public BigInteger getCertificateSerialNumber() {
+        return BigInteger.ONE;
+    }
+
+    public Date getCertificateNotBefore() {
+        return new Date(0L);
+    }
+
+    public Date getCertificateNotAfter() {
+        return new Date(2461449600000L);
+    }
+
+    public boolean isUserAuthenticationRequired() {
+        return mAuthRequired;
+    }
+
+    public int getUserAuthenticationValidityDurationSeconds() {
+        return mTimeout;
+    }
+
+    public int getUserAuthenticationType() {
+        return mType;
+    }
+
+    public static final class Builder {
+        private final String mAlias;
+        private int mKeySize = -1;
+        private boolean mAuthRequired;
+        private int mTimeout = 0;
+        private int mType = KeyProperties.AUTH_BIOMETRIC_STRONG;
+
+        public Builder(String alias, int purposes) {
+            mAlias = alias;
+        }
+
+        public Builder setKeySize(int keySize) {
+            mKeySize = keySize;
+            return this;
+        }
+
+        public Builder setUserAuthenticationRequired(boolean required) {
+            mAuthRequired = required;
+            return this;
+        }
+
+        /** KeyGenParameterSpec.Builder.setUserAuthenticationValidityDurationSeconds. */
+        public Builder setUserAuthenticationValidityDurationSeconds(int seconds) {
+            if (seconds < -1) throw new IllegalArgumentException("seconds must be -1 or larger");
+            if (seconds == -1) {
+                return setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG);
+            }
+            return setUserAuthenticationParameters(seconds, KeyProperties.AUTH_DEVICE_CREDENTIAL
+                    | KeyProperties.AUTH_BIOMETRIC_STRONG);
+        }
+
+        public Builder setUserAuthenticationParameters(int timeout, int type) {
+            if (timeout < 0) throw new IllegalArgumentException("timeout must be 0 or larger");
+            mTimeout = timeout;
+            mType = type;
+            return this;
+        }
+
+        public KeyGenParameterSpec build() {
+            return new KeyGenParameterSpec(this);
+        }
+    }
+}

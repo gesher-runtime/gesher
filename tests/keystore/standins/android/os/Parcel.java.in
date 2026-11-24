@@ -1,0 +1,84 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host stand-in of the Android boundary for tools/test_keystore_auth_contracts.py (ADR 0092):
+// only what the production classes under test call, with android-16.0.0_r4 values.
+package android.os;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** Values in order; reading a value of another type than was written fails the test. */
+public final class Parcel {
+    private final List<Object> mValues = new ArrayList<>();
+    private int mPosition;
+
+    private Parcel() {
+    }
+
+    public static Parcel obtain() {
+        return new Parcel();
+    }
+
+    public void recycle() {
+        mValues.clear();
+    }
+
+    public void setDataPosition(int position) {
+        mPosition = position;
+    }
+
+    private Object read() {
+        return mValues.get(mPosition++);
+    }
+
+    public void writeInterfaceToken(String descriptor) {
+        mValues.add("interface:" + descriptor);
+    }
+
+    public void enforceInterface(String descriptor) {
+        if (!("interface:" + descriptor).equals(read())) {
+            throw new SecurityException("Binder invocation to an incorrect interface");
+        }
+    }
+
+    public void writeNoException() {
+        mValues.add("no exception");
+    }
+
+    public void readException() {
+        if (!"no exception".equals(read())) throw new IllegalStateException("exception expected");
+    }
+
+    public void writeInt(int value) {
+        mValues.add(value);
+    }
+
+    public int readInt() {
+        return (Integer) read();
+    }
+
+    public void writeLong(long value) {
+        mValues.add(value);
+    }
+
+    public long readLong() {
+        return (Long) read();
+    }
+
+    public void writeByteArray(byte[] value) {
+        mValues.add(value != null ? value.clone() : new Object[0]);
+    }
+
+    public byte[] createByteArray() {
+        Object value = read();
+        return value instanceof byte[] ? ((byte[]) value).clone() : null;
+    }
+
+    public void writeStrongBinder(IBinder binder) {
+        mValues.add(binder != null ? binder : new Object[0]);
+    }
+
+    public IBinder readStrongBinder() {
+        Object value = read();
+        return value instanceof IBinder ? (IBinder) value : null;
+    }
+}
