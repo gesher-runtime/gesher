@@ -144,6 +144,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
 
+$exactAlarmOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExactAlarmContractTest') 90
+$exactAlarmCode = $LASTEXITCODE
+Check 'services: exact alarm scheduling contracts, permissions and revocation' {
+  $global:LASTEXITCODE = $exactAlarmCode
+  $exactAlarmOut
+} @('ExactAlarmContractTest all passed: 414 checks verified')
+
 $schedulerConstraintsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'JobSchedulerConstraintContractTest') 90
 $schedulerConstraintsCode = $LASTEXITCODE
@@ -325,8 +333,29 @@ Check 'services: authenticated notification delegation, revocation and retained 
   $delegationOut
 } @('NotificationDelegationTest all passed:')
 
-# The format fixture calls package-private production storage methods. Put this
-# test DEX on this VM's boot path, using a fresh profile and no application UI.
+# The image fixtures call package-private owners, so load the test DEX beside
+# the production services on the boot path. Each VM creates its own data child.
+$imageBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
+$imageArgs = @("-Xbootclasspath:$imageBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+$imagePublicationOut = FixesRun ($imageArgs + 'com.gesher.server.NotificationImagePublicationTest') 90
+$imagePublicationCode = $LASTEXITCODE
+Check 'services: notification image preparation progress, cancellation and replacement fencing' {
+  $global:LASTEXITCODE = $imagePublicationCode
+  $imagePublicationOut
+} @('NotificationImagePublicationTest passed:')
+$imageBitmapOut = FixesRun ($imageArgs + 'com.gesher.server.NotificationImageBitmapTest') 120
+$imageBitmapCode = $LASTEXITCODE
+# Check suppresses passing child output. Keep the actual PNG/control evidence
+# and all component samples in results.txt on success as well as on failure.
+($imageBitmapOut -split "`r?`n" | Where-Object { $_ -match '^NOTIFICATION_(PNG_|IMAGE_BITMAP_METRICS)' }) | ForEach-Object { Write-Host $_ }
+Check 'services: actual Bitmap PNG fidelity, mutable source invalidation and content reuse' {
+  $global:LASTEXITCODE = $imageBitmapCode
+  $imageBitmapOut
+} @('NotificationImageBitmapTest passed:', 'NOTIFICATION_IMAGE_BITMAP_METRICS',
+  'NOTIFICATION_PNG_ORIGINAL_WRITER_CONTROL', 'NOTIFICATION_PNG_DECODE')
+
+# The identity/format fixtures call package-private production storage methods.
+# Keep the shared profile across two VMs to verify persisted records and PNGs.
 $formatData = Join-Path $root 'notification-format-data'
 New-Item -ItemType Directory -Path $formatData -Force | Out-Null
 $formatSavedData = $env:ANDROID_DATA
@@ -336,14 +365,18 @@ try {
   $env:GESHER_MICROG_SPOOF = '0'
   $formatBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
   $formatArgs = @("-Xbootclasspath:$formatBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
-    'com.gesher.server.NotificationStoreFormatRunner')
+    'com.gesher.server.NotificationIdentityDevice')
   foreach ($formatPhase in @('write', 'read')) {
     $formatOut = FixesRun ($formatArgs + $formatPhase) 90
     $formatCode = $LASTEXITCODE
-    Check "services: native Parcel notification formats and restart migration ($formatPhase)" {
+    ($formatOut -split "`r?`n" | Where-Object { $_ -match '^NOTIFICATION_PNG_' }) | ForEach-Object { Write-Host $_ }
+    $formatExpected = @("NotificationIdentityDevice $formatPhase passed:", "ToastIdentityDevice $formatPhase passed:",
+      "NotificationStoreFormatDevice $formatPhase passed:")
+    if ($formatPhase -eq 'read') { $formatExpected += 'NOTIFICATION_PNG_RESTART_VERIFIED' }
+    Check "services: native notification formats, toast identity and image restart retention ($formatPhase)" {
       $global:LASTEXITCODE = $formatCode
       $formatOut
-    } @("NotificationStoreFormatDevice $formatPhase passed:")
+    } $formatExpected
   }
 } finally {
   if ($null -eq $formatSavedData) { Remove-Item Env:ANDROID_DATA -ErrorAction SilentlyContinue }
@@ -417,6 +450,29 @@ Check 'services: AppOps defaults, authority, attributed delivery, foreground lif
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
 } @('AppOpsContractTest all passed: 489 checks; binder=true')
+
+$permissionStateOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'RuntimePermissionStateTest') 90
+$permissionStateCode = $LASTEXITCODE
+Check 'services: runtime permission denial, rationale, fixed retry policy and owner lifetime' {
+  $global:LASTEXITCODE = $permissionStateCode
+  $permissionStateOut
+} @('RuntimePermissionStateTest all passed:', ' checks; binder=true')
+
+# Real UID grant decisions and the production AudioRecord/MediaRecorder JNI errors.
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
+$audioAdmissionData = Join-Path $root 'audio-recording-admission'
+New-Item -ItemType Directory -Force $audioAdmissionData | Out-Null
+$audioAdmissionOut = Invoke-FixtureProcess "$Dir/dalvikvm.exe" ($dvmFixes +
+  'gesher.services.ServiceFixtureRunner' + 'AudioRecordingPermissionTest') 90 @{
+    ANDROID_DATA = (NoDrive $audioAdmissionData)
+    GESHER_UID = '12772'; GESHER_BINDER_UID = '12772'; GESHER_MICROG_SPOOF = '1'
+  }
+$audioAdmissionCode = $LASTEXITCODE
+Check 'services: live UID microphone grants, revocation and native public admission errors' {
+  $global:LASTEXITCODE = $audioAdmissionCode
+  $audioAdmissionOut
+} @('AudioRecordingPermissionTest all passed:', 'checks; binder=true; production-jni=false')
 
 $uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'PackageUidIsolationContractTest' +
@@ -546,6 +602,9 @@ Check 'services: android.net.DnsResolver (the Connectivity module''s API) resolv
   $fixesOut
 } @('FrameworkFixesTest: android.net.DnsResolver: query and rawQuery answer localhost through the executor, other types NOTIMP, a cancelled query is silent',
   'FrameworkFixesTest all passed')
+Check 'services: bounded DNS ownership through real ART and Windows localhost lookup' {
+  FixesRun ($dvmFixes + 'gesher.services.DnsAdmissionTest') 80
+} @('DnsAdmissionTest passed:')
 Check 'services: BluetoothManager without an adapter, and android.os.Debug''s native heap counters' {
   $global:LASTEXITCODE = $fixesCode
   $fixesOut

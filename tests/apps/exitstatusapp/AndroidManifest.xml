@@ -9,5 +9,6 @@
             </intent-filter>
         </activity>
         <activity android:name=".AbnormalActivity" android:exported="true" />
+        <activity android:name=".RestartActivity" android:exported="true" />
     </application>
 </manifest>

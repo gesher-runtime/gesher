@@ -11,6 +11,7 @@ import android.content.IntentFilter;
 import android.content.pm.Signature;
 import android.content.pm.PermissionInfo;
 import android.content.res.AssetManager;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -36,6 +37,13 @@ import sun.misc.Unsafe;
 /** Android 16 r4 registration contracts through the actual ActivityManager entry point. */
 public final class ReceiverExportContractTest {
     private static final String ACTION = "fixture.receiver.exports.EVENT";
+    // media3 RequirementsWatcher.start() registers these without export flags; on API 24+
+    // its network requirement uses a NetworkCallback and leaves the filter without actions.
+    private static final String[] MEDIA3_SYSTEM_ACTIONS = {
+            "android.net.conn.CONNECTIVITY_CHANGE", Intent.ACTION_POWER_CONNECTED,
+            Intent.ACTION_POWER_DISCONNECTED, "android.os.action.DEVICE_IDLE_MODE_CHANGED",
+            Intent.ACTION_DEVICE_STORAGE_LOW, Intent.ACTION_DEVICE_STORAGE_OK};
+    private static final String NETMON_PREFIX_ACTION = "android.net.netmon.lingerExpired.fixture";
     private static int checks;
     private static final Unsafe UNSAFE;
     static {
@@ -147,6 +155,7 @@ public final class ReceiverExportContractTest {
                 // Host lacks framework-res. These definitions are in the pinned Android manifest.
                 ((Set<String>)get(catalog, "mProtectedBroadcasts")).add(Intent.ACTION_BOOT_COMPLETED);
                 ((Set<String>)get(catalog, "mProtectedBroadcasts")).add(Intent.ACTION_BATTERY_CHANGED);
+                ((Set<String>)get(catalog, "mProtectedBroadcasts")).addAll(List.of(MEDIA3_SYSTEM_ACTIONS));
                 PermissionInfo internet = new PermissionInfo();
                 internet.name = "android.permission.INTERNET"; internet.packageName = "android";
                 internet.protectionLevel = PermissionInfo.PROTECTION_NORMAL;
@@ -178,6 +187,18 @@ public final class ReceiverExportContractTest {
             app.call(() -> am.unregisterReceiver(receiver));
             check(registrations() == before, "Unregister leaked a receiver");
         }
+        /** Registers, reads the published export decision, and unregisters. */
+        boolean exported(App app, IntentFilter filter, int flags) throws Exception {
+            Receiver receiver = new Receiver(); int before = registrations();
+            register(app, receiver, filter, flags);
+            check(registrations() == before + 1, "Accepted registration did not enter the real controller");
+            Object list = ((Map<?,?>)get(controller, "mRegistered")).get(receiver.asBinder());
+            List<?> filters = (List<?>)get(list, "filters");
+            boolean result = (Boolean)get(filters.get(filters.size() - 1), "exported");
+            app.call(() -> am.unregisterReceiver(receiver));
+            check(registrations() == before, "Unregister leaked a receiver");
+            return result;
+        }
         void denied(App app, IntentFilter filter, int flags, Class<? extends Throwable> error) throws Exception {
             int before = registrations();
             rejects(error, () -> register(app, new Receiver(), filter, flags));
@@ -186,6 +207,10 @@ public final class ReceiverExportContractTest {
         void send(App app, String action, String target) throws Exception {
             app.call(() -> am.broadcastIntentWithFeature(app.thread, null, new Intent(action).setPackage(target),
                     null, null, 0, null, null, null, null, null, AppOpsManager.OP_NONE, null, false, false, 0));
+        }
+        void deliver(App app, Intent intent, boolean ordered) throws Exception {
+            app.call(() -> am.broadcastIntentWithFeature(app.thread, null, intent, null, null, 0, null,
+                    null, null, null, null, AppOpsManager.OP_NONE, null, ordered, false, 0));
         }
         @Override public void close() throws Exception {
             ((ScheduledThreadPoolExecutor)get(controller, "mTimeouts")).shutdownNow();
@@ -197,7 +222,27 @@ public final class ReceiverExportContractTest {
             IntentFilter custom = new IntentFilter(ACTION);
             for (App app : List.of(h.modern, h.latest)) {
                 h.denied(app, custom, 0, SecurityException.class);
-                h.denied(app, new IntentFilter(), 0, SecurityException.class);
+                // Android 16 BroadcastController starts onlyProtectedBroadcasts at true and
+                // only clears it per action: an empty filter needs no explicit flag.
+                check(h.exported(app, new IntentFilter(), 0), "Empty filter was not exported by default");
+                check(!h.exported(app, new IntentFilter(), Context.RECEIVER_NOT_EXPORTED),
+                        "Empty filter ignored RECEIVER_NOT_EXPORTED");
+                h.denied(app, new IntentFilter(), Context.RECEIVER_EXPORTED | Context.RECEIVER_NOT_EXPORTED,
+                        IllegalArgumentException.class);
+                h.denied(app, new IntentFilter(), Context.RECEIVER_NOT_EXPORTED
+                        | Context.RECEIVER_VISIBLE_TO_INSTANT_APPS, IllegalArgumentException.class);
+                // Every media3 RequirementsWatcher filter combination, then all of them at once.
+                IntentFilter media3All = new IntentFilter();
+                for (String[] combination : new String[][]{{MEDIA3_SYSTEM_ACTIONS[0]},
+                        {MEDIA3_SYSTEM_ACTIONS[1], MEDIA3_SYSTEM_ACTIONS[2]}, {MEDIA3_SYSTEM_ACTIONS[3]},
+                        {MEDIA3_SYSTEM_ACTIONS[4], MEDIA3_SYSTEM_ACTIONS[5]}}) {
+                    IntentFilter media3 = new IntentFilter();
+                    for (String action : combination) { media3.addAction(action); media3All.addAction(action); }
+                    check(h.exported(app, media3, 0), "Protected media3 filter was not exported by default");
+                }
+                check(h.exported(app, media3All, 0), "Combined media3 filter was not exported by default");
+                media3All.addAction(ACTION);
+                h.denied(app, media3All, 0, SecurityException.class);
                 h.denied(app, custom, Context.RECEIVER_VISIBLE_TO_INSTANT_APPS, SecurityException.class);
                 h.allowed(app, custom, Context.RECEIVER_EXPORTED);
                 h.allowed(app, custom, Context.RECEIVER_NOT_EXPORTED);
@@ -221,9 +266,16 @@ public final class ReceiverExportContractTest {
             h.allowed(h.sharedNew, custom, 0); // Android applies the UID change to every member.
             h.allowed(h.sharedOld, custom, 0);
             rejects(SecurityException.class, () -> h.send(h.old, Intent.ACTION_BOOT_COMPLETED, h.modern.code.packageName));
+            // PackageManagerService.isProtectedBroadcast also protects four platform prefixes.
+            h.allowed(h.modern, new IntentFilter(NETMON_PREFIX_ACTION), 0);
+            rejects(SecurityException.class, () -> h.send(h.old, NETMON_PREFIX_ACTION, h.modern.code.packageName));
             if (!binder) {
                 set(h.catalog, "mFrameworkRead", false);
                 h.denied(h.modern, new IntentFilter(Intent.ACTION_BOOT_COMPLETED), 0, SecurityException.class);
+                // Android consults no catalog for a filter without actions, nor for its
+                // PackageManagerService prefixes.
+                h.allowed(h.modern, new IntentFilter(), 0);
+                h.allowed(h.modern, new IntentFilter(NETMON_PREFIX_ACTION), 0);
                 set(h.catalog, "mFrameworkRead", true);
             }
             Receiver hidden = new Receiver(), exported = new Receiver(), legacy = new Receiver();
@@ -243,6 +295,34 @@ public final class ReceiverExportContractTest {
             h.modern.call(() -> { h.am.unregisterReceiver(hidden); h.am.unregisterReceiver(exported); });
             h.old.call(() -> h.am.unregisterReceiver(legacy));
             check(h.registrations() == 0, "Finished fixture left registered receiver state");
+
+            // Android's receiver IntentResolver never indexes a filter without actions,
+            // schemes or types, and gives an intent without action, type or scheme no
+            // candidates, although IntentFilter.match alone would accept both.
+            Receiver empty = new Receiver(), emptyHidden = new Receiver(), actionOnly = new Receiver(),
+                    dataOnly = new Receiver();
+            h.register(h.modern, empty, new IntentFilter(), 0);
+            h.register(h.modern, emptyHidden, new IntentFilter(), Context.RECEIVER_NOT_EXPORTED);
+            h.register(h.modern, actionOnly, new IntentFilter(ACTION + ".action"), Context.RECEIVER_EXPORTED);
+            IntentFilter dataFilter = new IntentFilter();
+            dataFilter.addDataScheme("fixture-data");
+            h.register(h.modern, dataOnly, dataFilter, Context.RECEIVER_EXPORTED);
+            String self = h.modern.code.packageName;
+            modernBefore = h.modern.thread.deliveries;
+            h.deliver(h.old, new Intent().setPackage(self), false);
+            h.deliver(h.old, new Intent(), false);
+            h.deliver(h.modern, new Intent().setPackage(self), false);
+            h.deliver(h.modern, new Intent(), false);
+            h.deliver(h.old, new Intent(ACTION + ".unmatched").setPackage(self), false);
+            check(h.modern.thread.deliveries == modernBefore,
+                    "A broadcast without action or data reached an unindexed filter");
+            h.deliver(h.old, new Intent().setData(Uri.parse("fixture-data://item")).setPackage(self), false);
+            check(h.modern.thread.deliveries == modernBefore + 1, "Data-only filter lost an action-less data broadcast");
+            h.deliver(h.old, new Intent(ACTION + ".action").setPackage(self), false);
+            check(h.modern.thread.deliveries == modernBefore + 2, "Action filter lost its broadcast");
+            h.modern.call(() -> { h.am.unregisterReceiver(empty); h.am.unregisterReceiver(emptyHidden);
+                h.am.unregisterReceiver(actionOnly); h.am.unregisterReceiver(dataOnly); });
+            check(h.registrations() == 0, "Resolver checks leaked receivers");
 
             Receiver shared = new Receiver(), guarded = new Receiver();
             h.register(h.sharedNew, shared, new IntentFilter(ACTION + ".shared"), Context.RECEIVER_NOT_EXPORTED);
@@ -289,6 +369,16 @@ public final class ReceiverExportContractTest {
                 h.register(h.latest, new Receiver(), custom, Context.RECEIVER_EXPORTED);
                 check(h.registrations() == before, "Retired process acquired receiver state after cleanup");
             }
+            // The ordered path, last: a finished ordered broadcast lets an idle sender process exit.
+            for (Receiver r : new Receiver[]{new Receiver(), new Receiver()}) h.register(h.modern, r, new IntentFilter(), 0);
+            h.register(h.modern, new Receiver(), new IntentFilter(), Context.RECEIVER_NOT_EXPORTED);
+            h.register(h.modern, new Receiver(), new IntentFilter(ACTION + ".ordered"), Context.RECEIVER_EXPORTED);
+            int orderedBefore = h.modern.thread.deliveries;
+            h.deliver(h.old, new Intent().setPackage(self), true);
+            h.deliver(h.sharedOld, new Intent(), true);
+            check(h.modern.thread.deliveries == orderedBefore, "Ordered action-less broadcast reached an unindexed filter");
+            h.deliver(h.sharedNew, new Intent(ACTION + ".ordered").setPackage(self), true);
+            check(h.modern.thread.deliveries == orderedBefore + 1, "Ordered path lost an indexed action filter");
         }
         return checks;
     }

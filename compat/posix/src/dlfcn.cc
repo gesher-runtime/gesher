@@ -138,11 +138,39 @@ void* dlopen(const char* filename, int flags) {
   if (BuiltinLibrary* library = FindBuiltin(filename)) return library;
   if (IsElfFile(filename)) return OpenElf(filename, flags);
   std::wstring path = gesher::Widen(filename);
-  HMODULE module = (flags & RTLD_NOLOAD) != 0
-      ? GetModuleHandleW(path.c_str())
-      : LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
-                                                  LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
-  if (module == nullptr) SetError("dlopen", filename);
+  DWORD load_flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+  const bool has_drive = path.size() >= 2 && path[1] == L':' &&
+      ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z'));
+  if (path.find_first_of(L"/\\") != std::wstring::npos || has_drive) {
+    // Consume a relative path once: another thread can change the process's
+    // current directory between a size query and the subsequent conversion.
+    // This bounds the allocation at Windows' maximum UTF-16 path length.
+    std::vector<wchar_t> full_path(32768);
+    const DWORD length = GetFullPathNameW(path.c_str(),
+        static_cast<DWORD>(full_path.size()), full_path.data(), nullptr);
+    if (length == 0 || length >= full_path.size()) {
+      if (length != 0) SetLastError(ERROR_FILENAME_EXCED_RANGE);
+      SetError("dlopen", filename);
+      return nullptr;
+    }
+    path.assign(full_path.data(), length);
+    load_flags |= LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
+  }
+  HMODULE module = nullptr;
+  if ((flags & RTLD_NOLOAD) != 0) {
+    // A successful dlopen owns the reference that its dlclose releases, even
+    // when it is only looking up an already loaded module.
+    GetModuleHandleExW(0, path.c_str(), &module);
+  } else {
+    module = LoadLibraryExW(path.c_str(), nullptr, load_flags);
+  }
+  if (module == nullptr) {
+    const DWORD error = GetLastError();
+    SetError("dlopen", filename);
+    // Safe bare-name lookup reports a real missing module, rather than the
+    // invalid-parameter error from using DLL_LOAD_DIR without a full path.
+    if (error == ERROR_MOD_NOT_FOUND) last_error += ": library not found";
+  }
   return module;
 }
 

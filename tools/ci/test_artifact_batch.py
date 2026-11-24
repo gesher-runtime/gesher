@@ -162,6 +162,74 @@ class ArtifactBatch(unittest.TestCase):
         self.assertFalse(list(self.destination.parent.glob('core-stage-*')))
         self.assertNotIn('CI_ARTIFACT_RECEIPT ', self.logs.getvalue())
 
+    def inconsistent_job_pages(self, *, initial=0, final=0):
+        """Disturb only complete transport payload cardinality, never selectors."""
+        original = self.api_json
+        reads = {False: 0, True: 0}
+        def read(endpoint):
+            value = original(endpoint)
+            if urlsplit(endpoint).path.endswith('/attempts/2/jobs'):
+                after_download = len(self.downloads) == len(self.specs)
+                reads[after_download] += 1
+                if reads[after_download] <= (final if after_download else initial):
+                    value['jobs'] = value['jobs'][:-1]
+            return value
+        return patch.object(self, 'api_json', side_effect=read)
+
+    def test_inconsistent_initial_and_final_job_pages_recover_before_publication(self):
+        with self.inconsistent_job_pages(initial=1, final=1):
+            self.execute()
+        self.assertEqual(len(self.json_reads), 8)
+        jobs = [endpoint for endpoint in self.json_reads if '/jobs?' in endpoint]
+        self.assertEqual(jobs, ['repos/gesher-runtime/gesher/actions/runs/7/attempts/2/jobs?per_page=100&page=1'] * 4)
+        self.assertEqual(len(self.downloads), len(self.specs))
+        self.assertEqual(len(list((self.destination / 'artifacts').iterdir())), len(self.specs))
+        self.assertEqual(self.logs.getvalue().count('CI_ARTIFACT_RECEIPT '), len(self.specs))
+        self.assertEqual(self.logs.getvalue().count('CI_GITHUB_JOBS_INCONSISTENT'), 2)
+
+    def test_persistent_initial_job_inconsistency_never_downloads_or_publishes(self):
+        with self.inconsistent_job_pages(initial=3), self.assertRaisesRegex(RuntimeError, 'Inconsistent job page'):
+            self.execute()
+        self.assertEqual(sum('/jobs?' in path for path in self.json_reads), 3)
+        self.assertFalse(any('/artifacts?' in path for path in self.json_reads))
+        self.assertEqual(self.downloads, [])
+        self.unpublished()
+
+    def test_persistent_final_job_inconsistency_discards_all_verified_staging(self):
+        with self.inconsistent_job_pages(final=3), self.assertRaisesRegex(RuntimeError, 'Inconsistent job page'):
+            self.execute()
+        self.assertEqual(sum('/jobs?' in path for path in self.json_reads), 4)
+        self.assertEqual(len(self.downloads), len(self.specs))
+        self.unpublished()
+
+    def test_recovered_inventory_does_not_relax_any_producer_provenance(self):
+        for key, value in (('run_id', 8), ('run_attempt', 3), ('head_sha', 'c' * 40),
+                           ('status', 'in_progress'), ('conclusion', 'failure')):
+            with self.subTest(key=key):
+                previous = self.jobs[0][key]
+                self.jobs[0][key] = value
+                with self.inconsistent_job_pages(initial=1), self.assertRaisesRegex(
+                        RuntimeError, 'Producer source/attempt/conclusion'):
+                    self.execute()
+                self.jobs[0][key] = previous
+                self.assertEqual(self.downloads, [])
+                self.unpublished()
+
+    def test_recovered_inventory_does_not_relax_artifact_digest(self):
+        self.items[0]['digest'] = 'invalid'
+        with self.inconsistent_job_pages(initial=1), self.assertRaisesRegex(RuntimeError, 'digest, size or expiry'):
+            self.execute()
+        self.assertEqual(self.downloads, [])
+        self.unpublished()
+
+    def test_attempt_change_after_recovered_final_inventory_still_discards_staging(self):
+        self.final_run = dict(self.run, run_attempt=3)
+        with self.inconsistent_job_pages(final=1), self.assertRaisesRegex(
+                RuntimeError, 'Current run/source/attempt/repository'):
+            self.execute()
+        self.assertEqual(len(self.downloads), len(self.specs))
+        self.unpublished()
+
     def test_complete_real_batch_has_20_api_requests_and_only_publishes_verified_members(self):
         self.execute()
         # One run + one 100-row job page + one artifact page, twice.
@@ -358,7 +426,9 @@ class ArtifactBatch(unittest.TestCase):
 
 class BatchManifestWiring(unittest.TestCase):
     """Each batch job downloads exactly its committed manifest from producers it waits for."""
-    JOBS = {'test-shards': ('tools/ci/test_shard_artifacts.json', 'ci-suppliers/core'),
+    # core-suppliers publishes its batch as one bundle for every test shard
+    # (see test_supplier_bundle.py); it assembles nothing itself.
+    JOBS = {'core-suppliers': ('tools/ci/test_shard_artifacts.json', 'ci-suppliers/core'),
             'web3-query-regression': ('tools/ci/web3_query_artifacts.json', 'ci-suppliers/web3'),
             'package': ('tools/ci/package_artifacts.json', 'ci-suppliers/package'),
             'binder2-sg-regression': ('tools/ci/binder2_sg_artifacts.json', 'ci-suppliers/binder2')}
@@ -405,7 +475,7 @@ class BatchManifestWiring(unittest.TestCase):
                 for spec in specs:
                     self.assertIn(spec['producer'].split(' / ', 1)[0], set(job['needs']), spec)
                     self.assertTrue(self.producer_exists(spec['producer']), spec)
-                if job_name == 'test-shards':
+                if job_name == 'core-suppliers':
                     continue
                 # Single receipts for batch members would repeat the API reads.
                 for spec in specs:
@@ -425,6 +495,115 @@ class BatchManifestWiring(unittest.TestCase):
                     self.assertIn('Move-Item -LiteralPath "' + destination +
                                   '/artifacts/$($pair[0])" -Destination $pair[1]', runs)
                     self.assertIn('if (Test-Path -LiteralPath $pair[1]) { throw', runs)
+
+
+class RetainedE2EInstaller(unittest.TestCase):
+    def setUp(self):
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.destination = Path(temporary) / 'suppliers' / 'installer'
+        self.value = dict(repo='gesher-runtime/gesher', repo_id='8', head_repo='9', run_id='7',
+                          attempt='3', workflow='ci', head='b' * 40, checkout='a' * 40)
+        self.runs = {attempt: dict(id=7, run_attempt=attempt, head_sha=self.value['head'],
+                     name='ci', path='.github/workflows/ci.yml', event='pull_request', status='completed',
+                     repository={'id': 8, 'full_name': self.value['repo']}, head_repository={'id': 9})
+                     for attempt in (1, 2, 3)}
+        self.jobs = {attempt: dict(id=100 + attempt, run_id=7, run_attempt=attempt, name='package',
+                     head_sha=self.value['head'], status='completed', conclusion='success', steps=[],
+                     started_at='2026-11-23T15:08:18Z', completed_at='2026-11-23T15:11:57Z')
+                     for attempt in (1, 2, 3)}
+        self.jobs[1]['steps'] = [dict(name='Upload tested installer artifact', conclusion='success',
+                                    started_at='2026-11-23T15:10:19Z', completed_at='2026-11-23T15:10:21Z')]
+        self.items = [dict(id=1000, name='gesher-setup', expired=False, digest='sha256:' + 'a' * 64,
+                           size_in_bytes=80, created_at='2026-11-23T15:10:20Z',
+                           workflow_run=dict(id=7, head_sha=self.value['head'], repository_id=8,
+                                             head_repository_id=9))]
+        self.args = types.SimpleNamespace(name='gesher-setup', producer='package', producer_suffix=False,
+                                          allow_failed_producer=True, destination=self.destination)
+        env = dict(GITHUB_WORKFLOW='ci', GITHUB_JOB='e2e', GITHUB_EVENT_NAME='pull_request')
+        self.enterContext(patch.dict(os.environ, env, clear=True))
+        self.enterContext(patch.object(receipt, 'context', return_value=self.value))
+        self.enterContext(patch.object(receipt, 'get_json', side_effect=self.read_run))
+        self.enterContext(patch.object(receipt, 'read_jobs', side_effect=self.read_jobs))
+        self.enterContext(patch.object(receipt, 'read_artifacts', side_effect=lambda *_a, **_k: copy.deepcopy(self.items)))
+        self.enterContext(patch.object(receipt, 'check_checkout'))
+        self.download = self.enterContext(patch.object(receipt, 'download', side_effect=self.extract))
+        self.logs = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
+
+    def read_run(self, endpoint):
+        if '/attempts/' in endpoint:
+            attempt = int(endpoint.rsplit('/', 1)[-1])
+        else:
+            attempt = 3
+        return copy.deepcopy(self.runs[attempt])
+
+    def read_jobs(self, value):
+        return dict(total_count=1, jobs=[copy.deepcopy(self.jobs[int(value['attempt'])])])
+
+    def extract(self, _, target):
+        target.mkdir()
+        (target / 'installer.exe').write_bytes(b'tested installer')
+
+    def reject(self, error):
+        with self.assertRaisesRegex(RuntimeError, error):
+            receipt.single(self.args)
+        self.assertFalse(self.destination.exists())
+        self.download.assert_not_called()
+
+    def test_copied_attempts_retain_original_upload_and_exact_archive(self):
+        receipt.single(self.args)
+        self.assertEqual((self.destination / 'installer.exe').read_bytes(), b'tested installer')
+        self.download.assert_called_once()
+        self.assertIn('original_attempt=1 original_producer_id=101', self.logs.getvalue())
+        self.assertIn('producer_id=103', self.logs.getvalue())
+
+    def test_original_run_and_copied_execution_must_match(self):
+        for target, key, value, error in (
+                (self.runs[1], 'head_sha', 'c' * 40, 'run identity'),
+                (self.runs[1], 'path', '.github/workflows/other.yml', 'run identity'),
+                (self.runs[2], 'event', 'push', 'run identity'),
+                (self.jobs[2], 'id', 103, 'does not match'),
+                (self.jobs[2], 'conclusion', 'failure', 'does not match'),
+                (self.jobs[1], 'started_at', '2026-11-23T15:08:19Z', 'does not match')):
+            with self.subTest(key=key):
+                with patch.dict(target, {key: value}):
+                    self.reject(error)
+
+    def test_present_failed_step_never_falls_back(self):
+        failure = {**self.jobs[1]['steps'][0], 'conclusion': 'failure'}
+        for attempt in (1, 2, 3):
+            with self.subTest(attempt=attempt), patch.dict(self.jobs[attempt], {'steps': [failure]}):
+                self.reject('Installer upload did not complete')
+
+    def test_artifact_must_come_from_original_upload_step(self):
+        with patch.dict(self.items[0], {'created_at': '2026-11-23T15:09:10Z'}):
+            self.reject('outside the original successful upload')
+        with patch.dict(self.items[0], {'expired': True}):
+            self.reject('expiry mismatch')
+        with patch.dict(self.items[0]['workflow_run'], {'head_repository_id': 10}):
+            self.reject('identity mismatch')
+
+    def test_download_followed_by_changed_archive_or_attempt_is_not_published(self):
+        for target, key, value, error in (
+                (self.items[0], 'digest', 'sha256:' + 'b' * 64, 'evidence changed'),
+                (self.runs[3], 'run_attempt', 4, 'Current run/source/attempt')):
+            with self.subTest(key=key):
+                previous = target[key]
+
+                def extract_then_change(item, path):
+                    self.extract(item, path)
+                    target[key] = value
+
+                try:
+                    self.download.side_effect = extract_then_change
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        receipt.single(self.args)
+                    self.assertFalse(self.destination.exists())
+                finally:
+                    target[key] = previous
+
+    def test_guard_still_rejects_any_other_consumer(self):
+        with patch.dict(os.environ, {'GITHUB_JOB': 'test-shards'}):
+            self.reject('restricted to canonical e2e')
 
 
 if __name__ == '__main__':

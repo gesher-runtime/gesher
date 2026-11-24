@@ -24,7 +24,9 @@ import java.util.function.Consumer;
  * The host's default-No consent dialog runs away from app/Binder/UI threads.
  */
 final class PermissionRequests {
-    public interface Decision { boolean allow(String packageName, String permissionNames); }
+    // Keep these values in sync with compat/credentials/permission_dialog.inc.
+    static final int DISMISSED = 0, DENIED = 1, ALLOWED = 2;
+    public interface Decision { int decide(String packageName, String permissionNames); }
 
     private final PackageManagerService mPm;
     private final Executor mExecutor;
@@ -36,7 +38,7 @@ final class PermissionRequests {
             Thread thread = new Thread(r, "permission-consent");
             thread.setDaemon(true);
             return thread;
-        }), PermissionRequests::confirm);
+        }), PermissionRequests::confirmDecision);
     }
 
     /** Server-local injection for regression tests; never exposed through Binder or env. */
@@ -46,17 +48,22 @@ final class PermissionRequests {
         mDecision = decision;
     }
 
+    /** Other host consent flows need only the explicit-Allow result. */
     static boolean confirm(String packageName, String permissions) {
+        return confirmDecision(packageName, permissions) == ALLOWED;
+    }
+
+    static int confirmDecision(String packageName, String permissions) {
         try {
             AccountSecretStore.ensureLoaded();
             return nativeConfirm(packageName, permissions);
         } catch (LinkageError | SecurityException e) {
             SystemServer.log("permission consent unavailable: " + e.getClass().getSimpleName());
-            return false;
+            return DISMISSED;
         }
     }
 
-    private static native boolean nativeConfirm(String packageLabel, String permissionNames);
+    private static native int nativeConfirm(String packageLabel, String permissionNames);
 
     void request(ApkPackage captured, String[] requested, Consumer<Intent> completion) {
         if (captured == null || requested == null || requested.length > 128) {
@@ -89,19 +96,15 @@ final class PermissionRequests {
                                         != PackageManager.PERMISSION_GRANTED
                                 && !prompt.contains(name)) prompt.add(name);
                     }
-                    boolean allow = !prompt.isEmpty() && !mPm.isRemovalPending(captured.packageName)
+                    int decision = !prompt.isEmpty() && !mPm.isRemovalPending(captured.packageName)
                             && mPm.get(captured.packageName) == captured
-                            && mDecision.allow(captured.packageName, describe(policy, prompt));
+                            ? mDecision.decide(captured.packageName, describe(policy, prompt)) : DISMISSED;
                     // PM.add/remove are synchronized on the PM. Keep identity stable
                     // across the final recheck and the entire grant operation.
                     synchronized (mPm) {
                         if (!mPm.isRemovalPending(captured.packageName) && mPm.get(captured.packageName) == captured) {
-                            if (allow) {
-                                for (String name : prompt) {
-                                    if (policy.canRequest(captured.packageName, name)) {
-                                        policy.grantRuntime(captured.packageName, name, 0);
-                                    }
-                                }
+                            if (decision == ALLOWED || decision == DENIED) {
+                                policy.recordUserDecision(captured, prompt, decision == ALLOWED);
                             }
                             for (int i = 0; i < names.length; i++) {
                                 if (names[i] != null) {
