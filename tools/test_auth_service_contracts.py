@@ -65,6 +65,9 @@ def main() -> None:
         print(Path(relative).name, "SHA256", hashlib.sha256(source.encode()).hexdigest(), flush=True)
         # The harness declares java.util.* once; Android types are its stand-ins.
         source = re.sub(r"^package .*;\n|^import .*;\n", "", source, flags=re.MULTILINE)
+        if marker == "// PRODUCTION_STANDIN":
+            source = source.replace("android.os.Parcel", "Parcel")
+            source = source.replace("android.os.RemoteException", "RemoteException")
         if public not in source:
             raise SystemExit(f"{relative}: expected '{public}'")
         harness = harness.replace(marker, source.replace(public, private, 1))

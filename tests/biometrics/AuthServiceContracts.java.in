@@ -1186,6 +1186,7 @@ class RemoteException extends Exception {
 }
 
 interface IBinder {
+    int FIRST_CALL_TRANSACTION = 1;
     interface DeathRecipient { void binderDied(); }
     void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException;
     boolean unlinkToDeath(DeathRecipient recipient, int flags);
@@ -1204,6 +1205,8 @@ class Binder implements IBinder {
 interface IInterface {
     IBinder asBinder();
 }
+
+final class Parcel {}
 
 final class ParceledListSlice<T> {
     final List<T> list;
