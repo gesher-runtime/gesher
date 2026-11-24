@@ -3,7 +3,7 @@ package com.gesher.app.webview;
 import android.webkit.ValueCallback;
 import android.webkit.WebStorage;
 
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.Map;
 
 /**
@@ -19,7 +19,7 @@ final class GesherWebStorage extends WebStorage {
     @Override
     @SuppressWarnings({"rawtypes", "unchecked"})
     public void getOrigins(ValueCallback<Map> callback) {
-        if (callback != null) callback.onReceiveValue(new HashMap<>());
+        if (callback != null) callback.onReceiveValue(Collections.emptyMap());
     }
 
     @Override
