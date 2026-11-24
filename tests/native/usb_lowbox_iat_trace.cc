@@ -165,8 +165,8 @@ bool RelativeComponent(const void* descriptor, DWORD offset, const void** output
   *output = reinterpret_cast<const void*>(base + offset);
   return true;
 }
-bool CompleteComponent(SnapshotState state) noexcept {
-  return state == SnapshotState::complete || state == SnapshotState::absent || state == SnapshotState::null_acl;
+bool CompleteComponent(SnapshotState component_state) noexcept {
+  return component_state == SnapshotState::complete || component_state == SnapshotState::absent || component_state == SnapshotState::null_acl;
 }
 void DescriptorSnapshot(const void* source, LowboxDirectorySecurity* output) noexcept {
   if (!source) { output->state = SnapshotState::absent; return; }
