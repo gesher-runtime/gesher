@@ -194,6 +194,16 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows Country or region lookup
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\home_region_win.cc tests\country-detector\home_region_windows_test.cc /Fe:home-region-test.exe
+      - name: Country or region agrees with GetUserDefaultGeoName and GetUserGeoID
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\home-region-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Country or region checks failed' }
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -571,6 +581,9 @@ jobs:
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
+
+      - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
+        run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
 
       - name: Portable code relocation, shell ownership and native profile selection
         run: |

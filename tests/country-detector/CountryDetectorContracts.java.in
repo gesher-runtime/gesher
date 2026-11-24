@@ -1,0 +1,210 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package com.gesher.server;
+
+import android.location.Country;
+import android.location.CountryDetector;
+import android.location.ICountryListener;
+import android.os.IBinder;
+import android.os.IInterface;
+import android.os.Parcel;
+import android.os.RemoteException;
+
+import java.io.FileDescriptor;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * Host contracts of the unchanged production CountryDetectorService on AOSP's own
+ * android.location.Country, CountryDetector (the app-side manager) and ICountryDetector
+ * (android-all 16). Test doubles, here only: the Windows answer (a region and a change
+ * signal) and a listener's binder (death and failing delivery are driven by the test).
+ */
+public final class CountryDetectorContracts {
+    private static int sChecks;
+
+    private static void check(boolean condition, String what) {
+        if (!condition) throw new AssertionError(what);
+        sChecks++;
+    }
+
+    private static void equal(Object expected, Object actual, String what) {
+        if (expected == null ? actual != null : !expected.equals(actual)) {
+            throw new AssertionError(what + ": expected <" + expected + "> but was <" + actual + ">");
+        }
+        sChecks++;
+    }
+
+    /** Windows: the region the user set, and the WM_SETTINGCHANGE signal. */
+    static final class TestWindows implements CountryDetectorService.Backend {
+        volatile String region;
+        RuntimeException failure;
+        Runnable onChange;
+        int watches;
+        int unwatches;
+
+        TestWindows(String region) { this.region = region; }
+
+        @Override public String homeRegion() {
+            if (failure != null) throw failure;
+            return region;
+        }
+
+        @Override public Runnable watch(Runnable change) {
+            watches++;
+            onChange = change;
+            return () -> { unwatches++; onChange = null; };
+        }
+
+        void change(String newRegion) {
+            region = newRegion;
+            Runnable r = onChange;
+            if (r != null) r.run();
+        }
+    }
+
+    /** A listener in an app process: its binder can die; delivery can fail. */
+    static final class TestListener implements ICountryListener, IBinder {
+        final List<Country> received = new ArrayList<>();
+        final List<DeathRecipient> recipients = new ArrayList<>();
+        boolean dead;
+        boolean failDelivery;
+
+        @Override public void onCountryDetected(Country country) throws RemoteException {
+            if (failDelivery) throw new RemoteException("delivery failed");
+            received.add(country);
+        }
+        @Override public IBinder asBinder() { return this; }
+        void die() {
+            dead = true;
+            for (DeathRecipient r : new ArrayList<>(recipients)) r.binderDied();
+        }
+        @Override public void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException {
+            if (dead) throw new RemoteException("dead");
+            recipients.add(recipient);
+        }
+        @Override public boolean unlinkToDeath(DeathRecipient recipient, int flags) {
+            return recipients.remove(recipient);
+        }
+        @Override public String getInterfaceDescriptor() { return "android.location.ICountryListener"; }
+        @Override public boolean pingBinder() { return !dead; }
+        @Override public boolean isBinderAlive() { return !dead; }
+        @Override public IInterface queryLocalInterface(String descriptor) { return this; }
+        @Override public void dump(FileDescriptor fd, String[] args) { }
+        @Override public void dumpAsync(FileDescriptor fd, String[] args) { }
+        @Override public void shellCommand(FileDescriptor in, FileDescriptor out, FileDescriptor err,
+                String[] args, android.os.ShellCallback callback, android.os.ResultReceiver result) { }
+        @Override public boolean transact(int code, Parcel data, Parcel reply, int flags) { return false; }
+    }
+
+    static void sourceIsLocale() throws Exception {
+        TestWindows windows = new TestWindows("IL");
+        CountryDetectorService service = new CountryDetectorService(windows, () -> Locale.US);
+        Country c = service.detectCountry();
+        equal("IL", c.getCountryCode(), "Windows' region");
+        equal(Country.COUNTRY_SOURCE_LOCALE, c.getSource(), "a preference is the locale source");
+
+        // The app-side manager (android.location.CountryDetector) over the service.
+        CountryDetector manager = new CountryDetector(service);
+        Country seen = manager.detectCountry();
+        check(seen != null && "IL".equals(seen.getCountryCode())
+                && seen.getSource() == Country.COUNTRY_SOURCE_LOCALE, "CountryDetector.detectCountry");
+
+        windows.region = "us";
+        equal("US", service.detectCountry().getCountryCode(), "upper case, as Country stores it");
+        // Not ISO 3166-1 alpha-2: the AOSP locale source (the default Locale's country).
+        for (String notIso : new String[] { "419", "001", "", "XX", "ISR", "I1", null }) {
+            windows.region = notIso;
+            Country fallback = service.detectCountry();
+            equal("US", fallback.getCountryCode(), "region " + notIso + " falls back to the Locale");
+            equal(Country.COUNTRY_SOURCE_LOCALE, fallback.getSource(), "fallback source");
+        }
+        windows.failure = new IllegalStateException("GetUserDefaultGeoName failed");
+        equal("US", service.detectCountry().getCountryCode(), "a failed Windows call falls back to the Locale");
+
+        // Without natives: AOSP's locale source, including a locale without a country.
+        equal("FR", new CountryDetectorService(null, () -> Locale.FRANCE).detectCountry().getCountryCode(),
+                "no natives: the Locale's country");
+        Country none = new CountryDetectorService(null, () -> Locale.ENGLISH).detectCountry();
+        check(none != null && "".equals(none.getCountryCode())
+                && none.getSource() == Country.COUNTRY_SOURCE_LOCALE,
+                "a locale without a country is \"\" (ComprehensiveCountryDetector.getLocaleCountry)");
+        equal(null, new CountryDetectorService(null, () -> null).detectCountry(), "no locale: null");
+    }
+
+    static void listeners() throws Exception {
+        TestWindows windows = new TestWindows("IL");
+        CountryDetectorService service = new CountryDetectorService(windows, () -> Locale.US);
+        TestListener a = new TestListener();
+        service.addCountryListener(a);
+        equal(1, a.received.size(), "a new listener gets the current country at once");
+        equal("IL", a.received.get(0).getCountryCode(), "the current country");
+        equal(1, windows.watches, "Windows is watched while there are listeners");
+        equal(1, a.recipients.size(), "linkToDeath");
+
+        windows.change("IL");
+        equal(1, a.received.size(), "a settings change that keeps the country notifies nothing");
+        windows.change("DE");
+        equal(2, a.received.size(), "a changed country is delivered");
+        equal("DE", a.received.get(1).getCountryCode(), "the new country");
+
+        TestListener b = new TestListener();
+        service.addCountryListener(b);
+        equal(1, windows.watches, "one Windows watch for all listeners");
+        windows.change("FR");
+        check(a.received.size() == 3 && b.received.size() == 2, "both listeners notified");
+
+        // Re-adding the same binder replaces its registration (one entry per binder).
+        service.addCountryListener(a);
+        equal(2, service.listenerCount(), "same binder: one registration");
+        equal(1, a.recipients.size(), "the replaced registration is unlinked");
+
+        // A failing delivery does not stop the others.
+        a.failDelivery = true;
+        windows.change("ES");
+        equal("ES", b.received.get(b.received.size() - 1).getCountryCode(), "others still notified");
+        a.failDelivery = false;
+
+        // Death removes the listener; the last one stops the watch.
+        a.die();
+        equal(1, service.listenerCount(), "a dead listener is removed");
+        service.removeCountryListener(b);
+        equal(0, service.listenerCount(), "removed");
+        equal(1, windows.unwatches, "the last listener stops the Windows watch");
+        check(b.recipients.isEmpty(), "removal unlinks the death recipient");
+        int before = b.received.size();
+        windows.change("IT");
+        equal(before, b.received.size(), "a removed listener gets nothing");
+        service.removeCountryListener(b);
+        equal(0, service.listenerCount(), "removing twice is harmless");
+
+        // A listener that is dead when added is not registered (and the call does not fail).
+        TestListener dead = new TestListener();
+        dead.dead = true;
+        service.addCountryListener(dead);
+        equal(0, service.listenerCount(), "a dead listener is not added");
+        check(dead.received.isEmpty(), "nothing delivered to a dead listener");
+
+        // Without natives listeners still get the locale country, and nothing is watched.
+        CountryDetectorService plain = new CountryDetectorService(null, () -> Locale.UK);
+        TestListener c = new TestListener();
+        plain.addCountryListener(c);
+        check(c.received.size() == 1 && "GB".equals(c.received.get(0).getCountryCode()), "no natives: listener");
+
+        try {
+            service.addCountryListener(null);
+            throw new AssertionError("null listener accepted");
+        } catch (NullPointerException expected) {
+            sChecks++;
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        sourceIsLocale();
+        listeners();
+        System.out.println("country-detector contracts: " + sChecks + " checks passed");
+    }
+}
