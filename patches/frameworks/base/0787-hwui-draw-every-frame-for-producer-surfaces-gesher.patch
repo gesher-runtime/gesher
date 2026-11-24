@@ -17,7 +17,7 @@ into the window, and keeps the pacing.
 diff --git a/libs/hwui/renderthread/CanvasContext.cpp b/libs/hwui/renderthread/CanvasContext.cpp
 --- a/libs/hwui/renderthread/CanvasContext.cpp
 +++ b/libs/hwui/renderthread/CanvasContext.cpp
-@@ -519,7 +519,20 @@
+@@ -519,7 +519,21 @@
          // the vsync was estimated due to being slow handling the signal.
          // See the logic in TimeLord#computeFrameTimeNanos or in
          // Choreographer.java for details on when this happens
@@ -26,7 +26,7 @@ diff --git a/libs/hwui/renderthread/CanvasContext.cpp b/libs/hwui/renderthread/C
 +        // surface whose consumer is not that compositor (an ImageReader or a
 +        // SurfaceTexture, drawn with Surface.lockHardwareCanvas) takes every
 +        // frame posted to it, so none is dropped for being soon after the last. A
-        // SurfaceView's surface is composited into its window: it reports 1.
++        // SurfaceView's surface is composited into its window: it reports 1.
 +        int queuesToComposer = 1;
 +        ANativeWindow* const window = mNativeSurface ? mNativeSurface->getNativeWindow() : nullptr;
 +        if (window != nullptr) {
