@@ -34,6 +34,8 @@ namespace {
 
 const IID kIidUnknown = {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 constexpr int kStarted = 0, kCompleted = 1, kCanceled = 2;
+// The pinned llvm-mingw headers do not define this WinRT HRESULT.
+constexpr HRESULT kIllegalStateChange = static_cast<HRESULT>(0x8000000Du);
 
 // An IAsyncOperation<UserConsentVerificationResult> whose course the test scripts.
 class ScriptedOperation final : public winrt::IAsyncOperation<int>, public winrt::IAsyncInfo {
@@ -90,7 +92,7 @@ class ScriptedOperation final : public winrt::IAsyncOperation<int>, public winrt
   }
   HRESULT STDMETHODCALLTYPE Close() override {
     closes++;
-    return status == kStarted ? E_ILLEGAL_STATE_CHANGE : S_OK;
+    return status == kStarted ? kIllegalStateChange : S_OK;
   }
 
  private:

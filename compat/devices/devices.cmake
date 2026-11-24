@@ -22,8 +22,11 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/sensors.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/sensors_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/winrt.cc)
-target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devices)
+target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devices
+  ${CMAKE_SOURCE_DIR}/compat/bionic/include)  # gesher/rgba_buffers.h
 target_link_libraries(framework_runtime PUBLIC ole32)
+# Location: the GNSS receiver's device interface (CM_Get_Device_Interface_List).
+target_link_libraries(framework_runtime PUBLIC cfgmgr32)
 # Bluetooth (docs/bluetooth.md): Winsock's AF_BTH sockets and WSASetService for
 # RFCOMM; IID_IUnknown. BluetoothApis.dll and the WinRT classes are found at run time.
 target_link_libraries(framework_runtime PUBLIC ws2_32 uuid)
