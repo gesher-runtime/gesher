@@ -49,16 +49,47 @@ final class WindowsHelloKey implements HelloKeyBackend {
 
     @Override
     public Operation sign(String name, int pid, byte[] data, Completion completion) {
-        int id;
-        synchronized (mLock) {
-            id = ++mNextId;
-        }
-        Request request = new Request(nativeStartSign(pid, name, data));
+        int id = nextId();
+        long owner = WindowsHello.nativeOwnerWindow(pid);
+        Request request = startOwned(owner, () -> nativeStartSign(pid, name, data));
         // On its own thread also when nothing started: never before sign returns.
-        Thread t = new Thread(() -> completion.onResult(request.await()), "keystore-hello-" + id);
+        Thread t = new Thread(() -> completion.onResult(awaitOwned(request, owner, pid, id)),
+                "keystore-hello-" + id);
         t.setDaemon(true);
         t.start();
         return request;
+    }
+
+    /** Never start a prompt without the owner that its lifecycle watch will follow. */
+    static Request startOwned(long owner, java.util.function.LongSupplier nativeStart) {
+        if (owner == 0) {
+            return new Request(() -> new Result(NOT_FOREGROUND, null), () -> { }, () -> { });
+        }
+        return new Request(nativeStart.getAsLong());
+    }
+
+    private int nextId() {
+        synchronized (mLock) {
+            return ++mNextId;
+        }
+    }
+
+    /** Key-backed authentication has the same foreground lifetime as the plain verifier. */
+    private static Result awaitOwned(Request request, long owner, int pid, int id) {
+        java.util.concurrent.atomic.AtomicBoolean done =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        if (owner != 0) {
+            Thread watch = new Thread(
+                    () -> WindowsHello.watchOwner(owner, pid, request::cancel, done),
+                    "keystore-hello-owner-" + id);
+            watch.setDaemon(true);
+            watch.start();
+        }
+        try {
+            return request.await();
+        } finally {
+            done.set(true);
+        }
     }
 
     @Override
@@ -72,32 +103,61 @@ final class WindowsHelloKey implements HelloKeyBackend {
     }
 
     /** One native request: awaited once, released once, cancel safe until then. */
-    private static final class Request implements Operation {
-        private final long mHandle;
+    static final class Request implements Operation {
+        private final java.util.function.Supplier<Result> mAwait;
+        private final Runnable mCancel;
+        private final Runnable mRelease;
         private boolean mReleased;
+        private boolean mCanceled;
 
         Request(long handle) {
-            mHandle = handle;
+            this(() -> awaitNative(handle),
+                    () -> { if (handle != 0) nativeCancel(handle); },
+                    () -> { if (handle != 0) nativeRelease(handle); });
+        }
+
+        /** Native request boundary, injectable without a Windows prompt in host tests. */
+        Request(java.util.function.Supplier<Result> await, Runnable cancel, Runnable release) {
+            mAwait = await;
+            mCancel = cancel;
+            mRelease = release;
         }
 
         Result await() {
-            if (mHandle == 0) return new Result(FAILED, null);
-            byte[][] bytes = new byte[1][];
-            int status = status(nativeAwait(mHandle, bytes));
-            synchronized (this) {
-                mReleased = true;
-                nativeRelease(mHandle);
+            Result result;
+            try {
+                result = mAwait.get();
+            } finally {
+                synchronized (this) {
+                    mReleased = true;
+                    mRelease.run();
+                }
             }
-            if (status == SUCCESS && bytes[0] == null) status = FAILED;
-            return new Result(status, status == SUCCESS ? bytes[0] : null);
+            synchronized (this) {
+                if (mCanceled) {
+                    if (result.data != null) java.util.Arrays.fill(result.data, (byte) 0);
+                    return new Result(USER_CANCELED, null);
+                }
+            }
+            return result;
         }
 
         @Override
         public void cancel() {
             synchronized (this) {
-                if (!mReleased && mHandle != 0) nativeCancel(mHandle);
+                if (mReleased || mCanceled) return;
+                mCanceled = true;
+                mCancel.run();
             }
         }
+    }
+
+    private static Result awaitNative(long handle) {
+        if (handle == 0) return new Result(FAILED, null);
+        byte[][] bytes = new byte[1][];
+        int status = status(nativeAwait(handle, bytes));
+        if (status == SUCCESS && bytes[0] == null) status = FAILED;
+        return new Result(status, status == SUCCESS ? bytes[0] : null);
     }
 
     private static native int nativeSupported(int[] hr);
