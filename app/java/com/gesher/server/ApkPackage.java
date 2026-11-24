@@ -199,7 +199,7 @@ public final class ApkPackage {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
-        if ("android".equals(packageName)) {
+        if (PLATFORM_PACKAGE.equals(packageName)) {
             throw new SecurityException("The platform package name is reserved");
         }
         mUid = -1;
@@ -299,13 +299,37 @@ public final class ApkPackage {
         return parse(base.getPath(), directory);
     }
 
+    /** The platform's own package (framework-res.apk), which no app may be. */
+    public static final String PLATFORM_PACKAGE = "android";
+
+    /** The package an APK's manifest declares (ApkLite: the manifest's head only). */
+    public static String declaredPackageName(File apk) throws IOException {
+        ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
+                ParseTypeImpl.forParsingWithoutPlatformCompat(), apk, 0);
+        if (result.isError()) {
+            throw new IOException("Cannot parse APK " + apk + ": " + result.getErrorMessage(),
+                    result.getException());
+        }
+        return result.getResult().getPackageName();
+    }
+
     /** Identify the base APK from the manifest before assembling a package cluster. */
     public static boolean isBaseApk(File file) throws IOException {
-        return codeApkLite(file).getSplitName() == null;
+        return splitName(file) == null;
+    }
+
+    /** The manifest's package name of {@code file}, a base or a split APK. */
+    public static String packageName(File file) throws IOException {
+        return codeApkLite(file).getPackageName();
+    }
+
+    /** The manifest's {@code split} name of {@code file}; null for a base APK. */
+    public static String splitName(File file) throws IOException {
+        return codeApkLite(file).getSplitName();
     }
 
     private static ApkLite codeApkLite(File file) throws IOException {
-        if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        if (file == null || !Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
         }
         ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
@@ -1183,7 +1207,9 @@ public final class ApkPackage {
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
 
-        // A long-lived PM record must not publish a cached graph after XML/jar updates.
+        // A long-lived PM record must not publish a stale graph after XML/jar updates:
+        // the registry's snapshot is checked against the files' metadata and the graph
+        // comes from it, without reading or hashing again while they are unchanged.
         // Ordinary packages keep the cheap immutable empty graph path.
         try {
             SharedLibraryGraph graph = SharedLibraryRegistry.usesNone(parsed) ? sharedLibraries
