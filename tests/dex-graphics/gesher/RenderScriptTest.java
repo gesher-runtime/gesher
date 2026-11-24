@@ -25,7 +25,13 @@ import android.renderscript.ScriptIntrinsicYuvToRGB;
 import android.renderscript.Type;
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * android.renderscript on Gesher's CPU runtime (docs/renderscript.md): librs_jni.so
@@ -728,8 +734,31 @@ public final class RenderScriptTest {
    * Elements of objects: Element.ALLOCATION is a pointer and three reserved words on
    * a 64-bit runtime (32 bytes), in an array of handles and in a struct. The
    * Allocations they hold stay usable after the holders are destroyed.
+   *
+   * The runtime reports a size mismatch (a runtime laid out for 4-byte handles
+   * expects 12 bytes where Java sends 96) as a non-fatal error, delivered later on
+   * the MessageThread. So every error is recorded, and a user message sent after
+   * the work marks the end: messages arrive in order, so once it is back every
+   * error the work caused has been delivered. The struct's int fields are also
+   * read back from the runtime's own layout.
    */
-  private static void objectElements(RenderScript rs) {
+  private static void objectElements(RenderScript rs) throws InterruptedException {
+    final List<String> errors = Collections.synchronizedList(new ArrayList<>());
+    final int markerId = 0x6e5e;
+    final CountDownLatch marker = new CountDownLatch(1);
+    rs.setErrorHandler(new RenderScript.RSErrorHandler() {
+      @Override
+      public void run() {
+        errors.add(mErrorNum + ": " + mErrorMessage);
+      }
+    });
+    rs.setMessageHandler(new RenderScript.RSMessageHandler() {
+      @Override
+      public void run() {
+        if (mID == markerId) marker.countDown();
+      }
+    });
+
     Allocation[] held = new Allocation[3];
     for (int i = 0; i < held.length; i++) {
       held[i] = Allocation.createSized(rs, Element.I32(rs), 4);
@@ -769,6 +798,30 @@ public final class RenderScriptTest {
     }
     check(ok && struct.getBytesSize() == 40, "Allocation of a struct {allocation, int, int} ("
         + struct.getBytesSize() + " bytes): setFromFieldPacker");
+
+    // The int fields, read back through the runtime's layout of the struct.
+    boolean fields = true;
+    String got = "";
+    for (int i = 0; i < 2; i++) {
+      FieldPacker x = new FieldPacker(4);
+      FieldPacker y = new FieldPacker(4);
+      structs.copyToFieldPacker(i, 0, 0, 1, x);
+      structs.copyToFieldPacker(i, 0, 0, 2, y);
+      int xv = ByteBuffer.wrap(x.getData()).order(ByteOrder.LITTLE_ENDIAN).getInt();
+      int yv = ByteBuffer.wrap(y.getData()).order(ByteOrder.LITTLE_ENDIAN).getInt();
+      got += " [" + xv + ", " + yv + "]";
+      fields &= xv == 7 + i && yv == -1;
+    }
+    check(fields, "struct fields after the allocation field read back as written:" + got);
+
+    rs.finish();
+    rs.sendMessage(markerId, new int[] {0});
+    boolean flushed = marker.await(30, TimeUnit.SECONDS);
+    check(flushed && errors.isEmpty(), "object elements: no RenderScript errors"
+        + (flushed ? "" : " (the marker message did not come back)")
+        + (errors.isEmpty() ? "" : " " + errors));
+    rs.setErrorHandler(null);
+    rs.setMessageHandler(null);
 
     // Destroying the holders releases their references; the held Allocations
     // stay usable.
