@@ -164,6 +164,25 @@ UTF-16 units, create the HSTRING with `winrt::CreateString`, delete it after the
 Windows shows its own title and buttons; the app's negative button cannot be shown
 (credential-only prompts have none in Android either).
 
+## 8b. Owner watch and Windows build (phase 2b)
+
+`compat/devices/hello_owner.h/.cc`, natives `nativeWindowsBuild`, `nativeOwnerWindow`,
+`nativeOwnerRelation` in `hello_jni.cc`:
+
+- `WindowsBuild()`: `RtlGetVersion` (ntdll, found at run time) `dwBuildNumber`, 0 when
+  unavailable. `DeviceCredential` offers no credential below 22000.
+- `OwnerWindow(pid)` (`hello_win.cc`): the window `Start` would choose as owner now.
+  `WindowsHello.verify` reads it first and treats null as "not in the foreground".
+- `RelationOf(owner, pid, foreground)` → `OwnerWatch`'s values: Gone (owner is not a
+  window of `pid` any more), None (no foreground window), Owner (the foreground window
+  is `pid`'s), Owned (another process's window with `GetAncestor(GA_ROOTOWNER) == owner`),
+  Other. `WindowsHello` polls it every 250 ms on a daemon thread per verification and
+  calls the verification's `cancel()` when `OwnerWatch.sample` says so (ADR decision 12).
+- `tests/biometrics/hello_owner_windows_test.cc` classifies real, hidden windows,
+  including one a child process creates with the test's window as owner.
+  `tests/biometrics/hello_owner_probe.cc` prints the classification while the real prompt
+  shows. **Verify on Windows** that the prompt is reported as *owned*.
+
 ## 9. Tests
 
 - Unit: a `GESHER_HELLO_TEST=1` switch below the JNI layer (as `bluetooth_test.cc`)
