@@ -48,6 +48,11 @@ provider, and an app cannot publish that authority.
   is the provider's private cache (`$ANDROID_DATA/system/downloads/files`, moved to
   `.../cache` on success), readable through `openFile`. File names and collisions follow
   `Helpers.generateSaveFile` (`name-1.ext`, ...).
+- `addCompletedDownload` checks the recorded MediaStore owner before accepting an
+  existing path. The internal lookup includes pending and trashed rows without
+  filtering owner names for package visibility. The owner must belong to the caller's
+  UID (including a shared UID); lookup errors reject the request. Before a media
+  provider is installed, there are no media ownership records to check.
 - Transfer: the system server's `HttpURLConnection`, which uses Windows' proxy
   settings (`WindowsProxy`) and the Windows trust store. Cleartext and TLS trust come
   from the requesting package's network security config (`ManifestConfigSource`,
@@ -58,7 +63,9 @@ provider, and an app cannot publish that authority.
   `setAllowedOverMetered`, `setAllowedOverRoaming` and Wi-Fi-only requests
   (`getRequiredNetworkType`, including the over-mobile size settings). Without a
   suitable network nothing is requested and the row stays pending until the network
-  changes.
+  changes. A cost or roaming change also rechecks a transfer already in progress;
+  when its network becomes unsuitable it keeps its partial file and waits, then
+  resumes with `Range` when an allowed network returns.
 - Charging and idle: `setRequiresCharging` and `setRequiresDeviceIdle`
   (`FLAG_REQUIRES_CHARGING`, `FLAG_REQUIRES_DEVICE_IDLE`, which `Helpers.scheduleJob`
   passes to `JobInfo`) are evaluated exactly as Gesher's `JobSchedulerService`
@@ -84,9 +91,8 @@ These are absent rather than simulated:
 
 - Notifications: `setNotificationVisibility` is validated and stored, but no download
   notification is posted, so `ACTION_NOTIFICATION_CLICKED` is never sent.
-- MediaStore: Gesher has no MediaStore provider, so completed downloads are not
-  scanned, `mediaprovider_uri` stays null, and `addCompletedDownload` does not check
-  MediaStore ownership.
+- MediaStore scanning: completed downloads are not scanned automatically and
+  `mediaprovider_uri` stays null. Existing media ownership is still enforced.
 - Certificate transparency policy (`ConfigNetworkSecurityPolicy`) is not installed per
   download; the package's trust anchors and cleartext rules are.
 - Disk-space preallocation is a usable-space check only.
@@ -96,7 +102,7 @@ These are absent rather than simulated:
 ## Tests
 
 `tools/test_download_manager_contracts.py` compiles `DownloadRequests`,
-`DownloadQueue`, `DownloadTransfer` and `DeviceConstraints` unchanged with AOSP's `SQLiteQueryBuilder` and
+`DownloadQueue`, `DownloadTransfer`, `DeviceConstraints` and `SharedStorageOwnership` unchanged with AOSP's `SQLiteQueryBuilder` and
 `SQLiteTokenizer` (pinned android-16.0.0_r4 sources), runs SQL in SQLite through
 sqlite-jdbc, and transfers over real sockets from a local HTTP server: admission,
 ownership, strict SQL, redirects, HTTP failures, cut connections with resumption,
