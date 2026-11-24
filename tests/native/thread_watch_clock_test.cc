@@ -17,16 +17,15 @@ void Check(const char* name, bool ok) {
   if (!ok) ++failures;
   std::printf("thread-watch-clock: %s %s\n", ok ? "PASS" : "FAIL", name);
 }
+// The same tick-resolution reading the watch takes: a precise reading could
+// fall between ticks, ahead of the watch's value.
 uint64_t UnbiasedMs() {
   ULONGLONG ticks;
-  QueryUnbiasedInterruptTimePrecise(&ticks);
+  QueryUnbiasedInterruptTime(&ticks);
   return ticks / 10000;
 }
-uint64_t BiasedMs() {
-  ULONGLONG ticks;
-  QueryInterruptTimePrecise(&ticks);
-  return ticks / 10000;
-}
+// Counts the time this boot slept.
+uint64_t BiasedMs() { return GetTickCount64(); }
 }  // namespace
 
 int main(int argc, char** argv) {

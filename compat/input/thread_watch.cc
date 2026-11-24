@@ -17,9 +17,6 @@
 #include <vector>
 
 #include "thread_watch.h"
-// Android's CLOCK_MONOTONIC source (unbiased interrupt time). The header
-// stands alone (stdint.h, windows.h): no POSIX shim is brought in.
-#include "../posix/include/gesher/awake_clock.h"
 
 namespace gesher {
 namespace input {
@@ -382,7 +379,13 @@ uint64_t ThreadWatchClockMs() {
   // (SystemClock.uptimeMillis). GetTickCount64 also counts while the PC sleeps
   // or hibernates, so a ping posted just before a sleep was reported after the
   // resume as a wait of hours.
-  return static_cast<uint64_t>(gesher_monotonic_nanos() / 1000000);
+  // QueryUnbiasedInterruptTime reads the unbiased interrupt time that Android's
+  // CLOCK_MONOTONIC follows here, at timer-tick resolution, which is ample for
+  // waits measured in seconds. It is kernel32's, so this file links without the
+  // POSIX layer's mincore import.
+  ULONGLONG ticks = 0;
+  QueryUnbiasedInterruptTime(&ticks);
+  return static_cast<uint64_t>(ticks / 10000);
 }
 
 class ThreadWatch {
