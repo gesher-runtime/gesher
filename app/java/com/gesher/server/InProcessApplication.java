@@ -5,8 +5,10 @@
 package com.gesher.server;
 
 import android.app.IApplicationThread;
+import android.content.Intent;
 import android.os.Binder;
 import android.os.Process;
+import java.util.function.BooleanSupplier;
 
 /**
  * The standalone launcher's admission, owned by the runtime before APK code is loaded.
@@ -81,6 +83,18 @@ public final class InProcessApplication implements AutoCloseable {
             throw new IllegalStateException("Standalone process was not prepared for binding");
         }
         mProcess = mServices.atm.attachInProcessApplication(mOwner, thread);
+    }
+
+    /** Result target registered by the trusted standalone driver. */
+    @FunctionalInterface
+    public interface ActivityResult {
+        void dispatch(Binder token, String who, int requestCode, Intent data);
+    }
+
+    public synchronized Binder registerActivity(BooleanSupplier active, ActivityResult result) {
+        requireCurrent();
+        if (mProcess == null) throw new IllegalStateException("Standalone process was not bound");
+        return mServices.atm.registerInProcessActivity(mProcess, active, result);
     }
 
     public void activityStarted() { activityState(ActivityTaskManagerService.State.STARTED); }

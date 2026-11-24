@@ -87,14 +87,6 @@ final class PermissionCatalog {
             uea.protectionLevel = PermissionInfo.PROTECTION_NORMAL;
             mFramework.put(uea.name, uea);
         }
-        if (!mFramework.containsKey("android.permission.OBSERVE_APP_USAGE")) {
-            PermissionInfo oau = new PermissionInfo();
-            oau.name = "android.permission.OBSERVE_APP_USAGE";
-            oau.packageName = "android";
-            oau.protectionLevel = PermissionInfo.PROTECTION_SIGNATURE
-                    | PermissionInfo.PROTECTION_FLAG_PRIVILEGED;
-            mFramework.put(oau.name, oau);
-        }
         mProtectedBroadcasts.add(android.app.AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED);
         mLoaded = true;
     }
@@ -110,6 +102,14 @@ final class PermissionCatalog {
     }
 
     boolean isProtectedBroadcast(String name) {
+        return name != null && (isPlatformPrefix(name) || isDeclaredProtectedBroadcast(name));
+    }
+
+    /**
+     * Manifest declarations only, without PackageManagerService's prefixes: Android's
+     * AppsFilterImpl reads the declared set for package visibility.
+     */
+    boolean isDeclaredProtectedBroadcast(String name) {
         load();
         // A failed framework catalog must not authorize an unknown sender.
         return name != null && (!mFrameworkRead || mProtectedBroadcasts.contains(name));
@@ -118,7 +118,16 @@ final class PermissionCatalog {
     /** Positive catalog evidence, for exemptions that must not be granted on load failure. */
     boolean isKnownProtectedBroadcast(String name) {
         load();
-        return mFrameworkRead && name != null && mProtectedBroadcasts.contains(name);
+        return name != null && (isPlatformPrefix(name)
+                || mFrameworkRead && mProtectedBroadcasts.contains(name));
+    }
+
+    /** Android 16 PackageManagerService.isProtectedBroadcast: prefixes outside any manifest. */
+    private static boolean isPlatformPrefix(String name) {
+        return name.startsWith("android.net.netmon.lingerExpired")
+                || name.startsWith("com.android.server.sip.SipWakeupTimer")
+                || name.startsWith("com.android.internal.telephony.data-reconnect")
+                || name.startsWith("android.net.netmon.launchCaptivePortalApp");
     }
 
     Map<String, PermissionInfo> permissions() {

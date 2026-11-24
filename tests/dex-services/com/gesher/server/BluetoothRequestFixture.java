@@ -458,6 +458,22 @@ public final class BluetoothRequestFixture {
         }
         check(operations == h.radio.reads + h.radio.confirms + h.radio.switches, "unhandled intent reached backend");
     }
+    /** Restore constructor defaults used by the real foreground-observation hooks. */
+    private static void initializeForegroundTracking(Object am, Object atm, PackageManagerService pm) throws Exception {
+        set(am, "mShortcutEvaluation", construct(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+        set(am, "mShortcutAwake", (BooleanSupplier) () -> false);
+        set(am, "mServices", construct(type("ActiveServices"), new Class<?>[]{
+                ActivityTaskManagerService.class, PackageManagerService.class, type("NotificationManagerService")},
+                atm, pm, null));
+        Object providers = get(am, "mProviders");
+        if (providers == null) {
+            providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(am, "mProviders", providers);
+        }
+        // These isolated routes have no provider connections. Keep the normal empty
+        // topology without initializing unrelated settings and document providers.
+        set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
+    }
     /** Result/lifetime integration, using real ActivityRecord and pending ResultInfo objects. */
     private static final class ResultRoute {
         final Harness h = new Harness();
@@ -469,10 +485,11 @@ public final class BluetoothRequestFixture {
         ResultRoute() throws Exception {
             set(atm, "mBluetoothRequests", h.requests);
             // The real result publisher needs its URI-grant boundary. Empty result
-            // data carries no URIs; unrelated service constructors are unnecessary.
+            // data carries no URIs, so provider/settings startup remains isolated.
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
             Object am = UNSAFE.allocateInstance(ActivityManagerService.class);
             set(am, "mProviders", providers); set(am, "mAtm", atm); set(am, "mPm", h.pm);
+            initializeForegroundTracking(am, atm, h.pm);
             set(atm, "mAm", am);
         }
         @SuppressWarnings({"unchecked", "rawtypes"}) Object record(Object parent, String who, int code) throws Exception {
@@ -584,6 +601,7 @@ public final class BluetoothRequestFixture {
             Object am = UNSAFE.allocateInstance(ActivityManagerService.class);
             set(am, "mAtm", atm); set(am, "mPm", h.pm);
             set(am, "mCallers", new CallerIdentity(h.pm, (ActivityTaskManagerService) atm));
+            initializeForegroundTracking(am, atm, h.pm);
             set(atm, "mAm", am);
             Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");
             process = UNSAFE.allocateInstance(processType);

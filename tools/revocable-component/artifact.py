@@ -38,6 +38,7 @@ def main() -> None:
                                            "--coff-imports", str(path)], text=True)
         (args.output / (path.name + ".imports.txt")).write_text(imports)
     selected = ["compat/posix", "compat/binder", "probes/binder", "tests/binder",
+                "compat/framework/app_container.cc", "compat/framework/app_container.h",
                 "tests/native/revocable_file_test.cc", "tools/revocable-component",
                 "cmake/toolchain-llvm-mingw.cmake", "aosp.lock",
                 ".github/workflows/revocable-descriptors-component.yml"]
