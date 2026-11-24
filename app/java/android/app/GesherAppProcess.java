@@ -59,6 +59,20 @@ public final class GesherAppProcess {
     private GesherAppProcess() {
     }
 
+    /**
+     * ActivityThread.main's "Make sure TrustedCertificateStore looks in the right place for
+     * CA certificates": the user's CA directories, {@code
+     * $ANDROID_DATA/misc/user/<user>/cacerts-added} and {@code cacerts-removed}, which
+     * KeyChain writes on a device and the network security config's
+     * UserCertificateSource reads. Without it Conscrypt's AndroidCAStore looks in
+     * {@code $ANDROID_DATA/misc/keychain} and lists no user-added CA. Gesher writes the
+     * roots installed on this PC there (compat/net/trust_store.cc, docs/network.md).
+     */
+    static void useUserCaCertificates() {
+        com.android.org.conscrypt.TrustedCertificateStore.setDefaultUserDirectory(
+                android.os.Environment.getUserConfigDirectory(android.os.UserHandle.myUserId()));
+    }
+
     private static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();
@@ -209,6 +223,8 @@ public final class GesherAppProcess {
             // integration ci run 40003812869).
             android.view.ThreadedRenderer.sRendererEnabled = false;
         }
+
+        useUserCaCertificates();
 
         // ActivityThread.main: the main Looper is prepared (Main.bootstrap), then
         // new ActivityThread().attach(false, startSeq).
