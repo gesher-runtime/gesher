@@ -221,7 +221,7 @@ With a modem:
   `MBNProfileExt` schema, where `SimIccID` is mandatory), the SIM's ICCID as `SimIccID`
   (`IMbnConnectionProfileManager::GetConnectionProfiles`, at most sixteen profiles;
   `IMbnConnectionProfile::GetProfileXmlData`); without the element, the schema's default,
-  `manual`. A profile that cannot be read this way (elements under a namespace prefix,
+  `manual`. A profile that cannot be read this way (elements under a namespace prefix, an empty prefix,
   attributes, unterminated elements) makes the mode unreadable rather than "no profile". Every reading of the modem includes it, so a change made in Windows' cellular
   settings (or by another program) is Android's answer at the next reading, and listeners
   hear it.
@@ -241,7 +241,9 @@ With a modem:
   in Windows while the mode is `manual` survives a repeated off, and a connection dropped by
   hand is not reconnected by a repeated on. Each setter first reads the modem afresh, so a change
   made in Windows moments before (which the last reading cannot show yet) is what the
-  switch's current value is compared with.
+  switch's current value is compared with. If that read fails, times out or is still
+  blocked in WwanSvc, the kept reading is not current and the setter changes nothing
+  (logged): no write, no listener event.
   `setDataRoamingEnabled()` needs `MODIFY_PHONE_STATE`
   (`SecurityException("setDataRoamingEnabled")`): with data on it writes `auto` or
   `auto-home` (and Windows disconnects while roaming); with data off it keeps Android's
@@ -250,7 +252,9 @@ With a modem:
 - The write (`IMbnConnectionProfile::UpdateProfile` with only `ConnectionMode` changed, then
   `IMbnConnection::Disconnect` or `Connect` with the profile's name) runs on a worker
   thread bounded to ten seconds; the binder thread waits without holding any lock of the
-  services. A change counts only when Windows accepts it: then the modem is read again,
+  services. With the reads around it (a query's read and the setter's fresh read before,
+  the re-read after, two seconds each), a setter call blocks its binder thread for at most
+  about sixteen seconds. A change counts only when Windows accepts it: then the modem is read again,
   and answers, `Settings.Global` and listeners follow that reading. A refused profile update
   or disconnect (a refused disconnect, or a connection state that cannot be read for it,
   restores the previous mode) or an unknown or unreadable mode leaves every answer
@@ -293,10 +297,11 @@ With a modem:
   `gesher-app mobile-data roaming on|off` (no argument shows both). The command calls the
   `phone` service's setters as the shell, as Settings' mobile network screen does, says
   that it changes Windows' cellular connection, and refuses without a modem or without an
-  active SIM subscription. It exits with an error when the switch did not take the value
-  (Windows refused it or did not answer in time, in which case a late change may still
-  apply) and when, after turning data off, Windows' connection is still up ten seconds
-  later.
+  active SIM subscription. As the setters return nothing, the command then reads Windows
+  itself (each read bounded to five seconds) and exits with an error when Windows cannot be
+  read (the change is then unconfirmed), when Windows does not show the requested setting
+  (refused, or not answered in time, in which case a late change may still apply), and
+  when, after turning data off, Windows' connection is still up ten seconds later.
 
 Not validated on hardware: no physical modem was available. Whether Windows' Settings >
 Cellular "Let Windows keep me connected" and "Roaming options" are this same profile
@@ -345,7 +350,8 @@ false.
 - `tools/test_telephony.py` runs the production Java services on a host JVM with synthetic
   modems and callers: features, translations, the data switches (answers from Windows'
   connection mode, setters and their permissions, Windows' writes and refusals, a bounded
-  hung write, the `Settings.Global` mirror in a real settings store file, listeners, the
+  hung write, setters refusing when the modem cannot be read now (failed or blocked
+  reads) and deciding from a fresh reading after a change in Windows, the `Settings.Global` mirror in a real settings store file, listeners, the
   data state following Windows' connection, and the `mobile-data` command), permission
   rules (including
   `LocationAccessPolicy` for listeners and `ServiceState`), redaction, listeners, SIM

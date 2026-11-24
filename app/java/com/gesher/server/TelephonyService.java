@@ -222,6 +222,8 @@ public final class TelephonyService {
         private int mSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         private int mFailures;
         private long mReadAt, mGoodAt, mDemandAt;
+        // Successful reads so far, so a caller can tell that a read it asked for succeeded.
+        private long mGoodReads;
         private boolean mWatched, mPolling;
         // A read still blocked in WwanSvc after its timeout (with mReadLock); no second
         // read is started while it lasts.
@@ -357,6 +359,30 @@ public final class TelephonyService {
         }
 
         /** One bounded read; listeners hear about changes. Returns whether anything changed. */
+        /**
+         * A read for a decision that must use Windows' current state (the data switch
+         * setters): true only when Windows was read successfully now (or by a read that
+         * completed meanwhile). A failed, timed-out or still-blocked read answers false, as
+         * does an exception from a change listener or the property sink, which is logged;
+         * the kept reading of a failed read is not current. Bounded like every read.
+         */
+        boolean readNow() {
+            if (!mPresent) return false;
+            long before;
+            synchronized (mLock) {
+                before = mGoodReads;
+            }
+            try {
+                refresh();
+            } catch (RuntimeException e) {
+                android.util.Log.w(TAG, "cellular: reading the modem failed: " + e);
+                return false;
+            }
+            synchronized (mLock) {
+                return mGoodReads != before;
+            }
+        }
+
         boolean refresh() {
             boolean changed = read(-1);
             if (changed) notifyListeners();
@@ -393,6 +419,7 @@ public final class TelephonyService {
                     } else {
                         mFailures = 0;
                         mGoodAt = now;
+                        mGoodReads++;
                     }
                     if (Objects.equals(mModem == null ? null : mModem.source,
                             next == null ? null : next.source)) {
@@ -955,8 +982,8 @@ public final class TelephonyService {
             boolean before, after;
             synchronized (mSetLock) {
                 // Windows may have changed since the last reading (polling and query reads keep
-                // a reading for seconds): decide from a fresh one.
-                mCellular.refresh();
+                // a reading for seconds): decide only from a reading taken now.
+                if (!mCellular.readNow()) return "the modem could not be read";
                 // Without a known mode there is nothing to change from: refused, as roaming is.
                 if (mode() == null) return "Windows' connection mode is unknown";
                 before = userEnabled();
@@ -981,7 +1008,8 @@ public final class TelephonyService {
          */
         String setRoamingEnabled(boolean enabled) {
             synchronized (mSetLock) {
-                mCellular.refresh();  // a fresh reading, as for the user switch
+                // A reading taken now, as for the user switch.
+                if (!mCellular.readNow()) return "the modem could not be read";
                 String mode = mode();
                 if (mode == null) return "Windows' connection mode is unknown";
                 if (!WindowsCellular.MODE_MANUAL.equals(mode) && roamingEnabled() != enabled) {

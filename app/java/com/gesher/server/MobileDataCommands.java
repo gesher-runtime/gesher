@@ -12,6 +12,7 @@ import com.android.internal.telephony.ITelephony;
 
 import java.io.PrintStream;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The launcher's {@code mobile-data} command: Android's mobile data and data roaming
@@ -19,8 +20,10 @@ import java.util.List;
  * behavior for the modem (the SIM's default Mobile Broadband profile, docs/telephony.md),
  * so changing them changes Windows' cellular connection for the whole machine. The
  * command calls the {@code phone} service's own setters, as Settings' mobile network
- * screen does, as the shell (MODIFY_PHONE_STATE), and reports what Windows then shows.
- * Only with a cellular modem and an active SIM subscription.
+ * screen does, as the shell (MODIFY_PHONE_STATE). The setters return nothing (as on
+ * AOSP), so the command then reads Windows itself and reports success only when Windows
+ * shows the requested setting (and, for data off, its connection down). Only with a
+ * cellular modem and an active SIM subscription.
  */
 public final class MobileDataCommands {
     private MobileDataCommands() {}
@@ -29,11 +32,11 @@ public final class MobileDataCommands {
 
     public static int run(List<String> args) throws Exception {
         return run(args, ITelephony.Stub.asInterface(ServiceManager.getService(Context.TELEPHONY_SERVICE)),
-                ISub.Stub.asInterface(ServiceManager.getService("isub")), System.out);
+                ISub.Stub.asInterface(ServiceManager.getService("isub")), WindowsCellular.WINDOWS, System.out);
     }
 
-    static int run(List<String> args, ITelephony phone, ISub subscriptions, PrintStream out)
-            throws RemoteException {
+    static int run(List<String> args, ITelephony phone, ISub subscriptions, WindowsCellular.Source windows,
+            PrintStream out) throws RemoteException {
         boolean roaming = !args.isEmpty() && args.get(0).equals("roaming");
         List<String> rest = roaming ? args.subList(1, args.size()) : args;
         Boolean value = null;
@@ -58,66 +61,101 @@ public final class MobileDataCommands {
             out.println("No active SIM subscription: the mobile data settings belong to one");
             return 1;
         }
-        boolean applied = true, stillUp = false;
+        boolean ok = true;
         if (value != null) {
             if (roaming) {
                 phone.setDataRoamingEnabled(subId, value);
-                applied = phone.isDataRoamingEnabled(subId) == value;
             } else {
-                boolean before = user;
                 phone.setDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER, value,
                         "com.android.shell");
-                applied = phone.isDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER) == value;
-                // Turning data off must also take Windows' connection down. The disconnect
-                // completes asynchronously in WwanSvc, so it is given a few seconds; a
-                // connection that stays up means Windows refused it (and the previous mode
-                // could not be restored). Already off: a connection made by hand in Windows
-                // is left alone, as an unchanged switch changes nothing.
-                if (applied && !value && before) stillUp = !disconnected(phone, subId);
             }
-            user = phone.isDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER);
+            ok = confirm(phone, subId, windows, roaming, value, user, out);
         }
-        if (!applied) {
-            out.println("Windows did not take the change, or did not answer in time (a late change"
-                    + " may still apply); the setting is as shown below");
-        }
-        if (stillUp) {
-            out.println("Windows stored mobile data off but its cellular connection is still up:"
-                    + " Windows refused to disconnect it");
-        }
-        out.println("Mobile data: " + (user ? "on" : "off"));
+        out.println("Mobile data: " + (phone.isDataEnabledForReason(subId,
+                TelephonyManager.DATA_ENABLED_REASON_USER) ? "on" : "off"));
         out.println("Data roaming: " + (phone.isDataRoamingEnabled(subId) ? "on" : "off"));
         out.println("These are Windows' cellular connection settings for this SIM (the whole machine):"
                 + " off disconnects Windows' cellular data; roaming off keeps it off while roaming.");
-        return applied && !stillUp ? 0 : 1;
+        return ok ? 0 : 1;
     }
 
     /**
-     * Waits up to ten seconds for Windows' connection to go down. The phone service answers
-     * from its reading of the modem, which the setter has just refreshed and which a query
-     * re-reads once it is seven seconds old (TelephonyService.Cellular), so within the ten
-     * seconds the answer comes from at least one reading taken after WwanSvc had time to
-     * complete the disconnect. Polling every half second between readings only costs
-     * cached answers; it lets the command return as soon as such a reading shows the
-     * connection down.
+     * Whether Windows shows the requested setting, read from Windows itself: data on is
+     * auto or auto-home and off is manual with the connection down (for a change from on;
+     * a connection made by hand while data was already off is left alone, as an unchanged
+     * switch changes nothing); roaming is auto or auto-home while data is on, and while it
+     * is off (manual, where Windows keeps no roaming choice) the phone service's answer.
      */
-    static boolean disconnected(ITelephony phone, int subId) throws RemoteException {
+    private static boolean confirm(ITelephony phone, int subId, WindowsCellular.Source windows,
+            boolean roaming, boolean value, boolean wasOn, PrintStream out) throws RemoteException {
+        WindowsCellular.Modem modem = read(windows);
+        if (modem == null || !modem.knownMode()) {
+            out.println("Windows' cellular settings could not be read, so the change is not confirmed"
+                    + " (Windows may or may not have taken it)");
+            return false;
+        }
+        String mode = modem.connectionMode;
+        boolean taken;
+        if (roaming) {
+            taken = WindowsCellular.MODE_MANUAL.equals(mode) ? phone.isDataRoamingEnabled(subId) == value
+                    : mode.equals(value ? WindowsCellular.MODE_AUTO : WindowsCellular.MODE_AUTO_HOME);
+        } else {
+            taken = WindowsCellular.MODE_MANUAL.equals(mode) != value;
+        }
+        if (!taken) {
+            out.println("Windows did not take the change, or did not answer in time (a late change"
+                    + " may still apply); Windows' setting is as shown below");
+            return false;
+        }
+        if (!roaming && !value && wasOn && !disconnected(windows, modem)) {
+            out.println("Windows stored mobile data off but its cellular connection is still up:"
+                    + " Windows refused to disconnect it");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Waits up to ten seconds for Windows' connection to go down: the disconnect completes
+     * asynchronously in WwanSvc. Each step reads Windows afresh.
+     */
+    private static boolean disconnected(WindowsCellular.Source windows, WindowsCellular.Modem modem) {
         for (int i = 0; ; i++) {
-            int state = phone.getDataStateForSubId(subId);
-            if (state != TelephonyManager.DATA_CONNECTED && state != TelephonyManager.DATA_CONNECTING
-                    && state != TelephonyManager.DATA_DISCONNECTING) {
-                return true;
-            }
+            if (modem != null && !up(modem)) return true;
             if (i >= sWaitSteps) return false;
             try {
-                Thread.sleep(500);
+                Thread.sleep(1000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
             }
+            modem = read(windows);
         }
     }
 
-    /** Half-second steps of disconnected's wait; host tests shorten it. */
-    static int sWaitSteps = 20;
+    private static boolean up(WindowsCellular.Modem modem) {
+        return modem.activation == WindowsCellular.ACTIVATION_ACTIVATED
+                || modem.activation == WindowsCellular.ACTIVATION_ACTIVATING
+                || modem.activation == WindowsCellular.ACTIVATION_DEACTIVATING;
+    }
+
+    /** One bounded read of Windows' modem (phone 0, the first interface), or null. */
+    private static WindowsCellular.Modem read(WindowsCellular.Source windows) {
+        AtomicReference<String> raw = new AtomicReference<>();
+        Thread reader = new Thread(() -> raw.set(windows.snapshot()), "mobile-data-read");
+        reader.setDaemon(true);
+        reader.start();
+        try {
+            reader.join(sReadTimeoutMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (reader.isAlive()) return null;
+        WindowsCellular.Snapshot snapshot = WindowsCellular.parse(raw.get());
+        return snapshot == null || !"ok".equals(snapshot.status) ? null : snapshot.primary();
+    }
+
+    /** One-second steps of the disconnect wait, and the bound of each read; tests shorten them. */
+    static int sWaitSteps = 10;
+    static long sReadTimeoutMillis = 5000;
 }

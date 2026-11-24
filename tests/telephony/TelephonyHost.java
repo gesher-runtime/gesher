@@ -1115,7 +1115,7 @@ public final class TelephonyHost {
         int waitSteps = MobileDataCommands.sWaitSteps;
         MobileDataCommands.sWaitSteps = 0;
         source.rollbackFails = true;
-        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, refusedOut), 1,
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, source, refusedOut), 1,
                 "A refused disconnect and restore fail the command");
         source.rollbackFails = false;
         MobileDataCommands.sWaitSteps = waitSteps;
@@ -1125,6 +1125,66 @@ public final class TelephonyHost {
         spec.mode = "auto";
         source.set(spec);
         cellular.refresh();
+
+        // A setter decides only from a reading taken now. When Windows cannot be read (a
+        // failed read, or a read still blocked in WwanSvc), the kept reading is not current:
+        // nothing is written, nothing changes, nothing is heard, and the command fails.
+        callers.current = SWITCHER;
+        Listener quiet = new Listener();
+        t.registry.listenWithEventList(false, false, SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, SWITCHER.name,
+                null, quiet, new int[] {TelephonyCallback.EVENT_USER_MOBILE_DATA_STATE_CHANGED,
+                        TelephonyCallback.EVENT_DATA_ENABLED_CHANGED}, false);
+        long readTimeout = MobileDataCommands.sReadTimeoutMillis;
+        MobileDataCommands.sReadTimeoutMillis = 300;
+        String good = source.text;
+        for (boolean on : new boolean[] {true, false}) {
+            // Windows' Settings change the mode; the read that follows fails.
+            spec.mode = on ? "manual" : "auto";
+            source.set(spec);
+            good = source.text;
+            source.text = "status\terror\t80004005\n";
+            writes = source.writes.size();
+            t.phone.setDataEnabledForReason(1, user, on, SWITCHER.name);
+            t.phone.setDataRoamingEnabled(1, !on);
+            check(source.writes.size() == writes && quiet.events.isEmpty(),
+                    "A failed read: no write and no event (" + on + ")");
+            java.io.ByteArrayOutputStream failedBytes = new java.io.ByteArrayOutputStream();
+            equal(MobileDataCommands.run(List.of(on ? "on" : "off"), t.phone, t.subscriptions, source,
+                    new java.io.PrintStream(failedBytes, true, StandardCharsets.UTF_8)), 1,
+                    "The command fails when Windows cannot be read (" + on + ")");
+            check(failedBytes.toString(StandardCharsets.UTF_8).contains("could not be read")
+                    && source.writes.size() == writes, "and says so, without a write");
+            source.text = good;
+            cellular.refresh();
+            quiet.events.clear();
+        }
+        spec.mode = "auto";
+        source.set(spec);
+        cellular.refresh();
+        quiet.events.clear();
+
+        // A read still blocked in WwanSvc (a model with short read bounds).
+        Source blocked = new Source();
+        ModemSpec blockedSpec = new ModemSpec();
+        blocked.set(blockedSpec);
+        TelephonyService.Cellular blockedModel = new TelephonyService.Cellular(blocked,
+                WindowsCellular.parse(blocked.text), new Properties(), new Clock(), new Workers(), 100);
+        TelephonyService.Endpoints b = new TelephonyService.Endpoints(blockedModel, callers,
+                TelephonyService.memorySettings());
+        blockedSpec.mode = "manual";
+        blocked.set(blockedSpec);
+        blocked.hang = new java.util.concurrent.CountDownLatch(1);
+        b.phone.setDataEnabledForReason(1, user, true, SWITCHER.name);
+        b.phone.setDataRoamingEnabled(1, false);
+        check(blocked.writes.isEmpty(), "A blocked read: no write");
+        java.io.ByteArrayOutputStream blockedBytes = new java.io.ByteArrayOutputStream();
+        equal(MobileDataCommands.run(List.of("on"), b.phone, b.subscriptions, blocked,
+                new java.io.PrintStream(blockedBytes, true, StandardCharsets.UTF_8)), 1,
+                "The command fails while Windows' read is blocked");
+        check(blockedBytes.toString(StandardCharsets.UTF_8).contains("could not be read") && blocked.writes.isEmpty(),
+                "and says so, without a write");
+        blocked.hang.countDown();
+        MobileDataCommands.sReadTimeoutMillis = readTimeout;
 
         // A direct Settings.Global write does not change Windows and is replaced by its value.
         rows.put(mobileData, "0");
@@ -1204,28 +1264,28 @@ public final class TelephonyHost {
         java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
         java.io.PrintStream out = new java.io.PrintStream(bytes, true, StandardCharsets.UTF_8);
         callers.current = SWITCHER;
-        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, out), 0, "mobile-data off");
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, source, out), 0, "mobile-data off");
         check(bytes.toString(StandardCharsets.UTF_8).contains("Mobile data: off") && "manual".equals(spec.mode),
                 "mobile-data off changes Windows");
         bytes.reset();
-        equal(MobileDataCommands.run(List.of("on"), t.phone, t.subscriptions, out), 0, "mobile-data on");
-        equal(MobileDataCommands.run(List.of("roaming", "on"), t.phone, t.subscriptions, out), 0, "roaming on");
+        equal(MobileDataCommands.run(List.of("on"), t.phone, t.subscriptions, source, out), 0, "mobile-data on");
+        equal(MobileDataCommands.run(List.of("roaming", "on"), t.phone, t.subscriptions, source, out), 0, "roaming on");
         check(bytes.toString(StandardCharsets.UTF_8).contains("Data roaming: on") && "auto".equals(spec.mode)
                 && bytes.toString(StandardCharsets.UTF_8).contains("whole machine"), "mobile-data roaming on");
         bytes.reset();
         source.refuse = "error\tupdate\t80070005";
-        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, out), 1, "A refused change fails");
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, source, out), 1, "A refused change fails");
         source.refuse = null;
         check(bytes.toString(StandardCharsets.UTF_8).contains("Windows did not take")
                 && bytes.toString(StandardCharsets.UTF_8).contains("Mobile data: on"), "and says so");
         bytes.reset();
-        equal(MobileDataCommands.run(List.of(), t.phone, t.subscriptions, out), 0, "mobile-data shows");
+        equal(MobileDataCommands.run(List.of(), t.phone, t.subscriptions, source, out), 0, "mobile-data shows");
         for (List<String> bad : List.of(List.of("maybe"), List.of("roaming"), List.of("on", "off"))) {
             throwsType(IllegalArgumentException.class,
-                    () -> MobileDataCommands.run(bad, t.phone, t.subscriptions, out), "Usage: " + bad);
+                    () -> MobileDataCommands.run(bad, t.phone, t.subscriptions, source, out), "Usage: " + bad);
         }
         callers.current = PLAIN;
-        denied(() -> MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, out),
+        denied(() -> MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, source, out),
                 "The command is the binder call: a caller without permission is refused");
 
         // Without a modem: the managers' null-service answers, no permission checks, no writes.
@@ -1245,7 +1305,7 @@ public final class TelephonyHost {
         equal(noModemRows.get(mobileData), "1", "No modem: MOBILE_DATA untouched");
         equal(noModemRows.get(dataRoaming), "0", "No modem: DATA_ROAMING untouched");
         bytes.reset();
-        equal(MobileDataCommands.run(List.of("off"), n.phone, n.subscriptions, out), 1, "No modem: the command refuses");
+        equal(MobileDataCommands.run(List.of("off"), n.phone, n.subscriptions, none, out), 1, "No modem: the command refuses");
         check(bytes.toString(StandardCharsets.UTF_8).contains("No cellular modem"), "and says why");
 
         // The production settings adapter without the system server's provider.

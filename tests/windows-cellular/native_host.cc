@@ -462,9 +462,11 @@ int main() {
       {{profile(u"auto", u"999990000000001")}, "", "Another SubscriberID with the same SimIccID is not this SIM's"},
       {{u"<MBNProfileExt><Name>e</Name><IsDefault>true</IsDefault><SimIccID>8997201000000000002</SimIccID>"
         u"<ConnectionMode>auto</ConnectionMode></MBNProfileExt>"}, "", "Another SimIccID is not this SIM's"},
-      {{u"<MBNProfile><Name>p</Name><Description>http://h/x:Name more</Description><IsDefault>true</IsDefault>"
+      {{u"<MBNProfile><Name>p</Name><Description>http://h/x:ConnectionMode more</Description><IsDefault>true</IsDefault>"
         u"<SubscriberID>425010123456789</SubscriberID><ConnectionMode>auto</ConnectionMode></MBNProfile>"},
        "auto", "A colon in text is not a prefixed element"},
+      {{u"<MBNProfile><Name>p</Name><IsDefault>true</IsDefault><SubscriberID>425010123456789</SubscriberID>"
+        u"<:ConnectionMode>auto</:ConnectionMode></MBNProfile>"}, "-", "An empty prefix is malformed"},
       {{u"<v1:MBNProfile xmlns:v1=\"x\"><v1:Name>p</v1:Name><v1:IsDefault>true</v1:IsDefault>"
         u"<v1:SubscriberID>425010123456789</v1:SubscriberID><v1:ConnectionMode>auto</v1:ConnectionMode>"
         u"</v1:MBNProfile>"}, "-", "Prefixed elements are unreadable, not absent"},
