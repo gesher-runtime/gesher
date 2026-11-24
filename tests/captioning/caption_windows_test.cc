@@ -10,6 +10,13 @@
 //      compat\devices\caption_win.cc compat\devices\winrt.cc tests\captioning\caption_windows_test.cc
 //      /Fe:caption-test.exe ole32.lib uuid.lib
 #include "../../compat/devices/caption_win.h"
+#include "../../compat/devices/winrt.h"
+
+// MinGW's generated WinRT headers collide on IReference<BYTE>/IReference<boolean>.
+// The production contracts below still run there; SDK diagnostics use Microsoft's SDK.
+#if defined(_MSC_VER)
+#include <windows.media.closedcaptioning.h>
+#endif
 
 #include <cstdio>
 
@@ -28,9 +35,56 @@ void Check(bool ok, const char* what) {
 
 bool In(int value, int last) { return value >= 0 && value <= last; }
 
+// Read every getter through the SDK's own ABI declaration. A combined Read failure
+// otherwise hides which Windows property failed, and whether the bridge's hand-written
+// interface declaration agrees with the installed SDK.
+#if defined(_MSC_VER)
+void DumpSdkProperties() {
+  namespace sdk = ABI::Windows::Media::ClosedCaptioning;
+  sdk::IClosedCaptionPropertiesStatics* settings = nullptr;
+  HRESULT hr = gesher::devices::winrt::GetActivationFactory(
+      L"Windows.Media.ClosedCaptioning.ClosedCaptionProperties",
+      __uuidof(sdk::IClosedCaptionPropertiesStatics), reinterpret_cast<void**>(&settings));
+  std::printf("SDK activation hr 0x%08lx\n", static_cast<unsigned long>(hr));
+  if (FAILED(hr)) return;
+#define READ_ENUM(Name, Type) do { \
+    sdk::Type value = {}; \
+    HRESULT result = settings->get_##Name(&value); \
+    std::printf("SDK " #Name " hr 0x%08lx value %d\n", \
+                static_cast<unsigned long>(result), static_cast<int>(value)); \
+  } while (false)
+#define READ_COLOR(Name) do { \
+    ABI::Windows::UI::Color value = {}; \
+    HRESULT result = settings->get_##Name(&value); \
+    std::printf("SDK " #Name " hr 0x%08lx ARGB %u %u %u %u\n", \
+                static_cast<unsigned long>(result), static_cast<unsigned>(value.A), \
+                static_cast<unsigned>(value.R), static_cast<unsigned>(value.G), \
+                static_cast<unsigned>(value.B)); \
+  } while (false)
+  READ_ENUM(FontColor, ClosedCaptionColor);
+  READ_COLOR(ComputedFontColor);
+  READ_ENUM(FontOpacity, ClosedCaptionOpacity);
+  READ_ENUM(FontSize, ClosedCaptionSize);
+  READ_ENUM(FontStyle, ClosedCaptionStyle);
+  READ_ENUM(FontEffect, ClosedCaptionEdgeEffect);
+  READ_ENUM(BackgroundColor, ClosedCaptionColor);
+  READ_COLOR(ComputedBackgroundColor);
+  READ_ENUM(BackgroundOpacity, ClosedCaptionOpacity);
+  READ_ENUM(RegionColor, ClosedCaptionColor);
+  READ_COLOR(ComputedRegionColor);
+  READ_ENUM(RegionOpacity, ClosedCaptionOpacity);
+#undef READ_COLOR
+#undef READ_ENUM
+  settings->Release();
+}
+#endif
+
 }  // namespace
 
 int main() {
+#if defined(_MSC_VER)
+  DumpSdkProperties();
+#endif
   captions::Properties p = {};
   HRESULT hr = captions::Read(&p);
   std::printf("info Read: hr 0x%08lx\n", static_cast<unsigned long>(hr));
