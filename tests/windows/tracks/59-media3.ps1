@@ -8,6 +8,7 @@
 # WASAPI capture path must either open real hardware or report unavailable.
 # Synthetic recordings below use separately named, default-OFF fixture builds.
 . "$PSScriptRoot/../helpers/FixturePermissions.ps1"
+. "$PSScriptRoot/../helpers/SharedLogBytes.ps1"
 
 $m3Tmp = Join-Path $env:RUNNER_TEMP 'gesher-media3'
 New-Item -ItemType Directory -Force $m3Tmp | Out-Null
@@ -308,7 +309,7 @@ if (Test-Path "$Dir/recordapp.apk") {
       '--activity', 'com.gesher.recordapp.PersistentInputActivity', '--ez', 'persistent.remote', 'true', '--headless', '--keep-task')) 180
     $persistentCode = $LASTEXITCODE
     if (Test-Path -LiteralPath $persistentLog) {
-      $persistentBytes = [IO.File]::ReadAllBytes($persistentLog)
+      $persistentBytes = Read-SharedLogBytes $persistentLog
       if ($persistentBytes.Length -ge $persistentOffset) {
         $persistentOut += "`n" + [Text.Encoding]::UTF8.GetString($persistentBytes, [int]$persistentOffset,
           [int]($persistentBytes.Length - $persistentOffset))
@@ -349,7 +350,7 @@ if (Test-Path "$Dir/recordapp.apk") {
       '--activity', 'com.gesher.recordapp.RecorderRolloverActivity', '--headless', '--keep-task')) 180
     $rolloverCode = $LASTEXITCODE
     if (Test-Path -LiteralPath $rolloverLog) {
-      $rolloverBytes = [IO.File]::ReadAllBytes($rolloverLog)
+      $rolloverBytes = Read-SharedLogBytes $rolloverLog
       if ($rolloverBytes.Length -ge $rolloverOffset) {
         $rolloverOut += "`n" + [Text.Encoding]::UTF8.GetString($rolloverBytes, [int]$rolloverOffset,
           [int]($rolloverBytes.Length - $rolloverOffset))

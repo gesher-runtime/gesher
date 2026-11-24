@@ -773,6 +773,25 @@ public final class WebViewOwnedResponsesHost {
         answer(zeroAvail, 15, "https://zeroavail.example/", CONTEXT_DOCUMENT);
         check(zeroAvailCloses.get() == 1 && Arrays.equals(last(zeroAvail).body, zeroAvailBody),
                 "zero-available multi-chunk stream corrupted bytes or skipped close");
+        byte[] unknownLengthBody = bytes("readable stream without an available hint");
+        AtomicInteger unknownLengthCloses = new AtomicInteger();
+        InputStream unknownLengthStream = new ByteArrayInputStream(unknownLengthBody) {
+            @Override public synchronized int available() {
+                throw new UnsupportedOperationException("length is not available");
+            }
+            @Override public void close() throws IOException {
+                unknownLengthCloses.incrementAndGet();
+                super.close();
+            }
+        };
+        WebViewOwnedResponsesHost unknownLength = new WebViewOwnedResponsesHost();
+        unknownLength.mInterceptsRequests = true;
+        unknownLength.mClient.response = () ->
+                new WebResourceResponse("application/octet-stream", null, unknownLengthStream);
+        answer(unknownLength, 16, "https://unknown-length.example/", CONTEXT_DOCUMENT);
+        check(unknownLengthCloses.get() == 1
+                        && Arrays.equals(last(unknownLength).body, unknownLengthBody),
+                "an unavailable optional length hint discarded readable response bytes");
     }
     private static void fallback(WebViewOwnedResponsesHost provider) {
         provider.mInterceptsRequests = true;

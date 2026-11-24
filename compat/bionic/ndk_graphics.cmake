@@ -59,6 +59,16 @@ target_link_libraries(gesher_ndk_graphics PRIVATE gesher_bionic gesher_elf graph
 target_compile_options(gesher_ndk_graphics PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(dalvikvm PRIVATE gesher_ndk_graphics)
 
+# AHardwareBuffer_fromHardwareBuffer for an ImageReader image's Java HardwareBuffer
+# (hardware_buffer_java.cc): reads the reader snapshot of hwui's reader_surface.cc,
+# so it is linked into dalvikvm only.
+add_library(gesher_hardware_buffer_java OBJECT ${CMAKE_CURRENT_LIST_DIR}/hardware_buffer_java.cc)
+target_include_directories(gesher_hardware_buffer_java PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${_gl_include})
+target_link_libraries(gesher_hardware_buffer_java PRIVATE gesher_bionic gesher_elf
+  graphics_native_headers nativehelper)
+target_compile_options(gesher_hardware_buffer_java PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(dalvikvm PRIVATE gesher_hardware_buffer_java)
+
 # The NDK library drawing into Gesher windows without Java
 # (tests/native/gl_window_test.cc), run in CI on Windows with libglapp.so.
 add_executable(gl_window_test ${CMAKE_SOURCE_DIR}/tests/native/gl_window_test.cc)

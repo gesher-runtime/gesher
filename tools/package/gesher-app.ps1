@@ -65,6 +65,7 @@ $ErrorActionPreference = 'Stop'
 Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
+. (Join-Path $scriptRoot 'gesher-runtime-files.ps1')
 $here = $scriptRoot
 
 # When started interactively from Explorer (.apk double-click or Start menu shortcut),
@@ -91,7 +92,7 @@ try {
   }
 } catch { }
 
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+$root = Set-GesherProfileEnvironment $here
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
@@ -170,7 +171,6 @@ if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path -LiteralPath $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)
 }
-. (Join-Path $here 'gesher-runtime-files.ps1')
 Set-Location -LiteralPath $here
 # A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
 # on the current drive, /mnt/<drive>/... on another, so ':'-separated lists
@@ -208,6 +208,13 @@ if (Test-Path (Join-Path $here 'com.android.location.provider.jar')) {
   New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
   Install (Join-Path $here 'com.android.location.provider.jar') (Join-Path $root 'system/framework/com.android.location.provider.jar')
   Install (Join-Path $here 'etc/permissions/com.android.location.provider.xml') (Join-Path $root 'system/etc/permissions/com.android.location.provider.xml')
+}
+foreach ($library in 'android.test.base', 'android.test.mock', 'android.test.runner') {
+  if (Test-Path (Join-Path $here "$library.jar")) {
+    New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
+    Install (Join-Path $here "$library.jar") (Join-Path $root "system/framework/$library.jar")
+    Install (Join-Path $here "etc/permissions/$library.xml") (Join-Path $root "system/etc/permissions/$library.xml")
+  }
 }
 if (Test-Path (Join-Path $here 'etc/permissions/privapp-permissions-microg.xml')) {
   New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null

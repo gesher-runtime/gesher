@@ -72,6 +72,7 @@ struct MFT_OUTPUT_STREAM_INFO { DWORD dwFlags, cbSize; };
 struct MFT_OUTPUT_DATA_BUFFER { DWORD dwStreamID; IMFSample* pSample; DWORD dwStatus; IUnknown* pEvents; };
 struct IMFTransform : IUnknown {
   virtual HRESULT SetOutputType(DWORD, IMFMediaType*, DWORD) = 0;
+  virtual HRESULT GetOutputCurrentType(DWORD, IMFMediaType**) = 0;
   virtual HRESULT SetInputType(DWORD, IMFMediaType*, DWORD) = 0;
   virtual HRESULT ProcessMessage(MFT_MESSAGE_TYPE, uintptr_t) = 0;
   virtual HRESULT GetOutputStreamInfo(DWORD, MFT_OUTPUT_STREAM_INFO*) = 0;

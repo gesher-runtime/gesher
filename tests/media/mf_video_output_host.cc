@@ -998,6 +998,32 @@ void StreamChangeCases() {
 }
 
 void ReuseAndFaultCases() {
+  // Malformed apertures must never reverse std::clamp's lower/upper bounds.
+  for (int offset : {16, 32767, -32768}) {
+    Reset();
+    state.cfg.has_aperture = true;
+    state.cfg.aperture.OffsetX.value = static_cast<int16_t>(offset);
+    state.cfg.aperture.OffsetY.value = static_cast<int16_t>(offset);
+    state.cfg.aperture.Area.cx = 4;
+    state.cfg.aperture.Area.cy = 4;
+    state.nv12_1d = BuildNv12(16, 12, 16, 0x8123);
+    auto dec = Decoder(16, 12);
+    gesher::media::Sample in;
+    in.data = {0, 0, 0, 1, 0x65};
+    state.emit_count = 1;
+    std::vector<VideoFrame> out;
+    Check(dec->Decode(in, &out) && out.size() == 1,
+          "out-of-range aperture is safely bounded");
+    if (!out.empty()) {
+      const auto& f = out.front();
+      Check(f.crop_left >= 0 && f.crop_top >= 0 && f.crop_right >= f.crop_left &&
+                f.crop_bottom >= f.crop_top && f.crop_right < 16 && f.crop_bottom < 12,
+            "bounded aperture remains inside the real frame");
+    }
+    dec.reset();
+    Empty();
+  }
+
   // 1. Steady-state !provides_samples reuse across 120 frames at 1920x1080 (3,110,400 B/frame).
   {
     Reset();

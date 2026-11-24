@@ -55,6 +55,7 @@ def main() -> int:
         binary = work / "mf_video_output"
         command = shlex.split(args.cxx) + [
             "-std=c++20", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fno-exceptions",
+            "-D_GLIBCXX_ASSERTIONS",
             "-DGESHER_MEDIA_STANDALONE", '-DGESHER_MF_VIDEO_SOURCE="' + str(mf_video_tu) + '"',
             "-I", str(work), "-I", str(ROOT), "-I", str(ROOT / "compat/media/video"),
             str(ROOT / "tests/media/mf_video_output_host.cc"),
