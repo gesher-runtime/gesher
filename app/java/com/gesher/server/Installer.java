@@ -340,10 +340,44 @@ final class Installer {
 
     /** Conventional companion filenames for a loose APK. */
     private static File[] companionSplits(File apk) {
+        return companionSplits(apk, null);
+    }
+
+    /**
+     * The companions of {@code pkg} among a loose APK's companion files: a folder such as
+     * Downloads also holds other apps' split_*.apk and config.*.apk files, which are not part
+     * of this install and are ignored rather than failing it.
+     */
+    private static File[] companionSplits(File apk, String pkg) {
+        if (apk == null) return null;
         File dir = apk.getParentFile();
+        if (dir == null) dir = apk.getAbsoluteFile().getParentFile();
         if (dir == null) return null;
-        return dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
+        File[] candidates = dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
                 && name.endsWith(".apk") && !name.equals(apk.getName()));
+        if (candidates == null || candidates.length == 0) return candidates;
+        if (pkg == null) {
+            try {
+                pkg = ApkPackage.packageName(apk);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        List<File> own = new ArrayList<>();
+        for (File candidate : candidates) {
+            try {
+                String owner = ApkPackage.packageName(candidate);
+                if (pkg != null && pkg.equals(owner)) {
+                    own.add(candidate);
+                } else if (owner != null) {
+                    SystemServer.log("install " + pkg + ": ignoring " + candidate.getName()
+                            + " beside it, an APK of " + owner);
+                }
+            } catch (Exception ignored) {
+                // Not a readable split APK or not an APK
+            }
+        }
+        return own.toArray(new File[0]);
     }
 
     /**
@@ -719,7 +753,7 @@ final class Installer {
                         || !new File(e.codePath, "base.apk").isFile()) {
                     return null;
                 }
-                File[] installedSplits = companionSplits(new File(e.codePath, "base.apk"));
+                File[] installedSplits = companionSplits(new File(e.codePath, "base.apk"), e.packageName);
                 if (installedSplits != null && installedSplits.length != 0) return null;
                 return e;
             }
