@@ -177,6 +177,22 @@ public final class WindowsLocation {
         return l;
     }
 
+    /**
+     * Whether Windows has a GNSS receiver (a present device of the GNSS driver class,
+     * which Windows' location service uses for high-accuracy positions). False without
+     * Gesher's natives or when Windows cannot be asked.
+     */
+    public static boolean hasGnssReceiver() {
+        int[] hr = new int[1];
+        try {
+            return nativeHasGnss(hr);
+        } catch (UnsatisfiedLinkError e) {
+            return false;  // Not Gesher's runtime: no receiver to report.
+        }
+    }
+
+    private static native boolean nativeHasGnss(int[] hr);
+
     private static native int nativeAccess(int[] hr);
 
     private static native int nativeStatus(int[] hr);

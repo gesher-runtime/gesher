@@ -85,11 +85,21 @@ public final class PackageServiceQueriesTest {
             if (PackageManager.FEATURE_TOUCHSCREEN.equals(feature.name)) listedTouchscreen = true;
         }
         require(listedTouchscreen, "Available features list omitted touchscreen");
-        // The network location provider is always registered; GNSS is not claimed.
+        // The network location provider is always registered; GPS follows a real GNSS
+        // receiver exactly (none without the runtime natives).
         require(service.hasSystemFeature(PackageManager.FEATURE_LOCATION, 0)
                         && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_NETWORK, 0)
-                        && !service.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS, 0),
-                "Location features do not match the network-only provider");
+                        && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS, 0)
+                                == com.gesher.server.WindowsLocation.hasGnssReceiver(),
+                "Location features do not match the providers and the GNSS receiver");
+        for (boolean gnss : new boolean[] {false, true}) {
+            android.util.ArrayMap<String, FeatureInfo> located = new android.util.ArrayMap<>();
+            PackageManagerService.addLocationFeatures(located, gnss);
+            require(located.containsKey(PackageManager.FEATURE_LOCATION)
+                            && located.containsKey(PackageManager.FEATURE_LOCATION_NETWORK)
+                            && located.containsKey(PackageManager.FEATURE_LOCATION_GPS) == gnss,
+                    "FEATURE_LOCATION_GPS does not follow the receiver (" + gnss + ")");
+        }
         // FEATURE_MICROPHONE follows the audio input exactly; without the runtime
         // natives (this process) there is no input to report.
         boolean input;

@@ -80,10 +80,18 @@ jint WindowsLocation_getFix(JNIEnv* env, jclass, jboolean high, jlong maxAgeMs, 
   return S_OK;
 }
 
+jboolean WindowsLocation_hasGnss(JNIEnv* env, jclass, jintArray hrOut) {
+  HRESULT hr = S_OK;
+  bool present = loc::HasGnssReceiver(&hr);
+  SetResult(env, hrOut, hr);
+  return present ? JNI_TRUE : JNI_FALSE;
+}
+
 const JNINativeMethod gWindowsLocationMethods[] = {
     {"nativeAccess", "([I)I", GESHER_JNI(WindowsLocation_access)},
     {"nativeStatus", "([I)I", GESHER_JNI(WindowsLocation_status)},
     {"nativeGetFix", "(ZJJ[D)I", GESHER_JNI(WindowsLocation_getFix)},
+    {"nativeHasGnss", "([I)Z", GESHER_JNI(WindowsLocation_hasGnss)},
 };
 
 // --- com.gesher.server.WindowsCamera: the capture devices (camera_mf.h) ----------------

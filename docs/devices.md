@@ -25,7 +25,12 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 - Providers `passive`, `network`, `fused`, `gps`. gps, network and fused are
   Windows' location service (gps asks for high accuracy); passive gets what
-  the others report. `isLocationEnabled()` is Windows' setting for desktop
+  the others report.
+- Features: `android.hardware.location` and `location.network` always;
+  `location.gps` only when Windows has a GNSS receiver (a present device
+  interface of the GNSS driver class, `GUID_DEVINTERFACE_GNSS`, which Windows'
+  location service uses for high-accuracy fixes). Google Play filters apps that
+  require `location.gps` on it. `isLocationEnabled()` is Windows' setting for desktop
   apps ("Let desktop apps access your location"), or a test provider being on.
 - Permissions: the app's manifest must ask for ACCESS_FINE_LOCATION or
   ACCESS_COARSE_LOCATION (Gesher grants what an app requests; there is no

@@ -1165,7 +1165,8 @@ public final class PackageManagerService extends IPackageManager.Default {
      * capture endpoint, the input AudioRecord and AudioManager report. FEATURE_LOCATION and
      * FEATURE_LOCATION_NETWORK describe {@link LocationManagerService}'s network provider,
      * which is always registered (Windows' location service, with the IP fallback);
-     * FEATURE_LOCATION_GPS is not claimed, as no GNSS receiver is known. Google Play filters
+     * FEATURE_LOCATION_GPS only when Windows has a GNSS receiver ({@link
+     * WindowsLocation#hasGnssReceiver}). Google Play filters
      * on these (a RECORD_AUDIO or location permission implies the feature unless the app
      * marks it not required), so an absent one hides an app the device can run.
      */
@@ -1198,7 +1199,13 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
-        addLocationFeatures(FEATURES);
+        boolean gnss;
+        try {
+            gnss = WindowsLocation.hasGnssReceiver();
+        } catch (LinkageError e) {
+            gnss = false;  // No runtime natives (a host JVM loading the class).
+        }
+        addLocationFeatures(FEATURES, gnss);
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */
@@ -1215,11 +1222,15 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (input) addFeature(features, PackageManager.FEATURE_MICROPHONE);
     }
 
-    /** The network location provider's features; no GPS claim. */
-    static void addLocationFeatures(
-            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features) {
+    /**
+     * The network location provider's features, and FEATURE_LOCATION_GPS when Windows has
+     * a GNSS receiver ({@code gnss}), whose fixes the gps provider then gets.
+     */
+    public static void addLocationFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean gnss) {
         addFeature(features, PackageManager.FEATURE_LOCATION);
         addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
+        if (gnss) addFeature(features, PackageManager.FEATURE_LOCATION_GPS);
     }
 
     /**
