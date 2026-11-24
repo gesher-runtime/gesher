@@ -197,8 +197,8 @@ public final class UiMessages {
             case "cp_action_finish": value = lang.equals("he") ? "\u05d9\u05e9 \u05dc\u05d4\u05de\u05ea\u05d9\u05df \u05dc\u05e1\u05d9\u05d5\u05dd \u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05d4\u05e0\u05d5\u05db\u05d7\u05d9\u05ea \u05dc\u05e4\u05e0\u05d9 \u05d4\u05e1\u05d2\u05d9\u05e8\u05d4." : "Wait for the current operation to finish before closing."; break;
             case "cp_dialog_ok": value = lang.equals("he") ? "\u05d0\u05d9\u05e9\u05d5\u05e8" : "OK"; break;
             case "cp_status_ready": value = lang.equals("he") ? "\u05de\u05d5\u05db\u05df" : "Ready"; break;
-            case "cp_btn_open_logs": value = lang.equals("he") ? "\u05e4\u05ea\u05d9\u05d7\u05ea \u05de\u05d9\u05e7\u05d5\u05dd \u05d4\u05dc\u05d5\u05d2\u05d9\u05dd" : "Open logs location"; break;
-            case "cp_open_logs_failed": value = lang.equals("he") ? "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e4\u05ea\u05d5\u05d7 \u05d0\u05ea \u05ea\u05d9\u05e7\u05d9\u05d9\u05ea \u05d4\u05dc\u05d5\u05d2\u05d9\u05dd: {0}" : "Could not open the logs folder: {0}"; break;
+            case "cp_btn_open_logs": value = lang.equals("he") ? "\u05e4\u05ea\u05d7 \u05d0\u05ea \u05de\u05d9\u05e7\u05d5\u05dd \u05d4\u05dc\u05d5\u05d2\u05d9\u05dd" : "Open logs location"; break;
+            case "cp_open_logs_failed": value = lang.equals("he") ? "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e4\u05ea\u05d5\u05d7 \u05d0\u05ea \u05ea\u05d9\u05e7\u05d9\u05d9\u05ea \u05d4\u05dc\u05d5\u05d2\u05d9\u05dd: \u2068{0}\u2069" : "Could not open the logs folder: \u2068{0}\u2069"; break;
             case "cp_status_working": value = lang.equals("he") ? "\u05de\u05e2\u05d1\u05d3, \u05e0\u05d0 \u05dc\u05d4\u05de\u05ea\u05d9\u05df\u2026" : "Working, please wait\u2026"; break;
             case "cp_staging": value = lang.equals("he") ? "\u05de\u05d2\u05d3\u05d9\u05e8 \u05e9\u05d9\u05e8\u05d5\u05ea\u05d9\u05dd\u2026" : "Configuring services\u2026"; break;
             case "cp_downloading": value = lang.equals("he") ? "\u05de\u05d5\u05e8\u05d9\u05d3 \u05d0\u05ea {0}\u2026" : "Downloading {0}\u2026"; break;

@@ -90,7 +90,8 @@ the launcher closes it; with --keep-task the app runs until it finishes;
 GESHER_APP_WINDOW=headless makes it the default), --hidden-window (the
 window is drawn off the desktop).
 The logs are in %LOCALAPPDATA%\Gesher\logs (<package>.log for an app);
-the Control Center's "Open logs location" opens that folder.
+the Control Center's "Open logs location" opens that folder (Data\logs in
+the installation folder of a portable install).
 
 Without the device, the app alone in one process with stand-in services:
 
