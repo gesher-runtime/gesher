@@ -216,18 +216,26 @@ public final class WindowsUriHandlers {
         if (intent == null) return result;
         if (intent.getPackage() != null && !PACKAGE.equals(intent.getPackage())) return result;
         ComponentName component = intent.getComponent();
+        Handler handler;
         if (component != null) {
-            if (PACKAGE.equals(component.getPackageName())) {
-                Handler handler = Handler.forClass(component.getClassName());
-                if (handler != null && available(handler)) {
-                    ResolveInfo ri = new ResolveInfo();
-                    ri.activityInfo = createActivityInfo(handler);
-                    result.add(ri);
-                }
+            // An explicit component is one handler, and the request must be one that handler
+            // hands to Windows: windowsUri() derives the launched URI from the data scheme,
+            // so a component whose filter the request does not match would launch another
+            // handler's URI. Categories are not part of an explicit request.
+            if (!PACKAGE.equals(component.getPackageName())) return result;
+            handler = Handler.forClass(component.getClassName());
+            if (handler == null || !available(handler)) return result;
+            String type = resolvedType != null ? resolvedType : intent.getType();
+            if (handler.filter().match(intent.getAction(), type, intent.getScheme(),
+                    intent.getData(), null, "gesher") < 0) {
+                return result;
             }
+            ResolveInfo ri = new ResolveInfo();
+            ri.activityInfo = createActivityInfo(handler);
+            result.add(ri);
             return result;
         }
-        Handler handler = Handler.forScheme(intent.getScheme());
+        handler = Handler.forScheme(intent.getScheme());
         if (handler == null) return result;
         IntentFilter filter = handler.filter();
         String type = resolvedType != null ? resolvedType : intent.getType();
