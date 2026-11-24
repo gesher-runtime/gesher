@@ -1612,6 +1612,22 @@ $btnProxyAll.Add_Click({
     if (Show-ProxyDialog) { $statusMessage.Text = Get-GesherText 'cp_proxy_saved' }
 })
 
+# The profile's logs folder (gesher-app.ps1 writes it; a portable install keeps its profile
+# beside the runtime), opened in File Explorer. Created first so a new install opens it too.
+function Open-PanelLogsFolder([string] $logs) {
+    [void][IO.Directory]::CreateDirectory($logs)
+    Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('"' + $logs + '"')
+}
+
+$btnOpenLogs = $window.FindName('BtnOpenLogs')
+$btnOpenLogs.ToolTip = Join-Path $root 'logs'
+$btnOpenLogs.Add_Click({
+    try { Open-PanelLogsFolder (Join-Path $root 'logs') }
+    catch {
+        Show-ModernMessageDialog -Title (Get-GesherText 'cp_title') -Message (Get-GesherText 'cp_open_logs_failed' @($_.Exception.Message)) -IsError $true
+    }
+})
+
 # Attach click events through visual tree dispatcher
 $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
     param($sender, $e)
