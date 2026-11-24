@@ -47,9 +47,12 @@ machines have a WWAN modem that Windows exposes through the Mobile Broadband API
   `Settings.Global.MOBILE_DATA` and `DATA_ROAMING`. AOSP's setters, with their permission
   checks, change Windows' cellular connection for the whole machine (disconnecting or
   connecting it) and report a change, and notify listeners, only once Windows has taken it;
-  users change them with `gesher-app mobile-data`. The policy, carrier and thermal switches
-  cannot be applied apart from that mode and stay on (docs/telephony.md, "Mobile data
-  switches"). The write path is unvalidated on hardware.
+  users change them with `gesher-app mobile-data`. An unchanged switch writes nothing, as on
+  AOSP. If Windows refuses both the disconnect and the restore of the previous mode, the
+  mode stays `manual` with the connection up; the answers report that state and the
+  command fails. The policy, carrier and thermal switches cannot be applied apart from that
+  mode and stay on, a documented deviation (docs/telephony.md, "Mobile data switches").
+  The write path is unvalidated on hardware.
 - Reading the modem costs an out-of-process WwanSvc session, so it is demand-driven:
   polled every five seconds only while telephony.registry has listeners or for 30 seconds
   after a query, with a bounded read before answering from an old reading, and every read

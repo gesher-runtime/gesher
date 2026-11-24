@@ -179,6 +179,8 @@ public final class TelephonyHost {
         final List<String> writes = new ArrayList<>();
         /** A native error line to answer instead of applying the write. */
         volatile String refuse;
+        /** Windows takes the mode, then refuses the disconnect and the restore. */
+        volatile boolean rollbackFails;
         /** While set, a write blocks until released. */
         volatile java.util.concurrent.CountDownLatch writeHang;
         @Override public String configure(String interfaceId, String mode) {
@@ -194,7 +196,13 @@ public final class TelephonyHost {
             if (refuse != null) return refuse;
             for (ModemSpec m : last) {
                 if (!m.id.equals(interfaceId)) continue;
+                // As the native adapter: an unchanged mode changes nothing.
+                if (mode.equals(m.mode)) return "ok\tunchanged\t00000000";
                 m.mode = mode;
+                if (rollbackFails) {
+                    set(last);
+                    return "error\trollback\t80070020";
+                }
                 boolean registered = m.register == WindowsCellular.REGISTER_HOME
                         || m.register == WindowsCellular.REGISTER_ROAMING;
                 boolean roaming = m.register == WindowsCellular.REGISTER_ROAMING;
@@ -1022,21 +1030,61 @@ public final class TelephonyHost {
 
         // Windows' mode unknown (unreadable profiles; no default profile): answers are the
         // mirrored rows, and setters fail rather than claim a change.
-        for (String unknown : new String[] {null, ""}) {
+        for (String unknown : new String[] {null, "", "Auto"}) {
             spec.mode = unknown;
             source.set(spec);
             cellular.refresh();
             check(t.phone.isUserDataEnabled(1) && t.phone.isDataRoamingEnabled(1), "Unknown mode: last mirrored values");
-            source.refuse = "error\tprofile\t80070490";
-            t.phone.setDataEnabledForReason(1, user, false, SWITCHER.name);
-            source.refuse = null;
             writes = source.writes.size();
+            t.phone.setDataEnabledForReason(1, user, false, SWITCHER.name);
             t.phone.setDataRoamingEnabled(1, false);
-            check(source.writes.size() == writes, "Roaming with an unknown mode is not written");
+            check(source.writes.size() == writes, "An unknown mode is not written (" + unknown + ")");
             check(t.phone.isUserDataEnabled(1) && t.phone.isDataRoamingEnabled(1)
                     && "1".equals(rows.get(mobileData)) && "1".equals(rows.get(dataRoaming)),
                     "Unknown mode: nothing changes");
         }
+        spec.mode = "auto";
+        source.set(spec);
+        cellular.refresh();
+
+        // An unchanged switch changes nothing (DataSettingsManager): in manual mode a
+        // connection made by hand in Windows survives a repeated off, and in auto mode a
+        // connection dropped by hand is not reconnected by a repeated on.
+        callers.current = SWITCHER;
+        spec.mode = "manual";
+        spec.activation = WindowsCellular.ACTIVATION_ACTIVATED;
+        source.set(spec);
+        cellular.refresh();
+        writes = source.writes.size();
+        t.phone.setDataEnabledForReason(1, user, false, SWITCHER.name);
+        check(source.writes.size() == writes && t.phone.getDataStateForSubId(1) == connected,
+                "A repeated off leaves a hand-made connection");
+        spec.mode = "auto";
+        spec.activation = WindowsCellular.ACTIVATION_DEACTIVATED;
+        source.set(spec);
+        cellular.refresh();
+        t.phone.setDataEnabledForReason(1, user, true, SWITCHER.name);
+        t.phone.setDataRoamingEnabled(1, true);
+        check(source.writes.size() == writes && t.phone.getDataStateForSubId(1) == disconnected,
+                "A repeated on does not reconnect");
+        spec.activation = WindowsCellular.ACTIVATION_ACTIVATED;
+        source.set(spec);
+        cellular.refresh();
+
+        // Windows takes the mode but refuses the disconnect and the restore: the answers are
+        // Windows' (mode manual, connection up), and the command does not report success.
+        java.io.ByteArrayOutputStream refusedBytes = new java.io.ByteArrayOutputStream();
+        java.io.PrintStream refusedOut = new java.io.PrintStream(refusedBytes, true, StandardCharsets.UTF_8);
+        int waitSteps = MobileDataCommands.sWaitSteps;
+        MobileDataCommands.sWaitSteps = 0;
+        source.rollbackFails = true;
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, refusedOut), 1,
+                "A refused disconnect and restore fail the command");
+        source.rollbackFails = false;
+        MobileDataCommands.sWaitSteps = waitSteps;
+        check(refusedBytes.toString(StandardCharsets.UTF_8).contains("still up")
+                && !t.phone.isUserDataEnabled(1) && t.phone.getDataStateForSubId(1) == connected,
+                "and says the connection is still up, as Windows shows");
         spec.mode = "auto";
         source.set(spec);
         cellular.refresh();
@@ -1131,7 +1179,7 @@ public final class TelephonyHost {
         source.refuse = "error\tupdate\t80070005";
         equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, out), 1, "A refused change fails");
         source.refuse = null;
-        check(bytes.toString(StandardCharsets.UTF_8).contains("Windows did not accept")
+        check(bytes.toString(StandardCharsets.UTF_8).contains("Windows did not take")
                 && bytes.toString(StandardCharsets.UTF_8).contains("Mobile data: on"), "and says so");
         bytes.reset();
         equal(MobileDataCommands.run(List.of(), t.phone, t.subscriptions, out), 0, "mobile-data shows");

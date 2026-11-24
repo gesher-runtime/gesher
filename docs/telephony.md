@@ -217,9 +217,12 @@ machine**, not only for Android apps.
 With a modem:
 
 - The default profile is the stored profile with `IsDefault` true and the SIM's IMSI as
-  `SubscriberID` (`IMbnConnectionProfileManager::GetConnectionProfiles`,
+  `SubscriberID`, or, in a profile without `SubscriberID` (optional in the v4
+  `MBNProfileExt` schema, where `SimIccID` is mandatory), the SIM's ICCID as `SimIccID`
+  (`IMbnConnectionProfileManager::GetConnectionProfiles`, at most sixteen profiles;
   `IMbnConnectionProfile::GetProfileXmlData`); without the element, the schema's default,
-  `manual`. Every reading of the modem includes it, so a change made in Windows' cellular
+  `manual`. A profile that cannot be read this way (elements under a namespace prefix,
+  attributes, unterminated elements) makes the mode unreadable rather than "no profile". Every reading of the modem includes it, so a change made in Windows' cellular
   settings (or by another program) is Android's answer at the next reading, and listeners
   hear it.
 - `isUserDataEnabled()`, `getDataEnabled()`, `isDataEnabledForReason(USER)` and
@@ -233,6 +236,10 @@ With a modem:
   do; no carrier apps exist) and otherwise throws `SecurityException`. Off writes `manual`
   and disconnects Windows' cellular connection; on writes `auto` or `auto-home` (by the
   roaming switch) and connects when the mode allows it at the current registration.
+  As `DataSettingsManager.setUserDataEnabled` does nothing for an unchanged switch, a switch
+  that already has the requested value writes nothing to Windows: a connection made by hand
+  in Windows while the mode is `manual` survives a repeated off, and a connection dropped by
+  hand is not reconnected by a repeated on.
   `setDataRoamingEnabled()` needs `MODIFY_PHONE_STATE`
   (`SecurityException("setDataRoamingEnabled")`): with data on it writes `auto` or
   `auto-home` (and Windows disconnects while roaming); with data off it keeps Android's
@@ -243,9 +250,15 @@ With a modem:
   thread bounded to ten seconds; the binder thread waits without holding any lock of the
   services. A change counts only when Windows accepts it: then the modem is read again,
   and answers, `Settings.Global` and listeners follow that reading. A refused profile update
-  or disconnect (a refused disconnect restores the previous mode), a timeout or an
-  unreadable mode leaves every answer unchanged and notifies nothing; the setters return
-  nothing on AOSP either, so the failure is logged. A connect that Windows refuses is
+  or disconnect (a refused disconnect, or a connection state that cannot be read for it,
+  restores the previous mode) or an unknown or unreadable mode leaves every answer
+  unchanged and notifies nothing; the setters return nothing on AOSP either, so the
+  failure is logged. A timed-out write is not reported as a change, but Windows may still
+  complete it; a later reading then shows it, and listeners hear it. If Windows refuses
+  both the disconnect and the restore of the previous mode, the new mode (`manual`) is
+  stored while the connection is still up: the answers report Windows' state as it is
+  (data off, connection up), the failure is logged, and `gesher-app mobile-data off` reports
+  that the connection is still up and exits with an error. A connect that Windows refuses is
   logged but not a failure: the mode is set and Windows connects by it when it can. The
   connect and disconnect complete asynchronously in WwanSvc; the following readings show
   the connection's state.
@@ -253,9 +266,11 @@ With a modem:
   names them on a single-SIM device) mirror Windows: they are rewritten to Windows' value
   whenever a reading changes it and whenever the `phone` service answers a switch.
   A value written to them directly (with `WRITE_SECURE_SETTINGS`) does not change Windows
-  and is replaced by Windows' value. While Windows' mode cannot be read (no default
-  profile, unreadable profiles) the switches answer the last mirrored values and the
-  setters change nothing. SettingsProvider starts a device with `mobile_data=1` (also in
+  and is replaced by Windows' value, except `DATA_ROAMING` while the mode is `manual`:
+  Windows then keeps no roaming choice, so the written value is Android's roaming switch
+  and is applied when data is turned on. While Windows' mode cannot be read (no default
+  profile, unreadable profiles, a value outside the schema) the switches answer the last
+  mirrored values and the setters change nothing. SettingsProvider starts a device with `mobile_data=1` (also in
   existing settings stores) and `data_roaming=0`.
 - With data off (or roaming off while roaming) Windows' connection is down, so
   `getDataState()`, data connection listeners and ConnectivityManager's
@@ -275,8 +290,11 @@ With a modem:
 - Users change the switches with `gesher-app mobile-data [on|off]` and
   `gesher-app mobile-data roaming on|off` (no argument shows both). The command calls the
   `phone` service's setters as the shell, as Settings' mobile network screen does, says
-  that it changes Windows' cellular connection, reports a change Windows did not accept,
-  and refuses without a modem or without an active SIM subscription.
+  that it changes Windows' cellular connection, and refuses without a modem or without an
+  active SIM subscription. It exits with an error when the switch did not take the value
+  (Windows refused it or did not answer in time, in which case a late change may still
+  apply) and when, after turning data off, Windows' connection is still up ten seconds
+  later.
 
 Not validated on hardware: no physical modem was available. Whether Windows' Settings >
 Cellular "Let Windows keep me connected" and "Roaming options" are this same profile
@@ -313,10 +331,14 @@ false.
   profile's connection mode, bounds and that every BSTR, SAFEARRAY and COM reference is
   released; and the connection-mode write: only `ConnectionMode` changes (inserted in its
   schema position when absent), disconnect and connect by mode and registration, refused
-  updates, disconnects (which restore the previous mode) and connects, and that a snapshot
-  never writes. Five negative controls (leaked capability strings, uninitializing a foreign
-  apartment, swapped radio states, keeping the new mode after a refused disconnect,
-  disconnecting at home in `auto-home`) must fail.
+  updates, disconnects and connection-state reads (which restore the previous mode), a
+  refused restore (reported as such), refused connects, an unchanged mode (no write, no
+  connect or disconnect), partner networks as roaming, no connect while unregistered,
+  profile selection by `SubscriberID` or `SimIccID`, prefixed elements, the sixteen-profile
+  bound, and that a snapshot never writes. Seven negative controls (leaked capability
+  strings, uninitializing a foreign apartment, swapped radio states, keeping the new mode
+  after a refused disconnect, disconnecting at home in `auto-home`, re-enforcing an
+  unchanged mode, hiding a refused restore) must fail.
 - `tools/test_telephony.py` runs the production Java services on a host JVM with synthetic
   modems and callers: features, translations, the data switches (answers from Windows'
   connection mode, setters and their permissions, Windows' writes and refusals, a bounded

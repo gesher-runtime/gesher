@@ -26,14 +26,24 @@ CONTROLS = {
                           'Software radio states are reported in order'),
     # Write path: a disconnect Windows refuses must not leave the new mode behind.
     'keep-mode-after-refused-disconnect': (
-        'if (out.rfind("error", 0) == 0 && previous != mode) profile.value->UpdateProfile(xml.c_str());',
-        'if (false) profile.value->UpdateProfile(xml.c_str());',
-        'A refused disconnect restores the previous profile'),
+        'if (out.rfind("error", 0) == 0 && FAILED(result = profile.value->UpdateProfile(xml.c_str()))) {',
+        'if (false) {',
+        'and restores the previous mode'),
     # Write path: auto-home (roaming off) connects at home; it must not disconnect there.
     'auto-home-disconnects-at-home': (
         'mode == Wide("auto-home") ? registered && !roaming : false;',
         'mode == Wide("auto-home") ? false : false;',
         'auto-home at home keeps the connection'),
+    # Write path: an unchanged mode is a no-op, not a re-enforcement of the connection.
+    'enforce-unchanged-mode': (
+        '} else if (previous == mode) {',
+        '} else if (false) {',
+        'Unchanged mode, already connected'),
+    # Write path: a refused restore must be reported, not hidden behind "error disconnect".
+    'hide-refused-restore': (
+        'out = line("error", "rollback", result);',
+        '(void)result;',
+        'A refused restore is reported'),
 }
 
 

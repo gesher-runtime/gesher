@@ -418,6 +418,7 @@ public final class TelephonyService {
         String configure(String mode) {
             if (!mPresent) return "no modem";
             AtomicReference<String> raw = new AtomicReference<>();
+            boolean timedOut = false;
             synchronized (mWriteLock) {
                 if (mStuckWrite != null) {
                     if (mStuckWrite.isAlive()) return "an earlier write is still blocked in WwanSvc";
@@ -434,15 +435,24 @@ public final class TelephonyService {
                 }
                 if (writer.isAlive()) {
                     mStuckWrite = writer;
-                    refreshQuietly();
-                    return "timed out";
+                    timedOut = true;
                 }
+            }
+            if (timedOut) {
+                refreshQuietly();
+                return "timed out (Windows may still apply the change)";
             }
             String result = raw.get();
             if (result == null) return "Mobile Broadband service unavailable";
             String[] f = result.split("\t", -1);
             if (f.length != 3 || !f[0].equals("ok")) {
                 refreshQuietly();
+                if (f.length == 3 && f[1].equals("rollback")) {
+                    // Windows took the new mode, refused the disconnect and then the restore:
+                    // the mode is stored while the connection is up, as readings now show.
+                    return "Windows kept its connection up and the previous mode could not be"
+                            + " restored (0x" + f[2] + ")";
+                }
                 return result.replace('\t', ' ');
             }
             if (f[1].equals("connect") && !f[2].equals("00000000") || f[1].equals("unavailable")) {
@@ -837,8 +847,10 @@ public final class TelephonyService {
 
         private final GlobalSettings mSettings;
         private final Cellular mCellular;
-        // Serializes setters, which read the mode and write Windows; readers never take it,
-        // and listeners are called after it is released.
+        // Serializes setters, which read the mode and write Windows; readers never take it.
+        // The re-read after a write runs inside it, so the modem model's change listeners
+        // (the registry's events and this mirror) run under it; DataSettings' own listeners
+        // (notifyChanged) are called after it is released.
         private final Object mSetLock = new Object();
         private final List<Listener> mListeners = new CopyOnWriteArrayList<>();
 
@@ -942,7 +954,12 @@ public final class TelephonyService {
         String setUserEnabled(boolean enabled) {
             boolean before, after;
             synchronized (mSetLock) {
+                // Without a known mode there is nothing to change from: refused, as roaming is.
+                if (mode() == null) return "Windows' connection mode is unknown";
                 before = userEnabled();
+                // DataSettingsManager.setUserDataEnabled does nothing for an unchanged switch:
+                // a connection made or dropped by hand in Windows stays as it is.
+                if (before == enabled) return null;
                 String target = !enabled ? WindowsCellular.MODE_MANUAL
                         : roamingEnabled() ? WindowsCellular.MODE_AUTO : WindowsCellular.MODE_AUTO_HOME;
                 String failure = mCellular.configure(target);
@@ -963,7 +980,7 @@ public final class TelephonyService {
             synchronized (mSetLock) {
                 String mode = mode();
                 if (mode == null) return "Windows' connection mode is unknown";
-                if (!WindowsCellular.MODE_MANUAL.equals(mode)) {
+                if (!WindowsCellular.MODE_MANUAL.equals(mode) && roamingEnabled() != enabled) {
                     String failure = mCellular.configure(enabled ? WindowsCellular.MODE_AUTO
                             : WindowsCellular.MODE_AUTO_HOME);
                     if (failure != null) return failure;

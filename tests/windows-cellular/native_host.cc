@@ -36,7 +36,9 @@ bool no_interface_array = false;
 // adapter makes. Writes are allowed only inside Configure.
 std::map<std::u16string, std::vector<std::u16string>> profiles;
 HRESULT profile_manager_result = S_OK, profiles_result = S_OK, update_result = S_OK,
-        disconnect_result = S_OK, connect_result = S_OK;
+        disconnect_result = S_OK, connect_result = S_OK, state_result = S_OK;
+// Updates after this many succeed fail with update_result (the first ones succeed).
+size_t updates_succeeding = 0;
 bool writes_allowed = false;
 std::vector<std::u16string> updates, connects;
 int disconnects = 0;
@@ -160,6 +162,7 @@ struct Connection : Object<mbn::Connection> {
     return disconnect_result;
   }
   HRESULT STDMETHODCALLTYPE GetConnectionState(ULONG* state, BSTR* profile) override {
+    if (FAILED(state_result)) return state_result;
     *state = s.activation;
     *profile = make(u"profile");
     return S_OK;
@@ -250,8 +253,9 @@ struct Profile : Object<mbn::ConnectionProfile> {
   HRESULT STDMETHODCALLTYPE UpdateProfile(LPCWSTR xml) override {
     check(writes_allowed, "Only Configure updates a profile");
     updates.push_back(xml);
-    if (SUCCEEDED(update_result)) profiles[id].at(index) = xml;
-    return update_result;
+    HRESULT result = updates.size() > updates_succeeding ? update_result : S_OK;
+    if (SUCCEEDED(result)) profiles[id].at(index) = xml;
+    return result;
   }
 };
 struct ProfileManager : Object<mbn::ProfileManager> {
@@ -294,6 +298,8 @@ void reset() {
   profiles.clear();
   profiles[Spec().id] = {profile(u"auto")};
   profile_manager_result = profiles_result = update_result = disconnect_result = connect_result = S_OK;
+  state_result = S_OK;
+  updates_succeeding = 0;
   writes_allowed = false;
   updates.clear(); connects.clear(); disconnects = 0;
 }
@@ -437,6 +443,32 @@ int main() {
     check(f[26] == (c.expected[0] == '-' ? std::string("-") : hex(c.expected)), c.reason);
     balanced();
   }
+  // A profile without SubscriberID (v4 MBNProfileExt) belongs to the SIM by its SimIccID;
+  // one with another SubscriberID does not, whatever its SimIccID.
+  const std::u16string noSubscriber =
+      u"<MBNProfileExt xmlns=\"http://www.microsoft.com/networking/WWAN/profile/v4\"><Name>e</Name>"
+      u"<IsDefault>true</IsDefault><SimIccID>8997201000000000001</SimIccID>"
+      u"<ConnectionMode>auto-home</ConnectionMode></MBNProfileExt>";
+  struct SelectionCase { std::vector<std::u16string> stored; const char* expected; const char* reason; };
+  std::vector<std::u16string> many(16, profile(u"auto", u"999990000000001"));
+  many.push_back(profile(u"manual"));
+  const SelectionCase selections[] = {
+      {{noSubscriber}, "auto-home", "SimIccID (without its F padding) when there is no SubscriberID"},
+      {{profile(u"auto", u"999990000000001")}, "", "Another SubscriberID with the same SimIccID is not this SIM's"},
+      {{u"<v1:MBNProfile xmlns:v1=\"x\"><v1:Name>p</v1:Name><v1:IsDefault>true</v1:IsDefault>"
+        u"<v1:SubscriberID>425010123456789</v1:SubscriberID><v1:ConnectionMode>auto</v1:ConnectionMode>"
+        u"</v1:MBNProfile>"}, "-", "Prefixed elements are unreadable, not absent"},
+      {many, "", "At most sixteen profiles are read"},
+  };
+  for (const SelectionCase& c : selections) {
+    reset();
+    modems.push_back(Spec());
+    profiles[Spec().id] = c.stored;
+    auto f = split(lines(Snapshot(api))[1]);
+    check(f[26] == (c.expected[0] == '-' ? std::string("-") : hex(c.expected)), c.reason);
+    balanced();
+  }
+
   reset();
   modems.push_back(Spec());
   profile_manager_result = REGDB_E_CLASSNOTREG;
@@ -503,8 +535,79 @@ int main() {
 
   reset();
   modems.push_back(Spec());
-  check(configure(api, id.c_str(), u"auto") == "ok\tnone\t00000000", "Unchanged mode, already connected");
+  check(configure(api, id.c_str(), u"auto") == "ok\tunchanged\t00000000", "Unchanged mode, already connected");
   check(updates.empty(), "An unchanged mode is not rewritten");
+  balanced();
+
+  // An unchanged mode changes nothing (DataSettingsManager: an unchanged switch is a
+  // no-op): a connection made by hand in manual mode stays, and a connection dropped by
+  // hand in auto mode is not reconnected.
+  reset();
+  modems.push_back(Spec());  // connected by hand
+  profiles[id] = {profile(u"manual")};
+  check(configure(api, id.c_str(), u"manual") == "ok\tunchanged\t00000000"
+        && disconnects == 0 && updates.empty(), "A repeated off leaves a hand-made connection");
+  balanced();
+  reset();
+  {
+    Spec down;
+    down.activation = 3;  // disconnected by hand
+    modems.push_back(down);
+  }
+  check(configure(api, id.c_str(), u"auto") == "ok\tunchanged\t00000000" && connects.empty(),
+        "A repeated on does not reconnect");
+  balanced();
+
+  // Registration: a partner network is roaming; an unregistered modem is not connected;
+  // a connection that was never activated (MBN_ACTIVATION_STATE_NONE) is connected.
+  reset();
+  {
+    Spec partner;
+    partner.register_state = 5;
+    modems.push_back(partner);
+  }
+  check(configure(api, id.c_str(), u"auto-home") == "ok\tdisconnect\t00000000", "A partner network is roaming");
+  balanced();
+  reset();
+  {
+    Spec searching;
+    searching.register_state = 2;
+    searching.activation = 3;
+    modems.push_back(searching);
+  }
+  profiles[id] = {profile(u"manual")};
+  check(configure(api, id.c_str(), u"auto") == "ok\tnone\t00000000" && connects.empty(),
+        "No connect while unregistered");
+  balanced();
+  reset();
+  {
+    Spec never;
+    never.activation = 0;
+    modems.push_back(never);
+  }
+  profiles[id] = {profile(u"manual")};
+  check(configure(api, id.c_str(), u"auto") == "ok\tconnect\t00000000" && connects.size() == 1,
+        "A never-activated connection is connected");
+  balanced();
+
+  // The connection state cannot be read for a disconnect: an error, and the previous
+  // mode is restored.
+  reset();
+  modems.push_back(Spec());
+  state_result = E_ACCESSDENIED;
+  check(configure(api, id.c_str(), u"manual") == "error\tstate\t80070005", "An unreadable connection state is an error");
+  check(updates.size() == 2 && profiles[id][0] == profile(u"auto"), "and restores the previous mode");
+  balanced();
+
+  // A refused disconnect whose restore is refused too: reported as its own error, with the
+  // new mode left stored while the connection is still up.
+  reset();
+  modems.push_back(Spec());
+  disconnect_result = E_ACCESSDENIED;
+  update_result = static_cast<HRESULT>(0x80070020);  // ERROR_SHARING_VIOLATION
+  updates_succeeding = 1;
+  check(configure(api, id.c_str(), u"manual") == "error\trollback\t80070020", "A refused restore is reported");
+  check(profiles[id][0] == profile(u"manual"), "The new mode stayed stored");
   balanced();
 
   reset();

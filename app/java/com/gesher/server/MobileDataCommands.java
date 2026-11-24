@@ -58,23 +58,58 @@ public final class MobileDataCommands {
             out.println("No active SIM subscription: the mobile data settings belong to one");
             return 1;
         }
-        boolean applied = true;
+        boolean applied = true, stillUp = false;
         if (value != null) {
             if (roaming) {
                 phone.setDataRoamingEnabled(subId, value);
                 applied = phone.isDataRoamingEnabled(subId) == value;
             } else {
+                boolean before = user;
                 phone.setDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER, value,
                         "com.android.shell");
                 applied = phone.isDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER) == value;
+                // Turning data off must also take Windows' connection down. The disconnect
+                // completes asynchronously in WwanSvc, so it is given a few seconds; a
+                // connection that stays up means Windows refused it (and the previous mode
+                // could not be restored). Already off: a connection made by hand in Windows
+                // is left alone, as an unchanged switch changes nothing.
+                if (applied && !value && before) stillUp = !disconnected(phone, subId);
             }
             user = phone.isDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER);
         }
-        if (!applied) out.println("Windows did not accept the change; nothing was changed");
+        if (!applied) {
+            out.println("Windows did not take the change, or did not answer in time (a late change"
+                    + " may still apply); the setting is as shown below");
+        }
+        if (stillUp) {
+            out.println("Windows stored mobile data off but its cellular connection is still up:"
+                    + " Windows refused to disconnect it");
+        }
         out.println("Mobile data: " + (user ? "on" : "off"));
         out.println("Data roaming: " + (phone.isDataRoamingEnabled(subId) ? "on" : "off"));
         out.println("These are Windows' cellular connection settings for this SIM (the whole machine):"
                 + " off disconnects Windows' cellular data; roaming off keeps it off while roaming.");
-        return applied ? 0 : 1;
+        return applied && !stillUp ? 0 : 1;
     }
+
+    /** Waits up to ten seconds for Windows' connection to go down. */
+    static boolean disconnected(ITelephony phone, int subId) throws RemoteException {
+        for (int i = 0; ; i++) {
+            int state = phone.getDataStateForSubId(subId);
+            if (state != TelephonyManager.DATA_CONNECTED && state != TelephonyManager.DATA_CONNECTING
+                    && state != TelephonyManager.DATA_DISCONNECTING) {
+                return true;
+            }
+            if (i >= sWaitSteps) return false;
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+    }
+
+    /** Half-second steps of disconnected's wait; host tests shorten it. */
+    static int sWaitSteps = 20;
 }

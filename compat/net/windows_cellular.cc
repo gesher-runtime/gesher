@@ -198,6 +198,16 @@ struct Span { size_t open = 0, start = 0, end = 0, close = 0; };
 
 Found Locate(const Text& xml, const char* name, Span* span) {
   Text open = Wide("<") + Wide(name), close = Wide("</") + Wide(name) + Wide(">");
+  // "<prefix:Name": the element under a namespace prefix, which this edit does not read.
+  for (size_t at = xml.find(Wide(":") + Wide(name)); at != Text::npos;
+       at = xml.find(Wide(":") + Wide(name), at + 1)) {
+    size_t start = at;
+    while (start > 0 && xml[start - 1] != '<' && xml[start - 1] != '/' && !Space(xml[start - 1])) start--;
+    size_t after = at + 1 + std::char_traits<char>::length(name);
+    bool tag = start > 0 && (xml[start - 1] == '<' || xml[start - 1] == '/')
+        && after < xml.size() && (xml[after] == '>' || Space(xml[after]) || xml[after] == '/');
+    if (tag) return Found::kMalformed;
+  }
   for (size_t at = xml.find(open); at != Text::npos; at = xml.find(open, at + 1)) {
     size_t after = at + open.size();
     if (after >= xml.size()) return Found::kMalformed;
@@ -368,8 +378,9 @@ void AppendCaps(Api& api, mbn::Interface* modem, std::string& line) {
   }
 }
 
-// The subscriber ID (IMSI) goes to *imsi when it was read: profiles are per subscriber.
-void AppendSubscriber(Api& api, mbn::Interface* modem, std::string& line, Text* imsi) {
+// The subscriber ID (IMSI) and ICCID go to *imsi and *iccid when they were read:
+// profiles are per SIM.
+void AppendSubscriber(Api& api, mbn::Interface* modem, std::string& line, Text* imsi, Text* iccidOut) {
   Ref<mbn::SubscriberInformation> info;
   HRESULT result = modem->GetSubscriberInformation(&info.value);
   if (FAILED(result) || !info.value) {
@@ -380,7 +391,9 @@ void AppendSubscriber(Api& api, mbn::Interface* modem, std::string& line, Text* 
   HRESULT read = info.value->get_SubscriberID(&subscriber.value);
   line += '\t' + Field(api, read, subscriber.value);
   if (SUCCEEDED(read) && subscriber.value) *imsi = Text(subscriber.value, api.string_length(subscriber.value));
-  line += '\t' + Field(api, info.value->get_SimIccID(&iccid.value), iccid.value);
+  read = info.value->get_SimIccID(&iccid.value);
+  line += '\t' + Field(api, read, iccid.value);
+  if (SUCCEEDED(read) && iccid.value) *iccidOut = Text(iccid.value, api.string_length(iccid.value));
   Array numbers(api);
   LONG low = 0, high = -1;
   if (FAILED(info.value->get_TelephoneNumbers(&numbers.value)) || !numbers.value
@@ -465,7 +478,37 @@ void AppendRadio(mbn::Interface* modem, std::string& line) {
 // The default connection profile of the modem's SIM: IsDefault true (at most one per
 // SIM, as the schema requires) and SubscriberID equal to the SIM's IMSI. S_OK with the
 // profile and its XML, S_FALSE when the SIM has none, or the failure.
-HRESULT DefaultProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* modem, const Text& imsi,
+// An ICCID as profiles and the modem write it: trimmed, without the SIM's 'F' padding,
+// case-insensitive.
+Text Iccid(const Text& raw) {
+  Text id = Trim(raw);
+  while (!id.empty() && (id.back() == 'F' || id.back() == 'f')) id.pop_back();
+  for (WCHAR& c : id) {
+    if (c >= 'a' && c <= 'z') c = static_cast<WCHAR>(c - 'a' + 'A');
+  }
+  return id;
+}
+
+struct Sim {
+  Text imsi, iccid;
+};
+
+// Whether a profile belongs to the SIM: its SubscriberID is the SIM's IMSI or, in a profile
+// without one (the v4 MBNProfileExt schema makes it optional, SimIccID mandatory), its
+// SimIccID is the SIM's ICCID.
+Found ForSim(const Text& xml, const Sim& sim) {
+  Text subscriber, iccid;
+  Found found = Value(xml, "SubscriberID", &subscriber);
+  if (found == Found::kMalformed) return found;
+  if (found == Found::kFound) {
+    return !sim.imsi.empty() && Trim(subscriber) == Trim(sim.imsi) ? Found::kFound : Found::kAbsent;
+  }
+  found = Value(xml, "SimIccID", &iccid);
+  if (found != Found::kFound) return found;
+  return !sim.iccid.empty() && Iccid(iccid) == Iccid(sim.iccid) ? Found::kFound : Found::kAbsent;
+}
+
+HRESULT DefaultProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* modem, const Sim& sim,
                        Ref<mbn::ConnectionProfile>* found, Text* xml) {
   Array array(api);
   LONG low = 0, high = -1;
@@ -475,41 +518,48 @@ HRESULT DefaultProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* 
   if (FAILED(result)) return result;
   if (!array.value) return S_FALSE;
   if (FAILED(api.lower(array.value, 1, &low)) || FAILED(api.upper(array.value, 1, &high))) return E_FAIL;
+  // A profile that cannot be read this way might be the SIM's default: then the answer
+  // is unknown, not "no default profile".
+  bool unreadable = false;
   for (LONG i = low, n = 0; i <= high && n < kMaxProfiles; i++, n++) {
     Ref<mbn::ConnectionProfile> profile;
-    if (FAILED(api.element(array.value, &i, &profile.value)) || !profile.value) continue;
+    if (FAILED(api.element(array.value, &i, &profile.value)) || !profile.value) { unreadable = true; continue; }
     String data(api);
-    if (FAILED(profile.value->GetProfileXmlData(&data.value)) || !data.value) continue;
+    if (FAILED(profile.value->GetProfileXmlData(&data.value)) || !data.value) { unreadable = true; continue; }
     UINT length = api.string_length(data.value);
-    if (length > kMaxProfileUnits) continue;
-    Text text(data.value, length), isDefault, subscriber;
-    if (Value(text, "IsDefault", &isDefault) != Found::kFound) continue;
+    if (length > kMaxProfileUnits) { unreadable = true; continue; }
+    Text text(data.value, length), isDefault;
+    Found match = Value(text, "IsDefault", &isDefault);
+    if (match == Found::kMalformed) { unreadable = true; continue; }
+    if (match == Found::kAbsent) continue;
     isDefault = Trim(isDefault);
     if (isDefault != Wide("true") && isDefault != Wide("1")) continue;
-    if (Value(text, "SubscriberID", &subscriber) != Found::kFound || Trim(subscriber) != Trim(imsi)) continue;
+    match = ForSim(text, sim);
+    if (match == Found::kMalformed) { unreadable = true; continue; }
+    if (match == Found::kAbsent) continue;
     found->value = profile.value;
     profile.value = nullptr;
     *xml = text;
     return S_OK;
   }
-  return S_FALSE;
+  return unreadable ? E_UNEXPECTED : S_FALSE;
 }
 
 // The default profile's connection mode: the mode, empty when the SIM has no default
 // profile (or no SIM is readable), "-" when the profiles or that profile cannot be read.
-void AppendProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* modem, const Text* imsi,
+void AppendProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* modem, const Sim& sim,
                    std::string& line) {
   if (!profiles) {
     line += "\t-";
     return;
   }
-  if (!imsi) {
+  if (sim.imsi.empty() && sim.iccid.empty()) {
     line += '\t';
     return;
   }
   Ref<mbn::ConnectionProfile> profile;
   Text xml, mode;
-  HRESULT result = DefaultProfile(api, profiles, modem, *imsi, &profile, &xml);
+  HRESULT result = DefaultProfile(api, profiles, modem, sim, &profile, &xml);
   if (FAILED(result)) {
     line += "\t-";
   } else if (result == S_FALSE) {
@@ -578,15 +628,14 @@ std::string Snapshot(Api& api) {
         ULONG ready = 0;
         line += '\t' + Number(modem.value->GetReadyState(&ready), ready);
         AppendCaps(api, modem.value, line);
-        Text imsi;
-        AppendSubscriber(api, modem.value, line, &imsi);
-        bool sim = !imsi.empty();
+        Sim sim;
+        AppendSubscriber(api, modem.value, line, &sim.imsi, &sim.iccid);
         AppendHome(api, modem.value, line);
         AppendRegistration(api, modem.value, line);
         AppendSignal(api, modem.value, line);
         AppendConnection(api, modem.value, line);
         AppendRadio(modem.value, line);
-        AppendProfile(api, profiles.value, modem.value, sim ? &imsi : nullptr, line);
+        AppendProfile(api, profiles.value, modem.value, sim, line);
         out += line + '\n';
       }
     }
@@ -638,12 +687,16 @@ std::string Enforce(Api& api, mbn::Interface* modem, const Text& mode, const Tex
 
 // Sets the connection mode of the SIM's default profile and makes the packet connection
 // follow it: "manual" disconnects, "auto-home" disconnects while roaming and connects
-// at home, "auto" connects while registered. The result is one line:
-//   ok <none|connect|disconnect|unavailable> <hresult of that step>
+// at home, "auto" connects while registered. A mode that is already set changes nothing,
+// as DataSettingsManager does nothing for an unchanged switch: a connection made or
+// dropped by hand in Windows stays as it is. The result is one line:
+//   ok <unchanged|none|connect|disconnect|unavailable> <hresult of that step>
 //   error <stage> <hresult>
-// The profile update and a needed disconnect must succeed; a disconnect that fails
-// restores the previous profile. A connect that Windows refuses is reported, not an
-// error: the mode is set and Windows keeps connecting by it.
+// The profile update and a needed disconnect must succeed. When the disconnect (or
+// reading the connection state for it) fails, the previous profile is restored; if the
+// restore fails too, the stage is "rollback" with the restore's result: the new mode is
+// then stored while the connection is still up. A connect that Windows refuses is
+// reported, not an error: the mode is set and Windows keeps connecting by it.
 std::string Configure(Api& api, const Text& interfaceId, const Text& mode) {
   auto line = [](const char* outcome, const char* step, HRESULT result) {
     char text[64];
@@ -661,32 +714,44 @@ std::string Configure(Api& api, const Text& interfaceId, const Text& mode) {
     Ref<mbn::SubscriberInformation> info;
     Ref<mbn::ProfileManager> profiles;
     Ref<mbn::ConnectionProfile> profile;
-    String imsiText(api);
-    Text xml, previous, updated, imsi;
+    String imsiText(api), iccidText(api);
+    Text xml, previous, updated;
+    Sim sim;
     HRESULT result = api.create(mbn::kManagerClass, nullptr, CLSCTX_ALL, mbn::kManager,
                                 reinterpret_cast<void**>(&manager.value));
     if (SUCCEEDED(result)) result = manager.value->GetInterface(interfaceId.c_str(), &modem.value);
     if (FAILED(result) || !modem.value) {
       out = line("error", "interface", FAILED(result) ? result : E_FAIL);
-    } else if (FAILED(result = modem.value->GetSubscriberInformation(&info.value)) || !info.value
-               || FAILED(result = info.value->get_SubscriberID(&imsiText.value)) || !imsiText.value) {
+    } else if (FAILED(result = modem.value->GetSubscriberInformation(&info.value)) || !info.value) {
       out = line("error", "subscriber", FAILED(result) ? result : E_FAIL);
     } else if (FAILED(result = api.create(mbn::kProfileManagerClass, nullptr, CLSCTX_ALL, mbn::kProfileManager,
                                           reinterpret_cast<void**>(&profiles.value))) || !profiles.value) {
       out = line("error", "profiles", FAILED(result) ? result : E_FAIL);
     } else {
-      imsi = Text(imsiText.value, api.string_length(imsiText.value));
-      result = DefaultProfile(api, profiles.value, modem.value, imsi, &profile, &xml);
-      if (result != S_OK) {
+      if (SUCCEEDED(info.value->get_SubscriberID(&imsiText.value)) && imsiText.value) {
+        sim.imsi = Text(imsiText.value, api.string_length(imsiText.value));
+      }
+      if (SUCCEEDED(info.value->get_SimIccID(&iccidText.value)) && iccidText.value) {
+        sim.iccid = Text(iccidText.value, api.string_length(iccidText.value));
+      }
+      result = sim.imsi.empty() && sim.iccid.empty() ? E_FAIL
+          : DefaultProfile(api, profiles.value, modem.value, sim, &profile, &xml);
+      if (sim.imsi.empty() && sim.iccid.empty()) {
+        out = line("error", "subscriber", E_FAIL);
+      } else if (result != S_OK) {
         out = line("error", "profile", FAILED(result) ? result : HRESULT_FROM_WIN32(ERROR_NOT_FOUND));
       } else if (!ConnectionMode(xml, &previous) || !WithConnectionMode(xml, mode, &updated)) {
         out = line("error", "profile", E_UNEXPECTED);
-      } else if (previous != mode && FAILED(result = profile.value->UpdateProfile(updated.c_str()))) {
+      } else if (previous == mode) {
+        out = line("ok", "unchanged", S_OK);
+      } else if (FAILED(result = profile.value->UpdateProfile(updated.c_str()))) {
         out = line("error", "update", result);
       } else {
         out = Enforce(api, modem.value, mode, xml, line);
-        // A refused disconnect leaves the connection up: the previous mode stays.
-        if (out.rfind("error", 0) == 0 && previous != mode) profile.value->UpdateProfile(xml.c_str());
+        // A refused disconnect leaves the connection up: the previous mode is restored.
+        if (out.rfind("error", 0) == 0 && FAILED(result = profile.value->UpdateProfile(xml.c_str()))) {
+          out = line("error", "rollback", result);
+        }
       }
     }
   }
