@@ -251,9 +251,46 @@ struct TlsImage {
 struct TlsBlock {
   uint8_t* base;
   DWORD owner_thread;
+  size_t committed_size = kTlsBlockSize;  // contiguous prefix, under g_tls_mutex
 };
 std::vector<TlsImage> g_tls_images;
 std::vector<TlsBlock> g_tls_blocks;  // every live thread's block (its TP)
+
+size_t TlsCommitSize(size_t extent) {
+  static const size_t page_size = [] {
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    return static_cast<size_t>(info.dwPageSize);
+  }();
+  return (extent + page_size - 1) / page_size * page_size;
+}
+
+// Only pages beyond every live reservation are dead. An interior rollback
+// can share a page with another module, or precede a nested committed module.
+// Failed decommit retains both the pages and their recorded commitment.
+void TrimTlsBlock(TlsBlock& block, size_t extent) {
+  const size_t keep = TlsCommitSize(extent);
+  if (keep < block.committed_size &&
+      VirtualFree(block.base + keep, block.committed_size - keep, MEM_DECOMMIT)) {
+    block.committed_size = keep;
+  }
+}
+
+bool CommitTlsBlocks(size_t extent) {
+  const size_t required = TlsCommitSize(extent);
+  for (TlsBlock& block : g_tls_blocks) {
+    if (required <= block.committed_size) continue;
+    if (VirtualAlloc(block.base + block.committed_size, required - block.committed_size,
+                     MEM_COMMIT, PAGE_READWRITE) == nullptr) {
+      // No offset has escaped. Reclaim successful growth in earlier blocks;
+      // any failed cleanup stays recorded and can be reused on a later retry.
+      for (TlsBlock& prior : g_tls_blocks) TrimTlsBlock(prior, g_tls_offset);
+      return false;
+    }
+    block.committed_size = required;
+  }
+  return true;
+}
 
 void InitializeTlsImage(const TlsImage& image, uint8_t* base) {
   std::memset(base + image.offset, 0, image.total_size);
@@ -287,6 +324,10 @@ int64_t ApiTlsRegister(size_t total_size, size_t align) {
     off = (end + align - 1) & ~(align - 1);
   }
   if (off > kTlsBlockSize || reserved > kTlsBlockSize - off) return -1;
+  // Prepare/Publish cannot report allocation failure. Commit the entire new
+  // extent in every attached thread, including sleeping threads, before the
+  // registration becomes visible to relocations or nested constructors.
+  if (!CommitTlsBlocks(std::max(g_tls_offset, off + reserved))) return -1;
   g_tls_images.push_back({static_cast<int64_t>(off), nullptr, 0, total_size,
                           GetCurrentThreadId(), false, false});
   g_tls_offset = std::max(g_tls_offset, off + reserved);
@@ -344,6 +385,7 @@ int ApiTlsRollback(int64_t offset, size_t total_size) {
     g_tls_offset = std::max(g_tls_offset, static_cast<size_t>(live.offset) +
                                             std::max(live.total_size, size_t{1}));
   }
+  for (TlsBlock& block : g_tls_blocks) TrimTlsBlock(block, g_tls_offset);
   return 1;
 }
 
@@ -661,6 +703,10 @@ class Env final : public A64::UserCallbacks {
         if (!ti.published && !(ti.prepared && ti.owner_thread == owner)) continue;
         InitializeTlsImage(ti, tls_block_);
       }
+      // Construction/Unpark still commits the full reservation before clearing
+      // historical bytes. Keep its address and every pending/published offset,
+      // then release only the unassigned tail for this active attachment.
+      TrimTlsBlock(g_tls_blocks.back(), g_tls_offset);
     }
     used_before_ = true;
     tls_pointer_ = reinterpret_cast<uint64_t>(tls_block_);  // a guest MSR TPIDR_EL0 may have moved it
