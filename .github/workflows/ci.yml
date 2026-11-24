@@ -560,6 +560,9 @@ jobs:
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
 
+      - name: Credential Manager passkey contracts (ADR 0092)
+        run: python3 tools/test_credential_manager_contracts.py --java-home "$JAVA_HOME"
+
       - name: MediaDataSource adapter contracts with checked JNI and UBSan
         run: python3 tools/test_media_callback_adapter.py
 
