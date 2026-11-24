@@ -674,7 +674,9 @@ public final class WindowSession extends IWindowSession.Stub {
         // A popup lays out in its app window's bounds (its display), as a dialog does in its
         // task's on a device.
         AppWindow root = root(w);
-        Rect bounds = root.bounds.isEmpty() ? TaskConfiguration.display(root.rotation) : new Rect(root.bounds);
+        Rect bounds = root.bounds.isEmpty() ? TaskConfiguration.display(root.rotation)
+                : TaskConfiguration.clampToDisplay(root.bounds.width(), root.bounds.height(),
+                        root.rotation);
         InsetsState state = out.insetsState;
         state.set(new InsetsState(), true /* copySources */);
         state.setDisplayFrame(bounds);
@@ -732,6 +734,7 @@ public final class WindowSession extends IWindowSession.Stub {
         int[] min = w.resizable ? minimumSize(w.attrs) : null;
         if (min != null) nw.setMinClientSize(min[0], min[1]);
         w.nativeWindow = nw;
+        limitToDisplay(w);
         syncSurfaceInsets(w);
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         w.handler = new Handler(looper);
@@ -1151,6 +1154,20 @@ public final class WindowSession extends IWindowSession.Stub {
     }
 
     /**
+     * The largest client area the user can give a resizable window: the display, turned as
+     * its task is (TaskConfiguration.clampToDisplay). On a device a window is never larger
+     * than its display, and the framework relies on it: ViewConfiguration's maximum drawing
+     * cache is 4 bytes for every pixel of the display (the max bounds), so in a larger window a
+     * View drawn in a software layer would not be drawn at all. Maximizing gives the window
+     * the display's size.
+     */
+    private static void limitToDisplay(AppWindow w) {
+        if (!w.resizable || w.nativeWindow == null) return;
+        Rect display = TaskConfiguration.display(w.rotation);
+        w.nativeWindow.setMaxClientSize(display.width(), display.height());
+    }
+
+    /**
      * The smallest client area of a resizable window, in pixels: its Activity's
      * {@code <layout android:minWidth android:minHeight>} (ActivityInfo.windowLayout), else
      * Android's default minimal size of a resizable task
@@ -1201,7 +1218,18 @@ public final class WindowSession extends IWindowSession.Stub {
             height = w.pendingHeight;
         }
         if (!w.resizable || width <= 0 || height <= 0) return;
-        Rect current = w.bounds.isEmpty() ? displayBounds() : w.bounds;
+        // Never larger than the display (limitToDisplay keeps the user within it; a window
+        // sized by another program is brought back to it).
+        Rect within = TaskConfiguration.clampToDisplay(width, height, w.rotation);
+        if (within.width() != width || within.height() != height) {
+            log("window \"" + w.title() + "\" resized to " + width + "x" + height
+                    + ", larger than the display (" + TaskConfiguration.rotationName(w.rotation)
+                    + "): kept at " + within.width() + "x" + within.height());
+            width = within.width();
+            height = within.height();
+            w.nativeWindow.setClientSize(width, height);
+        }
+        Rect current = w.bounds.isEmpty() ? TaskConfiguration.display(w.rotation) : w.bounds;
         if (current.width() == width && current.height() == height) return;
         w.bounds.set(0, 0, width, height);
         WindowRelayoutResult result = new WindowRelayoutResult(new ClientWindowFrames(),
@@ -1625,7 +1653,8 @@ public final class WindowSession extends IWindowSession.Stub {
                 // A window turned for its Activity's orientation has the turned display's
                 // size, not one the user gave the task (windows3 track).
                 return v.bounds.isEmpty() || v.rotation != android.view.Surface.ROTATION_0
-                        ? null : new Rect(v.bounds);
+                        ? null : TaskConfiguration.clampToDisplay(v.bounds.width(),
+                                v.bounds.height(), android.view.Surface.ROTATION_0);
             }
         }
         Rect last = mTaskScreen.get(w.taskId);
@@ -1634,7 +1663,8 @@ public final class WindowSession extends IWindowSession.Stub {
         Rect turned = TaskConfiguration.display(android.view.Surface.ROTATION_90);
         if (last.width() == turned.width() && last.height() == turned.height()) return null;
         return last.width() == display.width() && last.height() == display.height() ? null
-                : new Rect(0, 0, last.width(), last.height());
+                : TaskConfiguration.clampToDisplay(last.width(), last.height(),
+                        android.view.Surface.ROTATION_0);
     }
 
     /** The configuration of the Activity whose token is {@code token} (its resources'), or null. */
@@ -1691,6 +1721,9 @@ public final class WindowSession extends IWindowSession.Stub {
         w.configRotation = rotation;
         if (!turned && !following) return;
         w.rotation = rotation;
+        // The turned display is the window's new limit, before it takes the turned size.
+        limitToDisplay(w);
+        b = TaskConfiguration.clampToDisplay(b.width(), b.height(), rotation);
         if (b.equals(displayBounds())) {
             w.bounds.setEmpty();
         } else {
@@ -1858,10 +1891,13 @@ public final class WindowSession extends IWindowSession.Stub {
         Rect turned = TaskConfiguration.display(android.view.Surface.ROTATION_90);
         boolean otherTurned = !turned.equals(displayBounds()) && at.width() == turned.width()
                 && at.height() == turned.height();
-        if (w.resizable && !shaped && !otherTurned && (at.width() != w.nativeWindow.getWidth()
-                || at.height() != w.nativeWindow.getHeight())) {
+        // Within this window's display: a size taken from a window turned otherwise is
+        // limited to it (never larger than the display, limitToDisplay).
+        Rect size = TaskConfiguration.clampToDisplay(at.width(), at.height(), w.rotation);
+        if (w.resizable && !shaped && !otherTurned && (size.width() != w.nativeWindow.getWidth()
+                || size.height() != w.nativeWindow.getHeight())) {
             // WM_SIZE: the window lays out at the task's size (applyResize).
-            w.nativeWindow.setClientSize(at.width(), at.height());
+            w.nativeWindow.setClientSize(size.width(), size.height());
         }
         if (shownOnDesktop(w)) w.nativeWindow.setScreenPosition(at.left, at.top);
         log("window \"" + w.title() + "\" takes task " + w.taskId + "'s place "

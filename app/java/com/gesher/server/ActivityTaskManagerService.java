@@ -5333,11 +5333,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         List<ActivityRecord> activities = new ArrayList<>();
         Rect task;
         synchronized (this) {
-            // The display's size (turned as the task is) is no size of the user's.
-            Rect display = TaskConfiguration.display(mTaskRotation.get(taskId, Surface.ROTATION_0));
-            task = bounds == null || bounds.isEmpty()
-                    || (bounds.width() == display.width() && bounds.height() == display.height())
-                    ? null : new Rect(0, 0, bounds.width(), bounds.height());
+            // The display's size (turned as the task is) is no size of the user's. A task is
+            // never larger than its display (its max bounds), as WM keeps a freeform task
+            // within its display area.
+            int rotation = mTaskRotation.get(taskId, Surface.ROTATION_0);
+            Rect display = TaskConfiguration.display(rotation);
+            Rect within = bounds == null || bounds.isEmpty() ? null
+                    : TaskConfiguration.clampToDisplay(bounds.width(), bounds.height(), rotation);
+            task = within == null || within.equals(display) ? null : within;
             Rect old = mTaskBounds.get(taskId);
             if (old == null ? task == null : old.equals(task)) return;
             if (task != null) {

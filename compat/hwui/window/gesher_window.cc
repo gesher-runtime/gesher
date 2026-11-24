@@ -15,6 +15,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -594,6 +595,11 @@ void Window::SetMinClientSize(int width, int height) {
   min_client_height_ = height > 0 ? height : 0;
 }
 
+void Window::SetMaxClientSize(int width, int height) {
+  max_client_width_ = width > 0 ? width : 0;
+  max_client_height_ = height > 0 ? height : 0;
+}
+
 void Window::SetTitle(const std::string& title_utf8) {
   // SetWindowTextW from another thread sends WM_SETTEXT to the window's
   // thread and waits; the title is copied there.
@@ -947,6 +953,28 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
         if (!popup_) r.bottom += BackBarHeight(hwnd);
         if (min_w > 0) info->ptMinTrackSize.x = r.right - r.left;
         if (min_h > 0) info->ptMinTrackSize.y = r.bottom - r.top;
+      }
+      // The display's size (SetMaxClientSize), as a window size: the largest
+      // the user can resize the window to, and its maximized size.
+      const int max_w = max_client_width_, max_h = max_client_height_;
+      if (max_w > 0 || max_h > 0) {
+        RECT r = {0, 0, max_w, max_h};
+        AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
+                                 FALSE, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
+                                 GetDpiForWindow(hwnd));
+        if (!popup_) r.bottom += BackBarHeight(hwnd);
+        // An app's minimum larger than the display gives way to it, as a task's
+        // minimal size does to its display area.
+        if (max_w > 0) {
+          info->ptMaxTrackSize.x = r.right - r.left;
+          info->ptMaxSize.x = (std::min)(info->ptMaxSize.x, info->ptMaxTrackSize.x);
+          info->ptMinTrackSize.x = (std::min)(info->ptMinTrackSize.x, info->ptMaxTrackSize.x);
+        }
+        if (max_h > 0) {
+          info->ptMaxTrackSize.y = r.bottom - r.top;
+          info->ptMaxSize.y = (std::min)(info->ptMaxSize.y, info->ptMaxTrackSize.y);
+          info->ptMinTrackSize.y = (std::min)(info->ptMinTrackSize.y, info->ptMaxTrackSize.y);
+        }
       }
       return 0;
     }

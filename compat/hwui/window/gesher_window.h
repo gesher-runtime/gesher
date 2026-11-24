@@ -144,6 +144,10 @@ class Window {
   // The smallest client area the user can resize the window to (pixels; 0:
   // no minimum). SetWindowPos keeps to it too.
   void SetMinClientSize(int width, int height);
+  // The largest client area the user can resize or maximize the window to
+  // (pixels; 0: no limit), its display's size: an Android window is never
+  // larger than its display. SetWindowPos keeps to it too.
+  void SetMaxClientSize(int width, int height);
   // The window's icon (title bar, taskbar, Alt+Tab) from an .ico file; false
   // when it cannot be read.
   bool SetIcon(const std::string& ico_path_utf8);
@@ -304,6 +308,7 @@ class Window {
   // injected by other programs) do not change the thread's key state.
   int held_modifiers_ = 0;
   std::atomic<int> min_client_width_{0}, min_client_height_{0};
+  std::atomic<int> max_client_width_{0}, max_client_height_{0};
   // The touch keyboard (AdviseInputPane, the window's thread): the
   // IFrameworkInputPane, its handler and cookie; where the keyboard is on the
   // screen (left, top, right, bottom; empty: hidden) and the rows of the

@@ -45,6 +45,8 @@ public final class TaskConfiguration {
      * turned to {@code rotation} (Surface.ROTATION_*; 0 for none).
      */
     public static Configuration override(Rect bounds, int rotation) {
+        // The task's bounds lie within its display (its max bounds), whoever asks.
+        bounds = clampToDisplay(bounds.width(), bounds.height(), rotation);
         Configuration base = DeviceProfile.configuration();
         Configuration c = new Configuration();
         int dpi = DeviceProfile.DENSITY_DPI;
@@ -85,6 +87,20 @@ public final class TaskConfiguration {
         boolean swap = rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270;
         return new Rect(0, 0, swap ? DeviceProfile.HEIGHT : DeviceProfile.WIDTH,
                 swap ? DeviceProfile.WIDTH : DeviceProfile.HEIGHT);
+    }
+
+    /**
+     * {@code width}x{@code height} (pixels) limited to the display turned to {@code rotation}:
+     * the largest a task's window can be. On a device a window is never larger than the
+     * display it is on (a freeform task's bounds lie within its display area, its
+     * configuration's max bounds), and the framework sizes per-display limits from the
+     * display: ViewConfiguration's maximum drawing cache (software layers) is 4 bytes for
+     * every pixel of the max bounds, so a View larger than the display is not drawn.
+     */
+    public static Rect clampToDisplay(int width, int height, int rotation) {
+        Rect display = display(rotation);
+        return new Rect(0, 0, Math.max(1, Math.min(width, display.width())),
+                Math.max(1, Math.min(height, display.height())));
     }
 
     /** Whether the display is wider than tall in its natural orientation (ROTATION_0). */

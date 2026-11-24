@@ -166,6 +166,14 @@ public final class NativeWindow implements AutoCloseable {
     nSetMinClientSize(ptr(), width, height);
   }
 
+  /**
+   * The largest client area (pixels) the user can resize or maximize the window to; 0 for no
+   * limit on that axis.
+   */
+  public void setMaxClientSize(int width, int height) {
+    nSetMaxClientSize(ptr(), width, height);
+  }
+
   /** The window's icon (title bar, taskbar) from an .ico file; false if it cannot be read. */
   public boolean setIcon(String icoPath) {
     return nSetIcon(ptr(), icoPath);
@@ -298,6 +306,8 @@ public final class NativeWindow implements AutoCloseable {
   private static native void nSetClientSize(long ptr, int width, int height);
   private static native void nSetSurfaceInsets(long ptr, int left, int top, int right, int bottom);
   private static native void nSetMinClientSize(long ptr, int width, int height);
+
+  private static native void nSetMaxClientSize(long ptr, int width, int height);
   private static native void nTagSurfaceControl(long ptr, long surfaceControl);
   private static native int nGetEventFd(long ptr);
   private static native int nPollEvent(long ptr, double[] out);
