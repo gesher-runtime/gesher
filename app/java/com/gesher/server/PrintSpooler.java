@@ -426,6 +426,12 @@ final class PrintSpooler {
                 }
                 pageCount = layout.pageCount;
                 int[] requested = selectedPages(choice.pages, pageCount);
+                if (requested == null) {
+                    // The final layout no longer has any chosen page; nothing the user
+                    // chose can be printed, so the job ends before write().
+                    status = "The selected pages are not in the document";
+                    return;
+                }
                 synchronized (PrintSpooler.this) {
                     job.documentInfo = layout.info;
                     job.pages = requested.clone();
@@ -667,7 +673,9 @@ final class PrintSpooler {
     /**
      * The pages to request from the app (PrintActivity.updateSelectedPages and its
      * clipping to the laid-out count): ALL_PAGES for every page, ranges beyond the
-     * document dropped or cut at its end.
+     * document dropped or cut at its end. Null when an explicit choice has no page in
+     * the laid-out document: PrintActivity treats such a range as an error and offers
+     * no print button, so it is never widened to every page.
      */
     static int[] selectedPages(int[] chosen, int pageCount) {
         int[] pages = normalize(chosen);
@@ -679,7 +687,7 @@ final class PrintSpooler {
             kept.add(pages[i]);
             kept.add(Math.min(pages[i + 1], pageCount - 1));
         }
-        if (kept.isEmpty()) return ALL_PAGES.clone();
+        if (kept.isEmpty()) return null;
         int[] result = new int[kept.size()];
         for (int i = 0; i < result.length; i++) result[i] = kept.get(i);
         if (result.length == 2 && result[0] == 0 && result[1] == pageCount - 1) return ALL_PAGES.clone();
