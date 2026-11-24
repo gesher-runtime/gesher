@@ -25,6 +25,7 @@ try {
     "$root/app/java/com/google/firebase/FirebaseOptions.java",
     "$root/app/java/com/google/firebase/messaging/RemoteMessage.java",
     "$root/app/java/com/google/firebase/messaging/FirebaseMessaging.java",
+    "$root/app/java/com/google/android/gms/gcm/GoogleCloudMessaging.java",
     "$root/tests/test-apps/GmsCompatibilityUnitTest.java"
   )
 

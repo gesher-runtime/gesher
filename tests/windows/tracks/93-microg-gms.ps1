@@ -59,8 +59,8 @@ GmsCheck 'microg-gms (single process): no Google account or token without microG
   'gms: AccountManager: no com.google account; getAuthToken fails without an authenticator'
 )
 
-GmsCheck 'microg-gms (single process): FirebaseMessaging & FCM receiver intent routing' $outSingle $codeSingle @(
-  'gms: FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received',
+GmsCheck 'microg-gms (single process): no FCM/GCM registration without microG; own RECEIVE routing' $outSingle $codeSingle @(
+  'gms: FirebaseMessaging: no token without a push provider (SERVICE_NOT_AVAILABLE); app''s own RECEIVE broadcast routed',
   'gms: all steps ran'
 )
 
@@ -83,7 +83,7 @@ GmsCheck 'microg-gms (device): full GMS compatibility suite in system server' $o
   'gms: FusedLocationProviderClient: connected to LocationManagerService, updates received',
   'gms: GoogleSignIn: no signed-in account without Play services (SERVICE_MISSING)',
   'gms: AccountManager: no com.google account; getAuthToken fails without an authenticator',
-  'gms: FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received',
+  'gms: FirebaseMessaging: no token without a push provider (SERVICE_NOT_AVAILABLE); app''s own RECEIVE broadcast routed',
   'gms: all steps ran'
 )
 

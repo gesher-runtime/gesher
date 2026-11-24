@@ -339,6 +339,9 @@ jobs:
       - name: Notification image staging, cache, cancellation and encoder ownership
         run: python3 tools/test_notification_images.py
 
+      - name: Google client-library test fixtures report Play services' absence (#335)
+        run: python3 tools/test_gms_client_fixtures.py
+
       - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
         run: |
           python3 tools/test_hwui_renderer_policy.py --sanitize

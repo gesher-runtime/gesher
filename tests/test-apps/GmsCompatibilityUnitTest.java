@@ -23,6 +23,7 @@ import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailabilityLight;
 import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.Scope;
+import com.google.android.gms.gcm.GoogleCloudMessaging;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationRequest;
@@ -156,10 +157,19 @@ public final class GmsCompatibilityUnitTest {
     }
 
     private static void testFirebaseMessagingAndRemoteMessage() throws Exception {
+        // No push provider: the registration fails as Firebase's GmsRpc reports it (#335).
         FirebaseMessaging fcm = FirebaseMessaging.getInstance();
         Task<String> tokenTask = fcm.getToken();
-        String token = Tasks.await(tokenTask);
-        assertTrue(token != null && token.startsWith("fcm_token_gesher_"), "FCM token mismatch: " + token);
+        assertTrue(tokenTask.isComplete() && !tokenTask.isSuccessful(), "FCM token without a push provider");
+        assertTrue(tokenTask.getException() instanceof java.io.IOException
+                && "SERVICE_NOT_AVAILABLE".equals(tokenTask.getException().getMessage()),
+                "FCM failure: " + tokenTask.getException());
+        try {
+            String registration = GoogleCloudMessaging.getInstance(new Context()).register("1234567890");
+            throw new AssertionError("GCM registration without a push provider: " + registration);
+        } catch (java.io.IOException expected) {
+            assertEquals(GoogleCloudMessaging.ERROR_SERVICE_NOT_AVAILABLE, expected.getMessage(), "GCM failure");
+        }
 
         Bundle b = new Bundle();
         b.putString("from", "1234567890");

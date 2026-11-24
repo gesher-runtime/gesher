@@ -239,18 +239,29 @@ public final class GmsUnitSteps {
         Report.line("AccountManager: no com.google account; getAuthToken fails without an authenticator");
     }
 
+    /**
+     * Without microG there is no push provider: FCM's token task and GCM's registration
+     * fail with SERVICE_NOT_AVAILABLE (#335). A RECEIVE broadcast the app sends itself
+     * still reaches its own receiver.
+     */
     public void testFirebaseAndFcmRouting() throws Exception {
-        FirebaseMessaging fcm = FirebaseMessaging.getInstance();
-        Task<String> tokenTask = fcm.getToken();
-        String fcmToken = Tasks.await(tokenTask);
-        if (fcmToken == null || fcmToken.isEmpty()) {
-            throw new AssertionError("FirebaseMessaging returned empty token");
+        Task<String> tokenTask = FirebaseMessaging.getInstance().getToken();
+        try {
+            String token = Tasks.await(tokenTask);
+            throw new AssertionError("FirebaseMessaging returned a token without a push provider: " + token);
+        } catch (java.util.concurrent.ExecutionException expected) {
+            if (!(expected.getCause() instanceof java.io.IOException)
+                    || !"SERVICE_NOT_AVAILABLE".equals(expected.getCause().getMessage())) {
+                throw new AssertionError("FCM failure: " + expected.getCause());
+            }
         }
-
-        GoogleCloudMessaging gcm = GoogleCloudMessaging.getInstance(mActivity);
-        String gcmToken = gcm.register("1234567890");
-        if (gcmToken == null || gcmToken.isEmpty()) {
-            throw new AssertionError("GCM returned empty token");
+        try {
+            String registration = GoogleCloudMessaging.getInstance(mActivity).register("1234567890");
+            throw new AssertionError("GCM registration without a push provider: " + registration);
+        } catch (java.io.IOException expected) {
+            if (!GoogleCloudMessaging.ERROR_SERVICE_NOT_AVAILABLE.equals(expected.getMessage())) {
+                throw new AssertionError("GCM failure: " + expected.getMessage());
+            }
         }
 
         // Send a broadcast intent with com.google.android.c2dm.intent.RECEIVE
@@ -261,6 +272,6 @@ public final class GmsUnitSteps {
         receiveIntent.putExtra("google.message_id", "msg_test_001");
         mActivity.sendBroadcast(receiveIntent);
 
-        Report.line("FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received");
+        Report.line("FirebaseMessaging: no token without a push provider (SERVICE_NOT_AVAILABLE); app's own RECEIVE broadcast routed");
     }
 }
