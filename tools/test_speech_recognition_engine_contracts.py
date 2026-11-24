@@ -11,7 +11,8 @@ data delivery, ERROR_INSUFFICIENT_PERMISSIONS and onCancel. Covered: language ma
 against Windows' recognizer languages, callback order, partial results, confidences,
 permission refusals before any microphone, language and start errors, audio failures,
 speech time-out, no match, stopListening, cancel, onDestroy, busy, client death,
-EXTRA_AUDIO_SOURCE, checkRecognitionSupport, triggerModelDownload and levels. Windows
+EXTRA_AUDIO_SOURCE (with pipe reads of half a sample and an odd trailing byte),
+checkRecognitionSupport, triggerModelDownload and levels. Windows
 itself is covered by tests/speech/speech_recognition_windows_test.cc.
 Use --source-ref to run the contracts against another revision of the sources.
 """

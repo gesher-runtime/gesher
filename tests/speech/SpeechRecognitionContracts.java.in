@@ -187,6 +187,7 @@ public final class SpeechRecognitionContracts {
         windowsFailureMidSession();
         clientDeath();
         appAudioSource();
+        appAudioShortReads();
         recognitionSupport();
         modelDownload();
         levels();
@@ -644,6 +645,101 @@ public final class SpeechRecognitionContracts {
                 "EXTRA_AUDIO_SOURCE still needs the caller's RECORD_AUDIO data delivery, as RecognitionService checks");
     }
 
+    /** Little-endian 16-bit PCM of {@code count} distinct samples, then {@code extra} bytes. */
+    static byte[] pcmBytes(int count, int extra) {
+        byte[] b = new byte[count * 2 + extra];
+        for (int i = 0; i < count; i++) {
+            short v = sampleAt(i);
+            b[2 * i] = (byte) v;
+            b[2 * i + 1] = (byte) (v >> 8);
+        }
+        Arrays.fill(b, count * 2, b.length, (byte) 0x5a);
+        return b;
+    }
+
+    static short sampleAt(int i) {
+        return (short) (i * 7919 - 32000);
+    }
+
+    /**
+     * Reads the app's audio as the listening loop does, until StreamInput reports the end.
+     * Returns the samples handed over, or -1 - index for the first wrong sample.
+     */
+    static int drain(byte[] bytes, int bufferSamples, int... sizes) throws IOException {
+        ParcelFileDescriptor source = new ParcelFileDescriptor(new ShortReadInputStream(bytes, sizes));
+        StreamInput input = new StreamInput(source, 16000);
+        input.start();
+        short[] pcm = new short[bufferSamples];
+        int total = 0;
+        try {
+            while (true) {
+                int n = input.read(pcm);
+                if (n == 0) return total;
+                for (int k = 0; k < n; k++) {
+                    if (pcm[k] != sampleAt(total + k)) return -1 - (total + k);
+                }
+                total += n;
+            }
+        } finally {
+            input.stop();
+        }
+    }
+
+    static void appAudioShortReads() throws Exception {
+        // A pipe hands over what has arrived: as little as one byte, half a sample.
+        byte[] pcm = pcmBytes(1000, 0);
+        int n = drain(pcm, 320, 1, Integer.MAX_VALUE);
+        check(n == 1000, "a first read of one byte (half a sample) is not the end of the app's audio: " + n);
+        n = drain(pcm, 320, 1);
+        check(n == 1000, "reads of one byte throughout the stream deliver every sample: " + n);
+        n = drain(pcm, 320, 3);
+        check(n == 1000, "reads of three bytes throughout the stream deliver every sample: " + n);
+        n = drain(pcm, 320, 1, 3, 5, 7, 641, 1, 639);
+        check(n == 1000, "odd reads of mixed sizes deliver every sample, in order: " + n);
+        n = drain(pcm, 3, 1, 3, 5, 7);
+        check(n == 1000, "odd reads into a buffer of three samples deliver every sample: " + n);
+        n = drain(pcmBytes(1000, 1), 320, 1);
+        check(n == 1000, "a stream ending on an odd byte: every complete sample, the half sample dropped, then the end: " + n);
+        n = drain(pcmBytes(1000, 1), 320, 3, 5);
+        check(n == 1000, "an odd trailing byte after odd reads: every complete sample, then the end: " + n);
+        n = drain(pcmBytes(0, 1), 320, 1);
+        check(n == 0, "a stream of a single byte ends with no sample: " + n);
+        n = drain(new byte[0], 320, 1);
+        check(n == 0, "an empty stream ends at once: " + n);
+
+        // stop() while half a sample waits for its pair ends the read.
+        ShortReadInputStream live = new ShortReadInputStream(pcmBytes(0, 1), 1);
+        ParcelFileDescriptor source = new ParcelFileDescriptor(live);
+        StreamInput input = new StreamInput(source, 16000);
+        input.start();
+        live.onEnd = input::stop;
+        check(input.read(new short[320]) == 0 && source.closed,
+                "stop ends a read waiting for the second byte of a sample, and closes the descriptor");
+
+        // The service: the app's first write is one byte, odd writes follow.
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> r.onEndAudio = () -> {
+            r.emit(RecognizerBackend.SOUND_START);
+            r.emit(RecognizerBackend.SOUND_END);
+            r.emit(RecognizerBackend.RECOGNITION, "from the pipe");
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        source = new ParcelFileDescriptor(new ShortReadInputStream(pcmBytes(8000, 1), 1, 3, 4001, 5));
+        Intent i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source);
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 8000);
+        Listener l = new Listener();
+        s.startListening(i, l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "results:[from the pipe]"))
+                        && backend.last.samples.get() == 8000 && AudioRecord.created.isEmpty() && source.closed,
+                "EXTRA_AUDIO_SOURCE over a pipe that hands over one byte first and odd reads after: every sample reaches Windows ("
+                        + backend.last.samples.get() + ")");
+    }
+
     static void recognitionSupport() {
         FakeBackend backend = new FakeBackend();
         backend.languages = windowsLanguages();
@@ -909,6 +1005,40 @@ final class ParcelFileDescriptor {
         @Override public int read() throws IOException { return mFd.in.read(); }
         @Override public int read(byte[] b, int off, int len) throws IOException { return mFd.in.read(b, off, len); }
         @Override public void close() throws IOException { mFd.close(); }
+    }
+}
+
+/**
+ * The read side of an app's pipe, as its writes arrive: read k returns at most
+ * sizes[k % sizes.length] bytes, at least one, and -1 at the end. With onEnd set, the
+ * pipe stays open after the data instead: a read there runs onEnd (which stops the
+ * input) and then fails as the closed descriptor does. Test-only.
+ */
+final class ShortReadInputStream extends InputStream {
+    private final byte[] mData;
+    private final int[] mSizes;
+    private int mPos, mReads;
+    volatile Runnable onEnd;
+
+    ShortReadInputStream(byte[] data, int... sizes) { mData = data; mSizes = sizes; }
+
+    @Override public int read() throws IOException {
+        byte[] one = new byte[1];
+        return read(one, 0, 1) < 0 ? -1 : one[0] & 0xff;
+    }
+
+    @Override public int read(byte[] b, int off, int len) throws IOException {
+        if (len == 0) return 0;
+        if (mPos >= mData.length) {
+            Runnable end = onEnd;
+            if (end == null) return -1;
+            end.run();
+            throw new IOException("read on a closed descriptor");
+        }
+        int n = Math.min(Math.min(len, mSizes[mReads++ % mSizes.length]), mData.length - mPos);
+        System.arraycopy(mData, mPos, b, off, n);
+        mPos += n;
+        return n;
     }
 }
 
