@@ -46,8 +46,11 @@ std::string Narrow(const std::wstring& s) {
 // Feeds `ms` of silence and returns the events until the stream ends (or 20 s pass).
 std::vector<sr::Event> RecognizeSilence(sr::Session* session, int rate, int ms) {
   std::vector<int16_t> chunk(static_cast<size_t>(rate / 10), 0);  // 100 ms
+  std::printf("TRACE silence write begin\n");
   for (int t = 0; t < ms; t += 100) session->Write(chunk.data(), chunk.size());
+  std::printf("TRACE silence write complete, EndAudio begin\n");
   session->EndAudio();
+  std::printf("TRACE EndAudio complete, wait events\n");
   std::vector<sr::Event> events;
   ULONGLONG deadline = GetTickCount64() + 20000;
   while (GetTickCount64() < deadline) {
@@ -62,6 +65,9 @@ std::vector<sr::Event> RecognizeSilence(sr::Session* session, int rate, int ms) 
 }  // namespace
 
 int main() {
+  // Diagnostic-only: keep the last completed operation visible if the process hangs.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  std::setvbuf(stderr, nullptr, _IONBF, 0);
   // The pure language matching, as the Android engine relies on it.
   std::vector<sr::Recognizer> fixture(2);
   fixture[0].token_id = L"A";
@@ -77,6 +83,7 @@ int main() {
   Check(sr::FindRecognizer(fixture, L"") == -1, "no language is not found");
 
   std::vector<sr::Recognizer> recognizers;
+  std::printf("TRACE enumerate begin\n");
   HRESULT hr = sr::EnumerateRecognizers(&recognizers);
   std::printf("EnumerateRecognizers: HRESULT 0x%08lX, %zu recognizer(s)\n",
               static_cast<unsigned long>(hr), recognizers.size());
@@ -93,6 +100,7 @@ int main() {
   bool recognizer_failed = true;
   sr::SessionOptions unsupported;
   unsupported.language = L"x-gesher-none";
+  std::printf("TRACE unsupported-language session begin\n");
   hr = sr::StartSession(unsupported, &session, &recognizer_failed);
   Check(hr == sr::kSpErrNotFound && session == nullptr && !recognizer_failed,
         "a language without recognizer fails with SPERR_NOT_FOUND");
@@ -111,6 +119,7 @@ int main() {
     options.sample_rate = 16000;
     options.hypotheses = true;
     options.max_alternates = 3;
+    std::printf("TRACE real session begin\n");
     hr = sr::StartSession(options, &session, &recognizer_failed);
     std::printf("StartSession(%s): HRESULT 0x%08lX%s\n", Narrow(options.language).c_str(),
                 static_cast<unsigned long>(hr), recognizer_failed ? " (recognizer failed)" : "");
@@ -126,6 +135,7 @@ int main() {
             "no audio is taken after the end");
       session.reset();
 
+      std::printf("TRACE real session begin\n");
       hr = sr::StartSession(options, &session, &recognizer_failed);
       Check(SUCCEEDED(hr), "a second session starts");
       if (session != nullptr) {

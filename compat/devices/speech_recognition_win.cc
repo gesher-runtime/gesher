@@ -29,6 +29,12 @@
 namespace gesher::devices::speech_recognition {
 namespace {
 
+// Diagnostic-only tracing; no production behavior change.
+void Trace(const char* phase) {
+  std::fprintf(stderr, "TRACE tid=%lu %s\n", GetCurrentThreadId(), phase);
+  std::fflush(stderr);
+}
+
 // sapi.h's class IDs (Windows SDK sapi.idl, coclass uuid attributes). Declared here so
 // that only ole32 and uuid are linked, as the other device natives.
 constexpr CLSID kClsidSpInprocRecognizer = {
@@ -150,6 +156,7 @@ class PcmPipe final : public IStream {
 
   void End() {
     std::lock_guard<std::mutex> lock(mutex_);
+    Trace("PcmPipe::End");
     ended_ = true;
     ready_.notify_all();
   }
@@ -177,12 +184,23 @@ class PcmPipe final : public IStream {
   STDMETHODIMP Read(void* data, ULONG size, ULONG* read) override {
     if (data == nullptr) return STG_E_INVALIDPOINTER;
     std::unique_lock<std::mutex> lock(mutex_);
+    const bool trace_read = ++trace_reads_ <= 8;
+    if (trace_read) {
+      std::fprintf(stderr, "TRACE tid=%lu Read enter requested=%lu buffered=%zu ended=%d\n",
+                   GetCurrentThreadId(), size, buffer_.size(), ended_ ? 1 : 0);
+      std::fflush(stderr);
+    }
     ready_.wait(lock, [&] { return ended_ || buffer_.size() >= size; });
     ULONG n = static_cast<ULONG>(std::min<size_t>(size, buffer_.size()));
     std::copy(buffer_.begin(), buffer_.begin() + n, static_cast<BYTE*>(data));
     buffer_.erase(buffer_.begin(), buffer_.begin() + n);
     position_ += n;
     if (read != nullptr) *read = n;
+    if (trace_read) {
+      std::fprintf(stderr, "TRACE tid=%lu Read return requested=%lu read=%lu buffered=%zu ended=%d hr=S_OK\n",
+                   GetCurrentThreadId(), size, n, buffer_.size(), ended_ ? 1 : 0);
+      std::fflush(stderr);
+    }
     return S_OK;
   }
   STDMETHODIMP Write(const void*, ULONG, ULONG*) override { return STG_E_ACCESSDENIED; }
@@ -230,6 +248,7 @@ class PcmPipe final : public IStream {
   std::deque<BYTE> buffer_;
   ULONGLONG position_ = 0;
   bool ended_ = false;
+  unsigned trace_reads_ = 0;
 };
 
 HRESULT TokenLanguages(ISpObjectToken* token, std::vector<std::wstring>* out) {
@@ -332,7 +351,9 @@ class SapiSession final : public Session {
 
   ~SapiSession() override {
     Cancel();
+    Trace("before destructor joins worker");
     if (thread_.joinable()) thread_.join();
+    Trace("after destructor joins worker");
     if (pipe_ != nullptr) pipe_->Release();
     if (stop_ != nullptr) CloseHandle(stop_);
   }
@@ -343,7 +364,9 @@ class SapiSession final : public Session {
     pipe_ = new PcmPipe();
     std::unique_lock<std::mutex> lock(mutex_);
     thread_ = std::thread([this] { Run(); });
+    Trace("before Start waits setup_done");
     started_.wait(lock, [&] { return setup_done_; });
+    Trace("after Start waits setup_done");
     *recognizer_failed = recognizer_failed_;
     return setup_hr_;
   }
@@ -407,8 +430,12 @@ class SapiSession final : public Session {
     hr = CoCreateInstance(kClsidSpObjectToken, nullptr, CLSCTX_INPROC_SERVER,
                           __uuidof(ISpObjectToken), reinterpret_cast<void**>(token.put()));
     if (FAILED(hr)) return Log("CoCreateInstance(SpObjectToken)", hr);
+    Trace("before token SetId");
     hr = token->SetId(nullptr, token_id_.c_str(), FALSE);
+    Trace("after token SetId");
+    Trace("before SetRecognizer");
     if (SUCCEEDED(hr)) hr = (*recognizer)->SetRecognizer(token.get());
+    Trace("after SetRecognizer");
     if (FAILED(hr)) {
       *recognizer_failed = true;
       return Log("ISpRecognizer::SetRecognizer", hr);
@@ -424,33 +451,51 @@ class SapiSession final : public Session {
     Ref<ISpStream> stream;
     hr = CoCreateInstance(kClsidSpStream, nullptr, CLSCTX_INPROC_SERVER, __uuidof(ISpStream),
                           reinterpret_cast<void**>(stream.put()));
+    Trace("before SetBaseStream");
     if (SUCCEEDED(hr)) hr = stream->SetBaseStream(pipe_, kSpdfidWaveFormatEx, &format);
+    Trace("after SetBaseStream");
     // fAllowFormatChanges: SAPI converts the PCM to the engine's own format.
+    Trace("before SetInput");
     if (SUCCEEDED(hr)) hr = (*recognizer)->SetInput(stream.get(), TRUE);
+    Trace("after SetInput");
     if (FAILED(hr)) return Log("ISpRecognizer::SetInput", hr);
 
+    Trace("before CreateRecoContext");
     hr = (*recognizer)->CreateRecoContext(context->put());
+    Trace("after CreateRecoContext");
     if (FAILED(hr)) return Log("ISpRecognizer::CreateRecoContext", hr);
+    Trace("before SetNotifyWin32Event");
     hr = (*context)->SetNotifyWin32Event();
+    Trace("after SetNotifyWin32Event");
     if (FAILED(hr)) return Log("ISpRecoContext::SetNotifyWin32Event", hr);
     ULONGLONG interest = Interest(SPEI_SOUND_START) | Interest(SPEI_SOUND_END) |
                          Interest(SPEI_RECOGNITION) | Interest(SPEI_FALSE_RECOGNITION) |
                          Interest(SPEI_END_SR_STREAM);
     if (options_.hypotheses) interest |= Interest(SPEI_HYPOTHESIS);
+    Trace("before SetInterest");
     hr = (*context)->SetInterest(interest, interest);
+    Trace("after SetInterest");
     if (FAILED(hr)) return Log("ISpRecoContext::SetInterest", hr);
     if (options_.max_alternates > 1) {
       // An engine without alternates keeps answering with one text.
       (*context)->SetMaxAlternates(static_cast<ULONG>(options_.max_alternates));
     }
+    Trace("before CreateGrammar");
     hr = (*context)->CreateGrammar(0, grammar->put());
+    Trace("after CreateGrammar");
+    Trace("before LoadDictation");
     if (SUCCEEDED(hr)) hr = (*grammar)->LoadDictation(nullptr, SPLO_STATIC);
+    Trace("after LoadDictation");
     if (FAILED(hr)) {
       *recognizer_failed = true;
       return Log("ISpRecoGrammar::LoadDictation", hr);
     }
+    Trace("before SetDictationState ACTIVE");
     hr = (*grammar)->SetDictationState(SPRS_ACTIVE);
+    Trace("after SetDictationState ACTIVE");
+    Trace("before SetRecoState ACTIVE");
     if (SUCCEEDED(hr)) hr = (*recognizer)->SetRecoState(SPRST_ACTIVE);
+    Trace("after SetRecoState ACTIVE");
     if (FAILED(hr)) return Log("activating dictation", hr);
     return S_OK;
   }
@@ -462,13 +507,27 @@ class SapiSession final : public Session {
     Ref<ISpRecoGrammar> grammar;
     bool recognizer_failed = false;
     HRESULT hr = com.status();
+    Trace("before Setup");
     if (SUCCEEDED(hr)) hr = Setup(&recognizer, &context, &grammar, &recognizer_failed);
+    Trace("after Setup");
+    Trace("before SetupDone");
     SetupDone(hr, recognizer_failed);
+    Trace("after SetupDone");
+    Trace("before Pump");
     if (SUCCEEDED(hr)) Pump(context.get());
+    Trace("after Pump");
+    Trace("before SetRecoState INACTIVE_WITH_PURGE");
     if (recognizer.get() != nullptr) recognizer->SetRecoState(SPRST_INACTIVE_WITH_PURGE);
+    Trace("after SetRecoState INACTIVE_WITH_PURGE");
+    Trace("before grammar release");
     grammar.Reset();
+    Trace("after grammar release");
+    Trace("before context release");
     context.Reset();
+    Trace("after context release");
+    Trace("before recognizer release");
     recognizer.Reset();
+    Trace("after recognizer release");
   }
 
   void Pump(ISpRecoContext* context) {
