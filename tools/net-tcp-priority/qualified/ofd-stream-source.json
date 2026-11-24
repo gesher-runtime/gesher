@@ -7,7 +7,7 @@
     "compat/posix/src/system.cc",
     "compat/posix/src/winsock.cc"
   ],
-  "patch_sha256": "9ee2f32e66053405e4b283bbfc5ba1302aa2456d75bbaa1872913bfe6dfc0f33",
+  "patch_sha256": "edfff94a924def1d8897e63378ad1a19bbfcd5fda73e76db35fd235f65bd1bde",
   "source_sha256": {
     "compat/posix/src/ofd.cc": "2cd9960d954105ae987ab8eff7c319b59c6da96a6410c5610c5c0e78e04a2df1",
     "compat/posix/src/ofd_internal.h": "fa97f2675731123a03896ed179d73c8cb2701273b5d94d2078c484a1b16b37da",
