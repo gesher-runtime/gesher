@@ -22,6 +22,8 @@ HOSTS = {
         'app/java/com/gesher/server/PackageManagerService.java',
         'app/java/com/gesher/server/PackageVisibility.java',
         'app/java/com/gesher/server/GmsPackageSupport.java')),
+    'GmsAccountTruthHost': ('tests/account-session/framework_host.c', (
+        'app/java/com/gesher/server/AccountManagerService.java',)),
 }
 
 
