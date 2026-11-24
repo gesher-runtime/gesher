@@ -303,7 +303,8 @@ SERVICE_STATUS_PROCESS State(SC_HANDLE service) {
   return value;
 }
 void ValidateService(SC_HANDLE service, const Paths& paths, const Manifest& m) {
-  alignas(QUERY_SERVICE_CONFIGW) BYTE bytes[16384]{}; DWORD size = 0;
+  // QueryServiceConfigW's RPC contract caps the advertised buffer at 8 KiB.
+  alignas(QUERY_SERVICE_CONFIGW) BYTE bytes[8192]{}; DWORD size = 0;
   auto* c = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(bytes);
   Need(QueryServiceConfigW(service, c, sizeof(bytes), &size), "query-control-config");
   Need(c->lpBinaryPathName && Same(c->lpBinaryPathName, Command(paths, m.observed.service_name)) &&
