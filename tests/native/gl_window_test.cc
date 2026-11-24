@@ -18,13 +18,15 @@
 // forces WARP).
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
-#include <gesher/system_properties.h>
+#include <gesher/egl_angle.h>
 
 #include "gesher_native_window.h"
 
 // The project defines NOGDI for AOSP code; this test reads windows back with GDI.
 #undef NOGDI
 #include <windows.h>
+
+#include "declared_boot.h"  // after <windows.h> with GDI
 
 #include <cstdint>
 #include <cstdio>
@@ -251,36 +253,6 @@ bool CheckForegroundOnInput(HWND hwnd) {
   return ok;
 }
 
-// Test-only (--declared <version>): this process's boot declared `version`
-// (ro.opengles.version), in a property session and data directory of its own,
-// as an app process sees the system server's declaration. With 0x30000 under
-// GESHER_EGL_DEVICE=warp the default display gives ES 3.0 (uncapped WARP), so a
-// machine without a GPU still runs the ES 3 checks on it.
-bool DeclareForThisProcess(int argc, char** argv) {
-  for (int i = 2; i + 1 < argc; ++i) {
-    if (std::strcmp(argv[i], "--declared") != 0) continue;
-    const std::string declared = std::to_string(std::strtol(argv[i + 1], nullptr, 0));
-    char temp[MAX_PATH];
-    GetTempPathA(sizeof temp, temp);
-    const std::string session = "gl-window-test-" + std::to_string(GetCurrentProcessId());
-    const std::string data = std::string(temp) + session;
-    CreateDirectoryA(data.c_str(), nullptr);
-    SetEnvironmentVariableA("GESHER_BINDER", nullptr);
-    SetEnvironmentVariableA("GESHER_PROPERTY_SESSION", session.c_str());
-    SetEnvironmentVariableA("ANDROID_DATA", data.c_str());
-    _putenv_s("GESHER_BINDER", "");
-    _putenv_s("GESHER_PROPERTY_SESSION", session.c_str());
-    _putenv_s("ANDROID_DATA", data.c_str());
-    std::string read;
-    const bool ok = gesher::properties::Set("ro.opengles.version", declared) &&
-                    gesher::properties::Get("ro.opengles.version", &read) && read == declared;
-    std::printf("this process's boot declared ro.opengles.version=%s: %s\n", declared.c_str(),
-                ok ? "set" : "FAILED to set");
-    return ok;
-  }
-  return true;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -288,7 +260,13 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "usage: gl_window_test <libglapp.so> [--declared <ro.opengles.version>]\n");
     return 2;
   }
-  if (!DeclareForThisProcess(argc, argv)) return 1;
+  // --declared: this test as an app process of a boot that declared that
+  // version (declared_boot.h); with 0x30000 under GESHER_EGL_DEVICE=warp the
+  // default display gives ES 3.0 (uncapped WARP), so a machine without a GPU
+  // still runs the ES 3 checks on it.
+  int declared = 0;
+  const int parent = gesher::test::RunAsDeclaredBoot(argc, argv, "gl-window-test", &declared);
+  if (parent >= 0) return parent;
   setvbuf(stdout, nullptr, _IONBF, 0);
   gesher::bionic::InstallBionicShim();
   gesher::elf::SetupThreadTls();
@@ -375,6 +353,16 @@ int main(int argc, char** argv) {
     }
     gl_finish();
     ANativeWindow_release(window);
+  }
+
+  // With --declared, the default display gives exactly the declared version:
+  // ES 3 drawn for 0x30000, refused for 0x20000 (egl_gles_version.h).
+  if (declared != 0) {
+    const int gives = gesher_egl_gles_version();
+    const bool ok = gives == declared && (declared == 0x30000 ? es3_default : !es3_default);
+    std::printf("declared 0x%x: the default display gives 0x%x, ES 3 %s: %s\n", declared, gives,
+                es3_default ? "drawn" : "refused", ok ? "as declared" : "FAILED, not as declared");
+    if (!ok) failures++;
   }
 
   // Without ES 3 on the default display (no GPU, as on the CI runners), the

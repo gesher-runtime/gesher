@@ -18,7 +18,7 @@
 #include <timeapi.h>
 
 #include <gesher/egl_angle.h>
-#include <gesher/system_properties.h>
+#include "declared_boot.h"
 
 #include <chrono>
 #include <cstdint>
@@ -172,38 +172,12 @@ bool StartsWith(const std::string& s, const char* prefix) { return s.rfind(prefi
 
 }  // namespace
 
-// Test-only: this process's boot declared `declared` (ro.opengles.version), in
-// a property session and data directory of its own, as an app process sees
-// the system server's declaration (egl_gles_version.h). 0 for none.
-int DeclareForThisProcess(int argc, char** argv) {
-  for (int i = 1; i + 1 < argc; ++i) {
-    if (std::strcmp(argv[i], "--declared") != 0) continue;
-    const int declared = static_cast<int>(std::strtol(argv[i + 1], nullptr, 0));
-    char temp[MAX_PATH];
-    GetTempPathA(sizeof temp, temp);
-    const std::string session = "gpu-keepalive-test-" + std::to_string(GetCurrentProcessId());
-    const std::string data = std::string(temp) + session;
-    CreateDirectoryA(data.c_str(), nullptr);
-    SetEnvironmentVariableA("GESHER_BINDER", nullptr);
-    SetEnvironmentVariableA("GESHER_PROPERTY_SESSION", session.c_str());
-    SetEnvironmentVariableA("ANDROID_DATA", data.c_str());
-    _putenv_s("GESHER_BINDER", "");
-    _putenv_s("GESHER_PROPERTY_SESSION", session.c_str());
-    _putenv_s("ANDROID_DATA", data.c_str());
-    const bool set = gesher::properties::Set("ro.opengles.version", std::to_string(declared));
-    std::string read;
-    const bool got = gesher::properties::Get("ro.opengles.version", &read);
-    std::printf("this process's boot declared OpenGL ES 0x%x (ro.opengles.version=%s)\n", declared,
-                got ? read.c_str() : "unset");
-    Expect(set && got && read == std::to_string(declared), "ro.opengles.version set for this process's boot");
-    return declared;
-  }
-  return 0;
-}
-
 int main(int argc, char** argv) {
+  // --declared: this test as an app process of a boot that declared that version.
+  int declared = 0;
+  const int parent = gesher::test::RunAsDeclaredBoot(argc, argv, "gpu-keepalive-test", &declared);
+  if (parent >= 0) return parent;
   timeBeginPeriod(1);
-  const int declared = DeclareForThisProcess(argc, argv);
   // Asked first, as the system server does at boot: the display is chosen and
   // terminated again.
   const int probed = gesher_egl_gles_version();

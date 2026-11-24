@@ -146,9 +146,12 @@ is in classes of its own that never touch PackageManagerService (a call into
 it from that thread would wait for the initialization, which waits for the
 probe); normally it answers in well under a second. A value already in the
 property (an explicit `build.prop` line) is kept, as on a device, if it is one
-Gesher serves (0x30000 or 0x20000); any other preset value is not a
-declaration, for PackageManagerService (which declares the probed version)
-and for the EGL display choice alike.
+Gesher serves (0x30000 or 0x20000). Any other value in a `build.prop` is not
+loaded (`compat/art/jni_invocation_static.cc`, `BuildProps.java`, with a log
+line), so the property stays unset and the probe declares; a value set some
+other way that Gesher does not serve is not a declaration either, for
+PackageManagerService (which declares the probed version) and for the EGL
+display choice alike.
 
 Without the ANGLE DLLs, or without any Direct3D 11 device, there is no GLES and
 no version is declared.
@@ -269,7 +272,13 @@ promises. Absent (c): nothing implements it.
   ES 3.0 default display: a GPU, or `gl_window_test --declared 0x30000` under
   `GESHER_EGL_DEVICE=warp`, which track 40 runs on the runners) and the Java
   bindings' (`ImageReaderEglTest` with EGL14 where the default display gives
-  ES 3.0).
+  ES 3.0, and in track 31 with `declared-es3`: a `build.prop` with
+  `ro.opengles.version=196608` under `GESHER_EGL_DEVICE=warp`, so the runners
+  check it on WARP uncapped). The `--declared` runs of `gl_window_test` and
+  `gpu_keepalive_test` run the test again as a child process in a property
+  session and data directory of their own (`tests/native/declared_boot.h`),
+  which the parent removes; `gl_window_test --declared` fails unless the
+  default display gives exactly the declared version.
 - `tools/test_camera_selection_and_orientation.py`: `camera.external` for an
   unconfigured camera, not for a configured rear one.
 - CI runs `PackageServiceQueriesTest` without `libandroid_runtime`. Without

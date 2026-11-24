@@ -136,6 +136,31 @@ public final class PackageServiceQueriesTest {
     }
 
     /**
+     * build.prop loading keeps ro.opengles.version only as a version Gesher serves
+     * (BuildProps.servedGlEsVersion; compat/art/jni_invocation_static.cc does the same):
+     * 0x30000 and 0x20000 in any integer form; 0x30001 or garbage is left unset, so the
+     * probe declares the version. Other properties are not affected.
+     */
+    private static void checkBuildPropGlesVersion() {
+        try {
+            Class<?> props = Class.forName("com.gesher.app.BuildProps");
+            java.lang.reflect.Method served = props.getDeclaredMethod("servedGlEsVersion", String.class, String.class);
+            served.setAccessible(true);
+            String key = "ro.opengles.version";
+            require((Boolean) served.invoke(null, key, "196608") && (Boolean) served.invoke(null, key, "131072")
+                            && (Boolean) served.invoke(null, key, "0x30000"),
+                    "build.prop: a served OpenGL ES version was refused");
+            require(!(Boolean) served.invoke(null, key, "196609") && !(Boolean) served.invoke(null, key, "65536")
+                            && !(Boolean) served.invoke(null, key, "three"),
+                    "build.prop: an OpenGL ES version Gesher does not serve was kept");
+            require((Boolean) served.invoke(null, "ro.product.model", "196609"),
+                    "build.prop: another property was filtered");
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("BuildProps.servedGlEsVersion: " + e, e);
+        }
+    }
+
+    /**
      * The boot probe (PackageManagerService's static initializer) answers within its bound
      * in the normal case: its thread must not wait for that initialization to finish
      * (boundedProbe's ProbeRun). Only where it ran (the property natives present).
@@ -162,6 +187,7 @@ public final class PackageServiceQueriesTest {
 
     private static void checkSystemFeatures(PackageManagerService service) {
         checkBootProbeBounded();
+        checkBuildPropGlesVersion();
         List<FeatureInfo> list = service.getSystemAvailableFeatures().getList();
         // CI runs this class without libandroid_runtime (no property natives); through
         // ServiceFixtureRunner it has them. Each expectation follows what this process has.

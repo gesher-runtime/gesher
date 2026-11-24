@@ -117,4 +117,20 @@ $env:GESHER_EGL_DIRECT_READBACK = '0'
 GraphicsDex 'ImageReader surface: forced staging fallback preserves pixels and lifetime' `
   ImageReaderEglTest @()
 Remove-Item Env:GESHER_EGL_DIRECT_READBACK
+
+# A boot that declared OpenGL ES 3.0 (ro.opengles.version=196608 in this
+# process's build.prop, a copy of the test root's; docs/system-features.md) on
+# WARP: the default display is WARP uncapped and gives ES 3.0, so the runners,
+# which have no GPU, check the ES 3 ImageReader on Android's default display
+# and that the Java bindings' eglCreateContext (compat/hwui/gl/angle_gl.cc)
+# refuses an ES 3.1 context with EGL_BAD_MATCH.
+$gles3Root = Join-Path $env:RUNNER_TEMP 'gesher-root-gles3'
+New-Item -ItemType Directory -Force $gles3Root | Out-Null
+@(Get-Content (Join-Path $root 'system/build.prop')) + 'ro.opengles.version=196608' |
+  Set-Content (Join-Path $gles3Root 'build.prop')
+$androidRoot = $env:ANDROID_ROOT
+$env:ANDROID_ROOT = NoDrive $gles3Root
+GraphicsDex 'ImageReader on a boot that declared ES 3.0 (WARP uncapped): GLES3 readback on the default display, ES 3.1 refused through EGL14' `
+  ImageReaderEglTest @('declared-es3')
+$env:ANDROID_ROOT = $androidRoot
 Remove-Item Env:GESHER_EGL_DEVICE

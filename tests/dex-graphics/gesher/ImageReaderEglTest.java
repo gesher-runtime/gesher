@@ -307,8 +307,14 @@ public final class ImageReaderEglTest {
                         && (image.getPlanes()[0].getBuffer().get(0) & 255) == 128, "direct camera YUV pixels");
             }
         }
+        // "declared-es3": this process's boot declared ES 3.0 (ro.opengles.version in its
+        // build.prop; track 31 runs it so under GESHER_EGL_DEVICE=warp), so the default
+        // display must give ES 3.0, and the ES 3.1 refusal runs even without a GPU.
+        boolean declaredEs3 = args.length > 0 && "declared-es3".equals(args[0]);
         if (gles3ImageReader(display)) {
             es31Refused(display);
+        } else if (declaredEs3) {
+            throw new AssertionError("the boot declared ES 3.0, but the default display gives no ES 3");
         } else {
             // No ES 3 on the default display (no GPU, as on the CI runners): the
             // GLES3 child readback on ANGLE's uncapped WARP display, so it stays covered.

@@ -412,7 +412,9 @@ Check 'native libs: a boot that declared ES 3.0 gives ES 3.0 to an NDK .so on WA
   $global:LASTEXITCODE = $glDeclaredExit
   $glDeclaredOut
 } @('ro.opengles.version=196608: set', 'Direct3D 11 WARP device (boot declared OpenGL ES 3.0)',
-    'es3: EGL 1.5', 'GL_VERSION=OpenGL ES 3.0', 'es3.1 refused with EGL_BAD_MATCH', 'gl_window_test all passed')
+    'es3: EGL 1.5', 'GL_VERSION=OpenGL ES 3.0', 'es3.1 refused with EGL_BAD_MATCH',
+    'declared 0x30000: the default display gives 0x30000, ES 3 drawn: as declared', 'gl_window_test all passed',
+    'gl-window-test: the --declared run''s data directory removed')
 
 # AHardwareBuffer, the EGL native buffer/fence extensions and ASurfaceControl
 # (ADR 0089): surface_control_test.so (tests/native/surface_control_test.c)
@@ -517,13 +519,15 @@ Check 'native libs: a boot that declared OpenGL ES 3.0 gives ES 3.0 on WARP, and
   } finally {
     Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
   }
-} @('ok: ro.opengles.version set for this process''s boot', 'ok: boot declared 3.0: this process''s display gives ES 3.0',
-    'ok: an ES 3.0 display: an ES 3.1 context refused with EGL_BAD_MATCH', 'gpu_keepalive_test all passed')
+} @('ro.opengles.version=196608: set', 'ok: boot declared 3.0: this process''s display gives ES 3.0',
+    'ok: an ES 3.0 display: an ES 3.1 context refused with EGL_BAD_MATCH', 'gpu_keepalive_test all passed',
+    'gpu-keepalive-test: the --declared run''s data directory removed')
 
 Check 'native libs: a boot that declared OpenGL ES 2.0 gives ES 2.0 only, on whatever device' {
   & "$Dir/gpu_keepalive_test.exe" --declared 0x20000
-} @('ok: ro.opengles.version set for this process''s boot', 'ok: boot declared 2.0: this process''s display gives ES 2.0 only',
-    'ok: no ES 3 configs: an ES 3 context refused with EGL_BAD_MATCH', 'gpu_keepalive_test all passed')
+} @('ro.opengles.version=131072: set', 'ok: boot declared 2.0: this process''s display gives ES 2.0 only',
+    'ok: no ES 3 configs: an ES 3 context refused with EGL_BAD_MATCH', 'gpu_keepalive_test all passed',
+    'gpu-keepalive-test: the --declared run''s data directory removed')
 
 Check 'native libs: GESHER_GPU_KEEPALIVE=0 turns the GPU keep-alive off' {
   $env:GESHER_GPU_KEEPALIVE = '0'
