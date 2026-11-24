@@ -563,6 +563,12 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Camera runtime permission and attribution admission
+        run: |
+          python3 tools/test_camera_permission.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Permission policy work counts and publication contracts
         run: |
           python3 tools/test_permission_performance.py --java-home "$JAVA_HOME" \

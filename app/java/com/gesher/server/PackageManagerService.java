@@ -228,6 +228,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         mTransientEnabled = !persistentEnabled;
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
+            if (ContactsProviderSupport.hasBuiltInConflict(p)) {
+                SystemServer.log("package " + p.packageName
+                        + " skipped: claims a built-in contacts authority");
+                continue;
+            }
             if (map.put(p.packageName, p) != null) throw new IllegalArgumentException("Duplicate installed package");
         }
         try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
@@ -251,8 +256,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mEnabledStore;
     }
 
+    private static void checkBuiltInProviderOwner(ApkPackage pkg) {
+        try {
+            ContactsProviderSupport.checkPackageAdmission(pkg);
+        } catch (android.content.pm.PackageParser.PackageParserException conflict) {
+            throw new IllegalArgumentException(conflict.getMessage(), conflict);
+        }
+    }
+
     /** Finish owner I/O before an installer commits its durable package registry. */
     synchronized PackageUids.Admission prepareAdd(ApkPackage p) {
+        checkBuiltInProviderOwner(p);
         PackageUids.Admission identity = PackageUids.prepare(List.of(p), mPackages.values());
         try {
             PackageEnabledStore store = enabledStore();
@@ -534,6 +548,13 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.packageName = "android";
             info.applicationInfo = platformApplication();
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
+            if ((flags & PackageManager.GET_PROVIDERS) != 0
+                    && ContactsProviderSupport.matchesProviderFlags(flags)) {
+                info.providers = new ProviderInfo[] {
+                        ContactsProviderSupport.contactsProviderInfo(),
+                        ContactsProviderSupport.callLogProviderInfo()
+                };
+            }
             return info;
         }
         ApkPackage p = get(packageName);
@@ -590,7 +611,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         return null;
     }
 
-    private ApplicationInfo platformApplication() {
+    static ApplicationInfo platformApplication() {
         ApplicationInfo info = new ApplicationInfo();
         String root = System.getenv("ANDROID_ROOT");
         info.packageName = "android";
@@ -719,12 +740,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     synchronized ProviderInfo provider(String authority, long flags) {
         for (ApkPackage p : providerPackages(authority)) {
             if (isRemovalPending(p.packageName)) continue;
-            for (ProviderInfo info : p.providers(flags)) {
-                if (info.authority == null) continue;
-                for (String a : info.authority.split(";")) {
-                    if (a.equals(authority)) return info;
-                }
-            }
+            ProviderInfo info = p.providerForAuthority(authority, flags);
+            if (info != null) return info;
         }
         return null;
     }
@@ -799,7 +816,18 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
         if (userId != 0) return null;
         ProviderInfo hosted = hostedProvider(name);
-        if (hosted != null) return hosted;
+        if (hosted != null) {
+            if (ContactsProviderSupport.isSystemAuthority(name)
+                    && !ContactsProviderSupport.matchesProviderFlags(flags)) {
+                return null;
+            }
+            return hosted;
+        }
+        if (mHostedProviders == null && ContactsProviderSupport.isSystemAuthority(name)
+                && ContentProviders.declaredProvider(this, name) == null) {
+            ProviderInfo builtIn = ContactsProviderSupport.providerForAuthority(name, flags);
+            if (builtIn != null) return builtIn;
+        }
         return provider(name, flags);
     }
 
@@ -820,6 +848,10 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        if (userId != 0 || className == null) return null;
+        if (ContactsProviderSupport.PACKAGE.equals(className.getPackageName())) {
+            return ContactsProviderSupport.providerForComponent(className.getClassName(), flags);
+        }
         if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         if (p == null) return null;
@@ -1190,13 +1222,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
     }
 
-    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
+    /**
+     * Report real cameras: a configured rear camera as FEATURE_CAMERA, the others as front
+     * cameras (a PC's camera faces the user; CONTRIBUTING.md), without inferred capabilities.
+     */
     static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
-            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
+            addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
+                    : PackageManager.FEATURE_CAMERA_FRONT);
         }
     }
 
@@ -1380,7 +1416,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                 && !snapshot.packages.containsKey(GmsPackageSupport.PACKAGE_GMS)
                 && !snapshot.removing.containsKey(GmsPackageSupport.PACKAGE_VENDING);
         PackageVisibility visibility = new PackageVisibility(snapshot.visible, browser, gms, vending,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
         synchronized (this) {
             // A concurrent publication may retire this snapshot during construction.
             // The captured query stays coherent, but must not retain retired metadata.

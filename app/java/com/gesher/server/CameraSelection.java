@@ -37,7 +37,7 @@ public final class CameraSelection {
                 WindowsCamera.Device d = devices.get(i);
                 if (!d.test) {
                     System.out.println(i + "  " + d.name + "  " + d.sizes
-                            + (d.isRearFacing() ? "  [configured rear mounting]" : "  [external]"));
+                            + (d.isRearFacing() ? "  [configured rear mounting]" : "  [front]"));
                 }
             }
             return;

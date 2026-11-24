@@ -270,14 +270,22 @@ processes of packages without it; gesher-app applies it in its own process
   return it.
 - **Gesher's own proxy**, over Windows' settings (`com.gesher.net.ProxySetting`): for every
   app or for one package, saved in `<data>/system/proxy.properties` by
-  `gesher-app proxy [PACKAGE] host:port|direct|windows` (no argument shows them; `direct`
+  `gesher-app proxy [PACKAGE] host:port|direct|windows` or in the control panel ("Proxy for
+  every app" above the app list, and each app's "Proxy" button, where "Same as every app"
+  removes the package's own setting) (no argument shows them; `direct`
   is no proxy; `windows` for a package is Windows' settings over every app's setting), or for
   one launch (`gesher-app launch PACKAGE --proxy host:port`). The system server gives an app
   process its setting (the launch's, else the package's, else every app's) as
   `$GESHER_PROXY` when it starts it, with `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for HTTP
   clients that read those (Dart's HttpClient: Flutter apps); `WindowsProxy` then takes it
   instead of Windows' settings (an HTTP proxy server, with localhost, 127.0.0.1 and [::1] left out) and does not
-  follow Windows' changes. A running app keeps its proxy until its process ends.
+  follow Windows' changes. A running app keeps its proxy until its process ends: reopening
+  its window or an Activity can reuse that process, so a changed setting needs the app
+  closed completely (or the device stopped) and started again, as the control panel says.
+  It covers HTTP clients that use the system proxy or those variables. WebView pages are
+  not given it: without the app's own `ProxyController` override (androidx.webkit, ADR
+  0058) the process's WebView2 environment gets no proxy arguments and uses Windows'
+  settings.
 - **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
   sticky query, as BatteryService's battery broadcast) and sends it when the default
   network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,
