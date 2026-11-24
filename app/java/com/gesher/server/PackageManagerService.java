@@ -705,7 +705,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage caller = packages.get(source);
         if (caller == null) return false;
         PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
         // Package admission assigns isolated or authenticated shared identities
         // in both signature-spoofing modes.
         return visibility.canSee(caller.uid(), target);
@@ -738,12 +738,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     synchronized ProviderInfo provider(String authority, long flags) {
         for (ApkPackage p : providerPackages(authority)) {
             if (isRemovalPending(p.packageName)) continue;
-            for (ProviderInfo info : p.providers(flags)) {
-                if (info.authority == null) continue;
-                for (String a : info.authority.split(";")) {
-                    if (a.equals(authority)) return info;
-                }
-            }
+            ProviderInfo info = p.providerForAuthority(authority, flags);
+            if (info != null) return info;
         }
         return null;
     }
@@ -1509,6 +1505,8 @@ public final class PackageManagerService extends IPackageManager.Default {
      * FEATURE_SENSOR_* for the sensor types SensorManager lists (Windows.Devices.Sensors'
      * accelerometer, gyrometer, magnetometer and light sensor, docs/devices.md), so
      * hasSystemFeature agrees with getDefaultSensor. A rotation vector has no feature.
+     * {@link WindowsSensors#types} leaves out Gesher's stationary accelerometer: it is a
+     * desktop default, not hardware, so no FEATURE_SENSOR_ACCELEROMETER comes from it.
      */
     public static void addSensorFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             int[] types) {
@@ -1561,21 +1559,16 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     /**
-     * Report real cameras and an explicitly configured rear role, without inferred
-     * capabilities. A camera without a configured mounting is LENS_FACING_EXTERNAL at the
-     * EXTERNAL hardware level in CameraService's characteristics, so it is
-     * FEATURE_CAMERA_EXTERNAL, as Android declares for its external (USB) cameras.
+     * Report real cameras: a configured rear camera as FEATURE_CAMERA, the others as front
+     * cameras (a PC's camera faces the user; CONTRIBUTING.md), without inferred capabilities.
      */
     static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
-            if (camera.isRearFacing()) {
-                addFeature(features, PackageManager.FEATURE_CAMERA);
-            } else {
-                addFeature(features, PackageManager.FEATURE_CAMERA_EXTERNAL);
-            }
+            addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
+                    : PackageManager.FEATURE_CAMERA_FRONT);
         }
     }
 
@@ -1737,7 +1730,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                     && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
         }
         return new PackageVisibility(packages, browser, gms, vending,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
     }
 
     @Override

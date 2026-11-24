@@ -183,11 +183,11 @@ Not reported:
 | `android.hardware.location`, `.location.network` | always | LocationManagerService, Windows location with IP fallback |
 | `android.hardware.bluetooth`, `.bluetooth_le` | Windows radio / LE support | docs/bluetooth.md |
 | `android.hardware.camera.any` | a Windows camera | CameraService (docs/devices.md) |
-| `android.hardware.camera` | a camera explicitly configured as rear-mounted | as above |
-| `android.hardware.camera.external` | a camera without a configured mounting | Camera2 reports it `LENS_FACING_EXTERNAL`, hardware level EXTERNAL, as Android's USB cameras, which Android declares with this feature |
+| `android.hardware.camera` | a camera explicitly configured as rear-mounted (`GESHER_CAMERA_REAR_ID`) | as above; Camera2 and the legacy API report it `LENS_FACING_BACK` |
+| `android.hardware.camera.front` | a camera not configured as rear: a PC's camera faces the user (maintainer-approved desktop default, CONTRIBUTING.md) | as above; Camera2 and the legacy API report it `LENS_FACING_FRONT` (`CAMERA_FACING_FRONT`) |
 | `android.hardware.ram.normal` / `.ram.low` | whichever `ActivityManager.isLowRamDevice()` says (`ro.config.low_ram` is unset: normal) | as AOSP's SystemConfig |
 | `android.software.webview` | the WebView2 Runtime is installed | `android.webkit.WebView` on WebView2 (docs/webview.md); without the runtime WebViews stay empty, so it is not claimed |
-| `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass`, `.light` | the matching sensor in the list SensorManager gives apps (Windows.Devices.Sensors' default sensors) | SensorManager over Windows sensors (docs/devices.md) |
+| `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass`, `.light` | the matching sensor in the list SensorManager gives apps (Windows.Devices.Sensors' default sensors), except Gesher's stationary accelerometer: the gravity-only desktop default SensorManager lists on a PC without motion sensors (`GESHER_SENSOR_FALLBACK`) is not hardware and declares no feature | SensorManager over Windows sensors (docs/devices.md) |
 | `android.hardware.wifi` | a WLAN interface in a `WlanEnumInterfaces` census at boot (waited for at most 5 s; a hung WLAN service means no feature) | WifiManager over wlanapi (docs/wifi.md); no Wi-Fi Direct, Aware, RTT or Passpoint |
 | `android.hardware.telephony`, `.telephony.subscription`, `.telephony.radio_access`, `.telephony.data`, `.telephony.gsm` (3GPP only) | a cellular modem the Mobile Broadband API reports at boot | read-only, data-only telephony services (docs/telephony.md) |
 
@@ -202,7 +202,7 @@ promises. Absent (c): nothing implements it.
 | `android.hardware.audio.pro` | c | low_latency, plus ≤ 20 ms round trip, USB host audio and MIDI |
 | `android.hardware.audio.spatial.headtracking.low_latency` | c | a spatializer with head tracking |
 | `android.hardware.location.gps` | b | GPS_PROVIDER exists over Windows location, which can use a GNSS receiver, but there is no GnssStatus, NMEA, measurements or `GnssCapabilities`, and no detection of a GNSS device. Needs a GNSS device check (GUID_DEVINTERFACE_GNSS / Sensor API) and the GNSS status callbacks |
-| `android.hardware.camera.front` | b | a truthful front-mounting configuration (CameraSelection only offers rear), with sensor orientation and facing reported to match |
+| `android.hardware.camera.external` | b | cameras are reported with a facing (FRONT, or BACK when configured as rear), never `LENS_FACING_EXTERNAL`, so the feature that describes such cameras does not apply |
 | `android.hardware.camera.autofocus`, `.flash`, `.capability.*`, `.level.full`, `.concurrent`, `.ar` | c | the camera is fixed-focus, EXTERNAL level, no flash; needs Media Foundation focus/torch controls and the matching Camera2 metadata |
 | `android.software.input_methods` | c | only Windows' own text input is an IME (InputMethodManagerService); hosting installed `InputMethodService` apps |
 | `android.software.home_screen` | c | Windows' Start menu is the launcher; hosting a HOME activity |
@@ -284,8 +284,19 @@ promises. Absent (c): nothing implements it.
   session and data directory of their own (`tests/native/declared_boot.h`),
   which the parent removes; `gl_window_test --declared` fails unless the
   default display gives exactly the declared version.
-- `tools/test_camera_selection_and_orientation.py`: `camera.external` for an
-  unconfigured camera, not for a configured rear one.
+- `tools/test_camera_selection_and_orientation.py`: `camera.front` for a
+  camera not configured as rear, `camera` for a configured rear one, both for
+  a rear and a front camera together; never `camera.external` or `autofocus`.
+- `PackageServiceQueriesTest` compares the sensor features with
+  `WindowsSensors.types()`, the plain run without natives (nothing listed,
+  nothing claimed). Through `ServiceFixtureRunner` (the runtime natives) the
+  framework-fixes track runs it three times: with `GESHER_SENSOR_TEST=1` the test
+  accelerometer and light sensor are `hasSystemFeature` and
+  `getSystemAvailableFeatures` answers; with the defaults on the runners (no
+  Windows motion sensor) SensorManager's native list holds the stationary
+  accelerometer and `android.hardware.sensor.accelerometer` is not declared; with
+  `GESHER_SENSOR_FALLBACK=0` the list has no stationary accelerometer and no
+  sensor feature is declared.
 - CI runs `PackageServiceQueriesTest` without `libandroid_runtime`. Without
   the property natives, the RAM features and `ro.opengles.version` are absent
   (`GL_ES_VERSION_UNDEFINED`), and the test expects exactly that. Through
@@ -299,5 +310,5 @@ promises. Absent (c): nothing implements it.
   miniport and kernel-debug adapters are excluded.
 - Limits: the development machine has no touch digitizer, camera, audio
   endpoint, Wi-Fi adapter, cellular modem or sensors. Multitouch on a real touchscreen, a real webcam's
-  `camera.external`, an unplugged audio jack counting as an output, and a
+  `camera.front`, an unplugged audio jack counting as an output, and a
   hardware GPU below feature level 10_1 declaring ES 2.0 on the GPU were not observed.

@@ -307,7 +307,7 @@ public final class PackageServiceQueriesTest {
                 PackageManager.FEATURE_PICTURE_IN_PICTURE,
                 PackageManager.FEATURE_AUDIO_LOW_LATENCY,
                 PackageManager.FEATURE_CAMERA_AUTOFOCUS,
-                PackageManager.FEATURE_CAMERA_FRONT,
+                PackageManager.FEATURE_CAMERA_EXTERNAL,
                 PackageManager.FEATURE_CAMERA_FLASH,
                 PackageManager.FEATURE_USB_HOST,
                 PackageManager.FEATURE_NFC,
@@ -315,6 +315,25 @@ public final class PackageServiceQueriesTest {
                 PackageManager.FEATURE_VERIFIED_BOOT}) {
             require(!service.hasSystemFeature(absent, 0), "Unimplemented feature claimed: " + absent);
         }
+        // Cameras: FEATURE_CAMERA for one configured as rear, FEATURE_CAMERA_FRONT for the
+        // others (a PC's camera faces the user, CONTRIBUTING.md); none without natives.
+        List<com.gesher.server.WindowsCamera.Device> cameras;
+        try {
+            cameras = com.gesher.server.WindowsCamera.devices();
+        } catch (LinkageError e) {
+            cameras = Collections.emptyList();
+        }
+        boolean rearCamera = false;
+        boolean frontCamera = false;
+        for (com.gesher.server.WindowsCamera.Device camera : cameras) {
+            if (camera.isRearFacing()) rearCamera = true;
+            else frontCamera = true;
+        }
+        require(service.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY, 0) == !cameras.isEmpty()
+                        && service.hasSystemFeature(PackageManager.FEATURE_CAMERA, 0) == rearCamera
+                        && service.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT, 0)
+                                == frontCamera,
+                "Camera features disagree with the " + cameras.size() + " Windows cameras");
 
         android.util.ArrayMap<String, FeatureInfo> f = new android.util.ArrayMap<>();
         PackageManagerService.addHostHardwareFeatures(f, null);
@@ -344,6 +363,44 @@ public final class PackageServiceQueriesTest {
         f.clear();
         PackageManagerService.addMemoryFeature(f, false);
         require(f.containsKey(PackageManager.FEATURE_RAM_NORMAL) && f.size() == 1, "normal-RAM device");
+    }
+
+    /** Gesher's stationary accelerometer's name (compat/devices/sensors.cc, docs/devices.md). */
+    private static final String STATIONARY_ACCELEROMETER = "Gesher Stationary Accelerometer";
+
+    /**
+     * Every sensor SystemSensorManager's natives list in this process, as a SensorManager
+     * built on them would; empty without the runtime natives (the plain run).
+     */
+    private static List<android.hardware.Sensor> nativeSensorList() throws Exception {
+        List<android.hardware.Sensor> list = new ArrayList<>();
+        Class<?> manager = android.hardware.SystemSensorManager.class;
+        java.lang.reflect.Method classInit = manager.getDeclaredMethod("nativeClassInit");
+        java.lang.reflect.Method create = manager.getDeclaredMethod("nativeCreate", String.class);
+        java.lang.reflect.Method at = manager.getDeclaredMethod("nativeGetSensorAtIndex",
+                long.class, android.hardware.Sensor.class, int.class);
+        java.lang.reflect.Constructor<android.hardware.Sensor> constructor =
+                android.hardware.Sensor.class.getDeclaredConstructor();
+        classInit.setAccessible(true);
+        create.setAccessible(true);
+        at.setAccessible(true);
+        constructor.setAccessible(true);
+        long handle;
+        try {
+            classInit.invoke(null);
+            handle = (Long) create.invoke(null, "android");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof LinkageError) return list; // no runtime natives
+            throw e;
+        } catch (LinkageError e) {
+            return list; // no runtime natives: SystemSensorManager cannot initialize
+        }
+        for (int i = 0; ; i++) {
+            android.hardware.Sensor sensor = constructor.newInstance();
+            if (!(Boolean) at.invoke(null, handle, sensor, i)) break;
+            list.add(sensor);
+        }
+        return list;
     }
 
     private static void field(Object target, String name, Object value) throws Exception {
@@ -460,6 +517,55 @@ public final class PackageServiceQueriesTest {
                     "getSystemAvailableFeatures omits GESHER_SENSOR_TEST's sensors");
             System.out.println("PackageServiceQueriesTest: GESHER_SENSOR_TEST's accelerometer"
                     + " and light sensor are system features");
+        }
+        // Gesher's stationary accelerometer (GESHER_SENSOR_FALLBACK, on unless "0") is in
+        // SensorManager's native list on a PC without Windows motion sensors (the runners),
+        // but it is a desktop default, not hardware: WindowsSensors.types() leaves it out
+        // and no FEATURE_SENSOR_* comes from it. "sensor-fallback" requires it listed and
+        // featureless; "sensor-fallback-off" (GESHER_SENSOR_FALLBACK=0) requires it absent.
+        List<android.hardware.Sensor> listed = nativeSensorList();
+        int stationary = 0;
+        int listedAccelerometers = 0;
+        for (android.hardware.Sensor sensor : listed) {
+            if (sensor.getType() != android.hardware.Sensor.TYPE_ACCELEROMETER) continue;
+            listedAccelerometers++;
+            if (STATIONARY_ACCELEROMETER.equals(sensor.getName())) stationary++;
+        }
+        System.out.println("PackageServiceQueriesTest: SensorManager lists " + listed.size()
+                + " sensors, " + stationary + " stationary accelerometer");
+        int typedAccelerometers = 0;
+        for (int type : com.gesher.server.WindowsSensors.types()) {
+            if (type == android.hardware.Sensor.TYPE_ACCELEROMETER) typedAccelerometers++;
+        }
+        require(typedAccelerometers == listedAccelerometers - stationary,
+                "WindowsSensors.types() does not give exactly the non-stationary accelerometers: "
+                        + typedAccelerometers + " of " + listedAccelerometers + " listed, "
+                        + stationary + " stationary");
+        require(service.hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER, 0)
+                        == (listedAccelerometers > stationary),
+                "Accelerometer feature disagrees with the real accelerometers listed");
+        if (Arrays.asList(args).contains("sensor-fallback")) {
+            require(stationary == 1 && listedAccelerometers == 1,
+                    "The stationary accelerometer is not the only accelerometer listed: "
+                            + listedAccelerometers + " accelerometers, " + stationary
+                            + " stationary");
+            require(!service.hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER, 0),
+                    "The stationary accelerometer declared FEATURE_SENSOR_ACCELEROMETER");
+            for (FeatureInfo f : service.getSystemAvailableFeatures().getList()) {
+                require(f.name == null || !f.name.startsWith("android.hardware.sensor."),
+                        "The stationary accelerometer declared a sensor feature: " + f.name);
+            }
+            System.out.println("PackageServiceQueriesTest: the stationary accelerometer is"
+                    + " listed and declares no system feature");
+        }
+        if (Arrays.asList(args).contains("sensor-fallback-off")) {
+            require(stationary == 0, "GESHER_SENSOR_FALLBACK=0 still lists the stationary"
+                    + " accelerometer");
+            require(!service.hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER, 0)
+                            || listedAccelerometers > 0,
+                    "Accelerometer feature without an accelerometer");
+            System.out.println("PackageServiceQueriesTest: GESHER_SENSOR_FALLBACK=0 lists no"
+                    + " stationary accelerometer and its features follow the real sensors");
         }
         android.util.ArrayMap<String, FeatureInfo> sensors = new android.util.ArrayMap<>();
         PackageManagerService.addSensorFeatures(sensors, new int[0]);

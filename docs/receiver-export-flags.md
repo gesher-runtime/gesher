@@ -16,13 +16,28 @@ identity before applying the export policy and before allocating receiver state.
 | SDK 34+ UID, non-system action, no explicit export flag | `SecurityException` |
 | SDK 34+ UID, visible-to-instant-apps plus not-exported | `IllegalArgumentException` |
 | Exclusively protected system actions | Explicit export flag is optional |
+| Filter with no actions | Explicit export flag is optional |
 | Null receiver querying sticky broadcasts | Explicit export flag is optional |
 | Legacy UID without not-exported | Exported by default |
 
-A filter mixing protected and ordinary actions is not exempt. A filter with no
-actions also requires an explicit flag for a modern UID. An unreadable framework
-catalog cannot establish the protected-action exemption. The existing sender
+A filter mixing protected and ordinary actions is not exempt. Android starts
+`onlyProtectedBroadcasts` at true and clears it only for an unprotected action, so
+a filter with no actions is exempt and exported unless not-exported is requested.
+media3 `RequirementsWatcher` registers such a filter without flags for its default
+network requirement on API 24+. Protected actions are the framework manifest's
+`<protected-broadcast>` declarations plus the four prefixes that Android 16
+`PackageManagerService.isProtectedBroadcast` adds. An unreadable framework
+catalog cannot establish the exemption for a declared action. The existing sender
 policy still denies unknown protected actions when catalog loading fails.
+
+Registered receivers are matched as Android's receiver `IntentResolver` offers
+them to `IntentFilter.match`: a filter is indexed by data scheme, by MIME type
+and, with neither, by action. A filter with no actions, schemes or types therefore
+receives no broadcast, from another application or its own, and an intent with no
+action, type or scheme reaches no registered receiver. A filter with data but no
+actions still receives a matching action-less data broadcast. Both the ordinary
+and ordered delivery paths apply this. Sticky replay keeps Android's per-action
+selection, since every system sticky intent has an action.
 
 Protected broadcasts require system authority in every runtime compatibility
 mode. The registration exemption must not permit other applications to impersonate

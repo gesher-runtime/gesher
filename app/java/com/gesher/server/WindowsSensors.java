@@ -5,9 +5,12 @@
 package com.gesher.server;
 
 /**
- * The sensor types SensorManager lists on this device (compat/devices/sensors.cc:
- * Windows.Devices.Sensors' default sensors, plus GESHER_SENSOR_TEST's when that test
- * switch is set, docs/devices.md), for the system features that describe them.
+ * The types of the sensors SensorManager lists on this device that describe a sensor
+ * (compat/devices/sensors.cc: Windows.Devices.Sensors' default sensors, plus
+ * GESHER_SENSOR_TEST's when that test switch is set, docs/devices.md), for the system
+ * features that describe them. Gesher's stationary accelerometer, which SensorManager
+ * lists on a PC without motion sensors (GESHER_SENSOR_FALLBACK), is not hardware and is
+ * left out here by the native list's origin marker, so it declares no feature.
  */
 public final class WindowsSensors {
     private static volatile int[] sTypes;

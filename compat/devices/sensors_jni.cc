@@ -320,12 +320,18 @@ const JNINativeMethod gBaseEventQueueMethods[] = {
 
 // com.gesher.server.WindowsSensors.nativeTypes: the TYPE_* of each sensor the
 // SystemSensorManager natives above list (hub::List(), the same list in every
-// process), for PackageManagerService's FEATURE_SENSOR_* answers.
+// process) that describes a sensor, for PackageManagerService's FEATURE_SENSOR_*
+// answers: Windows' and GESHER_SENSOR_TEST's. The stationary accelerometer is
+// listed to apps but is Gesher's desktop default, not hardware, so it declares no
+// feature (hub::Origin).
 jintArray WindowsSensors_types(JNIEnv* env, jclass) {
   const std::vector<hub::Sensor>& list = hub::List();
   std::vector<jint> types;
   types.reserve(list.size());
-  for (const hub::Sensor& sensor : list) types.push_back(sensor.type);
+  for (const hub::Sensor& sensor : list) {
+    if (sensor.origin == hub::Origin::kStationaryDefault) continue;
+    types.push_back(sensor.type);
+  }
   jintArray result = env->NewIntArray(static_cast<jsize>(types.size()));
   if (result != nullptr && !types.empty()) {
     env->SetIntArrayRegion(result, 0, static_cast<jsize>(types.size()), types.data());

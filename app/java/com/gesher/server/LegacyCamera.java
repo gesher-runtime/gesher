@@ -25,8 +25,9 @@ import java.util.WeakHashMap;
  * postEventFromNative, as libcameraservice's client does.
  *
  * <p>A device is camera {@code i} in Windows' order (the test camera last); a PC's camera
- * faces the user (CAMERA_FACING_FRONT), the test camera is BACK, orientation 0. Opening needs
- * a current CAMERA permission grant, else "Fail to connect to camera service". Parameters: the
+ * faces the user (CAMERA_FACING_FRONT), the test camera is BACK; the orientation follows the
+ * display rotation of the Activity using the camera (CameraService.sensorOrientation). Opening
+ * needs a current CAMERA permission grant, else "Fail to connect to camera service". Parameters: the
  * device's sizes for preview, picture and video, preview formats NV21 (yuv420sp, the
  * default) and YV12, 30 fps, fixed focus, no flash, no zoom, no face detection, JPEG
  * pictures and thumbnails. Preview frames go to the preview callback (NV21 or YV12; with
@@ -71,7 +72,7 @@ public final class LegacyCamera {
         boolean rear = d.get(id).isRearFacing();
         info.facing = rear ? Camera.CameraInfo.CAMERA_FACING_BACK
                 : Camera.CameraInfo.CAMERA_FACING_FRONT;
-        info.orientation = CameraService.sensorOrientation();
+        info.orientation = CameraService.sensorOrientation(rear);
         info.canDisableShutterSound = true;
     }
 
