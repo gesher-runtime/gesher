@@ -407,8 +407,8 @@ class MfVideoDecoder : public VideoDecoder {
     height_ = height;
     stride_ = stride;
     if (has_area) {
-      crop_left_ = std::max<int>(0, area.OffsetX.value);
-      crop_top_ = std::max<int>(0, area.OffsetY.value);
+      crop_left_ = std::clamp<int>(area.OffsetX.value, 0, width_ - 1);
+      crop_top_ = std::clamp<int>(area.OffsetY.value, 0, height_ - 1);
       const int64_t right = static_cast<int64_t>(area.OffsetX.value) + area.Area.cx - 1;
       const int64_t bottom = static_cast<int64_t>(area.OffsetY.value) + area.Area.cy - 1;
       crop_right_ = static_cast<int>(std::clamp<int64_t>(right, crop_left_, width_ - 1));
