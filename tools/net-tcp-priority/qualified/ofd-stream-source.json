@@ -59,7 +59,7 @@
     "compat/posix/src/font_environment.cc": "4b7401dd93967ee63de6072f87b4e535627caef888dfb186a71852807fced499",
     "compat/posix/src/system_properties.cc": "a7891115d788a0a89745d389325cbe90a0b3b8c940651b2b3940f27693ac9989",
     "compat/bionic/posix_bionic.cc": "2c70a33b692e1b4522cf4a686187797e4bc2e37ed01c264410c38e743602c7d8",
-    "compat/bionic/shim.cc": "fecd77f2d4790089a7636dda40103576536d1e400fb827629007921d217e2e72",
+    "compat/bionic/shim.cc": "7d131093803fcea69b87ed663ec50165e136acb2a1724a3acbfacd752c1f3037",
     "compat/elf/exec/gesher_exec.cc": "6c86da7c77affc2f18871d4e83adc3175552925c10bdeda3f40523e6e1b2199f",
     "compat/elf/exec/exec_spawn.h": "6328b7ecffbb2c7287caff900912aa250c09fce61e9fe7e4694499fa60e315ea",
     "compat/elf/exec/spawn_actions.h": "b5acb3a95c4e5df7a783e6b16a3b2b02baf401250719a6ad0773a8d6055dc5ff",
