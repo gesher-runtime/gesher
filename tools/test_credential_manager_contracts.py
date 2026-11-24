@@ -2,8 +2,8 @@
 """Run the production Credential Manager (ICredentialManager) passkey contracts on a host JVM.
 
 The Android boundary is stand-ins with android-16.0.0_r4's and androidx.credentials'
-constant values; CredentialManagerService, PasskeyRequests, PasskeyJson, AssetLinks and
-PasskeyBackend are compiled unchanged apart from their package, imports and public class
+constant values; CredentialManagerService, PasskeyRequests, PasskeyJson, AssetLinks,
+PasskeyBackend and WindowsWebAuthn are compiled unchanged apart from package, imports and class
 visibility (docs/passkeys.md, ADR 0093). Tests cover AOSP's answers without a provider
 (production without Windows' WebAuthn API) and, with an isolated software authenticator
 and a local asset-links server only, request and response mapping, the security refusals,
@@ -26,6 +26,7 @@ SOURCES = {
     "// PRODUCTION_JSON": (SERVER + "PasskeyJson.java", "final class PasskeyJson", None),
     "// PRODUCTION_BACKEND": (SERVER + "PasskeyBackend.java",
                               "public interface PasskeyBackend", "interface PasskeyBackend"),
+    "// PRODUCTION_NATIVE": (SERVER + "WindowsWebAuthn.java", "final class WindowsWebAuthn", None),
     "// PRODUCTION_REQUESTS": (SERVER + "PasskeyRequests.java", "final class PasskeyRequests", None),
     "// PRODUCTION_ASSET_LINKS": (SERVER + "AssetLinks.java", "final class AssetLinks", None),
     "// PRODUCTION_SERVICE": (SERVER + "CredentialManagerService.java",
