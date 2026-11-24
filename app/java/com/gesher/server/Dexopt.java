@@ -589,7 +589,9 @@ final class Dexopt {
                 + ": -2 deadline, -3 foreground/memory cancellation); input retained for retry");
         // profman's exit codes are results (ProfmanResult), not only failures.
         boolean result = tool.equals("profman") && (code == 1 || code == 2 || code == 7);
-        if (code == -2 || (code > 0 && !result)) {
+        // -1 (no wait) and -3 (cancelled) have no failure of the tool's own; a crash's
+        // NTSTATUS exit code is negative too.
+        if (code != 0 && code != -1 && code != -3 && !result) {
             logOutput(code == -2 ? tool + " took more than " + TOOL_TIMEOUT_MS / 1000 + " s; stopped"
                     : tool + " exit code " + code, pid, log, outputStart);
         }
@@ -611,9 +613,9 @@ final class Dexopt {
     private static void logOutput(String what, int pid, File log, long start) {
         String output;
         try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(log, "r")) {
-            long end = f.length();
-            long from = Math.max(start, end - OUTPUT_READ_LIMIT);
-            byte[] bytes = new byte[(int) Math.max(0, end - from)];
+            // The run's first output: its cause and first errors come early.
+            long from = Math.min(start, f.length());
+            byte[] bytes = new byte[(int) Math.min(f.length() - from, OUTPUT_READ_LIMIT)];
             f.seek(from);
             f.readFully(bytes);
             output = new String(bytes, StandardCharsets.UTF_8);
