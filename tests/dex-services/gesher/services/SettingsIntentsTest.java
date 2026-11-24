@@ -521,9 +521,17 @@ public final class SettingsIntentsTest {
         Object modemless = cc.newInstance(none, null, noProperties);
         Constructor<?> rc = rules.getDeclaredConstructor(callers);
         rc.setAccessible(true);
-        Constructor<?> pc = phone.getDeclaredConstructor(cellular, rules);
+        // The data switches over a settings store of their own (no modem: never written).
+        Class<?> settings = Class.forName("com.gesher.server.TelephonyService$GlobalSettings", true, loader);
+        Class<?> data = Class.forName("com.gesher.server.TelephonyService$DataSettings", true, loader);
+        java.lang.reflect.Method memory = Class.forName("com.gesher.server.TelephonyService", true, loader)
+                .getDeclaredMethod("memorySettings");
+        memory.setAccessible(true);
+        Constructor<?> dc = data.getDeclaredConstructor(settings, cellular);
+        dc.setAccessible(true);
+        Constructor<?> pc = phone.getDeclaredConstructor(cellular, rules, data);
         pc.setAccessible(true);
         return (com.android.internal.telephony.ITelephony) pc.newInstance(modemless,
-                rc.newInstance(noCallers));
+                rc.newInstance(noCallers), dc.newInstance(memory.invoke(null), modemless));
     }
 }

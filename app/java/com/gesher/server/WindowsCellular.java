@@ -14,13 +14,15 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Read-only observations of the host's cellular (WWAN) modem through Windows' Mobile
- * Broadband API (compat/net/windows_cellular.cc, built-in libgesher_cellular.so), and
- * their translation into Android telephony values. See docs/telephony.md.
+ * Observations of the host's cellular (WWAN) modem through Windows' Mobile Broadband API
+ * (compat/net/windows_cellular.cc, built-in libgesher_cellular.so), and their translation
+ * into Android telephony values. See docs/telephony.md.
  *
- * <p>This class only reads and translates. It never connects, disconnects, unlocks or
- * reconfigures the modem; Android's permission and identifier rules are applied by
- * {@link TelephonyService}, which is the only consumer.
+ * <p>The one write is {@link Source#configure}: the connection mode of the SIM's default
+ * profile, which Android's mobile data and data roaming switches set, with the connect or
+ * disconnect that makes the connection follow it. Nothing else is written: no PIN,
+ * registration, provider, SMS or radio change. Android's permission and identifier rules
+ * are applied by {@link TelephonyService}, which is the only consumer.
  */
 public final class WindowsCellular {
     private WindowsCellular() {
@@ -30,28 +32,60 @@ public final class WindowsCellular {
     public interface Source {
         /** The native snapshot text, or null if the backend could not be reached. */
         String snapshot();
+
+        /**
+         * Sets the connection mode ("auto", "auto-home" or "manual") of the default
+         * profile of the interface's SIM and makes its connection follow it. The native
+         * result line ("ok ..." or "error ..."), or null if the backend could not be
+         * reached. Unsupported by default.
+         */
+        default String configure(String interfaceId, String mode) {
+            return null;
+        }
     }
 
     private static final Object LOAD_LOCK = new Object();
     private static boolean sLoaded;
 
     /** The production source: Windows' Mobile Broadband service on this machine. */
-    public static final Source WINDOWS = () -> {
-        try {
+    public static final Source WINDOWS = new Source() {
+        @Override
+        public String snapshot() {
+            try {
+                load();
+                return nativeSnapshot();
+            } catch (RuntimeException | LinkageError e) {
+                // No runtime natives (a host JVM) or no WWAN support: no modem.
+                return null;
+            }
+        }
+
+        @Override
+        public String configure(String interfaceId, String mode) {
+            try {
+                load();
+                return nativeConfigure(interfaceId, mode);
+            } catch (RuntimeException | LinkageError e) {
+                return null;
+            }
+        }
+
+        private void load() {
             synchronized (LOAD_LOCK) {
                 if (!sLoaded) {
                     System.loadLibrary("gesher_cellular");
                     sLoaded = true;
                 }
             }
-            return nativeSnapshot();
-        } catch (RuntimeException | LinkageError e) {
-            // No runtime natives (a host JVM) or no WWAN support: no modem.
-            return null;
         }
     };
 
     private static native String nativeSnapshot();
+
+    private static native String nativeConfigure(String interfaceId, String mode);
+
+    /** The Mobile Broadband profile schema's ConnectionMode values. */
+    static final String MODE_AUTO = "auto", MODE_AUTO_HOME = "auto-home", MODE_MANUAL = "manual";
 
     // MBN_READY_STATE.
     static final int READY_OFF = 0, READY_INITIALIZED = 1, READY_SIM_NOT_INSERTED = 2,
@@ -93,6 +127,12 @@ public final class WindowsCellular {
         public final long currentDataClass, signal, signalError, activation;
         /** IMbnRadio's software (Windows' radio switch) and hardware radio states. */
         public final long softwareRadio, hardwareRadio;
+        /**
+         * The ConnectionMode of the SIM's default connection profile ("auto", "auto-home",
+         * "manual" or another value Windows stored), "" when the SIM has no default profile,
+         * null when the profiles could not be read.
+         */
+        public final String connectionMode;
         /** The reading as reported, to detect changes. */
         final String source;
 
@@ -123,6 +163,13 @@ public final class WindowsCellular {
             activation = number(f[23]);
             softwareRadio = number(f[24]);
             hardwareRadio = number(f[25]);
+            connectionMode = f[26].equals("-") ? null : text(f[26]);
+        }
+
+        /** Whether the connection mode is one of the schema's three. */
+        boolean knownMode() {
+            return MODE_AUTO.equals(connectionMode) || MODE_AUTO_HOME.equals(connectionMode)
+                    || MODE_MANUAL.equals(connectionMode);
         }
 
         boolean simReady() { return readyState == READY_INITIALIZED; }
@@ -162,7 +209,7 @@ public final class WindowsCellular {
         public Modem primary() { return modems.isEmpty() ? null : modems.get(0); }
     }
 
-    private static final int MODEM_FIELDS = 26;
+    private static final int MODEM_FIELDS = 27;
 
     /** Parses native text; null when malformed (never a partial modem). */
     static Snapshot parse(String raw) {

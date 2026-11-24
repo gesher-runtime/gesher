@@ -3,7 +3,8 @@
 
 tests/windows-cellular/native_host.cc supplies synthetic WWAN interfaces through an
 explicit Win32/COM boundary; compat/net/windows_cellular.cc is compiled unchanged.
-Negative controls mutate one production contract and require the fixture to catch it.
+Negative controls mutate one production contract (reads and the connection-mode write)
+and require the fixture to catch it.
 """
 import argparse
 from pathlib import Path
@@ -16,12 +17,23 @@ CONTROLS = {
     'leak-capability-strings': ('    if (text) api.free_string(text);\n', '    (void)text;\n',
                                 'Every BSTR is freed'),
     # A thread already in another COM apartment must not be uninitialized.
-    'uninitialize-foreign-apartment': ('bool balance = SUCCEEDED(initialized);', 'bool balance = true;',
+    'uninitialize-foreign-apartment': ('COM is usable.\n  bool balance = SUCCEEDED(initialized);',
+                                       'COM is usable.\n  bool balance = true;',
                                        'Another apartment is never uninitialized'),
     # Airplane mode (the software radio) and a hardware switch must not be confused.
     'swap-radio-states': ('radio.value->get_SoftwareRadioState(&software)',
                           'radio.value->get_HardwareRadioState(&software)',
                           'Software radio states are reported in order'),
+    # Write path: a disconnect Windows refuses must not leave the new mode behind.
+    'keep-mode-after-refused-disconnect': (
+        'if (out.rfind("error", 0) == 0 && previous != mode) profile.value->UpdateProfile(xml.c_str());',
+        'if (false) profile.value->UpdateProfile(xml.c_str());',
+        'A refused disconnect restores the previous profile'),
+    # Write path: auto-home (roaming off) connects at home; it must not disconnect there.
+    'auto-home-disconnects-at-home': (
+        'mode == Wide("auto-home") ? registered && !roaming : false;',
+        'mode == Wide("auto-home") ? false : false;',
+        'auto-home at home keeps the connection'),
 }
 
 

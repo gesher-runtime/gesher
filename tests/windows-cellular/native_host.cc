@@ -31,6 +31,27 @@ BSTR make(const std::u16string& text) {
 int live_objects = 0, initialized = 0, uninitialized = 0;
 HRESULT initialize_result = S_OK, create_result = S_OK, interfaces_result = S_OK;
 bool no_interface_array = false;
+
+// The connection profiles WwanSvc stores, per interface ID, as XML; and the writes the
+// adapter makes. Writes are allowed only inside Configure.
+std::map<std::u16string, std::vector<std::u16string>> profiles;
+HRESULT profile_manager_result = S_OK, profiles_result = S_OK, update_result = S_OK,
+        disconnect_result = S_OK, connect_result = S_OK;
+bool writes_allowed = false;
+std::vector<std::u16string> updates, connects;
+int disconnects = 0;
+
+std::u16string profile(const std::u16string& mode, const std::u16string& imsi = u"425010123456789",
+                       bool isDefault = true, const std::u16string& name = u"Partner &amp; Co") {
+  return u"<?xml version=\"1.0\"?><MBNProfile xmlns=\"http://www.microsoft.com/networking/WWAN/profile/v1\">"
+         u"<Name>" + name + u"</Name><IsDefault>" + (isDefault ? u"true" : u"false")
+         + u"</IsDefault><ProfileCreationType>DeviceProvisioned</ProfileCreationType><SubscriberID>" + imsi
+         + u"</SubscriberID><SimIccID>8997201000000000001F</SimIccID><HomeProviderName>Partner</HomeProviderName>"
+           u"<AutoConnectOnInternet>false</AutoConnectOnInternet>"
+         + (mode.empty() ? u"" : u"<ConnectionMode>" + mode + u"</ConnectionMode>")
+         + u"<Context><AccessString>internet</AccessString><UserLogonCred><UserName>user</UserName>"
+           u"</UserLogonCred></Context></MBNProfile>";
+}
 }  // namespace fixture
 
 struct SAFEARRAY {
@@ -125,13 +146,18 @@ struct Connection : Object<mbn::Connection> {
   explicit Connection(const Spec& s) : s(s) { }
   HRESULT STDMETHODCALLTYPE get_ConnectionID(BSTR*) override { return E_FAIL; }
   HRESULT STDMETHODCALLTYPE get_InterfaceID(BSTR*) override { return E_FAIL; }
-  HRESULT STDMETHODCALLTYPE Connect(ULONG, LPCWSTR, ULONG*) override {
-    check(false, "The adapter must never connect");
-    return E_FAIL;
+  HRESULT STDMETHODCALLTYPE Connect(ULONG mode, LPCWSTR profile, ULONG* request) override {
+    check(writes_allowed, "Only Configure connects");
+    check(mode == 0, "Connects with a stored profile (MBN_CONNECTION_MODE_PROFILE)");
+    connects.push_back(profile);
+    *request = 7;
+    return connect_result;
   }
-  HRESULT STDMETHODCALLTYPE Disconnect(ULONG*) override {
-    check(false, "The adapter must never disconnect");
-    return E_FAIL;
+  HRESULT STDMETHODCALLTYPE Disconnect(ULONG* request) override {
+    check(writes_allowed, "Only Configure disconnects");
+    ++disconnects;
+    *request = 8;
+    return disconnect_result;
   }
   HRESULT STDMETHODCALLTYPE GetConnectionState(ULONG* state, BSTR* profile) override {
     *state = s.activation;
@@ -213,8 +239,42 @@ struct Interface : Object<mbn::Interface> {
   }
 };
 std::vector<Spec> modems;
+struct Profile : Object<mbn::ConnectionProfile> {
+  std::u16string id;
+  size_t index;
+  Profile(std::u16string id, size_t index) : id(std::move(id)), index(index) { }
+  HRESULT STDMETHODCALLTYPE GetProfileXmlData(BSTR* out) override {
+    *out = make(profiles[id].at(index));
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE UpdateProfile(LPCWSTR xml) override {
+    check(writes_allowed, "Only Configure updates a profile");
+    updates.push_back(xml);
+    if (SUCCEEDED(update_result)) profiles[id].at(index) = xml;
+    return update_result;
+  }
+};
+struct ProfileManager : Object<mbn::ProfileManager> {
+  HRESULT STDMETHODCALLTYPE GetConnectionProfiles(mbn::Interface* modem, SAFEARRAY** out) override {
+    if (FAILED(profiles_result)) return profiles_result;
+    BSTR id = nullptr;
+    check(SUCCEEDED(modem->get_InterfaceID(&id)), "Profiles of an interface");
+    std::u16string key(id, strings[id]);
+    SysFreeString(id);
+    auto* array = new SAFEARRAY{true, {}, {}};
+    ++live_arrays;
+    for (size_t i = 0; i < profiles[key].size(); i++) array->items.push_back(new Profile(key, i));
+    *out = array;
+    return S_OK;
+  }
+};
 struct Manager : Object<mbn::Manager> {
-  HRESULT STDMETHODCALLTYPE GetInterface(LPCWSTR, mbn::Interface**) override { return E_FAIL; }
+  HRESULT STDMETHODCALLTYPE GetInterface(LPCWSTR id, mbn::Interface** out) override {
+    for (const Spec& spec : modems) {
+      if (spec.id == id) { *out = new Interface(spec); return S_OK; }
+    }
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+  }
   HRESULT STDMETHODCALLTYPE GetInterfaces(SAFEARRAY** out) override {
     if (FAILED(interfaces_result)) return interfaces_result;
     if (no_interface_array) { *out = nullptr; return S_OK; }
@@ -231,6 +291,17 @@ void reset() {
   no_interface_array = false;
   initialized = uninitialized = 0;
   modems.clear();
+  profiles.clear();
+  profiles[Spec().id] = {profile(u"auto")};
+  profile_manager_result = profiles_result = update_result = disconnect_result = connect_result = S_OK;
+  writes_allowed = false;
+  updates.clear(); connects.clear(); disconnects = 0;
+}
+std::string configure(Api& api, const char16_t* id, const char16_t* mode) {
+  writes_allowed = true;
+  std::string out = Configure(api, id, mode);
+  writes_allowed = false;
+  return out;
 }
 void balanced() {
   check(strings.empty(), "Every BSTR is freed");
@@ -273,7 +344,14 @@ HRESULT CoInitializeEx(LPVOID, DWORD) {
 }
 void CoUninitialize() { ++fixture::uninitialized; }
 HRESULT CoCreateInstance(REFCLSID clsid, LPUNKNOWN, DWORD, REFIID iid, LPVOID* out) {
-  fixture::check(clsid == mbn::kManagerClass && iid == mbn::kManager, "Creates only the interface manager");
+  if (clsid == mbn::kProfileManagerClass) {
+    fixture::check(iid == mbn::kProfileManager, "The profile manager by its IID");
+    if (FAILED(fixture::profile_manager_result)) return fixture::profile_manager_result;
+    *out = static_cast<mbn::ProfileManager*>(new fixture::ProfileManager());
+    return S_OK;
+  }
+  fixture::check(clsid == mbn::kManagerClass && iid == mbn::kManager,
+                 "Creates only the interface and profile managers");
   if (FAILED(fixture::create_result)) return fixture::create_result;
   *out = static_cast<mbn::Manager*>(new fixture::Manager());
   return S_OK;
@@ -319,7 +397,7 @@ int main() {
     auto out = lines(Snapshot(api));
     check(out.size() == 2 && out[0] == "status\tok\t00000000", "One modem line");
     auto f = split(out[1]);
-    check(f.size() == 26, "Twenty-six modem fields");
+    check(f.size() == 27, "Twenty-seven modem fields");
     check(f[0] == "modem" && f[1] == hex("{0D7F7A43-0000-4000-8000-00000000C311}"), "Interface ID");
     check(f[2] == "1" && f[3] == "1" && f[4] == "1" && f[5] == "63" && f[6] == "3", "Ready state and caps");
     check(f[7] == hex("356938035643809") && f[8] == hex("Fixture") && f[9] == hex("WWAN 1")
@@ -332,7 +410,164 @@ int main() {
           && f[19] == "", "Registration with a surrogate pair");
     check(f[20] == "32" && f[21] == "20" && f[22] == "99" && f[23] == "1", "Data class, signal, activation");
     check(f[24] == "1" && f[25] == "1", "Software and hardware radio on");
+    check(f[26] == hex("auto"), "The default profile's connection mode");
   }
+  check(updates.empty() && connects.empty() && disconnects == 0, "A snapshot writes nothing");
+  balanced();
+
+  // The SIM's default profile: IsDefault and this SIM's SubscriberID; the schema's default
+  // mode, manual, without the element; unreadable profiles are unreported, not a mode.
+  struct ModeCase { std::vector<std::u16string> stored; const char* expected; const char* reason; };
+  const ModeCase modes[] = {
+      {{profile(u"auto", u"999990000000001"), profile(u"manual", u"425010123456789", false),
+        profile(u"auto-home")}, "auto-home", "Only this SIM's default profile counts"},
+      {{profile(u"")}, "manual", "No ConnectionMode element: the schema's manual"},
+      {{profile(u"auto", u"999990000000001")}, "", "No default profile for this SIM"},
+      {{}, "", "No stored profile"},
+      {{u"<MBNProfile><Name>x</Name><IsDefault>true</IsDefault><SubscriberID>425010123456789</SubscriberID>"
+        u"<ConnectionMode mode=\"x\">auto</ConnectionMode></MBNProfile>"}, "-", "A form the edit does not handle"},
+      {{u"<MBNProfile><Name>x</Name><IsDefault>true</IsDefault><SubscriberID>425010123456789</SubscriberID>"
+        u"<ConnectionMode>auto</MBNProfile>"}, "-", "An unterminated element"},
+  };
+  for (const ModeCase& c : modes) {
+    reset();
+    modems.push_back(Spec());
+    profiles[Spec().id] = c.stored;
+    auto f = split(lines(Snapshot(api))[1]);
+    check(f[26] == (c.expected[0] == '-' ? std::string("-") : hex(c.expected)), c.reason);
+    balanced();
+  }
+  reset();
+  modems.push_back(Spec());
+  profile_manager_result = REGDB_E_CLASSNOTREG;
+  check(split(lines(Snapshot(api))[1])[26] == "-", "No profile manager: mode unreported");
+  balanced();
+  reset();
+  modems.push_back(Spec());
+  profiles_result = E_ACCESSDENIED;
+  check(split(lines(Snapshot(api))[1])[26] == "-", "Unreadable profiles: mode unreported");
+  balanced();
+  reset();
+  modems.push_back(Spec());
+  profiles_result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+  check(split(lines(Snapshot(api))[1])[26] == "", "No profiles stored (ERROR_NOT_FOUND)");
+  balanced();
+
+  // Configure: the default profile's ConnectionMode, then the connection follows it.
+  const std::u16string id = Spec().id;
+  reset();
+  modems.push_back(Spec());  // home, connected
+  check(configure(api, id.c_str(), u"manual") == "ok\tdisconnect\t00000000", "Data off disconnects");
+  check(updates.size() == 1 && profiles[id][0] == profile(u"manual"), "Only ConnectionMode changes");
+  check(disconnects == 1 && connects.empty(), "One disconnect");
+  balanced();
+
+  reset();
+  {
+    Spec roaming;
+    roaming.register_state = 4;
+    modems.push_back(roaming);
+  }
+  check(configure(api, id.c_str(), u"auto-home") == "ok\tdisconnect\t00000000", "Roaming off disconnects while roaming");
+  check(profiles[id][0] == profile(u"auto-home"), "auto-home stored");
+  balanced();
+
+  reset();
+  modems.push_back(Spec());
+  check(configure(api, id.c_str(), u"auto-home") == "ok\tnone\t00000000", "auto-home at home keeps the connection");
+  check(disconnects == 0 && connects.empty(), "No connection change at home");
+  balanced();
+
+  reset();
+  {
+    Spec down;
+    down.activation = 3;
+    modems.push_back(down);
+  }
+  profiles[id] = {profile(u"manual")};
+  check(configure(api, id.c_str(), u"auto") == "ok\tconnect\t00000000", "Data on connects");
+  check(connects.size() == 1 && connects[0] == u"Partner & Co", "Connects with the decoded profile name");
+  balanced();
+
+  reset();
+  {
+    Spec down;
+    down.activation = 3;
+    modems.push_back(down);
+  }
+  profiles[id] = {profile(u"manual")};
+  connect_result = static_cast<HRESULT>(0x80548212);  // E_MBN_NOT_REGISTERED
+  check(configure(api, id.c_str(), u"auto") == "ok\tconnect\t80548212", "A refused connect is reported, not an error");
+  check(profiles[id][0] == profile(u"auto"), "The mode stays set");
+  balanced();
+
+  reset();
+  modems.push_back(Spec());
+  check(configure(api, id.c_str(), u"auto") == "ok\tnone\t00000000", "Unchanged mode, already connected");
+  check(updates.empty(), "An unchanged mode is not rewritten");
+  balanced();
+
+  reset();
+  modems.push_back(Spec());
+  profiles[id] = {profile(u"")};
+  check(configure(api, id.c_str(), u"auto-home") == "ok\tnone\t00000000", "Absent element is inserted");
+  {
+    std::u16string expected = profile(u"");
+    std::u16string anchor = u"<AutoConnectOnInternet>false</AutoConnectOnInternet>";
+    expected.insert(expected.find(anchor) + anchor.size(), u"<ConnectionMode>auto-home</ConnectionMode>");
+    check(profiles[id][0] == expected, "In its schema position");
+  }
+  balanced();
+
+  reset();
+  modems.push_back(Spec());
+  disconnect_result = E_ACCESSDENIED;
+  check(configure(api, id.c_str(), u"manual") == "error\tdisconnect\t80070005", "A refused disconnect is an error");
+  check(updates.size() == 2 && profiles[id][0] == profile(u"auto"), "A refused disconnect restores the previous profile");
+  balanced();
+
+  reset();
+  modems.push_back(Spec());
+  disconnect_result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+  check(configure(api, id.c_str(), u"manual") == "ok\tdisconnect\t80070490", "Already disconnected");
+  balanced();
+
+  reset();
+  modems.push_back(Spec());
+  update_result = E_ACCESSDENIED;
+  check(configure(api, id.c_str(), u"manual") == "error\tupdate\t80070005", "A refused update is an error");
+  check(disconnects == 0, "Nothing disconnects after a refused update");
+  balanced();
+
+  reset();
+  modems.push_back(Spec());
+  check(configure(api, id.c_str(), u"off") == "error\tmode\t80070057", "Only the schema's modes");
+  check(initialized == 0, "An invalid mode reaches no COM");
+  check(configure(api, u"{other}", u"manual") == "error\tinterface\t80070490", "Unknown interface");
+  profiles[id] = {profile(u"auto", u"999990000000001")};
+  check(configure(api, id.c_str(), u"manual") == "error\tprofile\t80070490", "No default profile");
+  check(updates.empty() && disconnects == 0, "Errors write nothing");
+  balanced();
+
+  reset();
+  {
+    Spec noSim;
+    noSim.subscriber = false;
+    modems.push_back(noSim);
+  }
+  check(configure(api, id.c_str(), u"manual") == "error\tsubscriber\t80548202", "No SIM, no profile");
+  balanced();
+
+  // A write from a thread already in another apartment leaves that apartment alone.
+  reset();
+  modems.push_back(Spec());
+  initialize_result = RPC_E_CHANGED_MODE;
+  check(configure(api, id.c_str(), u"manual") == "ok\tdisconnect\t00000000", "Writes in an existing apartment");
+  check(uninitialized == 0, "A write never uninitializes another apartment");
+  balanced();
+  reset();
+  initialize_result = static_cast<HRESULT>(0x8007000E);
+  check(configure(api, id.c_str(), u"manual") == "error\tcom\t8007000e", "Failed COM initialization");
   balanced();
 
   // Airplane mode or Windows' cellular switch (software) and a hardware switch are reported

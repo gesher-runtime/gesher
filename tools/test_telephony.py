@@ -41,6 +41,7 @@ def main():
                         str(ROOT / 'tests/telephony/framework_host.c'), '-o', str(library)], check=True)
         sources = [ROOT / 'app/java/com/gesher/server/WindowsCellular.java',
                    ROOT / 'app/java/com/gesher/server/TelephonyService.java',
+                   ROOT / 'app/java/com/gesher/server/MobileDataCommands.java',
                    ROOT / 'tests/telephony/TelephonyHost.java']
         subprocess.run([str(args.java_home / 'bin/javac'), '-encoding', 'UTF-8', '-nowarn', '-cp', cp,
                         '-d', str(classes), *map(str, sources)], check=True)

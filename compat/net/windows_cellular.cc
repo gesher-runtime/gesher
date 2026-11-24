@@ -1,12 +1,20 @@
 // Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0
-// Read-only Mobile Broadband (WWAN) boundary for com.gesher.server.WindowsCellular.
+// Mobile Broadband (WWAN) boundary for com.gesher.server.WindowsCellular.
 //
-// Reads Windows' Mobile Broadband API (mbnapi, the WwanSvc COM server) on the
+// Snapshot reads Windows' Mobile Broadband API (mbnapi, the WwanSvc COM server) on the
 // caller's thread: interface capabilities, ready state, subscriber information,
-// home provider, registration, signal, packet-connection and radio state. Nothing is
-// written to the modem: no connect/disconnect, PIN, registration mode, SMS or
-// provider changes, and the radio is never switched. A machine without the WWAN
-// service or without a cellular interface reports "none" rather than failing the runtime.
+// home provider, registration, signal, packet-connection and radio state, and the
+// connection mode (auto, auto-home or manual) of the SIM's default connection profile.
+// A machine without the WWAN service or without a cellular interface reports "none"
+// rather than failing the runtime.
+//
+// Configure is the only write, made for Android's mobile data and data roaming
+// switches (docs/telephony.md): it sets the ConnectionMode element of that same default
+// profile (IMbnConnectionProfile::UpdateProfile, the Mobile Broadband profile schema's
+// "manual", "auto" or "auto-home") and then makes the packet connection follow it
+// (IMbnConnection::Disconnect or Connect with that profile). Nothing else is ever
+// written: no PIN, registration mode, preferred providers, SMS, other profile elements
+// or radio state.
 //
 // The interface declarations below are written from the documented mbnapi.idl
 // (Windows SDK); llvm-mingw does not ship that header. Only the methods up to the
@@ -34,6 +42,17 @@ const IID kRegistration = {0xDCBBBAB6, 0x2009, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 
 const IID kSignal = {0xDCBBBAB6, 0x2003, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 0x36, 0x8A, 0xF6, 0xFA}};
 // {DCCCCAB6-201F-4BBB-AAEE-338E368AF6FA}
 const IID kRadio = {0xDCCCCAB6, 0x201F, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 0x36, 0x8A, 0xF6, 0xFA}};
+// CLSID_MbnConnectionProfileManager {BDFEE05A-4418-11DD-90ED-001C257CCFF1}
+const CLSID kProfileManagerClass = {0xBDFEE05A, 0x4418, 0x11DD, {0x90, 0xED, 0x00, 0x1C, 0x25, 0x7C, 0xCF, 0xF1}};
+// IID_IMbnConnectionProfileManager {DCBBBAB6-200F-4BBB-AAEE-338E368AF6FA}
+const IID kProfileManager = {0xDCBBBAB6, 0x200F, 0x4BBB, {0xAA, 0xEE, 0x33, 0x8E, 0x36, 0x8A, 0xF6, 0xFA}};
+
+// MBN_CONNECTION_MODE_PROFILE: Connect's profile argument is a stored profile's name.
+constexpr ULONG kConnectWithProfile = 0;
+// MBN_ACTIVATION_STATE.
+constexpr ULONG kActivated = 1, kActivating = 2, kDeactivated = 3;
+// MBN_REGISTER_STATE.
+constexpr ULONG kRegisterHome = 3, kRegisterRoaming = 4, kRegisterPartner = 5;
 
 enum MBN_RADIO { MBN_RADIO_OFF = 0, MBN_RADIO_ON = MBN_RADIO_OFF + 1 };
 
@@ -106,6 +125,15 @@ struct Radio : IUnknown {
   virtual HRESULT STDMETHODCALLTYPE get_SoftwareRadioState(MBN_RADIO* state) = 0;
   virtual HRESULT STDMETHODCALLTYPE get_HardwareRadioState(MBN_RADIO* state) = 0;
 };
+// IMbnConnectionProfile; Delete follows and is never called or declared.
+struct ConnectionProfile : IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE GetProfileXmlData(BSTR* xml) = 0;
+  virtual HRESULT STDMETHODCALLTYPE UpdateProfile(LPCWSTR xml) = 0;
+};
+// IMbnConnectionProfileManager; GetConnectionProfile and CreateConnectionProfile follow.
+struct ProfileManager : IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE GetConnectionProfiles(Interface* modem, SAFEARRAY** profiles) = 0;
+};
 }  // namespace mbn
 
 // The Windows calls this adapter makes, replaceable only by the native test host.
@@ -143,11 +171,134 @@ struct Array {
   ~Array() { if (value) api.destroy(value); }
 };
 
+using Text = std::basic_string<WCHAR>;
+
+constexpr LONG kMaxProfiles = 16;
+constexpr UINT kMaxProfileUnits = 65536;
+
+Text Wide(const char* ascii) {
+  Text text;
+  while (*ascii) text += static_cast<WCHAR>(*ascii++);
+  return text;
+}
+bool Space(WCHAR c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+Text Trim(const Text& text) {
+  size_t start = 0, end = text.size();
+  while (start < end && Space(text[start])) start++;
+  while (end > start && Space(text[end - 1])) end--;
+  return text.substr(start, end - start);
+}
+
+// The profile XML is edited as text: elements are found by their exact, unprefixed
+// tags, as the Mobile Broadband profile schema's own elements are written. Anything
+// else (attributes, a namespace prefix, a self-closing or unterminated element, markup
+// in a value) is malformed, and the profile is then neither read nor written.
+enum class Found { kAbsent, kFound, kMalformed };
+struct Span { size_t open = 0, start = 0, end = 0, close = 0; };
+
+Found Locate(const Text& xml, const char* name, Span* span) {
+  Text open = Wide("<") + Wide(name), close = Wide("</") + Wide(name) + Wide(">");
+  for (size_t at = xml.find(open); at != Text::npos; at = xml.find(open, at + 1)) {
+    size_t after = at + open.size();
+    if (after >= xml.size()) return Found::kMalformed;
+    WCHAR c = xml[after];
+    if (c == '>') {
+      size_t end = xml.find(close, after + 1);
+      if (end == Text::npos) return Found::kMalformed;
+      if (xml.find(static_cast<WCHAR>('<'), after + 1) != end) return Found::kMalformed;
+      *span = {at, after + 1, end, end + close.size()};
+      return Found::kFound;
+    }
+    // "<NameX": another element; "<Name " or "<Name/": a form this edit does not handle.
+    bool other = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+        || c == '-' || c == '_' || c == '.';
+    if (!other) return Found::kMalformed;
+  }
+  return Found::kAbsent;
+}
+
+// XML character and entity references in an element value.
+bool Decode(const Text& raw, Text* out) {
+  out->clear();
+  for (size_t i = 0; i < raw.size(); i++) {
+    if (raw[i] != '&') { *out += raw[i]; continue; }
+    size_t semi = raw.find(static_cast<WCHAR>(';'), i);
+    if (semi == Text::npos || semi - i > 10) return false;
+    Text entity = raw.substr(i + 1, semi - i - 1);
+    if (entity == Wide("amp")) *out += static_cast<WCHAR>('&');
+    else if (entity == Wide("lt")) *out += static_cast<WCHAR>('<');
+    else if (entity == Wide("gt")) *out += static_cast<WCHAR>('>');
+    else if (entity == Wide("quot")) *out += static_cast<WCHAR>('"');
+    else if (entity == Wide("apos")) *out += static_cast<WCHAR>('\'');
+    else if (entity.size() > 1 && entity[0] == '#') {
+      bool hex = entity[1] == 'x';
+      uint32_t value = 0;
+      size_t digits = 0;
+      for (size_t k = hex ? 2 : 1; k < entity.size(); k++, digits++) {
+        WCHAR c = entity[k];
+        int digit = c >= '0' && c <= '9' ? c - '0'
+            : hex && c >= 'a' && c <= 'f' ? c - 'a' + 10 : hex && c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (digit < 0) return false;
+        value = value * (hex ? 16 : 10) + digit;
+        if (value > 0xFFFF) return false;  // Names and tokens here stay in the BMP.
+      }
+      if (digits == 0 || (value >= 0xD800 && value <= 0xDFFF)) return false;
+      *out += static_cast<WCHAR>(value);
+    } else {
+      return false;
+    }
+    i = semi;
+  }
+  return true;
+}
+
+Found Value(const Text& xml, const char* name, Text* value) {
+  Span span;
+  Found found = Locate(xml, name, &span);
+  if (found != Found::kFound) return found;
+  return Decode(xml.substr(span.start, span.end - span.start), value) ? Found::kFound : Found::kMalformed;
+}
+
+bool KnownMode(const Text& mode) {
+  return mode == Wide("auto") || mode == Wide("auto-home") || mode == Wide("manual");
+}
+
+// The profile's connection mode: the schema's default, "manual", when the element is
+// absent. False when the profile cannot be read this way.
+bool ConnectionMode(const Text& xml, Text* mode) {
+  Text value;
+  Found found = Value(xml, "ConnectionMode", &value);
+  if (found == Found::kMalformed) return false;
+  *mode = found == Found::kAbsent ? Wide("manual") : Trim(value);
+  return true;
+}
+
+// The profile with ConnectionMode set; the element goes in its schema position (after
+// SubscriberID, SimIccID, HomeProviderName and AutoConnectOnInternet) when absent.
+bool WithConnectionMode(const Text& xml, const Text& mode, Text* out) {
+  Text element = Wide("<ConnectionMode>") + mode + Wide("</ConnectionMode>");
+  Span span;
+  Found found = Locate(xml, "ConnectionMode", &span);
+  if (found == Found::kMalformed) return false;
+  if (found == Found::kFound) {
+    *out = xml.substr(0, span.start) + mode + xml.substr(span.end);
+    return true;
+  }
+  for (const char* before : {"AutoConnectOnInternet", "HomeProviderName", "SimIccID", "SubscriberID"}) {
+    found = Locate(xml, before, &span);
+    if (found == Found::kMalformed) return false;
+    if (found == Found::kFound) {
+      *out = xml.substr(0, span.close) + element + xml.substr(span.close);
+      return true;
+    }
+  }
+  return false;
+}
+
 // UTF-16 to UTF-8, bounded; unpaired surrogates become U+FFFD. Output is hex so
 // operator names and numbers cross the JNI text boundary without any escaping.
-std::string Hex(Api& api, BSTR text) {
+std::string Hex(const WCHAR* text, UINT length) {
   if (!text) return "";
-  UINT length = api.string_length(text);
   if (length > kMaxStringUnits) length = kMaxStringUnits;
   std::string utf8;
   for (UINT i = 0; i < length; i++) {
@@ -185,6 +336,9 @@ std::string Hex(Api& api, BSTR text) {
   for (unsigned char b : utf8) { hex += digits[b >> 4]; hex += digits[b & 15]; }
   return hex;
 }
+std::string Hex(Api& api, BSTR text) {
+  return text ? Hex(text, api.string_length(text)) : std::string();
+}
 // A field the modem did not report is "-", distinct from a reported empty value.
 std::string Field(Api& api, HRESULT result, BSTR text) {
   return SUCCEEDED(result) ? Hex(api, text) : std::string("-");
@@ -214,7 +368,8 @@ void AppendCaps(Api& api, mbn::Interface* modem, std::string& line) {
   }
 }
 
-void AppendSubscriber(Api& api, mbn::Interface* modem, std::string& line) {
+// The subscriber ID (IMSI) goes to *imsi when it was read: profiles are per subscriber.
+void AppendSubscriber(Api& api, mbn::Interface* modem, std::string& line, Text* imsi) {
   Ref<mbn::SubscriberInformation> info;
   HRESULT result = modem->GetSubscriberInformation(&info.value);
   if (FAILED(result) || !info.value) {
@@ -222,7 +377,9 @@ void AppendSubscriber(Api& api, mbn::Interface* modem, std::string& line) {
     return;
   }
   String subscriber(api), iccid(api);
-  line += '\t' + Field(api, info.value->get_SubscriberID(&subscriber.value), subscriber.value);
+  HRESULT read = info.value->get_SubscriberID(&subscriber.value);
+  line += '\t' + Field(api, read, subscriber.value);
+  if (SUCCEEDED(read) && subscriber.value) *imsi = Text(subscriber.value, api.string_length(subscriber.value));
   line += '\t' + Field(api, info.value->get_SimIccID(&iccid.value), iccid.value);
   Array numbers(api);
   LONG low = 0, high = -1;
@@ -305,12 +462,71 @@ void AppendRadio(mbn::Interface* modem, std::string& line) {
   line += '\t' + Number(radio.value->get_HardwareRadioState(&hardware), static_cast<ULONG>(hardware));
 }
 
+// The default connection profile of the modem's SIM: IsDefault true (at most one per
+// SIM, as the schema requires) and SubscriberID equal to the SIM's IMSI. S_OK with the
+// profile and its XML, S_FALSE when the SIM has none, or the failure.
+HRESULT DefaultProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* modem, const Text& imsi,
+                       Ref<mbn::ConnectionProfile>* found, Text* xml) {
+  Array array(api);
+  LONG low = 0, high = -1;
+  HRESULT result = profiles->GetConnectionProfiles(modem, &array.value);
+  // No stored profile at all.
+  if (result == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) return S_FALSE;
+  if (FAILED(result)) return result;
+  if (!array.value) return S_FALSE;
+  if (FAILED(api.lower(array.value, 1, &low)) || FAILED(api.upper(array.value, 1, &high))) return E_FAIL;
+  for (LONG i = low, n = 0; i <= high && n < kMaxProfiles; i++, n++) {
+    Ref<mbn::ConnectionProfile> profile;
+    if (FAILED(api.element(array.value, &i, &profile.value)) || !profile.value) continue;
+    String data(api);
+    if (FAILED(profile.value->GetProfileXmlData(&data.value)) || !data.value) continue;
+    UINT length = api.string_length(data.value);
+    if (length > kMaxProfileUnits) continue;
+    Text text(data.value, length), isDefault, subscriber;
+    if (Value(text, "IsDefault", &isDefault) != Found::kFound) continue;
+    isDefault = Trim(isDefault);
+    if (isDefault != Wide("true") && isDefault != Wide("1")) continue;
+    if (Value(text, "SubscriberID", &subscriber) != Found::kFound || Trim(subscriber) != Trim(imsi)) continue;
+    found->value = profile.value;
+    profile.value = nullptr;
+    *xml = text;
+    return S_OK;
+  }
+  return S_FALSE;
+}
+
+// The default profile's connection mode: the mode, empty when the SIM has no default
+// profile (or no SIM is readable), "-" when the profiles or that profile cannot be read.
+void AppendProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* modem, const Text* imsi,
+                   std::string& line) {
+  if (!profiles) {
+    line += "\t-";
+    return;
+  }
+  if (!imsi) {
+    line += '\t';
+    return;
+  }
+  Ref<mbn::ConnectionProfile> profile;
+  Text xml, mode;
+  HRESULT result = DefaultProfile(api, profiles, modem, *imsi, &profile, &xml);
+  if (FAILED(result)) {
+    line += "\t-";
+  } else if (result == S_FALSE) {
+    line += '\t';
+  } else if (!ConnectionMode(xml, &mode)) {
+    line += "\t-";
+  } else {
+    line += '\t' + Hex(mode.data(), static_cast<UINT>(mode.size()));
+  }
+}
+
 // One line per interface, tab-separated, after a status line:
 //   status <ok|none|error> <hresult>
 //   modem <id> <ready> <cellular> <voice> <data> <sms> <device> <manufacturer> <model>
 //         <firmware> <imsi> <iccid> <numbers> <home-id> <home-name> <register> <reg-id>
 //         <reg-name> <roaming-text> <data-class> <signal> <signal-error> <activation>
-//         <software-radio> <hardware-radio>
+//         <software-radio> <hardware-radio> <connection-mode>
 std::string Snapshot(Api& api) {
   HRESULT initialized = api.initialize(nullptr, COINIT_MULTITHREADED);
   // RPC_E_CHANGED_MODE: the thread is already in an apartment; COM is usable.
@@ -328,6 +544,13 @@ std::string Snapshot(Api& api) {
     Array interfaces(api);
     LONG low = 0, high = -1;
     if (SUCCEEDED(result) && manager.value) result = manager.value->GetInterfaces(&interfaces.value);
+    // Profiles are read only when there are interfaces; a failure leaves the mode unreported.
+    Ref<mbn::ProfileManager> profiles;
+    if (SUCCEEDED(result) && interfaces.value
+        && FAILED(api.create(mbn::kProfileManagerClass, nullptr, CLSCTX_ALL, mbn::kProfileManager,
+                             reinterpret_cast<void**>(&profiles.value)))) {
+      profiles.value = nullptr;
+    }
     if (SUCCEEDED(result) && interfaces.value) {
       if (FAILED(api.lower(interfaces.value, 1, &low)) || FAILED(api.upper(interfaces.value, 1, &high))) {
         result = E_FAIL;
@@ -355,13 +578,115 @@ std::string Snapshot(Api& api) {
         ULONG ready = 0;
         line += '\t' + Number(modem.value->GetReadyState(&ready), ready);
         AppendCaps(api, modem.value, line);
-        AppendSubscriber(api, modem.value, line);
+        Text imsi;
+        AppendSubscriber(api, modem.value, line, &imsi);
+        bool sim = !imsi.empty();
         AppendHome(api, modem.value, line);
         AppendRegistration(api, modem.value, line);
         AppendSignal(api, modem.value, line);
         AppendConnection(api, modem.value, line);
         AppendRadio(modem.value, line);
+        AppendProfile(api, profiles.value, modem.value, sim ? &imsi : nullptr, line);
         out += line + '\n';
+      }
+    }
+  }
+  if (balance) api.uninitialize();
+  return out;
+}
+
+// Makes the packet connection follow a connection mode, from its state and registration.
+template <class Line>
+std::string Enforce(Api& api, mbn::Interface* modem, const Text& mode, const Text& xml, Line line) {
+  ULONG registerState = 0;
+  bool registered = false, roaming = false;
+  {
+    Ref<mbn::Registration> registration;
+    if (SUCCEEDED(modem->QueryInterface(mbn::kRegistration, reinterpret_cast<void**>(&registration.value)))
+        && registration.value && SUCCEEDED(registration.value->GetRegisterState(&registerState))) {
+      roaming = registerState == mbn::kRegisterRoaming || registerState == mbn::kRegisterPartner;
+      registered = roaming || registerState == mbn::kRegisterHome;
+    }
+  }
+  bool wanted = mode == Wide("auto") ? registered : mode == Wide("auto-home") ? registered && !roaming : false;
+  Ref<mbn::Connection> connection;
+  HRESULT result = modem->GetConnection(&connection.value);
+  if (FAILED(result) || !connection.value) {
+    // No connection object (not registered): nothing is connected, nothing can connect.
+    return line("ok", wanted ? "unavailable" : "none", FAILED(result) ? result : S_OK);
+  }
+  ULONG state = 0;
+  String profileName(api);
+  result = connection.value->GetConnectionState(&state, &profileName.value);
+  if (FAILED(result)) return wanted ? line("ok", "unavailable", result) : line("error", "state", result);
+  bool up = state == mbn::kActivated || state == mbn::kActivating;
+  ULONG request = 0;
+  if (!wanted && up) {
+    result = connection.value->Disconnect(&request);
+    // ERROR_NOT_FOUND: already disconnected.
+    if (FAILED(result) && result != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) return line("error", "disconnect", result);
+    return line("ok", "disconnect", result);
+  }
+  if (wanted && (state == mbn::kDeactivated || state == 0)) {
+    Text name;
+    if (Value(xml, "Name", &name) != Found::kFound) return line("ok", "unavailable", E_UNEXPECTED);
+    name = Trim(name);
+    return line("ok", "connect", connection.value->Connect(mbn::kConnectWithProfile, name.c_str(), &request));
+  }
+  return line("ok", "none", S_OK);
+}
+
+// Sets the connection mode of the SIM's default profile and makes the packet connection
+// follow it: "manual" disconnects, "auto-home" disconnects while roaming and connects
+// at home, "auto" connects while registered. The result is one line:
+//   ok <none|connect|disconnect|unavailable> <hresult of that step>
+//   error <stage> <hresult>
+// The profile update and a needed disconnect must succeed; a disconnect that fails
+// restores the previous profile. A connect that Windows refuses is reported, not an
+// error: the mode is set and Windows keeps connecting by it.
+std::string Configure(Api& api, const Text& interfaceId, const Text& mode) {
+  auto line = [](const char* outcome, const char* step, HRESULT result) {
+    char text[64];
+    snprintf(text, sizeof(text), "%s\t%s\t%08lx", outcome, step, static_cast<unsigned long>(result));
+    return std::string(text);
+  };
+  if (!KnownMode(mode)) return line("error", "mode", E_INVALIDARG);
+  HRESULT initialized = api.initialize(nullptr, COINIT_MULTITHREADED);
+  bool balance = SUCCEEDED(initialized);
+  if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) return line("error", "com", initialized);
+  std::string out;
+  {
+    Ref<mbn::Manager> manager;
+    Ref<mbn::Interface> modem;
+    Ref<mbn::SubscriberInformation> info;
+    Ref<mbn::ProfileManager> profiles;
+    Ref<mbn::ConnectionProfile> profile;
+    String imsiText(api);
+    Text xml, previous, updated, imsi;
+    HRESULT result = api.create(mbn::kManagerClass, nullptr, CLSCTX_ALL, mbn::kManager,
+                                reinterpret_cast<void**>(&manager.value));
+    if (SUCCEEDED(result)) result = manager.value->GetInterface(interfaceId.c_str(), &modem.value);
+    if (FAILED(result) || !modem.value) {
+      out = line("error", "interface", FAILED(result) ? result : E_FAIL);
+    } else if (FAILED(result = modem.value->GetSubscriberInformation(&info.value)) || !info.value
+               || FAILED(result = info.value->get_SubscriberID(&imsiText.value)) || !imsiText.value) {
+      out = line("error", "subscriber", FAILED(result) ? result : E_FAIL);
+    } else if (FAILED(result = api.create(mbn::kProfileManagerClass, nullptr, CLSCTX_ALL, mbn::kProfileManager,
+                                          reinterpret_cast<void**>(&profiles.value))) || !profiles.value) {
+      out = line("error", "profiles", FAILED(result) ? result : E_FAIL);
+    } else {
+      imsi = Text(imsiText.value, api.string_length(imsiText.value));
+      result = DefaultProfile(api, profiles.value, modem.value, imsi, &profile, &xml);
+      if (result != S_OK) {
+        out = line("error", "profile", FAILED(result) ? result : HRESULT_FROM_WIN32(ERROR_NOT_FOUND));
+      } else if (!ConnectionMode(xml, &previous) || !WithConnectionMode(xml, mode, &updated)) {
+        out = line("error", "profile", E_UNEXPECTED);
+      } else if (previous != mode && FAILED(result = profile.value->UpdateProfile(updated.c_str()))) {
+        out = line("error", "update", result);
+      } else {
+        out = Enforce(api, modem.value, mode, xml, line);
+        // A refused disconnect leaves the connection up: the previous mode stays.
+        if (out.rfind("error", 0) == 0 && previous != mode) profile.value->UpdateProfile(xml.c_str());
       }
     }
   }
@@ -374,8 +699,25 @@ jstring WindowsCellular_nativeSnapshot(JNIEnv* env, jclass) {
   std::string text = Snapshot(api);
   return env->NewStringUTF(text.c_str());
 }
+Text FromJava(JNIEnv* env, jstring value) {
+  Text text;
+  if (!value) return text;
+  jsize length = env->GetStringLength(value);
+  const jchar* chars = env->GetStringChars(value, nullptr);
+  if (!chars) return text;
+  for (jsize i = 0; i < length; i++) text += static_cast<WCHAR>(chars[i]);
+  env->ReleaseStringChars(value, chars);
+  return text;
+}
+jstring WindowsCellular_nativeConfigure(JNIEnv* env, jclass, jstring interfaceId, jstring mode) {
+  static Api api;
+  std::string text = Configure(api, FromJava(env, interfaceId), FromJava(env, mode));
+  return env->NewStringUTF(text.c_str());
+}
 const JNINativeMethod methods[] = {
     {"nativeSnapshot", "()Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsCellular_nativeSnapshot)},
+    {"nativeConfigure", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+     NATIVEHELPER_SYSV_JNI_ENTRY(WindowsCellular_nativeConfigure)},
 };
 jint OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;

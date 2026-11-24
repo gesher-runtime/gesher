@@ -19,8 +19,10 @@ machines have a WWAN modem that Windows exposes through the Mobile Broadband API
 1. A framework-res device overlay (`config/framework-res-overlay`, applied by
    `tools/build-framework-res.sh`) sets the three capability resources to false, as
    Android tablets' device overlays do. Capability then follows declared features only.
-2. A read-only native adapter reads the modem through `IMbnInterfaceManager` (no writes,
-   no connection control, no SMS).
+2. A native adapter reads the modem through `IMbnInterfaceManager`. Its one write is the
+   connection mode of the SIM's default connection profile, with the connect or
+   disconnect that follows it, for Android's mobile data switches (no PIN, registration,
+   radio or SMS control).
 3. `TelephonyService` implements the four services over one modem model (phone 0) with
    AOSP's permission and identifier rules, and publishes the `gsm.*` properties the phone
    process publishes on Android.
@@ -39,15 +41,15 @@ machines have a WWAN modem that Windows exposes through the Mobile Broadband API
   carrier configuration and cell info remain unsupported. Every ITelephony/ISub method a
   public manager API reaches answers consistently with the modem or with AOSP's unsupported
   answer (no Default answer contradicts the modem or leaves a callback unanswered); the
-  data switches, which Windows does not expose, are Android's settings: they start at
-  AOSP's defaults (mobile data on, roaming off), are `Settings.Global.MOBILE_DATA` and
-  `DATA_ROAMING`, persist, and change through AOSP's setters with their permission checks
-  and listener notifications; users change them with `gesher-app mobile-data`.
-- The data switches cannot be enforced: Gesher does not change Windows' cellular connection
-  and cannot keep Android traffic off it (that would need administrator-level filtering), so
-  with mobile data or roaming off Windows may still carry Android traffic over cellular per
-  its own settings, and the data state, `ServiceState` and ConnectivityManager keep reporting
-  Windows' connection as it is (docs/telephony.md, "Mobile data switches").
+  mobile data and data roaming switches are Windows' connection behavior for the modem
+  (the default profile's `ConnectionMode`: `manual` off, `auto` on with roaming,
+  `auto-home` on without), read from Windows and mirrored into
+  `Settings.Global.MOBILE_DATA` and `DATA_ROAMING`. AOSP's setters, with their permission
+  checks, change Windows' cellular connection for the whole machine (disconnecting or
+  connecting it) and report a change, and notify listeners, only once Windows has taken it;
+  users change them with `gesher-app mobile-data`. The policy, carrier and thermal switches
+  cannot be applied apart from that mode and stay on (docs/telephony.md, "Mobile data
+  switches"). The write path is unvalidated on hardware.
 - Reading the modem costs an out-of-process WwanSvc session, so it is demand-driven:
   polled every five seconds only while telephony.registry has listeners or for 30 seconds
   after a query, with a bounded read before answering from an old reading, and every read

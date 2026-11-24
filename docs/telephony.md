@@ -38,8 +38,12 @@ state, subscriber information (IMSI, ICCID, telephone numbers), home provider,
 registration (state, provider ID/name, current data class), signal (RSSI as a 27.007 CSQ
 value, bit error rate), the packet connection's activation state and the radio state
 (`IMbnRadio`: the software radio, which airplane mode and Windows' Cellular switch turn off,
-and the hardware radio). It never connects, disconnects, scans, unlocks a PIN, changes
-registration, switches the radio or touches SMS. `REGDB_E_CLASSNOTREG`,
+and the hardware radio), and the connection mode of the SIM's default connection profile
+(`IMbnConnectionProfileManager`, below). Its one write is that connection mode, with the
+connect or disconnect that makes the connection follow it, for Android's mobile data
+switches ("Mobile data switches" below). It never scans, unlocks a PIN, changes
+registration or preferred providers, changes another profile element, switches the radio
+or touches SMS. `REGDB_E_CLASSNOTREG`,
 `ERROR_NOT_FOUND` and a disabled/missing WWAN service mean "no modem"; any other failure is
 an error, not an absent modem. The interface declarations are written from the documented
 `mbnapi.idl`, which llvm-mingw does not ship; IIDs are looked up through COM, so a mismatch
@@ -197,63 +201,94 @@ Mobile data is the WWAN IP interface, which `ConnectivityService` already report
 
 ### Mobile data switches
 
-Android's data switches are settings of Android's, kept as AOSP's `DataSettingsManager`
-keeps them (android-16.0.0_r4); Windows' Mobile Broadband API has no equivalent (a
-connection profile's auto-connect mode only decides whether Windows connects by itself).
+Android's mobile data and data roaming switches are Windows' own connection behavior for
+the modem: the `ConnectionMode` of the SIM's default Mobile Broadband profile (the
+[Mobile Broadband profile schema](https://learn.microsoft.com/en-us/windows/win32/mbn/mobile-broadband-profile-schema):
+`manual` never connects automatically, `auto` always does, `auto-home` does except on a
+roaming network). Changing them changes Windows' cellular connection **for the whole
+machine**, not only for Android apps.
+
+| Windows' mode | `isUserDataEnabled()` | `isDataRoamingEnabled()` |
+| --- | --- | --- |
+| `auto` | true | true |
+| `auto-home` | true | false |
+| `manual` | false | `Settings.Global.DATA_ROAMING` (Windows keeps no roaming choice while manual) |
+
 With a modem:
 
-- The user switch is `Settings.Global.MOBILE_DATA` and data roaming
-  `Settings.Global.DATA_ROAMING`, unsuffixed as `GlobalSettingsHelper` names them on a
-  single-SIM device. They start at AOSP's defaults (SettingsProvider writes
-  `mobile_data=1`, also into existing settings stores, and `data_roaming=0`), are read on
-  every query, so a value written to `Settings.Global` directly is the answer as well, and
-  persist in the settings store like every Gesher setting. Before the device is
-  provisioned `DEVICE_PROVISIONING_MOBILE_DATA_ENABLED` decides, as on AOSP.
-- `isUserDataEnabled()`, `getDataEnabled()` and `isDataEnabledForReason(USER)` answer the
-  user switch; `isDataEnabled()` answers all switches (user, policy, carrier, thermal);
-  `isDataRoamingEnabled()` answers `DATA_ROAMING`. The policy, carrier and thermal
-  switches are in memory and start on. An unknown reason throws `NullPointerException`,
-  as `DataSettingsManager`'s unboxing does. Without a phone for the subscription (an
-  invalid ID, no SIM for the default subscription) the answers are false.
-- `setDataEnabledForReason()` needs `MODIFY_PHONE_STATE` (carrier privileges would also
-  do for the user and carrier reasons; no carrier apps exist) and otherwise throws
-  `SecurityException`. The user reason writes `MOBILE_DATA`; policy and thermal change
-  their switch; the carrier reason is a carrier action on metered APNs, which leaves
-  `isDataEnabledForReason(CARRIER)` unchanged, as on AOSP. `setDataRoamingEnabled()` needs
-  `MODIFY_PHONE_STATE` (`SecurityException("setDataRoamingEnabled")`) and writes
-  `DATA_ROAMING`. A change of the user switch reaches
-  `UserMobileDataStateListener`/`onUserMobileDataStateChanged`, and a change of the
-  overall answer `DataEnabledListener`/`onDataEnabledChanged` with the reason of the
-  change; data roaming has no listener on AOSP either.
+- The default profile is the stored profile with `IsDefault` true and the SIM's IMSI as
+  `SubscriberID` (`IMbnConnectionProfileManager::GetConnectionProfiles`,
+  `IMbnConnectionProfile::GetProfileXmlData`); without the element, the schema's default,
+  `manual`. Every reading of the modem includes it, so a change made in Windows' cellular
+  settings (or by another program) is Android's answer at the next reading, and listeners
+  hear it.
+- `isUserDataEnabled()`, `getDataEnabled()`, `isDataEnabledForReason(USER)` and
+  `isDataEnabled()` answer the user switch; `isDataRoamingEnabled()` the roaming switch. The
+  policy, carrier and thermal switches are on: Gesher has one Windows connection mode to
+  apply and cannot apply those apart from it, so it does not report data disabled while
+  Windows connects. An unknown reason throws `NullPointerException`, as
+  `DataSettingsManager`'s unboxing does. Without a phone for the subscription (an invalid ID,
+  no SIM for the default subscription) the answers are false.
+- `setDataEnabledForReason(USER)` needs `MODIFY_PHONE_STATE` (carrier privileges would also
+  do; no carrier apps exist) and otherwise throws `SecurityException`. Off writes `manual`
+  and disconnects Windows' cellular connection; on writes `auto` or `auto-home` (by the
+  roaming switch) and connects when the mode allows it at the current registration.
+  `setDataRoamingEnabled()` needs `MODIFY_PHONE_STATE`
+  (`SecurityException("setDataRoamingEnabled")`): with data on it writes `auto` or
+  `auto-home` (and Windows disconnects while roaming); with data off it keeps Android's
+  choice in `DATA_ROAMING` for when data is turned on. The policy, thermal and carrier
+  reasons are permission-checked and change nothing (logged).
+- The write (`IMbnConnectionProfile::UpdateProfile` with only `ConnectionMode` changed, then
+  `IMbnConnection::Disconnect` or `Connect` with the profile's name) runs on a worker
+  thread bounded to ten seconds; the binder thread waits without holding any lock of the
+  services. A change counts only when Windows accepts it: then the modem is read again,
+  and answers, `Settings.Global` and listeners follow that reading. A refused profile update
+  or disconnect (a refused disconnect restores the previous mode), a timeout or an
+  unreadable mode leaves every answer unchanged and notifies nothing; the setters return
+  nothing on AOSP either, so the failure is logged. A connect that Windows refuses is
+  logged but not a failure: the mode is set and Windows connects by it when it can. The
+  connect and disconnect complete asynchronously in WwanSvc; the following readings show
+  the connection's state.
+- `Settings.Global.MOBILE_DATA` and `DATA_ROAMING` (unsuffixed, as `GlobalSettingsHelper`
+  names them on a single-SIM device) mirror Windows: they are rewritten to Windows' value
+  whenever a reading changes it and whenever the `phone` service answers a switch.
+  A value written to them directly (with `WRITE_SECURE_SETTINGS`) does not change Windows
+  and is replaced by Windows' value. While Windows' mode cannot be read (no default
+  profile, unreadable profiles) the switches answer the last mirrored values and the
+  setters change nothing. SettingsProvider starts a device with `mobile_data=1` (also in
+  existing settings stores) and `data_roaming=0`.
+- With data off (or roaming off while roaming) Windows' connection is down, so
+  `getDataState()`, data connection listeners and ConnectivityManager's
+  `TRANSPORT_CELLULAR` network report it down; `ServiceState` keeps the data registration
+  and roaming flag, as on AOSP. If someone connects again in Windows while the mode is
+  `manual`, that connection is reported as it is.
+- A change of the user switch reaches `UserMobileDataStateListener`, and a change of the
+  overall answer `DataEnabledListener` with its reason; as `DataSettingsManager` does on a
+  subscription change, both are also sent (the latter for a valid subscription) when the
+  subscription changes. Data roaming has no listener on AOSP either.
 - `ISub.setDataRoaming()` (`SubscriptionManager.setDataRoaming`, hidden) needs
   `MODIFY_PHONE_STATE`, rejects a negative mode or an unknown subscription with
   `IllegalArgumentException`, and sets the subscription record's
   `SubscriptionInfo.getDataRoaming()` for the boot session (subscription records are not
-  persisted, see above); a change notifies subscription listeners. It is not the
-  `DATA_ROAMING` switch, as on AOSP.
+  persisted, see above); a change notifies subscription listeners. It is not the roaming
+  switch and does not change Windows, as on AOSP it does not change `DATA_ROAMING`.
 - Users change the switches with `gesher-app mobile-data [on|off]` and
   `gesher-app mobile-data roaming on|off` (no argument shows both). The command calls the
-  `phone` service's setters as the shell, as Settings' mobile network screen does, and
-  refuses without a modem or without an active SIM subscription.
+  `phone` service's setters as the shell, as Settings' mobile network screen does, says
+  that it changes Windows' cellular connection, reports a change Windows did not accept,
+  and refuses without a modem or without an active SIM subscription.
 
-What the switches do not do: Gesher never connects or disconnects Windows' cellular
-connection, and it cannot keep Android traffic off it. Android apps' sockets are Windows
-sockets routed by Windows (WebView2's traffic runs in Edge processes outside Gesher
-altogether), and steering them away from the WWAN interface would need a Windows Filtering
-Platform filter (administrator rights) or a change to Windows' own connection. So with mobile
-data off, or roaming off while roaming, Windows still carries traffic over cellular when its
-own cellular settings let it, and Gesher keeps reporting that connection as it is:
-`getDataState()`, data connection listeners, `ServiceState`'s data registration and roaming,
-and ConnectivityManager's `TRANSPORT_CELLULAR` network describe Windows' connection, not the
-switch. An app that consults the switches before using mobile data (`isDataEnabled()`,
-`Settings.Global.MOBILE_DATA`, the listeners) sees the user's choice; an app that just opens
-connections uses whatever network Windows routes it to. Turning off data on Windows itself is
-done in Windows' cellular settings (`ms-settings:network-cellular`).
+Not validated on hardware: no physical modem was available. Whether Windows' Settings >
+Cellular "Let Windows keep me connected" and "Roaming options" are this same profile
+element on every Windows version, whether a standard user may update an administrator-
+or operator-provisioned profile (a refusal is reported as above), and WwanSvc's timing
+are unverified until someone runs Gesher on a machine with a WWAN modem.
 
 Without a modem nothing changes: the setters give the managers' null-service answers
 (`setDataEnabledForReason` throws `IllegalStateException("telephony service is null.")`,
 `setDataRoamingEnabled` does nothing, `SubscriptionManager.setDataRoaming` updates no
-record) without permission checks, and the getters answer false.
+record) without permission checks, nothing is written to Windows, and the getters answer
+false.
 
 ## Unsupported (Android's own answers)
 
@@ -274,13 +309,20 @@ record) without permission checks, and the getters answer false.
 
 - `tools/test_windows_cellular_native.py` compiles the unchanged native adapter against an
   explicit COM boundary under ASan/UBSan: absent service/interface, errors, apartments,
-  exact UTF-8 fields, unreported fields, software and hardware radio states, bounds and that
-  every BSTR, SAFEARRAY and COM reference is released. Three negative controls (leaked
-  capability strings, uninitializing a foreign apartment, swapped radio states) must fail.
+  exact UTF-8 fields, unreported fields, software and hardware radio states, the default
+  profile's connection mode, bounds and that every BSTR, SAFEARRAY and COM reference is
+  released; and the connection-mode write: only `ConnectionMode` changes (inserted in its
+  schema position when absent), disconnect and connect by mode and registration, refused
+  updates, disconnects (which restore the previous mode) and connects, and that a snapshot
+  never writes. Five negative controls (leaked capability strings, uninitializing a foreign
+  apartment, swapped radio states, keeping the new mode after a refused disconnect,
+  disconnecting at home in `auto-home`) must fail.
 - `tools/test_telephony.py` runs the production Java services on a host JVM with synthetic
-  modems and callers: features, translations, the data switches (defaults, setters and their
-  permissions, `Settings.Global` agreement, persistence in a real settings store file,
-  listeners, and the data state still following Windows' connection), permission rules (including
+  modems and callers: features, translations, the data switches (answers from Windows'
+  connection mode, setters and their permissions, Windows' writes and refusals, a bounded
+  hung write, the `Settings.Global` mirror in a real settings store file, listeners, the
+  data state following Windows' connection, and the `mobile-data` command), permission
+  rules (including
   `LocationAccessPolicy` for listeners and `ServiceState`), redaction, listeners, SIM
   removal/insertion, a modem without a SIM (default slot and invalid phone IDs), radio
   switches, read failures, hung reads, demand-driven polling under a controlled clock and
@@ -290,7 +332,10 @@ record) without permission checks, and the getters answer false.
   answers through `TelephonyManager`.
 
 No physical modem has been tested: the native adapter's interface declarations (including
-`IMbnRadio`, `{DCCCCAB6-201F-4BBB-AAEE-338E368AF6FA}`) were checked against the Windows
-SDK's `mbnapi.h` (10.0.26100.0) locally, but real WwanSvc behavior, access
-rights for subscriber information, modem timing and the Windows cellular UI are
-unverified until someone runs Gesher on a machine with a WWAN modem.
+`IMbnRadio`, `{DCCCCAB6-201F-4BBB-AAEE-338E368AF6FA}`, `IMbnConnectionProfileManager`
+`{DCBBBAB6-200F-...}` with `CLSID_MbnConnectionProfileManager` `{BDFEE05A-...}`, and
+`IMbnConnectionProfile` `{DCBBBAB6-2010-...}`) were checked against the Windows SDK's
+`mbnapi.h` (10.0.26100.0) locally, but real WwanSvc behavior, access rights for subscriber
+information and profile updates, the connection-mode write and its effect on Windows'
+cellular settings, modem timing and the Windows cellular UI are unverified until someone
+runs Gesher on a machine with a WWAN modem.
