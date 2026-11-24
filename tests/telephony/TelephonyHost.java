@@ -1064,6 +1064,9 @@ public final class TelephonyHost {
             @Override public void put(String name, String value) { throw new IllegalStateException("read-only"); }
         };
         TelephonyService.Endpoints mirrorless = new TelephonyService.Endpoints(cellular, callers, stale);
+        spec.mode = "auto";
+        source.set(spec);
+        cellular.refresh();
         callers.current = NETSTATE;
         check(mirrorless.phone.isUserDataEnabled(1) && mirrorless.phone.isDataRoamingEnabled(1),
                 "Windows' auto, whatever the rows say");
@@ -1100,11 +1103,12 @@ public final class TelephonyHost {
         t.registry.addOnSubscriptionsChangedListener(SWITCHER.name, null, subscriptions);
         int calls = subscriptions.calls;
         writes = source.writes.size();
+        boolean roamingSwitch = t.phone.isDataRoamingEnabled(1);
         equal(t.subscriptions.setDataRoaming(SubscriptionManager.DATA_ROAMING_ENABLE, 1), 1, "One record updated");
         equal(subscriptions.calls, calls + 1, "A changed record notifies subscription listeners");
         equal(t.subscriptions.getActiveSubscriptionInfo(1, SWITCHER.name, null).getDataRoaming(),
                 SubscriptionManager.DATA_ROAMING_ENABLE, "SubscriptionInfo.getDataRoaming");
-        check(source.writes.size() == writes && !t.phone.isDataRoamingEnabled(1),
+        check(source.writes.size() == writes && t.phone.isDataRoamingEnabled(1) == roamingSwitch,
                 "The record is not the DATA_ROAMING switch, as on AOSP");
         equal(t.subscriptions.setDataRoaming(SubscriptionManager.DATA_ROAMING_ENABLE, 1), 1, "Same value");
         equal(subscriptions.calls, calls + 1, "An unchanged record notifies nothing");
