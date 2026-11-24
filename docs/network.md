@@ -242,6 +242,16 @@ FOREGROUND, NOT_VCN_MANAGED; NOT_VPN unless a VPN; INTERNET with a gateway
 reaches the internet through it; NOT_METERED, NOT_ROAMING, NOT_CONGESTED from
 its cost; bandwidths from the link speeds; a VPN's underlying networks.
 
+**Restrict background.** `getRestrictBackgroundStatus` is
+RESTRICT_BACKGROUND_STATUS_ENABLED while Windows restricts background data on the
+internet connection (its data limit setting "Background data";
+`ConnectionCost.BackgroundDataUsageRestricted`, the snapshot's `background` line,
+`compat/net/background_data_win.cc`), DISABLED otherwise or when Windows cannot say;
+never WHITELISTED (no per-app allowance exists). It needs ACCESS_NETWORK_STATE, as
+ConnectivityService.getRestrictBackgroundStatusByCaller. Gesher does not itself block a
+background app's sockets (Windows' setting is advice to apps, as Android's status is to
+an app that reads it), and ACTION_RESTRICT_BACKGROUND_CHANGED is not sent yet.
+
 **Permissions.** `ConnectivityService` refuses callers whose package does not
 request ACCESS_NETWORK_STATE (SecurityException, as ConnectivityService).
 INTERNET is the inet group on Android: without it gesher-base refuses

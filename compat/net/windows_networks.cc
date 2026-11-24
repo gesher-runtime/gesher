@@ -6,7 +6,8 @@
 // gateway, or the route Windows would take to the internet), each with its
 // kind (Wi-Fi, Ethernet, cellular, VPN), addresses, gateways, DNS servers and
 // suffix, MTU and link speeds, and from the Network List Manager whether it
-// reaches the internet and whether it is metered or roaming. Changes of
+// reaches the internet and whether it is metered or roaming; and whether Windows
+// restricts background data on the internet connection (background_data_win.cc). Changes of
 // interfaces, addresses and routes (NotifyIpInterfaceChange and friends) set
 // an event that nativeWaitForChange waits on.
 //
@@ -28,6 +29,8 @@
 #include <stdlib.h>
 
 #include <map>
+
+#include "background_data_win.h"
 #include <mutex>
 #include <string>
 #include <vector>
@@ -232,6 +235,14 @@ std::string Snapshot() {
   snprintf(line, sizeof(line), "default\t%lu\t%lu\ninternet\t%d\t%d\n", best4, best6,
            machine_internet ? 1 : 0, nlm_ok ? 1 : 0);
   out += line;
+  // Background data restricted on the internet connection (Windows' data limit settings),
+  // for ConnectivityManager.getRestrictBackgroundStatus; no line when Windows cannot say.
+  HRESULT background_hr = S_OK;
+  int background = gesher::net::BackgroundDataRestricted(&background_hr);
+  if (background >= 0) {
+    snprintf(line, sizeof(line), "background\t%d\n", background);
+    out += line;
+  }
   if (result != NO_ERROR) return out;
   for (auto* a = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()); a != nullptr;
        a = a->Next) {

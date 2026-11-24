@@ -40,7 +40,7 @@ target_link_libraries(trust_store_layout_test PRIVATE boringssl_crypto crypt32)
 # Windows' networks for the connectivity service, and the INTERNET permission's
 # switch (<gesher/inet.h>), plus the libgesher_nsd.so multicast query transport.
 add_library(gesher_net_natives OBJECT ${_net}/windows_networks.cc ${_net}/windows_nsd.cc
-  ${_net}/windows_wifi.cc)
+  ${_net}/windows_wifi.cc ${_net}/background_data_win.cc)
 target_include_directories(gesher_net_natives PRIVATE ${_net}/include)
 target_compile_options(gesher_net_natives PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(gesher_net_natives PUBLIC nativehelper iphlpapi ole32 oleaut32 ws2_32)

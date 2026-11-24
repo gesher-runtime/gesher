@@ -171,11 +171,26 @@ public final class WindowsNetworks {
         public final List<Net> networks;
         /** The Network List Manager says this machine reaches the internet. */
         public final boolean internet;
+        /**
+         * Windows restricts background data on the internet connection
+         * (ConnectionCost.BackgroundDataUsageRestricted); null when Windows could not say.
+         */
+        public final Boolean backgroundRestricted;
 
         Snapshot(String text, List<Net> networks, boolean internet) {
+            this(text, networks, internet, null);
+        }
+
+        Snapshot(String text, List<Net> networks, boolean internet, Boolean backgroundRestricted) {
             this.text = text;
             this.networks = Collections.unmodifiableList(networks);
             this.internet = internet;
+            this.backgroundRestricted = backgroundRestricted;
+        }
+
+        /** ConnectivityManager.getRestrictBackgroundStatus (BackgroundRestriction.status). */
+        public int restrictBackgroundStatus() {
+            return BackgroundRestriction.status(backgroundRestricted);
         }
 
         /** The network Windows routes the internet through (a VPN's, when one is up). */
@@ -200,12 +215,16 @@ public final class WindowsNetworks {
     public static Snapshot parse(String text) {
         List<Net> nets = new ArrayList<>();
         boolean internet = false;
+        Boolean background = null;
         for (String line : text.split("\n")) {
             String[] f = line.split("\t", -1);
             try {
                 switch (f[0]) {
                     case "internet":
                         internet = f[1].equals("1");
+                        break;
+                    case "background":
+                        background = BackgroundRestriction.parse(f[1]);
                         break;
                     case "net": {
                         Net n = new Net();
@@ -259,7 +278,7 @@ public final class WindowsNetworks {
                 // A line this version does not read.
             }
         }
-        return new Snapshot(text, nets, internet);
+        return new Snapshot(text, nets, internet, background);
     }
 
     private static Net find(List<Net> nets, String ifIndex) {
