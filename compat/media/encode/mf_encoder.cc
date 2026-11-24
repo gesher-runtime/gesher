@@ -296,6 +296,20 @@ bool PullAll(IMFTransform* t, DWORD out_size, OutputSampleCache* cache, const ch
     }
     if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
       if (db.pSample != nullptr && db.pSample != provided) db.pSample->Release();
+      // GetOutputStreamInfo only describes buffer requirements; it does not
+      // acknowledge a type change. Keep the configured encoding format, and
+      // report failure if the transform can no longer accept it.
+      IMFMediaType* current = nullptr;
+      HRESULT type_hr = t->GetOutputCurrentType(0, &current);
+      if (SUCCEEDED(type_hr)) {
+        type_hr = current != nullptr ? t->SetOutputType(0, current, 0) : E_FAIL;
+      }
+      if (current != nullptr) current->Release();
+      if (FAILED(type_hr)) {
+        cache->Reset();
+        MEDIA_LOGE("%s: output type change %s", name, Hex(type_hr).c_str());
+        return false;
+      }
       si = {};
       info_hr = t->GetOutputStreamInfo(0, &si);
       if (FAILED(info_hr)) {
