@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cwchar>
+#include <limits>
 #include <map>
 #include <mutex>
 
@@ -40,7 +41,16 @@ DWORD CALLBACK Changed(HCMNOTIFICATION, void* context, CM_NOTIFY_ACTION action,
   const wchar_t* path = data->u.DeviceInterface.SymbolicLink;
   std::lock_guard lock(state->lock);
   auto existing = state->versions.find(path);
-  if (existing != state->versions.end()) existing->second = ++state->generation;
+  if (existing != state->versions.end()) {
+    if (action == CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL) {
+      // Retire paths instead of accumulating every device ever attached. A
+      // future observation creates a fresh monotonically increasing epoch.
+      state->versions.erase(existing);
+    } else {
+      existing->second = state->generation == std::numeric_limits<int64_t>::max()
+          ? -1 : ++state->generation;
+    }
+  }
   return ERROR_SUCCESS;
 }
 
@@ -116,6 +126,9 @@ int64_t AttachmentVersion(const wchar_t* path) {
   std::lock_guard lock(state.lock);
   auto existing = state.versions.find(path);
   if (existing != state.versions.end()) return existing->second;
+  // Refuse another observation rather than silently dropping revocation
+  // tracking. Removed entries are retired by the real PnP callback above.
+  if (state.versions.size() >= 512 || state.generation == std::numeric_limits<int64_t>::max()) return -1;
   return state.versions.emplace(path, ++state.generation).first->second;
 }
 
@@ -175,9 +188,9 @@ Connection::Connection(HANDLE file) : file_(file) {
   UCHAR current = 0;
   if (WinUsb_GetCurrentAlternateSetting(interface_, &current)) {
     for (unsigned i = 0; i <= UCHAR_MAX; ++i) {
-      if (!WinUsb_QueryInterfaceSettings(interface_, i, &descriptor_)) break;
+      if (!WinUsb_QueryInterfaceSettings(interface_, static_cast<UCHAR>(i), &descriptor_)) break;
       if (descriptor_.bAlternateSetting != current) continue;
-      alternate_index_ = i;
+      alternate_index_ = static_cast<UCHAR>(i);
       read_policies_set_ = ConfigureReadPipes();
       return;
     }
@@ -209,11 +222,12 @@ std::wstring Connection::StringDescriptor(unsigned char index) const {
   if (!interface_ || index == 0) return {};
   auto languages = GetDescriptor(interface_, USB_STRING_DESCRIPTOR_TYPE, 0, 0, 255);
   if (languages.size() < 4 || languages[0] < 4 || languages[0] > languages.size()) return {};
-  const USHORT language = languages[2] | (static_cast<USHORT>(languages[3]) << 8);
+  const USHORT language = static_cast<USHORT>(languages[2] | (static_cast<unsigned>(languages[3]) << 8));
   auto bytes = GetDescriptor(interface_, USB_STRING_DESCRIPTOR_TYPE, index, language, 255);
   if (bytes.empty() || bytes[0] < 2 || bytes[0] > bytes.size() || bytes[0] % 2 != 0) return {};
   std::wstring result;
-  for (size_t i = 2; i < bytes[0]; i += 2) result.push_back(bytes[i] | (bytes[i + 1] << 8));
+  for (size_t i = 2; i < bytes[0]; i += 2)
+    result.push_back(static_cast<wchar_t>(bytes[i] | (static_cast<unsigned>(bytes[i + 1]) << 8)));
   return result;
 }
 
@@ -246,10 +260,10 @@ bool Connection::SetAlternate(int number, int alternate) {
     return false;
   USB_INTERFACE_DESCRIPTOR descriptor{};
   for (unsigned i = 0; i <= UCHAR_MAX; ++i) {
-    if (!WinUsb_QueryInterfaceSettings(interface_, i, &descriptor)) return false;
+    if (!WinUsb_QueryInterfaceSettings(interface_, static_cast<UCHAR>(i), &descriptor)) return false;
     if (descriptor.bAlternateSetting != alternate) continue;
-    if (!WinUsb_SetCurrentAlternateSetting(interface_, alternate)) return false;
-    alternate_index_ = i;
+    if (!WinUsb_SetCurrentAlternateSetting(interface_, static_cast<UCHAR>(alternate))) return false;
+    alternate_index_ = static_cast<UCHAR>(i);
     descriptor_ = descriptor;
     read_policies_set_ = ConfigureReadPipes();
     return true;
@@ -294,8 +308,8 @@ bool Connection::Submit(int endpoint, unsigned char* data, unsigned length, OVER
   if (closed_ || length > INT_MAX || !FindPipe(endpoint) ||
       ((endpoint & 0x80) && !read_policies_set_)) return false;
   const BOOL result = endpoint & 0x80
-      ? WinUsb_ReadPipe(interface_, endpoint, data, length, nullptr, op)
-      : WinUsb_WritePipe(interface_, endpoint, data, length, nullptr, op);
+      ? WinUsb_ReadPipe(interface_, static_cast<UCHAR>(endpoint), data, length, nullptr, op)
+      : WinUsb_WritePipe(interface_, static_cast<UCHAR>(endpoint), data, length, nullptr, op);
   if (result) SetEvent(op->hEvent);
   return result || GetLastError() == ERROR_IO_PENDING;
 }

@@ -56,6 +56,13 @@ they do not become successful guest operations. A fresh card or process requires
 fresh authorization. An Android USB permission decision does not by itself grant
 raw media access.
 
+The protected system server obtains real USB mass-storage descriptors and
+attachment generations from the authority through a bounded read-only metadata
+snapshot. The authority authenticates that exact server before opening the host
+hub; no hub or device handle is passed to Android. These observations do not
+claim WinUSB endpoint-transfer support. Android USB permissions and the separate
+raw-media consent remain distinct.
+
 The service stages the exact APK in a protected directory and keeps it pinned
 against replacement. The trusted Android package verifier verifies signatures
 and archive hashes. Before a suspended app resumes, the authority binds its
@@ -73,6 +80,11 @@ The authority and service manager register the actual `system_server` before it
 runs. Its real `ApplicationSharedMemory` object is admitted only from that exact
 producer and supplied to app peers with read-only access; arbitrary descriptor
 passing remains rejected.
+
+Protected AppContainer identities are stable for a desktop user and, for apps,
+the verified package and signer. Repeated sessions reuse those identities and
+their existing ACL entries. A reused Android UID cannot reuse another package's
+identity. Every process still requires its own exact service admission.
 
 The application's ordinary `su` requests create service-authorized child
 processes. Guest root operations stay within the selected media grant and the

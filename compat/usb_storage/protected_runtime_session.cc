@@ -12,7 +12,9 @@
 #include "binder_listener_factory.h"
 #include "block_session.h"
 #include "protected_signal.h"
+#include "protected_profile_name.h"
 #include "protected_tool_paths.h"
+#include "protected_usb_observation.h"
 #include "../framework/app_container.h"
 
 #include <aclapi.h>
@@ -281,6 +283,11 @@ struct Entry {
   std::wstring working_directory;
 };
 
+struct UsbQuery {
+  UsbObservationKind kind{};
+  std::wstring path;
+};
+
 class Session {
  public:
   Session(std::wstring directory, const ProtectedSessionOptions& options, HANDLE stop)
@@ -315,6 +322,9 @@ class Session {
   DWORD Spawn(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
   DWORD SpawnCommand(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
   DWORD Initialize(Entry& entry, wire::Reply* reply);
+  DWORD ValidateUsbObservation(const Entry& entry, const wire::Request& request,
+                              const std::vector<std::byte>& payload, UsbQuery* query);
+  DWORD ObserveUsb(const Entry& entry, const UsbQuery& query, wire::Reply* reply);
   DWORD PinApk(const std::wstring& path, const std::wstring& digest, Handle* file);
   DWORD GrantAppFiles(Entry& entry);
   DWORD MakeLogs(Entry& entry);
@@ -324,7 +334,7 @@ class Session {
   Entry* Find(uint32_t pid, uint64_t start_time);
   Entry* Root(Entry& entry);
 
-  std::wstring directory_, runtime_, root_, data_, stage_, base_environment_, binder_data_;
+  std::wstring directory_, runtime_, root_, data_, stage_, base_environment_, binder_data_, desktop_sid_;
   ProtectedSessionOptions options_;
   HANDLE stop_;
   Handle ready_;
@@ -412,9 +422,9 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
   alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
   DWORD bytes = 0;
   if (!GetTokenInformation(desktop, TokenUser, user, sizeof(user), &bytes)) return GetLastError();
-  const std::wstring name = SidText(reinterpret_cast<TOKEN_USER*>(user)->User.Sid);
-  if (name.empty()) return ERROR_INVALID_SID;
-  root_ = parent + L"\\" + name;
+  desktop_sid_ = SidText(reinterpret_cast<TOKEN_USER*>(user)->User.Sid);
+  if (desktop_sid_.empty()) return ERROR_INVALID_SID;
+  root_ = parent + L"\\" + desktop_sid_;
   status = PrivateDirectory(root_, identity_->sid());
   if (status != ERROR_SUCCESS) return status;
   status = container::Grant(root_, identity_->sid(), FILE_ALL_ACCESS, true);
@@ -427,8 +437,9 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
     status = container::Grant(path, identity_->sid(), FILE_ALL_ACCESS, true);
     if (status != ERROR_SUCCESS) return status;
   }
-  const std::wstring realm = binder_data_.substr(binder_data_.size() - 32);
-  status = CreateProfile(L"Gesher.Protected.Server." + realm, &service_profile_);
+  std::wstring profile_name;
+  status = ProtectedProfileName(desktop_sid_, {}, {}, &profile_name);
+  if (status == ERROR_SUCCESS) status = CreateProfile(profile_name, &service_profile_);
   if (status != ERROR_SUCCESS) return status;
   for (const auto& path : {root_, data_, stage_, root_ + L"\\logs", root_ + L"\\tmp"}) {
     // Each trusted root intentionally protects its DACL from inheritance.
@@ -709,8 +720,9 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
   entry->app_environment = environment;
   entry->parent = requester.registration;
   entry->root_app = entry->registration = next_id_++;
-  const std::wstring realm = binder_data_.substr(binder_data_.size() - 32);
-  status = CreateProfile(L"Gesher.Protected.App." + realm + L"." + std::to_wstring(entry->uid), &entry->profile);
+  std::wstring profile_name;
+  status = ProtectedProfileName(desktop_sid_, entry->package, entry->signer, &profile_name);
+  if (status == ERROR_SUCCESS) status = CreateProfile(profile_name, &entry->profile);
   if (status == ERROR_SUCCESS) status = GrantAppFiles(*entry);
   if (status == ERROR_SUCCESS) status = MakeLogs(*entry);
   if (status != ERROR_SUCCESS) return status;
@@ -796,6 +808,9 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
   if (request.operation == wire::Operation::kSpawn) return Spawn(entry, request, payload, reply);
   if (request.operation == wire::Operation::kSpawnCommand) return SpawnCommand(entry, request, payload, reply);
   if (request.operation == wire::Operation::kInitialize || request.uid || request.target_sdk || request.start_sequence) return ERROR_INVALID_DATA;
+  // USB observation is dispatched separately, after releasing mutex_. Driver
+  // I/O must not hold the process registry or delay another process's revoke.
+  if (request.operation == wire::Operation::kUsbObservation) return ERROR_INVALID_FUNCTION;
   Entry* child = Find(request.pid, request.start_time);
   reply->pid = request.pid; reply->start_time = request.start_time;
   if (!child) {
@@ -853,6 +868,82 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
   }
 }
 
+DWORD Session::ValidateUsbObservation(const Entry& entry, const wire::Request& request,
+    const std::vector<std::byte>& payload, UsbQuery* query) try {
+  if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
+  if (request.magic != wire::kMagic || request.version != wire::kVersion || request.reserved ||
+      request.payload_bytes != payload.size() || request.payload_bytes > wire::kMaximumPayload ||
+      request.standard_handles[0] || request.standard_handles[1] || request.standard_handles[2] ||
+      request.operation != wire::Operation::kUsbObservation || request.uid || request.target_sdk ||
+      request.start_sequence || request.lifetime_milliseconds) return ERROR_INVALID_DATA;
+  // This role came from authority-owned process creation and its Binder
+  // registration. Neither the opcode nor a claimed PID grants the role.
+  if (!entry.initialized || !entry.system_server || entry.uid != 1000 ||
+      request.pid != entry.launch->pid() || request.start_time != entry.start_time) return ERROR_ACCESS_DENIED;
+  if (request.flags < static_cast<uint32_t>(UsbObservationKind::Paths) ||
+      request.flags > static_cast<uint32_t>(UsbObservationKind::Available)) return ERROR_INVALID_PARAMETER;
+  const auto kind = static_cast<UsbObservationKind>(request.flags);
+  const bool needs_path = kind == UsbObservationKind::Inspect || kind == UsbObservationKind::Version;
+  std::u16string path;
+  if (needs_path) {
+    wire::Reader reader(payload);
+    if (!reader.Read(&path) || path.empty() || !reader.empty()) return ERROR_INVALID_DATA;
+  } else if (!payload.empty()) {
+    return ERROR_INVALID_DATA;
+  }
+  query->kind = kind;
+  query->path = Wide(path);
+  return ERROR_SUCCESS;
+} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
+
+DWORD Session::ObserveUsb(const Entry& entry, const UsbQuery& query, wire::Reply* reply) try {
+  // This worker owns entry until it marks finished; the reaper cannot erase
+  // it during this query. No process-map lock is held across synchronous host
+  // driver I/O. Such I/O has no hard deadline, but must not hold up the other
+  // entries' signal, grant-revocation or shutdown handling.
+  const auto authenticate = [&]() -> DWORD {
+    if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
+    const DWORD status = entry.peer->Authenticate();
+    if (status != ERROR_SUCCESS) return status;
+    return WaitForSingleObject(stop_, 0) == WAIT_TIMEOUT ? ERROR_SUCCESS : ERROR_OPERATION_ABORTED;
+  };
+  DWORD status = authenticate();
+  if (status != ERROR_SUCCESS) return status;
+  std::vector<std::byte> snapshot;
+  status = QueryProtectedUsbObservation(query.kind, query.path, &snapshot);
+  if (status != ERROR_SUCCESS) return status;
+  status = authenticate();
+  if (status != ERROR_SUCCESS) return status;
+  if (snapshot.empty() || snapshot.size() > kUsbObservationLimit) return ERROR_BUFFER_OVERFLOW;
+  const auto size = static_cast<DWORD>(snapshot.size());
+  const Handle section(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, size, nullptr));
+  if (!section) return GetLastError();
+  void* view = MapViewOfFile(section.get(), FILE_MAP_WRITE, 0, 0, size);
+  if (!view) return GetLastError();
+  std::memcpy(view, snapshot.data(), size);
+  if (!UnmapViewOfFile(view)) return GetLastError();
+  HANDLE readonly = nullptr;
+  // The only remote capability is read access to this newly-created metadata
+  // snapshot. No hub/disk handle or caller-selected handle is ever accepted.
+  if (!DuplicateHandle(GetCurrentProcess(), section.get(), entry.launch->process(), &readonly,
+      FILE_MAP_READ, FALSE, 0)) return GetLastError();
+  status = authenticate();
+  if (status != ERROR_SUCCESS) {
+    // This numeric value was just created here in this exact retained
+    // process, and has not been published to the client. Remove it if the
+    // peer disconnected or shutdown began during the handoff.
+    HANDLE reclaimed = nullptr;
+    if (DuplicateHandle(entry.launch->process(), readonly, GetCurrentProcess(), &reclaimed,
+        0, FALSE, DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS)) CloseHandle(reclaimed);
+    return status;
+  }
+  reply->pid = entry.launch->pid();
+  reply->start_time = entry.start_time;
+  reply->observation_section = reinterpret_cast<uintptr_t>(readonly);
+  reply->observation_bytes = size;
+  return ERROR_SUCCESS;
+} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
+
 void Session::Serve(Entry& entry) {
   const Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
   DWORD status = event ? ERROR_SUCCESS : GetLastError();
@@ -875,7 +966,14 @@ void Session::Serve(Entry& entry) {
     if (status == ERROR_SUCCESS) status = entry.peer->Authenticate();
     if (status != ERROR_SUCCESS) break;
     wire::Reply reply{};
-    {
+    if (request.operation == wire::Operation::kUsbObservation) {
+      UsbQuery query;
+      {
+        std::lock_guard lock(mutex_);
+        reply.status = ValidateUsbObservation(entry, request, payload, &query);
+      }
+      if (reply.status == ERROR_SUCCESS) reply.status = ObserveUsb(entry, query, &reply);
+    } else {
       std::lock_guard lock(mutex_);
       reply.status = Dispatch(entry, request, payload, &reply);
     }

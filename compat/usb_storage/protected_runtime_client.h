@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -24,6 +25,12 @@ uint32_t ProtectedPropertyMutex(uint64_t* handle);
 // An owned reduced duplicate of the authority-created mutex for this package's
 // log, shared by its admitted processes and by every DLL in one executable.
 uint32_t ProtectedLogMutex(uint64_t* handle);
+enum class UsbObservationKind : uint32_t;
+// Copies one bounded, read-only descriptor snapshot from the authority. Only
+// authenticated system_server can call this; device handles never cross it.
+// Inspect and Version require a path; Paths and Available require no path.
+uint32_t ProtectedUsbObservation(UsbObservationKind kind, std::wstring_view path,
+                                 std::vector<std::byte>* output);
 
 struct ProtectedStartupResources {
   uint64_t standard_handles[3]{};

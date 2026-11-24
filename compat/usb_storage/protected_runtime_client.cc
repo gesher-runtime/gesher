@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "protected_runtime_client.h"
 #include "protected_runtime_wire.h"
+#include "protected_usb_observation.h"
 #include "../binder/protected_data_client.h"
 #include "../binder/protected_data_pipe.h"
 
@@ -11,6 +12,7 @@
 
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <string>
@@ -94,7 +96,8 @@ uint32_t Exchange(State& state, const wire::Request& request, const void* payloa
   }
   if (status == ERROR_SUCCESS) status = Transfer(state.pipe, reply, sizeof(*reply), false);
   if (status == ERROR_SUCCESS && (reply->magic != wire::kMagic || reply->version != wire::kVersion ||
-      reply->reserved || reply->reserved2 || reply->running > 1 || reply->role > 1 || reply->reserved3)) {
+      reply->reserved || reply->reserved2 || reply->running > 1 || reply->role > 1 ||
+      reply->reserved3 || reply->reserved4)) {
     status = ERROR_INVALID_DATA;
   }
   const bool spawn = request.operation == wire::Operation::kSpawn || request.operation == wire::Operation::kSpawnCommand;
@@ -103,6 +106,10 @@ uint32_t Exchange(State& state, const wire::Request& request, const void* payloa
                (reply->pid != request.pid || reply->start_time != request.start_time))) status = ERROR_INVALID_DATA;
   if (status == ERROR_SUCCESS && reply->status == ERROR_SUCCESS &&
       request.operation == wire::Operation::kInitialize && !reply->log_mutex) status = ERROR_INVALID_DATA;
+  const bool observation = request.operation == wire::Operation::kUsbObservation && reply->status == ERROR_SUCCESS;
+  if (status == ERROR_SUCCESS && (observation ?
+      (!reply->observation_section || !reply->observation_bytes || reply->observation_bytes > kUsbObservationLimit) :
+      (reply->observation_section || reply->observation_bytes))) status = ERROR_INVALID_DATA;
   if (status != ERROR_SUCCESS) {
     if (state.pipe) CloseHandle(state.pipe);
     state.pipe = nullptr;
@@ -280,6 +287,39 @@ uint32_t ProtectedLogMutex(uint64_t* handle) {
       "gesher_protected_log_mutex"));
   return query ? query(handle) : ERROR_ACCESS_DENIED;
 }
+
+uint32_t ProtectedUsbObservation(UsbObservationKind kind, std::wstring_view path,
+    std::vector<std::byte>* output) try {
+  if (!output || !output->empty()) return ERROR_INVALID_PARAMETER;
+  if (!ProtectedRuntimeIsSystemServer()) return ERROR_ACCESS_DENIED;
+  const bool needs_path = kind == UsbObservationKind::Inspect || kind == UsbObservationKind::Version;
+  if ((kind != UsbObservationKind::Paths && kind != UsbObservationKind::Inspect &&
+       kind != UsbObservationKind::Version && kind != UsbObservationKind::Available) ||
+      (needs_path ? path.empty() : !path.empty()) || path.find(L'\0') != std::wstring_view::npos) return ERROR_INVALID_PARAMETER;
+  std::vector<std::byte> payload;
+  if (needs_path && !wire::Append(&payload, std::u16string(path.begin(), path.end()))) {
+    return ERROR_FILENAME_EXCED_RANGE;
+  }
+  wire::Request request{};
+  request.operation = wire::Operation::kUsbObservation;
+  request.flags = static_cast<uint32_t>(kind);
+  request.pid = GetCurrentProcessId();
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return GetLastError();
+  request.start_time = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  wire::Reply reply{};
+  const DWORD status = Call(request, payload, &reply);
+  if (status != ERROR_SUCCESS) return status;
+  struct Close { void operator()(void* value) const { if (value) CloseHandle(value); } };
+  const std::unique_ptr<void, Close> section(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(reply.observation_section)));
+  void* view = MapViewOfFile(section.get(), FILE_MAP_READ, 0, 0, reply.observation_bytes);
+  if (!view) return GetLastError();
+  struct Unmap { void operator()(void* value) const { if (value) UnmapViewOfFile(value); } };
+  const std::unique_ptr<void, Unmap> mapped(view);
+  const auto* begin = static_cast<const std::byte*>(view);
+  output->assign(begin, begin + reply.observation_bytes);
+  return ERROR_SUCCESS;
+} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
 
 uint32_t ProtectedInitializeResources(ProtectedStartupResources* resources) {
   if (!resources) return ERROR_INVALID_PARAMETER;

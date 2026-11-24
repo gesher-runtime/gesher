@@ -22,6 +22,7 @@
 #include <io.h>
 #include <stdint.h>
 #include <jni.h>
+#include "../usb_storage/protected_runtime_role.h"
 
 static BOOL server_process = FALSE;
 
@@ -37,6 +38,11 @@ static void Fail(JNIEnv* env, const char* type, const char* message) {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
   (void)vm; (void)reserved;
+  const int protected_role = GesherProtectedSystemServerRole();
+  if (protected_role >= 0) {
+    server_process = protected_role == 1;
+    return JNI_VERSION_1_6;
+  }
   int count = 0;
   LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &count);
   if (args != NULL) {

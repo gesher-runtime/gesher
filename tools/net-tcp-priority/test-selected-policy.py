@@ -411,7 +411,7 @@ USB_BLOCK_PATH_BASES = dict.fromkeys((
  'compat/posix/src/binder_wire.h',
  'tools/test_environment_lookup_contracts.py',
 ), 'af2a394d0f5399f954aa00aeaf37011d42b96623')
-USB_BLOCK_TRANSITION_SHA256 = '661eab396e5603175c1195c1bc32a11a6c3ca78798cace2c793edf9628da16a8'
+USB_BLOCK_TRANSITION_SHA256 = '2b7b6549c35c0ba7197591b41d1f9d9d44ae35e5f1bb6b987f70c616a5ce1cc1'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

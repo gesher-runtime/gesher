@@ -196,6 +196,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir out/binder-protected-ci --output-on-failure
           exit $LASTEXITCODE
+      - name: Authenticated native role query boundaries and stable protected profile names
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c11 /W4 /WX tests\native\protected_role_test.c /Fe:protected_role_test.exe
+          if errorlevel 1 exit /b 1
+          protected_role_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c11 /W4 /WX /DGESHER_TEST_MISSING_SERVER_QUERY tests\native\protected_role_test.c /Fe:protected_role_missing_test.exe
+          if errorlevel 1 exit /b 1
+          protected_role_missing_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\protected_profile_name_test.cc /Fe:protected_profile_name_test.exe bcrypt.lib
+          if errorlevel 1 exit /b 1
+          protected_profile_name_test.exe
+      - name: Protected USB observation bounds, identity epochs and malformed metadata
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\protected_usb_observation_test.cc compat\usb_storage\protected_usb_observation.cc /Fe:protected_usb_observation_test.exe
+          if errorlevel 1 exit /b 1
+          protected_usb_observation_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_attachment_versions_test.cc /Fe:usb_attachment_versions_test.exe cfgmgr32.lib setupapi.lib ole32.lib advapi32.lib winusb.lib
+          if errorlevel 1 exit /b 1
+          usb_attachment_versions_test.exe
       - name: Build native clipboard foreground actor before timed startup
         if: ${{ !cancelled() }}
         shell: cmd

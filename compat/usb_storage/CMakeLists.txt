@@ -7,6 +7,9 @@ add_executable(gesher-usb-authority
   binder_listener_factory.cc
   protected_identity.cc
   protected_runtime_session.cc
+  protected_usb_observation.cc
+  ${CMAKE_CURRENT_LIST_DIR}/../devsvc/usb_storage_observation.cc
+  ${CMAKE_CURRENT_LIST_DIR}/../devsvc/usb_winusb.cc
   protected_signal.cc
   block_session.cc
   block_channel.cc
@@ -19,7 +22,7 @@ target_include_directories(gesher-usb-authority PRIVATE ${CMAKE_CURRENT_LIST_DIR
 target_compile_options(gesher-usb-authority PRIVATE -Wall -Wextra -Werror -fexceptions)
 target_link_options(gesher-usb-authority PRIVATE -municode)
 target_link_libraries(gesher-usb-authority PRIVATE advapi32 bcrypt ole32 shell32 uuid wtsapi32
-  userenv user32 comctl32 setupapi cfgmgr32)
+  userenv user32 comctl32 setupapi cfgmgr32 winusb)
 
 # Full launch validation needs a disposable LocalSystem test host with an
 # ordinary desktop user logged on. The default invocation tests refusal.

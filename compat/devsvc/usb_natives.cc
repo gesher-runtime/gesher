@@ -22,6 +22,8 @@
 #include "core_jni_helpers.h"
 #include "usb_storage_observation.h"
 #include "usb_winusb.h"
+#include "../usb_storage/protected_runtime_client.h"
+#include "../usb_storage/protected_usb_observation.h"
 
 namespace android {
 int RegisterGesherNatives(JNIEnv*, const char*, const JNINativeMethod*, int);
@@ -29,6 +31,8 @@ int RegisterGesherNatives(JNIEnv*, const char*, const JNINativeMethod*, int);
 namespace {
 using gesher::usb::Connection;
 using gesher::usb::OpenDevice;
+using gesher::usb_storage::UsbObservationData;
+using gesher::usb_storage::UsbObservationKind;
 jfieldID context;
 jfieldID request_context;
 
@@ -53,7 +57,21 @@ jbyteArray Bytes(JNIEnv* env, const std::vector<unsigned char>& bytes) {
   return out;
 }
 
+std::optional<UsbObservationData> ProtectedObservation(UsbObservationKind kind,
+                                                     std::wstring_view path = {}) {
+  if (!gesher::usb_storage::ProtectedRuntimeIsSystemServer()) return std::nullopt;
+  std::vector<std::byte> bytes;
+  UsbObservationData value;
+  if (gesher::usb_storage::ProtectedUsbObservation(kind, path, &bytes) != ERROR_SUCCESS ||
+      !gesher::usb_storage::DecodeUsbObservation(kind, bytes, &value)) return std::nullopt;
+  return value;
+}
+
 jboolean Available(JNIEnv*, jclass) try {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    auto value = ProtectedObservation(UsbObservationKind::Available);
+    return value && value->available;
+  }
   return gesher::usb::AttachmentMonitoringAvailable();
 } catch (const std::bad_alloc&) {
   return JNI_FALSE;
@@ -75,6 +93,10 @@ jobjectArray PathArray(JNIEnv* env, const std::vector<std::wstring>& paths) {
 }
 
 jobjectArray Paths(JNIEnv* env, jclass) try {
+  // The protected realm does not transport arbitrary WinUSB endpoint handles.
+  // Its storage observations have a distinct Java backend with transfers
+  // unavailable; do not advertise inaccessible WinUSB transfer capabilities.
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) return PathArray(env, {});
   auto paths = gesher::usb::InterfacePaths();
   return paths ? PathArray(env, *paths) : nullptr;
 } catch (const std::bad_alloc&) {
@@ -82,6 +104,10 @@ jobjectArray Paths(JNIEnv* env, jclass) try {
 }
 
 jobjectArray StoragePaths(JNIEnv* env, jclass) try {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    auto value = ProtectedObservation(UsbObservationKind::Paths);
+    return value ? PathArray(env, value->paths) : nullptr;
+  }
   auto paths = gesher::usb::StorageInterfacePaths();
   return paths ? PathArray(env, *paths) : nullptr;
 } catch (const std::bad_alloc&) {
@@ -89,7 +115,13 @@ jobjectArray StoragePaths(JNIEnv* env, jclass) try {
 }
 
 jobject InspectStorage(JNIEnv* env, jclass, jstring name) try {
-  auto observation = gesher::usb::ObserveStorage(Wide(env, name));
+  std::optional<gesher::usb::StorageObservation> observation;
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    auto value = ProtectedObservation(UsbObservationKind::Inspect, Wide(env, name));
+    if (value) observation = std::move(value->storage);
+  } else {
+    observation = gesher::usb::ObserveStorage(Wide(env, name));
+  }
   if (!observation) return nullptr;
   jbyteArray raw = Bytes(env, observation->descriptors);
   if (!raw || env->ExceptionCheck()) return nullptr;
@@ -113,12 +145,17 @@ jobject InspectStorage(JNIEnv* env, jclass, jstring name) try {
 }
 
 jlong Version(JNIEnv* env, jclass, jstring name) try {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    auto value = ProtectedObservation(UsbObservationKind::Version, Wide(env, name));
+    return value ? value->version : -1;
+  }
   return gesher::usb::AttachmentVersion(Wide(env, name).c_str());
 } catch (const std::bad_alloc&) {
   return -1;
 }
 
 jbyteArray Inspect(JNIEnv* env, jclass, jstring name) try {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) return nullptr;
   auto file = OpenDevice(Wide(env, name).c_str());
   if (!file) return nullptr;
   return Bytes(env, Connection(file.get()).Descriptors());
@@ -127,6 +164,7 @@ jbyteArray Inspect(JNIEnv* env, jclass, jstring name) try {
 }
 
 jstring DeviceString(JNIEnv* env, jclass, jstring name, jint index) try {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) return nullptr;
   if (index < 1 || index > 255) return nullptr;
   auto file = OpenDevice(Wide(env, name).c_str());
   if (!file) return nullptr;
@@ -137,6 +175,7 @@ jstring DeviceString(JNIEnv* env, jclass, jstring name, jint index) try {
 }
 
 jint Publish(JNIEnv* env, jclass, jstring name, jlong version) try {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) return -1;
   auto path = Wide(env, name);
   const auto paths = gesher::usb::InterfacePaths();
   if (version < 0 || !paths || std::find(paths->begin(), paths->end(), path) == paths->end() ||
@@ -605,8 +644,11 @@ const JNINativeMethod request_methods[] = {
 };
 
 // JNI registration runs before the guest main class executes. Only the
-// independently launched system_server gets native Windows-path access.
+// independently launched system_server gets host inventory access. Protected
+// identity comes from the authenticated executable bootstrap, never argv text.
 bool IsSystemServerEntryPoint() {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled())
+    return gesher::usb_storage::ProtectedRuntimeIsSystemServer();
   int count = 0;
   wchar_t** args = CommandLineToArgvW(GetCommandLineW(), &count);
   if (!args) return false;

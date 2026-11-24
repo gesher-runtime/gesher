@@ -11,10 +11,11 @@
 
 namespace gesher::usb_storage::runtime_wire {
 inline constexpr uint32_t kMagic = 0x47525054;
-inline constexpr uint32_t kVersion = 2;
+inline constexpr uint32_t kVersion = 3;
 inline constexpr uint32_t kMaximumPayload = 64 * 1024;
 enum class Operation : uint32_t {
-  kSpawn = 1, kStatus, kKill, kGrantBlock, kRevokeBlock, kInitialize, kSpawnCommand, kSignal
+  kSpawn = 1, kStatus, kKill, kGrantBlock, kRevokeBlock, kInitialize, kSpawnCommand, kSignal,
+  kUsbObservation
 };
 struct Request {
   uint32_t magic = kMagic;
@@ -53,8 +54,11 @@ struct Reply {
   uint64_t signal_section = 0;
   uint64_t signal_event = 0;
   uint64_t log_mutex = 0;
+  uint64_t observation_section = 0;
+  uint32_t observation_bytes = 0;
+  uint32_t reserved4 = 0;
 };
-static_assert(sizeof(Request) == 80 && sizeof(Reply) == 136);
+static_assert(sizeof(Request) == 80 && sizeof(Reply) == 152);
 
 inline bool Append(std::vector<std::byte>* data, std::u16string_view text) {
   if (text.size() > 8192 || text.find(u'\0') != std::u16string_view::npos) return false;
