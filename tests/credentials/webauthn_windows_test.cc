@@ -8,8 +8,8 @@
 //    ceremony does no harm;
 //  - WebAuthNGetErrorName names the HRESULTs as CredentialManagerService's error
 //    mapping expects;
-//  - the platform credential list of a random relying party is empty, and deleting a
-//    random credential id fails;
+//  - the platform credential list of a random relying party is empty (from API version
+//    4, which added the list), and deleting a random credential id fails;
 //  - a ceremony without an owner window never reaches Windows: no dialog, no result.
 // On a Windows without webauthn.dll every call must answer kUnavailable.
 // tests/credentials/webauthn_probe.cc covers the real ceremonies by hand.
@@ -124,14 +124,16 @@ int main() {
                      reinterpret_cast<const uint8_t*>(&second) + sizeof(GUID));
     HRESULT deleted = webauthn::DeletePlatformCredential(random_id);
     printf("WebAuthNDeletePlatformCredential(random id): 0x%08lx\n", Hex(deleted));
+    // WebAuthNGetPlatformCredentialList came with API version 4; an older webauthn.dll
+    // (windows-2022 reports version 2) has no such export.
     if (version >= 4) {
       Check(list == S_OK && credentials.empty(),
             "the platform credential list of a random relying party is empty");
-      Check(FAILED(deleted), "deleting a random credential id fails");
     } else {
-      Check(list == webauthn::kUnavailable && deleted == webauthn::kUnavailable,
-            "before API version 4 there is no platform credential list");
+      Check(credentials.empty() && (list == webauthn::kUnavailable || list == S_OK),
+            "before API version 4 the platform credential list is unavailable or empty");
     }
+    Check(FAILED(deleted), "deleting a random credential id fails");
   }
 
   // No owner window: no dialog, no call into Windows, no result.

@@ -9,6 +9,11 @@
 //                            the credential's COSE public key, then delete the credential
 //   webauthn_probe cancel    start a registration and cancel it after 3 seconds through
 //                            its cancellation id, as an application's cancel does
+//   webauthn_probe host [seconds]   show a window (60 s by default) and print its pid:
+//                                   the "app" of the mode below
+//   webauthn_probe foreign <pid>    this process (the "system server") runs the round
+//                                   trip with the foreground window of process <pid> as
+//                                   the owner: the cross-process owner Gesher uses
 //
 // The probe is the production native code plus BCrypt for the verification. It is not an
 // Android application, so its clientDataJSON origin is a label of its own.
@@ -16,6 +21,7 @@
 #include <windows.h>
 #include <bcrypt.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <string>
@@ -436,18 +442,68 @@ int Cancel(HWND owner) {
   return failures == 0 ? 0 : 1;
 }
 
+void Pump() {
+  MSG message;
+  while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+}
+
+// A window of this process, standing in for an application's window.
+int Host(DWORD seconds) {
+  WNDCLASSW window_class{};
+  window_class.lpfnWndProc = DefWindowProcW;
+  window_class.hInstance = GetModuleHandleW(nullptr);
+  window_class.lpszClassName = L"GesherWebAuthnProbe";
+  window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  RegisterClassW(&window_class);
+  HWND window = CreateWindowExW(0, window_class.lpszClassName,
+                                L"Gesher WebAuthn probe: app window",
+                                WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
+                                480, 240, nullptr, nullptr, window_class.hInstance, nullptr);
+  SetForegroundWindow(window);
+  printf("host pid=%lu\n", static_cast<unsigned long>(GetCurrentProcessId()));
+  fflush(stdout);
+  for (ULONGLONG end = GetTickCount64() + seconds * 1000ULL; GetTickCount64() < end;) {
+    Pump();
+    Sleep(20);
+  }
+  return 0;
+}
+
+// The production owner rule: the foreground window of `pid`, or none.
+HWND WaitForForegroundWindowOf(DWORD pid) {
+  printf("Click the host window (pid %lu) within 15 seconds.\n", static_cast<unsigned long>(pid));
+  fflush(stdout);
+  for (ULONGLONG end = GetTickCount64() + 15000; GetTickCount64() < end; Sleep(100)) {
+    HWND owner = webauthn::ForegroundWindowOf(pid);
+    if (owner != nullptr) return owner;
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   const char* mode = argc > 1 ? argv[1] : "roundtrip";
+  if (strcmp(mode, "host") == 0) {
+    return Host(argc > 2 ? strtoul(argv[2], nullptr, 10) : 60);
+  }
   PrintInfo();
   if (strcmp(mode, "info") == 0) return 0;
   if (webauthn::ApiVersion() == 0) {
     printf("FAIL this Windows has no WebAuthn API (webauthn.dll)\n");
     return 1;
   }
-  // The dialog's owner: the window the probe was started from (its terminal).
-  HWND owner = GetForegroundWindow();
+  // The dialog's owner: the window the probe was started from (its terminal), or, as in
+  // Gesher, another process's foreground window.
+  bool foreign = strcmp(mode, "foreign") == 0;
+  HWND owner = foreign ? WaitForForegroundWindowOf(argc > 2 ? strtoul(argv[2], nullptr, 10) : 0)
+                       : GetForegroundWindow();
+  if (foreign && owner == nullptr) {
+    webauthn::Attestation none;
+    HRESULT refused = webauthn::MakeCredential(nullptr, Registration(Bytes()), nullptr, &none);
+    printf("that process does not own the foreground window: no dialog (0x%08lx)\n", Hex(refused));
+    return 1;
+  }
   wchar_t title[128] = L"";
   if (owner != nullptr) GetWindowTextW(owner, title, 128);
   printf("owner window: %p \"%ls\"\n", static_cast<void*>(owner), title);
@@ -458,10 +514,11 @@ int main(int argc, char** argv) {
   int result = 0;
   if (strcmp(mode, "cancel") == 0) {
     result = Cancel(owner);
-  } else if (strcmp(mode, "roundtrip") == 0) {
+  } else if (strcmp(mode, "roundtrip") == 0 || foreign) {
+    if (foreign) printf("the owner is another process's window\n");
     result = RoundTrip(owner);
   } else {
-    printf("usage: webauthn_probe [info|roundtrip|cancel]\n");
+    printf("usage: webauthn_probe [info|roundtrip|cancel|host [seconds]|foreign <pid>]\n");
     return 2;
   }
   printf("\nwebauthn probe: %s\n", result == 0 ? "PASSED" : "FAILED");
