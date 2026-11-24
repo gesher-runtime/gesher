@@ -217,7 +217,9 @@ Corp.`, `Microsoft Authenticode(tm) Root Authority`) are limited to other
 purposes by their enhanced key usage and are left out of both stores. The CA
 stores' self-signed certificates (such as `Root Agency` and the TPM roots
 Windows keeps there) are not taken: Windows does not trust a root there either.
-If neither list can be read, no root can be told apart and none is user-added.
+If neither list can be read, no root can be told apart and none is user-added:
+a sync then removes Gesher's user CAs (the safe direction; they come back at
+the next sync that can read a list).
 The lists are not signature-checked: only an administrator can change the
 registry copy, and crypt32.dll is a system file.
 
@@ -226,15 +228,33 @@ that trust only system CAs keep working, and Android's network security
 config and `AndroidCAStore` now also see it as a user-added CA: both a
 `system:` and a `user:` alias. (Android's own KeyChain installs no user copy of
 a system CA; here the system copy is Gesher's import from Windows, and the
-`user:` alias is what tells apps it was installed locally.)
+`user:` alias is what tells apps it was installed locally.) Apps see what they
+would on a phone with that CA installed by the user:
+`TrustedCertificateStore.isUserAddedCertificate` and
+`X509TrustManagerExtensions.isUserAddedCertificate` return true for chains
+that end at it, Chrome's `X509Util.getUserAddedRoots` lists it, and apps or
+browsers that warn that the network may be monitored when a user CA is
+installed will warn here.
 
 The directory is laid out as `TrustedCertificateStore` keeps it: DER files
 `<subject hash>.<n>`, a new one after the last index of its hash, a removed
 one truncated to an empty tombstone while a later index exists and deleted,
 with the tombstones before it, otherwise. A root removed from Windows is
-removed at the next sync. The manifest `misc/user/0/.gesher-user-cacerts`
-(next to the directory) names the entries Gesher wrote and their SHA-256; an
-entry Gesher did not write, or whose contents changed since, is never touched.
+removed at the next sync. Two records name the entries Gesher wrote and their
+SHA-256, and either one is enough: the manifest `misc/user/0/.gesher-user-cacerts`
+(next to the directory), written before the entries it adds, and an NTFS named
+stream `:gesher-owner` on each entry, written on the temporary file so the
+rename moves data and mark together. A lost or unwritable manifest, or a crash
+between writes, so leaves no entry behind that outlives its root (nothing in
+Gesher could remove it: there is no KeyChain or Settings). If the manifest
+cannot be written, no entry is written (a volume without named streams would
+have no other record). An entry Gesher did not write, or whose contents
+changed since, is never touched, including a file someone put there that
+holds the same certificate (it has no mark). The manifest is read leniently
+(CRLF, case, malformed lines skip only themselves). As in Conscrypt's
+`findCert`, the indexes of a hash end at the first one that is not a file: a
+directory there leaves the certificate out (the sync reports a failure)
+rather than writing it past the directory, where it would be unreachable.
 `cacerts-removed` (system CAs the user disabled) is Android's, unchanged.
 `GESHER_TRACE_CACERTS=1` lists the user-added roots.
 

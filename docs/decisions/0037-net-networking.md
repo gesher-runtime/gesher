@@ -58,9 +58,15 @@ ConnectivityManager that said there was no network.
   Microsoft's list, rather than the store or physical
   store a root is in, is the rule: Windows' own shipped roots and the ones it
   adds on demand share stores with an administrator's imports, and all of
-  them are listed. Without either list nothing is classified as local. The
+  them are listed. Without either list nothing is classified as local (Gesher's
+  user CAs are then removed until a list can be read). The
   system directory is unchanged, so such a root has a `system:` and a `user:`
-  alias. App processes set `TrustedCertificateStore`'s user directory to
+  alias; apps see it as on a phone with a user-installed CA
+  (`isUserAddedCertificate` is true, and "network may be monitored" warnings
+  appear where an app shows them). Gesher's entries are recorded twice, by a
+  manifest written before them and by a named stream on each file, so losing
+  one record or a crash between writes leaves no entry that outlives its root;
+  a same certificate someone else put there is left alone. App processes set `TrustedCertificateStore`'s user directory to
   `Environment.getUserConfigDirectory(userId)`, as `ActivityThread.main` does
   (it was Conscrypt's `misc/keychain` default). Rejected: moving installed
   roots out of the system directory (apps that trust only system CAs would
