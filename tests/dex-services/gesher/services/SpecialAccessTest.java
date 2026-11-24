@@ -60,6 +60,10 @@ public final class SpecialAccessTest {
         try { Binder.restoreCallingIdentity(((long)uid << 32) | pid); work.run(); }
         finally { Binder.restoreCallingIdentity(identity); }
     }
+    /** The server's own question, not an app's: the fixture's default UID is an ordinary app. */
+    private static void asSystem(Checked work) throws Exception {
+        as(android.os.Process.SYSTEM_UID, android.os.Process.myPid(), work);
+    }
     private static Object invoke(Class<?> type, String name, Object... args) throws Exception {
         for (Method method : type.getDeclaredMethods()) {
             if (method.getName().equals(name) && method.getParameterCount() == args.length) {
@@ -239,8 +243,8 @@ public final class SpecialAccessTest {
             }
             check(!appSees(pm, ops, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, Manifest.permission.SYSTEM_ALERT_WINDOW),
                     "canDrawOverlays is false before the user allows it");
-            check(!pm.canRequestPackageInstalls(APP, 0),
-                    "Declaring REQUEST_INSTALL_PACKAGES alone does not allow install requests");
+            asSystem(() -> check(!pm.canRequestPackageInstalls(APP, 0),
+                    "Declaring REQUEST_INSTALL_PACKAGES alone does not allow install requests"));
             check(ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP)
                     == AppOpsManager.opToDefaultMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW), "Default mode is AOSP's");
 
@@ -295,14 +299,14 @@ public final class SpecialAccessTest {
                 check(!appSees(pm, ops, op, permission), name + " reads denied in the app");
             }
             setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
-            check(pm.canRequestPackageInstalls(APP, 0), "canRequestPackageInstalls follows Install unknown apps");
-            check(!pm.canRequestPackageInstalls(APP, 10), "Only the one user");
+            asSystem(() -> check(pm.canRequestPackageInstalls(APP, 0), "canRequestPackageInstalls follows Install unknown apps"));
+            asSystem(() -> check(!pm.canRequestPackageInstalls(APP, 10), "Only the one user"));
             // The answer reveals a user decision: only the package's own caller may ask (AOSP).
             as(APP_UID, APP_PID, () -> check(pm.canRequestPackageInstalls(APP, 0), "An app may ask about itself"));
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> pm.canRequestPackageInstalls(PLAIN, 0)));
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> pm.canRequestPackageInstalls("fixture.absent", 0)));
             setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, false);
-            check(!pm.canRequestPackageInstalls(APP, 0), "Turning Install unknown apps off is read back");
+            asSystem(() -> check(!pm.canRequestPackageInstalls(APP, 0), "Turning Install unknown apps off is read back"));
 
             // Strict validation: undeclared, unknown and malformed input change nothing.
             rejects(IllegalArgumentException.class, () -> setAccess(pm, PLAIN, OVERLAY, true));
@@ -458,14 +462,24 @@ public final class SpecialAccessTest {
             check(rows(pm, INSTALLER).equals(List.of("android:request_install_packages\tallowed\tfixed")),
                     "Install unknown apps is shown fixed on for an installer: " + rows(pm, INSTALLER));
             rejects(IllegalStateException.class, () -> setAccess(pm, INSTALLER, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, false));
-            check(pm.canRequestPackageInstalls(INSTALLER, 0) && ops.checkRawMode(AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+            asSystem(() -> check(pm.canRequestPackageInstalls(INSTALLER, 0) && ops.checkRawMode(AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
                     INSTALLER_UID, INSTALLER) == AppOpsManager.opToDefaultMode(AppOpsManager.OP_REQUEST_INSTALL_PACKAGES),
-                    "The refused change wrote nothing and the installer may still install");
+                    "The refused change wrote nothing and the installer may still install"));
 
             // Storage stats follow the Usage access op (AOSP checkStatsPermission), not the manifest.
             File statsData = new File(directory, "data");
             check(new File(statsData, "media/0").mkdirs(), "Cannot create the storage stats data directory");
-            Object stats = make(type("StorageStatsService"), new Class<?>[]{PackageManagerService.class, File.class}, pm, statsData);
+            // Usage access is decided for the attached process's current installation (ATM).
+            Class<?> callerCode = type("StorageStatsService$CallerCode");
+            Method attachedCode = atm.getClass().getDeclaredMethod("authenticatedPackageCodeForPid", int.class, int.class);
+            attachedCode.setAccessible(true);
+            Object callers = Proxy.newProxyInstance(callerCode.getClassLoader(), new Class<?>[]{callerCode},
+                    (proxy, method, args) -> {
+                        if (!method.getName().equals("current")) throw new UnsupportedOperationException(method.getName());
+                        return attachedCode.invoke(atm, args);
+                    });
+            Object stats = make(type("StorageStatsService"), new Class<?>[]{PackageManagerService.class, File.class, callerCode},
+                    pm, statsData, callers);
             Method forUser = stats.getClass().getMethod("queryExternalStatsForUser", String.class, int.class, String.class);
             Checked queryAsApp = () -> as(APP_UID, APP_PID, () -> forUser.invoke(stats, null, 0, APP));
             setAccess(pm, APP, AppOpsManager.OPSTR_GET_USAGE_STATS, false);
