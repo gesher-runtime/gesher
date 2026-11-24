@@ -125,6 +125,43 @@ public final class HostLaunchReceiptTest {
             } finally { records.removeAll(Arrays.asList(older,pending,newer,foreign)); }
         }
     }
+    /**
+     * A first launch (no saved state) whose attached process dies before the
+     * activity is idle - an app crashing in Application.attachBaseContext - fails
+     * the launch; one that finished itself, or was already idle, does not.
+     */
+    @SuppressWarnings({"unchecked","rawtypes"})
+    private static void processDeathBeforeIdle(Object tasks, Class<?> atm, Class<?> recordType,
+            Class<?> processType, ActivityInfo info) throws Exception {
+        Class<?> state=Class.forName(atm.getName()+"$State");
+        Method died=method(atm,"processDied",processType);
+        Method waitForStart=method(atm,"waitForStarted",int.class,recordType);
+        Intent intent=new Intent().setComponent(new ComponentName(info.packageName,info.name));
+        String[] cases={"crashed","finished","idle"};
+        for (int i=0;i<cases.length;i++) {
+            Object process=make(processType,new Class<?>[]{atm,int.class,IApplicationThread.class},
+                    tasks,77310+i,new AppThread());
+            set(process,"packageName",info.packageName);set(process,"processName",info.packageName);
+            set(process,"ready",true);
+            Object record=make(recordType,new Class<?>[]{atm,ActivityInfo.class,Intent.class,int.class,int.class,
+                    String.class,recordType,String.class,int.class},tasks,info,new Intent(intent),
+                    710+i,Binder.getCallingPid(),"com.gesher.launcher",null,null,-1);
+            set(record,"app",process);set(record,"state",Enum.valueOf((Class)state,"RESUMED"));
+            if (cases[i].equals("finished")) set(record,"finishing",true);
+            if (cases[i].equals("idle")) set(record,"idle",true);
+            synchronized(tasks) {
+                ((List<Object>)get(tasks,"mProcesses")).add(process);
+                ((List<Object>)get(tasks,"mActivities")).add(record);
+                ((List<Object>)get(process,"activities")).add(record);
+            }
+            died.invoke(tasks,process);
+            require(get(record,"state").toString().equals("DESTROYED"),cases[i]+" record survived its process");
+            WaitResult result=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,record);
+            int expected=cases[i].equals("crashed")?ActivityManager.START_CANCELED:ActivityManager.START_SUCCESS;
+            require(result.result==expected && !result.timeout,
+                    cases[i]+" first launch whose process died reported "+result.result);
+        }
+    }
     @SuppressWarnings({"unchecked","rawtypes"})
     public static void main(String[] args)throws Exception {
         require(args.length==1,"Pass the synthetic webviewlifecycle APK");
@@ -206,6 +243,7 @@ public final class HostLaunchReceiptTest {
         require(reused.result==ActivityManager.START_DELIVERED_TO_TOP && reused.who.equals(intent.getComponent())
                 && get(record,"launchGeneration")==captured.get() && starts.get()==3,"Reused activity lost its actual record/generation");
         launchReadiness(tasks,atm,recordType,info);
+        processDeathBeforeIdle(tasks,atm,recordType,processType,info);
         System.out.println("HostLaunchReceiptTest all passed: "+checks+" generation, exact route, fast exit, reuse and launch readiness checks");
     }
 }

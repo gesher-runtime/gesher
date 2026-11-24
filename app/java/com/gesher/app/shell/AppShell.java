@@ -58,6 +58,10 @@ public final class AppShell {
     public static final String ENV_APP_USER_MODEL_ID = "GESHER_APP_USER_MODEL_ID";
     /** {@code GESHER_SHORTCUTS=0}: no Start menu shortcuts (and no URL protocols). */
     public static final String ENV_SHORTCUTS = "GESHER_SHORTCUTS";
+    /** Set by marker-aware launchers: no persistent integration with the host profile. */
+    private static boolean portableMode() {
+        return "1".equals(System.getenv("GESHER_PORTABLE"));
+    }
 
     private static final String TAG = "gesher-app";
     private static final String RECORD = "shortcut.properties";
@@ -163,6 +167,10 @@ public final class AppShell {
 
     private static void register(String packageName, String codePath, boolean changed)
             throws Exception {
+        if (portableMode()) {
+            writePortableRecord(packageName, codePath, changed);
+            return;
+        }
         Properties old = shortcutOf(packageName);
         if ("0".equals(System.getenv(ENV_SHORTCUTS))) return;
         String gesher = installDir();
@@ -253,6 +261,36 @@ public final class AppShell {
         log("Start menu shortcut " + link + ": " + icon.label + ", AppUserModelID " + id
                 + ", icon " + (icon.hasImages() ? iconPath : "Gesher's") + " from "
                 + icon.source);
+    }
+
+    /** The portable app list and windows keep real labels/icons without a Windows shortcut. */
+    private static void writePortableRecord(String packageName, String codePath, boolean changed)
+            throws Exception {
+        Properties old = shortcutOf(packageName);
+        File dir = shellDir(packageName);
+        File ico = new File(dir, ICON);
+        if (!changed && old != null && "portable".equals(old.getProperty("target"))
+                && !old.containsKey("link") && codePath.equals(old.getProperty("code"))
+                && UiText.language().equals(old.getProperty("ui_language"))
+                && ("".equals(old.getProperty("icon")) || ico.isFile())) return;
+        ApkPackage addon = com.gesher.server.MicrogAddons.stagedAddon(packageName, codePath);
+        ApkPackage pkg = addon != null ? addon : ApkPackage.parseCodeDirectory(codePath);
+        ActivityInfo launcher = launcherActivity(pkg);
+        AppIcon icon = AppIcon.load(pkg.apkPath, pkg.applicationInfo(0), launcher);
+        dir.mkdirs();
+        if (icon.hasImages()) icon.writeIco(ico);
+        else ico.delete();
+        Properties record = new Properties();
+        record.setProperty("package", packageName);
+        record.setProperty("label", icon.label);
+        record.setProperty("icon", icon.hasImages() ? Zygote.windowsPath(ico.getPath()) : "");
+        record.setProperty("code", codePath);
+        record.setProperty("app_user_model_id", appUserModelId(packageName));
+        record.setProperty("target", "portable");
+        record.setProperty("ui_language", UiText.language());
+        // Do not copy an old profile's .lnk path into this profile's authority.
+        Device.write(new File(dir, RECORD), record);
+        writeLauncherRecord(packageName, launcher != null);
     }
 
     /**
@@ -417,7 +455,7 @@ public final class AppShell {
     }
 
     private static boolean removeDynamicLink(String pkg, String id, String path) {
-        return !ownedDynamicLink(pkg, id, path) || Shell.removeFile(path);
+        return portableMode() || !ownedDynamicLink(pkg, id, path) || Shell.removeFile(path);
     }
     private static boolean sameDynamicLink(String first, String second) {
         return first == null ? second == null : second != null && first.replace('/', '\\').equalsIgnoreCase(second.replace('/', '\\'));
@@ -448,7 +486,8 @@ public final class AppShell {
         try {
             Properties app = shortcutOf(pkg);
             String gesher = installDir(), script = gesher + "\\gesher-app.ps1";
-            boolean shellEnabled = !"0".equals(System.getenv(ENV_SHORTCUTS)) && Shell.exists(script);
+            boolean shellEnabled = !portableMode() && !"0".equals(System.getenv(ENV_SHORTCUTS))
+                    && Shell.exists(script);
             if (shellEnabled) {
                 String folder = dynamicFolder();
                 if (folder == null || !Shell.makeDirectories(folder)) return false;
@@ -583,7 +622,7 @@ public final class AppShell {
 
     private static void registerUrlProtocols(String packageName, String codePath,
             boolean changed) throws Exception {
-        if ("0".equals(System.getenv(ENV_SHORTCUTS))) return;
+        if (portableMode() || "0".equals(System.getenv(ENV_SHORTCUTS))) return;
         String gesher = installDir();
         String systemRoot = System.getenv("SystemRoot");
         if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
@@ -652,7 +691,7 @@ public final class AppShell {
     public static void unregisterUrlProtocolsQuietly(String packageName, Properties record) {
         try {
             if (record == null) return;
-            for (String scheme : record.getProperty("schemes", "").split(",")) {
+            for (String scheme : (portableMode() ? "" : record.getProperty("schemes", "")).split(",")) {
                 if (scheme.isEmpty()) continue;
                 int hr = Shell.unregisterUrlProtocol(scheme, packageName);
                 if (hr == 0) {
@@ -708,7 +747,7 @@ public final class AppShell {
     private static final long APK_ICON_CACHE_GRACE_MS = 10 * 60_000L;
 
     /**
-     * {@code gesher-app apk-icon APK}, also accepting APKS/XAPK bundles, what the icon
+     * {@code gesher-app apk-icon APK}, also accepting split APK bundles, what the icon
      * handler runs for a file it has no
      * icon of (gesher_shellext.dll, in the background, at most twice at once): draws the
      * app's icon as {@link #registerQuietly} does, without installing the app, into
@@ -868,6 +907,7 @@ public final class AppShell {
     }
 
     private static void removeShortcut(Properties shortcut) {
+        if (portableMode()) return;
         String link = shortcut != null ? shortcut.getProperty("link") : null;
         if (link == null) return;
         if (Shell.exists(link)) {

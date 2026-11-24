@@ -205,6 +205,13 @@ jobs:
         timeout-minutes: 2
         shell: powershell
         run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: Portable profiles, add-on routing and complete package contracts
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          tests/windows/shell/PortableModeChecks.ps1
+          python tools/tests/test_portable_package.py
+          if ($LASTEXITCODE -ne 0) { throw 'Portable package contracts failed' }
       - name: API 37 report gate failure and selection contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -547,6 +554,12 @@ jobs:
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
+
+      - name: Portable code relocation, shell ownership and native profile selection
+        run: |
+          python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_shell.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_launcher.py
 
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
@@ -1191,6 +1204,11 @@ jobs:
           "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
           Get-ChildItem installer
 
+      - name: Build portable ZIP from the same verified runtime
+        shell: pwsh
+        run: |
+          tools/package/package-portable.ps1 -BuildDir "$PWD/dist" -OutDir "$PWD/installer" -Version $env:GESHER_PACKAGE_VERSION
+
       # Uploaded before the checks below: the e2e job tests this installer even when one
       # of them fails.
       - name: Upload tested installer artifact
@@ -1199,6 +1217,8 @@ jobs:
           name: gesher-setup
           path: |
             installer/*.exe
+            installer/*-portable.zip
+            installer/*-portable.zip.sha256
             installer/SHA256SUMS.txt
 
       - name: Install, run Hello, uninstall
@@ -1230,6 +1250,9 @@ jobs:
             throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
           }
           'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Test the release ZIP and portable Setup while the standard install
+          # exists, so accidental deletion/overwrite of its registration fails.
+          tests/windows/shell/PortableRuntimeChecks.ps1 -ZipPath "installer/gesher-${env:GESHER_PACKAGE_VERSION}-portable.zip" -InstallerPath $setup -Version $env:GESHER_PACKAGE_VERSION -InstalledRuntimeDirectory $app -ComponentsApk "$PWD/dist/components.apk"
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
           $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
@@ -1506,6 +1529,33 @@ jobs:
             throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
           }
           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
+          foreach ($ext in $bundleExtensions) {
+            if ((Get-ItemProperty "$cls\$ext").'(default)' -ne 'Gesher.Xapk') { throw "$ext default ProgID is missing" }
+            if ($null -eq (Get-ItemProperty "$cls\$ext\OpenWithProgids").'Gesher.Xapk') {
+              throw "$ext OpenWithProgids lacks Gesher.Xapk"
+            }
+          }
+          $bundleOpen = (Get-ItemProperty "$cls\Gesher.Xapk\shell\open\command").'(default)'
+          if ($bundleOpen -ne $open) { throw "Bundle open command differs from the APK command: $bundleOpen" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($ext in '.apkm', '.apk+') {
+            $bundle = Join-Path $env:RUNNER_TEMP "shell launch$ext"
+            $archive = [IO.Compression.ZipFile]::Open($bundle, 'Create')
+            try {
+              $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
+            } finally { $archive.Dispose() }
+            $psi.Arguments = '"{0}"' -f $bundle
+            $p = [Diagnostics.Process]::Start($psi)
+            $errors = $p.StandardError.ReadToEndAsync()
+            $out = $p.StandardOutput.ReadToEnd()
+            $p.WaitForExit()
+            $out += $errors.Result
+            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
+              throw "$ext open command failed (exit $($p.ExitCode)): $out"
+            }
+          }
+          'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
@@ -1849,6 +1899,13 @@ jobs:
           if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
           if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
           'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path "$cls\Gesher.Xapk") { throw 'Uninstall left the Gesher.Xapk ProgID' }
+          foreach ($ext in '.apks', '.xapk', '.apkm', '.apk+') {
+            if ((Get-ItemProperty "$cls\$ext" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Xapk' -or
+                $null -ne (Get-ItemProperty "$cls\$ext\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Xapk') {
+              throw "Uninstall left the Gesher bundle association for $ext"
+            }
+          }
           if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
           $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
           if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
@@ -1860,6 +1917,14 @@ jobs:
           Remove-Item $sentinel
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Preserve portable Windows runtime and Setup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-runtime-windows-2022
+          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+          if-no-files-found: warn
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
   # clean runner runs real, unmodified open-source apps from F-Droid

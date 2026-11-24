@@ -18,8 +18,7 @@ if ($Dex -eq '') { $Dex = Join-Path $here 'hello.dex' }  # PowerShell 5: no $PSS
 
 $dexFull = (Resolve-Path $Dex).Path
 . (Join-Path $here 'gesher-runtime-files.ps1')
-$root = Get-GesherProfileRoot $here
-$env:GESHER_PROFILE = $root
+$root = Set-GesherProfileEnvironment $here
 # Drive-less paths resolve on the current drive.
 Set-Location -LiteralPath $here
 # A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
@@ -55,6 +54,13 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"
 
 $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
+# The VM's exit code is the result: ART's stderr diagnostics, which Windows
+# PowerShell turns into ErrorRecords when that stream is redirected, must not
+# stop the script (as gesher-app.ps1's Invoke-Dalvikvm). A VM that could not be
+# started sets no exit code.
+$ErrorActionPreference = 'Continue'
+$global:LASTEXITCODE = $null
 & (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$here/framework/boot.art")" `
   -Xint '-Xusejit:false' -cp (UserPath $dexFull) $Class @ProgramArgs
+if ($null -eq $global:LASTEXITCODE) { throw "gesher: could not start $(Join-Path $here 'dalvikvm.exe')" }
 exit $LASTEXITCODE

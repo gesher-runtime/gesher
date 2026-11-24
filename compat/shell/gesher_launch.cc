@@ -50,6 +50,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
+#include "../windows/host_dialog_theme.h"
 
 #include <algorithm>
 #include <cstring>
@@ -130,36 +131,25 @@ bool IsFile(const std::wstring& path) {
   return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-bool IsDirectory(const std::wstring& path) {
-  DWORD attributes = GetFileAttributesW(path.c_str());
-  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-}
-
 std::wstring GetDataDirectory(const std::wstring& here) {
-  std::wstring env_data = Env(L"ANDROID_DATA");
-  if (!env_data.empty()) {
-    if (env_data.size() >= 7 && (env_data[0] == L'/' || env_data[0] == L'\\') &&
-        (env_data.substr(1, 4) == L"mnt/" || env_data.substr(1, 4) == L"mnt\\")) {
-      wchar_t drive = env_data[5];
-      env_data = std::wstring(1, drive) + L":" + env_data.substr(6);
-    }
-    for (wchar_t& c : env_data) {
-      if (c == L'/') c = L'\\';
-    }
-    return env_data;
-  }
+  // Keep the splash on the runtime scripts' profile. They derive ANDROID_DATA
+  // from this profile, so an inherited Android path is not authoritative here.
   std::wstring env_profile = Env(L"GESHER_PROFILE");
   if (!env_profile.empty()) {
-    for (wchar_t& c : env_profile) {
-      if (c == L'/') c = L'\\';
-    }
-    return env_profile + L"\\data";
+    DWORD required = GetFullPathNameW(env_profile.c_str(), 0, nullptr, nullptr);
+    if (required == 0) return std::wstring();
+    std::vector<wchar_t> full(required);
+    DWORD count = GetFullPathNameW(env_profile.c_str(), required, full.data(), nullptr);
+    return count > 0 && count < required ? std::wstring(full.data(), count) + L"\\data"
+                                        : std::wstring();
   }
-  if (IsFile(here + L"\\portable.marker") || IsDirectory(here + L"\\Data")) {
+  if (IsFile(here + L"\\portable.marker")) {
     return here + L"\\Data\\data";
   }
+  size_t slash = here.find_last_of(L"\\/");
+  std::wstring leaf = slash == std::wstring::npos ? here : here.substr(slash + 1);
   std::wstring parent = Directory(here.c_str());
-  if (IsFile(parent + L"\\portable.marker") || IsDirectory(parent + L"\\Data")) {
+  if (Lower(leaf) == L"app" && IsFile(parent + L"\\portable.marker")) {
     return parent + L"\\Data\\data";
   }
   return Env(L"LOCALAPPDATA") + L"\\Gesher\\data";
@@ -206,9 +196,9 @@ void ShowLaunchFailure(const std::wstring& reason) {
   const size_t at = text.find(L"{0}");
   if (at != std::wstring::npos) text.replace(at, 3, reason);
   else text = reason;
-  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
-  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
-  MessageBoxW(nullptr, text.c_str(), GesherUiText(language, "brand"), flags);
+  GesherHostPrompt(GesherUiText(language, "brand"), text.c_str(),
+                   GesherUiText(language, "cp_dialog_ok"), nullptr,
+                   GesherUiRtl(language), nullptr);
 }
 
 // A failing app starts this short-lived host process rather than waiting inside
@@ -233,9 +223,9 @@ int ShowAppCrash(int argc, LPWSTR* argv) {
     else if (pattern.compare(i, 3, L"{2}") == 0) { message += argv[5]; i += 3; }
     else message += pattern[i++];
   }
-  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
-  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
-  MessageBoxW(nullptr, message.c_str(), GesherUiText(language, "brand"), flags);
+  GesherHostPrompt(GesherUiText(language, "brand"), message.c_str(),
+                   GesherUiText(language, "cp_dialog_ok"), nullptr,
+                   GesherUiRtl(language), nullptr);
   return 0;
 }
 
@@ -476,10 +466,6 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
   return true;
 }
 
-bool IsAppLaunch(const std::wstring& here, Splash* splash) {
-  return SplashFor(here, splash);
-}
-
 // shell32's SHGetPropertyStoreForWindow, looked up when first used.
 HRESULT WindowPropertyStore(HWND hwnd, IPropertyStore** store) {
   using GetStoreFn = HRESULT(WINAPI*)(HWND, REFIID, void**);
@@ -590,7 +576,10 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     HDC dc = BeginPaint(hwnd, &ps);
     RECT client;
     GetClientRect(hwnd, &client);
-    FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
+    // Match the Control Center's light surface and semantic text hierarchy.
+    const bool high_contrast = GesherHostHighContrast() != FALSE;
+    FillRect(dc, &client, high_contrast ? GetSysColorBrush(COLOR_WINDOW)
+        : static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
     const int w = client.right, h = client.bottom;
     const int size = std::min(kIconSize, w / 2);
     const int top = std::max(16, h * 2 / 5 - size / 2);
@@ -599,12 +588,12 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ old = SelectObject(dc, g_splash->title_font);
-    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_WINDOWTEXT) : RGB(16, 24, 40));
     RECT label = {16, top + size + 24, w - 16, top + size + 24 + 64};
     DrawTextW(dc, g_splash->label.c_str(), -1, &label,
               DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
     SelectObject(dc, g_splash->text_font);
-    SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+    SetTextColor(dc, high_contrast ? GetSysColor(COLOR_GRAYTEXT) : RGB(102, 112, 133));
     RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
     const auto language = GesherUiCurrentLanguage();
     DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
@@ -673,6 +662,7 @@ HWND ShowSplash(Splash* splash) {
   HWND hwnd = CreateWindowExW(ex_style, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
                               nullptr, instance, nullptr);
   if (hwnd == nullptr) return nullptr;
+  GesherHostApplyCaption(hwnd);
   // Before it is shown: its taskbar button is the app's (the shortcut's icon).
   if (!splash->app_id.empty()) SetWindowAppUserModelId(hwnd, splash->app_id);
   if (splash->big != nullptr) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(splash->big));
@@ -914,7 +904,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   CloseHandle(pi.hThread);
   // The splash comes up while powershell starts (the launch is never delayed by it).
   bool started = false;
-  bool cancelled = SplashWhileStarting(here, pi.hProcess, pi.dwProcessId, detached, &started);
+  bool cancelled = SplashWhileStarting(Directory(script.c_str()), pi.hProcess,
+                                       pi.dwProcessId, detached, &started);
   if (cancelled) {
     // The job also holds a device this launch started (its processes cannot break
     // away): once the activity has started, the device and the app stay; the

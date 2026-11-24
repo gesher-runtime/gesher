@@ -1,28 +1,13 @@
-﻿<#
+# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+<#
 .SYNOPSIS
-    Assembles and packages a portable Gesher distribution.
-
+    Packages the installer's complete runtime as a portable ZIP.
 .DESCRIPTION
-    Creates a self-contained portable package with layout:
-    GesherPortable/
-    ├── Gesher.exe              (copied from gesher-launch.exe, with gesher.ico embedded)
-    ├── portable.marker         (empty flag file)
-    ├── README.txt              (from tools/package/README.txt or README.he.txt)
-    ├── Data/                   (empty directory ready for user profile, apps, logs)
-    └── App/                    (all runtime files)
-
-.PARAMETER BuildDir
-    Directory containing built binaries and runtime assets. If omitted,
-    searches dist, $env:LOCALAPPDATA\Programs\Gesher, and out.
-
-.PARAMETER OutDir
-    Output directory for the portable archive and checksums (default: installer).
-
+    Uses the same [Files] manifest as the installer, including required resources
+    and license notices. Missing inputs fail before a release archive is replaced.
+    The archive contains GesherPortable/Gesher.exe, App/, Data/ and portable.marker.
 .PARAMETER Version
-    Package version string. If omitted, queried via release_version.py or defaults to 0.1.0.
-
-.PARAMETER SkipZip
-    If set, leaves the staged GesherPortable directory without archiving.
+    The exact installer version. If omitted, reads BuildDir/gesher-version.ini.
 #>
 [CmdletBinding()]
 param(
@@ -34,342 +19,124 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$packageDir = $PSScriptRoot
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $packageDir '../..'))
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = [IO.Path]::GetFullPath((Join-Path $ScriptDir '..\..'))
-$PackageDir = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'tools\package'))
-
-# 1. Resolve BuildDir
-if ([string]::IsNullOrWhiteSpace($BuildDir)) {
-    $candidates = @(
-        (Join-Path $RepoRoot 'dist'),
-        "$env:LOCALAPPDATA\Programs\Gesher",
-        (Join-Path $RepoRoot 'out')
-    )
-    foreach ($cand in $candidates) {
-        if ((Test-Path -LiteralPath $cand) -and (
-            (Test-Path -LiteralPath (Join-Path $cand 'dalvikvm.exe')) -or
-            (Test-Path -LiteralPath (Join-Path $cand 'gesher-launch.exe'))
-        )) {
-            $BuildDir = $cand
-            break
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($BuildDir)) {
-        foreach ($cand in $candidates) {
-            if (Test-Path -LiteralPath $cand) {
-                $BuildDir = $cand
-                break
-            }
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($BuildDir)) {
-        throw "Could not determine BuildDir. Please specify -BuildDir."
-    }
-}
+if ([string]::IsNullOrWhiteSpace($BuildDir)) { $BuildDir = Join-Path $repoRoot 'dist' }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
-Write-Host "Using BuildDir: $BuildDir"
-
-# 2. Resolve Version
+if (-not (Test-Path -LiteralPath $BuildDir -PathType Container)) { throw "Runtime build directory does not exist: $BuildDir" }
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    try {
-        $vScript = Join-Path $RepoRoot 'tools\ci\release_version.py'
-        if (Test-Path -LiteralPath $vScript) {
-            $vOutput = & python $vScript 2>$null
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($vOutput)) {
-                $Version = $vOutput.Trim()
-            }
-        }
-    } catch { }
-
-    if ([string]::IsNullOrWhiteSpace($Version)) {
-        $ini = Join-Path $BuildDir 'gesher-version.ini'
-        if (Test-Path -LiteralPath $ini) {
-            $text = Get-Content -LiteralPath $ini -Raw -ErrorAction SilentlyContinue
-            if ($text -match 'Version\s*=\s*([0-9\.]+)') {
-                $Version = $Matches[1].Trim()
-            }
-        }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($Version)) {
-        $Version = '0.1.0'
+    $metadata = Join-Path $BuildDir 'gesher-version.ini'
+    if (Test-Path -LiteralPath $metadata -PathType Leaf) {
+        $match = [regex]::Match([IO.File]::ReadAllText($metadata), '(?m)^Version=([0-9.]+)\r?$')
+        if ($match.Success) { $Version = $match.Groups[1].Value }
     }
 }
-$Version = $Version.Trim()
-Write-Host "Packaging version: $Version"
-
-# 3. Resolve OutDir
-if (-not [IO.Path]::IsPathRooted($OutDir)) {
-    $OutDir = Join-Path $RepoRoot $OutDir
+if ($Version -cnotmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.[1-9][0-9]*)?$' -or
+    @($Version.Split('.') | Where-Object { $_.Length -gt 5 -or [int]$_ -gt 65535 }).Count -ne 0) {
+    throw 'Pass the exact installer version with -Version (X.Y.Z or X.Y.Z.N).'
 }
+if (-not [IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $repoRoot $OutDir }
 $OutDir = [IO.Path]::GetFullPath($OutDir)
-if (-not (Test-Path -LiteralPath $OutDir)) {
-    New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
+$null = [IO.Directory]::CreateDirectory($OutDir)
+$finalStage = Join-Path $OutDir 'GesherPortable'
+if ($SkipZip -and (Test-Path -LiteralPath $finalStage)) {
+    throw "Portable output already exists; choose an empty output directory to preserve its Data: $finalStage"
 }
 
-# 4. Create staging directory structure
-$StagingDir = Join-Path $OutDir 'GesherPortable'
-if (Test-Path -LiteralPath $StagingDir) {
-    Remove-Item -LiteralPath $StagingDir -Recurse -Force
-}
-New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
-
-$AppDir = Join-Path $StagingDir 'App'
-New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
-
-$DataDir = Join-Path $StagingDir 'Data'
-New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
-
-# 5. Root portable files
-$MarkerPath = Join-Path $StagingDir 'portable.marker'
-New-Item -ItemType File -Path $MarkerPath -Force | Out-Null
-
-$readmeSrc = $null
-if (Test-Path -LiteralPath (Join-Path $PackageDir 'README.txt')) {
-    $readmeSrc = Join-Path $PackageDir 'README.txt'
-} elseif (Test-Path -LiteralPath (Join-Path $BuildDir 'README.txt')) {
-    $readmeSrc = Join-Path $BuildDir 'README.txt'
-} elseif (Test-Path -LiteralPath (Join-Path $PackageDir 'README.he.txt')) {
-    $readmeSrc = Join-Path $PackageDir 'README.he.txt'
-}
-if ($readmeSrc) {
-    Copy-Item -LiteralPath $readmeSrc -Destination (Join-Path $StagingDir 'README.txt') -Force
-}
-
-# 6. Copy gesher-launch.exe to Gesher.exe and embed gesher.ico
-$launchExe = $null
-if (Test-Path -LiteralPath (Join-Path $BuildDir 'gesher-launch.exe')) {
-    $launchExe = Join-Path $BuildDir 'gesher-launch.exe'
-} elseif (Test-Path -LiteralPath (Join-Path $PackageDir 'gesher-launch.exe')) {
-    $launchExe = Join-Path $PackageDir 'gesher-launch.exe'
-}
-if ($launchExe) {
-    $targetGesherExe = Join-Path $StagingDir 'Gesher.exe'
-    Copy-Item -LiteralPath $launchExe -Destination $targetGesherExe -Force
-
-    $icoFile = $null
-    if (Test-Path -LiteralPath (Join-Path $PackageDir 'gesher.ico')) {
-        $icoFile = Join-Path $PackageDir 'gesher.ico'
-    } elseif (Test-Path -LiteralPath (Join-Path $BuildDir 'gesher.ico')) {
-        $icoFile = Join-Path $BuildDir 'gesher.ico'
-    }
-
-    if ($icoFile) {
-        try {
-            if (-not ([System.Management.Automation.PSTypeName]'IconEmbedder').Type) {
-                $csharp = @"
-using System;
-using System.IO;
-using System.Runtime.InteropServices;
-
-public class IconEmbedder {
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    public static extern IntPtr BeginUpdateResource(string pFileName, bool bDeleteExistingResources);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool UpdateResource(IntPtr hUpdate, IntPtr lpType, IntPtr lpName, ushort wLanguage, byte[] lpData, uint cbData);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool EndUpdateResource(IntPtr hUpdate, bool fDiscard);
-
-    public static bool EmbedIcon(string exePath, string icoPath) {
-        try {
-            byte[] icoBytes = File.ReadAllBytes(icoPath);
-            if (icoBytes.Length < 6) return false;
-            ushort type = BitConverter.ToUInt16(icoBytes, 2);
-            ushort count = BitConverter.ToUInt16(icoBytes, 4);
-            if (type != 1 || count == 0) return false;
-
-            IntPtr hUpdate = BeginUpdateResource(exePath, false);
-            if (hUpdate == IntPtr.Zero) return false;
-
-            byte[] groupData = new byte[6 + count * 14];
-            Buffer.BlockCopy(icoBytes, 0, groupData, 0, 6);
-
-            for (int i = 0; i < count; i++) {
-                int dirOffset = 6 + i * 16;
-                int grpOffset = 6 + i * 14;
-
-                Buffer.BlockCopy(icoBytes, dirOffset, groupData, grpOffset, 12);
-                ushort nID = (ushort)(i + 1);
-                byte[] idBytes = BitConverter.GetBytes(nID);
-                groupData[grpOffset + 12] = idBytes[0];
-                groupData[grpOffset + 13] = idBytes[1];
-
-                uint bytesInRes = BitConverter.ToUInt32(icoBytes, dirOffset + 8);
-                uint imageOffset = BitConverter.ToUInt32(icoBytes, dirOffset + 12);
-
-                byte[] imageBytes = new byte[bytesInRes];
-                Buffer.BlockCopy(icoBytes, (int)imageOffset, imageBytes, 0, (int)bytesInRes);
-
-                if (!UpdateResource(hUpdate, (IntPtr)3, (IntPtr)nID, 0, imageBytes, bytesInRes)) {
-                    EndUpdateResource(hUpdate, true);
-                    return false;
-                }
-            }
-
-            if (!UpdateResource(hUpdate, (IntPtr)14, (IntPtr)1, 0, groupData, (uint)groupData.Length)) {
-                EndUpdateResource(hUpdate, true);
-                return false;
-            }
-
-            return EndUpdateResource(hUpdate, false);
-        } catch {
-            return false;
+# Resolve the trusted installer manifest before creating a staging directory.
+# A new manifest directive must be handled explicitly instead of silently
+# producing a different runtime. All paths are literal except its leaf globs.
+$files = [Collections.Generic.List[object]]::new()
+$destinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$inFiles = $false
+foreach ($line in [IO.File]::ReadAllLines((Join-Path $packageDir 'gesher.iss'))) {
+    if ($line -match '^\[([^\]]+)\]') { $inFiles = $Matches[1] -ceq 'Files'; continue }
+    if (-not $inFiles -or [string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith(';')) { continue }
+    $fields = @{}
+    foreach ($part in $line.Split(';')) {
+        if ($part -notmatch '^\s*([A-Za-z]+):\s*(.*?)\s*$') { throw "Unsupported installer file entry: $line" }
+        $key = $Matches[1]; $value = $Matches[2]
+        if ($fields.ContainsKey($key) -or $key -notin @('Source', 'DestDir', 'DestName', 'Flags', 'Languages')) {
+            throw "Unsupported or duplicate installer file field: $key"
         }
+        if ($value.StartsWith('"') -and $value.EndsWith('"')) { $value = $value.Substring(1, $value.Length - 2) }
+        $fields[$key] = $value
+    }
+    if ($fields.ContainsKey('Languages') -and $fields.Languages -cne 'en') { continue }
+    if (-not $fields.ContainsKey('Source') -or -not $fields.ContainsKey('DestDir') -or
+        $fields.DestDir -notmatch '^\{app\}(\\[^{}]*)?$') { throw "Unsupported installer file destination: $line" }
+    $destination = $fields.DestDir.Substring(5).TrimStart('\').Replace('\', '/')
+    if ($destination.Split('/') -contains '..') { throw 'Installer file destination escapes the runtime.' }
+    $flags = @()
+    if ($fields.ContainsKey('Flags')) { $flags = @($fields.Flags.Split(' ') | Where-Object { $_ }) }
+    if (@($flags | Where-Object { $_ -notin @('ignoreversion', 'recursesubdirs') }).Count) { throw "Unsupported installer file flags: $($fields.Flags)" }
+    $sourceRoot = $packageDir
+    $relative = $fields.Source
+    if ($relative.StartsWith('{#BuildDir}\', [StringComparison]::Ordinal)) {
+        $sourceRoot = $BuildDir; $relative = $relative.Substring(12)
+    }
+    $relative = $relative.Replace('\', '/')
+    if ($relative.Contains('{') -or [IO.Path]::IsPathRooted($relative) -or $relative.Split('/') -contains '..') { throw "Unsupported installer file source: $($fields.Source)" }
+    $parent = [IO.Path]::GetDirectoryName($relative)
+    $sourceDirectory = if ($parent) { Join-Path $sourceRoot $parent } else { $sourceRoot }
+    $pattern = [IO.Path]::GetFileName($relative)
+    $recursive = $flags -contains 'recursesubdirs'
+    if (-not (Test-Path -LiteralPath $sourceDirectory -PathType Container)) { throw "Missing runtime directory: $sourceDirectory" }
+    $sourceFiles = @(Get-ChildItem -LiteralPath $sourceDirectory -Filter $pattern -File -Recurse:$recursive)
+    if ($sourceFiles.Count -eq 0) { throw "Missing required runtime input: $($fields.Source)" }
+    foreach ($file in $sourceFiles) {
+        if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Runtime input is a link: $($file.FullName)" }
+        $name = if ($fields.ContainsKey('DestName')) { $fields.DestName } elseif ($recursive) {
+            $file.FullName.Substring($sourceDirectory.Length).TrimStart('\', '/').Replace('\', '/')
+        } else { $file.Name }
+        $target = if ($destination) { "$destination/$name" } else { $name }
+        if (-not $destinations.Add($target)) { throw "Duplicate runtime destination: $target" }
+        $files.Add([PSCustomObject]@{Source = $file.FullName; Destination = $target})
     }
 }
-"@
-                Add-Type -TypeDefinition $csharp -ErrorAction SilentlyContinue
-            }
-            [IconEmbedder]::EmbedIcon($targetGesherExe, $icoFile) | Out-Null
-        } catch { }
+if (-not $destinations.Contains('gesher-launch.exe') -or -not $destinations.Contains('dalvikvm.exe') -or
+    -not $destinations.Contains('gesher-panel-native.ps1')) { throw 'Installer runtime manifest is incomplete.' }
+
+$scratchStage = Join-Path $OutDir ('.portable-stage-' + [Guid]::NewGuid().ToString('N'))
+$staging = Join-Path $scratchStage 'GesherPortable'
+$temporaryZip = Join-Path $OutDir ('.portable-' + [Guid]::NewGuid().ToString('N') + '.zip')
+try {
+    $app = Join-Path $staging 'App'
+    $null = [IO.Directory]::CreateDirectory($app)
+    $null = [IO.Directory]::CreateDirectory((Join-Path $staging 'Data'))
+    [IO.File]::WriteAllText((Join-Path $staging 'portable.marker'), '')
+    foreach ($file in $files) {
+        $target = Join-Path $app $file.Destination
+        $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
+        [IO.File]::Copy($file.Source, $target, $false)
     }
-}
-
-# 7. Helper to copy directories
-function Copy-DirectoryIfExists {
-    param([string] $Source, [string] $Destination)
-    if (Test-Path -LiteralPath $Source) {
-        if (-not (Test-Path -LiteralPath $Destination)) {
-            New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-        }
-        Copy-Item -LiteralPath "$Source\*" -Destination $Destination -Recurse -Force
-    }
-}
-
-# 8. Stage runtime files into App/
-$runtimeFiles = @(
-    'dalvikvm.exe',
-    'core-oj.jar',
-    'core-libart.jar',
-    'core-icu4j.jar',
-    'hello.dex',
-    'framework.jar',
-    'framework-res.apk',
-    'build.prop',
-    'gesher-app.jar',
-    'org.apache.http.legacy.jar',
-    'com.android.location.provider.jar',
-    'binderd.exe',
-    'servicemanager.exe',
-    'gesher-exec.exe',
-    'gesher-launch.exe',
-    'gesher_shellext.dll',
-    'dex2oat.exe',
-    'profman.exe',
-    'oatdump.exe',
-    'lifecycle.apk',
-    'gesher-camera.apk',
-    'libEGL.dll',
-    'libGLESv2.dll',
-    'gesher_arm64.dll'
-)
-
-foreach ($f in $runtimeFiles) {
-    $src = $null
-    if (Test-Path -LiteralPath (Join-Path $BuildDir $f)) {
-        $src = Join-Path $BuildDir $f
-    } elseif (Test-Path -LiteralPath (Join-Path $PackageDir $f)) {
-        $src = Join-Path $PackageDir $f
-    }
-    if ($src) {
-        Copy-Item -LiteralPath $src -Destination (Join-Path $AppDir $f) -Force
-    }
-}
-
-# Wildcards from BuildDir
-Get-ChildItem -LiteralPath $BuildDir -Filter 'libgesher_*.so' -File -ErrorAction SilentlyContinue | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $AppDir -Force
-}
-Get-ChildItem -LiteralPath $BuildDir -Filter 'icudt*l.dat' -File -ErrorAction SilentlyContinue | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $AppDir -Force
-}
-Get-ChildItem -LiteralPath $BuildDir -Filter '*.jar' -File -ErrorAction SilentlyContinue | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $AppDir -Force
-}
-
-# Directories from BuildDir / PackageDir
-Copy-DirectoryIfExists (Join-Path $BuildDir 'framework\x86_64') (Join-Path $AppDir 'framework\x86_64')
-Copy-DirectoryIfExists (Join-Path $BuildDir 'fonts') (Join-Path $AppDir 'fonts')
-Copy-DirectoryIfExists (Join-Path $BuildDir 'tzdata') (Join-Path $AppDir 'tzdata')
-Copy-DirectoryIfExists (Join-Path $BuildDir 'cacerts') (Join-Path $AppDir 'cacerts')
-Copy-DirectoryIfExists (Join-Path $BuildDir 'media\audio') (Join-Path $AppDir 'media\audio')
-Copy-DirectoryIfExists (Join-Path $PackageDir 'etc\permissions') (Join-Path $AppDir 'etc\permissions')
-Copy-DirectoryIfExists (Join-Path $BuildDir 'etc\permissions') (Join-Path $AppDir 'etc\permissions')
-
-# Licenses
-$AppLicenses = Join-Path $AppDir 'licenses'
-New-Item -ItemType Directory -Path $AppLicenses -Force | Out-Null
-Copy-DirectoryIfExists (Join-Path $PackageDir 'licenses') $AppLicenses
-Copy-DirectoryIfExists (Join-Path $BuildDir 'licenses') $AppLicenses
-foreach ($notice in @('ANGLE-NOTICES.txt', 'DYNARMIC-NOTICES.txt', 'FONTS-NOTICES.txt', 'TZDATA-NOTICES.txt', 'NET-NOTICES.txt')) {
-    $noticePath = Join-Path $BuildDir $notice
-    if (Test-Path -LiteralPath $noticePath) {
-        Copy-Item -LiteralPath $noticePath -Destination $AppLicenses -Force
-    }
-}
-
-# Package scripts
-$scripts = @(
-    'gesher.cmd',
-    'gesher.ps1',
-    'gesher-app.cmd',
-    'gesher-app.ps1',
-    'gesher-app-microg.ps1',
-    'gesher-control-panel.ps1',
-    'gesher-update.ps1',
-    'gesher-runtime-files.ps1',
-    'gesher-ui.ps1',
-    'ui-messages.json',
-    'gesher.ico'
-)
-foreach ($s in $scripts) {
-    $src = $null
-    if (Test-Path -LiteralPath (Join-Path $PackageDir $s)) {
-        $src = Join-Path $PackageDir $s
-    } elseif (Test-Path -LiteralPath (Join-Path $BuildDir $s)) {
-        $src = Join-Path $BuildDir $s
-    }
-    if ($src) {
-        Copy-Item -LiteralPath $src -Destination (Join-Path $AppDir $s) -Force
-    }
-}
-
-# Version file
-$iniContent = "[Gesher]`r`nVersion=$Version`r`n"
-Set-Content -LiteralPath (Join-Path $AppDir 'gesher-version.ini') -Value $iniContent -Encoding ASCII
-
-# 9. Packaging into zip if -not $SkipZip
-if (-not $SkipZip) {
-    $zipName = "gesher-$Version-portable.zip"
-    $zipPath = Join-Path $OutDir $zipName
-    if (Test-Path -LiteralPath $zipPath) {
-        Remove-Item -LiteralPath $zipPath -Force
-    }
-
-    Write-Host "Creating portable archive: $zipPath"
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($StagingDir, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $true)
-
-    $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-
-    $shaFile = "$zipPath.sha256"
-    "$hash  $zipName" | Set-Content -LiteralPath $shaFile -Encoding ASCII
-
-    $sumsFile = Join-Path $OutDir 'SHA256SUMS.txt'
-    $sumsLine = "$hash  $zipName"
-    if (Test-Path -LiteralPath $sumsFile) {
-        $lines = @(Get-Content -LiteralPath $sumsFile | Where-Object { $_ -notmatch "\s+$([regex]::Escape($zipName))$" })
-        $lines += $sumsLine
-        $lines | Set-Content -LiteralPath $sumsFile -Encoding ASCII
+    # Keep the built launcher byte-identical in the portable root and App.
+    # Its resources belong to the native build, not to a post-build PE editor.
+    [IO.File]::Copy((Join-Path $app 'gesher-launch.exe'), (Join-Path $staging 'Gesher.exe'), $false)
+    [IO.File]::WriteAllText((Join-Path $app 'gesher-version.ini'), "[Gesher]`r`nVersion=$Version`r`n", [Text.Encoding]::ASCII)
+    [IO.File]::Copy((Join-Path $packageDir 'README-portable.txt'), (Join-Path $staging 'README.txt'), $false)
+    foreach ($notice in 'security-notice.txt', 'security-notice.he.txt') { [IO.File]::Copy((Join-Path $packageDir $notice), (Join-Path $staging $notice), $false) }
+    if ($SkipZip) {
+        [IO.Directory]::Move($staging, $finalStage)
+        Write-Host "Portable package staged at: $finalStage"
     } else {
-        $sumsLine | Set-Content -LiteralPath $sumsFile -Encoding ASCII
+        $zipName = "gesher-$Version-portable.zip"
+        $zipPath = Join-Path $OutDir $zipName
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $temporaryZip, [IO.Compression.CompressionLevel]::Optimal, $true)
+        $hash = (Get-FileHash -LiteralPath $temporaryZip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ([IO.File]::Exists($zipPath)) { [IO.File]::Replace($temporaryZip, $zipPath, $null) }
+        else { [IO.File]::Move($temporaryZip, $zipPath) }
+        $sum = "$hash  $zipName"
+        [IO.File]::WriteAllText("$zipPath.sha256", "$sum`r`n", [Text.Encoding]::ASCII)
+        $sumsPath = Join-Path $OutDir 'SHA256SUMS.txt'
+        $lines = @()
+        if ([IO.File]::Exists($sumsPath)) { $lines = @([IO.File]::ReadAllLines($sumsPath) | Where-Object { $_ -notmatch ('\s+' + [regex]::Escape($zipName) + '$') }) }
+        [IO.File]::WriteAllLines($sumsPath, [string[]]($lines + $sum), [Text.Encoding]::ASCII)
+        Write-Host "Portable package created: $zipPath (SHA256: $hash)"
     }
-
-    Remove-Item -LiteralPath $StagingDir -Recurse -Force
-    Write-Host "Portable package created: $zipPath (SHA256: $hash)"
-} else {
-    Write-Host "Portable package staged at: $StagingDir"
+} finally {
+    if ([IO.File]::Exists($temporaryZip)) { [IO.File]::Delete($temporaryZip) }
+    if ([IO.Directory]::Exists($scratchStage)) { [IO.Directory]::Delete($scratchStage, $true) }
 }
