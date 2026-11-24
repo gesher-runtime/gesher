@@ -46,6 +46,9 @@ final class CaptioningSettings {
             BACKGROUND_OPACITY = 8, REGION_COLOR = 9, COMPUTED_REGION_COLOR = 10,
             REGION_OPACITY = 11, VALUES = 12;
 
+    /** A fully transparent color that CaptionStyle.hasColor accepts (not COLOR_UNSPECIFIED). */
+    static final int TRANSPARENT = 0x00000000;
+
     /** Windows' "Default" in each of its caption enums. */
     static final int DEFAULT = 0;
 
@@ -120,6 +123,12 @@ final class CaptioningSettings {
             case 4: alpha = 0x00; break;  // ZeroPercent
             default: return null;
         }
+        // CaptionStyle.hasColor(c) is (c >>> 24) != 0 || (c & 0x00FFFF00) == 0: a fully
+        // transparent color whose red or green is set (white at 0% is 0x00FFFFFF, which is
+        // COLOR_UNSPECIFIED itself) reads as "no color", and the player would draw its own
+        // opaque default. Transparent is the same whatever its RGB, so encode it as
+        // 0x00000000, a color hasColor accepts.
+        if (alpha == 0) return TRANSPARENT;
         return (alpha << 24) | rgb;
     }
 
