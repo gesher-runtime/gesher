@@ -431,6 +431,14 @@ public final class SurfaceParcelTest {
         require(wrong == 0, wrong + " of 2048 pixels differ from the producer's frame");
         require(timestamp >= before && timestamp <= after, "the frame's time stamp " + timestamp
                 + " is not the producer's (between " + before + " and " + after + ")");
+        // The reader keeps its own pool of frame buffers (AHardwareBuffers, one memfd
+        // each, reused frame after frame: compat/devices/camera_frames.cc), so its first
+        // frame may add one descriptor here. What the producer sent must add none: the
+        // count is taken again after that first frame, and must not grow with the next five.
+        int ownPool = memfds() - own;
+        require(ownPool >= 0 && ownPool <= 1, "the first frame left " + ownPool
+                + " descriptors here, not at most the reader's one pooled buffer");
+        own += ownPool;
         say("an ImageReader's Surface drawn by process " + attached.pid + ": 64x32, 0 pixels differ,"
                 + " the producer's time stamp");
 

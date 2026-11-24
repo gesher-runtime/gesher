@@ -27,6 +27,13 @@ thread_local std::function<void(size_t)> allocation_hook;
   std::abort();
 }
 [[gnu::noinline]] void* operator new[](size_t size) { return ::operator new(size); }
+// The nothrow forms too (an allocator that replaces only the throwing ones leaves
+// these to the sanitizer's, whose blocks the deletes below would free() as ours).
+// The throwing ones abort on exhaustion, so these never return null.
+[[gnu::noinline]] void* operator new(size_t size, const std::nothrow_t&) noexcept { return ::operator new(size); }
+[[gnu::noinline]] void* operator new[](size_t size, const std::nothrow_t&) noexcept { return ::operator new(size); }
+[[gnu::noinline]] void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 [[gnu::noinline]] void operator delete(void* p) noexcept { std::free(p); }
 [[gnu::noinline]] void operator delete[](void* p) noexcept { std::free(p); }
 [[gnu::noinline]] void operator delete(void* p, size_t) noexcept { std::free(p); }

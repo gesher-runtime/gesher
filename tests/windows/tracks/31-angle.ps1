@@ -116,7 +116,7 @@ GraphicsDex 'ImageReader native surface: EGL pixels, Canvas notification, queue 
 # by an NDK library (AHardwareBuffer_fromHardwareBuffer, reader_buffer_test.so from
 # native-libs.yml), and camera frames still delivered to it.
 GraphicsDex 'ImageReader PRIVATE: drawn into, imported through AHardwareBuffer_fromHardwareBuffer, camera frames kept' `
-  ImageReaderPrivateTest @((NoDrive "$Dir/reader_buffer_test.so"))
+  ImageReaderPrivateTest @((NoDrive (Resolve-Path "$Dir/reader_buffer_test.so").Path))
 # Independently exercise the old staging path even if ANGLE supports the
 # direct readback extension. All ImageReader pixel/lifetime checks must pass.
 $env:GESHER_EGL_DIRECT_READBACK = '0'
