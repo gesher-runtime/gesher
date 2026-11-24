@@ -24,6 +24,14 @@ Check 'clock domains: Windows unbiased/biased readers and unchanged host pthread
   'clock-domains-windows: PASS explicit Android adapter keeps the awake epoch',
   ' assertions, 0 failures')
 
+# The window-thread watch measures waits in awake time, so a sleep or hibernate
+# is never reported as an unanswered window (thread_watch.cc, docs/input.md).
+Check 'thread watch: waits are measured in awake (unbiased interrupt) time' {
+  N2Run "$n2Dir/thread_watch_clock_test.exe" @()
+} @('thread-watch-clock: PASS the watch clock matches an independent unbiased interrupt-time bracket',
+  'thread-watch-clock: PASS the watch clock advances while awake',
+  ' assertions, 0 failures')
+
 # Default mode runs only awake waits; physical --after-suspend qualification is
 # opt-in and must be recorded separately for suspend and hibernate.
 Check 'boottime transport: real Windows registration and read poll epoll guest sleep' {
