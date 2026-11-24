@@ -47,12 +47,18 @@ public final class PackageServiceQueriesTest {
      */
     private static void checkLateGlesVersion() throws ReflectiveOperationException {
         boolean propertySet;
+        int property;
         try {
-            propertySet = android.os.SystemProperties.getInt("ro.opengles.version", 0) != 0;
+            property = android.os.SystemProperties.getInt("ro.opengles.version", 0);
+            propertySet = property != 0;
         } catch (LinkageError e) {
+            property = 0;
             propertySet = true;  // no property natives: nothing can be written
         }
         if (!propertySet) return;
+        // A late answer is declared; where the boot already declared a version, the
+        // declaration stays equal to the property.
+        final int expected = property == 0x30000 || property == 0x20000 ? property : 0x30000;
         Field known = PackageManagerService.class.getDeclaredField("sGlEsVersionKnown");
         Field version = PackageManagerService.class.getDeclaredField("sGlEsVersion");
         known.setAccessible(true);
@@ -66,10 +72,10 @@ public final class PackageServiceQueriesTest {
                 known.setBoolean(null, true);
                 version.setInt(null, FeatureInfo.GL_ES_VERSION_UNDEFINED);
                 late.invoke(null, 0x30000);
-                require(PackageManagerService.glEsVersion() == 0x30000,
-                        "a late GLES answer was not declared after a timeout");
+                require(PackageManagerService.glEsVersion() == expected,
+                        "a late GLES answer was not declared as 0x" + Integer.toHexString(expected));
                 late.invoke(null, 0x20000);
-                require(PackageManagerService.glEsVersion() == 0x30000,
+                require(PackageManagerService.glEsVersion() == expected,
                         "a second late GLES answer replaced a known version");
             } finally {
                 known.setBoolean(null, savedKnown);
@@ -130,32 +136,32 @@ public final class PackageServiceQueriesTest {
     }
 
     /**
-     * The boot's OpenGL ES probe may answer after GL_PROBE_TIMEOUT_MS (a loaded machine,
-     * an interpreted runtime); its late answer is then declared (lateGlEsVersion). With
-     * the natives, wait until the probe has answered (WindowsHost.glEsVersion waits for
-     * it) and its answer has been declared, so the checks below see one version.
+     * The boot probe (PackageManagerService's static initializer) answers within its bound
+     * in the normal case: its thread must not wait for that initialization to finish
+     * (boundedProbe's ProbeRun). Only where it ran (the property natives present).
      */
-    private static void awaitGlesProbe() {
-        int answer;
+    private static void checkBootProbeBounded() {
         try {
-            answer = com.gesher.server.WindowsHost.glEsVersion();
-        } catch (LinkageError e) {
-            return;
-        }
-        if (answer <= 0) return;
-        long deadline = System.nanoTime() + 30_000_000_000L;
-        while (PackageManagerService.glEsVersion() != answer && System.nanoTime() < deadline) {
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
+            Field ran = PackageManagerService.class.getDeclaredField("sGlProbeRan");
+            Field timedOut = PackageManagerService.class.getDeclaredField("sGlProbeTimedOut");
+            Field millis = PackageManagerService.class.getDeclaredField("sGlProbeMillis");
+            Field bound = PackageManagerService.class.getDeclaredField("GL_PROBE_TIMEOUT_MS");
+            ran.setAccessible(true);
+            timedOut.setAccessible(true);
+            millis.setAccessible(true);
+            bound.setAccessible(true);
+            if (!ran.getBoolean(null)) return;
+            long took = millis.getLong(null);
+            System.out.println("system features: the boot's OpenGL ES probe answered in " + took + " ms");
+            require(!timedOut.getBoolean(null) && took < bound.getLong(null),
+                    "the boot's OpenGL ES probe did not answer within its bound (" + took + " ms)");
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("PackageManagerService probe fields: " + e, e);
         }
     }
 
     private static void checkSystemFeatures(PackageManagerService service) {
-        awaitGlesProbe();
+        checkBootProbeBounded();
         List<FeatureInfo> list = service.getSystemAvailableFeatures().getList();
         // CI runs this class without libandroid_runtime (no property natives); through
         // ServiceFixtureRunner it has them. Each expectation follows what this process has.

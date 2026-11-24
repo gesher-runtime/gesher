@@ -405,6 +405,20 @@ EXPORT int glapp_gl_draw(ANativeWindow* window, int es, char* out, size_t n) {
   if (!eglSwapBuffers(g_display, g_surface)) FAIL("eglSwapBuffers 0x%x", eglGetError());
   append(out, n, ", swap=ok");
   if (es >= 3 && check_buffer_ranges(out, n) != 0) return 1;
+  if (es >= 3 && !g_angle_warp) {
+    // Android's default display gives ES 3.0, never more (the version the device
+    // declares; docs/system-features.md): an ES 3.1 context is refused with
+    // EGL_BAD_MATCH through this .so's eglCreateContext, as a 3.0 driver refuses it.
+    const EGLint es31_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_CONTEXT_MINOR_VERSION_KHR, 1, EGL_NONE};
+    EGLContext es31 = eglCreateContext(g_display, config, EGL_NO_CONTEXT, es31_attribs);
+    EGLint error = eglGetError();
+    if (es31 != EGL_NO_CONTEXT) {
+      eglDestroyContext(g_display, es31);
+      FAIL("an ES 3.1 context was created on an ES 3.0 display");
+    }
+    if (error != EGL_BAD_MATCH) FAIL("ES 3.1 context refused with 0x%x, not EGL_BAD_MATCH", error);
+    append(out, n, ", es3.1 refused with EGL_BAD_MATCH");
+  }
   return 0;
 }
 

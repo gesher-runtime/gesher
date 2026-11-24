@@ -89,7 +89,10 @@ inline int ConfigVersion(const DisplayFacts& facts) {
 
 // The boot's declaration as the policy uses it: 0x30000, 0x20000, or
 // undefined (none yet: the system server's probe, or a process outside a
-// Gesher boot). Any other value counts as undefined.
+// Gesher boot). Any other value (a preset build.prop line such as 0x30001)
+// counts as undefined: the display is chosen as the probe chooses it, and
+// PackageManagerService likewise ignores such a preset and declares the probed
+// version (servedDeclaration).
 inline int Declaration(int ro_opengles_version) {
   return ro_opengles_version == kGlEsVersion30 || ro_opengles_version == kGlEsVersion20
              ? ro_opengles_version : kGlEsVersionUndefined;

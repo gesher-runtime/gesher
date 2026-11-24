@@ -140,8 +140,15 @@ an answer that comes later is declared then (`lateGlEsVersion`: the property,
 `getSystemAvailableFeatures`, `getDeviceConfigurationInfo`), with a log line. A
 display that was already initialized in the process (an app's own through
 `eglGetPlatformDisplay`'s pass-through with the same attributes) is not
-terminated; the system server loads no app code. A value already in the
-property (an explicit `build.prop` line) is kept, as on a device.
+terminated; the system server loads no app code. The probe runs while
+PackageManagerService's class is being initialized, so the probe thread's code
+is in classes of its own that never touch PackageManagerService (a call into
+it from that thread would wait for the initialization, which waits for the
+probe); normally it answers in well under a second. A value already in the
+property (an explicit `build.prop` line) is kept, as on a device, if it is one
+Gesher serves (0x30000 or 0x20000); any other preset value is not a
+declaration, for PackageManagerService (which declares the probed version)
+and for the EGL display choice alike.
 
 Without the ANGLE DLLs, or without any Direct3D 11 device, there is no GLES and
 no version is declared.
@@ -232,7 +239,9 @@ promises. Absent (c): nothing implements it.
   `SystemFeaturesCache`. It also runs the bounded probe with an answer, with a
   probe that hangs (-2, no version, after the timeout, then its late answer
   reaching the late handler) and with a LinkageError, and `lateGlEsVersion`
-  (declared after a timeout; a known version kept). The helpers claim
+  (declared after a timeout, equal to the property where the boot already
+  declared one; a known version kept). Where the boot probe ran, it must have
+  answered within its bound (fields `sGlProbeTimedOut`, `sGlProbeMillis`). The helpers claim
   nothing for unknown or absent hardware, and the unimplemented features above
   are absent.
 - `tests/native/egl_gles_version_test.cc` (in `tools/test_hwui_renderer_policy.py`):
@@ -255,7 +264,12 @@ promises. Absent (c): nothing implements it.
   their ES 3 paths on ANGLE's own uncapped WARP display, reached through
   `eglGetPlatformDisplay(EXT)`'s pass-through (test-only); track 40 decides
   which from its own DXGI enumeration of the adapter ANGLE's hardware device
-  takes, not from the tested output.
+  takes, not from the tested output. The ES 3.1 refusal is checked through
+  each app-facing `eglCreateContext`: an NDK `.so`'s (`libglapp.so` on an
+  ES 3.0 default display: a GPU, or `gl_window_test --declared 0x30000` under
+  `GESHER_EGL_DEVICE=warp`, which track 40 runs on the runners) and the Java
+  bindings' (`ImageReaderEglTest` with EGL14 where the default display gives
+  ES 3.0).
 - `tools/test_camera_selection_and_orientation.py`: `camera.external` for an
   unconfigured camera, not for a configured rear one.
 - CI runs `PackageServiceQueriesTest` without `libandroid_runtime`. Without

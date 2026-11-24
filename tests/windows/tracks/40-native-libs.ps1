@@ -349,7 +349,8 @@ if ($glEs3) {
     $global:LASTEXITCODE = $glTestExit
     $glTestOut
   } @('gesher EGL: default display: ANGLE, Direct3D 11 hardware device', 'declared OpenGL ES 3.0',
-      'es3: EGL 1.5', 'es2: EGL 1.5', 'GL_VERSION=OpenGL ES 3.', 'readpixels=ok, swap=ok', 'gl_window_test all passed')
+      'es3: EGL 1.5', 'es3.1 refused with EGL_BAD_MATCH', 'es2: EGL 1.5', 'GL_VERSION=OpenGL ES 3.',
+      'readpixels=ok, swap=ok', 'gl_window_test all passed')
 } else {
   Check 'native libs: no OpenGL ES 3 without a GPU (ES 3 refused), ES 2 from an NDK .so onto a window surface; glReadPixels' {
     $global:LASTEXITCODE = $glTestExit
@@ -398,6 +399,20 @@ Check 'native libs: the same EGL/GLES window surfaces on WARP' {
 } (@('gesher EGL: default display: ANGLE, Direct3D 11 WARP device, feature level 10_0',
      'ES 3 configs no), declared OpenGL ES 2.0', 'GL_VERSION=OpenGL ES 2.', 'readpixels=ok, swap=ok',
      'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed') + $es3Refused + $es3OnAngleWarp)
+
+# A boot that declared ES 3.0 (ro.opengles.version, set by gl_window_test in a
+# property session of its own) gives ES 3.0 on the default display even on
+# WARP (uncapped then), and through the .so's eglCreateContext no ES 3.1: the
+# runners, which have no GPU, check the ES 3.0 default display this way.
+$env:GESHER_EGL_DEVICE = 'warp'
+$glDeclaredOut = & "$Dir/gl_window_test.exe" (NoDrive "$Dir/libglapp.so") --declared 0x30000 2>&1 | Out-String
+$glDeclaredExit = $LASTEXITCODE
+Remove-Item Env:GESHER_EGL_DEVICE
+Check 'native libs: a boot that declared ES 3.0 gives ES 3.0 to an NDK .so on WARP, and refuses ES 3.1' {
+  $global:LASTEXITCODE = $glDeclaredExit
+  $glDeclaredOut
+} @('ro.opengles.version=196608: set', 'Direct3D 11 WARP device (boot declared OpenGL ES 3.0)',
+    'es3: EGL 1.5', 'GL_VERSION=OpenGL ES 3.0', 'es3.1 refused with EGL_BAD_MATCH', 'gl_window_test all passed')
 
 # AHardwareBuffer, the EGL native buffer/fence extensions and ASurfaceControl
 # (ADR 0089): surface_control_test.so (tests/native/surface_control_test.c)

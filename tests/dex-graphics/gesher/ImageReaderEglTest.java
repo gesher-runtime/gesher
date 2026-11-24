@@ -99,6 +99,29 @@ public final class ImageReaderEglTest {
     }
 
     /**
+     * The default display gives ES 3.0, never more (docs/system-features.md): an ES 3.1
+     * context requested through EGL14 (the Java bindings' eglCreateContext) is refused
+     * with EGL_BAD_MATCH, as a 3.0 driver refuses it.
+     */
+    private static void es31Refused(EGLDisplay display) {
+        EGLConfig[] configs = new EGLConfig[1];
+        int[] count = new int[1];
+        check(EGL14.eglChooseConfig(display, new int[] {EGL14.EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT_KHR */,
+                        EGL14.EGL_NONE}, 0, configs, 0, 1, count, 0) && count[0] == 1,
+                "an ES 3 config on the default display");
+        EGLContext context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT,
+                new int[] {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, 0x30FB /* EGL_CONTEXT_MINOR_VERSION */, 1,
+                        EGL14.EGL_NONE}, 0);
+        int error = EGL14.eglGetError();
+        if (context != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(display, context);
+        if (context != EGL14.EGL_NO_CONTEXT || error != 0x3009) {
+            throw new AssertionError("an ES 3.1 context on the default ES 3.0 display: "
+                    + (context != EGL14.EGL_NO_CONTEXT ? "created" : "refused with 0x" + Integer.toHexString(error)));
+        }
+        System.out.println("ImageReaderEglTest PASS an ES 3.1 context refused with EGL_BAD_MATCH on the default ES 3.0 display");
+    }
+
+    /**
      * Test-only: ANGLE's own WARP display, uncapped (ES 3), through EGL15's
      * eglGetPlatformDisplay pass-through; never what an app gets by default.
      */
@@ -113,6 +136,7 @@ public final class ImageReaderEglTest {
                         EGL14.EGL_NONE}, 0);
         check(warp != EGL14.EGL_NO_DISPLAY && EGL14.eglInitialize(warp, new int[2], 0, new int[2], 0),
                 "ANGLE's uncapped WARP display (test-only)");
+        // Uncapped, so it has ES 3 configs (the default display has none here).
         EGLConfig[] configs = new EGLConfig[1];
         int[] count = new int[1];
         check(EGL14.eglChooseConfig(warp, new int[] {EGL14.EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT_KHR */,
@@ -283,7 +307,9 @@ public final class ImageReaderEglTest {
                         && (image.getPlanes()[0].getBuffer().get(0) & 255) == 128, "direct camera YUV pixels");
             }
         }
-        if (!gles3ImageReader(display)) {
+        if (gles3ImageReader(display)) {
+            es31Refused(display);
+        } else {
             // No ES 3 on the default display (no GPU, as on the CI runners): the
             // GLES3 child readback on ANGLE's uncapped WARP display, so it stays covered.
             System.out.println("INFO GLES3 ImageReader on ANGLE's uncapped WARP display (test-only)");
