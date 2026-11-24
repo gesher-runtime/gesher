@@ -16,6 +16,7 @@
 
 #include <netlistmgr.h>
 #include <objbase.h>
+#include <objidl.h>
 #include <ocidl.h>
 
 #include <atomic>
@@ -37,7 +38,68 @@ void PrintProxy(REFIID iid, const char* label) {
   CLSID proxy = {};
   HRESULT hr = CoGetPSClsid(iid, &proxy);
   PrintResult(label, hr);
-  if (SUCCEEDED(hr)) PrintGuid("proxy CLSID", proxy);
+  if (SUCCEEDED(hr)) {
+    PrintGuid("proxy CLSID", proxy);
+    IPSFactoryBuffer* factory = nullptr;
+    hr = CoGetClassObject(proxy, CLSCTX_INPROC_SERVER, nullptr, IID_IPSFactoryBuffer,
+                          reinterpret_cast<void**>(&factory));
+    std::printf("diagnostic %s IPSFactoryBuffer activation: hr 0x%08lx\n", label,
+                static_cast<unsigned long>(hr));
+    if (factory != nullptr) factory->Release();
+  }
+}
+
+void PrintMachineCostActivation() {
+  INetworkCostManager* manager = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_NetworkListManager, nullptr, CLSCTX_ALL,
+                               __uuidof(INetworkCostManager),
+                               reinterpret_cast<void**>(&manager));
+  PrintResult("CoCreateInstance SDK INetworkCostManager", hr);
+  if (manager != nullptr) manager->Release();
+}
+
+void PrintConnectionCosts(IConnectionPointContainer* container) {
+  INetworkListManager* manager = nullptr;
+  HRESULT hr = container->QueryInterface(__uuidof(INetworkListManager),
+                                         reinterpret_cast<void**>(&manager));
+  PrintResult("container QueryInterface SDK INetworkListManager", hr);
+  IEnumNetworkConnections* connections = nullptr;
+  if (SUCCEEDED(hr)) {
+    hr = manager->GetNetworkConnections(&connections);
+    PrintResult("GetNetworkConnections", hr);
+  }
+  if (SUCCEEDED(hr)) {
+    // A bounded sample of real connections is enough to distinguish interface
+    // acquisition from an unavailable cost provider; no settings are changed.
+    for (int index = 0; index != 4; ++index) {
+      INetworkConnection* connection = nullptr;
+      ULONG fetched = 0;
+      hr = connections->Next(1, &connection, &fetched);
+      if (hr != S_OK || fetched == 0) {
+        PrintResult("connection enumeration end", hr);
+        if (connection != nullptr) connection->Release();
+        break;
+      }
+      std::printf("diagnostic real connection %d\n", index + 1);
+      INetworkConnectionCost* cost = nullptr;
+      hr = connection->QueryInterface(__uuidof(INetworkConnectionCost),
+                                       reinterpret_cast<void**>(&cost));
+      PrintResult("connection QueryInterface SDK INetworkConnectionCost", hr);
+      if (SUCCEEDED(hr)) {
+        DWORD value = 0;
+        hr = cost->GetCost(&value);
+        PrintResult("connection GetCost", hr);
+        if (SUCCEEDED(hr)) {
+          std::printf("diagnostic connection cost flags: 0x%08lx\n",
+                      static_cast<unsigned long>(value));
+        }
+      }
+      if (cost != nullptr) cost->Release();
+      connection->Release();
+    }
+  }
+  if (connections != nullptr) connections->Release();
+  if (manager != nullptr) manager->Release();
 }
 
 class SdkSink final : public INetworkConnectionCostEvents, public INetworkCostManagerEvents {
@@ -102,6 +164,7 @@ int main() {
   PrintProxy(__uuidof(INetworkConnectionCostEvents), "connection cost event proxy");
   PrintProxy(__uuidof(INetworkCostManagerEvents), "machine cost event proxy");
   PrintProxy(__uuidof(INetworkConnectionEvents), "connection event proxy");
+  PrintMachineCostActivation();
 
   IConnectionPointContainer* container = nullptr;
   HRESULT hr = CoCreateInstance(CLSID_NetworkListManager, nullptr, CLSCTX_ALL,
@@ -110,6 +173,7 @@ int main() {
   PrintResult("CoCreateInstance connection-point container", hr);
   IConnectionPoint* point = nullptr;
   if (SUCCEEDED(hr)) {
+    PrintConnectionCosts(container);
     hr = container->FindConnectionPoint(__uuidof(INetworkConnectionCostEvents), &point);
     PrintResult("FindConnectionPoint SDK connection cost events", hr);
   }
