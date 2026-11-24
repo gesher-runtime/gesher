@@ -218,6 +218,7 @@ jobs:
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelLaunchChecks.ps1
           tests/windows/shell/ControlPanelProxyChecks.ps1
+          tests/windows/shell/ControlPanelLogsChecks.ps1
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
