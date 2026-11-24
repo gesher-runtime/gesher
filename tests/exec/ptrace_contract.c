@@ -30,6 +30,7 @@
  *   ptrace-contract <self> sharedreader <fd> <pipe>  reads a pipe its parent shares
  *   ptrace-contract <self> stream <wfd> <rfd> <fd>  writes and reads large pipe streams
  *   ptrace-contract <self> bigwriter <wfd> <fd>  one 1 MB write() to a shared pipe
+ *   ptrace-contract <self> pendreader <rfd> <size> <fd>  one read(size), its result reported
  *   ptrace-contract <self> [no]exitkill <fd>   seizes a child (PTRACE_O_EXITKILL
  *       or not) and exits
  * Lock files go next to the program.
@@ -1109,6 +1110,132 @@ static void parent_shared_write(void) {
         "shared write: every byte arrives once, the tracer's 16 between whole pieces");
 }
 
+/* --- a blocking write into a pending read --------------------------------
+ * A reader blocked in read(R) on an empty pipe, then a write(W): the write
+ * completes at once and the read returns all W bytes (W <= R), as on Linux.
+ * Windows lets a pending read reserve its own size from the pipe's write
+ * quota, so the room the pipe reports (65536 - R, or none) understates what
+ * a write can do; the write must neither wait for room nor be split. In one
+ * process and across processes. */
+static int child_pendreader(int fd, size_t size, int report) {
+  char* buf = malloc(size);
+  if (write(report, "R", 1) != 1) return 2;
+  ssize_t n = read(fd, buf, size);
+  char text[32];
+  int len = snprintf(text, sizeof text, "%zd\n", n);
+  if (write(report, text, (size_t)len) != len) return 3;
+  free(buf);
+  return 0;
+}
+static int pr_fd;
+static size_t pr_size;
+static volatile ssize_t pr_got;
+static volatile int pr_done;
+static void* pending_reader(void* arg) {
+  (void)arg;
+  char* buf = malloc(pr_size);
+  pr_got = read(pr_fd, buf, pr_size);
+  free(buf);
+  pr_done = 1;
+  return NULL;
+}
+static int pw_fd;
+static size_t pw_size;
+static volatile ssize_t pw_result;
+static volatile int pw_done;
+static void* pending_writer(void* arg) {
+  (void)arg;
+  char* buf = malloc(pw_size);
+  memset(buf, 'w', pw_size);
+  pw_result = write(pw_fd, buf, pw_size);
+  free(buf);
+  pw_done = 1;
+  return NULL;
+}
+/* Writes `size` bytes to `fd` on a thread; whether it completed in 3 s. */
+static int timed_write(int fd, size_t size) {
+  pw_fd = fd;
+  pw_size = size;
+  pw_done = 0;
+  pw_result = -2;
+  pthread_t w;
+  pthread_create(&w, NULL, pending_writer, NULL);
+  const int64_t t0 = now_ms();
+  while (!pw_done && now_ms() - t0 < 3000) sleep_ms(1);
+  if (!pw_done) return 0; /* left blocked: the check fails */
+  pthread_join(w, NULL);
+  return 1;
+}
+static void parent_pending_read(size_t r, size_t w) {
+  char name[160];
+  int fds[2];
+  if (pipe(fds) != 0) {
+    check(0, "pending read: pipe");
+    return;
+  }
+  pr_fd = fds[0];
+  pr_size = r;
+  pr_done = 0;
+  pr_got = -2;
+  pthread_t reader;
+  pthread_create(&reader, NULL, pending_reader, NULL);
+  sleep_ms(100); /* the read is pending */
+  const int wrote = timed_write(fds[1], w);
+  int64_t t0 = now_ms();
+  while (!pr_done && now_ms() - t0 < 3000) sleep_ms(1);
+  snprintf(name, sizeof name,
+           "pending read: write(%zu) into a pending read(%zu) completes at once, whole", w, r);
+  check(wrote && pw_result == (ssize_t)w, name);
+  snprintf(name, sizeof name, "pending read: read(%zu) returns all %zu bytes of the write", r,
+           w < r ? w : r);
+  check(pr_done && pr_got == (ssize_t)(w < r ? w : r), name);
+  if (pr_done) pthread_join(reader, NULL);
+  if (wrote && pr_done) {
+    close(fds[0]);
+    close(fds[1]);
+  }
+
+  /* Across processes: the reader is another process. */
+  int pa[2], rp[2];
+  if (pipe2(pa, O_CLOEXEC) != 0 || pipe2(rp, O_CLOEXEC) != 0) {
+    check(0, "pending read: pipes");
+    return;
+  }
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_adddup2(&fa, pa[0], 20);
+  posix_spawn_file_actions_adddup2(&fa, rp[1], 22);
+  char size_text[32];
+  snprintf(size_text, sizeof size_text, "%zu", r);
+  char* args[] = {"ptrace-contract", (char*)self_path, "pendreader", "20", size_text, "22", NULL};
+  pid_t pid = -1;
+  const int spawned = posix_spawn(&pid, self_path, &fa, NULL, args, environ) == 0;
+  posix_spawn_file_actions_destroy(&fa);
+  close(pa[0]);
+  close(rp[1]);
+  char c = 0;
+  if (!spawned || read(rp[0], &c, 1) != 1) {
+    check(0, "pending read: the reader process started");
+    return;
+  }
+  sleep_ms(200); /* its read is pending */
+  const int wrote_other = timed_write(pa[1], w);
+  snprintf(name, sizeof name,
+           "pending read: write(%zu) into another process's pending read(%zu) completes at once, whole",
+           w, r);
+  check(wrote_other && pw_result == (ssize_t)w, name);
+  char text[64] = {0};
+  if (!wrote_other) kill(pid, SIGKILL);
+  if (read(rp[0], text, sizeof text - 1) < 0) text[0] = 0;
+  snprintf(name, sizeof name,
+           "pending read: the other process's read(%zu) returns all %zu bytes of the write", r,
+           w < r ? w : r);
+  check(atoll(text) == (long long)(w < r ? w : r), name);
+  if (wrote_other) close(pa[1]);
+  close(rp[0]);
+  wait_exit(pid);
+}
+
 /* PTRACE_O_EXITKILL: the tracer's exit kills the tracee; without it the
  * tracee runs on. */
 static void parent_exitkill(void) {
@@ -1157,6 +1284,8 @@ int main(int argc, char** argv) {
   if (argc >= 4 && strcmp(argv[2], "spinvictim") == 0) return child_codevictim(atoi(argv[3]), 1);
   if (argc >= 4 && strcmp(argv[2], "pipetracer") == 0) return child_pipetracer(atoi(argv[3]));
   if (argc >= 3 && strcmp(argv[2], "sleeper") == 0) return child_sleeper();
+  if (argc >= 6 && strcmp(argv[2], "pendreader") == 0)
+    return child_pendreader(atoi(argv[3]), (size_t)atoll(argv[4]), atoi(argv[5]));
   if (argc >= 5 && strcmp(argv[2], "bigwriter") == 0) return child_bigwriter(atoi(argv[3]), atoi(argv[4]));
   if (argc >= 6 && strcmp(argv[2], "stream") == 0) return child_stream(atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
   if (argc >= 5 && strcmp(argv[2], "sharedreader") == 0) return child_sharedreader(atoi(argv[4]), atoi(argv[3]));
@@ -1276,6 +1405,8 @@ int main(int argc, char** argv) {
   parent_pipe();
   parent_shared_pipe();
   parent_shared_write();
+  parent_pending_read(65535, 100);
+  parent_pending_read(65536, 100);
   parent_stream(0, 60);
   parent_stream(1, 60);
   parent_attach_at_spawn();

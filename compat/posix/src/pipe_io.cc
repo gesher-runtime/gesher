@@ -173,24 +173,26 @@ bool Signaled(HANDLE event) { return event && WaitForSingleObject(event, 0) == W
 // the pipe is partly read while it waits, a cancelled one (a ptrace stop, a
 // signal) then reports none of it although some of it was read, and the
 // thread that issued it holds the handle's file object (and the
-// description's gate) until it completes, also while it is stopped. So:
-//  - the bytes go in pieces that fit the free buffer space the pipe reports
-//    (WriteQuotaAvailable): such a write is buffered at once, complete;
-//  - the pipe reports no room both when its buffer is full and when a read is
-//    pending on its other end (its buffer is then empty). One byte is then
-//    written blocking: it completes at once into the pending read, or when
-//    the reader frees room; a ptrace stop or a signal cancels it without
-//    ambiguity (it was read or it was not). The next piece fits the room
-//    reported again;
-//  - a write of at most PIPE_BUF bytes is written whole when the reported
-//    room holds it, and otherwise waits (1 ms polls, nothing pending, where a
-//    stop can take it) while the buffer is partly full; when the pipe reports
-//    no room at all it starts with the blocking byte, and its rest follows
-//    as above (atomic unless a stop or signal falls in between and another
-//    writer of the same description writes meanwhile).
-// (Switching the endpoint to PIPE_NOWAIT for each piece would not need the
-// reported room, but Windows refuses that switch with ERROR_PIPE_BUSY while
-// the pipe holds data, which is when a blocking write needs it.)
+// description's gate) until it completes, also while it is stopped. So, with
+// the gate keeping every other Gesher user of the description out:
+//  - when the free buffer space the pipe reports (WriteQuotaAvailable) holds
+//    the write (or, beyond PIPE_BUF, a piece of it), that is written: it is
+//    buffered at once, complete;
+//  - otherwise the reported room says little: a read pending on the other
+//    end reserves its own size from it, although a write into that read
+//    completes at once. The endpoint is switched to PIPE_NOWAIT (one file
+//    object for every handle and process of the description), which Windows
+//    allows only while the pipe holds no data. When it does, the pipe is
+//    empty: the write (a piece of it beyond PIPE_BUF, halved until it fits)
+//    goes in at once, all or nothing, into the pending read and the buffer,
+//    and the endpoint is switched back;
+//  - when it does not (ERROR_PIPE_BUSY), data is waiting for a reader that
+//    is not reading, and the write waits for room. Beyond PIPE_BUF one byte
+//    waits in a blocking write, which completes when the reader frees room
+//    and which a ptrace stop or a signal cancels without ambiguity (it was
+//    read or it was not). A write of at most PIPE_BUF bytes is never split:
+//    it waits with nothing pending (short sleeps, where a stop can take it)
+//    and tries again.
 // `*total` counts the bytes in the pipe so far, across interruptions.
 // Returns the total when done, -1 with errno, or kPipeTransferRestart when a
 // ptrace stop interrupted it (the caller waits for the stop to end without
@@ -198,38 +200,74 @@ bool Signaled(HANDLE event) { return event && WaitForSingleObject(event, 0) == W
 int WriteInPieces(HANDLE file, const char* bytes, unsigned count, unsigned* total,
                   HANDLE canceled, HANDLE interrupted) {
   constexpr unsigned kPipeBuf = 4096;
-  bool atomic = count <= kPipeBuf;
+  constexpr unsigned kMaxPiece = 1u << 20;
+  const bool atomic = count <= kPipeBuf;
   auto partial = [&](int error) { return *total != 0 ? static_cast<int>(*total) : (errno = error, -1); };
+  auto mode = [&](bool nowait) {
+    DWORD value = PIPE_READMODE_BYTE | (nowait ? PIPE_NOWAIT : PIPE_WAIT);
+    return SetNamedPipeHandleState(file, &value, nullptr, nullptr) != 0;
+  };
+  unsigned waits = 0;  // consecutive waits for room (PIPE_BUF writes)
   while (*total < count) {
     if (Signaled(canceled) || Signaled(interrupted)) return partial(EINTR);
+    char* const next = const_cast<char*>(bytes) + *total;
     const unsigned remaining = count - *total;
     FILE_PIPE_LOCAL_INFORMATION info{};
     if (QueryPipe(file, &info, sizeof(info), FilePipeLocalInformation) < 0) return partial(errno);
+    const bool connected = info.NamedPipeState == 3;
     const unsigned room = static_cast<unsigned>(info.WriteQuotaAvailable);
-    if (info.NamedPipeState == 3 && room != 0 && (!atomic || room >= remaining)) {
-      const int written = NativePipeTransfer(file, const_cast<char*>(bytes) + *total,
-                                             std::min(remaining, room), true, true, nullptr, nullptr);
+    if (connected && room != 0 && (!atomic || room >= remaining)) {
+      const int written = NativePipeTransfer(file, next, std::min(remaining, room), true, true,
+                                             nullptr, nullptr);
       if (written < 0) return partial(errno);
       *total += static_cast<unsigned>(written);
+      waits = 0;
       continue;
     }
-    if (info.NamedPipeState == 3 && room != 0) {
-      // A PIPE_BUF write and a partly full buffer: wait for room for all of
-      // it, with nothing pending.
+    if (connected) {
+      if (mode(true)) {
+        // The pipe is empty: the write goes in at once, all or nothing.
+        unsigned piece = std::min(remaining, kMaxPiece);
+        int written;
+        for (;;) {
+          // A no-wait write that does not fit moves nothing (EAGAIN).
+          written = NativePipeTransfer(file, next, piece, true, true, nullptr, nullptr);
+          if (written < 0 && errno == EAGAIN) written = 0;
+          if (written != 0 || atomic || piece == 1) break;
+          piece /= 2;
+        }
+        const int saved = errno;
+        if (!mode(false)) return partial(ErrnoFromWin32(GetLastError()));
+        if (written < 0) return partial(saved);
+        if (written > 0) {
+          *total += static_cast<unsigned>(written);
+          waits = 0;
+          continue;
+        }
+        // Nothing fitted (the reader went meanwhile): wait as below.
+      } else if (GetLastError() != ERROR_PIPE_BUSY) {
+        return partial(ErrnoFromWin32(GetLastError()));
+      } else if (!atomic) {
+        // Data waits for the reader: one byte waits for room.
+        const int one = NativePipeTransfer(file, next, 1, true, false, canceled, interrupted);
+        if (one == kPipeTransferRestart) return kPipeTransferRestart;
+        if (one < 0) return partial(errno);
+        *total += static_cast<unsigned>(one);
+        continue;
+      }
+      // A PIPE_BUF write waits for room for all of it, with nothing pending:
+      // at once a few times, then 1 ms at a time.
       gesher::ptrace::ParkedScope parked;
       if (parked.Interrupted()) return kPipeTransferRestart;
-      Sleep(1);
+      Sleep(waits++ < 4 ? 0 : 1);
       if (parked.Interrupted()) return kPipeTransferRestart;
       continue;
     }
-    // No room reported (full, or a read pending on the other end), or the
-    // reader is gone (the write reports it): one byte, blocking.
-    const int one = NativePipeTransfer(file, const_cast<char*>(bytes) + *total, 1, true, false,
-                                       canceled, interrupted);
+    // The reader is gone, or the pipe is closing: the write reports it.
+    const int one = NativePipeTransfer(file, next, 1, true, false, canceled, interrupted);
     if (one == kPipeTransferRestart) return kPipeTransferRestart;
     if (one < 0) return partial(errno);
     *total += static_cast<unsigned>(one);
-    atomic = false;  // its rest follows in pieces
   }
   return static_cast<int>(*total);
 }
