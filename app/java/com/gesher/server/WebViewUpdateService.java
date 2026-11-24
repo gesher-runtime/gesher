@@ -34,8 +34,14 @@ public final class WebViewUpdateService extends IWebViewUpdateService.Default {
     public static final String PROVIDER_PACKAGE = "com.gesher.webview";
     static final String DESCRIPTION = "Gesher WebView (Microsoft Edge WebView2)";
 
+    /** How long a runtime version read stays current (WebView2 updates in the background). */
+    private static final long VERSION_CACHE_MS = 10_000;
+
     private final PackageManagerService mPm;
     private final Supplier<String> mRuntimeVersion;
+    private final Object mLock = new Object();
+    private String mCachedVersion;
+    private long mCachedAt = Long.MIN_VALUE;
 
     WebViewUpdateService(PackageManagerService pm) {
         this(pm, com.gesher.app.webview.WebView2Host::runtimeVersion);
@@ -54,12 +60,7 @@ public final class WebViewUpdateService extends IWebViewUpdateService.Default {
 
     /** The provider at the installed runtime's version, or null without a runtime. */
     private PackageInfo current() {
-        String version;
-        try {
-            version = mRuntimeVersion.get();
-        } catch (LinkageError e) {
-            version = null;  // No WebView bridge library: no runtime to report.
-        }
+        String version = runtimeVersion();
         if (version == null || version.isEmpty()) return null;
         PackageInfo info = new PackageInfo();
         info.packageName = PROVIDER_PACKAGE;
@@ -73,6 +74,25 @@ public final class WebViewUpdateService extends IWebViewUpdateService.Default {
         app.targetSdkVersion = Build.VERSION.SDK_INT;
         info.applicationInfo = app;
         return info;
+    }
+
+    /** The runtime's version, read at most every {@link #VERSION_CACHE_MS}. */
+    private String runtimeVersion() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        synchronized (mLock) {
+            if (mCachedAt != Long.MIN_VALUE && now - mCachedAt < VERSION_CACHE_MS) {
+                return mCachedVersion;
+            }
+            String version;
+            try {
+                version = mRuntimeVersion.get();
+            } catch (LinkageError e) {
+                version = null;  // No WebView bridge library: no runtime to report.
+            }
+            mCachedVersion = version;
+            mCachedAt = now;
+            return version;
+        }
     }
 
     /**

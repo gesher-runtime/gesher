@@ -737,6 +737,7 @@ class MfCapture : public Capture {
  public:
   ~MfCapture() override {
     read_trace_.Log();
+    RestoreFocus();
     SafeRelease(camera_control_);
     SafeRelease(reader_);
     if (source_ != nullptr) source_->Shutdown();
@@ -747,7 +748,23 @@ class MfCapture : public Capture {
     HRESULT hr = NewReader(device, &source_, &reader_);
     if (FAILED(hr)) return hr;
     camera_control_ = CameraControlOf(source_);
+    if (camera_control_ != nullptr) {
+      // The focus as the device had it: restored on close, so Gesher's AF does not leave
+      // the webcam in manual focus for other programs (UVC keeps control values).
+      EnsureCom();
+      initial_focus_saved_ = SUCCEEDED(camera_control_->Get(
+          kCameraControlFocus, &initial_focus_, &initial_focus_flags_));
+    }
     return Configure(w, h);
+  }
+
+  void RestoreFocus() {
+    if (camera_control_ == nullptr || !initial_focus_saved_ || !focus_changed_) return;
+    EnsureCom();
+    std::lock_guard<std::mutex> lock(focus_mutex_);
+    camera_control_->Set(kCameraControlFocus, initial_focus_,
+                         (initial_focus_flags_ & kCameraControlAuto) != 0 ? kCameraControlAuto
+                                                                          : kCameraControlManual);
   }
 
   HRESULT Focus(int op, long* value, long* flags) override {
@@ -758,6 +775,7 @@ class MfCapture : public Capture {
     std::lock_guard<std::mutex> lock(focus_mutex_);
     LONG position = 0, current = 0;
     HRESULT hr = camera_control_->Get(kCameraControlFocus, &position, &current);
+    if (op != kFocusGet) focus_changed_ = true;
     if (op == kFocusAuto) {
       if (FAILED(hr)) {
         // No current position to pass along: the driver's default.
@@ -880,6 +898,10 @@ class MfCapture : public Capture {
   IMFMediaSource* source_ = nullptr;
   IMFSourceReader* reader_ = nullptr;
   AmCameraControl* camera_control_ = nullptr;  // the device's (not the test camera's)
+  bool initial_focus_saved_ = false;
+  bool focus_changed_ = false;
+  LONG initial_focus_ = 0;
+  LONG initial_focus_flags_ = 0;
   std::mutex focus_mutex_;
   bool paced_ = false;  // the test camera's source makes frames at once: 30 a second here
   ULONGLONG next_ = 0;

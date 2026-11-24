@@ -315,9 +315,10 @@ public final class CameraService extends ICameraService.Default {
         m.set(CameraCharacteristics.FLASH_INFO_AVAILABLE, false);
         m.set(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS, new float[] {3.5f});
         m.set(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES, new float[] {2.0f});
-        // 0: fixed focus. A focusing lens has a nearest focus distance; Windows does not
-        // report it, so it is a nominal 10 cm (10 diopters), and the calibration below says
-        // the distances are uncalibrated (no LENS_FOCUS_DISTANCE is reported).
+        // 0: fixed focus. A focusing lens needs a nonzero nearest focus; Windows does not
+        // report one, and with UNCALIBRATED distances (below) the value is in unspecified
+        // units (Android: the largest focus position), so it marks a focusable lens and
+        // claims no distance (no LENS_FOCUS_DISTANCE is reported).
         m.set(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE,
                 d.autofocus ? NOMINAL_MINIMUM_FOCUS_DIOPTERS : 0f);
         m.set(CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION,

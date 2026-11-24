@@ -184,11 +184,16 @@ public final class WindowsLocation {
      */
     public static boolean hasGnssReceiver() {
         int[] hr = new int[1];
+        boolean present;
         try {
-            return nativeHasGnss(hr);
+            present = nativeHasGnss(hr);
         } catch (UnsatisfiedLinkError e) {
             return false;  // Not Gesher's runtime: no receiver to report.
         }
+        if (hr[0] != 0) {
+            System.err.println("location: no GNSS receiver list from Windows: " + hresult(hr[0]));
+        }
+        return present;
     }
 
     private static native boolean nativeHasGnss(int[] hr);

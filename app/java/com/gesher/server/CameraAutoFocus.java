@@ -187,8 +187,12 @@ public final class CameraAutoFocus {
         return mState;
     }
 
-    /** Whether the lens is moving (LENS_STATE): during a scan, until it is locked. */
+    /**
+     * Whether the lens is moving (LENS_STATE): during a scan, until it is locked, and in a
+     * locked state whose lock the driver refused (its automatic focus still runs).
+     */
     public boolean lensMoving() {
+        if ((mState == FOCUSED_LOCKED || mState == NOT_FOCUSED_LOCKED) && mAutoOn) return true;
         return (mState == ACTIVE_SCAN || mState == PASSIVE_SCAN) && !mVerifying;
     }
 
@@ -203,8 +207,7 @@ public final class CameraAutoFocus {
             mAutoOn = mLens.auto();
         } else {
             // OFF and AUTO without a trigger: the lens stays where it is.
-            mLens.lock();
-            mAutoOn = false;
+            mAutoOn = !mLens.lock();
         }
     }
 
@@ -226,9 +229,11 @@ public final class CameraAutoFocus {
         mSamples.clear();
     }
 
+    /** Locks the lens; when the driver refuses, its automatic focus is still on. */
     private boolean lockLens() {
-        mAutoOn = false;
-        return mLens.lock();
+        boolean locked = mLens.lock();
+        if (locked) mAutoOn = false;
+        return locked;
     }
 
     /** The converged sharpness, or null while the lens or the picture still changes. */

@@ -130,8 +130,8 @@ Windows without them (no location service, no Media Foundation) gets clean
   `WindowsCamera.Device.autofocus`). The test camera has fixed focus. Such a
   camera offers CONTROL_AF_AVAILABLE_MODES AUTO, CONTINUOUS_VIDEO and
   CONTINUOUS_PICTURE (not OFF: manual focus by LENS_FOCUS_DISTANCE is not
-  implemented), a nominal LENS_INFO_MINIMUM_FOCUS_DISTANCE of 10 diopters with
-  UNCALIBRATED distances, no AF regions, and continuous focus in the default
+  implemented), a nonzero LENS_INFO_MINIMUM_FOCUS_DISTANCE (10) in the
+  unspecified units of UNCALIBRATED distances (it claims no real distance), no AF regions, and continuous focus in the default
   requests (CONTINUOUS_VIDEO for record and video snapshot). A fixed-focus
   camera keeps `{OFF}`, 0 and AF state INACTIVE as before.
   `CameraAutoFocus` runs Android's AF state machine on the capture thread: the

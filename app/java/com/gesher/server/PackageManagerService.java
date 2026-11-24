@@ -1179,7 +1179,9 @@ public final class PackageManagerService extends IPackageManager.Default {
                 PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
                 PackageManager.FEATURE_SCREEN_LANDSCAPE,
-                // The built-in WebView provider (WebView2, ADR 0041; WebViewUpdateService).
+                // Gesher's built-in WebView (WebView2, ADR 0041; WebViewUpdateService). The
+                // WebView2 Runtime is the installer's prerequisite; without it WebViews
+                // stay empty and webviewupdate names no valid provider.
                 PackageManager.FEATURE_WEBVIEW}) {
             android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
             f.name = name;
@@ -1200,13 +1202,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
-        boolean gnss;
-        try {
-            gnss = WindowsLocation.hasGnssReceiver();
-        } catch (LinkageError e) {
-            gnss = false;  // No runtime natives (a host JVM loading the class).
-        }
-        addLocationFeatures(FEATURES, gnss);
+        addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */

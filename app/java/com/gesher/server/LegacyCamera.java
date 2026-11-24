@@ -108,6 +108,10 @@ public final class LegacyCamera {
         int afTrigger = AF_TRIGGER_IDLE;
         /** autoFocus waits for a locked state. */
         boolean focusPending;
+        /** The autoFocus call {@link #focusPending} answers (each call a new one). */
+        long focusRequest;
+        /** The autoFocus call whose START a preview frame has handed to the AF machine. */
+        long focusStarted;
         /** The preview's AF ended locked (takePicture keeps the lens there). */
         boolean focusLocked;
 
@@ -290,6 +294,18 @@ public final class LegacyCamera {
         if (format != null && !format.equals("yuv420sp") && !format.equals("yuv420p")) {
             throw new RuntimeException("setParameters failed");
         }
+        String focus = p.get("focus-mode");
+        if (focus != null) {
+            String supported;
+            synchronized (s) {
+                supported = s.params.get("focus-mode-values");
+            }
+            // As the HAL: a mode the camera does not offer (infinity on an autofocus
+            // camera, auto on a fixed-focus one) is rejected, not run as another mode.
+            if (supported == null || !("," + supported + ",").contains("," + focus + ",")) {
+                throw new RuntimeException("setParameters failed");
+            }
+        }
         synchronized (s) {
             s.params.putAll(p);
         }
@@ -418,6 +434,9 @@ public final class LegacyCamera {
             trigger = s.afTrigger;
             s.afTrigger = AF_TRIGGER_IDLE;
             mode = afMode(s.params.get("focus-mode"));
+            // Only a scan started for the pending call may answer it: a lock left by an
+            // earlier scan must not, while this call's START waits for the next frame.
+            if (trigger == AF_TRIGGER_START) s.focusStarted = s.focusRequest;
         }
         int state = af.frame(mode, trigger, android.os.SystemClock.uptimeMillis(),
                 CameraAutoFocus.sharpness(nv12, capture.width, capture.height));
@@ -428,7 +447,8 @@ public final class LegacyCamera {
         synchronized (s) {
             if (!s.previewing || s.capture != capture) return;
             s.focusLocked = locked;
-            if (s.focusPending && locked && s.afTrigger != AF_TRIGGER_CANCEL) {
+            if (s.focusPending && locked && s.afTrigger != AF_TRIGGER_CANCEL
+                    && s.focusStarted == s.focusRequest) {
                 s.focusPending = false;
                 boolean focused = state == android.hardware.camera2.CameraMetadata
                         .CONTROL_AF_STATE_FOCUSED_LOCKED;
@@ -600,6 +620,7 @@ public final class LegacyCamera {
                 if (!s.previewing) throw new RuntimeException("autoFocus failed");
                 s.afTrigger = AF_TRIGGER_START;
                 s.focusPending = true;
+                s.focusRequest++;
                 return;
             }
         }

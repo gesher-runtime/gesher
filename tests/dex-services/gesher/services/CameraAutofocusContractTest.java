@@ -498,6 +498,8 @@ public final class CameraAutofocusContractTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // The real CameraMetadataNative behind the characteristics (camera_metadata_jni.cc).
+        System.loadLibrary("android_runtime");
         deviceLines();
         featureRule();
         characteristics();
