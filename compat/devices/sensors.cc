@@ -1,5 +1,6 @@
 // Gesher (devices track): the sensors of sensors.h, Windows.Devices.Sensors
-// through its ABI and the GESHER_SENSOR_TEST sensors, sampled by one thread.
+// through its ABI, Gesher's stationary accelerometer where Windows has no motion
+// sensor, and the GESHER_SENSOR_TEST sensors, sampled by one thread.
 
 #include "sensors.h"
 
@@ -214,6 +215,12 @@ class TestSource : public Source {
   int type_;
 };
 
+// The stationary accelerometer is on unless GESHER_SENSOR_FALLBACK is "0".
+bool StationaryDefaultEnabled() {
+  const char* value = getenv("GESHER_SENSOR_FALLBACK");
+  return value == nullptr || strcmp(value, "0") != 0;
+}
+
 std::string& DescribeText() {
   static std::string text;
   return text;
@@ -223,7 +230,13 @@ std::vector<Sensor> Find() {
   std::vector<Sensor> list;
   std::string& describe = DescribeText();
   int handle = 1;
+  // A gravity-only reading would contradict a real accelerometer, gyrometer or
+  // orientation sensor, so the stationary default exists only when Windows answers
+  // that it has none of the three (a failed activation or query is not "none").
+  bool motionPresentOrUnknown = false;
   for (const WindowsClass& c : kWindowsClasses) {
+    const bool motion =
+        c.type == kAccelerometer || c.type == kGyroscope || c.type == kRotationVector;
     if (!describe.empty()) describe += ", ";
     describe += c.label;
     describe += ": ";
@@ -234,16 +247,25 @@ std::vector<Sensor> Find() {
       char buf[32];
       snprintf(buf, sizeof(buf), "HRESULT 0x%08lX", static_cast<unsigned long>(hr));
       describe += buf;
+      if (motion) motionPresentOrUnknown = true;
       continue;
     }
     IUnknown* sensor = nullptr;
     hr = statics->GetDefault(&sensor);
     statics->Release();
-    if (FAILED(hr) || sensor == nullptr) {
+    if (FAILED(hr)) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "HRESULT 0x%08lX", static_cast<unsigned long>(hr));
+      describe += buf;
+      if (motion) motionPresentOrUnknown = true;
+      continue;
+    }
+    if (sensor == nullptr) {
       describe += "none";
       continue;
     }
     describe += "present";
+    if (motion) motionPresentOrUnknown = true;
     auto source = std::make_shared<WindowsSource>(static_cast<ISensorBase*>(sensor), c.type);
     Sensor s;
     s.handle = handle++;
@@ -288,6 +310,24 @@ std::vector<Sensor> Find() {
     l.source = std::make_shared<TestSource>(kLight);
     list.push_back(l);
     describe += ", test sensors: accelerometer, light";
+  } else if (!motionPresentOrUnknown && StationaryDefaultEnabled()) {
+    // Maintainer-approved desktop default (CONTRIBUTING.md): a PC without motion
+    // sensors stands still, so the accelerometer reads gravity only. Named as
+    // Gesher's; GESHER_SENSOR_FALLBACK=0 turns it off.
+    Sensor a;
+    a.handle = handle++;
+    a.type = kAccelerometer;
+    a.name = "Gesher Stationary Accelerometer";
+    a.vendor = "Gesher";
+    a.maxRange = 8 * kGravity;
+    a.resolution = 0.01f;
+    a.power = 0.1f;
+    a.minDelayUs = 10000;
+    a.maxDelayUs = 1000000;
+    a.flags = kContinuous;
+    a.source = std::make_shared<TestSource>(kAccelerometer);
+    list.push_back(a);
+    describe += ", stationary default: accelerometer";
   }
   return list;
 }

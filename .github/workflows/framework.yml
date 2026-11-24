@@ -563,6 +563,12 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Camera runtime permission and attribution admission
+        run: |
+          python3 tools/test_camera_permission.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Permission policy work counts and publication contracts
         run: |
           python3 tools/test_permission_performance.py --java-home "$JAVA_HOME" \
@@ -635,6 +641,12 @@ jobs:
       - name: Floating activity roots and task window placement
         run: |
           python3 tools/test_window_parent_placement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
+      - name: Activity window activation and single-process finish
+        run: |
+          python3 tools/test_activity_window_activation.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 

@@ -545,7 +545,10 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
             if ((flags & PackageManager.GET_PROVIDERS) != 0
                     && ContactsProviderSupport.matchesProviderFlags(flags)) {
-                info.providers = new ProviderInfo[] { ContactsProviderSupport.callLogProviderInfo() };
+                info.providers = new ProviderInfo[] {
+                        ContactsProviderSupport.contactsProviderInfo(),
+                        ContactsProviderSupport.callLogProviderInfo()
+                };
             }
             return info;
         }
@@ -702,7 +705,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage caller = packages.get(source);
         if (caller == null) return false;
         PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
         // Package admission assigns isolated or authenticated shared identities
         // in both signature-spoofing modes.
         return visibility.canSee(caller.uid(), target);
@@ -735,12 +738,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     synchronized ProviderInfo provider(String authority, long flags) {
         for (ApkPackage p : providerPackages(authority)) {
             if (isRemovalPending(p.packageName)) continue;
-            for (ProviderInfo info : p.providers(flags)) {
-                if (info.authority == null) continue;
-                for (String a : info.authority.split(";")) {
-                    if (a.equals(authority)) return info;
-                }
-            }
+            ProviderInfo info = p.providerForAuthority(authority, flags);
+            if (info != null) return info;
         }
         return null;
     }
@@ -1221,13 +1220,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
     }
 
-    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
+    /**
+     * Report real cameras: a configured rear camera as FEATURE_CAMERA, the others as front
+     * cameras (a PC's camera faces the user; CONTRIBUTING.md), without inferred capabilities.
+     */
     static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
-            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
+            addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
+                    : PackageManager.FEATURE_CAMERA_FRONT);
         }
     }
 
@@ -1383,7 +1386,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                     && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
         }
         return new PackageVisibility(packages, browser, gms, vending,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
     }
 
     @Override

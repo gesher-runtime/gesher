@@ -44,6 +44,8 @@ import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IRemoteCallback;
@@ -123,7 +125,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return info;
     }
 
-    /** How long startActivityAndWait waits for the activity to be idle. */
+    /**
+     * How long startActivityAndWait waits for the activity to draw its first frame or be
+     * idle. Longer than Android's idle timeout (ActivityTaskSupervisor.IDLE_TIMEOUT, 10 s
+     * after the activity resumed): it also covers starting the process, and an app's first
+     * start on Windows (dexopt, an interpreted APK) can take minutes.
+     */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
     private static final AtomicLongFieldUpdater<ProcessRecord> LAST_ACTIVE =
@@ -191,6 +198,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         Configuration config;
         /** Actual manual-driver lifecycle; null for a server-driven application. */
         State inProcessActivityState;
+        InProcessActivity inProcessActivity;
         /** Actual activity-start history for BIND_ALLOW_OOM_MANAGEMENT; owned by this process. */
         boolean shortcutHasShownUi;
         final List<ActivityRecord> activities = new ArrayList<>();
@@ -248,6 +256,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 new WindowContainerToken(new IWindowContainerToken.Stub() {});
         State state = State.INITIALIZING;
         boolean idle;
+        /**
+         * The first frame of one of its windows was drawn in its process (ActivityRecord
+         * .onWindowsDrawn; ActivityClientController#windowsDrawn). Unlike idle it stays
+         * through a resume or relaunch (a preserved window is not drawn "first" again);
+         * a new process must draw anew.
+         */
+        boolean drawn;
         boolean finishing;
         boolean preserveProcessOnFinish;
         int exactAlarmSettings;
@@ -688,6 +703,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return app;
     }
 
+    private record InProcessActivity(Binder token, Handler handler,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {}
+
+    private boolean isCurrentInProcessApplication(ProcessRecord app) {
+        return app != null && app.inProcessActivityState != null && app.ready
+                && !app.dead && !app.exiting && !app.pidSuperseded
+                && attachedProcessByPid(app.pid) == app
+                && app.packageCode != null && mPm.get(app.packageName) == app.packageCode
+                && !mPm.isRemovalPending(app.packageName)
+                && app.packageCode.matchesEnabledApplication(0)
+                && (app.enabledProcessLifetime == null || app.enabledProcessLifetime.getAsBoolean());
+    }
+
+    synchronized Binder registerInProcessActivity(ProcessRecord app,
+            java.util.function.BooleanSupplier active, InProcessApplication.ActivityResult result) {
+        if (!isCurrentInProcessApplication(app) || app.inProcessActivity != null
+                || app.pid != Binder.getCallingPid() || app.uid != Binder.getCallingUid()) {
+            throw new SecurityException("Standalone activity requires its admitted process");
+        }
+        Binder token = new Binder("Standalone activity");
+        app.inProcessActivity = new InProcessActivity(token, new Handler(Looper.getMainLooper()),
+                Objects.requireNonNull(active), Objects.requireNonNull(result));
+        return token;
+    }
+
     /** Manual-driver lifecycle is used for AppOps state, never as proof of Windows focus. */
     synchronized void inProcessActivityState(ProcessRecord app, State state) {
         if (app.inProcessActivityState == null || app.dead || app.exiting
@@ -708,6 +748,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.ready = false;
             app.exiting = true;
             app.inProcessActivityState = State.STOPPED;
+            app.inProcessActivity = null;
         }
         processDied(app);
     }
@@ -1628,12 +1669,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         long deadline = SystemClock.uptimeMillis() + WAIT_TIMEOUT_MS;
         synchronized (this) {
             // ActivityTaskSupervisor.waitActivityVisibleOrLaunched: until the launch is
-            // complete (here: the activity is idle), or it went away. A trampoline (a
-            // launcher activity that starts the app's real one and stays below it,
-            // stopped, never idle) completes the launch with that activity: one started
-            // after it in its task that is idle (Android's launch transition ends when
-            // the task's windows are drawn).
-            while (!r.idle && r.state != State.DESTROYED && idleAbove(r) == null) {
+            // complete, or it went away (cleanupActivity). Android completes it when the
+            // activity's windows are drawn (ActivityRecord.onWindowsDrawn ->
+            // reportActivityLaunched), not when its main thread is idle: an app that keeps
+            // its looper busy (a map that posts frame after frame) is never idle, yet has
+            // launched. Here: its first frame was drawn in its process, or else it is idle
+            // (no window drawn: a headless process). A trampoline (a launcher activity that
+            // starts the app's real one and stays below it, stopped, never drawn or idle)
+            // completes the launch with that activity: one started after it in its task
+            // that has launched (Android's launch transition ends when the task's windows
+            // are drawn).
+            while (!launched(r) && r.state != State.DESTROYED && launchedAbove(r) == null) {
                 long left = deadline - SystemClock.uptimeMillis();
                 if (left <= 0) {
                     result.timeout = true;
@@ -1646,9 +1692,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     break;
                 }
             }
-            // A rejected native start or unexpected pre-idle process death is
-            // different from an activity deliberately finishing in onCreate.
-            if (r.launchFailed && !r.idle && idleAbove(r) == null) {
+            // A rejected native start or unexpected process death before the activity
+            // drew or was idle is different from an activity deliberately finishing in
+            // onCreate.
+            if (r.launchFailed && !launched(r) && launchedAbove(r) == null) {
                 result.result = ActivityManager.START_CANCELED;
             }
         }
@@ -1656,11 +1703,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return result;
     }
 
-    /** An activity started after {@code r} in its task that is idle, or null. Guarded by this. */
-    private ActivityRecord idleAbove(ActivityRecord r) {
+    /** Its launch is complete: a window drawn, or idle. Guarded by this. */
+    private static boolean launched(ActivityRecord r) {
+        return r.drawn || r.idle;
+    }
+
+    /**
+     * An activity started after {@code r} in its task that has launched ({@link #launched}),
+     * or null. Guarded by this.
+     */
+    private ActivityRecord launchedAbove(ActivityRecord r) {
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord a = mActivities.get(i);
-            if (a != r && a.taskId == r.taskId && a.idle && a.state != State.DESTROYED
+            if (a != r && a.taskId == r.taskId && launched(a) && a.state != State.DESTROYED
                     && a.startOrder > r.startOrder) {
                 return a;
             }
@@ -2156,24 +2211,50 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         mAm.callers().requirePackage(callingPackage);
         final ActivityRecord source;
         final ProcessRecord process;
+        final InProcessActivity standalone;
         final ApkPackage captured;
         synchronized (this) {
             source = forToken(resultToToken);
-            if (source == null || source.app == null || source.finishing
-                    || source.state == State.DESTROYED || caller == null
-                    || source.app.pid != Binder.getCallingPid()
-                    || !caller.asBinder().equals(source.app.thread.asBinder())
-                    || !source.info.packageName.equals(callingPackage)) {
-                throw new SecurityException("Permission request must come from its own activity");
+            if (source == null) {
+                process = attachedProcessByPid(Binder.getCallingPid());
+                if (!isCurrentInProcessApplication(process) || process.inProcessActivity == null
+                        || process.inProcessActivity.token() != resultToToken || caller == null
+                        || Binder.getCallingUid() != process.uid
+                        || !caller.asBinder().equals(process.thread.asBinder())
+                        || !process.packageName.equals(callingPackage)
+                        || !process.inProcessActivity.active().getAsBoolean()) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                standalone = process.inProcessActivity;
+                captured = process.packageCode;
+            } else {
+                if (source.app == null || source.finishing || source.state == State.DESTROYED
+                        || caller == null || source.app.pid != Binder.getCallingPid()
+                        || !caller.asBinder().equals(source.app.thread.asBinder())
+                        || !source.info.packageName.equals(callingPackage)) {
+                    throw new SecurityException("Permission request must come from its own activity");
+                }
+                process = source.app;
+                standalone = null;
+                captured = mPm.get(callingPackage);
             }
-            process = source.app;
-            captured = mPm.get(callingPackage);
         }
         if (intent.getIntExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_DEVICE_ID, 0) != 0) {
             throw new SecurityException("Only the default permission device is supported");
         }
         mPermissionRequests.request(captured,
                 intent.getStringArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_NAMES), data -> {
+                    if (standalone != null) {
+                        standalone.handler().post(() -> {
+                            synchronized (ActivityTaskManagerService.this) {
+                                if (!isCurrentInProcessApplication(process)
+                                        || process.inProcessActivity != standalone
+                                        || process.packageCode != captured) return;
+                            }
+                            standalone.result().dispatch(standalone.token(), resultWho, requestCode, data);
+                        });
+                        return;
+                    }
                     synchronized (ActivityTaskManagerService.this) {
                         if (source.app != process || source.finishing
                                 || source.state == State.DESTROYED || !mActivities.contains(source)
@@ -4563,6 +4644,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     affectedTasks.add(r.taskId);
                     continue;
                 }
+                // A launch that lost its process before drawing or becoming idle must
+                // report failure, even with no saved state and removal below. A drawn
+                // activity has already launched even if its looper never becomes idle.
+                if (!launched(r) && !r.finishing && r.state != State.DESTROYED) r.launchFailed = true;
                 recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
@@ -4576,12 +4661,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         mTaskRotation.delete(r.taskId);
                     }
                 } else {
-                    if (!r.idle) r.launchFailed = true;
                     r.app = null;
                     r.launchGeneration = null;
                     r.launchScheduled = false;
                     r.state = State.STOPPED;
                     r.idle = false;
+                    r.drawn = false;
                     r.stopWhenIdle = false;
                     r.waitingFor = null;
                     r.activityWindowGrant = null;
@@ -6045,6 +6130,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         SystemServer.log("activityIdle: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
+    }
+
+    /**
+     * ActivityRecord.onWindowsDrawn: the first frame of the activity's window was drawn in
+     * its process (ActivityClientController#windowsDrawn). A launch waiting for the activity
+     * is complete ({@link #waitForStarted}); unlike idle, it stops no activity behind it.
+     * {@code callingPid}: the reporting process, which must still be the record's live
+     * process now (the server's own pid reports for in-process records).
+     *
+     * <p>The report is one way and can be overtaken by the process's death: a process that
+     * draws and dies before the server reads the report fails the launch it was waiting
+     * for (START_CANCELED). That is accepted: the app is gone moments after its first
+     * frame, and a report from a dead process cannot be told apart from a stale one.
+     */
+    void activityWindowsDrawn(ActivityRecord r, int callingPid) {
+        synchronized (this) {
+            if (r.drawn || r.state == State.DESTROYED || !mActivities.contains(r)) return;
+            if (callingPid != android.os.Process.myPid()) {
+                ProcessRecord caller = processByPid(callingPid);
+                if (caller == null || r.app != caller) return;
+            }
+            r.drawn = true;
+            notifyAll();
+        }
+        SystemServer.log("activityWindowsDrawn: " + r.name());
     }
 
     /**

@@ -211,6 +211,13 @@ If that API is available, its dimensions and pixels must also agree. On the
 current Windows runtime the expected diagnostic is `byte_decoder=passed
 file_descriptor_decoder=null`; its first observed target result remains pending.
 
+Addendum (2026-11-24): `patches/frameworks/base/0786-hwui-decode-file-descriptors-gesher.patch`
+builds the device path of `nativeDecodeFileDescriptor` and `ImageDecoder`'s
+descriptor source on Gesher, whose POSIX layer provides `fstat`,
+`fcntl(F_DUPFD_CLOEXEC)`, `fdopen` and `lseek`. `decodeFile` then returns the
+image, so the old-writer control above checks its dimensions and pixels too;
+`tests/dex-graphics` covers the descriptor decoders directly.
+
 Every saved-image check emits its canonical pathname, byte count, SHA256, raw
 33-byte PNG header and native decoded dimensions. Restart write records the
 canonical path, length and SHA256 in a separate fixture receipt. The second VM
