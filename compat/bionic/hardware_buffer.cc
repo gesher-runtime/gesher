@@ -23,6 +23,7 @@
 // over the socket (SCM_RIGHTS, ADR 0088's broker between processes);
 // AHardwareBuffer_recvHandleFromUnixSocket maps the same memory.
 #include "gpu_interop.h"  // first: the EGL/GL prototype macros
+#include "gpu_fence.h"
 #include "hardware_buffer.h"
 
 #include "abi_types.h"
@@ -1001,13 +1002,22 @@ void Register() {
 
 }  // namespace
 
-void* AllocateRgbaBuffer(uint32_t width, uint32_t height) {
+constexpr unsigned kAngleIdleTimeoutMs = 2000;
+
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
   AHardwareBuffer_Desc desc{};
   desc.width = width;
   desc.height = height;
   desc.layers = 1;
   desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-  desc.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+  desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+  // A reader nothing samples on the GPU (a camera QR scanner's) is CPU-only, and
+  // reports that usage: Served() would start ANGLE and the GPU thread for it.
+  if (!gpu_form) {
+    AHardwareBuffer* app = nullptr;
+    return Allocate(&desc, &app) == 0 ? app : nullptr;
+  }
+  desc.usage |= AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
   if (!Served(&desc)) {
     // No GPU device (ANGLE/Direct3D 11 unavailable) or a size it cannot take: the
     // reader still delivers frames, in a CPU-only buffer that an app's
@@ -1046,15 +1056,28 @@ void MarkRgbaWritten(void* buffer) {
 
 void FlushRgbaToGpu(void* buffer) {
   Buffer* b = FromApp(buffer);
-  bool upload;
+  bool upload, app_read;
   {
     std::lock_guard<std::mutex> lock(b->mutex);
     upload = b->has_texture && b->memory_newer;
+    app_read = b->gpu_written;  // an app image exists or existed: it may have sampled the texture
     if (upload) b->memory_newer = false;
   }
   // A texture made before (an app's EGLImage of this buffer) gets the new pixels
   // here, on the GPU thread in order with the compositor. Without a texture the
   // memory is uploaded when one is first made (EnsureTexture).
+  //
+  // Ordering: the texture is shared between the GPU thread's device and ANGLE's
+  // with no keyed mutex, so the upload is not ordered after draws the app already
+  // issued that sample it (an app may close the Image and HardwareBuffer right
+  // after drawing, keeping the EGLImage). ANGLE's device is therefore flushed and
+  // waited idle first: every draw the app made before this call has completed
+  // when the new pixels are written. Draws made after the call see them (the
+  // upload finishes before this returns).
+  if (upload && app_read && !gpu::WaitAngleDeviceIdle(kAngleIdleTimeoutMs)) {
+    static std::atomic<bool> said{false};
+    LogOnce(&said, "ANGLE's device did not report idle before a reader buffer was rewritten");
+  }
   if (upload)
     gpu::Thread::Get()->Run([&] {
       UploadRect(b, ARect{0, 0, static_cast<int32_t>(b->desc.width), static_cast<int32_t>(b->desc.height)});

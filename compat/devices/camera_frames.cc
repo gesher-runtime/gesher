@@ -114,12 +114,17 @@ struct Reader {
   int acquired = 0;
   bool closed = false;
   std::shared_ptr<gesher::media::ReaderSurface> producer;
-  // RGBA buffers frames are written into (a reference each, the pool's own). A
-  // frame goes into the first one that only EGLImages (and the pool) still
-  // reference, so the buffers, and their ids, repeat; a pool whose buffers are
-  // all held by Images grows, and its oldest entries are let go past twice
-  // maxImages (the queue and the acquired images) + 2.
+  // RGBA buffers frames are written into (a reference each, the pool's own),
+  // least recently used first. A frame goes into the first one that only
+  // EGLImages (and the pool) still reference, which moves to the back: the one
+  // released longest ago is rewritten, so the pool's slack separates a rewrite
+  // from the buffer's last use, and the buffers, with their ids, repeat. A pool
+  // whose buffers are all held by Images grows, and its front entries are let
+  // go past twice maxImages (the queue and the acquired images) + 2.
   std::vector<void*> pool;
+  // Frames can be sampled by the GPU (GPU_SAMPLED_IMAGE usage or a PRIVATE
+  // reader): only then are buffers given a GPU form (ANGLE and the GPU thread).
+  bool GpuForm() const { return (usage & 0x100) != 0 || halFormat == kHalPrivate; }
 };
 
 // A pooled buffer for the next RGBA frame of `r`, with a reference for the
@@ -131,14 +136,16 @@ void* AcquireRgbaBuffer(const std::shared_ptr<Reader>& r) {
   {
     std::lock_guard<std::mutex> lock(r->mutex);
     if (r->closed) return nullptr;
-    for (void* candidate : r->pool) {
+    for (auto it = r->pool.begin(); it != r->pool.end(); ++it) {
+      void* candidate = *it;
       if (RgbaBufferReusable(candidate)) {
+        std::rotate(it, it + 1, r->pool.end());  // now the most recently used
         RetainRgbaBuffer(candidate);
         return candidate;
       }
     }
   }
-  void* fresh = AllocateRgbaBuffer(r->width, r->height);
+  void* fresh = AllocateRgbaBuffer(r->width, r->height, r->GpuForm());
   if (fresh == nullptr) return nullptr;
   std::lock_guard<std::mutex> lock(r->mutex);
   if (r->closed) {

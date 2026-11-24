@@ -93,6 +93,16 @@ std::shared_ptr<NativeFence> CreateCurrentFence(void* display, int* egl_error) {
   return fence;
 }
 
+bool WaitAngleDeviceIdle(unsigned timeout_ms) {
+  auto dispatch = AngleDispatch();
+  if (!dispatch) return false;
+  Submission submission;
+  if (!dispatch(Submit, &submission) || FAILED(submission.result) || !submission.event) return false;
+  const bool done = WaitForSingleObject(submission.event, timeout_ms) == WAIT_OBJECT_0;
+  CloseHandle(submission.event);
+  return done;
+}
+
 bool WaitCurrentFence(const std::shared_ptr<NativeFence>& fence, int* egl_error) {
   *egl_error = EGL_SUCCESS;
   ServerWait wait{fence};

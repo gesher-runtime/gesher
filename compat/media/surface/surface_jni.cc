@@ -597,6 +597,9 @@ std::shared_ptr<ViewSurface> ViewSurfaceFor(jlong blast, bool create) {
   if (!create) return nullptr;
   auto vs = std::make_shared<ViewSurface>();
   vs->surface = android::sp<QueueSurface>::make(1, 1);
+  // A SurfaceView's layer is composited into its window (Android's SurfaceFlinger
+  // does that for its BLAST surface), so hwui paces its frames like a window's.
+  vs->surface->SetQueuesToWindowComposer(true);
   std::weak_ptr<ViewSurface> weak = vs;
   vs->surface->SetListener([weak] {
     std::shared_ptr<ViewSurface> v = weak.lock();

@@ -11,17 +11,22 @@
 // references are the app's EGLImages is reused too. The new pixels reach the
 // GPU form (the texture those EGLImages share) when a consumer next takes the
 // buffer (FlushRgbaToGpu, from Image.getHardwareBuffer), on the GPU thread in
-// order with the compositor, not for frames that are dropped.
+// order with the compositor, not for frames that are dropped. That write waits
+// for ANGLE's device to finish the draws the app already issued (the texture is
+// shared between the two devices without a keyed mutex), and the reader writes
+// the buffer released longest ago, so a rewrite is also far from its last use.
 #pragma once
 
 #include <stdint.h>
 
 namespace gesher::bionic::ahb {
 
-// A new buffer, one reference (the caller's); GPU_SAMPLED_IMAGE | CPU_READ_OFTEN
-// usage, or CPU_READ_OFTEN alone (logged once) when there is no GPU form to give,
-// rows of width * 4 bytes. Null only when memory runs out.
-void* AllocateRgbaBuffer(uint32_t width, uint32_t height);
+// A new buffer, one reference (the caller's), rows of width * 4 bytes. With
+// gpu_form: GPU_SAMPLED_IMAGE | CPU_READ_OFTEN usage (an app may make EGLImages
+// of it; this starts ANGLE and the GPU thread), or CPU_READ_OFTEN alone (logged
+// once) when there is no GPU form to give. Without: CPU_READ_OFTEN only, and
+// nothing GPU-side is started. Null only when memory runs out.
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form);
 void RetainRgbaBuffer(void* buffer);
 void ReleaseRgbaBuffer(void* buffer);
 // Only the caller holds a reference.

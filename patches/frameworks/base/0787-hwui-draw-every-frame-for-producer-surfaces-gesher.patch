@@ -8,8 +8,11 @@ has no pulse to pace: Surface.lockHardwareCanvas gives each
 unlockCanvasAndPost its own timestamp and its consumer expects a frame for
 every post. Frames posted less than 2 ms after one another were dropped, with
 no image and no onImageAvailable. A surface that does not queue to the window
-composer (NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER is 0: Gesher's QueueSurface)
-is no longer subject to that skip; window surfaces are unchanged.
+composer (NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER is 0: Gesher's QueueSurface of
+an ImageReader or a SurfaceTexture) is no longer subject to that skip. Window
+surfaces are unchanged, and so is a SurfaceView's: its BLAST surface (also a
+QueueSurface in Gesher) reports 1, as it does on Android where it is composited
+into the window, and keeps the pacing.
 ---
 diff --git a/libs/hwui/renderthread/CanvasContext.cpp b/libs/hwui/renderthread/CanvasContext.cpp
 --- a/libs/hwui/renderthread/CanvasContext.cpp
@@ -22,7 +25,8 @@ diff --git a/libs/hwui/renderthread/CanvasContext.cpp b/libs/hwui/renderthread/C
 +        // Gesher: a vsync pulse paces frames shown by the display compositor. A
 +        // surface whose consumer is not that compositor (an ImageReader or a
 +        // SurfaceTexture, drawn with Surface.lockHardwareCanvas) takes every
-+        // frame posted to it, so none is dropped for being soon after the last.
++        // frame posted to it, so none is dropped for being soon after the last. A
+        // SurfaceView's surface is composited into its window: it reports 1.
 +        int queuesToComposer = 1;
 +        ANativeWindow* const window = mNativeSurface ? mNativeSurface->getNativeWindow() : nullptr;
 +        if (window != nullptr) {

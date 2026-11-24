@@ -127,8 +127,9 @@ struct HostRgbaBuffer {
   bool memory_newer = false;
   std::unique_ptr<uint8_t[]> pixels;
 };
-std::atomic<int> rgba_buffers_live{0};
-void* AllocateRgbaBuffer(uint32_t width, uint32_t height) {
+std::atomic<int> rgba_buffers_live{0}, rgba_gpu_form_buffers{0}, rgba_cpu_only_buffers{0};
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
+  (gpu_form ? rgba_gpu_form_buffers : rgba_cpu_only_buffers)++;
   auto* b = new (std::nothrow) HostRgbaBuffer();
   if (b == nullptr) return nullptr;
   b->width = width;
@@ -291,7 +292,14 @@ void PixelCases() {
           auto frame = Frame(d[0],d[1],crop,crop,pad,7);
           const auto old = frame.data;
           const int64_t timestamp = crop == 0 ? 0 : crop == 1 ? -9000000000000001LL : 9000000000000001LL;
+          const int gpu_before = gesher::bionic::ahb::rgba_gpu_form_buffers, cpu_before = gesher::bionic::ahb::rgba_cpu_only_buffers;
           Check(target.Deliver(frame,timestamp) == OK, "valid delivery accepted");
+          if (PRIVATE_IS_RGBA && IsRgbaFormat(format)) {
+            // A reader nothing samples on the GPU (no usage bits, not PRIVATE) gets CPU-only buffers.
+            Check(gesher::bionic::ahb::rgba_gpu_form_buffers - gpu_before == (format == 0x22 ? 1 : 0) &&
+                  gesher::bionic::ahb::rgba_cpu_only_buffers - cpu_before == (format == 0x22 ? 0 : 1),
+                  "GPU form only for PRIVATE or GPU_SAMPLED readers");
+          }
           auto* image = target.Acquire();
           Check(image != nullptr, "Image available");
           if (!image) continue;

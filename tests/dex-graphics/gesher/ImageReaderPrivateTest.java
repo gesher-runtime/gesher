@@ -5,6 +5,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.hardware.HardwareBuffer;
 import android.hardware.SyncFence;
 import android.media.Image;
@@ -38,6 +39,12 @@ public final class ImageReaderPrivateTest {
 
     private static native int nativeInspect(HardwareBuffer buffer, int[] probes, int[] out);
     private static native int nativeFenceFd();
+    // An EGLImage and texture kept after the Image and HardwareBuffer are closed
+    // (tests/native/reader_buffer_test.c).
+    private static native int nativeKeep(HardwareBuffer buffer, int[] out);
+    private static native int nativeSampleKept(int[] probes, int[] out);
+    private static native int nativeReadTarget(int[] probes, int[] out);
+    private static native void nativeDropKept();
 
     private static final int[] PROBES = {4, 4, 28, 4, 4, 20, 28, 20};
     // Indexes of nativeInspect's result.
@@ -185,6 +192,41 @@ public final class ImageReaderPrivateTest {
                 check(seen[0] == colors.length, "one notification per frame (" + seen[0] + ")");
             }
 
+            // --- the buffer released longest ago is the one rewritten ---------------------
+            try (ImageReader reader = privateReader(2)) {
+                CountDownLatch[] latch = {new CountDownLatch(1)};
+                reader.setOnImageAvailableListener(r -> latch[0].countDown(), handler);
+                long[] ids = new long[2];
+                Image[] held = new Image[2];
+                for (int i = 0; i < 2; i++) {  // two frames held at once: two buffers
+                    latch[0] = new CountDownLatch(1);
+                    Canvas canvas = reader.getSurface().lockCanvas(null);
+                    canvas.drawColor(Color.RED);
+                    reader.getSurface().unlockCanvasAndPost(canvas);
+                    held[i] = next(reader, latch[0], "lru held frame " + i);
+                    try (HardwareBuffer b = held[i].getHardwareBuffer()) {
+                        ids[i] = b.getId();
+                    }
+                }
+                check(ids[0] != ids[1], "two held frames are two buffers");
+                held[0].close();
+                held[1].close();
+                long previous = 0;
+                for (int frame = 0; frame < 6; frame++) {
+                    latch[0] = new CountDownLatch(1);
+                    Canvas canvas = reader.getSurface().lockCanvas(null);
+                    canvas.drawColor(Color.GREEN);
+                    reader.getSurface().unlockCanvasAndPost(canvas);
+                    try (Image image = next(reader, latch[0], "lru frame " + frame);
+                            HardwareBuffer b = image.getHardwareBuffer()) {
+                        check(b.getId() == ids[0] || b.getId() == ids[1], "lru frame " + frame + " is a pooled buffer");
+                        check(b.getId() != previous, "lru frame " + frame
+                                + " is not the buffer just released (" + b.getId() + ")");
+                        previous = b.getId();
+                    }
+                }
+            }
+
             // --- software Canvas (a Surface does not mix it with lockHardwareCanvas) ----
             try (ImageReader reader = privateReader(2)) {
                 CountDownLatch[] latch = {new CountDownLatch(1)};
@@ -276,6 +318,49 @@ public final class ImageReaderPrivateTest {
                             "a signaled fence has no recorded signal time");
                 }
                 image.close();
+                // --- an EGLImage kept after its Image and HardwareBuffer are closed (Flutter's
+                // texture cache hit): the buffer is reused at once, the earlier draw that
+                // sampled it stays ordered before the rewrite, and the kept texture then
+                // samples the new frame.
+                try (ImageReader keptReader = privateReader(2)) {
+                    CountDownLatch[] kl = {new CountDownLatch(1)};
+                    keptReader.setOnImageAvailableListener(r -> kl[0].countDown(), handler);
+                    Canvas kc = keptReader.getSurface().lockHardwareCanvas();
+                    kc.drawColor(Color.RED);
+                    keptReader.getSurface().unlockCanvasAndPost(kc);
+                    Image first = next(keptReader, kl[0], "kept: first frame");
+                    HardwareBuffer firstBuffer = first.getHardwareBuffer();
+                    long firstId = firstBuffer.getId();
+                    int[] keep = new int[3];
+                    check(nativeKeep(firstBuffer, keep) == 0,
+                            "kept: EGLImage, texture and a queued draw of the first frame");
+                    check(((keep[2] & 0xffffffffL) << 32 | (keep[1] & 0xffffffffL)) == firstId,
+                            "kept: the native id is the Java id");
+                    // Closed at once, with no glFinish: the draw may still be queued.
+                    firstBuffer.close();
+                    first.close();
+                    kl[0] = new CountDownLatch(1);
+                    kc = keptReader.getSurface().lockHardwareCanvas();
+                    kc.drawColor(Color.GREEN);
+                    keptReader.getSurface().unlockCanvasAndPost(kc);
+                    Image secondImage = next(keptReader, kl[0], "kept: second frame");
+                    HardwareBuffer secondBuffer = secondImage.getHardwareBuffer();  // uploads the frame
+                    check(secondBuffer.getId() == firstId,
+                            "kept: the buffer is reused while an EGLImage of it is alive");
+                    int[] earlier = new int[N];
+                    check(nativeReadTarget(PROBES, earlier) == 0, "kept: read the earlier draw");
+                    for (int i = 0; i < N; i++)
+                        check(earlier[i] == RED, "kept: the draw queued before the rewrite sampled the old frame, pixel "
+                                + i + " 0x" + Integer.toHexString(earlier[i]));
+                    int[] now = new int[N];
+                    check(nativeSampleKept(PROBES, now) == 0, "kept: sample the kept texture");
+                    for (int i = 0; i < N; i++)
+                        check(now[i] == GREEN, "kept: the kept texture samples the new frame, pixel " + i
+                                + " 0x" + Integer.toHexString(now[i]));
+                    secondBuffer.close();
+                    secondImage.close();
+                    nativeDropKept();
+                }
                 EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE,
                         EGL14.EGL_NO_CONTEXT);
                 EGL14.eglDestroySurface(display, surface);
@@ -301,6 +386,30 @@ public final class ImageReaderPrivateTest {
                     // NV12 grey 128/128/128 as RGBA (BT.601 limited range): 130 each.
                     inspect(image, new int[] {0xff828282, 0xff828282, 0xff828282, 0xff828282},
                             false, "camera frame");
+                }
+            }
+            // --- a reader nothing samples on the GPU has CPU-only buffers (a camera QR
+            // scanner's), a GPU-sampled one GPU-capable ones ------------------------------
+            for (boolean gpu : new boolean[] {false, true}) {
+                ImageReader.Builder builder = new ImageReader.Builder(W, H).setMaxImages(2)
+                        .setImageFormat(PixelFormat.RGBA_8888);
+                if (gpu) builder.setUsage(HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE);
+                try (ImageReader reader = builder.build()) {
+                    byte[] nv12 = new byte[W * H * 3 / 2];
+                    Arrays.fill(nv12, (byte) 128);
+                    Class<?> frames = Class.forName("com.gesher.server.CameraFrames");
+                    check((Integer) frames.getMethod("deliver", Surface.class, byte[].class,
+                            int.class, int.class, long.class, byte[].class)
+                            .invoke(null, reader.getSurface(), nv12, W, H, 1L, null) == 0,
+                            "camera delivery into a " + (gpu ? "GPU-sampled" : "CPU") + " RGBA reader");
+                    try (Image image = reader.acquireNextImage(); HardwareBuffer buffer = image.getHardwareBuffer()) {
+                        long usage = buffer.getUsage();
+                        check((usage & HardwareBuffer.USAGE_CPU_READ_OFTEN) == HardwareBuffer.USAGE_CPU_READ_OFTEN,
+                                "camera RGBA buffer is CPU readable");
+                        check(((usage & HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE) != 0) == gpu,
+                                "camera RGBA buffer reports its true usage 0x" + Long.toHexString(usage)
+                                        + (gpu ? " (GPU sampled)" : " (CPU only)"));
+                    }
                 }
             }
         } finally {

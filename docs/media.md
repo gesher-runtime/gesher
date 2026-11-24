@@ -13,7 +13,29 @@ Every `unlockCanvasAndPost` of a hardware canvas is a frame with its own
 `onImageAvailable`, however soon after the last: hwui's one-frame-per-vsync
 skip (a frame within 2 ms of the last swap) applies to window surfaces only,
 not to a surface that does not queue to the window composer
-(`patches/frameworks/base/0787`).
+(`patches/frameworks/base/0787`): an ImageReader's or a SurfaceTexture's
+`QueueSurface` reports `NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER` 0, a
+SurfaceView's reports 1 (as on Android, where it is composited into the window)
+and keeps the pacing.
+
+RGBA images (RGBA readers, PRIVATE readers, and what is drawn into either's
+Surface) live in a per-reader pool of `AHardwareBuffer`s that repeat across
+frames, the one released longest ago being written next. A reader whose usage
+has neither `GPU_SAMPLED_IMAGE` nor PRIVATE format (a camera QR scanner's)
+gets CPU-only buffers (usage `CPU_READ_OFTEN`, reported as such, and neither
+ANGLE nor the GPU thread is started for it). Where an app keeps an EGLImage of
+a buffer after closing its Image and HardwareBuffer (Flutter's texture cache),
+the buffer is written again like an Android BufferQueue slot, and the new
+frame reaches the texture when `Image.getHardwareBuffer` next takes it. The
+texture is shared between the GPU thread's Direct3D device and ANGLE's with no
+keyed mutex, so that write first flushes ANGLE's device and waits for it to
+finish everything issued before (`WaitAngleDeviceIdle`, ANGLE's own context
+dispatch plus a completion event): draws the app made before the call, and
+before it closed the Image, have sampled the old frame when the new one is
+written; draws after the call see the new one (the upload completes before
+`getHardwareBuffer` returns). Not ordered: draws another thread issues
+concurrently with the call. `ImageReaderPrivateTest` runs the sequence with an
+EGLImage kept across the rewrite.
 Its images report the reader's PRIVATE format and have no CPU planes
 (`getPlanes()` is empty, as Android's). Their pixels are RGBA whatever
 produced them: a drawn frame, a camera frame (converted from NV12) or a
