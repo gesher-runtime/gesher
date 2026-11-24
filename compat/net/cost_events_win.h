@@ -32,6 +32,7 @@ struct CostWatch;
 // Microsoft's NetworkCost sample does) on a thread of its own, which stays in the multithreaded
 // apartment while subscribed. Returns null and the reason in `hr` when Windows refuses (no
 // Network List Manager, no such connection point); the caller keeps polling then.
+// Owns a duplicate event handle so a timed-out initialization can finish safely after return.
 CostWatch* StartCostWatch(HANDLE event, HRESULT* hr);
 
 // Unsubscribes and ends the thread. Null is fine.
