@@ -1,0 +1,483 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Exact production bodies are inserted by test_protected_thread_signals.py.
+// Windows security, handles, waits, duplication and retirement are not mocked.
+#include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <errno.h>
+#include "gesher/pending_signals.h"
+#include "gesher/futex_interrupt.h"
+#define BIONIC_SYSV
+
+std::atomic<int> queued_nodes{0};
+extern "C" bool gesher_signal_queue_acquire(bool) { ++queued_nodes; return true; }
+extern "C" void gesher_signal_queue_release() { --queued_nodes; }
+// Explicit notification boundary; futex/ARM64 execution has separate gates.
+extern "C" void gesher_futex_interrupt_request(gesher_futex_interrupt* cell) {
+  InterlockedExchange(&cell->requested, 1);
+}
+namespace {
+@CONSTANTS@
+@TYPES@
+thread_local ThreadState* t_state = nullptr;
+std::atomic<bool> g_process_pending{false}, g_directed_pending{false};
+std::atomic<unsigned> checks{0};
+void Check(bool value, const char* description) {
+  ++checks;
+  if (!value) {
+    std::fprintf(stderr, "FAIL: %s win32=%lu errno=%d\n", description,
+        static_cast<unsigned long>(GetLastError()), errno);
+    throw std::runtime_error(description);
+  }
+}
+struct Close { void operator()(void* value) const { if (value) CloseHandle(value); } };
+struct Free { void operator()(void* value) const { if (value) LocalFree(value); } };
+using Handle = std::unique_ptr<void, Close>;
+using Local = std::unique_ptr<void, Free>;
+
+// Fixture registry population uses actual creation handles. These fields are
+// exactly those the extracted lookup reads; pthread creation is not emulated.
+struct ThreadRecord { HANDLE handle = nullptr; int32_t tid = 0; };
+struct ExternalThreadRecord { HANDLE handle = nullptr; };
+std::mutex g_threads_mutex;
+std::unordered_map<uint64_t, ThreadRecord*> g_threads;
+std::unordered_map<uint64_t, ExternalThreadRecord> g_external_threads;
+@PTHREAD_LOOKUP@
+@STATE@
+
+// Explicit frame/UID boundaries. Production code still queues and claims the
+// real pending record on the actual receiver thread.
+struct Delivery { DWORD tid = 0; int signal = 0; BionicSiginfo info{}; unsigned count = 0; };
+thread_local Delivery delivered;
+void Dispatch(ThreadState*, int sig, const BionicSiginfo& info, const BionicSigaction&,
+              const uint64_t* = nullptr) {
+  delivered.tid = GetCurrentThreadId(); delivered.signal = sig; delivered.info = info; ++delivered.count;
+}
+[[maybe_unused]] bool IsGuestHandler(const BionicSigaction&) { return false; }
+[[maybe_unused]] bool GuestContextAvailable() { return false; }
+uint32_t getuid() { return 10000; }
+void InterruptGuestThread(uint32_t) {}
+@DELIVERY@
+std::atomic<int> remote_calls{0}, remote_result{0}, remote_pid{0};
+int KillOtherProcess(int pid, int sig) {
+  Check(sig == 0, "remote route asks the existing authorization boundary for signal zero");
+  ++remote_calls; remote_pid = pid;
+  if (remote_result) return errno = remote_result.load(), -1;
+  return 0;
+}
+@ROUTING@
+
+Local Descriptor(const std::wstring& sddl) {
+  PSECURITY_DESCRIPTOR raw = nullptr;
+  Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &raw, nullptr) != FALSE,
+      "create fixture security descriptor");
+  return Local(raw);
+}
+Local Security(HANDLE object) {
+  PSECURITY_DESCRIPTOR raw = nullptr;
+  Check(GetSecurityInfo(object, SE_KERNEL_OBJECT,
+      OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+      nullptr, nullptr, nullptr, nullptr, &raw) == ERROR_SUCCESS, "read exact thread object security");
+  return Local(raw);
+}
+PACL Dacl(void* descriptor) {
+  PACL acl = nullptr; BOOL present = FALSE, defaulted = FALSE;
+  Check(GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted) && present && acl,
+      "fixture DACL present and non-null");
+  return acl;
+}
+bool EqualAcl(PACL first, PACL second) {
+  return (!first || !second) ? first == second : first->AclSize == second->AclSize &&
+      std::memcmp(first, second, first->AclSize) == 0;
+}
+void SameSecurity(void* before, void* after) {
+  PSID left = nullptr, right = nullptr; BOOL ignored = FALSE;
+  Check(GetSecurityDescriptorOwner(before, &left, &ignored) && GetSecurityDescriptorOwner(after, &right, &ignored) &&
+      left && right && EqualSid(left, right), "thread owner unchanged");
+  Check(GetSecurityDescriptorGroup(before, &left, &ignored) && GetSecurityDescriptorGroup(after, &right, &ignored) &&
+      left && right && EqualSid(left, right), "thread group unchanged");
+  Check(EqualAcl(Dacl(before), Dacl(after)), "exact thread DACL bytes preserved/restored");
+  PACL first = nullptr, second = nullptr; BOOL first_present = FALSE, second_present = FALSE;
+  Check(GetSecurityDescriptorSacl(before, &first_present, &first, &ignored) &&
+      GetSecurityDescriptorSacl(after, &second_present, &second, &ignored) &&
+      first_present == second_present && EqualAcl(first, second), "thread mandatory label unchanged");
+  SECURITY_DESCRIPTOR_CONTROL first_control{}, second_control{}; DWORD revision = 0;
+  Check(GetSecurityDescriptorControl(before, &first_control, &revision) &&
+      GetSecurityDescriptorControl(after, &second_control, &revision) && first_control == second_control,
+      "thread security control restored/preserved");
+}
+struct MainSecurity {
+  Handle thread;
+  Local original;
+  bool restored = false;
+  explicit MainSecurity(void* restriction) {
+    HANDLE retained = nullptr;
+    Check(DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &retained,
+        THREAD_ALL_ACCESS, FALSE, 0) != FALSE, "retain exact initial thread");
+    thread.reset(retained); original = Security(thread.get());
+    Check(SetSecurityInfo(thread.get(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, Dacl(restriction), nullptr) == ERROR_SUCCESS, "seal initial thread before production Self registration");
+  }
+  void Restore() {
+    SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
+    Check(GetSecurityDescriptorControl(original.get(), &control, &revision) != FALSE, "read original DACL control");
+    Check(SetSecurityInfo(thread.get(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION |
+        (control & SE_DACL_PROTECTED ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION),
+        nullptr, nullptr, Dacl(original.get()), nullptr) == ERROR_SUCCESS, "restore initial thread through retained handle");
+    auto actual = Security(thread.get()); SameSecurity(original.get(), actual.get()); restored = true;
+  }
+  ~MainSecurity() {
+    if (!restored) { try { Restore(); } catch (...) { std::fputs("FAIL: initial ACL cleanup\n", stderr); } }
+  }
+};
+Handle RestrictedCaller(std::wstring* sid_text) {
+  HANDLE raw = nullptr;
+  Check(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw) != FALSE, "open caller token");
+  Handle primary(raw);
+  BYTE administrators[SECURITY_MAX_SID_SIZE]{}; DWORD bytes = sizeof(administrators);
+  Check(CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, administrators, &bytes) != FALSE, "administrators SID");
+  SID_AND_ATTRIBUTES disabled{administrators, 0};
+  Check(CreateRestrictedToken(primary.get(), DISABLE_MAX_PRIVILEGE, 1, &disabled, 0, nullptr, 0, nullptr, &raw) != FALSE,
+      "create caller without administrative group or debug privilege");
+  Handle restricted(raw);
+  Check(DuplicateTokenEx(restricted.get(), TOKEN_QUERY | TOKEN_IMPERSONATE, nullptr,
+      SecurityImpersonation, TokenImpersonation, &raw) != FALSE, "create restricted impersonation context");
+  Handle result(raw);
+  DWORD required = 0;
+  GetTokenInformation(result.get(), TokenUser, nullptr, 0, &required);
+  std::vector<BYTE> user(required);
+  Check(required && GetTokenInformation(result.get(), TokenUser, user.data(), required, &required), "actual caller identity");
+  PSID sid = reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid;
+  Check(!IsWellKnownSid(sid, WinLocalSystemSid), "fixture caller is an ordinary Windows account");
+  wchar_t* text = nullptr; Check(ConvertSidToStringSidW(sid, &text) != FALSE, "caller SID text");
+  Local text_owner(text); *sid_text = text;
+  GetTokenInformation(result.get(), TokenPrivileges, nullptr, 0, &required);
+  std::vector<BYTE> privileges(required);
+  Check(required && GetTokenInformation(result.get(), TokenPrivileges, privileges.data(), required, &required), "restricted privileges");
+  LUID debug{}; Check(LookupPrivilegeValueW(nullptr, L"SeDebugPrivilege", &debug) != FALSE, "debug privilege identity");
+  const auto* list = reinterpret_cast<const TOKEN_PRIVILEGES*>(privileges.data());
+  for (DWORD i = 0; i < list->PrivilegeCount; ++i) {
+    const auto& item = list->Privileges[i];
+    Check(item.Luid.LowPart != debug.LowPart || item.Luid.HighPart != debug.HighPart ||
+        !(item.Attributes & SE_PRIVILEGE_ENABLED), "debug privilege disabled");
+  }
+  return result;
+}
+void DeniedNamedOpen(DWORD tid) {
+  const DWORD masks[] = {THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, THREAD_QUERY_LIMITED_INFORMATION};
+  for (DWORD rights : masks) {
+    HANDLE raw = OpenThread(rights, FALSE, tid); const DWORD error = GetLastError(); Handle opened(raw);
+    Check(!opened && error == ERROR_ACCESS_DENIED, "real OpenThread denies the restricted caller");
+  }
+}
+void QueryOnlyOpen(DWORD tid) {
+  HANDLE raw = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, tid);
+  const DWORD error = GetLastError(); Handle full(raw);
+  Check(!full && error == ERROR_ACCESS_DENIED, "real OpenThread denies SYNCHRONIZE");
+  Handle query(OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, tid));
+  Check(query != nullptr, "real OpenThread permits QUERY only");
+}
+void AsRestricted(HANDLE token, const std::function<void()>& body) {
+  Check(SetThreadToken(nullptr, token) != FALSE, "enter restricted caller context");
+  try { body(); } catch (...) { if (!RevertToSelf()) std::abort(); throw; }
+  Check(RevertToSelf() != FALSE, "restore caller context");
+}
+void OnOtherThread(const std::function<void()>& body) {
+  struct Call { const std::function<void()>* body; std::exception_ptr error; } call{&body, {}};
+  DWORD tid = 0;
+  Handle thread(CreateThread(nullptr, 0, [](void* value) -> DWORD {
+    auto* target = static_cast<Call*>(value);
+    try { (*target->body)(); } catch (...) { target->error = std::current_exception(); }
+    return 0;
+  }, &call, 0, &tid));
+  Check(thread != nullptr, "create sender thread");
+  if (WaitForSingleObject(thread.get(), 10000) != WAIT_OBJECT_0) {
+    // The sender still owns pointers into this stack; never unwind them while
+    // it may execute. Abort only this isolated fixture on a bounded timeout.
+    std::fputs("FAIL: bounded sender completion\n", stderr); std::abort();
+  }
+  if (call.error) std::rethrow_exception(call.error);
+}
+
+struct Worker {
+  Handle ready{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  Handle deliver{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
+  Handle received{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
+  Handle stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  Handle thread;
+  Local security;
+  DWORD tid = 0, exit_code = 0;
+  bool register_self = false, joined = false;
+  std::exception_ptr error;
+  Delivery observation;
+  Worker(void* descriptor, bool registration, DWORD exit = 0) : exit_code(exit), register_self(registration) {
+    Check(ready && deliver && received && stop, "create fixture events");
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
+    thread.reset(CreateThread(descriptor ? &attributes : nullptr, 0, [](void* value) -> DWORD {
+      auto* self = static_cast<Worker*>(value);
+      try {
+        if (self->register_self) Check(Self() != nullptr, "production Self registers after DACL sealing");
+        SetEvent(self->ready.get());
+        const HANDLE waits[] = {self->stop.get(), self->deliver.get()};
+        for (;;) {
+          const DWORD waited = WaitForMultipleObjects(2, waits, FALSE, 20000);
+          if (waited == WAIT_OBJECT_0) break;
+          Check(waited == WAIT_OBJECT_0 + 1, "bounded receiver wait");
+          auto* state = Self(); Check(state != nullptr, "receiver adopts exact production signal state");
+          Check(DeliverAll(state) == 0, "production pending claim succeeds");
+          self->observation = delivered; SetEvent(self->received.get());
+        }
+      } catch (...) { self->error = std::current_exception(); SetEvent(self->ready.get()); SetEvent(self->received.get()); }
+      return self->exit_code;
+    }, this, CREATE_SUSPENDED, &tid));
+    Check(thread != nullptr, "create actual suspended thread with final restrictive DACL");
+    bool resumed = false;
+    try {
+      security = Security(thread.get());
+      Check(ResumeThread(thread.get()) == 1, "resume fixture thread"); resumed = true;
+      Check(WaitForSingleObject(ready.get(), 10000) == WAIT_OBJECT_0, "await receiver registration boundary");
+      if (error) std::rethrow_exception(error);
+    } catch (...) {
+      SetEvent(stop.get()); if (!resumed) ResumeThread(thread.get());
+      if (WaitForSingleObject(thread.get(), 10000) != WAIT_OBJECT_0) std::abort();
+      throw;
+    }
+  }
+  void Receive(unsigned count) {
+    Check(SetEvent(deliver.get()) != FALSE && WaitForSingleObject(received.get(), 10000) == WAIT_OBJECT_0,
+        "receiver consumes queued signal");
+    if (error) std::rethrow_exception(error);
+    Check(observation.count == count && observation.tid == tid && observation.signal == 10 &&
+        observation.info.pid == static_cast<int32_t>(GetCurrentProcessId()) && observation.info.code == kSiTkill &&
+        observation.info.uid == 10000, "actual queue preserves target thread and sender metadata");
+  }
+  void Join() {
+    if (joined) return;
+    Check(SetEvent(stop.get()) != FALSE && WaitForSingleObject(thread.get(), 10000) == WAIT_OBJECT_0,
+        "fixture thread exits on exact retained handle");
+    DWORD actual = 0; Check(GetExitCodeThread(thread.get(), &actual) && actual == exit_code, "actual thread exit code");
+    auto current = Security(thread.get()); SameSecurity(security.get(), current.get()); joined = true;
+    if (error) std::rethrow_exception(error);
+  }
+  ~Worker() {
+    if (!joined) { try { Join(); } catch (...) { std::fputs("FAIL: worker cleanup\n", stderr); std::abort(); } }
+  }
+};
+void Retired(DWORD tid) {
+  for (unsigned i = 0; i < 1000; ++i) {
+    { std::lock_guard<std::mutex> lock(S().mutex); if (!S().threads.count(tid)) return; }
+    Sleep(1);
+  }
+  Check(false, "actual Windows exit retires signal registry entry");
+}
+void VerifyOwnedSyncHandle(DWORD tid) {
+  HANDLE raw = nullptr;
+  Check(RegisteredSignalTarget(tid, &raw) == 0 && raw, "retain known local signal identity");
+  Handle value(raw); DWORD flags = 0;
+  Check(GetHandleInformation(value.get(), &flags) && !(flags & HANDLE_FLAG_INHERIT) &&
+      WaitForSingleObject(value.get(), 0) == WAIT_TIMEOUT, "local lifetime duplicate is live and non-inheriting");
+  Check(GetProcessIdOfThread(value.get()) == 0 && GetLastError() == ERROR_ACCESS_DENIED,
+      "local lifetime duplicate does not add QUERY rights");
+}
+void SendCases(HANDLE caller, Worker& worker) {
+  AsRestricted(caller, [&] {
+    DeniedNamedOpen(worker.tid);
+    Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(worker.tid), 0) == 0 &&
+        Tkill(static_cast<int>(worker.tid), 0) == 0, "signal zero proves exact live local target");
+    errno = 0;
+    Check(Tgkill(static_cast<int>(GetCurrentProcessId()) + 1, static_cast<int>(worker.tid), 10) == -1 && errno == kESRCH,
+        "wrong tgid cannot redirect retained local identity");
+    errno = 0;
+    Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(worker.tid), 65) == -1 && errno == kEINVAL,
+        "invalid signal preserves EINVAL");
+    Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(worker.tid), 10) == 0,
+        "tgkill routes through retained identity despite real OpenThread denial");
+  });
+  worker.Receive(1);
+  AsRestricted(caller, [&] {
+    VerifyOwnedSyncHandle(worker.tid);
+    Check(Tkill(static_cast<int>(worker.tid), 10) == 0, "tkill retains local target without reopening");
+  });
+  worker.Receive(2);
+}
+struct Remote {
+  PROCESS_INFORMATION process{};
+  Local security;
+  explicit Remote(void* descriptor) {
+    wchar_t path[32768]{};
+    const DWORD count = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+    Check(count && count < std::size(path), "fixture executable path");
+    std::wstring command = L"\"" + std::wstring(path) + L"\" --suspended-fixture-child";
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+    Check(CreateProcessW(path, command.data(), nullptr, &attributes, FALSE,
+        CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process) != FALSE,
+        "create actual separate fixture process/thread");
+    try { security = Security(process.hThread); }
+    catch (...) {
+      if (!TerminateProcess(process.hProcess, 0) ||
+          WaitForSingleObject(process.hProcess, 10000) != WAIT_OBJECT_0) std::abort();
+      CloseHandle(process.hThread); CloseHandle(process.hProcess); process = {};
+      throw;
+    }
+  }
+  ~Remote() {
+    if (process.hProcess) {
+      if (!TerminateProcess(process.hProcess, 0) || WaitForSingleObject(process.hProcess, 10000) != WAIT_OBJECT_0) std::abort();
+      try { auto current = Security(process.hThread); SameSecurity(security.get(), current.get()); }
+      catch (...) { std::abort(); }
+      CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    }
+  }
+};
+void MainCases() {
+  // The extracted declaration lines also retain these neighboring constants.
+  static_cast<void>(kSaNodefer); static_cast<void>(kSiUser); static_cast<void>(kSiQueue);
+  std::puts("Protected local signals: real Windows DACL/handles/waits/retirement and exact production routing/queue/claim; fixture registry population, final frame/UID, futex/ARM64 and remote authorization boundaries");
+  auto restriction = Descriptor(L"D:P(A;;GA;;;SY)");
+  std::wstring user;
+  auto caller = RestrictedCaller(&user);
+  auto query_only = Descriptor(L"D:P(A;;GA;;;SY)(A;;0x00000800;;;" + user + L")");
+  auto query_sync = Descriptor(L"D:P(A;;GA;;;SY)(A;;0x00100800;;;" + user + L")");
+  MainSecurity main_security(restriction.get());
+  auto* initial = Self(); Check(initial != nullptr, "initial Self registers after DACL sealing");
+  S().actions[10].handler = 2;  // Fixture-owned ordinary supported disposition.
+  const DWORD initial_tid = GetCurrentThreadId();
+  OnOtherThread([&] { AsRestricted(caller.get(), [&] {
+    DeniedNamedOpen(initial_tid);
+    Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(initial_tid), 10) == 0,
+        "another thread reaches sealed initial registered thread");
+  }); });
+  Check(DeliverAll(initial) == 0 && delivered.count == 1 && delivered.tid == initial_tid,
+      "initial receiver claims real pending record");
+  {
+    Worker registered(restriction.get(), true); SendCases(caller.get(), registered);
+    registered.Join(); Retired(registered.tid);
+  }
+  for (bool external : {false, true}) {
+    Worker worker(restriction.get(), false);
+    ThreadRecord record{worker.thread.get(), static_cast<int32_t>(worker.tid)};
+    { std::lock_guard<std::mutex> lock(g_threads_mutex);
+      if (external) g_external_threads.emplace(1, ExternalThreadRecord{worker.thread.get()});
+      else g_threads.emplace(1, &record); }
+    try { SendCases(caller.get(), worker); }
+    catch (...) { std::lock_guard<std::mutex> lock(g_threads_mutex); g_threads.clear(); g_external_threads.clear(); throw; }
+    { std::lock_guard<std::mutex> lock(g_threads_mutex); g_threads.clear(); g_external_threads.clear(); }
+    worker.Join(); Retired(worker.tid);
+    std::printf("Protected local signals: retained %s route passed\n", external ? "external registry" : "pthread registry");
+  }
+  {
+    Worker ordinary(nullptr, false);
+    { std::lock_guard<std::mutex> lock(S().mutex);
+      Check(!S().threads.count(ordinary.tid), "ordinary target has no signal registry entry"); }
+    { std::lock_guard<std::mutex> lock(g_threads_mutex);
+      Check(g_threads.empty() && g_external_threads.empty(), "ordinary target has no pthread registry entry"); }
+    AsRestricted(caller.get(), [&] {
+      Handle opened(OpenThread(THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, ordinary.tid));
+      Check(opened != nullptr, "ordinary unregistered thread retains permitted named lookup");
+      Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(ordinary.tid), 0) == 0 &&
+          Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(ordinary.tid), 10) == 0,
+          "ordinary unregistered local route still proves life and queues");
+    });
+    ordinary.Receive(1);
+    AsRestricted(caller.get(), [&] {
+      Check(Tkill(static_cast<int>(ordinary.tid), 10) == 0, "ordinary tkill queues through its registered exact lifetime");
+    });
+    ordinary.Receive(2); ordinary.Join(); Retired(ordinary.tid);
+  }
+  {
+    Worker exited(nullptr, false, STILL_ACTIVE); exited.Join();
+    ThreadRecord record{exited.thread.get(), static_cast<int32_t>(exited.tid)};
+    { std::lock_guard<std::mutex> lock(g_threads_mutex); g_threads.emplace(1, &record); }
+    HANDLE invalid = nullptr;
+    Check(PthreadSignalTargetByTid(exited.tid, &invalid) == kESRCH && !invalid,
+        "genuine exit259 is not a live retained pthread target");
+    errno = 0;
+    Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(exited.tid), 0) == -1 && errno == kESRCH,
+        "genuine exited259 thread does not report sig0 success");
+    Worker live(restriction.get(), false);
+    auto stale = std::make_unique<ThreadState>(); HANDLE lifetime = nullptr;
+    Check(DuplicateHandle(GetCurrentProcess(), exited.thread.get(), GetCurrentProcess(), &lifetime,
+        SYNCHRONIZE, FALSE, 0) != FALSE, "retain exited identity for synthetic stale-map control");
+    stale->tid = live.tid; stale->lifetime = lifetime;
+    { std::lock_guard<std::mutex> lock(S().mutex); S().threads.emplace(live.tid, stale.get()); }
+    ThreadRecord actual{live.thread.get(), static_cast<int32_t>(live.tid)};
+    { std::lock_guard<std::mutex> lock(g_threads_mutex);
+      record.tid = static_cast<int32_t>(live.tid); g_threads.emplace(2, &actual); }
+    SendCases(caller.get(), live);
+    Check(stale->pending.Mask() == 0, "synthetic stale-map binding receives no signal");
+    { std::lock_guard<std::mutex> lock(g_threads_mutex); g_threads.clear(); }
+    live.Join(); Retired(live.tid);
+    std::puts("Protected local signals: stale registry binding is synthetic; no forced actual Windows TID reuse is claimed");
+  }
+  Check(remote_calls == 0, "local routes never invoke remote broker authorization");
+  {
+    Worker ambiguous(query_only.get(), false, STILL_ACTIVE);
+    AsRestricted(caller.get(), [&] {
+      QueryOnlyOpen(ambiguous.tid);
+      for (int sig : {0, 10}) {
+        errno = 0;
+        Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(ambiguous.tid), sig) == -1 && errno == kEPERM,
+            "QUERY-only local target cannot claim positive existence or queue a signal");
+      }
+    });
+    ambiguous.Join();
+    AsRestricted(caller.get(), [&] {
+      errno = 0;
+      Check(Tgkill(static_cast<int>(GetCurrentProcessId()), static_cast<int>(ambiguous.tid), 0) == -1 &&
+          (errno == kEPERM || errno == kESRCH), "exited259 QUERY-only target cannot report success after native lookup or denial");
+    });
+  }
+  for (bool synchronize : {false, true}) {
+    Remote child(synchronize ? query_sync.get() : query_only.get());
+    ThreadRecord foreign{child.process.hThread, static_cast<int32_t>(child.process.dwThreadId)};
+    { std::lock_guard<std::mutex> lock(g_threads_mutex); g_threads.emplace(99, &foreign); }
+    HANDLE invalid = nullptr;
+    Check(PthreadSignalTargetByTid(child.process.dwThreadId, &invalid) == kESRCH && !invalid,
+        "synthetic foreign registry entry cannot become a local thread authority");
+    { std::lock_guard<std::mutex> lock(g_threads_mutex); g_threads.clear(); }
+    AsRestricted(caller.get(), [&] {
+      if (!synchronize) QueryOnlyOpen(child.process.dwThreadId);
+      const int pid = static_cast<int>(child.process.dwProcessId), tid = static_cast<int>(child.process.dwThreadId);
+      remote_result = kEPERM; errno = 0;
+      Check(Tgkill(pid, tid, 0) == -1 && errno == kEPERM && remote_pid == pid, "remote authorization error retained");
+      remote_result = 0; errno = 0;
+      const int found = Tgkill(pid, tid, 0);
+      Check(synchronize ? found == 0 : found == -1 && errno == kEPERM,
+          "remote positive existence requires exact waitable lifetime");
+      errno = 0; Check(Tgkill(pid, tid, 10) == -1 && errno == kENOSYS, "remote nonzero signal stays unsupported");
+      const int before = remote_calls; errno = 0;
+      Check(Tgkill(pid + 1, tid, 0) == -1 && errno == kESRCH && remote_calls == before,
+          "wrong remote tgid fails before broker authorization");
+    });
+  }
+  Check(queued_nodes == 0, "all real pending nodes consumed");
+  main_security.Restore();
+  Check(UnregisterWaitEx(initial->retirement_wait, INVALID_HANDLE_VALUE) != FALSE, "retire initial fixture wait");
+  { std::lock_guard<std::mutex> lock(S().mutex); S().threads.erase(initial_tid); Check(S().threads.empty(), "all fixture signal states retired"); }
+  delete initial; t_state = nullptr;
+  std::printf("Protected local signals: %u checks passed; actual ACLs preserved/restored; no production permission or broker change\n", checks.load());
+}
+}  // namespace
+int main(int argc, char**) {
+  if (argc != 1) return 2;  // Separate remote fixtures are never resumed.
+  try { MainCases(); return 0; }
+  catch (const std::exception& error) { std::fprintf(stderr, "Protected local signals: FAILED: %s\n", error.what()); return 1; }
+}

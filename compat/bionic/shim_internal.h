@@ -14,6 +14,8 @@
 #include <string>
 #include <unordered_map>
 
+struct gesher_futex_interrupt;  // <gesher/futex_interrupt.h>
+
 namespace gesher::bionic {
 
 // bionic's semaphore bound, shared by enforcement and _SC_SEM_VALUE_MAX.
@@ -180,12 +182,30 @@ int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*),
 // and sleeps, and wherever the signal mask is lowered. Cheap when none are
 // pending.
 void DeliverPendingSignals();
+// Waits a signal directed at the calling thread (pthread_kill, tgkill,
+// tkill from another thread) interrupts, as Linux interrupts a blocked futex:
+// AttachSignalInterrupt makes the thread's futex waits through ::syscall end
+// with EINTR then (nullptr if the thread has no signal state; Detach undoes
+// it); DeliverAfterInterrupt runs the deliverable signals and says which
+// handlers ran (kNoHandler, kHandlersRestart: all with SA_RESTART,
+// kHandlersWithoutRestart: one without).
+// InterruptibleAddressWait is WaitOnAddress (true: woken, false: timed out)
+// that also wakes, after running the signals, for such a signal.
+::gesher_futex_interrupt* AttachSignalInterrupt();
+void DetachSignalInterrupt();
+constexpr int kNoHandler = 0, kHandlersRestart = 1, kHandlersWithoutRestart = 2;
+int DeliverAfterInterrupt();
+bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
+                              unsigned long ms);
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();
 // Retains a known live kernel thread object for the signal queue. The caller
 // closes the returned handle; an arbitrary or retired pthread id is ESRCH.
 int PthreadSignalTarget(uint64_t thread, void** handle);
+// Resolve a registered local Windows TID through its exact retained object.
+// Returns an owned QUERY_LIMITED|SYNCHRONIZE duplicate; never opens by ID.
+int PthreadSignalTargetByTid(uint32_t tid, void** handle);
 int PthreadSetName(uint64_t thread, const char* name);
 int PthreadGetName(uint64_t thread, char* name, size_t size);
 int PthreadCpuClock(uint64_t thread, int* clock_id);

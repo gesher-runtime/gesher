@@ -128,6 +128,10 @@ jobs:
           name: protected-launch-native-${{ matrix.os }}
           path: usb-protected-launch.log
           if-no-files-found: error
+      - name: Protected local thread signals under restrictive Windows ACLs
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: python tools/test_protected_thread_signals.py --cxx cl
       - name: Launch failure text with native Windows direction classification
         if: ${{ !cancelled() }}
         shell: pwsh
