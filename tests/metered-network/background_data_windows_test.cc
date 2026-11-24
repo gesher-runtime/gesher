@@ -39,7 +39,7 @@ int InternetPerNlm() {
     return -1;
   }
   VARIANT_BOOL connected = VARIANT_FALSE;
-  HRESULT hr = nlm->IsConnectedToInternet(&connected);
+  HRESULT hr = nlm->get_IsConnectedToInternet(&connected);
   nlm->Release();
   return FAILED(hr) ? -1 : connected != VARIANT_FALSE ? 1 : 0;
 }
