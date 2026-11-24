@@ -93,6 +93,15 @@ ceremony (`WebAuthNCancelCurrentOperation`); as in AOSP's canceled session, no
 callback follows. Every request answers at most once. Requests of different
 applications, or several of one, run concurrently.
 
+Cancellation is latched before native entry so a canceled request cannot start a
+new dialog. Windows does not remember a cancellation sent before its operation
+starts, so a cancellation during the Java/JNI handoff is reissued every 100 ms
+until the synchronous native call ends. That completion stops and joins the one
+per-request cancellation worker, including on an exception. Cancellation and
+completion also release the callback's Binder death link exactly once.
+If Windows cannot supply a cancellation GUID, the backend fails the request
+without opening an uncancellable dialog.
+
 ### Request mapping
 
 | WebAuthn JSON | Windows |
