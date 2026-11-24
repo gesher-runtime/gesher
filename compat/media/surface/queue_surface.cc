@@ -376,7 +376,7 @@ int QueueSurface::query(int what, int* value) const {
       *value = 1;
       return 0;
     case NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER:
-      *value = 0;
+      *value = queues_to_composer_ ? 1 : 0;
       return 0;
     case NATIVE_WINDOW_CONCRETE_TYPE:
       *value = NATIVE_WINDOW_SURFACE;
