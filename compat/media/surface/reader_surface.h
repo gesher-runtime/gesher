@@ -14,7 +14,13 @@ class ReaderSurface {
   virtual void Close() = 0;
 };
 std::shared_ptr<ReaderSurface> MakeReaderSurface(int width, int height, ReaderFrame listener);
-// A retained CPU snapshot for Image.getHardwareBuffer -> Bitmap.wrapHardwareBuffer.
-jobject ReaderHardwareBuffer(JNIEnv* env, const uint8_t* pixels, int width, int height);
+// A Java HardwareBuffer of an image's RGBA AHardwareBuffer (a gesher/rgba_buffers.h
+// handle), for Image.getHardwareBuffer -> Bitmap.wrapHardwareBuffer. It holds a
+// reference to the buffer; `width` and `height` are the buffer's.
+jobject ReaderHardwareBuffer(JNIEnv* env, void* rgba, int width, int height);
+// The AHardwareBuffer* of such a Java HardwareBuffer, for AHardwareBuffer_fromHardwareBuffer:
+// null when `buffer` is not one or is closed. It lives as long as the Java object,
+// which owns a reference, so no reference is taken for the caller.
+void* ReaderHardwareBufferNative(JNIEnv* env, jobject buffer);
 }  // namespace gesher::media
 int register_gesher_reader_buffers(JNIEnv* env);

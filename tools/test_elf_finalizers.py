@@ -23,7 +23,9 @@ def main():
     source = args.source.read_text()
     template = (ROOT / "tests/native/elf_finalizers_host_test.cc.in").read_text()
     for placeholder, start, end in [
-        ("@CLOSE_IMPLEMENTATION@", "void Close(Library* library) {", "bool SetupThreadTls()"),
+        ("@LOADER_MUTEX_IMPLEMENTATION@", "class LoaderMutex {", "LoaderMutex g_mutex;"),
+        ("@CLOSE_IMPLEMENTATION@", "void Close(Library* library) {",
+         "namespace {\n\n// Takes `library` out of every list"),
         ("@LOOKUP_GLOBAL_LOCKED_IMPLEMENTATION@", "void* LookupGlobalLocked(const char* name,",
          "struct ResolvedSymbol {"),
         ("@LOOKUP_GLOBAL_IMPLEMENTATION@", "void* LookupGlobal(const char* name) {",

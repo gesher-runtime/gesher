@@ -13,5 +13,8 @@ void DupNativeFence(int from, int to);
 bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
                          std::shared_ptr<NativeFence>* retained = nullptr);
 int AdoptNativeFence(HANDLE owned, uint64_t metadata);
+// Linux's sync_file ioctls on a native fence fd (<linux/sync_file.h>):
+// SYNC_IOC_FILE_INFO; others fail with ENOTTY. False: fd is not a native fence.
+bool SyncFileIoctl(int fd, unsigned long request, void* argument, int* result);
 short PollNativeFence(const std::shared_ptr<NativeFence>& fence, short events, HANDLE* wake);
 }  // namespace gesher
