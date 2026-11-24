@@ -514,10 +514,10 @@ final class Dexopt {
             snapshot = File.createTempFile("current-", ".prof", ref.getParentFile());
             Files.copy(cur.toPath(), snapshot.toPath(), StandardCopyOption.REPLACE_EXISTING);
             if (ref.isFile()) Files.copy(ref.toPath(), staged.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            String apk = new File(codePath, "base.apk").getPath();
+            String apk = toolPath(new File(codePath, "base.apk"));
             List<String> args = new ArrayList<>();
-            args.add("--profile-file=" + snapshot.getPath());
-            args.add("--reference-profile-file=" + staged.getPath());
+            args.add("--profile-file=" + toolPath(snapshot));
+            args.add("--reference-profile-file=" + toolPath(staged));
             args.add("--apk=" + apk);
             args.add("--dex-location=" + apk);
             args.add("--force-merge-and-analyze");
@@ -549,6 +549,26 @@ final class Dexopt {
     }
 
     // --- tools --------------------------------------------------------------------------
+
+    /**
+     * Rewrites paths under the data directory to use {@link Device#dataDir()}'s ASCII 8.3
+     * prefix so native tools with ANSI argv (such as profman.exe) can open them on Windows
+     * accounts with non-ASCII usernames (#355).
+     */
+    private static String toolPath(File file) {
+        String raw = file.getPath();
+        try {
+            String dataDir = Device.dataDir();
+            String dataCanon = new File(dataDir).getCanonicalPath();
+            String fileCanon = file.getCanonicalPath();
+            if (fileCanon.equals(dataCanon)) return dataDir;
+            if (fileCanon.startsWith(dataCanon + File.separator)) {
+                return dataDir + fileCanon.substring(dataCanon.length());
+            }
+        } catch (IOException ignored) {
+        }
+        return raw;
+    }
 
     /** Runs {@code tool}.exe (next to dalvikvm.exe) and returns its exit code. */
     private static int run(String tool, List<String> args) {
