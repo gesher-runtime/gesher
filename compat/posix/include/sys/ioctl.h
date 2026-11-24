@@ -1,5 +1,6 @@
 // gesher-base: <sys/ioctl.h>. Device ioctls do not exist on Windows; ioctl
-// fails with ENOTTY.
+// answers the requests gesher-base implements (sockets, network interfaces, a
+// native fence's SYNC_IOC_FILE_INFO) and fails the rest with ENOTTY.
 #pragma once
 
 #ifdef __cplusplus

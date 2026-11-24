@@ -333,8 +333,29 @@ Check 'services: authenticated notification delegation, revocation and retained 
   $delegationOut
 } @('NotificationDelegationTest all passed:')
 
-# The format fixture calls package-private production storage methods. Put this
-# test DEX on this VM's boot path, using a fresh profile and no application UI.
+# The image fixtures call package-private owners, so load the test DEX beside
+# the production services on the boot path. Each VM creates its own data child.
+$imageBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
+$imageArgs = @("-Xbootclasspath:$imageBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+$imagePublicationOut = FixesRun ($imageArgs + 'com.gesher.server.NotificationImagePublicationTest') 90
+$imagePublicationCode = $LASTEXITCODE
+Check 'services: notification image preparation progress, cancellation and replacement fencing' {
+  $global:LASTEXITCODE = $imagePublicationCode
+  $imagePublicationOut
+} @('NotificationImagePublicationTest passed:')
+$imageBitmapOut = FixesRun ($imageArgs + 'com.gesher.server.NotificationImageBitmapTest') 120
+$imageBitmapCode = $LASTEXITCODE
+# Check suppresses passing child output. Keep the actual PNG/control evidence
+# and all component samples in results.txt on success as well as on failure.
+($imageBitmapOut -split "`r?`n" | Where-Object { $_ -match '^NOTIFICATION_(PNG_|IMAGE_BITMAP_METRICS)' }) | ForEach-Object { Write-Host $_ }
+Check 'services: actual Bitmap PNG fidelity, mutable source invalidation and content reuse' {
+  $global:LASTEXITCODE = $imageBitmapCode
+  $imageBitmapOut
+} @('NotificationImageBitmapTest passed:', 'NOTIFICATION_IMAGE_BITMAP_METRICS',
+  'NOTIFICATION_PNG_ORIGINAL_WRITER_CONTROL', 'NOTIFICATION_PNG_DECODE')
+
+# The identity/format fixtures call package-private production storage methods.
+# Keep the shared profile across two VMs to verify persisted records and PNGs.
 $formatData = Join-Path $root 'notification-format-data'
 New-Item -ItemType Directory -Path $formatData -Force | Out-Null
 $formatSavedData = $env:ANDROID_DATA
@@ -344,14 +365,18 @@ try {
   $env:GESHER_MICROG_SPOOF = '0'
   $formatBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
   $formatArgs = @("-Xbootclasspath:$formatBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
-    'com.gesher.server.NotificationStoreFormatRunner')
+    'com.gesher.server.NotificationIdentityDevice')
   foreach ($formatPhase in @('write', 'read')) {
     $formatOut = FixesRun ($formatArgs + $formatPhase) 90
     $formatCode = $LASTEXITCODE
-    Check "services: native Parcel notification formats and restart migration ($formatPhase)" {
+    ($formatOut -split "`r?`n" | Where-Object { $_ -match '^NOTIFICATION_PNG_' }) | ForEach-Object { Write-Host $_ }
+    $formatExpected = @("NotificationIdentityDevice $formatPhase passed:", "ToastIdentityDevice $formatPhase passed:",
+      "NotificationStoreFormatDevice $formatPhase passed:")
+    if ($formatPhase -eq 'read') { $formatExpected += 'NOTIFICATION_PNG_RESTART_VERIFIED' }
+    Check "services: native notification formats, toast identity and image restart retention ($formatPhase)" {
       $global:LASTEXITCODE = $formatCode
       $formatOut
-    } @("NotificationStoreFormatDevice $formatPhase passed:")
+    } $formatExpected
   }
 } finally {
   if ($null -eq $formatSavedData) { Remove-Item Env:ANDROID_DATA -ErrorAction SilentlyContinue }
@@ -425,6 +450,14 @@ Check 'services: AppOps defaults, authority, attributed delivery, foreground lif
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
 } @('AppOpsContractTest all passed: 489 checks; binder=true')
+
+$permissionStateOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'RuntimePermissionStateTest') 90
+$permissionStateCode = $LASTEXITCODE
+Check 'services: runtime permission denial, rationale, fixed retry policy and owner lifetime' {
+  $global:LASTEXITCODE = $permissionStateCode
+  $permissionStateOut
+} @('RuntimePermissionStateTest all passed:', ' checks; binder=true')
 
 # Real UID grant decisions and the production AudioRecord/MediaRecorder JNI errors.
 . "$PSScriptRoot/../helpers/FixturePermissions.ps1"
@@ -658,6 +691,48 @@ Check 'services: BasicCookieStore (Gmail''s contacts client) loads and works fro
   $httpOut
 } @('HttpLegacyTest: BasicCookieStore loads from the shared jar and stores and clears a synthetic cookie',
   'HttpLegacyTest all passed')
+
+# android.test.base, android.test.mock and android.test.runner (frameworks/base/test-*),
+# shared libraries apps name in <uses-library> (GloryFit's android.test.runner), laid
+# out as gesher-app.ps1 installs them, in a system root of their own.
+$testLibRoot = Join-Path $root 'android-test-system'
+New-Item -ItemType Directory -Force (Join-Path $testLibRoot 'framework'), (Join-Path $testLibRoot 'etc/permissions') | Out-Null
+foreach ($library in 'android.test.base', 'android.test.mock', 'android.test.runner') {
+  Copy-Item "$Dir/$library.jar" (Join-Path $testLibRoot 'framework') -Force
+  Copy-Item (Join-Path $PSScriptRoot "../../../tools/package/etc/permissions/$library.xml") (Join-Path $testLibRoot 'etc/permissions') -Force
+}
+$testLibOut = FixesRun ($dvmFixes + 'gesher.services.AndroidTestLibrariesTest' + (NoDrive $testLibRoot)) 90
+$testLibCode = $LASTEXITCODE
+Check 'services: android.test.runner resolves with android.test.base and android.test.mock to the system root''s jars' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: android.test.runner resolves to $ANDROID_ROOT/framework jars with android.test.base and android.test.mock',
+  'AndroidTestLibrariesTest all passed')
+Check 'services: apps targeting API 29 or lower get android.test.base, as AndroidTestBaseUpdater adds it' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: apps targeting API 29 or lower get android.test.base, android.test.runner brings mock and base',
+  'AndroidTestLibrariesTest all passed')
+Check 'services: JUnit 3, MockContext and InstrumentationTestRunner load from the android.test jars' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: junit.framework, android.test.mock and android.test.InstrumentationTestRunner load from the jars, not the boot class path',
+  'AndroidTestLibrariesTest all passed')
+
+# The system root's shared-library declarations, read once while unchanged (no XML
+# parsing or jar hashing in a bindService), and read again after a change.
+$snapshotOut = FixesRun ($dvmFixes + 'gesher.services.SharedLibrarySnapshotTest' + (NoDrive $root)) 90
+$snapshotCode = $LASTEXITCODE
+Check 'services: shared-library declarations are read once and reused while their files are unchanged' {
+  $global:LASTEXITCODE = $snapshotCode
+  $snapshotOut
+} @('SharedLibrarySnapshotTest: unchanged declarations are read once and their graph reused, with no StrictMode violation for the caller',
+  'SharedLibrarySnapshotTest all passed')
+Check 'services: changed shared-library jars and declarations are seen at the next resolution' {
+  $global:LASTEXITCODE = $snapshotCode
+  $snapshotOut
+} @('SharedLibrarySnapshotTest: replaced, added and removed jars and declarations are seen at the next resolution',
+  'SharedLibrarySnapshotTest all passed')
 
 # An installed APK's signers (ApkPackage), which apps read for their own: WhatsApp's
 # registration token is built from GET_SIGNATURES. Its fixtures (tests/dex-services/

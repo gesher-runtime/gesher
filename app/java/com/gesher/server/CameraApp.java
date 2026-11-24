@@ -30,6 +30,10 @@ final class CameraApp {
                 String[] r = installer.install(apk);
                 SystemServer.log("camera app: " + PACKAGE + " " + r[1] + " (" + cameras
                         + " camera(s))");
+                // As every install: no Start menu shortcut (it has no launcher activity), its
+                // windows' icon, and the record that the Control Center offers no "Launch".
+                PackageInstallerService.WINDOWS_SHELL.installed(r[0], r[2],
+                        !"unchanged".equals(r[1]));
             } else if (cameras == 0 && installed) {
                 installer.uninstall(PACKAGE);
                 SystemServer.log("camera app: no camera, " + PACKAGE + " uninstalled");

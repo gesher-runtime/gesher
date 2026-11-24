@@ -13,6 +13,17 @@ speed, with no hidden VM and no Android image to boot.
 > **Release: v0.1.0** — Native execution of Android applications on Windows with ART JIT, HWUI/Direct3D acceleration, WASAPI audio, Camera/Location subsystems, microG GMS stubs, ARM64-to-x64 binary translation, and seamless desktop integration.
 > See the [architecture overview](docs/architecture.md).
 
+## Security: apps are not isolated from Windows
+
+Gesher runs each Android app as an ordinary Windows program, with the
+permissions of your Windows account. Android's permission prompts control what
+an app can do through Android's APIs, but they do not isolate it from Windows:
+its code, especially its native code, can read and change your files, use the
+network and start programs, as any program you install can. **Treat an `.apk`
+like a downloaded `.exe`: install only apps you trust, from sources you
+trust.** Per-app isolation with Windows AppContainers is under development and
+off by default; see [docs/sandbox.md](docs/sandbox.md).
+
 ## How it works
 
 Instead of rewriting Android, Gesher compiles the Android Open Source Project's
@@ -95,6 +106,9 @@ SDK inventory that separates structural gaps from demonstrated failures.
 
 ## Building
 
+See the [build and package guide](docs/build-and-package.md) for source identity,
+complete installer suppliers and local validation.
+
 The production build runs on Linux or WSL and produces Windows x64 binaries.
 Requirements: CMake 3.24+, Ninja, Python 3.12+, git, curl, and GNU Make. The
 recipe downloads the pinned [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)
@@ -125,7 +139,8 @@ Outputs include:
 
 - `dalvikvm.exe`: The ported ART runtime with JIT compiler.
 - `gesher-exec.exe`: App process host and launcher.
-- `installer/gesher-setup-*.exe`: Complete Windows installer and shell integration.
+- `installer/gesher-setup-*.exe`: Complete Windows installer and shell integration,
+  produced separately by the CI `package` job after supplier verification.
 
 Tests: `tests/build-test-apps.sh out/test-apps` (needs a JDK), then
 `tests/windows/run-tests.ps1` on Windows.
@@ -151,3 +166,14 @@ See [updating Gesher](docs/updates.md) for behavior, release packaging and tests
 הסינון שמותקן במחשב.
 
 גרסה **v0.1.0** כוללת מנוע ART עם JIT, האצת חומרה HWUI/Direct3D, סאונד WASAPI, תמיכת מצלמה ומיקום, שירותי microG GMS, תרגום ספריות ARM64, ושילוב מלא בשולחן העבודה של Windows.
+
+### אבטחה: האפליקציות אינן מבודדות מ-Windows
+
+‏גשר מריץ כל אפליקציית אנדרואיד כתוכנה רגילה של Windows, עם ההרשאות של חשבון
+ה-Windows שלך. בקשות ההרשאה של אנדרואיד קובעות מה אפליקציה יכולה לעשות דרך
+הממשקים של אנדרואיד, אבל אינן מבודדות אותה מ-Windows: הקוד שלה, ובמיוחד קוד
+native, יכול לקרוא ולשנות את הקבצים שלך, להשתמש ברשת ולהפעיל תוכנות, כמו כל
+תוכנה שמותקנת במחשב. **יש להתייחס לקובץ ‎`.apk` כמו לקובץ ‎`.exe` שהורד
+מהאינטרנט: להתקין רק אפליקציות מהימנות, ממקורות מהימנים.** בידוד לכל אפליקציה
+באמצעות Windows AppContainer נמצא בפיתוח וכבוי כברירת מחדל; ראו
+[docs/sandbox.md](docs/sandbox.md).
