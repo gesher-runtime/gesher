@@ -22,7 +22,8 @@ function Assert-Install([bool] $condition, [string] $message) {
 # The texts the launcher and gesher-launch show, in both languages.
 $catalog = Get-Content -LiteralPath $UiMessagesPath -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($key in 'launch_failed', 'install_update_incompatible', 'install_bad_signature',
-                 'install_bad_split_signature', 'install_missing_split', 'cp_install_failed') {
+                 'install_bad_split_signature', 'install_missing_split', 'install_no_matching_abis',
+                 'cp_install_failed') {
     $entry = $catalog.messages.PSObject.Properties[$key]
     Assert-Install ($null -ne $entry) "ui-messages.json has '$key'"
     foreach ($lang in 'en', 'he') {
@@ -33,7 +34,12 @@ foreach ($key in 'launch_failed', 'install_update_incompatible', 'install_bad_si
 foreach ($lang in 'en', 'he') {
     # The advice names a command that exists (gesher.ps1 runs a dex, not uninstall).
     Assert-Install ($catalog.messages.install_update_incompatible.$lang.Contains('gesher-app uninstall {0}')) "install_update_incompatible ($lang) names gesher-app uninstall"
+    Assert-Install ($catalog.messages.install_no_matching_abis.$lang.Contains('{1}')) "install_no_matching_abis ($lang) shows unsupported ABI"
+    Assert-Install ($catalog.messages.install_no_matching_abis.$lang.Contains('arm64-v8a')) "install_no_matching_abis ($lang) mentions arm64-v8a"
+    Assert-Install ($catalog.messages.install_no_matching_abis.$lang.Contains('x86_64')) "install_no_matching_abis ($lang) mentions x86_64"
 }
+Assert-Install ($catalog.messages.install_no_matching_abis.he.Contains([char]0x202A)) 'install_no_matching_abis (he) protects embedded tokens with LRE'
+Assert-Install ($catalog.messages.install_no_matching_abis.he.Contains([char]0x202C)) 'install_no_matching_abis (he) closes embedded tokens with PDF'
 Assert-Install ($catalog.messages.install_update_incompatible.he.Contains($catalog.messages.cp_title.he)) 'The Hebrew advice names the Control Center as its title does'
 
 # Install-PanelApk itself, as the panel defines it.

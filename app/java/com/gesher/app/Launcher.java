@@ -141,9 +141,19 @@ public final class Launcher {
                     return text("install_bad_split_signature", detail);
                 case "INSTALL_FAILED_MISSING_SPLIT":
                     return text("install_missing_split", detail);
-                case "INSTALL_FAILED_NO_MATCHING_ABIS":
+                case "INSTALL_FAILED_NO_MATCHING_ABIS": {
+                    int hasNative = detail.indexOf(" has native code only for ");
+                    if (hasNative >= 0) {
+                        String name = detail.substring(0, hasNative).trim();
+                        String rest = detail.substring(hasNative + " has native code only for ".length());
+                        int semi = rest.indexOf(';');
+                        String abis = semi >= 0 ? rest.substring(0, semi).trim() : rest.trim();
+                        return text("install_no_matching_abis", name, abis);
+                    }
+                    return detail.isEmpty() ? code : text("install_no_matching_abis", detail, "32-bit");
+                }
                 case "INSTALL_FAILED_BAD_DEX_METADATA":
-                    // Their text already says what is wrong.
+                    // Its text already says what is wrong.
                     return detail.isEmpty() ? code : detail;
                 default:
                     // Others name only the package or file: the code says what failed.
