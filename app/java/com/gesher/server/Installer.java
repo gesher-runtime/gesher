@@ -11,6 +11,7 @@ import android.content.pm.parsing.result.ParseResult;
 import android.content.pm.parsing.result.ParseTypeImpl;
 
 import com.gesher.app.NativeLibs;
+import com.gesher.app.PackageBundles;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -23,6 +24,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -108,6 +110,23 @@ final class Installer {
         return root;
     }
 
+    static String resolveCodePath(String codePath) throws IOException {
+        if (codePath == null || codePath.isEmpty()) return codePath;
+        String name = new File(codePath).getName();
+        if (name.isEmpty() || name.equals(".") || name.equals("..")) return codePath;
+        // The registry belongs to this profile, including when it was copied and
+        // the old profile still exists. Never prefer another profile's APKs just
+        // because its old absolute path remains accessible.
+        File relocated = new File(codeRoot(), name);
+        if (Files.isDirectory(relocated.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                && relocated.equals(relocated.getCanonicalFile())) {
+            return relocated.getPath();
+        }
+        // Keep invalid/missing paths for the existing parser to reject. Do not
+        // weaken its canonical direct-child and no-symlink code boundary.
+        return codePath;
+    }
+
     private static Map<String, Entry> readRegistry() throws IOException {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
@@ -116,7 +135,8 @@ final class Installer {
             String[] fields = line.split("\t", -1);
             if (fields.length < 4 || line.startsWith("#")) continue;
             try {
-                entries.put(fields[0], new Entry(fields[0], fields[1],
+                String codePath = resolveCodePath(fields[1]);
+                entries.put(fields[0], new Entry(fields[0], codePath,
                         Long.parseLong(fields[2]), Long.parseLong(fields[3]),
                         readInstallSource(fields)));
             } catch (NumberFormatException e) {
@@ -251,7 +271,9 @@ final class Installer {
         }
         for (Entry e : entries.values()) {
             try {
-                result.add(open(e));
+                ApkPackage installedPackage = open(e);
+                ContactsProviderSupport.checkPackageAdmission(installedPackage);
+                result.add(installedPackage);
             } catch (Exception ex) {
                 SystemServer.log("installed package " + e.packageName + " at " + e.codePath
                         + " could not be loaded: " + ex);
@@ -288,16 +310,14 @@ final class Installer {
         return paths;
     }
 
-    /** The split APKs beside {@code apk} (an extracted .xapk's config.*.apk), or null. */
     /**
      * The ABIs {@code apk} and its companion splits ship native code for, if none of
      * them is one Gesher runs ({@link NativeLibs#SUPPORTED}); null if one is, or if
      * there is no native code.
      */
-    private static String[] unsupportedAbis(File apk) throws IOException {
+    private static String[] unsupportedAbis(File apk, File[] splits) throws IOException {
         List<File> files = new ArrayList<>();
         files.add(apk);
-        File[] splits = companionSplits(apk);
         if (splits != null) files.addAll(Arrays.asList(splits));
         java.util.Set<String> abis = new java.util.TreeSet<>();
         for (File f : files) {
@@ -317,11 +337,54 @@ final class Installer {
         return abis.isEmpty() ? null : abis.toArray(new String[0]);
     }
 
+    /** Conventional companion filenames for a loose APK. */
     private static File[] companionSplits(File apk) {
+        if (apk == null) return null;
         File dir = apk.getParentFile();
+        if (dir == null) dir = apk.getAbsoluteFile().getParentFile();
         if (dir == null) return null;
+        // Keep discovery independent of parsing: even an unreadable candidate must
+        // invalidate the base-only source cache and reach companionsOf's validation.
         return dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
                 && name.endsWith(".apk") && !name.equals(apk.getName()));
+    }
+
+    /**
+     * The companions of {@code pkg} among a loose APK's {@code companions}: a folder such as
+     * Downloads also holds other apps' split_*.apk and config.*.apk files, which are not part
+     * of this install and are left out rather than failing it. An unreadable manifest cannot
+     * establish a different owner, so its parse error still rejects the installation.
+     */
+    private static File[] companionsOf(String pkg, File[] companions) throws IOException {
+        if (companions == null) return null;
+        List<File> own = new ArrayList<>();
+        for (File companion : companions) {
+            String owner = ApkPackage.packageName(companion);
+            if (pkg.equals(owner)) {
+                own.add(companion);
+            } else {
+                SystemServer.log("install " + pkg + ": ignoring " + companion.getName()
+                        + " beside it, an APK of " + owner);
+            }
+        }
+        return own.toArray(new File[0]);
+    }
+
+    /**
+     * Logs the expansion (OBB) files a bundle carries. Android keeps them in shared storage,
+     * {@code Android/obb/<package>/}, where Google Play or an XAPK installer copies them; a
+     * package install does not, and this one leaves them in the archive.
+     */
+    private static void reportExpansions(File archive, String pkg) throws IOException {
+        List<String> obbs;
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            obbs = PackageBundles.expansions(zip);
+        }
+        if (!obbs.isEmpty()) {
+            SystemServer.log("install " + pkg + ": " + archive.getName() + " also holds expansion files,"
+                    + " which were not installed (Android/obb/" + pkg + "/ is left as it is): "
+                    + String.join(", ", obbs));
+        }
     }
 
     /**
@@ -340,11 +403,19 @@ final class Installer {
         if (count == 0 && keepUnspecified) return true;
         if ((installed != null ? installed.length : 0) != count) return false;
         for (int i = 0; i < count; i++) {
-            String name = splits[i].getName();
-            File target = new File(codePath, name.startsWith("split_") ? name : "split_" + name);
-            if (!sameContent(splits[i], target)) return false;
+            if (!sameContent(splits[i], new File(codePath, splitFileName(splits[i])))) return false;
         }
         return true;
+    }
+
+    /**
+     * The installed name of split APK {@code split}, from its manifest rather than its file
+     * name: {@code split_<split name>.apk}, as PackageInstallerSession names it.
+     */
+    private static String splitFileName(File split) throws IOException {
+        String name = ApkPackage.splitName(split);
+        if (name == null) throw new IOException("Not a split APK: " + split.getName());
+        return InstalledSplitSet.apkName(name);
     }
 
     /** base.apk and the split APKs installed beside it (split_*.apk). */
@@ -398,33 +469,37 @@ final class Installer {
         Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
+            ContactsProviderSupport.checkPackageAdmission(parsed);
             return unchanged(apk, recorded.packageName, parsed, recorded, null);
         }
         File tempDir = null;
         File pendingCode = null;
         String pendingPackage = null;
         try {
-            if (source.getName().toLowerCase().endsWith(".xapk")
-                    || source.getName().toLowerCase().endsWith(".apks")) {
-                tempDir = Files.createTempDirectory("gesher-xapk-").toFile();
-                extractZip(source, tempDir);
-                File[] apks = tempDir.listFiles((dir, name) -> name.endsWith(".apk"));
-                if (apks == null || apks.length == 0) {
-                    throw new IllegalArgumentException("no apk found in " + apk);
+            File[] incomingSplits;
+            if (PackageBundles.isBundle(source)) {
+                tempDir = Files.createTempDirectory("gesher-bundle-").toFile();
+                List<File> splits = new ArrayList<>();
+                source = extractBundle(source, tempDir, splits);
+                incomingSplits = splits.toArray(new File[0]);
+            } else {
+                if (source.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".apkm")
+                        && !PackageBundles.isZip(source)) {
+                    // APKMirror's encrypted format: Gesher has no key for it and does not guess.
+                    throw new IllegalArgumentException("INSTALL_FAILED_INVALID_APK: " + source.getName()
+                            + " is not a ZIP of APKs but an encrypted APKMirror bundle, which Gesher"
+                            + " cannot open; use an unencrypted .apkm, .apks or .xapk of the app");
                 }
-                File mainApk = null;
-                for (File a : apks) {
-                    if (a.getName().equals("base.apk")
-                            || (!a.getName().startsWith("config.") && !a.getName().startsWith("split_"))) {
-                        mainApk = a;
-                        break;
-                    }
-                }
-                if (mainApk == null) mainApk = apks[0];
-                source = mainApk;
+                incomingSplits = companionSplits(source);
             }
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
+            ContactsProviderSupport.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
+            if (tempDir == null) {
+                incomingSplits = companionsOf(pkg, incomingSplits);
+            } else {
+                reportExpansions(original, pkg);
+            }
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
                 ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
@@ -434,7 +509,7 @@ final class Installer {
                             + result.getErrorMessage(), result.getException());
                 }
             }
-            String[] foreign = unsupportedAbis(source);
+            String[] foreign = unsupportedAbis(source, incomingSplits);
             if (foreign != null) {
                 // Native code only for ABIs Gesher cannot run (32-bit armeabi-v7a, x86):
                 // refused, as a device refuses it, instead of an app whose libraries
@@ -465,7 +540,6 @@ final class Installer {
             try (PackageUids.Admission checked = PackageUids.prepare(List.of(parsed), mPm.packages())) {
                 // Preflight only. Parsing/validation never commits shared membership.
             }
-            File[] incomingSplits = companionSplits(source);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
                     android.content.pm.Signature[] splitSigners = ApkPackage.verifySignatures(split.getPath());
@@ -513,12 +587,14 @@ final class Installer {
             boolean syncCode = sessionMetadata != null;
             copy(source, base, syncCode);
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode);
-            File[] companionSplits = companionSplits(source);
-            if (companionSplits != null) {
-                for (File split : companionSplits) {
-                    String targetName = split.getName().startsWith("split_")
-                            ? split.getName() : "split_" + split.getName();
-                    copy(split, new File(code, targetName), syncCode);
+            if (incomingSplits != null) {
+                for (File split : incomingSplits) {
+                    String targetName = splitFileName(split);
+                    File target = new File(code, targetName);
+                    if (!target.createNewFile()) {
+                        throw new IOException("Conflicting split filenames: " + targetName);
+                    }
+                    copy(split, target, syncCode);
                     File splitMetadata = dexMetadata(split);
                     if (splitMetadata.isFile()) copy(splitMetadata,
                             new File(code, InstallSessionMetadata.dexName(targetName)), syncCode);
@@ -528,6 +604,7 @@ final class Installer {
             // Verification must apply to the bytes being published, not a mutable
             // download that could change after its initial parse/verification.
             ApkPackage staged = ApkPackage.parseCodeDirectory(code.getPath());
+            ContactsProviderSupport.checkPackageAdmission(staged);
             android.content.pm.Signature[] stagedSigners = staged.verifiedSignatures();
             if (!pkg.equals(staged.packageName) || staged.versionCode() != parsed.versionCode()
                     || !Arrays.equals(newSigners, stagedSigners)
@@ -613,6 +690,7 @@ final class Installer {
                 mPm.publishPrepared(installed, this);
             }
         }
+        Dexopt.packagesChanged();
     }
 
     private void commitEntry(Entry entry) throws IOException {
@@ -731,21 +809,67 @@ final class Installer {
         }
     }
 
-    private static void extractZip(File zipFile, File destDir) throws IOException {
-        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(zipFile)) {
+    /**
+     * Stages {@code archive}'s APKs in {@code directory} under the names the package manager
+     * gives a package's files, taken from their manifests rather than from the archive:
+     * {@code base.apk} and {@code split_<split name>.apk}, each with the {@code .dm} beside
+     * it in the archive. Archive paths never reach the filesystem, so entries of different
+     * folders with the same file name neither collide nor leave the directory.
+     */
+    private static File extractBundle(File archive, File directory, List<File> splits) throws IOException {
+        File base = null;
+        byte[] buffer = new byte[64 * 1024];
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            // An APK set holds alternatives (variants, standalones, other devices' splits):
+            // only the APKs this device gets are installed.
+            List<java.util.zip.ZipEntry> apks = new ArrayList<>();
+            for (String path : PackageBundles.select(zip,
+                    PackageBundles.Device.gesher(android.os.Build.VERSION.SDK_INT))) {
+                apks.add(zip.getEntry(path));
+            }
+            Map<String, java.util.zip.ZipEntry> dexMetadata = new LinkedHashMap<>();
             java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
                 java.util.zip.ZipEntry entry = entries.nextElement();
-                if (entry.isDirectory()) continue;
                 String name = entry.getName();
-                if (!name.endsWith(".apk") && !name.endsWith(".dm")) continue;
-                File out = new File(destDir, new File(name).getName());
-                try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = new FileOutputStream(out)) {
-                    byte[] buf = new byte[64 * 1024];
-                    for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+                if (!entry.isDirectory() && name.endsWith(".dm")) {
+                    dexMetadata.put(name.substring(0, name.length() - 3), entry);
                 }
             }
+            for (int i = 0; i < apks.size(); i++) {
+                java.util.zip.ZipEntry entry = apks.get(i);
+                // A generated name until the manifest names it.
+                File staged = new File(directory, i + ".apk");
+                unzip(zip, entry, staged, buffer);
+                String split = ApkPackage.splitName(staged);
+                String name = InstalledSplitSet.apkName(split);
+                File target = new File(directory, name);
+                if (target.exists()) {
+                    throw new IOException(split == null ? "Multiple base APKs in " + archive
+                            : "Split " + split + " defined more than once in " + archive);
+                }
+                Files.move(staged.toPath(), target.toPath());
+                String path = entry.getName();
+                java.util.zip.ZipEntry dm = dexMetadata.get(path.substring(0, path.length() - 4));
+                if (dm != null) {
+                    unzip(zip, dm, new File(directory, InstallSessionMetadata.dexName(name)), buffer);
+                }
+                if (split == null) {
+                    base = target;
+                } else {
+                    splits.add(target);
+                }
+            }
+        }
+        if (base == null) throw new IOException("No base APK in " + archive);
+        return base;
+    }
+
+    private static void unzip(java.util.zip.ZipFile zip, java.util.zip.ZipEntry entry, File out,
+            byte[] buffer) throws IOException {
+        try (InputStream in = zip.getInputStream(entry);
+                OutputStream os = Files.newOutputStream(out.toPath(), StandardOpenOption.CREATE_NEW)) {
+            for (int n; (n = in.read(buffer)) > 0; ) os.write(buffer, 0, n);
         }
     }
 
@@ -787,6 +911,8 @@ final class Installer {
         boolean committed = false, restored = false;
         Attribution metadata = mAttributions.get(packageName);
         try {
+            Dexopt.packageChanging(packageName);
+            Dexopt.awaitCompiler();
             mPm.checkPackageRemoval(packageName);
             mAtm.forceStopPackage(packageName);
             // Fail closed on persistent revocation errors. A failed removal can leave
@@ -817,6 +943,7 @@ final class Installer {
             throw failure;
         } finally {
             mRemovalActive = false;
+            Dexopt.packagesChanged();
             if (committed || restored) {
                 mPm.endPackageRemoval(target);
                 reconcileAccountRemovalsBestEffort();
@@ -824,6 +951,7 @@ final class Installer {
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);
+        AppSandbox.deleteContainer(packageName);
         mPm.packageRemoved(target, this);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;

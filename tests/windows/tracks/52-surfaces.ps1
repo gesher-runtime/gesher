@@ -8,6 +8,7 @@
 # process (gesher-app --hidden-window) and on the Gesher device (its own app process),
 # both with GESHER_CAMERA_TEST's camera for the preview phases.
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
 if (-not ('GesherSurfWin32' -as [type])) {
   Add-Type @'
 using System;
@@ -69,7 +70,7 @@ function InOrder([string] $text, [string[]] $lines) {
 }
 
 # Runs surfaceapp with $Arguments; returns @{ Text; Shots = @{ phase -> pixels } }.
-function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [string] $Prefix = 'surfaces', [int] $Phases = 7) {
+function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [string] $Prefix = 'surfaces', [int] $Phases = 7, [hashtable] $Environment = @{}) {
   $log = Join-Path $env:RUNNER_TEMP "surfaces-$Tag-$(Get-Random).log"
   # The scaling Activity reuses surfaceapp after SurfaceActivity. Keep earlier
   # evidence on disk, but never capture a prior launch's HWND or phase markers.
@@ -82,6 +83,7 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
   $psi.Environment['GESHER_CAMERA_TEST'] = '1'
+  foreach ($entry in $Environment.GetEnumerator()) { $psi.Environment[$entry.Key] = [string]$entry.Value }
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   try {
@@ -318,9 +320,14 @@ if (-not (Test-Path "$Dir/surfaceapp.apk")) {
 } else {
   Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force -ErrorAction SilentlyContinue
   Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force -ErrorAction SilentlyContinue
+  # Camera previews require the isolated operator's explicit grant, including
+  # the ordinary application identity used by the single-process runner.
+  $surfaceUid = Grant-FixturePermissions "$Dir/dalvikvm.exe" $dvmSurfaces (NoDrive "$Dir/services-tests.dex") `
+    (NoDrive "$Dir/surfaceapp.apk") 'com.gesher.surfaceapp' @('android.permission.CAMERA')
   # 1. A single process.
   $script:surfacesFailedBefore = $failed
-  $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/surfaceapp.apk")) 'single' @()
+  $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/surfaceapp.apk")) 'single' @() `
+    -Environment @{ GESHER_UID = [string]$surfaceUid; GESHER_BINDER_UID = [string]$surfaceUid }
   SurfaceChecks 'single process' $r
   $script:surfacesFailedBefore = $failed
   $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', '--activity', 'com.gesher.surfaceapp.CodecScalingActivity', (NoDrive "$Dir/surfaceapp.apk")) 'scaling-single' @() 'scaling' 6
@@ -335,6 +342,15 @@ if (-not (Test-Path "$Dir/surfaceapp.apk")) {
   $env:GESHER_SHORTCUTS = '0'
   $env:GESHER_CAMERA_TEST = '1'  # the device's processes inherit it
   try {
+    # This profile has its own UID registry. Install through the real launcher,
+    # then grant/read back through its running package and permission services.
+    $surfaceDeviceUid = Grant-FixturePermissions "$Dir/dalvikvm.exe" $dvmSurfaces (NoDrive "$Dir/services-tests.dex") `
+      (NoDrive "$Dir/surfaceapp.apk") 'com.gesher.surfaceapp' @('android.permission.CAMERA')
+    $surfaceInstall = RunTimed "$Dir/dalvikvm.exe" ($dvmSurfaces + @('com.gesher.app.Launcher', 'install', (NoDrive "$Dir/surfaceapp.apk"))) 180
+    if ($LASTEXITCODE -ne 0) { throw "Surface fixture installation prerequisite failed: $surfaceInstall" }
+    $null = Grant-FixturePermissions "$Dir/dalvikvm.exe" $dvmSurfaces (NoDrive "$Dir/services-tests.dex") `
+      (NoDrive "$Dir/surfaceapp.apk") 'com.gesher.surfaceapp' @('android.permission.CAMERA') `
+      -Installed -ExpectedUid $surfaceDeviceUid
     $script:surfacesFailedBefore = $failed
     $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--hidden-window') 'device' @("$root/logs-surfaces/com.gesher.surfaceapp.log")
     SurfaceChecks 'Gesher device' $r
