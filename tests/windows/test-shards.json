@@ -93,6 +93,7 @@
       "58-devices.ps1",
       "61-bluetooth.ps1",
       "61-hello-credential.ps1",
+      "62-hello-keys.ps1",
       "83-libcore-io.ps1",
       "geocoder-operation-fixture.ps1",
       "geocoder-operation.ps1"

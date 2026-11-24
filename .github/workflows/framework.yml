@@ -455,6 +455,10 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/hellocred" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          # Keys that require the device credential, on the combined Windows Hello head (ADR 0092).
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/hellokeys" tests/apps/lifecycle/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/devsvc/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
@@ -886,6 +890,7 @@ jobs:
           cp out/app/exitstatusapp.apk dist-framework/
           cp out/app/crashnotice.apk dist-framework/
           cp out/app/hellocred.apk dist-framework/
+          cp out/app/hellokeys.apk dist-framework/
           cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibraryafter.apk out/app/sharedlibraryafterdlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/
           ls -la dist-framework
