@@ -11,6 +11,7 @@
 #include <userenv.h>
 #include <wtsapi32.h>
 #include <array>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -43,6 +44,28 @@ struct ProfileDeletionEvidence {
   DWORD api_status = ERROR_NOT_READY;
   DWORD hive_status = ERROR_NOT_READY;
 };
+enum class Trustee : DWORD { unknown, private_user, system, administrators, owner_rights, everyone, authenticated, logon, other };
+struct TokenAceEvidence { DWORD type = 0, flags = 0, mask = 0; Trustee trustee = Trustee::unknown; };
+struct TokenObjectEvidence {
+  DWORD status = ERROR_NOT_READY;
+  Trustee owner = Trustee::unknown;
+  DWORD control = 0, present = 0, defaulted = 0, null_acl = 0, count = 0, recorded = 0;
+  TokenAceEvidence aces[12]{};
+};
+struct TokenCallEvidence {
+  DWORD called = 0, status = ERROR_NOT_READY, succeeded = 0, returned_token = 0;
+};
+struct TokenPhaseEvidence {
+  TokenObjectEvidence object;
+  DWORD impersonate = ERROR_NOT_READY;
+  TokenCallEvidence duplicate_launch, duplicate_all, wrapper, native_private, native_system;
+};
+struct EquivalentTokenEvidence {
+  DWORD attempted = 0, status = ERROR_NOT_READY;
+  DWORD wrapper_export = ERROR_NOT_READY, native_export = ERROR_NOT_READY;
+  TokenPhaseEvidence before, after;
+  char stage[64] = "not-attempted";
+};
 struct Evidence {
   DWORD magic = 0x47504c54;
   DWORD status = ERROR_SUCCESS;
@@ -52,9 +75,11 @@ struct Evidence {
   DWORD target_token_access = ERROR_NOT_READY;
   DWORD private_caller_token_access = ERROR_NOT_READY;
   DWORD system_caller_token_access = ERROR_NOT_READY;
+  EquivalentTokenEvidence equivalent;
   char stage[96] = "complete";
   char cleanup_stage[64] = "none";
 };
+static_assert(std::is_trivially_copyable_v<Evidence> && sizeof(Evidence) <= 4096);
 struct Configuration { std::wstring name, image, directory; DWORD session = 0; } config;
 SERVICE_STATUS_HANDLE service_status = nullptr;
 Handle service_stop;
@@ -158,7 +183,16 @@ DWORD DeleteOwnedProfile(const std::wstring& directory, ProfileDeletionEvidence*
     const auto sid = Read(marker, SECURITY_MAX_SID_SIZE);
     Require(sid.size() >= 8 && IsValidSid(const_cast<BYTE*>(sid.data())) &&
         GetLengthSid(const_cast<BYTE*>(sid.data())) == sid.size(), "owned-profile-marker", ERROR_INVALID_SID);
+    const SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    Require(*GetSidSubAuthorityCount(const_cast<BYTE*>(sid.data())) == 6 &&
+        std::memcmp(GetSidIdentifierAuthority(const_cast<BYTE*>(sid.data())), &nt, sizeof(nt)) == 0 &&
+        *GetSidSubAuthority(const_cast<BYTE*>(sid.data()), 0) == SECURITY_SERVICE_ID_BASE_RID,
+        "owned-service-profile-marker", ERROR_INVALID_SID);
     const std::wstring text = SidText(const_cast<BYTE*>(sid.data()));
+    // Controller stdout is captured by CI. The SYSTEM worker has no captured
+    // stdout; emit only this canonical, protected ownership marker's SID.
+    std::printf("Protected launch: owned-profile-sid=%ls\n", text.c_str());
+    std::fflush(stdout);
     const ULONGLONG deadline = GetTickCount64() + 5000;
     for (;;) {
       ++observed->attempts;
@@ -273,6 +307,237 @@ void ObserveLaunchAccess(HANDLE token, Evidence* evidence) {
   if (caller) CloseHandle(caller);
   // These observations distinguish access checks; the test never requires a
   // hypothesized cause of an earlier failure. All real launch assertions follow.
+}
+Trustee ClassifyTrustee(PSID sid, PSID private_user) {
+  if (!sid || !IsValidSid(sid)) return Trustee::unknown;
+  if (EqualSid(sid, private_user)) return Trustee::private_user;
+  if (IsWellKnownSid(sid, WinLocalSystemSid)) return Trustee::system;
+  if (IsWellKnownSid(sid, WinBuiltinAdministratorsSid)) return Trustee::administrators;
+  if (IsWellKnownSid(sid, WinCreatorOwnerRightsSid)) return Trustee::owner_rights;
+  if (IsWellKnownSid(sid, WinWorldSid)) return Trustee::everyone;
+  if (IsWellKnownSid(sid, WinAuthenticatedUserSid)) return Trustee::authenticated;
+  if (IsWellKnownSid(sid, WinLogonIdsSid)) return Trustee::logon;
+  return Trustee::other;
+}
+TokenObjectEvidence ObserveTokenObject(HANDLE token, PSID private_user) {
+  TokenObjectEvidence result;
+  PSID owner = nullptr;
+  PACL acl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  result.status = GetSecurityInfo(token, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+      &owner, nullptr, &acl, nullptr, &descriptor);
+  const Local release(descriptor);
+  if (result.status != ERROR_SUCCESS) return result;
+  result.owner = ClassifyTrustee(owner, private_user);
+  SECURITY_DESCRIPTOR_CONTROL control = 0;
+  DWORD revision = 0;
+  BOOL present = FALSE, defaulted = FALSE;
+  if (!GetSecurityDescriptorControl(descriptor, &control, &revision) ||
+      !GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted)) {
+    result.status = GetLastError();
+    return result;
+  }
+  result.control = control;
+  result.present = static_cast<DWORD>(present != FALSE);
+  result.defaulted = static_cast<DWORD>(defaulted != FALSE);
+  result.null_acl = static_cast<DWORD>(acl == nullptr);
+  if (!present || !acl) return result;
+  if (!IsValidAcl(acl)) { result.status = ERROR_INVALID_ACL; return result; }
+  result.count = acl->AceCount;
+  for (DWORD i = 0; i < result.count && i < std::size(result.aces); ++i) {
+    void* raw = nullptr;
+    if (!GetAce(acl, i, &raw)) { result.status = GetLastError(); return result; }
+    const auto* header = static_cast<const ACE_HEADER*>(raw);
+    auto& observed = result.aces[result.recorded++];
+    observed.type = header->AceType;
+    observed.flags = header->AceFlags;
+    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE && header->AceType != ACCESS_DENIED_ACE_TYPE) continue;
+    // These two ACE forms share the mask/SID layout. Bound the SID before any
+    // Win32 SID inspection; unfamiliar ACE forms remain explicitly unclassified.
+    constexpr size_t offset = offsetof(ACCESS_ALLOWED_ACE, SidStart);
+    if (header->AceSize < offset + 8) { result.status = ERROR_INVALID_ACL; return result; }
+    const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw);
+    PSID sid = const_cast<DWORD*>(&ace->SidStart);
+    const size_t sid_bytes = 8 + static_cast<size_t>(*GetSidSubAuthorityCount(sid)) * sizeof(DWORD);
+    if (sid_bytes > header->AceSize - offset || !IsValidSid(sid)) {
+      result.status = ERROR_INVALID_SID;
+      return result;
+    }
+    observed.mask = ace->Mask;
+    observed.trustee = ClassifyTrustee(sid, private_user);
+  }
+  if (result.recorded != result.count) result.status = ERROR_MORE_DATA;
+  return result;
+}
+using CreateDiagnosticLowbox = BOOL(WINAPI*)(HANDLE, PSECURITY_CAPABILITIES, PHANDLE);
+// Native signature is also exercised with zero extra handles by Chromium's
+// base/win/access_token_unittest.cc. This fixture reports raw NTSTATUS separately
+// from Win32; no diagnostic token can reach a process or a resource handoff.
+using CreateDiagnosticNativeLowbox = LONG(NTAPI*)(PHANDLE, HANDLE, ACCESS_MASK, PVOID,
+    PSID, DWORD, PSID_AND_ATTRIBUTES, DWORD, PHANDLE);
+TokenCallEvidence ObserveDuplicate(HANDLE token, DWORD access) {
+  TokenCallEvidence observed;
+  HANDLE raw = nullptr;
+  const BOOL ok = DuplicateTokenEx(token, access, nullptr, SecurityImpersonation, TokenPrimary, &raw);
+  observed.status = ok ? ERROR_SUCCESS : GetLastError();
+  observed.called = 1;
+  observed.succeeded = static_cast<DWORD>(ok != FALSE);
+  observed.returned_token = static_cast<DWORD>(raw && raw != INVALID_HANDLE_VALUE);
+  const Handle close(raw);
+  return observed;
+}
+TokenCallEvidence ObserveNativeLowbox(CreateDiagnosticNativeLowbox create, HANDLE token,
+                                     const SECURITY_CAPABILITIES& capabilities) {
+  TokenCallEvidence observed;
+  if (!create) return observed;
+  HANDLE raw = nullptr;
+  const LONG status = create(&raw, token, TOKEN_ALL_ACCESS, nullptr, capabilities.AppContainerSid,
+      capabilities.CapabilityCount, capabilities.Capabilities, 0, nullptr);
+  observed.called = 1;
+  observed.status = static_cast<DWORD>(status);
+  observed.succeeded = static_cast<DWORD>(status >= 0);
+  observed.returned_token = static_cast<DWORD>(raw && raw != INVALID_HANDLE_VALUE);
+  const Handle close(raw);
+  return observed;
+}
+void ObserveTokenPhase(HANDLE token, PSID private_user, SECURITY_CAPABILITIES capabilities,
+                       CreateDiagnosticLowbox wrapper, CreateDiagnosticNativeLowbox native,
+                       TokenPhaseEvidence* observed) {
+  observed->object = ObserveTokenObject(token, private_user);
+  observed->native_system = ObserveNativeLowbox(native, token, capabilities);
+  if (!ImpersonateLoggedOnUser(token)) { observed->impersonate = GetLastError(); return; }
+  // No throwing C++ operations occur while impersonating. The raw kernel call
+  // precedes the private-only wrapper, which may initialize namespace objects.
+  observed->impersonate = ERROR_SUCCESS;
+  observed->duplicate_launch = ObserveDuplicate(token, TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY);
+  observed->duplicate_all = ObserveDuplicate(token, TOKEN_ALL_ACCESS);
+  observed->native_private = ObserveNativeLowbox(native, token, capabilities);
+  if (wrapper) {
+    HANDLE raw = nullptr;
+    const BOOL ok = wrapper(token, &capabilities, &raw);
+    observed->wrapper.status = ok ? ERROR_SUCCESS : GetLastError();
+    observed->wrapper.called = 1;
+    observed->wrapper.succeeded = static_cast<DWORD>(ok != FALSE);
+    observed->wrapper.returned_token = static_cast<DWORD>(raw && raw != INVALID_HANDLE_VALUE);
+    if (raw && raw != INVALID_HANDLE_VALUE) CloseHandle(raw);
+  }
+  if (!RevertToSelf()) std::abort();
+}
+void ObserveEquivalentToken(HANDLE token, const storage::AuthorityLaunchSpec& spec, EquivalentTokenEvidence* observed) {
+  observed->attempted = 1;
+  try {
+    HANDLE current = nullptr;
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &current)) {
+      CloseHandle(current);
+      throw Failure{ERROR_ACCESS_DENIED, "diagnostic-requires-system-context"};
+    }
+    Require(GetLastError() == ERROR_NO_TOKEN, "diagnostic-thread-token-state");
+    Require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current), "diagnostic-caller-token");
+    const Handle caller(current);
+    const auto caller_sid = User(current);
+    Require(IsWellKnownSid(const_cast<BYTE*>(caller_sid.data()), WinLocalSystemSid),
+        "diagnostic-system-token", ERROR_ACCESS_DENIED);
+    HANDLE raw = nullptr;
+    Require(CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
+        0, nullptr, &raw), "diagnostic-equivalent-derivation");
+    const Handle equivalent(raw);
+    const auto actual_user = User(raw);
+    TOKEN_STATISTICS parent{}, derived{};
+    DWORD session = 0, bytes = 0;
+    Require(GetTokenInformation(token, TokenStatistics, &parent, sizeof(parent), &bytes) &&
+        GetTokenInformation(raw, TokenStatistics, &derived, sizeof(derived), &bytes) &&
+        GetTokenInformation(raw, TokenSessionId, &session, sizeof(session), &bytes), "diagnostic-equivalent-identity-query");
+    Require(derived.TokenType == TokenPrimary && EqualSid(const_cast<BYTE*>(actual_user.data()), spec.desktop_user) &&
+        session == spec.desktop_session && derived.AuthenticationId.HighPart == parent.AuthenticationId.HighPart &&
+        derived.AuthenticationId.LowPart == parent.AuthenticationId.LowPart,
+        "diagnostic-equivalent-identity", ERROR_ACCESS_DENIED);
+    const HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto wrapper = kernelbase ? reinterpret_cast<CreateDiagnosticLowbox>(
+        reinterpret_cast<void*>(GetProcAddress(kernelbase, "CreateAppContainerToken"))) : nullptr;
+    const auto native = ntdll ? reinterpret_cast<CreateDiagnosticNativeLowbox>(
+        reinterpret_cast<void*>(GetProcAddress(ntdll, "NtCreateLowBoxToken"))) : nullptr;
+    observed->wrapper_export = wrapper ? ERROR_SUCCESS : (kernelbase ? ERROR_PROC_NOT_FOUND : ERROR_MOD_NOT_FOUND);
+    observed->native_export = native ? ERROR_SUCCESS : (ntdll ? ERROR_PROC_NOT_FOUND : ERROR_MOD_NOT_FOUND);
+    ObserveTokenPhase(raw, spec.desktop_user, spec.capabilities, wrapper, native, &observed->before);
+    // Match the production default-DACL change; this does not modify the token
+    // object's own security descriptor, which is queried in each phase above.
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(D;;WDWO;;;OW)(A;;GA;;;SY)",
+        SDDL_REVISION_1, &descriptor, nullptr), "diagnostic-default-descriptor");
+    const Local release(descriptor);
+    PACL acl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    Require(GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted) && present && acl,
+        "diagnostic-default-acl", ERROR_INVALID_ACL);
+    TOKEN_DEFAULT_DACL defaults{acl};
+    Require(SetTokenInformation(raw, TokenDefaultDacl, &defaults, sizeof(defaults)), "diagnostic-seal-default-dacl");
+    ObserveTokenPhase(raw, spec.desktop_user, spec.capabilities, wrapper, native, &observed->after);
+    observed->status = ERROR_SUCCESS;
+    std::snprintf(observed->stage, sizeof(observed->stage), "%s", "complete");
+  } catch (const Failure& failure) {
+    observed->status = failure.status;
+    std::snprintf(observed->stage, sizeof(observed->stage), "%s", failure.stage);
+  } catch (...) {
+    observed->status = ERROR_NOT_ENOUGH_MEMORY;
+    std::snprintf(observed->stage, sizeof(observed->stage), "%s", "diagnostic-allocation");
+  }
+}
+const char* TrusteeName(Trustee value) {
+  switch (value) {
+    case Trustee::private_user: return "private";
+    case Trustee::system: return "system";
+    case Trustee::administrators: return "administrators";
+    case Trustee::owner_rights: return "owner-rights";
+    case Trustee::everyone: return "everyone";
+    case Trustee::authenticated: return "authenticated";
+    case Trustee::logon: return "logon";
+    case Trustee::other: return "other";
+    default: return "unclassified";
+  }
+}
+void PrintTokenCall(const char* phase, const char* operation, const TokenCallEvidence& observed, bool native = false) {
+  if (!observed.called) {
+    std::printf("Protected launch: equivalent-token phase=%s operation=%s called=0\n", phase, operation);
+  } else if (native) {
+    std::printf("Protected launch: equivalent-token phase=%s operation=%s ntstatus=0x%08lx nt-success=%lu returned-token=%lu\n",
+        phase, operation, static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.succeeded),
+        static_cast<unsigned long>(observed.returned_token));
+  } else {
+    std::printf("Protected launch: equivalent-token phase=%s operation=%s win32=%lu api-success=%lu returned-token=%lu\n",
+        phase, operation, static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.succeeded),
+        static_cast<unsigned long>(observed.returned_token));
+  }
+}
+void PrintTokenPhase(const char* phase, const TokenPhaseEvidence& observed) {
+  const auto& object = observed.object;
+  std::printf("Protected launch: equivalent-token phase=%s object-query-win32=%lu owner=%s control=0x%04lx dacl-present=%lu defaulted=%lu null=%lu aces=%lu recorded=%lu\n",
+      phase, static_cast<unsigned long>(object.status), TrusteeName(object.owner), static_cast<unsigned long>(object.control),
+      static_cast<unsigned long>(object.present), static_cast<unsigned long>(object.defaulted),
+      static_cast<unsigned long>(object.null_acl), static_cast<unsigned long>(object.count), static_cast<unsigned long>(object.recorded));
+  for (DWORD i = 0; i < object.recorded && i < std::size(object.aces); ++i) {
+    const auto& ace = object.aces[i];
+    std::printf("Protected launch: equivalent-token phase=%s ace=%lu type=%lu flags=0x%02lx mask=0x%08lx trustee=%s\n",
+        phase, static_cast<unsigned long>(i), static_cast<unsigned long>(ace.type), static_cast<unsigned long>(ace.flags),
+        static_cast<unsigned long>(ace.mask), TrusteeName(ace.trustee));
+  }
+  std::printf("Protected launch: equivalent-token phase=%s private-impersonation-win32=%lu\n",
+      phase, static_cast<unsigned long>(observed.impersonate));
+  PrintTokenCall(phase, "native-system-zero-handles", observed.native_system, true);
+  PrintTokenCall(phase, "duplicate-private-launch-rights", observed.duplicate_launch);
+  PrintTokenCall(phase, "duplicate-private-all-rights", observed.duplicate_all);
+  PrintTokenCall(phase, "native-private-zero-handles", observed.native_private, true);
+  PrintTokenCall(phase, "wrapper-private", observed.wrapper);
+}
+void PrintEquivalentToken(const EquivalentTokenEvidence& observed) {
+  if (!observed.attempted) return;
+  std::printf("Protected launch: post-failure-equivalent-token setup-stage=%s setup-win32=%lu wrapper-export-win32=%lu native-export-win32=%lu\n",
+      observed.stage, static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.wrapper_export),
+      static_cast<unsigned long>(observed.native_export));
+  // These sequential observations may reuse objects initialized by the failed
+  // production wrapper or earlier observations; they are not isolated retries.
+  PrintTokenPhase("before-default-seal", observed.before);
+  PrintTokenPhase("after-default-seal", observed.after);
 }
 Evidence RunSystem() {
   Evidence evidence;
@@ -389,6 +654,12 @@ Evidence RunSystem() {
         "deny-case-insensitive-environment-shadow", ERROR_INVALID_DATA);
     ObserveLaunchAccess(identity->token(), &evidence);
     const DWORD created = storage::AuthorityLaunch::Create(identity->token(), spec, &child, &stage);
+    if (created != ERROR_SUCCESS && std::strcmp(stage, "lowbox.create-token") == 0) {
+      // The failed production object has already been destroyed. This is an
+      // equivalently derived token, observed only after the real failure; no
+      // diagnostic result retries launch or changes that primary result.
+      ObserveEquivalentToken(identity->token(), spec, &evidence.equivalent);
+    }
     Check(created, stage);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;
@@ -600,7 +871,8 @@ DWORD Controller() {
     Evidence evidence{};
     std::memcpy(&evidence, data.data(), sizeof(evidence));
     Require(evidence.magic == 0x47504c54 && std::memchr(evidence.stage, 0, sizeof(evidence.stage)) &&
-        std::memchr(evidence.cleanup_stage, 0, sizeof(evidence.cleanup_stage)),
+        std::memchr(evidence.cleanup_stage, 0, sizeof(evidence.cleanup_stage)) &&
+        std::memchr(evidence.equivalent.stage, 0, sizeof(evidence.equivalent.stage)),
         "validate-test-evidence", ERROR_INVALID_DATA);
     std::printf("Protected launch: private-token-preflight-image=%lu directory=%lu target-token=%lu caller-as-private=%lu caller-as-system=%lu\n",
         static_cast<unsigned long>(evidence.image_access), static_cast<unsigned long>(evidence.directory_access),
@@ -608,6 +880,7 @@ DWORD Controller() {
         static_cast<unsigned long>(evidence.system_caller_token_access));
     std::printf("Protected launch: stage=%s win32=%lu cleanup_win32=%lu cleanup_stage=%s\n", evidence.stage,
         static_cast<unsigned long>(evidence.status), static_cast<unsigned long>(evidence.cleanup), evidence.cleanup_stage);
+    PrintEquivalentToken(evidence.equivalent);
     result = evidence.status ? evidence.status : evidence.cleanup;
   } catch (const Failure& failure) {
     std::fprintf(stderr, "Protected launch: stage=%s win32=%lu\n", failure.stage, static_cast<unsigned long>(failure.status));

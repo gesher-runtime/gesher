@@ -114,9 +114,11 @@ jobs:
             type usb-protected-launch.log
             exit /b %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
           )
+          python -c "from datetime import datetime, timezone; print('Protected launch: fixture-start-utc=' + datetime.now(timezone.utc).isoformat(timespec='microseconds'))" >> usb-protected-launch.log 2>&1
           usb_protected_launch_test.exe >> usb-protected-launch.log 2>&1
           set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"
           >> usb-protected-launch.log echo Protected launch native exit: %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+          if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" pwsh -NoLogo -NoProfile -NonInteractive -File tools\ci\protected_profile_diagnostics.ps1 -LogPath usb-protected-launch.log >> usb-protected-launch.log 2>&1
           type usb-protected-launch.log
           exit /b %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
       - name: Preserve early protected launch diagnostics
