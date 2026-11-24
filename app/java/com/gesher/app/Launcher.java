@@ -54,7 +54,7 @@ import java.util.Properties;
  *                       install or update the APK, start its launcher activity through the
  *                       system server (am start -W) and show the app's output until the
  *                       app's process ends (--wait, the default). --detach: return once the
- *                       activity has started (its first frame drawn, idle), exit code 0, and
+ *                       activity has started (its first frame drawn, or idle), exit code 0, and
  *                       leave the app running: what gesher-launch asks for
  *                       ($GESHER_LAUNCH_DETACH=1) when nobody reads the output (a Start menu
  *                       shortcut, a double-clicked .apk). Its windows are Win32 windows (--window, the
@@ -834,8 +834,17 @@ public final class Launcher {
             log(text("start_result", result.result,
                     result.who != null ? result.who.flattenToShortString() : text("no_activity"),
                     result.timeout ? text("timed_out") : "") + ", " + result.totalTime + " ms");
-            if (!ActivityManager.isStartResultSuccessful(result.result)
-                    || (detach && result.timeout)) {
+            boolean failed = !ActivityManager.isStartResultSuccessful(result.result)
+                    || (detach && result.timeout);
+            // Waiting for the app (not detached), a launch canceled because its process
+            // died before the activity was ready still has that process's real exit
+            // status: follow it below, as for any other exit, rather than a generic failure.
+            if (failed && !detach && result.result == ActivityManager.START_CANCELED
+                    && launch.exitReceipt != null && launch.taskId >= 0
+                    && processObserved(gesher, launch)) {
+                failed = false;
+            }
+            if (failed) {
                 throw new IllegalStateException(text("start_failed", intent));
             }
             if (launch.exitReceipt == null || launch.taskId < 0) {
@@ -847,8 +856,8 @@ public final class Launcher {
                 atm.removeTask(launch.taskId);
             }
             if (detach) {
-                // The activity is up (startActivityAndWait waited until it is idle: it
-                // has drawn its first frame). The app's process belongs to the device
+                // The activity is up (startActivityAndWait waited until it drew its
+                // first frame, or was idle). The app's process belongs to the device
                 // (its system server started it and follows it), not to this launcher:
                 // nothing here keeps it, and the device's idle timeout counts app
                 // processes only.
@@ -902,6 +911,16 @@ public final class Launcher {
             return 0;
         } finally {
             tail.finish();
+        }
+    }
+
+    /** Whether the launch's own process generation was really started (it runs or has exited). */
+    private static boolean processObserved(GesherService.Client gesher, GesherService.LaunchResult launch) {
+        try {
+            int state = gesher.launchExit(launch.exitReceipt).state;
+            return state == GesherService.EXIT_RUNNING || state == GesherService.EXIT_FINISHED;
+        } catch (Throwable t) {
+            return false;
         }
     }
 
