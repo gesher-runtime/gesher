@@ -48,6 +48,32 @@ index a495246..6f5b392 100644
  #else  // RS_COMPATIBILITY_LIB is defined
      const char *nativeLibDir = mCtx->getContext()->getNativeLibDir();
      mScriptSO = SharedLibraryUtils::loadSharedLibrary(cacheDir, resName, nativeLibDir);
+diff --git a/driver/rsdAllocation.cpp b/driver/rsdAllocation.cpp
+index 475d9fc..2f75737 100644
+--- a/driver/rsdAllocation.cpp
++++ b/driver/rsdAllocation.cpp
+@@ -1228,7 +1228,7 @@ void rsdAllocationUpdateCachedObject(const Context *rsc,
+                                      rs_allocation *obj)
+ {
+     obj->p = alloc;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdBcc.cpp b/driver/rsdBcc.cpp
+index 0e07aaf..b156853 100644
+--- a/driver/rsdBcc.cpp
++++ b/driver/rsdBcc.cpp
+@@ -182,7 +182,7 @@ void rsdScriptUpdateCachedObject(const Context *rsc,
+                                  rs_script *obj)
+ {
+     obj->p = script;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
 diff --git a/driver/rsdCore.cpp b/driver/rsdCore.cpp
 index cd48340..6039734 100644
 --- a/driver/rsdCore.cpp
@@ -62,6 +88,58 @@ index cd48340..6039734 100644
      if (loadIOSuppLibSyms()) {
          rsc->mHal.funcs.allocation.destroy = sAllocationDestroy;
          rsc->mHal.funcs.allocation.ioSend = sAllocationIoSend;
+diff --git a/driver/rsdElement.cpp b/driver/rsdElement.cpp
+index 349e3e6..0123e35 100644
+--- a/driver/rsdElement.cpp
++++ b/driver/rsdElement.cpp
+@@ -34,7 +34,7 @@ void rsdElementUpdateCachedObject(const Context *rsc,
+                                   rs_element *obj)
+ {
+     obj->p = element;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdSampler.cpp b/driver/rsdSampler.cpp
+index 8c4ac58..e047bc7 100644
+--- a/driver/rsdSampler.cpp
++++ b/driver/rsdSampler.cpp
+@@ -46,7 +46,7 @@ void rsdSamplerUpdateCachedObject(const Context *rsc,
+                                   rs_sampler *obj)
+ {
+     obj->p = alloc;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdScriptGroup.cpp b/driver/rsdScriptGroup.cpp
+index c7d10b6..82eb107 100644
+--- a/driver/rsdScriptGroup.cpp
++++ b/driver/rsdScriptGroup.cpp
+@@ -64,7 +64,7 @@ void rsdScriptGroupUpdateCachedObject(const Context *rsc,
+                                       rs_script_group *obj)
+ {
+     obj->p = sg;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdType.cpp b/driver/rsdType.cpp
+index ba845be..7e6363e 100644
+--- a/driver/rsdType.cpp
++++ b/driver/rsdType.cpp
+@@ -42,7 +42,7 @@ void rsdTypeDestroy(const Context *rsc, const Type *t) {
+ void rsdTypeUpdateCachedObject(const Context *rsc, const Type *t,
+                                rs_type *obj) {
+     obj->p = t;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
 diff --git a/rsAllocation.cpp b/rsAllocation.cpp
 index a210435..b9d93a1 100644
 --- a/rsAllocation.cpp
@@ -83,6 +161,19 @@ index a210435..b9d93a1 100644
      // Allocation objects must use allocator specified by the driver
      void* allocMem = rsc->mHal.funcs.allocRuntimeMem(sizeof(Allocation), 0);
  
+diff --git a/rsComponent.cpp b/rsComponent.cpp
+index c3e0d13..0950ee4 100644
+--- a/rsComponent.cpp
++++ b/rsComponent.cpp
+@@ -127,7 +127,7 @@ void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize) {
+         rsAssert(mVectorSize == 1);
+         rsAssert(mNormalized == false);
+         rsAssert(mKind == RS_KIND_USER);
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+         // Large object pointers on 64-bit targets.
+         mBits = 256;
+         mTypeBits = 256;
 diff --git a/rsScriptIntrinsic.cpp b/rsScriptIntrinsic.cpp
 index 7908dd5..18d7651 100644
 --- a/rsScriptIntrinsic.cpp
@@ -104,3 +195,25 @@ index 7908dd5..18d7651 100644
  
  
      return true;
+diff --git a/rs_hal.h b/rs_hal.h
+index 06a9b57..19182cd 100644
+--- a/rs_hal.h
++++ b/rs_hal.h
+@@ -107,7 +107,7 @@ class FBOCache;
+ // RS_BASE_OBJ must have the same layout as _RS_OBJECT_DECL defined in
+ // script_api/rs_object_types.spec.
+ // TODO(jeanluc) Look at unifying.
+-#ifndef __LP64__
++#if !defined(__LP64__) && !(defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+ #define RS_BASE_OBJ(_t_) typedef struct { const _t_* p; } __attribute__((packed, aligned(4)))
+ #define RS_BASE_NULL_OBJ {0}
+ #else
+@@ -123,7 +123,7 @@ RS_BASE_OBJ(Sampler) rs_sampler;
+ RS_BASE_OBJ(Script) rs_script;
+ RS_BASE_OBJ(ScriptGroup) rs_script_group;
+ 
+-#ifndef __LP64__
++#if !defined(__LP64__) && !(defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+ typedef struct { const int* p; } __attribute__((packed, aligned(4))) rs_mesh;
+ typedef struct { const int* p; } __attribute__((packed, aligned(4))) rs_program_fragment;
+ typedef struct { const int* p; } __attribute__((packed, aligned(4))) rs_program_vertex;

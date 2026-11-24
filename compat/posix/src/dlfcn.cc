@@ -65,15 +65,6 @@ BuiltinLibrary* FindBuiltin(const char* filename) {
   return nullptr;
 }
 
-// LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR needs a fully qualified path (a drive and
-// a root, or UNC); with any other name LoadLibraryExW fails with
-// ERROR_INVALID_PARAMETER, which would hide "not found" for a bare name.
-bool IsFullyQualified(const std::wstring& path) {
-  auto sep = [](wchar_t c) { return c == L'\\' || c == L'/'; };
-  if (path.size() >= 3 && path[1] == L':' && sep(path[2])) return true;
-  return path.size() >= 2 && sep(path[0]) && sep(path[1]);
-}
-
 BuiltinLibrary* AsBuiltin(void* handle) {
   std::lock_guard<std::mutex> lock(builtins_mutex);
   for (BuiltinLibrary* library : Builtins()) {
@@ -149,10 +140,19 @@ void* dlopen(const char* filename, int flags) {
   std::wstring path = gesher::Widen(filename);
   HMODULE module = (flags & RTLD_NOLOAD) != 0
       ? GetModuleHandleW(path.c_str())
-      : LoadLibraryExW(path.c_str(), nullptr,
-                       LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
-                           (IsFullyQualified(path) ? LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR : 0));
-  if (module == nullptr) SetError("dlopen", filename);
+      : LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+                                                  LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
+  if (module == nullptr) {
+    if (GetLastError() == ERROR_INVALID_PARAMETER && BaseName(filename) == filename) {
+      // A bare name that is no builtin library: LoadLibraryExW refuses it
+      // (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR needs a full path), which only means
+      // there is no library by that name here.
+      last_error = std::string("dlopen ") + filename + ": library not found";
+      has_error = true;
+    } else {
+      SetError("dlopen", filename);
+    }
+  }
   return module;
 }
 

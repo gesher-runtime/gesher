@@ -21,6 +21,21 @@ without a vendor driver: a context thread with its command FIFO, the
 (`rsCpuCore.cpp`, over gesher-base's pthreads), and the intrinsics' portable
 C++ (no NEON assembly and no SSSE3 path, so `gArchUseSIMD` stays off).
 
+Windows x64 is LLP64: pointers are 64 bits, `long` is 32, and `__LP64__` is
+not defined. Two consequences are handled:
+
+- libRS chooses the layout of object handles (`rs_allocation`, `rs_element`,
+  ...) and the size of object elements (`Element.ALLOCATION` and the other
+  `RS_TYPE_*` objects) by `__LP64__`. Patch 0001 makes those places
+  (`rs_hal.h`, `rsComponent.cpp`, the driver's `rsd*UpdateCachedObject`)
+  follow the pointer size instead, so they use the 64-bit layout (a pointer
+  and three reserved words, 32 bytes) that the framework's Java side uses
+  (`RenderScript.sPointerSize` is 8). The `__LP64__` tests that are about
+  `long` (the script runtime's `long` element accessors) or about Android
+  library paths are left as they are.
+- The JNI's `nScriptGroup2Create` returned a C `long`, which truncated the
+  ScriptGroup2's address; the copy returns `jlong` (gen_jni_source.py).
+
 Supported, as on Android:
 
 - `RenderScript.create`/`destroy`/`finish`, process contexts, messages and
@@ -87,11 +102,16 @@ independent Java computation of its definition: Blur on a Bitmap the way
 Soundcore's `BlurUtil` uses it, and on U8; ColorMatrix with an add vector;
 Convolve3x3 and 5x5; LUT, Blend source-over, Histogram and YuvToRGB (NV21)
 exactly; 3DLUT with an inverting table; Resize of ramps; Allocation copies of
-arrays and Allocations. Float results may differ from the Java reference by
+arrays and Allocations; ScriptGroup (V1) and ScriptGroup2 (Builder2) each
+chaining two ColorMatrix kernels; object elements (`Element.ALLOCATION` is 32
+bytes, `copyFrom(BaseObj[])`, a struct with an allocation field through
+`FieldPacker`, and the held Allocations intact after their holders are
+destroyed). Float results may differ from the Java reference by
 one step after truncation, so those compare within 1 (2-3 for the
 interpolating 3DLUT and Resize). It also checks that ScriptC, BLAS and
 `USAGE_IO_INPUT` fail with the exceptions above, that the context keeps working
 after them, that a second context works after the first is destroyed, and that
 four threads at once (two with contexts of their own, two sharing the process
 context) blur Bitmaps correctly, as apps do from the UI thread and a background
-Handler.
+Handler. An unexpected exception fails the test and exits the VM (the process
+context's `MessageThread` would otherwise keep it running).

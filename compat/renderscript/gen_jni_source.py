@@ -18,6 +18,8 @@ exactly once (the script fails otherwise, as a patch would):
   and the Surface natives of an Allocation are registered from
   compat/renderscript/rs_jni_unavailable.h instead: libRS is built CPU only
   (cmake/aosp/renderscript.cmake), and these fail as that header describes.
+- nScriptGroup2Create returns jlong rather than long, which is 32 bits on
+  Windows and truncated the ScriptGroup2's address.
 - JNI_OnLoad is named gesher_rs_jni_OnLoad: compat/renderscript/renderscript_jni.cc
   registers it as librs_jni.so's JNI_OnLoad (a builtin library).
 - nScriptIntrinsicCreate throws RSRuntimeException when the CPU driver has no
@@ -57,6 +59,10 @@ EDITS = [
     ('static const char *classPathName = "android/renderscript/RenderScript";\n',
      '#include "rs_jni_unavailable.h"  // Gesher: compat/renderscript\n\n'
      'static const char *classPathName = "android/renderscript/RenderScript";\n'),
+    # `long` is 32 bits on Windows (LLP64): the ScriptGroup2's address would be
+    # truncated. The Java method returns a long (jlong).
+    ('static long\nnScriptGroup2Create(',
+     'static jlong\nnScriptGroup2Create('),
     ('jint JNI_OnLoad(JavaVM* vm, void* reserved)\n',
      'jint gesher_rs_jni_OnLoad(JavaVM* vm, void* reserved)\n'),
     ('    return (jlong)(uintptr_t)rsScriptIntrinsicCreate((RsContext)con, id, (RsElement)eid);\n',

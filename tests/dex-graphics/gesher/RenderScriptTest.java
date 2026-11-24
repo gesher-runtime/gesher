@@ -2,12 +2,15 @@ package gesher;
 
 import android.graphics.Bitmap;
 import android.renderscript.Allocation;
+import android.renderscript.BaseObj;
 import android.renderscript.Element;
+import android.renderscript.FieldPacker;
 import android.renderscript.Matrix4f;
 import android.renderscript.RSRuntimeException;
 import android.renderscript.RenderScript;
 import android.renderscript.RenderScriptCacheDir;
 import android.renderscript.ScriptC;
+import android.renderscript.ScriptGroup;
 import android.renderscript.ScriptIntrinsic3DLUT;
 import android.renderscript.ScriptIntrinsicBLAS;
 import android.renderscript.ScriptIntrinsicBlend;
@@ -43,7 +46,20 @@ import java.util.Random;
 public final class RenderScriptTest {
   private static int failures;
 
-  public static void main(String[] args) throws Exception {
+  public static void main(String[] args) {
+    try {
+      run(args);
+    } catch (Throwable t) {
+      // The process context's MessageThread is not a daemon: without an exit
+      // the VM would wait for it until the CI time limit.
+      System.out.println("FAIL  unexpected " + t);
+      t.printStackTrace(System.out);
+      System.out.println("RenderScriptTest: failed with an exception");
+      System.exit(1);
+    }
+  }
+
+  private static void run(String[] args) throws Exception {
     // libandroid_runtime (SystemProperties, hwui's Bitmap), as gesher-app's Main loads it.
     System.loadLibrary("android_runtime");
     File cache = new File(args.length > 0 ? args[0] : System.getProperty("java.io.tmpdir"),
@@ -67,6 +83,9 @@ public final class RenderScriptTest {
       lut3d(rs);
       resize(rs);
       yuvToRgb(rs);
+      scriptGroup(rs);
+      scriptGroup2(rs);
+      objectElements(rs);
       unsupported(rs);
       rs.finish();
     } finally {
@@ -613,6 +632,158 @@ public final class RenderScriptTest {
       }
     }
     check(maxDiff(out, expected) == 0, "ScriptIntrinsicYuvToRGB NV21, exact");
+  }
+
+  // --- Script groups, object elements ---------------------------------------------------
+
+  private static final float[] SEPIA = {
+      0.393f, 0.349f, 0.272f, 0f,
+      0.769f, 0.686f, 0.534f, 0f,
+      0.189f, 0.168f, 0.131f, 0f,
+      0f, 0f, 0f, 1f};
+  private static final float[] SWAP_RB = {
+      0f, 0f, 1f, 0f,
+      0f, 1f, 0f, 0f,
+      1f, 0f, 0f, 0f,
+      0f, 0f, 0f, 1f};
+
+  /** ScriptIntrinsicColorMatrix's U8_4 arithmetic (no add vector). */
+  private static byte[] colorMatrixReference(byte[] in, float[] c) {
+    byte[] out = new byte[in.length];
+    for (int i = 0; i < in.length; i += 4) {
+      float x = u(in[i]), y = u(in[i + 1]), z = u(in[i + 2]), w = u(in[i + 3]);
+      for (int k = 0; k < 4; k++) {
+        float sum = x * c[k] + y * c[4 + k] + z * c[8 + k] + w * c[12 + k];
+        sum = sum < 0 ? 0 : (sum > 255.5f ? 255.5f : sum);
+        out[i + k] = (byte) (int) sum;
+      }
+    }
+    return out;
+  }
+
+  private static ScriptIntrinsicColorMatrix colorMatrix(RenderScript rs, float[] m) {
+    ScriptIntrinsicColorMatrix cm = ScriptIntrinsicColorMatrix.create(rs);
+    cm.setColorMatrix(new Matrix4f(m));
+    return cm;
+  }
+
+  /**
+   * ScriptGroup (V1): two ColorMatrix kernels joined by an intermediate connection.
+   * (Not ScriptIntrinsicLUT: its table reaches the driver only in its own forEach.)
+   */
+  private static void scriptGroup(RenderScript rs) {
+    int w = 24, h = 10;
+    byte[] in = rgba(w, h, 12, false);
+    Type t = Type.createXY(rs, Element.U8_4(rs), w, h);
+    Allocation ain = Allocation.createTyped(rs, t);
+    Allocation aout = Allocation.createTyped(rs, t);
+    ain.copyFrom(in);
+    ScriptIntrinsicColorMatrix first = colorMatrix(rs, SEPIA);
+    ScriptIntrinsicColorMatrix second = colorMatrix(rs, SWAP_RB);
+    ScriptGroup.Builder b = new ScriptGroup.Builder(rs);
+    b.addKernel(first.getKernelID());
+    b.addKernel(second.getKernelID());
+    b.addConnection(t, first.getKernelID(), second.getKernelID());
+    ScriptGroup group = b.create();
+    group.setInput(first.getKernelID(), ain);
+    group.setOutput(second.getKernelID(), aout);
+    group.execute();
+    byte[] out = new byte[in.length];
+    aout.copyTo(out);
+    byte[] expected = colorMatrixReference(colorMatrixReference(in, SEPIA), SWAP_RB);
+    int diff = maxDiff(out, expected);
+    check(diff <= 1, "ScriptGroup: ColorMatrix (sepia) then ColorMatrix (red/blue swap) (max difference "
+        + diff + ")");
+    group.destroy();
+  }
+
+  /** ScriptGroup2 (Builder2): two ColorMatrix kernels, the first's result into the second. */
+  private static void scriptGroup2(RenderScript rs) {
+    int w = 20, h = 12;
+    byte[] in = rgba(w, h, 13, false);
+    Type t = Type.createXY(rs, Element.U8_4(rs), w, h);
+    Allocation ain = Allocation.createTyped(rs, t);
+    ain.copyFrom(in);
+    ScriptIntrinsicColorMatrix first = colorMatrix(rs, SEPIA);
+    ScriptIntrinsicColorMatrix second = colorMatrix(rs, SWAP_RB);
+    ScriptGroup.Builder2 b = new ScriptGroup.Builder2(rs);
+    ScriptGroup.Input input = b.addInput();
+    ScriptGroup.Closure c1 = b.addKernel(first.getKernelID(), t, input);
+    ScriptGroup.Closure c2 = b.addKernel(second.getKernelID(), t, c1.getReturn());
+    ScriptGroup group = b.create("gesher_rs_group2", c2.getReturn());
+    Object[] results = group.execute(ain);
+    boolean shape = results != null && results.length == 1 && results[0] instanceof Allocation;
+    check(shape, "ScriptGroup2: execute returns the output Allocation");
+    if (!shape) return;
+    byte[] out = new byte[in.length];
+    ((Allocation) results[0]).copyTo(out);
+    byte[] expected = colorMatrixReference(colorMatrixReference(in, SEPIA), SWAP_RB);
+    int diff = maxDiff(out, expected);
+    check(diff <= 1, "ScriptGroup2: ColorMatrix (sepia) then ColorMatrix (red/blue swap) (max difference "
+        + diff + ")");
+    group.destroy();
+  }
+
+  /**
+   * Elements of objects: Element.ALLOCATION is a pointer and three reserved words on
+   * a 64-bit runtime (32 bytes), in an array of handles and in a struct. The
+   * Allocations they hold stay usable after the holders are destroyed.
+   */
+  private static void objectElements(RenderScript rs) {
+    Allocation[] held = new Allocation[3];
+    for (int i = 0; i < held.length; i++) {
+      held[i] = Allocation.createSized(rs, Element.I32(rs), 4);
+      held[i].copyFrom(new int[] {i, i, i, i});
+    }
+    int size = Element.ALLOCATION(rs).getBytesSize();
+    check(size == 32, "Element.ALLOCATION is 32 bytes (got " + size + ")");
+    Allocation handles = Allocation.createSized(rs, Element.ALLOCATION(rs), held.length);
+    boolean ok;
+    try {
+      handles.copyFrom((BaseObj[]) held);
+      ok = true;
+    } catch (RuntimeException e) {
+      System.out.println("  " + e);
+      ok = false;
+    }
+    check(ok, "Allocation of Element.ALLOCATION: copyFrom(BaseObj[])");
+
+    Element.Builder eb = new Element.Builder(rs);
+    eb.add(Element.ALLOCATION(rs), "a");
+    eb.add(Element.I32(rs), "x");
+    eb.add(Element.I32(rs), "y");
+    Element struct = eb.create();
+    Allocation structs = Allocation.createSized(rs, struct, 2);
+    try {
+      for (int i = 0; i < 2; i++) {
+        FieldPacker fp = new FieldPacker(struct.getBytesSize());
+        fp.addObj(held[i]);
+        fp.addI32(7 + i);
+        fp.addI32(-1);
+        structs.setFromFieldPacker(i, fp);
+      }
+      ok = true;
+    } catch (RuntimeException e) {
+      System.out.println("  " + e);
+      ok = false;
+    }
+    check(ok && struct.getBytesSize() == 40, "Allocation of a struct {allocation, int, int} ("
+        + struct.getBytesSize() + " bytes): setFromFieldPacker");
+
+    // Destroying the holders releases their references; the held Allocations
+    // stay usable.
+    handles.destroy();
+    structs.destroy();
+    rs.finish();
+    boolean usable = true;
+    for (int i = 0; i < held.length; i++) {
+      int[] back = new int[4];
+      held[i].copyTo(back);
+      usable &= back[0] == i && back[3] == i;
+      held[i].destroy();
+    }
+    rs.finish();
+    check(usable, "Allocations held by destroyed object elements are intact, then destroyed");
   }
 
   // --- What fails as on Android ------------------------------------------------------------
