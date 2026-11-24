@@ -525,6 +525,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Play services, Google accounts, tokens and push only where they exist (#335)
+        run: |
+          python3 tools/test_gms_truthful_contracts.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Unsupported connectionless handwriting callback contracts
         run: |
           python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \
