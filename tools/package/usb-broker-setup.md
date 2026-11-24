@@ -2,6 +2,10 @@
 
 The separate Gesher Raw USB Broker installer requires a Windows administrator.
 Ordinary Gesher installation and updates continue to run per user.
+The protected account also requires Microsoft's WebView2 Runtime installed for
+all users. If it is missing, Setup reports that prerequisite before installing
+files. Run Microsoft's Evergreen WebView2 installer as administrator to supply
+it; a runtime registered only for the desktop user does not satisfy this check.
 
 The optional companion supplies a protected Android runtime, an explicit media
 selection and consent flow, and a process-bound USB block broker. It is independent

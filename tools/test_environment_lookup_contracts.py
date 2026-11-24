@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Exercise actual exec selection bodies with declared host filesystem boundaries.
 
-This never starts a process. Probe/module-path/encoding/Win32 comparison calls
-are deterministic host replacements. Environment decoding and selection bodies
-are copied verbatim from the selected source snapshot.
+This never starts a process. Probe/module-path/encoding/Win32 comparison and
+authenticated-runtime query calls are deterministic host replacements.
+Environment decoding, selection and protected ELF policy bodies are copied
+verbatim from the selected source snapshot.
 """
 from pathlib import Path
 import argparse
@@ -42,6 +43,8 @@ def main():
     block = source[source.index('std::wstring EnvironmentBlock('):source.index('\nint ExitStatus(')]
     header = args.source_root / 'compat/posix/include/gesher/environment_utf16.h'
     reserved = args.source_root / 'compat/posix/include/gesher/reserved_names.h'
+    protected_policy = (args.source_root / 'compat/usb_storage/protected_tool_paths.h').read_text()
+    protected_policy = protected_policy[protected_policy.index('namespace gesher::usb_storage {'):]
     preamble = r'''
     #include <algorithm>
     #include <cerrno>
@@ -64,10 +67,12 @@ def main():
     constexpr size_t MAX_PATH = 260;
     constexpr DWORD INVALID_FILE_ATTRIBUTES = static_cast<DWORD>(-1);
     constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16;
-    constexpr int TRUE = 1, CSTR_LESS_THAN = 1;
+    constexpr int TRUE = 1, CSTR_LESS_THAN = 1, CSTR_EQUAL = 2;
     static const char* process_path = ".";
     static const char* process_comspec = nullptr;
     static const char* process_launcher = nullptr;
+    static bool protected_runtime = false, protected_credentials = false;
+    static uint32_t protected_uid = UINT32_MAX, protected_gid = UINT32_MAX;
     static int probes;
     static std::map<std::wstring, std::string> files;
     static DWORD GetFileAttributesW(const wchar_t* path) {
@@ -93,6 +98,15 @@ def main():
       for (auto& value : right) value = std::towlower(value);
       return left < right ? 1 : left == right ? 2 : 3;
     }
+    @PROTECTED_POLICY@
+    namespace gesher::usb_storage {
+    bool ProtectedRuntimeEnabled() { return protected_runtime; }
+    bool ProtectedRuntimeCredentials(uint32_t* uid, uint32_t* gid) {
+      if (!protected_credentials) return false;
+      *uid = protected_uid; *gid = protected_gid;
+      return true;
+    }
+    }
     namespace gesher {
     char* GetWindowsEnvironment(const char* name) {
       if (std::strcmp(name, "PATH") == 0) return const_cast<char*>(process_path);
@@ -114,6 +128,7 @@ def main():
       *command += L'"'; *command += value; *command += L'"';
     }
     std::wstring LauncherPath();
+    bool CanLoadExecutableElf(const std::wstring& path);
     namespace {
     constexpr size_t kMaxCommandLine = 32767;
     int Probe(const std::wstring& path, std::string* header) {
@@ -123,7 +138,7 @@ def main():
       *header = found->second;
       return 0;
     }
-    '''.replace('@HEADER@', str(header)).replace('@RESERVED@', str(reserved))
+    '''.replace('@HEADER@', str(header)).replace('@RESERVED@', str(reserved)).replace('@PROTECTED_POLICY@', protected_policy)
     checks = r'''
     } } // namespace gesher::exec
     static int checks, failures;
@@ -134,6 +149,8 @@ def main():
     }
     static void Reset() {
       process_path = "."; process_comspec = nullptr; process_launcher = nullptr;
+      protected_runtime = false; protected_credentials = false;
+      protected_uid = UINT32_MAX; protected_gid = UINT32_MAX;
       probes = 0; errno = 0;
     }
     int main() {
@@ -178,6 +195,20 @@ def main():
       Reset(); process_launcher = malformed; process_comspec = malformed;
       launch = {}; result = ex::PrepareLaunch({"C:/known/good.exe"}, "", &launch);
       Check("direct PE ignores unrelated malformed launcher and ComSpec", result == 0 && launch.application == L"C:\\known\\good.exe");
+      Reset(); protected_runtime = true; process_launcher = "C:\\untrusted\\replacement.exe";
+      Check("protected launcher ignores guest environment override", ex::LauncherPath() == L"C:\\fixture\\gesher-exec.exe");
+      Reset(); protected_runtime = true; process_launcher = malformed;
+      launch = {}; result = ex::PrepareLaunch({"sh"}, "", &launch);
+      Check("protected shell ignores malformed guest launcher override", result == 0 && launch.application == L"C:\\fixture\\gesher-exec.exe");
+      Check("protected ELF requires authenticated credentials", !ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat"));
+      protected_credentials = true; protected_uid = 0; protected_gid = 0;
+      Check("protected root rejects app-controlled ELF", !ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
+      Check("protected root permits exact sealed filesystem tool", ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat"));
+      Check("protected root rejects traversal spelling", !ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\..\\bin\\mkfs.fat"));
+      protected_uid = 10000; protected_gid = 10000;
+      Check("ordinary protected app retains its ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
+      Reset();
+      Check("ordinary Android keeps unrestricted ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
       std::printf("%d checks; %d failures (source-body host control only)\n", checks, failures);
       return failures ? 1 : 0;
     }

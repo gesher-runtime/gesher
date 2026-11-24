@@ -8,6 +8,7 @@
 #include <gesher/environment_utf16.h>
 
 #include "../../usb_storage/protected_runtime_client.h"
+#include "../../usb_storage/protected_tool_paths.h"
 
 #include <shellapi.h>
 
@@ -101,7 +102,7 @@ bool IsSuName(const std::string& name) {
 std::string ToolName(const std::string& name) {
   static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
                                        "dd", "basename", "tr", "ps", "pm", "am", "kill",
-                                       "sleep", "toybox", "blockdev"};
+                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync", "umount"};
   std::string base = name;
   for (const char* dir : {"/system/bin/", "/system/xbin/", "/bin/"}) {
     if (name.rfind(dir, 0) == 0) {
@@ -196,6 +197,7 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
   const auto* h = reinterpret_cast<const unsigned char*>(head.data());
   std::wstring ext = Extension(path);
   if (head.size() >= 20 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F') {
+    if (!CanLoadExecutableElf(path)) return kEACCES;
     // ELF64, little-endian, EM_X86_64 or EM_AARCH64 (run by the arm64
     // translator, docs/arm64.md): anything else is not runnable here.
     if (h[4] != 2 || h[5] != 1 || (h[18] != 62 && h[18] != 183) || h[19] != 0) return kENOEXEC;
@@ -412,6 +414,20 @@ std::wstring LauncherPath() {
   }
   size_t slash = self.find_last_of(L"\\/");
   return (slash == std::wstring::npos ? std::wstring() : self.substr(0, slash + 1)) + L"gesher-exec.exe";
+}
+
+bool CanLoadExecutableElf(const std::wstring& path) {
+  const bool protected_runtime = gesher::usb_storage::ProtectedRuntimeEnabled();
+  if (!protected_runtime) return true;
+  uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
+  const bool credentials = gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid);
+  // In protected mode LauncherPath is derived from the actual installed
+  // executable and ignores all guest environment overrides.
+  std::wstring runtime = LauncherPath();
+  const size_t slash = runtime.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) return false;
+  runtime.resize(slash);
+  return gesher::usb_storage::ProtectedElfPolicy(path, runtime, protected_runtime, credentials, uid, gid);
 }
 
 namespace {

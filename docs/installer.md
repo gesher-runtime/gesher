@@ -15,6 +15,44 @@ Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 Programs' (`UninstallDisplayIcon`), the Start menu entries' and that of an
 `.apk` file Gesher has not installed.
 
+## Portable package
+
+Each release also includes `gesher-X.Y.Z-portable.zip`, its `.sha256` file and
+`SHA256SUMS.txt`, which covers both the ZIP and the installer. CI builds both
+packages from the same verified runtime suppliers. The release publisher checks
+the exact versioned filenames and both checksums before uploading the assets.
+
+Extract the complete `GesherPortable` folder and open `Gesher.exe`. `App` contains
+the runtime, while `Data` contains the Android profile, installed apps, settings
+and logs. A `portable.marker` file declares the mode; an unrelated folder named
+`Data` does not. `GESHER_PROFILE` remains an explicit profile override. Stop the
+Gesher device and close its apps before copying the folder or removing a drive.
+
+Setup also offers a portable mode (`/PORTABLE /DIR=<runtime-directory>`), with a
+flat runtime layout. Updating an extracted ZIP targets its existing `App`
+directory, refreshes the root `Gesher.exe`, and preserves the adjacent `Data`.
+The Control Center updater supplies the same mode and directory automatically.
+Setup prevents switching between standard and portable modes in an existing
+runtime directory. Portable Setup creates no uninstaller or uninstall entry and
+does not delete or replace another installation's registration.
+
+Portable mode suppresses automatic Windows Start menu shortcuts, file
+associations and app URL-protocol registration. Android app labels, icons,
+dynamic-shortcut data and internal intents remain in the profile. External-browser
+sign-in callbacks that need a custom host URL protocol are not newly registered
+by portable mode. Notifications can still create per-user Windows AppUserModelID
+metadata; this mode does not promise that Windows or apps leave no host records.
+WebView2 and other host prerequisites must already be available. Android apps
+retain the Windows user's access, as described in the bundled security notice.
+
+CI separately tests the actual packaged Windows/ART runtime: Hello, APK
+installation and launch, copying a populated profile while the original remains,
+flat and `App`-layout Setup updates, and preservation of an existing standard
+installation's uninstall entry, PATH, associations and shortcuts. Host fixtures
+also cover profile selection, add-on routing and release payload rejection.
+The package check uses the same installer for update-layout validation; it does
+not exercise network update discovery or physical USB removal.
+
 ## microG on update
 
 Setup recognizes microG that `gesher-app-microg.ps1` staged in the user's

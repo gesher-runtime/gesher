@@ -310,6 +310,7 @@ final class UsbService extends IUsbManager.Default {
         Objects.requireNonNull(accessory);
         Objects.requireNonNull(user);
         requireManageUsb();
+        throw new UnsupportedOperationException("USB accessory mode is not available");
     }
 
     @Override
@@ -321,6 +322,7 @@ final class UsbService extends IUsbManager.Default {
     @Override
     public void grantAccessoryPermission(UsbAccessory accessory, int uid) {
         requireManageUsb();
+        throw new UnsupportedOperationException("USB accessory mode is not available");
     }
 
     @Override

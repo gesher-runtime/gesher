@@ -511,6 +511,9 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
+      - name: Durable USB permission identity and failure contracts
+        run: python3 tools/test_usb_permission_decisions.py --java-home "$JAVA_HOME"
+
       - name: Package UID admission, permission and interruption contracts
         run: |
           python3 tools/test_package_uid_isolation.py --java-home "$JAVA_HOME" \

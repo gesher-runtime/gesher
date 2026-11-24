@@ -33,6 +33,18 @@ bool ProtectedSystemServer() {
   return query && query();
 }
 
+HANDLE ProtectedWriterMutex() {
+  // Each DLL has its own copy of this POSIX implementation. The authenticated
+  // executable owns one unnamed mutex so the sealed token's default DACL never
+  // needs to be broadened to reopen a predictable name from another module.
+  using Acquire = uint32_t (*)(uint64_t*);
+  auto acquire = reinterpret_cast<Acquire>(GetProcAddress(GetModuleHandleW(nullptr),
+      "gesher_protected_property_mutex"));
+  uint64_t handle = 0;
+  if (!acquire || acquire(&handle) != ERROR_SUCCESS || !handle || handle > UINTPTR_MAX) return nullptr;
+  return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
+}
+
 constexpr DWORD kCapacity = 4 * 1024 * 1024;
 // Match the previous format's maximum payload. Each area now has two banks.
 constexpr DWORD kPayloadCapacity = kCapacity - 4 * sizeof(uint32_t);
@@ -243,7 +255,10 @@ bool WritePersistent(const std::wstring& path, const Snapshot& values) {
 }
 bool Persist(const std::wstring& path, const std::string* name, const Value* value, Snapshot* initial) {
   Handle mutex;
-  mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
+  // Protected system_server is the sole writer. The shared unnamed mutex is
+  // recursive for this thread when Current() calls persistence while locked.
+  mutex.value = ProtectedSystemServer() ? ProtectedWriterMutex() :
+      CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
   MutexLock lock(mutex.value);
   if (!lock.held) return false;
   std::string data;
@@ -414,7 +429,8 @@ Area* Current() { // LocalMutex is held by every caller.
   area->persistent = data + L"\\property\\persistent_properties";
   if (!area->read_only) {
     if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
-    area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
+    area->mutex.value = ProtectedSystemServer() ? ProtectedWriterMutex() :
+        CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
     if (!area->mutex.value) return nullptr;
   }
   MutexLock lock(area->mutex.value);

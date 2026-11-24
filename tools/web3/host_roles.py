@@ -69,14 +69,64 @@ def cache(build):
         result[key.rsplit(":", 1)[0]] = value
     return result
 
+def command_output(build, item, args):
+    if "-o" in args:
+        position = args.index("-o")
+        require(args.count("-o") == 1 and position + 1 < len(args),
+                "Compile command has ambiguous or missing output")
+        output = args[position + 1]
+        require(output and not output.startswith("-"), "Compile command has invalid output")
+    else:
+        # CMake's RC rule invokes the configured windres as
+        # `windres -O coff [preprocessor options] input.rc output.res`.
+        # Retain this entry in the exact before/after build graph rather than
+        # dropping resource compilation or guessing the output of other tools.
+        require(len(args) >= 5 and Path(item["file"]).suffix.lower() == ".rc",
+                "Compile command has no explicit output")
+        records = list((build / "CMakeFiles").glob("*/CMakeRCCompiler.cmake"))
+        require(len(records) == 1, "Expected one authoritative generated RC compiler record")
+        matches = re.findall(r'^\s*set\(CMAKE_RC_COMPILER\s+"([^"]+)"\)\s*$',
+                             records[0].read_text(encoding="utf-8"), flags=re.MULTILINE)
+        require(len(matches) == 1 and Path(matches[0]).is_absolute(),
+                "Missing or ambiguous configured RC driver")
+        configured = Path(matches[0]).resolve(strict=True)
+        require(re.fullmatch(r"(?:[A-Za-z0-9_]+-)*windres(?:\.exe)?", Path(args[0]).name)
+                and Path(args[0]).is_absolute() and Path(args[0]).resolve(strict=True) == configured,
+                "Positional output requires the configured windres driver")
+        options = args[1:-2]
+        require(options[:2] == ["-O", "coff"], "Unexpected windres output format")
+        position = 2
+        while position < len(options):
+            option = options[position]
+            if option in ("-I", "-D", "-U"):
+                require(position + 1 < len(options) and options[position + 1]
+                        and not options[position + 1].startswith("-"),
+                        "Missing windres preprocessor option value")
+                position += 2
+            else:
+                require(option.startswith(("-I", "-D", "-U")) and len(option) > 2,
+                        "Unexpected windres option")
+                position += 1
+        directory = Path(item["directory"])
+        require(not args[-2].startswith("-") and
+                (directory / args[-2]).resolve() == (directory / item["file"]).resolve(),
+                "Windres input differs from the compile record")
+        output = args[-1]
+        require(output and not output.startswith("-") and Path(output).suffix == ".res",
+                "Invalid positional windres output")
+    if "output" in item:
+        directory = Path(item["directory"])
+        require((directory / output).resolve() == (directory / item["output"]).resolve(),
+                "Compile output differs from the compile record")
+    return output
+
 def commands(build):
     result = {}
     for item in json.loads((build / "compile_commands.json").read_text(encoding="utf-8")):
         args = item.get("arguments")
         if args is None:
             args = shlex.split(item["command"])
-        require("-o" in args, "Compile command has no explicit output")
-        output = args[args.index("-o") + 1]
+        output = command_output(build, item, args)
         key = (item["directory"], item["file"], output)
         require(key not in result, "Duplicate compile command output")
         result[key] = args

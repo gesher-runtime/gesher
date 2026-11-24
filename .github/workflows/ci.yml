@@ -179,6 +179,13 @@ jobs:
           cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\program_break_test.cc /Fe:program_break_test.exe
           if errorlevel 1 exit /b 1
           program_break_test.exe
+      - name: Retire failed USB child handoffs without joining under the session lock
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_block_session_test.cc compat\usb_storage\block_session.cc compat\usb_storage\block_channel.cc /Fe:usb_block_session_test.exe bcrypt.lib advapi32.lib
+          if errorlevel 1 exit /b 1
+          usb_block_session_test.exe
       - name: Protected Binder bootstrap and data-pipe identity
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -236,6 +243,13 @@ jobs:
         timeout-minutes: 2
         shell: powershell
         run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: Portable profiles, add-on routing and complete package contracts
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          tests/windows/shell/PortableModeChecks.ps1
+          python tools/tests/test_portable_package.py
+          if ($LASTEXITCODE -ne 0) { throw 'Portable package contracts failed' }
       - name: API 37 report gate failure and selection contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -374,6 +388,7 @@ jobs:
           python3 tools/test_retriever_frame_contracts.py --sanitize
           python3 tools/test_utc_time_contracts.py --sanitize
           python3 tools/test_sleep_contracts.py --sanitize
+          python3 tools/test_storage_tools.py
 
       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
         run: |
@@ -578,6 +593,12 @@ jobs:
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
+
+      - name: Portable code relocation, shell ownership and native profile selection
+        run: |
+          python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_shell.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_launcher.py
 
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
@@ -1232,6 +1253,11 @@ jobs:
           "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
           Get-ChildItem installer
 
+      - name: Build portable ZIP from the same verified runtime
+        shell: pwsh
+        run: |
+          tools/package/package-portable.ps1 -BuildDir "$PWD/dist" -OutDir "$PWD/installer" -Version $env:GESHER_PACKAGE_VERSION
+
       # Uploaded before the checks below: the e2e job tests this installer even when one
       # of them fails.
       - name: Upload tested installer artifact
@@ -1240,7 +1266,37 @@ jobs:
           name: gesher-setup
           path: |
             installer/*.exe
+            installer/*-portable.zip
+            installer/*-portable.zip.sha256
             installer/SHA256SUMS.txt
+
+      - name: Ensure the protected account has the machine WebView2 runtime
+        shell: pwsh
+        run: |
+          $client = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $keys = @("HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$client",
+                    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$client")
+          function Has-MachineWebView {
+            foreach ($key in $keys) {
+              $version = (Get-ItemProperty -LiteralPath $key -Name pv -ErrorAction SilentlyContinue).pv
+              if ($version -and $version -ne '0.0.0.0') { return $true }
+            }
+            return $false
+          }
+          if (-not (Has-MachineWebView)) {
+            $bootstrapper = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
+            $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapper
+            if ($signature.Status -ne 'Valid' -or
+                $signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -ne 'Microsoft Corporation') {
+              throw 'WebView2 prerequisite is not a valid Microsoft-signed installer'
+            }
+            $installation = Start-Process -FilePath $bootstrapper -ArgumentList '/silent', '/install' -PassThru -Wait
+            if ($installation.ExitCode -ne 0 -or -not (Has-MachineWebView)) {
+              throw "Machine WebView2 prerequisite installation failed: $($installation.ExitCode)"
+            }
+          }
+          'Machine WebView2 runtime verified for the protected service account' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
       - name: Build and test the optional USB authority installer
         shell: pwsh
@@ -1313,6 +1369,9 @@ jobs:
             throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
           }
           'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Test the release ZIP and portable Setup while the standard install
+          # exists, so accidental deletion/overwrite of its registration fails.
+          tests/windows/shell/PortableRuntimeChecks.ps1 -ZipPath "installer/gesher-${env:GESHER_PACKAGE_VERSION}-portable.zip" -InstallerPath $setup -Version $env:GESHER_PACKAGE_VERSION -InstalledRuntimeDirectory $app -ComponentsApk "$PWD/dist/components.apk"
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
           $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
@@ -1979,6 +2038,14 @@ jobs:
           Remove-Item $sentinel
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Preserve portable Windows runtime and Setup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-runtime-windows-2022
+          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+          if-no-files-found: warn
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
   # clean runner runs real, unmodified open-source apps from F-Droid

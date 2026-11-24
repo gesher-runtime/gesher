@@ -246,6 +246,22 @@ begin
   end;
 end;
 
+// The protected runtime has its own Windows account. A WebView2 installation
+// registered only in the desktop user's HKCU is not available to that account.
+// Microsoft documents the HKLM pv registration and elevated installation at:
+// https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+function MachineWebView2Installed(): Boolean;
+var
+  Key, Version: String;
+begin
+  Key := 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  Result := False;
+  if RegQueryStringValue(HKEY_LOCAL_MACHINE,
+       'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
+     RegQueryStringValue(HKEY_LOCAL_MACHINE, Key, 'pv', Version) then
+    Result := (Version <> '') and (Version <> '0.0.0.0');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Path: String;
@@ -253,6 +269,13 @@ begin
   Result := 'Setup requires its fixed, protected Program Files destination.';
   if not FixedDestination() or not ProtectOutputOwnership() then
     Exit;
+  if not MachineWebView2Installed() then
+  begin
+    Result := 'Install Microsoft Edge WebView2 Runtime for all users before installing the protected Android runtime. ' +
+      'Run Microsoft''s Evergreen Runtime installer as administrator, then retry Setup. ' +
+      'Download: https://developer.microsoft.com/microsoft-edge/webview2/';
+    Exit;
+  end;
   Path := BrokerDirectory();
   if GetFileAttributesW(Path) = InvalidAttributes then
   begin

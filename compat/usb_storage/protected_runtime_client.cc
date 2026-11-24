@@ -30,8 +30,14 @@ struct State {
   uint32_t uid = 0;
   uint32_t gid = 0;
   bool system_server = false;
+  HANDLE property_mutex = nullptr;
+  HANDLE log_mutex = nullptr;
   std::map<uint32_t, uint64_t> children;
-  ~State() { if (pipe) CloseHandle(pipe); }
+  ~State() {
+    if (property_mutex) CloseHandle(property_mutex);
+    if (log_mutex) CloseHandle(log_mutex);
+    if (pipe) CloseHandle(pipe);
+  }
 };
 State& Local() { static State value; return value; }
 
@@ -95,6 +101,8 @@ uint32_t Exchange(State& state, const wire::Request& request, const void* payloa
   if (status == ERROR_SUCCESS && reply->status == ERROR_SUCCESS &&
       (spawn ? (!reply->pid || !reply->start_time) :
                (reply->pid != request.pid || reply->start_time != request.start_time))) status = ERROR_INVALID_DATA;
+  if (status == ERROR_SUCCESS && reply->status == ERROR_SUCCESS &&
+      request.operation == wire::Operation::kInitialize && !reply->log_mutex) status = ERROR_INVALID_DATA;
   if (status != ERROR_SUCCESS) {
     if (state.pipe) CloseHandle(state.pipe);
     state.pipe = nullptr;
@@ -123,6 +131,34 @@ extern "C" __declspec(dllexport) bool gesher_protected_runtime_system_server() {
   auto& state = Local();
   std::lock_guard lock(state.mutex);
   return state.initialized && state.system_server;
+}
+
+extern "C" __declspec(dllexport) uint32_t gesher_protected_property_mutex(uint64_t* result) {
+  if (!result || *result) return ERROR_INVALID_PARAMETER;
+  auto& state = Local();
+  std::lock_guard lock(state.mutex);
+  if (!state.initialized || !state.system_server) return ERROR_ACCESS_DENIED;
+  if (!state.property_mutex) {
+    state.property_mutex = CreateMutexW(nullptr, FALSE, nullptr);
+    if (!state.property_mutex) return GetLastError();
+  }
+  HANDLE duplicate = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), state.property_mutex, GetCurrentProcess(), &duplicate,
+      SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, 0)) return GetLastError();
+  *result = reinterpret_cast<uintptr_t>(duplicate);
+  return ERROR_SUCCESS;
+}
+
+extern "C" __declspec(dllexport) uint32_t gesher_protected_log_mutex(uint64_t* result) {
+  if (!result || *result) return ERROR_INVALID_PARAMETER;
+  auto& state = Local();
+  std::lock_guard lock(state.mutex);
+  if (!state.initialized || !state.log_mutex) return ERROR_ACCESS_DENIED;
+  HANDLE duplicate = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), state.log_mutex, GetCurrentProcess(), &duplicate,
+      SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, 0)) return GetLastError();
+  *result = reinterpret_cast<uintptr_t>(duplicate);
+  return ERROR_SUCCESS;
 }
 
 extern "C" __declspec(dllexport) uint32_t gesher_protected_runtime_rpc(
@@ -159,6 +195,7 @@ extern "C" __declspec(dllexport) uint32_t gesher_protected_runtime_rpc(
     state.uid = reply->uid;
     state.gid = reply->gid;
     state.system_server = reply->role == 1;
+    state.log_mutex = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(reply->log_mutex));
     state.initialized = true;
   }
   if (status == ERROR_SUCCESS && spawn) {
@@ -228,6 +265,20 @@ bool ProtectedRuntimeIsSystemServer() {
   auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(nullptr),
                                                      "gesher_protected_runtime_system_server"));
   return query && query();
+}
+
+uint32_t ProtectedPropertyMutex(uint64_t* handle) {
+  using Query = uint32_t (*)(uint64_t*);
+  auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(nullptr),
+      "gesher_protected_property_mutex"));
+  return query ? query(handle) : ERROR_ACCESS_DENIED;
+}
+
+uint32_t ProtectedLogMutex(uint64_t* handle) {
+  using Query = uint32_t (*)(uint64_t*);
+  auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(nullptr),
+      "gesher_protected_log_mutex"));
+  return query ? query(handle) : ERROR_ACCESS_DENIED;
 }
 
 uint32_t ProtectedInitializeResources(ProtectedStartupResources* resources) {

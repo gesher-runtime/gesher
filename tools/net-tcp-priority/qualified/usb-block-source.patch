@@ -298,29 +298,30 @@ index 57385c1d..85c47001 100644
 +  E("sbrk", Sbrk);
 +  E("brk", Brk);
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index d693bd9f..4c643b08 100644
+index d693bd9f..a03256ce 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
-@@ -9,0 +10,4 @@
+@@ -9,0 +10,5 @@
 +#include "../../usb_storage/protected_runtime_client.h"
++#include "../../usb_storage/protected_tool_paths.h"
 +
 +#include <shellapi.h>
 +
-@@ -10,0 +15 @@
+@@ -10,0 +16 @@
 +#include <array>
-@@ -89,0 +95,5 @@ bool IsShName(const std::string& name) {
+@@ -89,0 +96,5 @@ bool IsShName(const std::string& name) {
 +bool IsSuName(const std::string& name) {
 +  return name == "su" || name == "/system/bin/su" || name == "/system/xbin/su" ||
 +         name == "/bin/su";
 +}
 +
-@@ -92,2 +102,3 @@ std::string ToolName(const std::string& name) {
+@@ -92,2 +103,3 @@ std::string ToolName(const std::string& name) {
 -  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
 -                                       "ps",      "pm", "am", "kill",   "sleep", "toybox"};
 +  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
 +                                       "dd", "basename", "tr", "ps", "pm", "am", "kill",
-+                                       "sleep", "toybox", "blockdev"};
-@@ -107,0 +119,22 @@ std::string ToolName(const std::string& name) {
++                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync", "umount"};
+@@ -107,0 +120,22 @@ std::string ToolName(const std::string& name) {
 +std::wstring FilesystemTool(const std::string& name) {
 +  if (!gesher::usb_storage::ProtectedRuntimeEnabled()) return {};
 +  std::string base = name;
@@ -343,13 +344,30 @@ index d693bd9f..4c643b08 100644
 +  return directory + L"filesystem-tools\\bin\\" + file;
 +}
 +
-@@ -366 +399,4 @@ std::wstring LauncherPath() {
+@@ -165,0 +200 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
++    if (!CanLoadExecutableElf(path)) return kEACCES;
+@@ -366 +401,4 @@ std::wstring LauncherPath() {
 -  const char* env = gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
 +  // The protected authority starts its own installed executable. A guest
 +  // setting cannot redirect that route to a different native image.
 +  const char* env = gesher::usb_storage::ProtectedRuntimeEnabled()
 +                        ? nullptr : gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
-@@ -385,0 +422,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
+@@ -380,0 +419,14 @@ std::wstring LauncherPath() {
++bool CanLoadExecutableElf(const std::wstring& path) {
++  const bool protected_runtime = gesher::usb_storage::ProtectedRuntimeEnabled();
++  if (!protected_runtime) return true;
++  uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
++  const bool credentials = gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid);
++  // In protected mode LauncherPath is derived from the actual installed
++  // executable and ignores all guest environment overrides.
++  std::wstring runtime = LauncherPath();
++  const size_t slash = runtime.find_last_of(L"\\/");
++  if (slash == std::wstring::npos) return false;
++  runtime.resize(slash);
++  return gesher::usb_storage::ProtectedElfPolicy(path, runtime, protected_runtime, credentials, uid, gid);
++}
++
+@@ -385,0 +438,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
 +  if (IsSuName(prog) && gesher::usb_storage::ProtectedRuntimeEnabled()) {
 +    launch->kind = "su";
 +    launch->application = LauncherPath();
@@ -359,7 +377,7 @@ index d693bd9f..4c643b08 100644
 +    AppendArgs(&launch->command_line, argv, 1);
 +    return Finish(launch);
 +  }
-@@ -394,0 +440,10 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
+@@ -394,0 +456,10 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
 +  if (const std::wstring file = FilesystemTool(prog); !file.empty()) {
 +    std::string head;
 +    const int error = Probe(file, &head);
@@ -370,12 +388,12 @@ index d693bd9f..4c643b08 100644
 +    // Missing tools remain ENOENT; no format/check success is synthesized.
 +    return LaunchFile(file, head, argv, dir, depth, launch);
 +  }
-@@ -460,0 +516,4 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
+@@ -460,0 +532,4 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
 +  if (const std::wstring file = FilesystemTool(name); !file.empty()) {
 +    std::string head;
 +    return Probe(file, &head) == 0 ? file : std::wstring{};
 +  }
-@@ -489,0 +549,96 @@ bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
+@@ -489,0 +565,96 @@ bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 +namespace {
 +
 +DWORD DescriptorError() {
@@ -472,12 +490,22 @@ index d693bd9f..4c643b08 100644
 +
 +}  // namespace
 +
-@@ -512,0 +668,3 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -512,0 +684,3 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 +  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
 +    return SpawnProtectedCommand(launch, environment, cwd, fds, info, extra_flags);
 +  }
+diff --git a/compat/elf/exec/exec_spawn.h b/compat/elf/exec/exec_spawn.h
+index 194e9f9a..af68411c 100644
+--- a/compat/elf/exec/exec_spawn.h
++++ b/compat/elf/exec/exec_spawn.h
+@@ -63,0 +64,5 @@ std::wstring LauncherPath();
++// Every ELF entry, including an in-process exec/spawn transition, checks the
++// authenticated protected UID/GID. Root commands may load only the six sealed
++// installed filesystem helpers. Ordinary Android process execution is unchanged.
++bool CanLoadExecutableElf(const std::wstring& path);
++
 diff --git a/compat/elf/exec/gesher_exec.cc b/compat/elf/exec/gesher_exec.cc
-index cd785799..a41616ac 100644
+index cd785799..d84fe784 100644
 --- a/compat/elf/exec/gesher_exec.cc
 +++ b/compat/elf/exec/gesher_exec.cc
 @@ -27,0 +28,4 @@
@@ -487,7 +515,15 @@ index cd785799..a41616ac 100644
 +#include "../../usb_storage/protected_runtime_client.h"
 @@ -37,0 +42 @@
 +#include <unistd.h>
-@@ -378,0 +384,23 @@ int RunArguments(const std::vector<std::string>& args) {
+@@ -345,0 +351,7 @@ int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
++  // This guard is deliberately at the final loader entry, not only in the
++  // authority's direct --elf parser. Encoded spawn and future exec transitions
++  // cannot carry UID 0 into a package-controlled ELF image.
++  if (!ex::CanLoadExecutableElf(path)) {
++    std::fprintf(stderr, "gesher-exec: ELF image is not authorized for this protected process\n");
++    return 126;
++  }
+@@ -378,0 +391,23 @@ int RunArguments(const std::vector<std::string>& args) {
 +  if (!args.empty() && args[0] == "--su") {
 +    uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
 +    if (!gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) || uid != 0 || gid != 0) {
@@ -511,7 +547,19 @@ index cd785799..a41616ac 100644
 +    }
 +    return ex::RunShell(shell);
 +  }
-@@ -434,0 +463,30 @@ int main() {
+@@ -396,2 +431,3 @@ int RunArguments(const std::vector<std::string>& args) {
+-    if (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
+-        (launch.kind == "script" && launch.application == ex::LauncherPath())) {
++    if (!gesher::usb_storage::ProtectedRuntimeEnabled() &&
++        (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
++         (launch.kind == "script" && launch.application == ex::LauncherPath()))) {
+@@ -407 +443,4 @@ int RunArguments(const std::vector<std::string>& args) {
+-    // PE/batch programs keep the existing wait-and-propagate convention.
++    // A protected encoded spawn must expose its resolved target to the
++    // authority and receive a fresh exact-process grant. It never executes an
++    // arbitrary resolved image inline with the wrapper's credentials.
++    // Ordinary PE/batch programs keep the wait-and-propagate convention.
+@@ -434,0 +474,30 @@ int main() {
 +  int argc = 0;
 +  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
 +  if (!wargv || argc < 1) return 1;
@@ -542,7 +590,7 @@ index cd785799..a41616ac 100644
 +    const DWORD status = gesher::InitializeProtectedProcessResources();
 +    if (status != ERROR_SUCCESS) return 1;
 +  }
-@@ -447,5 +504,0 @@ int main() {
+@@ -447,5 +515,0 @@ int main() {
 -  int argc = 0;
 -  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
 -  std::vector<std::string> args;
@@ -1089,10 +1137,10 @@ index a3bc4dfd..ad04b557 100644
 +    return 0;
 +  }
 diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
-index 8e960fbb..46956137 100644
+index 8e960fbb..93cd9828 100644
 --- a/compat/posix/src/system_properties.cc
 +++ b/compat/posix/src/system_properties.cc
-@@ -25,0 +26,10 @@ namespace {
+@@ -25,0 +26,22 @@ namespace {
 +bool ProtectedSystemServer() {
 +  // The executable publishes this role only after the authority authenticates
 +  // its exact suspended creation handle and native resource bootstrap finishes.
@@ -1103,32 +1151,44 @@ index 8e960fbb..46956137 100644
 +  return query && query();
 +}
 +
-@@ -26,0 +37,2 @@ constexpr DWORD kCapacity = 4 * 1024 * 1024;
++HANDLE ProtectedWriterMutex() {
++  // Each DLL has its own copy of this POSIX implementation. The authenticated
++  // executable owns one unnamed mutex so the sealed token's default DACL never
++  // needs to be broadened to reopen a predictable name from another module.
++  using Acquire = uint32_t (*)(uint64_t*);
++  auto acquire = reinterpret_cast<Acquire>(GetProcAddress(GetModuleHandleW(nullptr),
++      "gesher_protected_property_mutex"));
++  uint64_t handle = 0;
++  if (!acquire || acquire(&handle) != ERROR_SUCCESS || !handle || handle > UINTPTR_MAX) return nullptr;
++  return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
++}
++
+@@ -26,0 +49,2 @@ constexpr DWORD kCapacity = 4 * 1024 * 1024;
 +// Match the previous format's maximum payload. Each area now has two banks.
 +constexpr DWORD kPayloadCapacity = kCapacity - 4 * sizeof(uint32_t);
-@@ -28 +40 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
+@@ -28 +52 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
 -constexpr uint32_t kVersion = 2;
 +constexpr uint32_t kVersion = 3;
-@@ -41 +53,5 @@ struct Header {
+@@ -41 +65,5 @@ struct Header {
 -  uint32_t used;
 +  uint32_t used[2];
 +};
 +struct AreaLayout {
 +  Header header;
 +  char banks[2][kPayloadCapacity];
-@@ -42,0 +59,2 @@ struct Header {
+@@ -42,0 +71,2 @@ struct Header {
 +static_assert(sizeof(AreaLayout) == sizeof(Header) + 2 * kPayloadCapacity);
 +constexpr DWORD kAreaSize = sizeof(AreaLayout);
-@@ -61,0 +80 @@ struct Area {
+@@ -61,0 +92 @@ struct Area {
 +  bool read_only = false;
-@@ -68,0 +88,6 @@ bool Valid(const std::string& name, const std::string& value);
+@@ -68,0 +100,6 @@ bool Valid(const std::string& name, const std::string& value);
 +bool InAppContainer() {
 +  DWORD contained = 0, size = 0;
 +  return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
 +                             &contained, sizeof(contained), &size) && contained != 0;
 +}
 +
-@@ -94,0 +120,9 @@ std::wstring FullPath(std::wstring path) {
+@@ -94,0 +132,9 @@ std::wstring FullPath(std::wstring path) {
 +  // Android/Java uses the canonical /mnt/<drive> form (ADR 0045). Passing
 +  // that form directly to GetFullPathNameW would resolve it as a directory
 +  // named "mnt" on the current drive, outside the intended Android root.
@@ -1138,7 +1198,13 @@ index 8e960fbb..46956137 100644
 +    path = std::wstring(1, path[5]) + L":" +
 +        (path.size() == 6 ? L"/" : path.substr(6));
 +  }
-@@ -264,8 +298,22 @@ bool Refresh(Area* area) {
+@@ -212 +258,4 @@ bool Persist(const std::wstring& path, const std::string* name, const Value* val
+-  mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
++  // Protected system_server is the sole writer. The shared unnamed mutex is
++  // recursive for this thread when Current() calls persistence while locked.
++  mutex.value = ProtectedSystemServer() ? ProtectedWriterMutex() :
++      CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
+@@ -264,8 +313,22 @@ bool Refresh(Area* area) {
 -  const auto* header = static_cast<Header*>(area->view);
 -  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
@@ -1169,7 +1235,7 @@ index 8e960fbb..46956137 100644
 +  // A writer can publish repeatedly while the reader is copying a snapshot.
 +  // Keep the last coherent values, and retry the new generation on next use.
 +  return area->cached_generation != 0;
-@@ -275,10 +323,17 @@ bool Publish(Area* area, Snapshot values) {
+@@ -275,10 +338,17 @@ bool Publish(Area* area, Snapshot values) {
 -  if (data.size() > kCapacity - sizeof(Header)) return false;
 -  auto* header = static_cast<Header*>(area->view);
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
@@ -1197,22 +1263,23 @@ index 8e960fbb..46956137 100644
 +    header->magic = kMagic;
 +    header->version = kVersion;
 +  }
-@@ -353,2 +408,3 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -353,2 +423,3 @@ Area* Current() { // LocalMutex is held by every caller.
 -  std::wstring path = dir + L"\\" + Key(session) + L".area";
 -  if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
 +  // The previous format has a single bank. Keep an older live process from
 +  // attaching to the new layout during a runtime upgrade.
 +  std::wstring path = dir + L"\\" + Key(session + L"/3") + L".area";
-@@ -356,0 +413 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -356,0 +428 @@ Area* Current() { // LocalMutex is held by every caller.
 +  area->read_only = InAppContainer() && !ProtectedSystemServer();
-@@ -358 +415,5 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -358 +430,6 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +  if (!area->read_only) {
 +    if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
-+    area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
++    area->mutex.value = ProtectedSystemServer() ? ProtectedWriterMutex() :
++        CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +    if (!area->mutex.value) return nullptr;
 +  }
-@@ -360,3 +421,4 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -360,3 +437,4 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!lock.held) return nullptr;
 -  area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
 -                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
@@ -1220,21 +1287,21 @@ index 8e960fbb..46956137 100644
 +  area->file.value = CreateFileW(path.c_str(), area->read_only ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
 +                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
 +                                 area->read_only ? OPEN_EXISTING : OPEN_ALWAYS,
-@@ -365 +427,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -365 +443,2 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
 +  area->mapping.value = CreateFileMappingW(area->file.value, nullptr,
 +      area->read_only ? PAGE_READONLY : PAGE_READWRITE, 0, area->read_only ? 0 : kAreaSize, nullptr);
-@@ -367 +430,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -367 +446,2 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
 +  area->view = MapViewOfFile(area->mapping.value, area->read_only ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS,
 +                            0, 0, kAreaSize);
-@@ -370 +434 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -370 +450 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!header->magic) {
 +  if (!area->read_only && !__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) {
-@@ -381 +445 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -381 +461 @@ Area* Current() { // LocalMutex is held by every caller.
 -  RemoveOldAreas(dir, path);
 +  if (!result->read_only) RemoveOldAreas(dir, path);
-@@ -422,6 +486,2 @@ namespace {
+@@ -422,6 +502,2 @@ namespace {
 -// few properties (log.tag.*). Without the cross-process mutex, this reads only
 -// the header's 32-bit generation (one aligned load) and never the shared
 -// values: when it equals the generation this process last decoded under the
@@ -1243,37 +1310,37 @@ index 8e960fbb..46956137 100644
 -// different generation takes the mutex and decodes again.
 +// few properties (log.tag.*). Refresh uses the unlocked generation fast path
 +// and decodes a bank only when another process has published new values.
-@@ -432,3 +492,2 @@ Area* Refreshed() {
+@@ -432,3 +508,2 @@ Area* Refreshed() {
 -  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
 -    MutexLock lock(area->mutex.value);
 -    if (!lock.held || !Refresh(area)) return nullptr;
 +  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) == area->cached_generation) {
 +    return area;
-@@ -436 +495,2 @@ Area* Refreshed() {
+@@ -436 +511,2 @@ Area* Refreshed() {
 -  return area;
 +  MutexLock lock(area->mutex.value);
 +  return (area->read_only || lock.held) && Refresh(area) ? area : nullptr;
-@@ -470 +530 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -470 +546 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (!area) return false;
 +  if (!area || area->read_only) return false;
-@@ -479 +539 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -479 +555 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
 +  if (Encode(values).size() > kPayloadCapacity) return false;
-@@ -485,4 +545,2 @@ Snapshot List() {
+@@ -485,4 +561,2 @@ Snapshot List() {
 -  Area* area = Current();
 -  if (!area) return {};
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->values : Snapshot{};
 +  Area* area = Refreshed();
 +  return area ? area->values : Snapshot{};
-@@ -492,4 +550,2 @@ uint32_t AreaSerial() {
+@@ -492,4 +566,2 @@ uint32_t AreaSerial() {
 -  Area* area = Current();
 -  if (!area) return 0;
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->cached_generation : 0;
 +  Area* area = Refreshed();
 +  return area ? area->cached_generation : 0;
-@@ -523 +579 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+@@ -523 +595 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
 -      if (!lock.held || !Refresh(area)) return false;
 +      if ((!area->read_only && !lock.held) || !Refresh(area)) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
@@ -1431,6 +1498,60 @@ index 6b226dd4..a2144c7f 100644
 +                 flag, L"private-name", L"17", L"4", L"Main"}) == EXIT_FAILURE && vm_calls == 0,
 +            "duplicate routing must not silently replace a native security decision");
 +#endif
+diff --git a/tools/test_environment_lookup_contracts.py b/tools/test_environment_lookup_contracts.py
+index f2407351..51b3d5b5 100755
+--- a/tools/test_environment_lookup_contracts.py
++++ b/tools/test_environment_lookup_contracts.py
+@@ -4,3 +4,4 @@
+-This never starts a process. Probe/module-path/encoding/Win32 comparison calls
+-are deterministic host replacements. Environment decoding and selection bodies
+-are copied verbatim from the selected source snapshot.
++This never starts a process. Probe/module-path/encoding/Win32 comparison and
++authenticated-runtime query calls are deterministic host replacements.
++Environment decoding, selection and protected ELF policy bodies are copied
++verbatim from the selected source snapshot.
+@@ -44,0 +46,2 @@ def main():
++    protected_policy = (args.source_root / 'compat/usb_storage/protected_tool_paths.h').read_text()
++    protected_policy = protected_policy[protected_policy.index('namespace gesher::usb_storage {'):]
+@@ -67 +70 @@ def main():
+-    constexpr int TRUE = 1, CSTR_LESS_THAN = 1;
++    constexpr int TRUE = 1, CSTR_LESS_THAN = 1, CSTR_EQUAL = 2;
+@@ -70,0 +74,2 @@ def main():
++    static bool protected_runtime = false, protected_credentials = false;
++    static uint32_t protected_uid = UINT32_MAX, protected_gid = UINT32_MAX;
+@@ -95,0 +101,9 @@ def main():
++    @PROTECTED_POLICY@
++    namespace gesher::usb_storage {
++    bool ProtectedRuntimeEnabled() { return protected_runtime; }
++    bool ProtectedRuntimeCredentials(uint32_t* uid, uint32_t* gid) {
++      if (!protected_credentials) return false;
++      *uid = protected_uid; *gid = protected_gid;
++      return true;
++    }
++    }
+@@ -116,0 +131 @@ def main():
++    bool CanLoadExecutableElf(const std::wstring& path);
+@@ -126 +141 @@ def main():
+-    '''.replace('@HEADER@', str(header)).replace('@RESERVED@', str(reserved))
++    '''.replace('@HEADER@', str(header)).replace('@RESERVED@', str(reserved)).replace('@PROTECTED_POLICY@', protected_policy)
+@@ -136,0 +152,2 @@ def main():
++      protected_runtime = false; protected_credentials = false;
++      protected_uid = UINT32_MAX; protected_gid = UINT32_MAX;
+@@ -180,0 +198,14 @@ def main():
++      Reset(); protected_runtime = true; process_launcher = "C:\\untrusted\\replacement.exe";
++      Check("protected launcher ignores guest environment override", ex::LauncherPath() == L"C:\\fixture\\gesher-exec.exe");
++      Reset(); protected_runtime = true; process_launcher = malformed;
++      launch = {}; result = ex::PrepareLaunch({"sh"}, "", &launch);
++      Check("protected shell ignores malformed guest launcher override", result == 0 && launch.application == L"C:\\fixture\\gesher-exec.exe");
++      Check("protected ELF requires authenticated credentials", !ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat"));
++      protected_credentials = true; protected_uid = 0; protected_gid = 0;
++      Check("protected root rejects app-controlled ELF", !ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
++      Check("protected root permits exact sealed filesystem tool", ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat"));
++      Check("protected root rejects traversal spelling", !ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\..\\bin\\mkfs.fat"));
++      protected_uid = 10000; protected_gid = 10000;
++      Check("ordinary protected app retains its ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
++      Reset();
++      Check("ordinary Android keeps unrestricted ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
 diff --git a/tools/test_temp_directory.py b/tools/test_temp_directory.py
 index 9c65429d..8adecaae 100644
 --- a/tools/test_temp_directory.py

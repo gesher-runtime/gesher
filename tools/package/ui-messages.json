@@ -408,6 +408,42 @@
       "en": "Setup could not download these components and will continue without them:\n\n%1\nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).",
       "he": "לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:\n\n%1\nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר)."
     },
+    "setup_install_type_title": {
+      "en": "Installation Type",
+      "he": "סוג התקנה"
+    },
+    "setup_install_type_desc": {
+      "en": "Choose how you want to install Gesher.",
+      "he": "בחר כיצד ברצונך להתקין את גשר."
+    },
+    "setup_install_standard": {
+      "en": "Standard installation (recommended for this computer)",
+      "he": "התקנה רגילה (מומלץ למחשב זה)"
+    },
+    "setup_install_standard_desc": {
+      "en": "Installs into your user profile, registers .apk associations, and adds Start menu shortcuts.",
+      "he": "מתקין לפרופיל המשתמש, משייך קובצי .apk ומוסיף קיצורי דרך לתפריט התחל."
+    },
+    "setup_install_portable": {
+      "en": "Portable installation (for USB flash drives or standalone folder)",
+      "he": "התקנה ניידת (לדיסק-און-קי או תיקייה עצמאית)"
+    },
+    "setup_install_portable_desc": {
+      "en": "Extracts Gesher as a self-contained portable application. Does not modify the Windows registry or Start menu.",
+      "he": "מחלץ את גשר כיישום נייד ועצמאי. אינו משנה את רישום המערכת (Registry) ולא מוסיף קיצורים לתפריט התחל."
+    },
+    "setup_portable_existing_install": {
+      "en": "This folder contains a standard Gesher installation. Choose another folder for the portable installation.",
+      "he": "בתיקייה זו קיימת התקנה רגילה של גשר. יש לבחור תיקייה אחרת להתקנה הניידת."
+    },
+    "setup_standard_existing_portable": {
+      "en": "This folder contains a portable Gesher installation. Choose portable installation to update it, or choose another folder.",
+      "he": "בתיקייה זו קיימת התקנה ניידת של גשר. לעדכונה יש לבחור בהתקנה ניידת, או לבחור תיקייה אחרת."
+    },
+    "setup_portable_write_failed": {
+      "en": "The portable data folder or launcher could not be written. Check that the destination is writable.",
+      "he": "לא ניתן לכתוב את תיקיית הנתונים או את קובץ ההפעלה הנייד. יש לוודא שניתן לכתוב לתיקיית היעד."
+    },
     "cp_title": {
       "en": "Gesher Control Center",
       "he": "לוח הבקרה של גשר"

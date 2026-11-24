@@ -31,9 +31,18 @@ bool ExactPackageSid(PSID sid) {
 }
 
 struct ClientSids {
-  alignas(TOKEN_GROUPS) BYTE groups[sizeof(TOKEN_GROUPS) + SECURITY_MAX_SID_SIZE];
+  // Round the storage itself to its required alignment. This keeps every SID
+  // buffer aligned without implicit inter-member padding (MSVC /W4 /WX).
+  static constexpr size_t kGroupsBytes =
+      (sizeof(TOKEN_GROUPS) + SECURITY_MAX_SID_SIZE + alignof(TOKEN_GROUPS) - 1) /
+      alignof(TOKEN_GROUPS) * alignof(TOKEN_GROUPS);
+  static constexpr size_t kContainerBytes =
+      (sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE +
+       alignof(TOKEN_APPCONTAINER_INFORMATION) - 1) /
+      alignof(TOKEN_APPCONTAINER_INFORMATION) * alignof(TOKEN_APPCONTAINER_INFORMATION);
+  alignas(TOKEN_GROUPS) BYTE groups[kGroupsBytes];
   alignas(TOKEN_APPCONTAINER_INFORMATION)
-      BYTE container[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE];
+      BYTE container[kContainerBytes];
   PSID logon = nullptr;
   PSID package = nullptr;
 

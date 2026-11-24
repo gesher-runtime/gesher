@@ -39,7 +39,10 @@ struct Media {
   std::vector<uint8_t> bytes = std::vector<uint8_t>(kMediaBytes);
   bool consent = true;
   bool readonly = false;
+  DWORD flush_error = ERROR_SUCCESS;
+  DWORD readonly_error = ERROR_SUCCESS;
   std::atomic<uint64_t> writes{0};
+  std::atomic<uint64_t> flushes{0};
   explicit Media(uint8_t partition_type) {
     bytes[510] = 0x55; bytes[511] = 0xaa;
     bytes[446 + 4] = partition_type;
@@ -93,13 +96,15 @@ bool Serve(BlockChannel& channel, Media& media) {
     }
     if (request.operation == BlockOperation::kFlush) {
       if (request.length || request.offset) return false;
-      if (!Reply(channel, 0)) return true;
+      ++media.flushes;
+      if (!Reply(channel, media.flush_error)) return true;
       continue;
     }
     if (request.operation == BlockOperation::kSetReadOnly) {
       if (request.length || request.offset > 1) return false;
-      if (media.consent) media.readonly = request.offset != 0;
-      if (!Reply(channel, media.consent ? 0 : ERROR_ACCESS_DENIED)) return true;
+      const DWORD error = !media.consent ? ERROR_ACCESS_DENIED : media.readonly_error;
+      if (!error) media.readonly = request.offset != 0;
+      if (!Reply(channel, error)) return true;
       continue;
     }
     if (!request.length || request.length > kBlockTransferLimit || request.offset > media.bytes.size() ||
@@ -141,9 +146,10 @@ std::string Output(HANDLE file) {
   return text;
 }
 
-struct Result { int code = -1; bool timeout = false; bool protocol = false; };
+struct Result { int code = -1; bool timeout = false; bool protocol = false; std::string output; };
 
 Result Run(Media& media, const std::vector<std::string>& arguments, DWORD timeout = 120000) {
+  std::atomic<bool> served{false};  // Outlives Child's thread, including failed resume.
   struct Child {
     PROCESS_INFORMATION process{};
     std::unique_ptr<BlockChannel> channel;
@@ -204,7 +210,6 @@ Result Run(Media& media, const std::vector<std::string>& arguments, DWORD timeou
   DWORD sent = 0;
   if (!WriteFile(bootstrap.get(), &guest, sizeof(guest), &sent, nullptr) || sent != sizeof(guest)) return result;
   bootstrap.reset();
-  std::atomic<bool> served{false};
   child.server = std::thread([&] { served = Serve(*child.channel, media); });
   if (ResumeThread(child.process.hThread) != 1) return result;
   const DWORD waited = WaitForSingleObject(child.process.hProcess, timeout);
@@ -218,8 +223,9 @@ Result Run(Media& media, const std::vector<std::string>& arguments, DWORD timeou
   child.channel->Revoke();
   child.server.join();
   result.protocol = served.load();
+  result.output = Output(output.get());
   std::printf("original tool %s: exit=%d timeout=%s\n%s\n", arguments.size() > 2 ? arguments[2].c_str() : "fixture",
-      result.code, result.timeout ? "yes" : "no", Output(output.get()).c_str());
+      result.code, result.timeout ? "yes" : "no", result.output.c_str());
   return result;
 }
 
@@ -237,6 +243,42 @@ void Require(bool condition, const char* message) {
 
 void Clean(const Result& result, const char* message) {
   Require(result.protocol && !result.timeout && result.code == 0, message);
+}
+
+void CheckMediaControls() {
+  Media media(0x0c);
+  auto result = Run(media, {"--tool", "sync"});
+  Clean(result, "sync failed with an active writable fixture grant");
+  Require(media.flushes > 0 && media.writes == 0, "sync did not reach the broker or changed media bytes");
+  media.consent = false;
+  uint64_t before = media.flushes.load();
+  Clean(Run(media, {"--tool", "sync"}), "read-only session flush failed");
+  Require(media.flushes > before && media.writes == 0, "read-only sync bypassed the broker");
+  result = Run(media, {"--tool", "blockdev", "--setrw", kNode});
+  Require(result.protocol && !result.timeout && result.code > 0,
+      "blockdev cleared read-only state without write consent");
+  media.consent = true;
+  media.readonly = true;
+  result = Run(media, {"--tool", "blockdev", "--getro", kNode});
+  Clean(result, "blockdev did not query live media state");
+  Require(result.output == "1\n", "blockdev misreported read-only media");
+  media.readonly_error = ERROR_WRITE_PROTECT;
+  result = Run(media, {"--tool", "blockdev", "--setrw", kNode});
+  Require(result.protocol && !result.timeout && result.code > 0 && media.readonly,
+      "blockdev claimed to remove hardware write protection");
+  media.readonly_error = ERROR_SUCCESS;
+  Clean(Run(media, {"--tool", "blockdev", "--setrw", kNode}), "software read-only clear failed");
+  Require(!media.readonly && media.writes == 0, "blockdev did not apply the requested state faithfully");
+  result = Run(media, {"--tool", "blockdev", "--getro", kNode});
+  Clean(result, "blockdev did not re-query changed media state");
+  Require(result.output == "0\n", "blockdev cached stale read-only state");
+  for (DWORD error : {DWORD{ERROR_WRITE_FAULT}, DWORD{ERROR_DEVICE_NOT_CONNECTED}}) {
+    before = media.flushes.load();
+    media.flush_error = error;
+    result = Run(media, {"--tool", "sync"});
+    Require(result.protocol && !result.timeout && result.code > 0 && media.flushes > before,
+        "sync hid an actual flush failure or removal");
+  }
 }
 
 uint32_t SuperblockCrc(const uint8_t* bytes) {
@@ -326,7 +368,7 @@ int main() {
   if (!raw || count < 1) return 1;
   std::vector<std::wstring> args(raw, raw + count);
   LocalFree(raw);
-  if (count >= 2 && args[1] == L"--elf") return fs_fixture::Guest(false);
+  if (count >= 2 && (args[1] == L"--elf" || args[1] == L"--tool")) return fs_fixture::Guest(false);
   if (count == 2 && args[1] == L"--usb-fixture-hang") return fs_fixture::Guest(true);
   std::wstring tools;
   if (count == 3 && args[1] == L"--tools") tools = args[2];
@@ -334,6 +376,7 @@ int main() {
     tools = args[0].substr(0, args[0].find_last_of(L"\\/")) + L"\\filesystem-tools\\bin";
   } else return 2;
   try {
+    fs_fixture::CheckMediaControls();
     fs_fixture::CheckFilesystems(tools);
     std::puts("Original FAT32/exFAT/ext4 format, check, repair and consent fixture passed");
     return 0;

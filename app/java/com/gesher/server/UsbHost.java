@@ -189,7 +189,10 @@ final class UsbHost {
                 device = descriptors == null ? null : parse(name, descriptors.raw,
                         index -> descriptors.strings[index]);
             }
-            if (device == null || nativeVersion(path) != version) continue;
+            if (device == null || nativeVersion(path) != version) {
+                serialStrings.remove(name);
+                continue;
+            }
             ++nextAddress;
             Attachment attachment = new Attachment(path, version, device, backend, serialStrings.get(name));
             byName.put(name, attachment);
@@ -383,12 +386,18 @@ final class UsbHost {
 
     synchronized void grant(String name, int uid) {
         Attachment device = valid(name);
-        if (device == null || !device.supportsTransfers()) return;
+        if (device == null) throw new IllegalArgumentException("USB device is not attached");
+        if (!device.supportsTransfers()) {
+            throw new UnsupportedOperationException("Windows owns this USB storage transport");
+        }
+        boolean found = false;
         for (ApkPackage installation : packages.packages()) {
             if (installation.uid() == uid && installed(installation)) {
                 device.grants.add(installation);
+                found = true;
             }
         }
+        if (!found) throw new IllegalArgumentException("UID has no installed package");
     }
 
     synchronized ParcelFileDescriptor open(String name, String packageName) {
@@ -449,6 +458,10 @@ final class UsbHost {
                 pending.remove(request);
                 allowed = allowed && installed(installation)
                         && valid(device.device.getDeviceName()) == device;
+                // A privileged administrator can deny while the consent UI is
+                // open. Never return a grant that the persistent decision has
+                // already withdrawn before this dialog completed.
+                allowed = allowed && !Boolean.FALSE.equals(persistent.get(device.permissionKey, installation));
                 if (allowed) device.grants.add(installation);
             }
             UsbService.sendDevicePermission(reply, device.device, allowed);

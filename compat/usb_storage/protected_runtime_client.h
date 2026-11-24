@@ -18,6 +18,12 @@ bool ConfigureProtectedRuntimeStartup(std::string_view locator,
 bool ProtectedRuntimeEnabled();
 bool ProtectedRuntimeCredentials(uint32_t* uid, uint32_t* gid);
 bool ProtectedRuntimeIsSystemServer();
+// An owned duplicate of the executable's unnamed property-writer mutex.
+// Available only after authenticated system_server initialization.
+uint32_t ProtectedPropertyMutex(uint64_t* handle);
+// An owned reduced duplicate of the authority-created mutex for this package's
+// log, shared by its admitted processes and by every DLL in one executable.
+uint32_t ProtectedLogMutex(uint64_t* handle);
 
 struct ProtectedStartupResources {
   uint64_t standard_handles[3]{};

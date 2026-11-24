@@ -82,7 +82,29 @@ struct Destination {
     }
     wchar_t name[64];
     std::swprintf(name, 64, L"Local\\gesher-log-%016llx", static_cast<unsigned long long>(hash));
-    mutex.value = CreateMutexW(nullptr, FALSE, name);
+    // Protected guests receive one authority-created unnamed mutex per package.
+    // A default-DACL named mutex cannot be safely reopened by another DLL or
+    // sibling process, and a desktop-controlled name cannot establish trust.
+#ifdef _WIN32
+    using Enabled = bool (*)();
+    auto enabled = reinterpret_cast<Enabled>(GetProcAddress(GetModuleHandleW(nullptr),
+        "gesher_protected_runtime_enabled"));
+    if (enabled && enabled()) {
+      using Acquire = uint32_t (*)(uint64_t*);
+      auto acquire = reinterpret_cast<Acquire>(GetProcAddress(GetModuleHandleW(nullptr),
+          "gesher_protected_log_mutex"));
+      uint64_t handle = 0;
+      const DWORD status = acquire ? acquire(&handle) : ERROR_ACCESS_DENIED;
+      if (status == ERROR_SUCCESS && handle && handle <= UINTPTR_MAX) {
+        mutex.value = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
+      } else {
+        SetLastError(status != ERROR_SUCCESS ? status : ERROR_INVALID_HANDLE);
+      }
+    } else
+#endif
+    {
+      mutex.value = CreateMutexW(nullptr, FALSE, name);
+    }
     if (!mutex.value) {
       if (error) *error = "cannot open the log mutex (Windows error " + std::to_string(GetLastError()) + ")";
       return false;

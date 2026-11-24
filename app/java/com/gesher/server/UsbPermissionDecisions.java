@@ -112,6 +112,14 @@ final class UsbPermissionDecisions {
                 if (output != null) file.failWrite(output);
                 throw failure;
             }
+            // AtomicFile.finishWrite has a void result: some Android versions
+            // log a failed replacement instead of throwing it. A successful
+            // setter must represent the decision that was actually committed.
+            try (var input = file.openRead()) {
+                if (!Arrays.equals(bytes.toByteArray(), input.readNBytes(MAX_BYTES + 1))) {
+                    throw new IOException("USB permission replacement did not commit");
+                }
+            }
             decisions = changed;
         } catch (IOException failure) {
             throw new IllegalStateException("Cannot persist USB permission decision", failure);

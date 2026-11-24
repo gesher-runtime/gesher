@@ -404,17 +404,20 @@ USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
 # require the existing OFD receipt's exact bytes as before.
 USB_BLOCK_PATH_BASES = dict.fromkeys((
  'compat/bionic/process_bionic.cc',
+ 'compat/elf/exec/exec_spawn.h',
  'compat/elf/exec/gesher_exec.cc',
  'compat/libcore/process.cc',
  'compat/posix/src/binder_file_descriptions.h',
  'compat/posix/src/binder_wire.h',
+ 'tools/test_environment_lookup_contracts.py',
 ), 'af2a394d0f5399f954aa00aeaf37011d42b96623')
-USB_BLOCK_TRANSITION_SHA256 = 'eeeb5ed8d9a7612a32f9946255f5258969e7411dc7cb80ffdaea72769aaf8a51'
+USB_BLOCK_TRANSITION_SHA256 = '661eab396e5603175c1195c1bc32a11a6c3ca78798cace2c793edf9628da16a8'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
  'compat/bionic/process_bionic.cc',
  'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/exec_spawn.h',
  'compat/elf/exec/gesher_exec.cc',
  'compat/elf/exec/gesher_shell.cc',
  'compat/elf/exec/shell_execute.inc',
@@ -434,6 +437,7 @@ USB_BLOCK_TRANSITION_PATHS = (
  'compat/posix/src/unistd.cc',
  'compat/posix/src/unix_rights.cc',
  'tests/art-temp/entry_test.cc',
+ 'tools/test_environment_lookup_contracts.py',
  'tools/test_temp_directory.py',
 )
 

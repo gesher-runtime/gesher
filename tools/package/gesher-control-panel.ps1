@@ -13,7 +13,8 @@ try {
 
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
 $script:UpdateDirectory = Join-Path $root 'updates'
 
 # One Control Center. A second start (the Start menu again, or an app's "App info", which
@@ -31,8 +32,9 @@ $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
 $script:PanelInstanceCreated = $false
-$script:PanelInstance = [System.Threading.Mutex]::new($false, 'Local\Gesher.ControlPanel', [ref] $script:PanelInstanceCreated)
-$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, 'Local\Gesher.ControlPanel.Show')
+$panelName = Get-GesherControlPanelName $root
+$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
+$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
 if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
     $null = $script:PanelShowEvent.Set()
     exit 0

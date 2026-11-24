@@ -14,6 +14,8 @@ target_compile_options(gesher_exec_spawn PRIVATE -Wall -Wextra -Werror)
 # return ERROR_NOT_ENOUGH_MEMORY at the Spawn/SpawnWithFds status boundaries.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/exec_spawn.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/gesher_tools.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
 
 add_executable(ofd_native_child ${CMAKE_SOURCE_DIR}/tests/exec/ofd-native-child.cc)
 # posix.cmake supplies a directory-wide link_libraries default. This fixture

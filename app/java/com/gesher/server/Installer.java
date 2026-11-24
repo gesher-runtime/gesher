@@ -111,6 +111,23 @@ final class Installer {
         return root;
     }
 
+    static String resolveCodePath(String codePath) throws IOException {
+        if (codePath == null || codePath.isEmpty()) return codePath;
+        String name = new File(codePath).getName();
+        if (name.isEmpty() || name.equals(".") || name.equals("..")) return codePath;
+        // The registry belongs to this profile, including when it was copied and
+        // the old profile still exists. Never prefer another profile's APKs just
+        // because its old absolute path remains accessible.
+        File relocated = new File(codeRoot(), name);
+        if (Files.isDirectory(relocated.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                && relocated.equals(relocated.getCanonicalFile())) {
+            return relocated.getPath();
+        }
+        // Keep invalid/missing paths for the existing parser to reject. Do not
+        // weaken its canonical direct-child and no-symlink code boundary.
+        return codePath;
+    }
+
     private static Map<String, Entry> readRegistry() throws IOException {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
@@ -119,7 +136,8 @@ final class Installer {
             String[] fields = line.split("\t", -1);
             if (fields.length < 4 || line.startsWith("#")) continue;
             try {
-                entries.put(fields[0], new Entry(fields[0], fields[1],
+                String codePath = resolveCodePath(fields[1]);
+                entries.put(fields[0], new Entry(fields[0], codePath,
                         Long.parseLong(fields[2]), Long.parseLong(fields[3]),
                         readInstallSource(fields)));
             } catch (NumberFormatException e) {

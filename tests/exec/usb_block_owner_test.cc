@@ -17,9 +17,68 @@
 
 #include "../../compat/usb_storage/block_broker.h"
 #include "../../compat/usb_storage/block_channel.h"
+#include "../../compat/usb_storage/protected_tool_paths.h"
+#include "../../compat/elf/exec/spawn_actions.h"
 
 namespace {
 using namespace gesher::usb_storage;
+
+bool CheckProtectedElfPolicy() {
+  // Exercise the same path/credential decision at the authority and final ELF
+  // entry. Credentials here are explicit fixture inputs, not a substitute for
+  // the protected-process registration and token tests.
+  const std::wstring runtime = L"C:\\Program Files\\Gesher\\runtime";
+  const std::wstring tools = runtime + L"\\filesystem-tools\\bin\\";
+  const std::wstring package = L"C:\\ProgramData\\Gesher\\data\\app\\package\\lib\\attacker.so";
+  struct Case { std::wstring path; bool allowed; };
+  std::vector<Case> cases;
+  for (const wchar_t* name : {L"mkfs.fat", L"fsck.fat", L"mkfs.exfat", L"fsck.exfat", L"mke2fs", L"e2fsck"}) {
+    cases.push_back({tools + name, true});
+  }
+  cases.push_back({L"c:\\PROGRAM FILES\\GESHER\\RUNTIME\\filesystem-tools\\bin\\MKE2FS", true});
+  for (const std::wstring& path : {
+      std::wstring{}, package, std::wstring{L"mke2fs"}, std::wstring{L"filesystem-tools\\bin\\mke2fs"},
+      std::wstring{L"/system/bin/mkfs.ext4"}, tools + L"mkfs.ext4", tools + L"mke2fs.exe",
+      tools + L"mke2fs:payload", tools + L"mke2fs::$DATA", tools + L"mke2fs.", tools + L"mke2fs ",
+      tools + L"..\\bin\\mke2fs", tools + L"..\\..\\..\\data\\app\\attacker.so",
+      tools + L"mke2fs\\attacker.so", runtime + L"-other\\filesystem-tools\\bin\\mke2fs",
+      std::wstring{L"C:Program Files\\Gesher\\runtime\\filesystem-tools\\bin\\mke2fs"},
+      std::wstring{L"\\\\?\\C:\\Program Files\\Gesher\\runtime\\filesystem-tools\\bin\\mke2fs"},
+      std::wstring{L"\\\\attacker\\share\\filesystem-tools\\bin\\mke2fs"},
+      tools + L"mke2fs" + std::wstring(1, L'\0') + L".so", std::wstring(32768, L'a')}) {
+    cases.push_back({path, false});
+  }
+  unsigned checked = 0;
+  for (const auto& entry : cases) {
+    if (ProtectedElfPolicy(entry.path, runtime, true, true, 0, 0) != entry.allowed ||
+        ProtectedElfPolicy(entry.path, runtime, true, true, 10000, 0) != entry.allowed ||
+        ProtectedElfPolicy(entry.path, runtime, true, true, 0, 10000) != entry.allowed ||
+        ProtectedElfPolicy(entry.path, runtime, true, false, 0, 0)) return false;
+    // The old bypass carried this target through --spawn while argv[0]
+    // impersonated a trusted helper. Neither serialization nor an alias can
+    // authorize the decoded image; directory actions and PATH are irrelevant
+    // to the exact resolved target examined at the final loader boundary.
+    gesher::exec::SpawnRequest request;
+    request.program.assign(entry.path.begin(), entry.path.end());
+    request.argv = {"mkfs.ext4", "-F", "/dev/block/sdb1"};
+    request.search = true;
+    request.search_path = "C:\\attacker";
+    request.actions.push_back({3, -1, -1, 0, 0, "C:\\attacker"});
+    gesher::exec::SpawnRequest decoded;
+    if (!gesher::exec::DecodeSpawn(gesher::exec::EncodeSpawn(request), &decoded) ||
+        decoded.program != request.program || decoded.argv != request.argv ||
+        decoded.actions.size() != 1 || decoded.actions[0].path != "C:\\attacker" ||
+        ProtectedElfPolicy(std::wstring(decoded.program.begin(), decoded.program.end()), runtime,
+                           true, true, 0, 0) != entry.allowed) return false;
+    ++checked;
+  }
+  if (!ProtectedElfPolicy(package, runtime, false, false, 0, 0) ||
+      !ProtectedElfPolicy(package, runtime, true, true, 10000, 10000) ||
+      ProtectedElfPolicy(tools + L"mke2fs", L"", true, true, 0, 0) ||
+      ProtectedElfPolicy(tools + L"mke2fs", runtime + std::wstring(1, L'\0'), true, true, 0, 0)) return false;
+  std::printf("Protected root ELF policy passed: %u direct and encoded targets; ordinary app ELF retained\n", checked);
+  return true;
+}
 
 bool Transfer(const BlockChannel& channel, void* bytes, DWORD size, bool writing) {
   OVERLAPPED pending{};
@@ -132,6 +191,12 @@ int Check(const char* dll, bool attach_from_dll, BlockChannel& channel, const Bl
   const int from_exe = open("/dev/block/sdb", O_RDWR);
   const int from_dll = module.open();
   if (from_exe < 0 || from_dll < 0) return 14;
+  // Optional upstream mkfs verification can request direct I/O. The broker
+  // implements buffered sector I/O, so it must refuse rather than claim that
+  // either open or a later F_SETFL enabled an unimplemented cache mode.
+  if (open("/dev/block/sdb", O_RDONLY | O_DIRECT) != -1 || errno != EOPNOTSUPP ||
+      fcntl(from_exe, F_SETFL, O_DIRECT) != -1 || errno != EINVAL ||
+      (fcntl(from_exe, F_GETFL) & O_DIRECT)) return 22;
   char value[6]{};
   if (module.read(from_exe, value, sizeof(value), 513) != sizeof(value) ||
       std::memcmp(value, "shared", sizeof(value)) != 0) return 15;
@@ -156,6 +221,10 @@ int Check(const char* dll, bool attach_from_dll, BlockChannel& channel, const Bl
 
 int main(int argc, char** argv) {
   if (argc != 3 || (std::strcmp(argv[2], "exe") && std::strcmp(argv[2], "dll"))) return 2;
+  if (!CheckProtectedElfPolicy()) {
+    std::fprintf(stderr, "Protected root ELF path/credential policy failed\n");
+    return 7;
+  }
   std::unique_ptr<BlockChannel> channel;
   if (BlockChannel::Create(&channel) != ERROR_SUCCESS) return 3;
   const HANDLE self = OpenProcess(PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, GetCurrentProcessId());

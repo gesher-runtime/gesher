@@ -61,6 +61,11 @@ std::wstring WindowsPath(const std::string& path, const std::string& dir = "");
 // gesher-exec.exe: $GESHER_EXEC_LAUNCHER, else next to the running executable.
 std::wstring LauncherPath();
 
+// Every ELF entry, including an in-process exec/spawn transition, checks the
+// authenticated protected UID/GID. Root commands may load only the six sealed
+// installed filesystem helpers. Ordinary Android process execution is unchanged.
+bool CanLoadExecutableElf(const std::wstring& path);
+
 // How a program runs.
 struct Launch {
   std::wstring application;   // the image CreateProcessW starts

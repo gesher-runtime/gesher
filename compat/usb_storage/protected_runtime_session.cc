@@ -12,6 +12,7 @@
 #include "binder_listener_factory.h"
 #include "block_session.h"
 #include "protected_signal.h"
+#include "protected_tool_paths.h"
 #include "../framework/app_container.h"
 
 #include <aclapi.h>
@@ -273,6 +274,7 @@ struct Entry {
   std::wstring package, digest, signer, apk;
   Handle apk_pin;
   std::array<Handle, 3> standard;
+  std::shared_ptr<void> log_mutex;
   std::unique_ptr<BlockSession> block;
   std::unique_ptr<ProtectedSignalChannel> signals;
   std::vector<std::wstring> app_environment;
@@ -344,6 +346,7 @@ class Session {
     bool application;
   };
   std::map<uint64_t, Exit> exits_;
+  std::map<std::wstring, std::weak_ptr<void>> log_mutexes_;
   std::unique_ptr<HostDisk> selected_;
   uint64_t next_id_ = 3;
   bool application_started_ = false;
@@ -525,6 +528,16 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
 }
 
 DWORD Session::MakeLogs(Entry& entry) {
+  std::erase_if(log_mutexes_, [](const auto& item) { return item.second.expired(); });
+  const std::wstring key = entry.system_server ? L"system" : L"app:" + entry.package;
+  auto& shared = log_mutexes_[key];
+  entry.log_mutex = shared.lock();
+  if (!entry.log_mutex) {
+    HANDLE mutex = CreateMutexW(nullptr, FALSE, nullptr);
+    if (!mutex) return GetLastError();
+    entry.log_mutex = std::shared_ptr<void>(mutex, Close{});
+    shared = entry.log_mutex;
+  }
   entry.standard[0].reset(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
       nullptr, OPEN_EXISTING, 0, nullptr));
   if (entry.standard[0].get() == INVALID_HANDLE_VALUE) return GetLastError();
@@ -728,6 +741,11 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
 
 DWORD Session::Initialize(Entry& entry, wire::Reply* reply) {
   if (entry.initialized) return ERROR_ALREADY_ASSIGNED;
+  HANDLE log_mutex = nullptr;
+  if (!entry.log_mutex) return ERROR_NOT_READY;
+  if (!DuplicateHandle(GetCurrentProcess(), entry.log_mutex.get(),
+      entry.launch->process(), &log_mutex, SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, 0)) return GetLastError();
+  reply->log_mutex = reinterpret_cast<uintptr_t>(log_mutex);
   HANDLE signal_section = nullptr, signal_event = nullptr;
   DWORD signal_status = entry.signals->Handoff(&signal_section, &signal_event);
   if (signal_status != ERROR_SUCCESS) return signal_status;
@@ -1050,7 +1068,17 @@ DWORD CaptureStandard(HANDLE parent, uint64_t value, size_t index, DWORD broker_
   } else if (type != FILE_TYPE_CHAR || !NullObject(raw)) {
     return ERROR_ACCESS_DENIED;
   }
-  const DWORD rights = SYNCHRONIZE | (index == 0 ? FILE_READ_DATA | FILE_READ_ATTRIBUTES : FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES);
+  using Query = NTSTATUS (NTAPI*)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+  auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"));
+  PUBLIC_OBJECT_BASIC_INFORMATION information{};
+  ULONG received = 0;
+  if (!query || query(raw, ObjectBasicInformation, &information, sizeof(information), &received) < 0 ||
+      received < sizeof(ULONG) + sizeof(ACCESS_MASK)) return ERROR_ACCESS_DENIED;
+  const DWORD data_rights = index == 0 ? FILE_READ_DATA : FILE_WRITE_DATA | FILE_APPEND_DATA;
+  const DWORD rights = information.GrantedAccess & (SYNCHRONIZE | FILE_READ_ATTRIBUTES | data_rights);
+  if (!(rights & data_rights)) return ERROR_ACCESS_DENIED;
+  // Never ask the privileged service to widen the source handle's rights.
+  // Append-only stdout logs remain append-only through every shell descendant.
   HANDLE limited = nullptr;
   if (!DuplicateHandle(GetCurrentProcess(), raw, GetCurrentProcess(), &limited, rights, FALSE, 0)) return GetLastError();
   output->reset(limited);
@@ -1085,13 +1113,12 @@ DWORD Session::SpawnCommand(Entry& requester, const wire::Request& request,
       arguments.front() != L"--tool" && arguments.front() != L"--elf" && arguments.front() != L"--spawn") {
     return ERROR_ACCESS_DENIED;
   }
+  // The encoded spawn protocol can resolve another program after file actions.
+  // Elevated launches must expose their target directly for authority review.
+  if ((request.flags || requester.uid == 0) && arguments.front() == L"--spawn") return ERROR_ACCESS_DENIED;
   if (arguments.front() == L"--elf" && (request.flags || requester.uid == 0)) {
-    if (arguments.size() < 3 || !LocalPath(arguments[1])) return ERROR_ACCESS_DENIED;
-    bool trusted = false;
-    for (const wchar_t* tool : {L"mkfs.fat", L"fsck.fat", L"mkfs.exfat", L"fsck.exfat", L"mke2fs", L"e2fsck"}) {
-      if (Same(arguments[1], runtime_ + L"\\filesystem-tools\\bin\\" + tool)) trusted = true;
-    }
-    if (!trusted) return ERROR_ACCESS_DENIED;
+    if (arguments.size() < 3 || !LocalPath(arguments[1]) ||
+        !IsProtectedFilesystemTool(arguments[1], runtime_)) return ERROR_ACCESS_DENIED;
   }
   std::vector<std::wstring> environment = root->app_environment;
   std::map<std::wstring, size_t> keys;
@@ -1114,6 +1141,7 @@ DWORD Session::SpawnCommand(Entry& requester, const wire::Request& request,
   child->root_app = requester.root_app;
   child->uid = request.flags || requester.uid == 0 ? 0 : root->uid;
   child->profile = root->profile;
+  child->log_mutex = root->log_mutex;
   child->internet = root->internet;
   child->package = root->package;
   child->digest = root->digest;

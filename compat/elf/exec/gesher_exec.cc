@@ -348,6 +348,13 @@ DWORD WINAPI ProgramThread(void*) {
 }
 
 int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
+  // This guard is deliberately at the final loader entry, not only in the
+  // authority's direct --elf parser. Encoded spawn and future exec transitions
+  // cannot carry UID 0 into a package-controlled ELF image.
+  if (!ex::CanLoadExecutableElf(path)) {
+    std::fprintf(stderr, "gesher-exec: ELF image is not authorized for this protected process\n");
+    return 126;
+  }
   static ProgramState state;
   g_program = &state;
   state.path = path;
@@ -421,8 +428,9 @@ int RunArguments(const std::vector<std::string>& args) {
       errno = prepared_error;
       return ex::SpawnFailure("program lookup", request.program.c_str());
     }
-    if (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
-        (launch.kind == "script" && launch.application == ex::LauncherPath())) {
+    if (!gesher::usb_storage::ProtectedRuntimeEnabled() &&
+        (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
+         (launch.kind == "script" && launch.application == ex::LauncherPath()))) {
       int count = 0;
       wchar_t** prepared = CommandLineToArgvW(launch.command_line.c_str(), &count);
       if (prepared == nullptr) return ex::SpawnFailure("prepared arguments", request.program.c_str());
@@ -432,7 +440,10 @@ int RunArguments(const std::vector<std::string>& args) {
       g_link_failure_status = 127;
       return RunArguments(next);
     }
-    // PE/batch programs keep the existing wait-and-propagate convention.
+    // A protected encoded spawn must expose its resolved target to the
+    // authority and receive a fresh exact-process grant. It never executes an
+    // arbitrary resolved image inline with the wrapper's credentials.
+    // Ordinary PE/batch programs keep the wait-and-propagate convention.
     std::vector<ex::ChildFd> fds;
     std::vector<std::pair<int, gesher::DescriptorSnapshotPtr>> captured;
     if (gesher::CaptureDescriptors(&captured, false) != 0) return 127;
