@@ -260,12 +260,13 @@ class Planner:
         # before anything its sources reach (an AIDL interface's
         # additional_libs, say). Other libraries' own sources rank first.
         is_root = mod.name == self.root
-        # A java_sdk_library's implementation also compiles against its
-        # impl_only_libs (android.test.runner against android.test.base's
-        # and android.test.mock's implementations).
-        libs = as_list(props.get('libs')) + as_list(props.get('impl_only_libs'))
+        # The library being built, a java_sdk_library's implementation, also
+        # compiles against its impl_only_libs (android.test.runner against
+        # android.test.base's and android.test.mock's implementations). A
+        # dependency is reached through its API and keeps only its `libs`.
+        libs = as_list(props.get('libs'))
         if is_root:
-            for dep in libs:
+            for dep in libs + as_list(props.get('impl_only_libs')):
                 self.library(dep, False, mod.name)
         excluded = set(self.expand(ctx, as_list(props.get('exclude_srcs')), collect=False))
         for item in self.expand(ctx, as_list(props.get('srcs')) + as_list(props.get('device_common_srcs'))):
