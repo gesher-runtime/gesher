@@ -269,7 +269,8 @@ function WaitForLog([scriptblock] $ReadLog, [string] $Want, [int] $Seconds = 90)
 # View cyan); keys typing "Gesher" into the focused EditText, then a WM_CHAR
 # no key types (U+05D0), echoed into the gray TextView; the mouse wheel over
 # the ScrollView; the user resizing the window (below its minimum, then to
-# 600x700), which lays the views out and draws them at the new size.
+# 600x700 and 1920x941, kept within the 400x800 display), which lays the views
+# out and draws them at the new size.
 # Returns the problems.
 function UiAppInput([IntPtr] $hwnd, [scriptblock] $ReadLog) {
   $out = @()
@@ -307,17 +308,26 @@ function UiAppInput([IntPtr] $hwnd, [scriptblock] $ReadLog) {
   Write-Host "INFO  resized to 100x100: the client area is $($min[0])x$($min[1])"
   if ($min[0] -lt 220 -or $min[1] -lt 220) { $out += "resized below the minimum: $($min[0])x$($min[1])" }
   elseif (-not (WaitForLog $ReadLog "UiActivity content $($min[0])x$($min[1])" 60)) { $out += "no layout at $($min[0])x$($min[1])" }
+  # Wider than the 400x800 display: kept within it (400x700), as a window on a
+  # device is never larger than its display (ViewConfiguration's software-layer
+  # limit is the display's size).
   [GesherWin32]::SetClientSize($hwnd, 600, 700)
   # A window shown off the desktop stays off it as it grows (where it reached
   # onto the desktop, Windows would paint only that part).
   if (-not [GesherWin32]::OffDesktop($hwnd)) { $out += 'the off-desktop window reached onto the desktop when resized' }
-  if (-not (WaitForLog $ReadLog 'UiActivity content 600x700' 60)) { $out += 'no layout at 600x700' } else {
+  if (-not (WaitForLog $ReadLog 'UiActivity content 400x700' 60)) { $out += 'no layout at 400x700 (600x700 kept within the display)' } else {
     $size = [GesherWin32]::ClientSize($hwnd)
-    if ($size[0] -ne 600 -or $size[1] -ne 700) { $out += "client area $($size[0])x$($size[1]) after resizing to 600x700" }
+    if ($size[0] -ne 400 -or $size[1] -ne 700) { $out += "client area $($size[0])x$($size[1]) after resizing to 600x700 on a 400x800 display" }
     else {
-      $out += @(WaitRegions $hwnd @(@('cyan at 600x700', 0, 0, 600, 200, 0x00ffff), @('green at 600x700', 0, 200, 300, 400, 0x00ff00),
-                                    @('blue at 600x700', 300, 200, 600, 400, 0x0000ff)))
+      $out += @(WaitRegions $hwnd @(@('cyan at 400x700', 0, 0, 400, 200, 0x00ffff), @('green at 400x700', 0, 200, 200, 400, 0x00ff00),
+                                    @('blue at 400x700', 200, 200, 400, 400, 0x0000ff)))
     }
+  }
+  # Larger than the display both ways: the display's size, no more.
+  [GesherWin32]::SetClientSize($hwnd, 1920, 941)
+  if (-not (WaitForLog $ReadLog 'resized by the user to 400x800' 60)) { $out += 'no resize to 400x800 (1920x941 kept within the display)' } else {
+    $size = [GesherWin32]::ClientSize($hwnd)
+    if ($size[0] -ne 400 -or $size[1] -ne 800) { $out += "client area $($size[0])x$($size[1]) after resizing to 1920x941 on a 400x800 display" }
   }
   return $out
 }

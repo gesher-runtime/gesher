@@ -1021,6 +1021,7 @@ try {
   $canonicalChecks = @(
     @{ Class = 'UserManagerProfilesTest'; Count = 49; Name = 'single-user profile, serial, identity and restriction contracts' },
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
+    @{ Class = 'WindowDisplayBoundsTest'; Count = 291; Name = 'a window within its display: task bounds, max bounds, DisplayInfo and the real ViewConfiguration drawing cache (issue #426)' },
     @{ Class = 'BlobStoreContractTest'; Count = 87; Name = 'blob sessions, digest publication, quota admission, leases, and restart' },
     @{ Class = 'NsdContractTest'; Count = 65; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
     @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },

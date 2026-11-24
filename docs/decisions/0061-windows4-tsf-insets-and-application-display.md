@@ -23,7 +23,8 @@ including zero, so an unfocused portrait task does not inherit another task's
 landscape orientation. DisplayInfo uses the rotated logical dimensions while
 the physical display mode remains natural. Real display callbacks carry basic
 display changes and respect each client's event mask. A user resize changes
-the task's bounds, not the shared display's natural dimensions.
+the task's bounds, not the shared display's natural dimensions; the bounds stay
+within the display (ADR 0091).
 
 DisplayManagerGlobal's private cache is disabled in every app client before
 Application code. Its Android 16 invalidation path requires a native shared

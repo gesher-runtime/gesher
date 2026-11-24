@@ -130,8 +130,10 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
 - **Resizing by the user**: an application window that fills its bounds
   (MATCH_PARENT both ways) is resizable (`WS_THICKFRAME`); its smallest
   client area is the Activity's `<layout android:minWidth/minHeight>`,
-  else 220dp (Android's default minimal size of a resizable task),
-  enforced in `WM_GETMINMAXINFO`. WM_SIZE becomes the window's bounds:
+  else 220dp (Android's default minimal size of a resizable task), and its
+  largest (and maximized) the display, turned as its task is (ADR 0091: a
+  window is never larger than its display), both enforced in
+  `WM_GETMINMAXINFO`. WM_SIZE becomes the window's bounds:
   `IWindow.resized` gets frames for them and a merged configuration whose
   override has them as `windowConfiguration` bounds and app bounds, as a
   freeform task's (ViewRootImpl lays out from those bounds itself,
@@ -308,7 +310,8 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   purple pixels`); SetWindowPos to 100x100 stops at the 220x220 minimum and
   to 600x700 lays the views out and draws them at the new size
   (`UiActivity content 600x700`, `cyan at 600x700: 120000 of 120000
-  pixels`, green and blue halves of 300 px):
+  pixels`, green and blue halves of 300 px; since ADR 0091 the window stays
+  within the 400x800 display: 400x700, and 1920x941 gives 400x800):
   - `PASS  gesher-app: input reaches uiapp.apk's views in its Win32 window:
     a click (WM_LBUTTONDOWN/UP) runs the Button's onClick and the window
     shows its new color, keys (WM_KEYDOWN/UP) and a WM_CHAR type into the

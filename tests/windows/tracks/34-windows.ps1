@@ -96,7 +96,7 @@ WindowAppCheck 'uiapp.apk drawn in a Win32 window by hwui (layout colors and tex
   { param($px, $hwnd, $text, $readLog) @(UiAppPixels $px) + @(UiAppInput $hwnd $readLog) } `
   @('UiActivity onResume', 'window "Gesher UI test" added', 'hardware accelerated true', 'input attached',
     'UiActivity onClick: button', 'UiActivity echo: Gesher\u05d0', 'UiActivity scrolled to ',
-    'resized by the user to 600x700', 'UiActivity content 600x700', 'closed by the user',
+    'resized by the user to 400x700', 'UiActivity content 400x700', 'closed by the user',
     'UiActivity onDestroy', 'gesher-app: done')
 $inputName = 'input reaches uiapp.apk''s views in its Win32 window: a click (WM_LBUTTONDOWN/UP) runs the Button''s onClick and the window shows its new color, keys (WM_KEYDOWN/UP) and a WM_CHAR type into the focused EditText and its echo is drawn, the wheel scrolls a ScrollView; the user resizing the window (at least its minimum) lays it out and redraws it at the new size'
 if ($failed -eq $failedBeforeWindows) { Write-Host "PASS  gesher-app: $inputName (single process)" }
@@ -194,8 +194,8 @@ try {
     @('gesher-app: windows of com.gesher.uiapp: hidden', 'gesher-app: app process for com.gesher.uiapp: pid ',
       'gesher-app: windows: Win32 windows of this process (hidden)', 'UiActivity onResume',
       'window "Gesher UI test" added', 'hardware accelerated true', 'input attached', 'UiActivity onClick: button',
-      'UiActivity echo: Gesher\u05d0', 'UiActivity scrolled to ', 'resized by the user to 600x700',
-      'UiActivity content 600x700', 'closed by the user', 'UiActivity onDestroy',
+      'UiActivity echo: Gesher\u05d0', 'UiActivity scrolled to ', 'resized by the user to 400x700',
+      'UiActivity content 400x700', 'closed by the user', 'UiActivity onDestroy',
       'gesher-app: the system server ended the process (scheduleExit)',
       'gesher-app: the process of com.gesher.uiapp ended (exit code 0)', 'gesher-app: done')
   if ($failed -eq $failedBeforeDevice) { Write-Host "PASS  gesher-app: the Gesher device: $inputName (uiapp.apk's app process)" }

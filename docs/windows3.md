@@ -36,7 +36,9 @@ orientation (`screenOrientation`, `setRequestedOrientation`), as
   `ActivityClientHook`).
 
 A size the user gave the window goes when the task turns; a window the user
-resizes afterwards keeps the display rotation.
+resizes afterwards keeps the display rotation. A window is never larger than
+the display turned as its task is (ADR 0091): 400x800 for a portrait task,
+800x400 for a landscape one on the default display, maximized too.
 
 Signal Generator (userLandscape) runs in e2e on the default display.
 

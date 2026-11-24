@@ -532,9 +532,9 @@ function W3FloatingRootChecks([string] $Mode, [IntPtr] $app, [scriptblock] $Read
                               [bool] $SameTask, [bool] $Shared) {
   $out = @()
   $mark = W3Mark $ReadLog
-  [GesherWin32]::SetClientSize($app, 420, 620)
-  if (-not (W3WaitSize $app '420x620')) { $out += 'could not resize the floating splash' }
-  if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity onConfigurationChanged: portrait, 420x620 dp' 30).Success) {
+  [GesherWin32]::SetClientSize($app, 380, 620)
+  if (-not (W3WaitSize $app '380x620')) { $out += 'could not resize the floating splash' }
+  if (-not (W3Wait $ReadLog $mark 'FloatingSplashActivity onConfigurationChanged: portrait, 380x620 dp' 30).Success) {
     $out += 'the splash did not observe its real resize'
   }
   [void][GesherWin32]::SetWindowPos($app, [IntPtr]::Zero, 137, 113, 0, 0, 0x0015)  # NOSIZE, NOZORDER, NOACTIVATE

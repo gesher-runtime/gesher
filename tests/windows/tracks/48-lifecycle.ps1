@@ -226,11 +226,13 @@ function LifeAppScenario([IntPtr] $app, [scriptblock] $ReadLog, [switch] $Device
   }
 
   # 4. Resized to landscape and back: LifeActivity handles size changes
-  #    (onConfigurationChanged, not relaunched), its resources follow (-land, -w600dp).
+  #    (onConfigurationChanged, not relaunched), its resources follow (-land). The
+  #    window stays within the 400x800 display (a window is never larger than its
+  #    display), so a landscape window is at most 400 dp wide (-w600dp does not apply).
   $mark = LogMark $ReadLog
-  [GesherWin32]::SetClientSize($app, 640, 400)
-  if (-not (WaitAfter $ReadLog $mark 'LifeActivity onConfigurationChanged: 640x400 dp, smallest 400 dp, landscape')) { $out += 'no onConfigurationChanged for a 640x400 window' }
-  elseif (-not (WaitAfter $ReadLog $mark 'resources land w600dp' 10)) { $out += 'the resources did not resolve -land and -w600dp in a 640x400 window' }
+  [GesherWin32]::SetClientSize($app, 400, 300)
+  if (-not (WaitAfter $ReadLog $mark 'LifeActivity onConfigurationChanged: 400x300 dp, smallest 300 dp, landscape')) { $out += 'no onConfigurationChanged for a 400x300 window' }
+  elseif (-not (WaitAfter $ReadLog $mark 'resources land narrow' 10)) { $out += 'the resources did not resolve -land (and not -w600dp) in a 400x300 window' }
   $mark = LogMark $ReadLog
   [GesherWin32]::SetClientSize($app, 400, 800)
   if (-not (WaitAfter $ReadLog $mark 'LifeActivity onConfigurationChanged: 400x800 dp, smallest 400 dp, portrait')) { $out += 'no onConfigurationChanged back to 400x800' }
@@ -257,10 +259,10 @@ function LifeAppScenario([IntPtr] $app, [scriptblock] $ReadLog, [switch] $Device
         # with its saved state, in the same window.
         Start-Sleep 2
         $mark = LogMark $ReadLog
-        [GesherWin32]::SetClientSize($opaque, 640, 400)
+        [GesherWin32]::SetClientSize($opaque, 400, 300)
         if (-not (WaitAfter $ReadLog $mark 'OpaqueActivity onCreate with saved state')) { $out += 'resizing OpaqueActivity''s window did not relaunch it' } else {
           [void](WaitAfter $ReadLog $mark 'OpaqueActivity onResume' 30)
-          $out += @(OrderProblems $ReadLog $mark @('OpaqueActivity onPause', 'OpaqueActivity onDestroy (changing configurations)', 'OpaqueActivity onCreate with saved state', 'landscape', 'resources land w600dp', 'OpaqueActivity onResume') 'OpaqueActivity relaunched')
+          $out += @(OrderProblems $ReadLog $mark @('OpaqueActivity onPause', 'OpaqueActivity onDestroy (changing configurations)', 'OpaqueActivity onCreate with saved state', 'landscape', 'resources land narrow', 'OpaqueActivity onResume') 'OpaqueActivity relaunched')
           if (-not [GesherWin32]::IsWindow($opaque) -or -not [GesherWin32]::IsWindowVisible($opaque)) { $out += 'OpaqueActivity''s window did not stay through the relaunch' }
         }
         $mark = LogMark $ReadLog
