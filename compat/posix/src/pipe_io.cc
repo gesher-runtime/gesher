@@ -5,6 +5,8 @@
 #include "record_lock_descriptors.h"
 #include "ofd_internal.h"
 
+#include <gesher/ptrace_state.h>
+
 #include <bcrypt.h>
 #include <fcntl.h>
 #include <io.h>
@@ -124,12 +126,21 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
   // A valid, unique OVERLAPPED is legal for synchronous handles too. It also
   // lets an external asynchronous pipe complete without relying on UCRT's
   // unspecified ReadFile(NULL) behavior for that handle type.
-  BOOL done = writing ? WriteFile(file, bytes, count, &transferred, &operation.overlapped)
-                       : ReadFile(file, bytes, count, &transferred, &operation.overlapped);
-  DWORD error = done ? ERROR_SUCCESS : GetLastError();
-  if (!done && error == ERROR_IO_PENDING) {
-    done = GetOverlappedResult(file, &operation.overlapped, &transferred, TRUE);
+  BOOL done;
+  DWORD error;
+  {
+    // Blocked for data or room (in ReadFile/WriteFile itself for a
+    // synchronous handle, else in GetOverlappedResult): a safe point for a
+    // ptrace stop although this thread owns the description's gate (ADR
+    // 0093), as Linux stops a thread blocked in read() or write() on a pipe.
+    gesher::ptrace::ParkedScope parked;
+    done = writing ? WriteFile(file, bytes, count, &transferred, &operation.overlapped)
+                   : ReadFile(file, bytes, count, &transferred, &operation.overlapped);
     error = done ? ERROR_SUCCESS : GetLastError();
+    if (!done && error == ERROR_IO_PENDING) {
+      done = GetOverlappedResult(file, &operation.overlapped, &transferred, TRUE);
+      error = done ? ERROR_SUCCESS : GetLastError();
+    }
   }
   operation.active.store(false, std::memory_order_release);
   return CompletePipeIo(done, transferred, error, writing);
