@@ -29,7 +29,7 @@ def main():
     template = (root / "tests/native/quota_registry_probe_host.cc.in").read_text()
     reader = section(helper, "constexpr size_t kMaxJson", "inline bool PumpUntil")
     inventory = section(probe, "struct Observation", "struct State")
-    capture = section(probe, "inline void FindFrames", "inline bool Registry")
+    capture = section(probe, "inline void FindFrames", "inline bool InitializeIndexedDb")
     variants = {"current": (inventory, capture, None),
                 "missing-origin-control": (inventory.replace(
                     "for (const auto& item : positive) if (totals[item.key] == 0) return false;",
@@ -83,6 +83,26 @@ def main():
         fixture.write_text(registry)
         subprocess.run([node, "--check", str(fixture)], check=True, timeout=15)
         print("Embedded browser fixture and live registry script: syntax passed", flush=True)
+        initialization = section(probe, 'static const wchar_t* initialization = LR"JS(', ')JS";')
+        initialization = initialization.split('LR"JS(', 1)[1]
+        control = initialization.replace(
+            'const result = await handler.getAllBucketsAcrossAllStorageKeys();',
+            'const result = handler.getAllBucketsAcrossAllStorageKeys();')
+        assert control != initialization, "initialization barrier mutation did not apply"
+        adapter = root / "tests/native/quota_registry_initialization_test.js"
+        for name, script in {"discovery-barrier": initialization,
+                             "unawaited-discovery-control": control}.items():
+            fixture.write_text(script)
+            result = subprocess.run([node, "--experimental-vm-modules", str(adapter), str(fixture)],
+                                    text=True, capture_output=True, timeout=15)
+            print(name + ": " + result.stdout.strip(), flush=True)
+            if name == "discovery-barrier":
+                if result.returncode:
+                    raise AssertionError(result.stderr)
+            else:
+                if result.returncode != 1 or "discovery completion must be awaited" not in result.stderr:
+                    raise AssertionError(f"{name} did not reject its intended defect: {result.returncode}\n{result.stderr}")
+                print(name + ": intended regression rejected", flush=True)
 
 
 if __name__ == "__main__":

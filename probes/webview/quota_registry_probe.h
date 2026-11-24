@@ -469,6 +469,40 @@ inline bool CaptureKey(const std::shared_ptr<State>& state, Observation* item, b
   return true;
 }
 
+inline bool InitializeIndexedDb(const std::shared_ptr<State>& state) {
+  // The quota DB can enumerate persisted buckets before the IndexedDB client's
+  // lazy disk discovery. Until then that client reports zero for unknown IDs.
+  // This real WebUI control waits for InitializeFromFilesIfNeeded; it does not
+  // navigate to any fixture origin or substitute metadata for quota usage.
+  if (!Navigate(state, L"edge://indexeddb-internals/", true)) return false;
+  static const wchar_t* initialization = LR"JS((async () => {
+    if (!['edge:', 'chrome:'].includes(location.protocol) || location.hostname !== 'indexeddb-internals')
+      return {unavailable: 'not the built-in IndexedDB document', url: location.href};
+    let module;
+    try { module = await import('./indexed_db_internals.mojom-webui.js'); }
+    catch (error) { return {unavailable: 'built-in IndexedDB bindings unavailable', detail: String(error)}; }
+    if (typeof module.IdbInternalsHandler?.getRemote !== 'function')
+      return {unavailable: 'IndexedDB discovery interface unavailable'};
+    const handler = module.IdbInternalsHandler.getRemote();
+    if (typeof handler?.getAllBucketsAcrossAllStorageKeys !== 'function')
+      return {unavailable: 'IndexedDB discovery method unavailable'};
+    const result = await handler.getAllBucketsAcrossAllStorageKeys();
+    if (result?.error !== null) throw Error('IndexedDB discovery failed: ' + result?.error);
+    if (!Array.isArray(result.partitions) || result.partitions.length === 0 || result.partitions.length > 64)
+      throw Error('invalid IndexedDB discovery partitions');
+    return {initialized: true, partitions: String(result.partitions.length)};
+  })())JS";
+  Json value;
+  if (!Evaluate(state, initialization, &value, true)) return false;
+  const Json* unavailable = value.Get(L"unavailable", L'"');
+  if (unavailable) return state->Unavailable(unavailable->text);
+  uint64_t partitions = 0;
+  if (!value.Get(L"initialized", L't') || !Unsigned(value.Get(L"partitions", L'"'), &partitions) ||
+      partitions == 0 || partitions > 64) return state->Fail(L"malformed IndexedDB discovery completion");
+  Log(L"INFO", L"IndexedDB discovery barrier completed partitions=" + std::to_wstring(partitions));
+  return true;
+}
+
 inline bool Registry(const std::shared_ptr<State>& state, std::vector<Bucket>* buckets) {
   // The 131 proxy accepts StorageType.TEMPORARY=0; newer proxies ignore that
   // extra JS argument. Invoke the runtime's own module and generated bindings.
@@ -565,7 +599,7 @@ inline int Run(HWND parent) {
     if (!Start(inspect, parent, profile, {a, b, c}) || inspect->profile_path != seed->profile_path) {
       if (!inspect->failed) inspect->Fail(L"reopened a different browser profile"); break;
     }
-    if (!Navigate(inspect, L"edge://quota-internals/", true) ||
+    if (!InitializeIndexedDb(inspect) || !Navigate(inspect, L"edge://quota-internals/", true) ||
         !Measure(inspect, L"persisted-before-revisit", {first, embedded_a})) break;
     if (inspect->served != 0) { inspect->Fail(L"persisted inventory revisited an origin before discovery"); break; }
     Log(L"PASS", L"persisted discovery after browser exit without revisiting fixture origins");
