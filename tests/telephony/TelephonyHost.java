@@ -1241,6 +1241,22 @@ public final class TelephonyHost {
         otherSim.iccid = "8997201000000000009F";
         equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, new Sequence(otherSim), cliOut), 1,
                 "Only the interface with the subscription's SIM is checked");
+        // The read before the change fails: whether data was on is unknown, so the
+        // disconnect is still checked (here Windows refuses the disconnect and the restore,
+        // and keeps the connection up).
+        spec.mode = "auto";
+        spec.activation = WindowsCellular.ACTIVATION_ACTIVATED;
+        source.set(spec);
+        cellular.refresh();
+        Sequence unreadableFirst = new Sequence(windows("manual", 1, home));
+        unreadableFirst.texts.add(0, "status\terror\t80004005\n");
+        cliBytes.reset();
+        source.rollbackFails = true;  // Windows refuses the disconnect and the restore
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, unreadableFirst, cliOut), 1,
+                "Unknown before (unreadable): the disconnect is checked");
+        source.rollbackFails = false;
+        check(cliBytes.toString(StandardCharsets.UTF_8).contains("not confirmed (the connection is still up"),
+                "and is reported as not confirmed");
         MobileDataCommands.sWaitSteps = steps;
         spec.mode = "auto";
         spec.activation = WindowsCellular.ACTIVATION_ACTIVATED;
