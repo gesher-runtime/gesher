@@ -1,0 +1,37 @@
+From: Gesher Authors
+Subject: [PATCH] hwui: decode from file descriptors on Gesher
+
+LayoutLib for Windows stubs out ImageDecoder.nCreate(FileDescriptor) and
+BitmapFactory.nativeDecodeFileDescriptor because it lacks F_DUPFD_CLOEXEC.
+Gesher implements fstat, fcntl(F_DUPFD_CLOEXEC), fdopen and lseek, so it
+builds the device path: BitmapFactory.decodeFile/decodeFileDescriptor and
+ImageDecoder File and AssetFileDescriptor sources decode as on Android.
+---
+diff --git a/libs/hwui/jni/BitmapFactory.cpp b/libs/hwui/jni/BitmapFactory.cpp
+index 3337238..97f8b96 100644
+--- a/libs/hwui/jni/BitmapFactory.cpp
++++ b/libs/hwui/jni/BitmapFactory.cpp
+@@ -686,7 +686,8 @@ static jobject nativeDecodeStream(JNIEnv* env, jobject clazz, jobject is, jbyteA
+ 
+ static jobject nativeDecodeFileDescriptor(JNIEnv* env, jobject clazz, jobject fileDescriptor,
+         jobject padding, jobject bitmapFactoryOptions, jlong inBitmapHandle, jlong colorSpaceHandle) {
+-#ifdef _WIN32  // LayoutLib for Windows does not support F_DUPFD_CLOEXEC
++#if defined(_WIN32) && !defined(GESHER)  // LayoutLib for Windows does not support F_DUPFD_CLOEXEC;
++                                           // Gesher implements fstat, F_DUPFD_CLOEXEC and fdopen
+     return nullObjectReturn("Not supported on Windows");
+ #else
+     NPE_CHECK_RETURN_ZERO(env, fileDescriptor);
+diff --git a/libs/hwui/jni/ImageDecoder.cpp b/libs/hwui/jni/ImageDecoder.cpp
+index e47b6e5..25dab7e 100644
+--- a/libs/hwui/jni/ImageDecoder.cpp
++++ b/libs/hwui/jni/ImageDecoder.cpp
+@@ -163,7 +163,8 @@ static jobject native_create(JNIEnv* env, std::unique_ptr<SkStream> stream,
+ 
+ static jobject ImageDecoder_nCreateFd(JNIEnv* env, jobject /*clazz*/,
+         jobject fileDescriptor, jlong length, jboolean preferAnimation, jobject source) {
+-#ifdef _WIN32  // LayoutLib for Windows does not support F_DUPFD_CLOEXEC
++#if defined(_WIN32) && !defined(GESHER)  // LayoutLib for Windows does not support F_DUPFD_CLOEXEC;
++                                           // Gesher implements fstat, F_DUPFD_CLOEXEC and fdopen
+     return throw_exception(env, kSourceException, "Not supported on Windows", nullptr, source);
+ #else
+     int descriptor = jniGetFDFromFileDescriptor(env, fileDescriptor);

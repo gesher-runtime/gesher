@@ -172,7 +172,7 @@ public final class Services {
         // What real apps fetch as they start (docs/e2e.md): without these getSystemService
         // answers null.
         services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
-                new PowerManagerService()).asBinder());
+                new PowerManagerService(am)).asBinder());
         // DeviceIdleManager is also PowerExemptionManager's constructor dependency.
         // Register the real Binder stub in both in-process and system-server modes.
         services.put(Context.DEVICE_IDLE_CONTROLLER, StandIn.of(android.os.IDeviceIdleController.class,
@@ -193,6 +193,9 @@ public final class Services {
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
+        // webviewupdate: the built-in WebView provider's package (WebView2, docs/webview.md).
+        services.put(WebViewUpdateService.NAME, StandIn.of(android.webkit.IWebViewUpdateService.class,
+                new WebViewUpdateService(pm)).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));

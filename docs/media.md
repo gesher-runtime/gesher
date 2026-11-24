@@ -5,15 +5,86 @@ Design: [0042](decisions/0042-media-audio-engine-and-codecs.md). Tests:
 `media_probe.exe` and `tests/apps/mediaapp` (`mediaapp.apk`, built by
 `.github/workflows/media.yml` against the run's framework classes).
 
-RGBA `ImageReader` surfaces accept Canvas, NDK and EGL producers through the
-in-process `QueueSurface`. Swapped frames supply the reader's image queue and
-availability notifications. `Image.getHardwareBuffer()` retains an independent
-CPU snapshot; `Bitmap.wrapHardwareBuffer()` converts it to an immutable software
-bitmap that remains drawable after the image or buffer closes. This supports
+RGBA and PRIVATE `ImageReader` surfaces accept Canvas, NDK and EGL producers
+through the in-process `QueueSurface`; a PRIVATE reader (what Flutter's
+platform views create: `ImageReader.Builder`, PRIVATE, `GPU_SAMPLED_IMAGE`)
+is drawn into with `lockHardwareCanvas`, `lockCanvas` or EGL like an RGBA one.
+Every `unlockCanvasAndPost` of a hardware canvas is a frame with its own
+`onImageAvailable`, however soon after the last: hwui's one-frame-per-vsync
+skip (a frame within 2 ms of the last swap) applies to window surfaces only,
+not to a surface that does not queue to the window composer
+(`patches/frameworks/base/0787`): an ImageReader's or a SurfaceTexture's
+`QueueSurface` reports `NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER` 0, a
+SurfaceView's reports 1 (as on Android, where it is composited into the window)
+and keeps the pacing. (A Surface parceled to another process, as a browser's
+GPU process draws into its SurfaceView's, is a forwarding `QueueSurface` there
+that reports 0 whatever the source is: the parcel carries no such flag, so
+hwui in the producer's process does not pace its frames by vsync and the
+consumer paces what it shows.)
+
+RGBA images (RGBA readers, PRIVATE readers, and what is drawn into either's
+Surface) live in a per-reader pool of `AHardwareBuffer`s that repeat across
+frames, the one released longest ago being written next. A reader whose usage
+has neither `GPU_SAMPLED_IMAGE` nor PRIVATE format (a camera QR scanner's)
+gets CPU-only buffers (usage `CPU_READ_OFTEN`, reported as such, and neither
+ANGLE nor the GPU thread is started for it). Where an app keeps an EGLImage of
+a buffer after closing its Image and HardwareBuffer (Flutter's texture cache),
+the buffer is written again like an Android BufferQueue slot, and the new
+frame reaches the texture when `Image.getHardwareBuffer` next takes it. The
+texture is shared between the GPU thread's Direct3D device and ANGLE's with no
+keyed mutex, so each buffer has a release fence, as Android's slots do: when an
+app-facing holder (the Image, a Java HardwareBuffer) lets go of a buffer an app
+made an EGLImage of, a fence is queued on ANGLE's device (`CreateAngleFence`:
+ANGLE's own context dispatch flushes and registers a DXGI completion event, no
+wait) and kept on the buffer. The write waits for that fence only (the pool
+rewrites the buffer released longest ago, so it has normally signalled long
+ago, and the device is not drained of the app's next frame). Draws the app
+made before it let go have sampled the old frame when the new one is written;
+draws after the write see the new one (the upload completes before
+`getHardwareBuffer` returns). Not ordered: draws the app issues with a kept
+EGLImage after it let go and before the rewrite, and another thread's racing
+with the call. `ImageReaderPrivateTest` runs the sequence with an
+EGLImage kept across the rewrite.
+Its images report the reader's PRIVATE format and have no CPU planes
+(`getPlanes()` is empty, as Android's). Their pixels are RGBA whatever
+produced them: a drawn frame, a camera frame (converted from NV12) or a
+decoder's output (a decoder renders to the reader's native window, so it
+arrives as a Surface frame). The reader keeps a pool of RGBA AHardwareBuffers
+and writes each frame into the first one that no Image, `HardwareBuffer` or
+other app reference holds, so the buffers, and their `AHardwareBuffer_getId`s,
+repeat across frames and an app's per-id texture caches keep hitting; a pool
+whose buffers are all held grows (and is trimmed past twice `maxImages` + 2).
+As on Android, where a BufferQueue slot is rewritten once its Image is closed
+even while a consumer still maps it, a buffer whose only other references are
+the app's EGLImages is reused. Its new pixels reach the texture those EGLImages
+share when the app next takes the image (`Image.getHardwareBuffer()`), on the
+GPU thread in order with the compositor, so frames that are dropped cost no
+upload. Without a GPU device (ANGLE/Direct3D 11 unavailable) the buffers are
+CPU-only (logged once; `eglCreateImageKHR` refuses them) and readers work as
+before; if even that allocation fails a frame stays in process memory and has
+no HardwareBuffer. `discardFreeBuffers()` lets go of the buffers nothing holds.
+`Image.getHardwareBuffer()` wraps the image's pooled buffer, holding a
+reference (`HardwareBuffer.getId()`/`getUsage()` agree with
+`AHardwareBuffer_getId`/`describe`); `Bitmap.wrapHardwareBuffer()` converts it
+to an immutable software bitmap that remains drawable after the image or buffer
+closes. `Image.getFence()` is the empty fence (the image is complete when
+queued); `SyncFence`'s natives work over Gesher's native fences (an
+`eglDupNativeFenceFDANDROID` descriptor): `isValid`, `awaitForever` and `await`
+are real, `getSignalTime` is `SIGNAL_TIME_PENDING` while pending and
+`SIGNAL_TIME_INVALID` once signaled, since the fence records no time. This supports
 Flutter's platform-view display path without changing the application's APK.
-These snapshots do not implement general HardwareBuffer allocation, Android GPU
+An NDK library imports a buffer with `AHardwareBuffer_fromHardwareBuffer`
+(`compat/bionic/hardware_buffer_java.cc`): the image's pooled AHardwareBuffer
+(RGBA8888, `GPU_SAMPLED_IMAGE | CPU_READ_OFTEN`), no reference taken (it lives
+as long as the Java object, as the NDK says). It describes, locks and
+becomes an EGLImage (`EGL_NATIVE_BUFFER_ANDROID`) like any other
+AHardwareBuffer, which is how Flutter's raster thread samples a platform view.
+`AHardwareBuffer_toHardwareBuffer` is not provided. Tested by
+`tests/dex-graphics/gesher/ImageReaderPrivateTest.java` with
+`tests/native/reader_buffer_test.c`.
+These buffers do not implement general HardwareBuffer allocation, Android GPU
 imports, parcel transport or protected content. Other ImageReader formats retain
-the existing direct CameraFrames delivery path. See the
+the existing direct CameraFrames delivery path (YUV_420_888 as I420, JPEG bytes). See the
 [Otzaria regression evidence](research/otzaria-imagereader-validation-2026-11-07.json).
 
 ## Pieces
@@ -42,8 +113,8 @@ the existing direct CameraFrames delivery path. See the
 
 `new AudioTrack(...)` → `native_setup` creates an engine `Track` (format,
 rate, channels, the stream type from the attributes, the buffer size); writes
-copy into its ring (streaming) or its static buffer; the engine's thread,
-every 10 ms, mixes the tracks of each stream group at the output's rate,
+copy into its ring (streaming) or its static buffer. The engine's thread wakes
+for WASAPI refill events or a 10 ms timer and mixes each stream group at the output's rate,
 resampling and converting channels, applies the track's volume (ramped) and
 the master volume, and gives the mix to the sink. WASAPI applies the stream
 volume as the session's; the capture applies it in software. Positions count
@@ -331,6 +402,7 @@ up is not established.
 | AAudio input streams, OpenSL ES audio recorders | `compat/media/ndk/aaudio.cc`, `opensles.cc` |
 | Encoders: H.264 and AAC through Media Foundation's encoder MFTs, Opus through libopus, libavc's H.264 encoder where Media Foundation has none (`GESHER_VIDEO_ENCODERS=soft`) | `compat/media/encode` |
 | MediaCodec encoders (ByteBuffers, Images, createInputSurface), MediaCodecList's encoders; decoders into an ImageReader's Surface | `compat/media/jni/media_codec_jni.cc`; input surfaces: `compat/media/video/input_surface.cc` (built into hwui) |
+| Persistent input Surfaces reused by successive MediaCodec and MediaRecorder consumers, with one active consumer lease | `jni/persistent_input_surface.{h,cc}`, `video/input_surface.{h,cc}` |
 | Container writers: MPEG-4/3GPP, WebM (libwebm's mkvmuxer), Ogg Opus, AAC ADTS; MediaMuxer | `compat/media/mux`, `jni/media_muxer_jni.cc` |
 | MediaRecorder: audio, video from its Surface (Canvas, a Camera2 session) | `compat/media/record`, `jni/media_recorder_jni.cc` |
 
@@ -345,6 +417,18 @@ source evidence and validation boundaries.
 The [recorder contracts](media-recorder-contracts.md) pin lifecycle/error behavior,
 requested codec handling, complete-container size admission, callback ordering
 and the exact boundaries of host and Windows validation.
+
+`MediaCodec.createPersistentInputSurface()` creates a producer whose lifetime is
+independent of a particular encoder. A configured video codec attaches it through
+`setInputSurface`; a recorder stores it before `prepare`, then acquires its
+exclusive consumer lease while preparing. The recorder's `getSurface` is
+unavailable when persistent input was configured. Stop, reset and release quiesce
+the retiring consumer's callbacks while keeping the persistent producer usable
+by its successor. The application owns the final `Surface.release()`.
+Frames before codec start or after input EOS are rejected before I420 allocation
+and conversion. This does not change accepted pixels, timestamps, queue bounds or
+encoder selection. See the [persistent input contract and measurements](research/persistent-input-surface-2026-11-22.md)
+for exact scope, ownership, errors, host evidence and pending Windows acceptance.
 
 `MediaRecorder.setNextOutputFile` now queues one caller-selected writable,
 seekable MP4 descriptor. At the size limit the writer finalizes the current

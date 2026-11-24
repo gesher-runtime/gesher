@@ -1,0 +1,54 @@
+diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
+index 12e38a21df..8e960fbb58 100644
+--- a/compat/posix/src/system_properties.cc
++++ b/compat/posix/src/system_properties.cc
+@@ -18,0 +19 @@
++#include <string_view>
+@@ -83,0 +85,9 @@ std::wstring Environment(const wchar_t* name) {
++// The ordinary device/session and inherited root fit in this stack buffer.
++// Longer supported values retain the general environment reader. Read the
++// actual environment every time: callers may change device boots in-process.
++bool EnvironmentEquals(const wchar_t* name, std::wstring_view expected) {
++  wchar_t buffer[1024];
++  DWORD count = GetEnvironmentVariableW(name, buffer, 1024);
++  if (count >= 1024) return Environment(name) == expected;
++  return count == expected.size() && (!count || std::wmemcmp(buffer, expected.data(), count) == 0);
++}
+@@ -299,0 +310,14 @@ Area* Current() { // LocalMutex is held by every caller.
++  // Map keys and Areas have process lifetime. Avoid rebuilding session/root
++  // strings on every property/log read, but preserve all environment changes
++  // and the existing root inheritance repair on the slow path.
++  static const std::wstring* last_session = nullptr;
++  static Area* last_area = nullptr;
++  if (last_session) {
++    std::wstring_view session(*last_session);
++    bool same = session.starts_with(L"device-")
++        ? EnvironmentEquals(L"GESHER_BINDER", session.substr(7))
++        : EnvironmentEquals(L"GESHER_BINDER", {}) &&
++          EnvironmentEquals(L"GESHER_PROPERTY_SESSION", session.substr(7));
++    if (same && EnvironmentEquals(L"GESHER_PROPERTY_ROOT_SESSION", session) &&
++        EnvironmentEquals(L"GESHER_PROPERTY_ROOT", last_area->root)) return last_area;
++  }
+@@ -306 +330,4 @@ Area* Current() { // LocalMutex is held by every caller.
+-    return InheritRoot(session, area->root) ? area : nullptr;
++    if (!InheritRoot(session, area->root)) return nullptr;
++    last_session = &existing->first;
++    last_area = area;
++    return area;
+@@ -351 +378,3 @@ Area* Current() { // LocalMutex is held by every caller.
+-  cached.emplace(session, std::move(area));
++  auto inserted = cached.emplace(session, std::move(area));
++  last_session = &inserted.first->first;
++  last_area = result;
+@@ -411 +440,8 @@ Area* Refreshed() {
+-void GetAll(const std::string* names, std::string* values, size_t count) {
++Revision CurrentRevision() {
++  std::lock_guard local(LocalMutex());
++  Area* area = Current();
++  if (!area) return {};
++  const auto* header = static_cast<const Header*>(area->view);
++  return {area, __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)};
++}
++void GetAll(const std::string* names, std::string* values, size_t count, Revision* revision) {
+@@ -413,0 +450 @@ void GetAll(const std::string* names, std::string* values, size_t count) {
++  if (revision) *revision = area ? Revision{area, area->cached_generation} : Revision{};

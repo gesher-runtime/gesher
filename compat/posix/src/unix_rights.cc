@@ -94,7 +94,7 @@ HANDLE Connect() {
   const std::wstring name = std::wstring(wire::kPipePrefix) + Widen(device.c_str());
   HANDLE pipe = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt) {
-    pipe = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0,
+    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING, 0,
                        nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
       if (GetLastError() != ERROR_PIPE_BUSY) return INVALID_HANDLE_VALUE;

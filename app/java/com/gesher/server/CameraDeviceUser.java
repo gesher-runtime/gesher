@@ -19,7 +19,6 @@ import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.utils.SubmitInfo;
 import android.hardware.camera2.utils.SurfaceUtils;
 import android.hardware.common.fmq.MQDescriptor;
-import android.os.RemoteException;
 import android.os.ServiceSpecificException;
 import android.os.SystemClock;
 import android.util.Size;
@@ -54,11 +53,15 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         final Request request;
         final int subsequenceId;
         long frameNumber;
+        boolean imageCaptured; // Updated under mLock before publishing any output buffer.
+        final CameraCallbacks.FrameCallbacks callbacks;
 
-        Frame(Request request, int subsequenceId, long frameNumber) {
+        Frame(Request request, int subsequenceId, long frameNumber,
+                CameraCallbacks.FrameCallbacks callbacks) {
             this.request = request;
             this.subsequenceId = subsequenceId;
             this.frameNumber = frameNumber;
+            this.callbacks = callbacks;
         }
     }
 
@@ -119,27 +122,41 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         final CameraMetadataNative settings;
         final int[] streamIds;
         final int[] surfaceIds;
+        final long retainedBytes;
+        final long frameBytes;
 
         Request(int requestId, CaptureRequest request) {
             this.requestId = requestId;
-            this.settings = request.getNativeCopy();
             int[] streams = request.getStreamIds();
             int[] surfaces = request.getSurfaceIds();
+            if ((streams != null && streams.length > CameraCallbacks.MAX_TARGETS)
+                    || (surfaces != null && surfaces.length > CameraCallbacks.MAX_TARGETS)) {
+                throw CameraCallbacks.full();
+            }
+            this.settings = request.getNativeCopy();
+            long metadata = CameraCallbacks.metadataBytes(settings);
             this.streamIds = streams != null ? streams.clone() : new int[0];
             this.surfaceIds = surfaces != null ? surfaces.clone() : new int[0];
+            retainedBytes = metadata + 4L * (streamIds.length + surfaceIds.length) + 256;
+            // Result metadata clones the request and adds a fixed set of tags.
+            // The native buffer grows geometrically; reserve its doubled capacity,
+            // new tags, callback nodes and the retained source before capture starts.
+            frameBytes = retainedBytes + 2 * metadata + 4096 + 256L * streamIds.length;
         }
     }
 
     private final CameraService mService;
     private final String mCameraId;
     private final WindowsCamera.Device mDevice;
-    private final ICameraDeviceCallbacks mCallbacks;
     private final CameraCallbacks mCallbackQueue;
 
     private final Object mLock = new Object();
     private final Map<Integer, Stream> mStreams = new HashMap<>();
     private final ArrayDeque<Frame> mQueue = new ArrayDeque<>();
     private Request[] mRepeating;
+    private CameraCallbacks.Retained mRepeatingStorage;
+    private int mRepeatingIndex;
+    private Frame mActive;
     private int mRepeatingId = -1;
     private long mRepeatingLastFrame = NO_IN_FLIGHT_REPEATING_FRAMES;
     private int mNextStreamId;
@@ -151,17 +168,24 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     /** endConfigure asks the capture thread to open the device at the session's size. */
     private boolean mOpenWanted;
     private Thread mThread;
+    private CameraCallbacks.Retained mProducerLifetime;
     private WindowsCamera.Capture mCapture;
     /** The size {@link #mCapture} was opened for (the largest stream's then). */
     private Size mCaptureFor;
+    /**
+     * The AF state machine over {@link #mCapture}'s focus control, for a camera with real
+     * autofocus (null for a fixed-focus one); the capture thread's alone.
+     */
+    private CameraAutoFocus mAutoFocus;
 
     CameraDeviceUser(CameraService service, String cameraId, WindowsCamera.Device device,
             ICameraDeviceCallbacks callbacks) {
         mService = service;
         mCameraId = cameraId;
         mDevice = device;
-        mCallbackQueue = new CameraCallbacks(cameraId, callbacks);
-        mCallbacks = mCallbackQueue;
+        mCallbackQueue = new CameraCallbacks(cameraId, callbacks, () -> {
+            synchronized (mLock) { mLock.notifyAll(); }
+        });
     }
 
     // --- configuration -----------------------------------------------------------------------
@@ -264,10 +288,9 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     @Override
     public void prepare(int streamId) {
-        try {
-            mCallbacks.onPrepared(streamId);
-        } catch (RemoteException e) {
-            // gone
+        synchronized (mLock) {
+            checkConnected();
+            mCallbackQueue.prepared(streamId);
         }
     }
 
@@ -326,9 +349,21 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     "no requests");
         }
         synchronized (mLock) {
-            int requestId = mNextRequestId++;
+            checkConnected();
+            if (requests.length > CameraCallbacks.MAX_FRAMES
+                    || (!streaming && !mCallbackQueue.hasFrameCapacity(requests.length))) {
+                throw CameraCallbacks.full();
+            }
+            int requestId = mNextRequestId;
             Request[] copies = new Request[requests.length];
+            long[] frameBytes = new long[requests.length];
+            long retainedBytes = 0;
+            long largestFrame = 0;
             for (int i = 0; i < requests.length; i++) {
+                if (requests[i] == null) {
+                    throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                            "null capture request");
+                }
                 copies[i] = new Request(requestId, requests[i]);
                 for (int streamId : copies[i].streamIds) {
                     if (!mStreams.containsKey(streamId)) {
@@ -336,25 +371,52 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                                 "request targets stream " + streamId + ", not configured");
                     }
                 }
+                frameBytes[i] = copies[i].frameBytes;
+                largestFrame = Math.max(largestFrame, frameBytes[i]);
+                retainedBytes += copies[i].retainedBytes;
+                if (retainedBytes > CameraCallbacks.MAX_BYTES) throw CameraCallbacks.full();
             }
             SubmitInfo info;
             if (streaming) {
+                // The immutable repeating template must leave room for EACH
+                // subsequence to produce a frame. Otherwise no callback exists
+                // that could ever release the missing credit, so next() stalls.
+                if (largestFrame > CameraCallbacks.MAX_BYTES - retainedBytes) {
+                    throw CameraCallbacks.full();
+                }
+                CameraCallbacks.Retained storage = mCallbackQueue.retain(retainedBytes);
+                if (storage == null) throw CameraCallbacks.full();
                 info = new SubmitInfo(requestId, mRepeatingLastFrame);
+                clearRepeatingLocked();
                 mRepeating = copies;
+                mRepeatingStorage = storage;
+                mRepeatingIndex = 0;
                 mRepeatingId = requestId;
                 mRepeatingLastFrame = NO_IN_FLIGHT_REPEATING_FRAMES;
             } else {
+                CameraCallbacks.FrameCallbacks[] callbacks = mCallbackQueue.reserve(frameBytes);
+                if (callbacks == null) throw CameraCallbacks.full();
                 long last = -1;
                 for (int i = 0; i < copies.length; i++) {
                     last = mNextFrameNumber++;
-                    mQueue.add(new Frame(copies[i], i, last));
+                    mQueue.add(new Frame(copies[i], i, last, callbacks[i]));
                 }
                 info = new SubmitInfo(requestId, last);
             }
+            ++mNextRequestId;
             startThreadLocked();
             mIdleReported = false;
             mLock.notifyAll();
             return info;
+        }
+    }
+
+    private void clearRepeatingLocked() {
+        mRepeating = null;
+        mRepeatingId = -1;
+        if (mRepeatingStorage != null) {
+            mRepeatingStorage.close();
+            mRepeatingStorage = null;
         }
     }
 
@@ -365,8 +427,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
                         "request " + requestId + " is not the repeating request");
             }
-            mRepeating = null;
-            mRepeatingId = -1;
+            clearRepeatingLocked();
             long last = mRepeatingLastFrame;
             mRepeatingLastFrame = NO_IN_FLIGHT_REPEATING_FRAMES;
             mLock.notifyAll();
@@ -377,9 +438,22 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     @Override
     public long flush() {
         synchronized (mLock) {
-            mRepeating = null;
-            mRepeatingId = -1;
+            clearRepeatingLocked();
             mRepeatingLastFrame = NO_IN_FLIGHT_REPEATING_FRAMES;
+            // Queued work is still admitted and must receive a terminal callback.
+            // Post while holding the selection lock (enqueue only, never app code)
+            // so a competing producer cannot start a frame after its flush error.
+            if (mActive != null) {
+                mActive.callbacks.onDeviceError(captureFailure(mActive),
+                        extras(mActive.request.requestId, mActive.subsequenceId, mActive.frameNumber));
+                // A native read may still own this frame. Only its producer seals it.
+            }
+            for (Frame frame : mQueue) {
+                frame.callbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_REQUEST,
+                        extras(frame.request.requestId, frame.subsequenceId, frame.frameNumber));
+                frame.callbacks.close();
+            }
+            mQueue.clear();
             mLock.notifyAll();
             return mNextFrameNumber - 1;
         }
@@ -415,11 +489,11 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         synchronized (mLock) {
             if (mDisconnected) return;
             mDisconnected = true;
-            mRepeating = null;
-            mQueue.clear();
+            flush();
             thread = mThread;
             mLock.notifyAll();
         }
+        mCallbackQueue.close();
         if (thread != null && thread != Thread.currentThread()) {
             try {
                 thread.join(5000);
@@ -427,19 +501,13 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 Thread.currentThread().interrupt();
             }
         }
-        mCallbackQueue.close();
         mService.closed(mCameraId, this);
         CameraService.log("disconnect " + mCameraId);
     }
 
     /** Another client opened this camera. */
     void evicted() {
-        try {
-            mCallbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_DISCONNECTED,
-                    extras(-1, 0, -1));
-        } catch (RemoteException e) {
-            // gone
-        }
+        mCallbackQueue.disconnected(extras(-1, 0, -1));
         disconnect();
     }
 
@@ -456,6 +524,13 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     private void startThreadLocked() {
         if (mThread != null) return;
+        // Even a native configuration/open/read that outlives disconnect remains
+        // charged to the finite per-process owner budget until its thread exits.
+        mProducerLifetime = mCallbackQueue.retain(0);
+        if (mProducerLifetime == null) {
+            throw new ServiceSpecificException(ICameraService.ERROR_DISCONNECTED,
+                    "camera " + mCameraId + " is disconnected");
+        }
         mThread = new Thread(this::captureLoop, "camera-" + mCameraId);
         mThread.setDaemon(true);
         mThread.start();
@@ -464,52 +539,46 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     /** The next frame to make, or null when disconnected; reports idleness. */
     private Frame next() {
         for (;;) {
-            boolean openWanted = false;
+            boolean openWanted;
             synchronized (mLock) {
+                mActive = null;
                 mBusy = false;
                 mLock.notifyAll();
-                boolean reportIdle = false;
-                while (!mDisconnected && !mOpenWanted && mQueue.isEmpty() && mRepeating == null) {
-                    if (!mIdleReported) {
-                        mIdleReported = true;
-                        reportIdle = true;
-                        break;
-                    }
-                    try {
-                        mLock.wait();
-                    } catch (InterruptedException e) {
-                        return null;
-                    }
+                if (mDisconnected) return null;
+                if (!mOpenWanted && mQueue.isEmpty() && mRepeating == null) {
+                    if (!mIdleReported && mCallbackQueue.idle()) mIdleReported = true;
+                    try { mLock.wait(); }
+                    catch (InterruptedException e) { return null; }
+                    continue;
                 }
-                if (!reportIdle) {
-                    if (mDisconnected) return null;
+                openWanted = mOpenWanted;
+                if (!openWanted) {
+                    Frame frame = mQueue.poll();
+                    if (frame == null) {
+                        Request request = mRepeating[mRepeatingIndex];
+                        CameraCallbacks.FrameCallbacks[] credit = mCallbackQueue.reserve(
+                                new long[] {request.frameBytes});
+                        if (credit == null) {
+                            // Object.wait releases mLock: cancel/flush/disconnect and
+                            // reentrant submissions never depend on the blocked client.
+                            try { mLock.wait(); }
+                            catch (InterruptedException e) { return null; }
+                            continue;
+                        }
+                        frame = new Frame(request, mRepeatingIndex, mNextFrameNumber++, credit[0]);
+                        mRepeatingIndex = (mRepeatingIndex + 1) % mRepeating.length;
+                        mRepeatingLastFrame = frame.frameNumber;
+                    }
                     mBusy = true;
-                    openWanted = mOpenWanted;
+                    mActive = frame;
+                    return frame;
                 }
-                if (!reportIdle && !openWanted) {
-                    Frame f = mQueue.poll();
-                    if (f != null) return f;
-                    // Select and number this frame under the same lock that
-                    // established a request exists. cancelRequest/flush may clear
-                    // mRepeating as soon as this lock is released.
-                    Request r = mRepeating[0];
-                    f = new Frame(r, 0, mNextFrameNumber++);
-                    mRepeatingLastFrame = f.frameNumber;
-                    return f;
-                }
+                mBusy = true;
             }
-            if (openWanted) {
-                openForConfiguration();
-                synchronized (mLock) {
-                    mOpenWanted = false;
-                    mLock.notifyAll();
-                }
-                continue;
-            }
-            try {
-                mCallbacks.onDeviceIdle();
-            } catch (RemoteException e) {
-                // gone
+            openForConfiguration();
+            synchronized (mLock) {
+                mOpenWanted = false;
+                mLock.notifyAll();
             }
         }
     }
@@ -523,7 +592,14 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             // read, or miss a handle opened after disconnect began.
             WindowsCamera.Capture capture = mCapture;
             mCapture = null;
-            if (capture != null) capture.close();
+            try {
+                if (capture != null) capture.close();
+            } finally {
+                mProducerLifetime.close();
+                // A failed configuration or native adapter must not strand
+                // admitted frames if the capture worker exits unexpectedly.
+                disconnect();
+            }
         }
     }
 
@@ -533,78 +609,98 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         byte[] nv12 = null;
         Frame f;
         while ((f = next(timing)) != null) {
-            if (mCapture == null) {
-                try {
-                    open(configuredSize());
-                } catch (WindowsCamera.OpenException e) {
-                    CameraService.log(e.getMessage());
+            try {
+                if (f.callbacks.terminal()) continue;
+                if (mCapture == null) {
+                    try {
+                        open(configuredSize());
+                    } catch (WindowsCamera.OpenException e) {
+                        CameraService.log(e.getMessage());
+                        fail(f, ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE);
+                        if (timing != null) { ++timing.readErrors; timing.end(); }
+                        continue;
+                    }
+                }
+                if (nv12 == null || nv12.length < mCapture.width * mCapture.height * 3 / 2) {
+                    nv12 = new byte[mCapture.width * mCapture.height * 3 / 2];
+                }
+                if (timing != null) timing.advance(CaptureTiming.READ);
+                int hr = mCapture.read(nv12);
+                long timestamp = SystemClock.elapsedRealtimeNanos();
+                if (timing != null) timing.advance(CaptureTiming.STARTED);
+                if (hr < 0) {
+                    CameraService.log(String.format("reading camera %s: HRESULT 0x%08X", mCameraId,
+                            hr));
                     fail(f, ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE);
                     if (timing != null) { ++timing.readErrors; timing.end(); }
                     continue;
                 }
-            }
-            if (nv12 == null || nv12.length < mCapture.width * mCapture.height * 3 / 2) {
-                nv12 = new byte[mCapture.width * mCapture.height * 3 / 2];
-            }
-            if (timing != null) timing.advance(CaptureTiming.READ);
-            int hr = mCapture.read(nv12);
-            long timestamp = SystemClock.elapsedRealtimeNanos();
-            if (timing != null) timing.advance(CaptureTiming.STARTED);
-            if (hr < 0) {
-                CameraService.log(String.format("reading camera %s: HRESULT 0x%08X", mCameraId,
-                        hr));
-                fail(f, ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE);
-                if (timing != null) { ++timing.readErrors; timing.end(); }
-                continue;
-            }
-            CaptureResultExtras extras = extras(f.request.requestId, f.subsequenceId,
-                    f.frameNumber);
-            try {
-                mCallbacks.onCaptureStarted(extras, timestamp);
-                if (timing != null) timing.advance(CaptureTiming.DELIVERY);
-                for (int i = 0; i < f.request.streamIds.length; i++) {
-                    Stream s;
-                    synchronized (mLock) {
-                        s = mStreams.get(f.request.streamIds[i]);
-                    }
-                    if (s == null) continue;
-                    int surfaceId = i < f.request.surfaceIds.length ? f.request.surfaceIds[i] : 0;
-                    Surface surface = surfaceId < s.surfaces.size() ? s.surfaces.get(surfaceId)
-                            : s.surfaces.get(0);
-                    byte[] jpeg = null;
-                    if (s.format == CameraService.HAL_BLOB) {
-                        Byte quality = f.request.settings.get(CaptureRequest.JPEG_QUALITY);
-                        jpeg = CameraFrames.jpeg(nv12, mCapture.width, mCapture.height,
-                                s.size.getWidth(), s.size.getHeight(),
-                                quality != null ? quality & 0xff : 95);
-                    }
-                    if (timing != null) ++timing.deliveries;
-                    int delivered = CameraFrames.deliver(surface, nv12, mCapture.width,
-                            mCapture.height, timestamp, jpeg);
-                    if (delivered != CameraFrames.OK) {
-                        if (timing != null) ++timing.deliveryErrors;
-                        CameraService.log("frame " + f.frameNumber + ": stream "
-                                + f.request.streamIds[i] + " (format 0x"
-                                + Integer.toHexString(s.format) + ") took no frame"
-                                + (s.format == CameraService.HAL_BLOB ? ", JPEG "
-                                + (jpeg == null ? "none" : jpeg.length + " bytes") : ""));
-                        mCallbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_BUFFER,
-                                extras(f.request.requestId, f.subsequenceId, f.frameNumber,
-                                        f.request.streamIds[i]));
-                    }
+                synchronized (mLock) {
+                    if (f.callbacks.terminal()) continue;
+                    f.imageCaptured = true;
                 }
-                if (timing != null) timing.advance(CaptureTiming.METADATA);
-                CameraMetadataNative result = result(f.request.settings, timestamp);
-                if (timing != null) timing.advance(CaptureTiming.RESULT);
-                mCallbacks.onResultReceived(CameraMetadataInfo.metadata(result), extras,
-                        new PhysicalCaptureResultInfo[0]);
-                if (timing != null) timing.advance(CaptureTiming.TAIL);
-            } catch (RemoteException | RuntimeException e) {
-                if (timing != null) ++timing.callbackErrors;
-                CameraService.log("frame " + f.frameNumber + " of camera " + mCameraId
-                        + " failed: " + e);
+                CaptureResultExtras extras = extras(f.request.requestId, f.subsequenceId,
+                        f.frameNumber);
+                try {
+                    f.callbacks.onCaptureStarted(extras, timestamp);
+                    if (timing != null) timing.advance(CaptureTiming.DELIVERY);
+                    for (int i = 0; i < f.request.streamIds.length; i++) {
+                        if (f.callbacks.terminal()) break;
+                        Stream s;
+                        synchronized (mLock) {
+                            s = mStreams.get(f.request.streamIds[i]);
+                        }
+                        if (s == null) continue;
+                        int surfaceId = i < f.request.surfaceIds.length ? f.request.surfaceIds[i] : 0;
+                        Surface surface = surfaceId < s.surfaces.size() ? s.surfaces.get(surfaceId)
+                                : s.surfaces.get(0);
+                        byte[] jpeg = null;
+                        if (s.format == CameraService.HAL_BLOB) {
+                            Byte quality = f.request.settings.get(CaptureRequest.JPEG_QUALITY);
+                            jpeg = CameraFrames.jpeg(nv12, mCapture.width, mCapture.height,
+                                    s.size.getWidth(), s.size.getHeight(),
+                                    quality != null ? quality & 0xff : 95);
+                        }
+                        if (timing != null) ++timing.deliveries;
+                        int delivered = CameraFrames.deliver(surface, nv12, mCapture.width,
+                                mCapture.height, timestamp, jpeg);
+                        if (delivered != CameraFrames.OK) {
+                            if (timing != null) ++timing.deliveryErrors;
+                            CameraService.log("frame " + f.frameNumber + ": stream "
+                                    + f.request.streamIds[i] + " (format 0x"
+                                    + Integer.toHexString(s.format) + ") took no frame"
+                                    + (s.format == CameraService.HAL_BLOB ? ", JPEG "
+                                    + (jpeg == null ? "none" : jpeg.length + " bytes") : ""));
+                            f.callbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_BUFFER,
+                                    extras(f.request.requestId, f.subsequenceId, f.frameNumber,
+                                            f.request.streamIds[i]));
+                        }
+                    }
+                    if (f.callbacks.terminal()) continue;
+                    if (timing != null) timing.advance(CaptureTiming.METADATA);
+                    int af = autoFocusFrame(f.request.settings, nv12);
+                    CameraMetadataNative result = result(f.request.settings, timestamp,
+                            af & AF_STATE_MASK, (af & AF_LENS_MOVING) != 0);
+                    if (timing != null) timing.advance(CaptureTiming.RESULT);
+                    f.callbacks.onResultReceived(CameraMetadataInfo.metadata(result), extras,
+                            new PhysicalCaptureResultInfo[0]);
+                    if (timing != null) timing.advance(CaptureTiming.TAIL);
+                } catch (RuntimeException e) {
+                    if (timing != null) ++timing.callbackErrors;
+                    CameraService.log("frame " + f.frameNumber + " of camera " + mCameraId
+                            + " failed: " + e);
+                } finally {
+                    if (timing != null) timing.end();
+                }
+            } catch (RuntimeException e) {
+                CameraService.log("camera " + mCameraId + " capture failed: " + e);
             } finally {
-                if (timing != null) timing.end();
+                // A delivery/metadata exception still completes the admitted frame.
+                if (!f.callbacks.terminal()) {
+                    f.callbacks.onDeviceError(captureFailure(f),
+                            extras(f.request.requestId, f.subsequenceId, f.frameNumber));
+                }
+                f.callbacks.close();
             }
         }
         if (timing != null) timing.log(mCameraId);
@@ -648,6 +744,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             WindowsCamera.Capture old = mCapture;
             mCapture = null;
             mCaptureFor = null;
+            stopAutoFocus();
             old.close();
         }
         try {
@@ -664,29 +761,29 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 size.getHeight());
         mCapture = capture;
         mCaptureFor = size;
+        startAutoFocus(capture);
         CameraService.log("camera " + mCameraId + " (" + mDevice.name + ") capturing at "
                 + capture.width + "x" + capture.height + " (opened in "
                 + (SystemClock.elapsedRealtime() - start) + " ms)");
     }
 
+    private static int captureFailure(Frame frame) {
+        // CameraDeviceImpl uses only RESULT errors to allow buffers on a
+        // failed capture. A REQUEST error promises that none are available.
+        return frame.imageCaptured ? ICameraDeviceCallbacks.ERROR_CAMERA_RESULT
+                : ICameraDeviceCallbacks.ERROR_CAMERA_REQUEST;
+    }
+
     private void fail(Frame f, int error) {
-        try {
-            mCallbacks.onDeviceError(error, extras(f.request.requestId, f.subsequenceId,
-                    f.frameNumber));
-        } catch (RemoteException e) {
-            // gone
-        }
+        f.callbacks.onDeviceError(error, extras(f.request.requestId, f.subsequenceId,
+                f.frameNumber));
         synchronized (mLock) {
-            if (error == ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE && mRepeating != null) {
+            if (error == ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE && mRepeating != null
+                    && f.request.requestId == mRepeatingId) {
                 long last = mRepeatingLastFrame;
                 int id = mRepeatingId;
-                mRepeating = null;
-                mRepeatingId = -1;
-                try {
-                    mCallbacks.onRepeatingRequestError(last, id);
-                } catch (RemoteException e) {
-                    // gone
-                }
+                clearRepeatingLocked();
+                f.callbacks.onRepeatingRequestError(last, id);
             }
         }
     }
@@ -704,18 +801,55 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 false, 0);
     }
 
-    /** The result of a frame: the request's settings and what the camera did. */
+    /** {@link #autoFocusFrame}'s answer: the CONTROL_AF_STATE bits, and the lens moving. */
+    private static final int AF_STATE_MASK = 0xff, AF_LENS_MOVING = 0x100;
+
+    /** A new source starts the AF state machine again (mode applied on the next frame). */
+    private void startAutoFocus(WindowsCamera.Capture capture) {
+        mAutoFocus = mDevice.autofocus
+                ? new CameraAutoFocus(CameraAutoFocus.lensOf(capture, mCameraId)) : null;
+    }
+
+    private void stopAutoFocus() {
+        mAutoFocus = null;
+    }
+
+    /**
+     * One frame through the AF state machine for the request's AF mode and trigger: the
+     * CONTROL_AF_STATE, with {@link #AF_LENS_MOVING} while the lens moves. INACTIVE and
+     * stationary for a fixed-focus camera.
+     */
+    private int autoFocusFrame(CameraMetadataNative settings, byte[] nv12) {
+        if (mAutoFocus == null) return CameraMetadata.CONTROL_AF_STATE_INACTIVE;
+        Integer afMode = settings.get(CaptureRequest.CONTROL_AF_MODE);
+        Integer trigger = settings.get(CaptureRequest.CONTROL_AF_TRIGGER);
+        int state = mAutoFocus.frame(
+                afMode != null ? afMode : CameraMetadata.CONTROL_AF_MODE_OFF,
+                trigger != null ? trigger : CameraMetadata.CONTROL_AF_TRIGGER_IDLE,
+                SystemClock.uptimeMillis(),
+                CameraAutoFocus.sharpness(nv12, mCapture.width, mCapture.height));
+        return state | (mAutoFocus.lensMoving() ? AF_LENS_MOVING : 0);
+    }
+
+    /** The result of a frame of a fixed-focus camera (AF INACTIVE, the lens stationary). */
     static CameraMetadataNative result(CameraMetadataNative settings, long timestamp) {
+        return result(settings, timestamp, CameraMetadata.CONTROL_AF_STATE_INACTIVE, false);
+    }
+
+    /** The result of a frame: the request's settings and what the camera did. */
+    static CameraMetadataNative result(CameraMetadataNative settings, long timestamp,
+            int afState, boolean lensMoving) {
         CameraMetadataNative m = new CameraMetadataNative(settings);
         m.set(CaptureResult.SENSOR_TIMESTAMP, timestamp);
         m.set(CaptureResult.SENSOR_EXPOSURE_TIME, CameraService.FRAME_DURATION_NS);
         m.set(CaptureResult.SENSOR_FRAME_DURATION, CameraService.FRAME_DURATION_NS);
         m.set(CaptureResult.REQUEST_PIPELINE_DEPTH, (byte) 1);
         m.set(CaptureResult.CONTROL_AE_STATE, CameraMetadata.CONTROL_AE_STATE_CONVERGED);
-        m.set(CaptureResult.CONTROL_AF_STATE, CameraMetadata.CONTROL_AF_STATE_INACTIVE);
+        m.set(CaptureResult.CONTROL_AF_STATE, afState);
         m.set(CaptureResult.CONTROL_AWB_STATE, CameraMetadata.CONTROL_AWB_STATE_CONVERGED);
         m.set(CaptureResult.FLASH_STATE, CameraMetadata.FLASH_STATE_UNAVAILABLE);
-        m.set(CaptureResult.LENS_STATE, CameraMetadata.LENS_STATE_STATIONARY);
+        m.set(CaptureResult.LENS_STATE, lensMoving ? CameraMetadata.LENS_STATE_MOVING
+                : CameraMetadata.LENS_STATE_STATIONARY);
         return m;
     }
 }

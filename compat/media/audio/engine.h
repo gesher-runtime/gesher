@@ -200,7 +200,7 @@ class Track : public std::enable_shared_from_this<Track> {
   uint32_t underrun_count_ = 0;
   bool was_underrun_ = false;
   bool end_signalled_ = false;
-  int starved_ticks_ = 0;
+  int64_t starved_since_ns_ = -1;
 
   float vol_left_ = 1.0f, vol_right_ = 1.0f;
   float applied_left_ = 1.0f, applied_right_ = 1.0f;  // ramps toward vol_*

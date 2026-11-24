@@ -120,7 +120,8 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.content.pm.ICrossProfileApps \
   android.view.ISensitiveContentProtectionManager \
   android.permission.IPermissionManager \
-  android.content.pm.verify.domain.IDomainVerificationManager
+  android.content.pm.verify.domain.IDomainVerificationManager \
+  android.webkit.IWebViewUpdateService
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the
