@@ -75,8 +75,9 @@ constexpr int kWnowait = 0x01000000, kWclone = static_cast<int>(0x80000000u),
               kWall = 0x40000000;
 constexpr int kMaxSignal = 64;
 // How long ATTACH waits for a process that has just started to publish its
-// ptrace state and start its guard.
-constexpr int kStartupWaitMs = 3000;
+// ptrace state and start its guard (its executable's start-up, before main;
+// a loaded machine can take seconds).
+constexpr int kStartupWaitMs = 10000;
 
 enum class TraceeState { kRunning, kStopPending, kStopped };
 
@@ -197,20 +198,24 @@ int64_t Attach(int pid, bool seize, uint64_t addr, uint64_t options) {
   }
   Tracee t;
   t.process = process;
+  const int64_t start = pt::ProcessStartTime(process);
   if (static_cast<DWORD>(pid) != self) {
     // A process that has just started publishes its state and starts its
     // guard during its start-up: wait for them a bounded time. One that
     // publishes no state, or has no guard to stop it (gesher-base only in a
     // DLL), cannot be stopped as Linux stops a tracee.
-    for (int waited = 0;; waited += 5) {
+    const ULONGLONG deadline = GetTickCount64() + kStartupWaitMs;
+    for (;;) {
       DWORD code = 0;
       if (!GetExitCodeProcess(process, &code) || code != STILL_ACTIVE) {
         Release(t);
         return Fail(kESRCH);
       }
-      if (t.remote.state == nullptr) pt::OpenRemote(static_cast<DWORD>(pid), &t.remote);
+      // Only the state this very process published (a state an exited
+      // process with the same pid left is not it).
+      if (t.remote.state == nullptr) pt::OpenRemote(static_cast<DWORD>(pid), &t.remote, start);
       if (t.remote.state != nullptr && t.remote.state->guard_tid != 0) break;
-      if (waited >= kStartupWaitMs) {
+      if (GetTickCount64() >= deadline) {
         Release(t);
         return Fail(kEPERM);
       }
@@ -302,15 +307,12 @@ Tracee* Find(int pid, bool any_state) {
   const int64_t me = pt::SelfTracerId();
   if (it == tracees.end()) {
     Tracee t;
-    if (!pt::OpenRemote(static_cast<DWORD>(pid), &t.remote)) return nullptr;
-    if (pt::LiveTracer(t.remote.state) != me) {
-      Release(t);
-      return nullptr;
-    }
     t.process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE | PROCESS_VM_READ |
                                 PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
                             FALSE, static_cast<DWORD>(pid));
-    if (t.process == nullptr) {
+    if (t.process == nullptr ||
+        !pt::OpenRemote(static_cast<DWORD>(pid), &t.remote, pt::ProcessStartTime(t.process)) ||
+        pt::LiveTracer(t.remote.state) != me) {
       Release(t);
       return nullptr;
     }

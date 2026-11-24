@@ -93,7 +93,11 @@ int CompletePipeIo(BOOL done, DWORD transferred, DWORD error, bool writing) {
   if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED)
     return writing ? (errno = EPIPE, -1) : 0;
   if (error == ERROR_NO_DATA) return errno = writing ? EPIPE : EAGAIN, -1;
-  if (error == ERROR_OPERATION_ABORTED) return errno = EINTR, -1;
+  // An interrupted transfer that reports bytes moved returns them (a short
+  // count), as Linux does; one that reports none is EINTR.
+  if (error == ERROR_OPERATION_ABORTED) {
+    return transferred != 0 ? static_cast<int>(transferred) : (errno = EINTR, -1);
+  }
   if (error == ERROR_NOACCESS || error == ERROR_INVALID_USER_BUFFER) return errno = EFAULT, -1;
   return errno = ErrnoFromWin32(error), -1;
 }
@@ -101,7 +105,8 @@ int CompletePipeIo(BOOL done, DWORD transferred, DWORD error, bool writing) {
 // transfer before it moved a byte: the caller restarts it (ADR 0093).
 constexpr int kPipeTransferRestart = -2;
 int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
-                       bool immediate, HANDLE canceled, HANDLE interrupted) {
+                       bool immediate, HANDLE canceled, HANDLE interrupted,
+                       HANDLE gate = nullptr) {
   DWORD transferred = 0;
   if (immediate) {
     const BOOL done = writing ? WriteFile(file, bytes, count, &transferred, nullptr)
@@ -135,10 +140,18 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
   {
     // Blocked for data or room (in ReadFile/WriteFile itself for a
     // synchronous handle, else in GetOverlappedResult) while owning the
-    // description's gate: a ptrace stop interrupts this wait (ADR 0093), as
-    // a Linux stop interrupts a blocked read() or write(), so that the gate
-    // and the handle are free while the process is stopped.
-    gesher::ptrace::ParkedScope parked;
+    // description's gate: a safe point for a ptrace stop (ADR 0093), as a
+    // Linux stop takes a thread blocked in read() or write() on a pipe.
+    //  - A read is interrupted (and restarted after the stop), so that the
+    //    gate and the handle are free while the process is stopped: a
+    //    cancelled read has taken no data.
+    //  - A write is not: a pending write larger than the room in the pipe is
+    //    partly read while it waits, and a cancelled one reports none of it
+    //    (its bytes would be written twice). It stays pending while the
+    //    process is stopped, and the stop leaves it its gate, which no other
+    //    writer could use before it completes anyway (the pipe is full).
+    gesher::ptrace::ParkedScope parked(gate, !writing);
+    parked.SetIo(file, &operation.overlapped);
     done = writing ? WriteFile(file, bytes, count, &transferred, &operation.overlapped)
                    : ReadFile(file, bytes, count, &transferred, &operation.overlapped);
     error = done ? ERROR_SUCCESS : GetLastError();
@@ -146,8 +159,11 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
       done = GetOverlappedResult(file, &operation.overlapped, &transferred, TRUE);
       error = done ? ERROR_SUCCESS : GetLastError();
     }
-    restart = !done && error == ERROR_OPERATION_ABORTED && transferred == 0 &&
-              parked.Interrupted() &&
+    // A read the ptrace guard cancelled: it is the only canceller besides
+    // the caller's cancellation events, so an aborted read with neither
+    // event set restarts (also one the guard reached after its target read
+    // completed).
+    restart = !writing && !done && error == ERROR_OPERATION_ABORTED && transferred == 0 &&
               !(canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) &&
               !(interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0);
   }
@@ -247,7 +263,8 @@ int TransferPipeBody(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigne
           amount = std::min(amount, quota);
         }
       }
-      result = NativePipeTransfer(snapshot->handle, bytes, amount, writing, immediate, canceled, interrupted);
+      result = NativePipeTransfer(snapshot->handle, bytes, amount, writing, immediate, canceled,
+                                  interrupted, description.pipe_mutex);
     }
     if (result != kPipeTransferRestart) return result;
     // A ptrace stop interrupted the blocked transfer: wait for the stop to

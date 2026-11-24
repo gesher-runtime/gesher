@@ -65,7 +65,7 @@ gesher-base's copy in the executable creates it when the process starts, with
 the guard thread, and publishes it (its version) only once the guard's id is
 in it, so a process that never called anything ptrace-related can be traced
 (by its ancestor). A tracer that finds a live process without a published
-state or guard waits up to 3 s for its start-up to publish them (a process
+state or guard waits up to 10 s for its start-up to publish them (a process
 just started with `posix_spawn` is attached to at once); after that, a process
 whose gesher-base lives only in a DLL (a state but no guard), or that is not a
 Gesher process, cannot be traced (`EPERM`).
@@ -157,31 +157,59 @@ stop, it:
    mutexes count (their name's last component starts with "gesher", in any
    case); a private mutex of a Windows DLL or of the app is neither
    duplicated nor queried, as no other process waits for it. For a Gesher
-   mutex it asks for the owner (`NtQueryMutant`). If a suspended thread owns
-   one, the guard resumes them all. If that owner is parked in one of
-   Gesher's blocking waits (`ParkedScope`, around the pipe transfer's
-   blocking `ReadFile`/`WriteFile`: a pipe description's gate is held for
-   the whole transfer), the guard interrupts the wait (`CancelSynchronousIo`)
-   and marks it as interrupted for a stop, as a Linux stop interrupts a
-   blocked `read()`: the transfer then gives the gate back, waits holding no
-   Gesher mutex until the stop ends, and restarts. The guard then waits up
-   to 20 ms for the mutex; with it, it suspends them all again while holding
-   it (no thread of the process can take it again), releases it and checks
-   again; without it (a thread that took it again, or entered its wait only
-   after the interruption), it redoes the pass. A mutex whose owner died
+   mutex it asks for the owner (`NtQueryMutant`). A pipe description's gate
+   is held for a whole transfer, also while it blocks (`ParkedScope`
+   records the blocked thread, its gate and its request):
+   - a thread blocked in a pipe **write** owns its gate at a safe point and
+     is left there: the stop does not wait for that gate. Its write stays
+     pending while the process is stopped (below);
+   - a thread blocked in a pipe **read** is interrupted, as a Linux stop
+     interrupts a blocked `read()`: the guard marks it, resumes the
+     threads and cancels that very request (`CancelIoEx` with the read's
+     handle and `OVERLAPPED`, identified while the thread was suspended;
+     cancelling a thread's synchronous I/O waits for the thread, so it
+     cannot be done while it is suspended). The read gives the gate back,
+     waits holding no Gesher mutex until the stop ends, and restarts. A
+     cancelled read has taken no data. A read that is aborted with neither
+     of its caller's cancellation events set restarts in the same way, so a
+     cancellation that reaches a later read of the same thread on the same
+     pipe restarts that read too;
+   - for any other owner it resumes them all.
+
+   The guard then waits up to 20 ms for the mutex; with it, it suspends
+   them all again while holding it (no thread of the process can take it
+   again), releases it and checks again; without it (a thread that took it
+   again, or entered its read only after the interruption), it redoes the
+   pass. A mutex whose owner died
    (`WAIT_ABANDONED`) is taken and released the same way, so its next owner
    sees an ordinary acquisition; every Gesher use of these mutexes treats
    the two results alike. A handle list it cannot read or a Gesher mutex it
    cannot examine means no stop yet, as in 1;
 3. publishes `stopped` once every other thread is suspended and none owns a
-   Gesher mutex.
+   Gesher mutex but a blocked writer's gate.
 
 None of this spins: every wait is on the mutex, the tracer's request and the
 tracer's process, bounded at 20 ms before the next pass. A stop is delayed
 while a thread of the tracee holds a Gesher mutex outside a blocking wait,
 for as long as that thread's critical section lasts, as Linux delays a stop
 while a task is in an uninterruptible kernel section; it is never published
-with a Gesher mutex held.
+with a Gesher mutex held but a blocked writer's gate.
+
+A pipe write is not interrupted because Windows cannot say how much of it was
+read. A blocking write larger than the room in the pipe stays pending while
+the reader takes its bytes, and a cancelled one reports that it moved none,
+although some of its bytes were read: restarting it sent them twice (an
+independent review measured megabytes duplicated over a few hundred stops).
+Writing in pieces that fit the room does not avoid it: a pipe with a read
+pending on it reports no room at all although a write completes at once.
+So the write stays pending, and the pipe's reader may take its bytes while
+the writer is stopped; the bytes still arrive once each, in order, and the
+writer's `write()` returns their full count after it is resumed. Another
+writer of the same description waits for the gate until that write
+completes, as it waits for room in the full pipe anyway. A signal or a
+thread's cancellation that interrupts such a write after part of it was read
+has the same ambiguity: the write returns the count Windows reports (a short
+count when it reports one, else `EINTR`), as before this change.
 
 While stopped it rescans every 20 ms. A thread the system started meanwhile
 (a thread pool worker) is suspended and checked as in 2; if it is not at a
@@ -191,17 +219,19 @@ suspended the guard makes only system calls (no heap, loader lock or thread
 pool: a suspended thread may hold them); its buffers are static or
 `VirtualAlloc`ed.
 
-A stopped tracee therefore holds no pipe description's gate and has no
-pending transfer on it: the tracer or any other process sharing the
-description (after fork or inheritance) can poll, read, write and change its
-flags while the tracee is stopped, and data written meanwhile stays in the
-pipe for whoever reads it, as on Linux; the tracee's interrupted read starts
-again when it is resumed. (While the tracee runs and blocks in a read, it
+A stopped tracee therefore holds no read description's gate and has no read
+pending: the tracer or any other process sharing the description (after fork
+or inheritance) can poll, read and change its flags while the tracee is
+stopped, and data written meanwhile stays in the pipe for whoever reads it,
+as on Linux; the tracee's interrupted read starts again when it is resumed.
+A stopped writer keeps its write description's gate until its pending write
+completes (above). (While the tracee runs and blocks in a read, it
 holds the gate, and another process's `poll()` of that description fails
 with `EOPNOTSUPP` and its blocking read waits: that is Gesher's pipe model,
-with or without ptrace.) A stopped tracee holds no Gesher mutex, so it never
-makes another process wait for one; what other processes wait for is what
-they would wait for on Linux (a record lock it holds, data it would write).
+with or without ptrace.) Apart from a blocked writer's gate, a stopped tracee
+holds no Gesher mutex, so it does not make another process wait for one;
+otherwise other processes wait for what they would wait for on Linux (a
+record lock it holds, data it would write).
 
 `CONT` or `DETACH` resumes the process; so does the tracer's exit, which
 releases the tracee as Linux does, after killing it under
@@ -328,8 +358,10 @@ the clone's guard updates it.
 - A stopped tracee is really stopped: its timers and watchdogs do not run
   until it is resumed, as under Linux. Stopping it waits until its threads
   have left Gesher's cross-process critical sections, and interrupts (then
-  restarts) its blocking pipe transfers.
-- Gesher's media audio state uses a named mutex
-  (`Local\gesher-<device>-audio-lock`) instead of a spin lock in its shared
-  mapping, so that a stopped tracee never holds it either; the spin lock
-  remains only if that mutex cannot be created.
+  restarts) its blocking pipe reads; a blocking pipe write stays pending.
+- Gesher's media audio state takes a named mutex
+  (`Local\gesher-<device>-audio-lock`) before the spin lock in its shared
+  mapping, and holds the spin lock only inside it, so that a stopped tracee
+  never holds the spin lock; a process that cannot take the mutex (an older
+  binary, a failed creation) still excludes the others through the spin
+  lock.

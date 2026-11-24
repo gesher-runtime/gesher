@@ -261,6 +261,8 @@ static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
 // host process: no wait is ever interrupted for a stop.
 namespace gesher::ptrace {
 struct ParkedScope {
+  ParkedScope(HANDLE, bool) {}
+  void SetIo(HANDLE, OVERLAPPED*) {}
   bool Interrupted() const { return false; }
 };
 inline void WaitWhileStopping() {}

@@ -28,10 +28,12 @@
  *       pipe, and writes into that pipe while the parent is stopped
  *   ptrace-contract <self> sleeper             sleeps 3 s
  *   ptrace-contract <self> sharedreader <fd> <pipe>  reads a pipe its parent shares
+ *   ptrace-contract <self> stream <wfd> <rfd> <fd>  writes and reads large pipe streams
  *   ptrace-contract <self> [no]exitkill <fd>   seizes a child (PTRACE_O_EXITKILL
  *       or not) and exits
  * Lock files go next to the program.
  */
+#define _GNU_SOURCE /* pipe2 */
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -770,6 +772,220 @@ static void parent_attach_at_spawn(void) {
   check(ok == 10, "spawn: SEIZE right after posix_spawn succeeds (10 of 10)");
 }
 
+/* --- byte-exact pipe streams across repeated stops (QA round 4, qa6) ---------
+ * The tracee writes a large stream into pipe A (kept full by a slow drainer in
+ * the tracer) in 300 KB write() calls, and reads a stream from pipe B in
+ * 200 KB read() calls, while the tracer stops and resumes it again and again.
+ * Every byte at stream offset k is stream_byte(k): a byte lost or written
+ * twice is a mismatch. On Linux a stop never makes read()/write() fail (the
+ * call goes on after it), and the byte counts agree. */
+#define STREAM_WCHUNK 300000
+#define STREAM_RCHUNK 200000
+static inline unsigned char stream_byte(uint64_t k) {
+  return (unsigned char)((k * 2654435761u) >> 11 ^ (k >> 16) ^ k);
+}
+static int s_wfd, s_rfd;
+static volatile uint64_t s_written, s_read, s_rmismatch, s_eintr, s_errors;
+static volatile int s_stop;
+static void* stream_writer(void* arg) {
+  (void)arg;
+  unsigned char* buf = malloc(STREAM_WCHUNK);
+  uint64_t off = 0;
+  for (;;) {
+    for (int i = 0; i < STREAM_WCHUNK; ++i) buf[i] = stream_byte(off + i);
+    size_t done = 0;
+    while (done < STREAM_WCHUNK) {
+      ssize_t n = write(s_wfd, buf + done, STREAM_WCHUNK - done);
+      if (n < 0) {
+        if (errno == EINTR) { ++s_eintr; continue; }
+        if (errno != EPIPE) ++s_errors;
+        s_written = off + done;
+        free(buf);
+        return NULL;
+      }
+      done += (size_t)n;
+    }
+    off += STREAM_WCHUNK;
+    s_written = off;
+    if (s_stop) {
+      close(s_wfd);
+      free(buf);
+      return NULL;
+    }
+  }
+}
+static void* stream_reader(void* arg) {
+  (void)arg;
+  unsigned char* buf = malloc(STREAM_RCHUNK);
+  uint64_t off = 0;
+  for (;;) {
+    ssize_t n = read(s_rfd, buf, STREAM_RCHUNK);
+    if (n == 0) break;
+    if (n < 0) {
+      if (errno == EINTR) { ++s_eintr; continue; }
+      ++s_errors;
+      break;
+    }
+    for (ssize_t i = 0; i < n; ++i) {
+      if (buf[i] != stream_byte(off + i)) {
+        ++s_rmismatch;
+        break;
+      }
+    }
+    off += (uint64_t)n;
+    s_read = off;
+  }
+  s_stop = 1;
+  free(buf);
+  return NULL;
+}
+static int child_stream(int wfd, int rfd, int report) {
+  signal(SIGPIPE, SIG_IGN);
+  s_wfd = wfd;
+  s_rfd = rfd;
+  pthread_t w, r;
+  pthread_create(&w, NULL, stream_writer, NULL);
+  pthread_create(&r, NULL, stream_reader, NULL);
+  if (write(report, "R", 1) != 1) return 2;
+  pthread_join(r, NULL);
+  pthread_join(w, NULL);
+  char text[256];
+  int len = snprintf(text, sizeof text, "%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 "\n",
+                     (uint64_t)s_written, (uint64_t)s_read, (uint64_t)s_rmismatch,
+                     (uint64_t)s_eintr, (uint64_t)s_errors);
+  if (write(report, text, (size_t)len) != len) return 3;
+  close(report);
+  return 0;
+}
+
+static int st_drain_fd, st_feed_fd;
+static volatile int st_stop_feed;
+static volatile uint64_t st_drained, st_drain_mismatch, st_fed;
+static void* stream_drainer(void* arg) {
+  (void)arg;
+  unsigned char buf[4096];
+  uint64_t off = 0;
+  for (;;) {
+    ssize_t n = read(st_drain_fd, buf, sizeof buf);
+    if (n <= 0) {
+      if (n < 0 && errno == EINTR) continue;
+      break;
+    }
+    for (ssize_t i = 0; i < n; ++i) {
+      if (buf[i] != stream_byte(off + i)) {
+        ++st_drain_mismatch;
+        break;
+      }
+    }
+    off += (uint64_t)n;
+    st_drained = off;
+    if (!st_stop_feed) sleep_ms(rand() % 2);
+  }
+  return NULL;
+}
+static void* stream_feeder(void* arg) {
+  (void)arg;
+  unsigned char buf[3000];
+  uint64_t off = 0;
+  while (!st_stop_feed) {
+    size_t len = 500 + (size_t)(rand() % 2500);
+    for (size_t i = 0; i < len; ++i) buf[i] = stream_byte(off + i);
+    size_t done = 0;
+    while (done < len) {
+      ssize_t n = write(st_feed_fd, buf + done, len - done);
+      if (n < 0) {
+        if (errno == EINTR) continue;
+        return NULL;
+      }
+      done += (size_t)n;
+    }
+    off += len;
+    st_fed = off;
+    sleep_ms(rand() % 2);
+  }
+  return NULL;
+}
+static void parent_stream(int seize, int cycles) {
+  const char* mode = seize ? "seize" : "attach";
+  st_stop_feed = 0;
+  st_drained = st_drain_mismatch = st_fed = 0;
+  int pa[2], pb[2], rp[2];
+  if (pipe2(pa, O_CLOEXEC) != 0 || pipe2(pb, O_CLOEXEC) != 0 || pipe2(rp, O_CLOEXEC) != 0) {
+    check(0, "stream: pipes");
+    return;
+  }
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_adddup2(&fa, pa[1], 20);
+  posix_spawn_file_actions_adddup2(&fa, pb[0], 21);
+  posix_spawn_file_actions_adddup2(&fa, rp[1], 22);
+  char* args[] = {"ptrace-contract", (char*)self_path, "stream", "20", "21", "22", NULL};
+  pid_t pid = -1;
+  const int spawned = posix_spawn(&pid, self_path, &fa, NULL, args, environ) == 0;
+  posix_spawn_file_actions_destroy(&fa);
+  close(pa[1]);
+  close(pb[0]);
+  close(rp[1]);
+  char c = 0;
+  if (!spawned || read(rp[0], &c, 1) != 1) {
+    check(0, "stream: the tracee started");
+    return;
+  }
+  st_drain_fd = pa[0];
+  st_feed_fd = pb[1];
+  pthread_t drainer, feeder;
+  pthread_create(&drainer, NULL, stream_drainer, NULL);
+  pthread_create(&feeder, NULL, stream_feeder, NULL);
+  sleep_ms(100);
+  int stops = 0;
+  if (seize && ptrace(PTRACE_SEIZE, pid, 0, 0) != 0) cycles = 0;
+  for (int i = 0; i < cycles; ++i) {
+    if (seize ? ptrace(PTRACE_INTERRUPT, pid, 0, 0) != 0 : ptrace(PTRACE_ATTACH, pid, 0, 0) != 0) break;
+    int status = 0, got = 0;
+    int64_t t0 = now_ms();
+    while (!got && now_ms() - t0 < 5000) {
+      if (waitpid(pid, &status, WNOHANG | __WALL) == pid) got = WIFSTOPPED(status);
+      else sleep_ms(1);
+    }
+    if (!got) break;
+    ++stops;
+    sleep_ms(rand() % 3); /* stopped while the tracer drains and feeds */
+    if (seize ? ptrace(PTRACE_CONT, pid, 0, 0) != 0 : ptrace(PTRACE_DETACH, pid, 0, 0) != 0) break;
+    sleep_ms(rand() % 4);
+  }
+  if (seize) ptrace(PTRACE_DETACH, pid, 0, 0);
+  st_stop_feed = 1;
+  pthread_join(feeder, NULL);
+  sleep_ms(200);
+  close(st_feed_fd); /* the tracee's reader sees EOF; its writer then ends */
+  pthread_join(drainer, NULL);
+  char text[256] = {0};
+  size_t got = 0;
+  for (;;) {
+    ssize_t n = read(rp[0], text + got, sizeof text - 1 - got);
+    if (n <= 0) break;
+    got += (size_t)n;
+  }
+  close(rp[0]);
+  close(st_drain_fd);
+  wait_exit(pid);
+  unsigned long long w = 0, r = 0, rm = 0, eintr = 0, errors = 0;
+  sscanf(text + (text[0] == 'R' ? 1 : 0), "%llu %llu %llu %llu %llu", &w, &r, &rm, &eintr, &errors);
+  printf("INFO  ptrace: stream %s: %d stops; tracee wrote %llu, tracer drained %llu (%llu mismatched"
+         " reads); tracer fed %llu, tracee read %llu (%llu mismatched reads); EINTR %llu, errors %llu\n",
+         mode, stops, w, (unsigned long long)st_drained, (unsigned long long)st_drain_mismatch,
+         (unsigned long long)st_fed, r, rm, eintr, errors);
+  char name[160];
+  snprintf(name, sizeof name, "stream %s: %d stops of a tracee in large pipe writes and reads", mode, cycles);
+  check(stops == cycles, name);
+  snprintf(name, sizeof name, "stream %s: every byte written arrives once, in order", mode);
+  check(st_drain_mismatch == 0 && st_drained == w && w > 0, name);
+  snprintf(name, sizeof name, "stream %s: every byte fed is read once, in order", mode);
+  check(rm == 0 && r == st_fed && r > 0, name);
+  snprintf(name, sizeof name, "stream %s: no EINTR or error from a stop", mode);
+  check(eintr == 0 && errors == 0, name);
+}
+
 /* PTRACE_O_EXITKILL: the tracer's exit kills the tracee; without it the
  * tracee runs on. */
 static void parent_exitkill(void) {
@@ -818,6 +1034,7 @@ int main(int argc, char** argv) {
   if (argc >= 4 && strcmp(argv[2], "spinvictim") == 0) return child_codevictim(atoi(argv[3]), 1);
   if (argc >= 4 && strcmp(argv[2], "pipetracer") == 0) return child_pipetracer(atoi(argv[3]));
   if (argc >= 3 && strcmp(argv[2], "sleeper") == 0) return child_sleeper();
+  if (argc >= 6 && strcmp(argv[2], "stream") == 0) return child_stream(atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
   if (argc >= 5 && strcmp(argv[2], "sharedreader") == 0) return child_sharedreader(atoi(argv[4]), atoi(argv[3]));
   if (argc >= 5 && strcmp(argv[2], "lockvictim") == 0) return child_lockvictim(atoi(argv[3]), argv[4]);
   if (argc >= 4 && strcmp(argv[2], "lockone") == 0) return child_lockone(argv[3]);
@@ -934,6 +1151,8 @@ int main(int argc, char** argv) {
   parent_poke_code("spinvictim", PTRACE_POKETEXT);
   parent_pipe();
   parent_shared_pipe();
+  parent_stream(0, 60);
+  parent_stream(1, 60);
   parent_attach_at_spawn();
   parent_exitkill();
   parent_locks(20);

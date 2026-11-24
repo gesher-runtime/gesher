@@ -36,7 +36,12 @@ constexpr int kCodeWrites = 64;  // a ring; older writes than that clear everyth
 // cross-process mutexes (a pipe description's gate): ParkedScope.
 struct ParkedSlot {
   volatile LONG tid;
-  volatile LONG restart;  // the guard interrupted its wait for a stop
+  volatile LONG restart;      // the guard interrupted its wait for a stop
+  volatile LONG restartable;  // a stop interrupts the wait (else it is left)
+  volatile LONG reserved;     // the slot is taken
+  volatile LONG64 gate;       // the mutex it owns (its handle value here)
+  volatile LONG64 file;       // the handle and OVERLAPPED of its pending I/O
+  volatile LONG64 overlapped;
 };
 constexpr int kParkedSlots = 256;
 
@@ -55,6 +60,7 @@ struct SharedState {
   // The tracer as one value, so that claiming and releasing it are single
   // compare-exchanges: TracerId(pid, creation time); 0 when not traced.
   volatile LONG64 tracer;
+  volatile LONG64 start;       // the owning process's creation time (pid reuse)
   volatile LONG64 stop_epoch;  // incremented at every stop the guard completes
   volatile LONG64 code_epoch;  // the last CodeWrite's epoch
   CodeWrite code_writes[kCodeWrites];
@@ -64,7 +70,7 @@ struct SharedState {
   // the stop to end outside it, and restarts its call.
   ParkedSlot parked[kParkedSlots];
 };
-constexpr LONG kStateVersion = 4;
+constexpr LONG kStateVersion = 7;
 constexpr LONG kOptExitkill = 0x100000;  // PTRACE_O_EXITKILL
 
 // A tracer's identity: its pid in the low half, the low 32 bits of its
@@ -137,16 +143,21 @@ using HaltHook = void (*)();
 void SetHaltHook(HaltHook hook);
 
 // Marks the calling thread as parked in a Gesher blocking wait while it owns
-// one of Gesher's cross-process mutexes, for the scope's lifetime. A stop
-// interrupts the wait (CancelSynchronousIo): the caller then sees
+// the Gesher mutex `gate`, for the scope's lifetime. A stop interrupts a
+// restartable wait (CancelSynchronousIo): the caller then sees
 // Interrupted(), releases the mutex, calls WaitWhileStopping() and restarts
-// its call, as Linux restarts a system call a stop interrupted.
+// its call, as Linux restarts a system call a stop interrupted. A wait that
+// cannot be interrupted without losing track of its progress (a pipe write)
+// is a safe point as it is: the stop leaves it pending, owning `gate`.
 class ParkedScope {
  public:
-  ParkedScope();
+  explicit ParkedScope(HANDLE gate = nullptr, bool restartable = true);
   ~ParkedScope();
   ParkedScope(const ParkedScope&) = delete;
   ParkedScope& operator=(const ParkedScope&) = delete;
+  // The I/O the wait is for: a stop cancels exactly that request
+  // (CancelIoEx), with the thread still suspended in it.
+  void SetIo(HANDLE file, OVERLAPPED* overlapped);
   // Whether a stop interrupted the wait.
   bool Interrupted() const { return slot_ != nullptr && slot_->restart != 0; }
 
@@ -164,8 +175,10 @@ struct Remote {
   HANDLE request = nullptr;  // the guard's request event
   HANDLE done = nullptr;     // the guard's answer
 };
-// False when `pid` publishes no state (not a Gesher process, or gone).
-bool OpenRemote(DWORD pid, Remote* out);
+// False when `pid` publishes no state (not a Gesher process, or gone), or,
+// with `start` (its creation time), a state an exited process with the same
+// pid left (the new process has not published its own yet).
+bool OpenRemote(DWORD pid, Remote* out, int64_t start = 0);
 void CloseRemote(Remote* remote);
 // Wakes the guard after changing `want_stop`, `tracer` or `options`.
 void Notify(const Remote& remote);

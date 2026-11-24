@@ -99,10 +99,13 @@ SharedAudioState* Open() {
 }
 
 // The device's lock for the multi-field updates: a named mutex beside the
-// mapping. A process stopped by a tracer (ptrace, ADR 0093) is stopped only
-// outside it, as for Gesher's other cross-process mutexes ("gesher..."
-// names); a spin lock in the mapping could be held by a suspended thread and
-// make the device's other processes spin. A holder that dies releases it.
+// mapping, then the mapping's spin lock inside it. A process stopped by a
+// tracer (ptrace, ADR 0093) is stopped only outside Gesher's cross-process
+// mutexes ("gesher..." names), so it never holds the spin lock while
+// stopped: the mutex is taken first and the spin lock is only held inside
+// it. The spin lock still excludes a process that could not take the mutex
+// (it could not create it, or an older binary that only spins): every user
+// takes it.
 HANDLE LockMutex() {
   static HANDLE mutex = CreateMutexW(nullptr, FALSE, (MappingName() + L"-lock").c_str());
   return mutex;
@@ -113,17 +116,15 @@ class SpinLock {
   explicit SpinLock(SharedAudioState* s) : s_(s), mutex_(LockMutex()) {
     if (mutex_ != nullptr) {
       const DWORD wait = WaitForSingleObject(mutex_, INFINITE);
-      if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) return;
-      mutex_ = nullptr;
+      if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) mutex_ = nullptr;
     }
-    // No named mutex (it could not be created): the mapping's spin lock.
     for (int spins = 0; InterlockedCompareExchange(&s_->lock, 1, 0) != 0; spins++) {
       if (spins > 64) Sleep(0);
     }
   }
   ~SpinLock() {
+    InterlockedExchange(&s_->lock, 0);
     if (mutex_ != nullptr) ReleaseMutex(mutex_);
-    else InterlockedExchange(&s_->lock, 0);
   }
 
  private:
