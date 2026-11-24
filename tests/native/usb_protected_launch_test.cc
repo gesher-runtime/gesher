@@ -6,9 +6,11 @@
 #include "../../compat/usb_storage/authority_launch.h"
 #include "../../compat/framework/app_container.h"
 #include <aclapi.h>
+#include <securityappcontainer.h>
 #include <sddl.h>
 #include <shlobj.h>
 #include <userenv.h>
+#include <winternl.h>
 #include <wtsapi32.h>
 #include <array>
 #include <cstddef>
@@ -58,12 +60,34 @@ struct TokenCallEvidence {
 struct TokenPhaseEvidence {
   TokenObjectEvidence object;
   DWORD impersonate = ERROR_NOT_READY;
+  TokenCallEvidence thread_query_private, thread_query_self, thread_combined_private, thread_combined_self;
   TokenCallEvidence duplicate_launch, duplicate_all, wrapper, native_private, native_system;
+};
+constexpr size_t kNamespacePathCharacters = 384;
+struct NamespacePathEvidence {
+  DWORD status = ERROR_NOT_READY, succeeded = 0, returned_length = 0, validation = ERROR_NOT_READY;
+  wchar_t path[kNamespacePathCharacters]{};
+};
+struct DirectoryCallEvidence { DWORD called = 0, status = 0, returned_handle = 0; };
+struct NamespaceDirectoryEvidence {
+  // Bits: 1=absolute API result, 2=worker-session candidate, 4=token-session
+  // candidate. Shared ancestors retain every applicable candidate bit.
+  DWORD candidates = 0, depth = 0, impersonate = ERROR_NOT_READY;
+  wchar_t path[kNamespacePathCharacters]{};
+  DirectoryCallEvidence system_query, system_security, private_query, private_security;
+  TokenObjectEvidence security;
+};
+struct NamespaceEvidence {
+  DWORD status = ERROR_NOT_READY, worker_session = 0, token_session = 0, private_impersonate = ERROR_NOT_READY;
+  DWORD directory_export = ERROR_NOT_READY, source_private = 0, count = 0;
+  NamespacePathEvidence system_path, private_path;
+  NamespaceDirectoryEvidence directories[8]{};
 };
 struct EquivalentTokenEvidence {
   DWORD attempted = 0, status = ERROR_NOT_READY;
   DWORD wrapper_export = ERROR_NOT_READY, native_export = ERROR_NOT_READY;
   TokenPhaseEvidence before, after;
+  NamespaceEvidence object_namespace;
   char stage[64] = "not-attempted";
 };
 struct Evidence {
@@ -79,7 +103,9 @@ struct Evidence {
   char stage[96] = "complete";
   char cleanup_stage[64] = "none";
 };
-static_assert(std::is_trivially_copyable_v<Evidence> && sizeof(Evidence) <= 4096);
+// Fixed diagnostic payload: two API paths, eight exact directory observations,
+// and at most twelve ACEs per object. The controller validates counts/strings.
+static_assert(std::is_trivially_copyable_v<Evidence> && sizeof(Evidence) <= 16384);
 struct Configuration { std::wstring name, image, directory; DWORD session = 0; } config;
 SERVICE_STATUS_HANDLE service_status = nullptr;
 Handle service_stop;
@@ -386,6 +412,17 @@ TokenCallEvidence ObserveDuplicate(HANDLE token, DWORD access) {
   const Handle close(raw);
   return observed;
 }
+TokenCallEvidence ObserveThreadReopen(DWORD access, BOOL as_self) {
+  TokenCallEvidence observed;
+  HANDLE raw = nullptr;
+  const BOOL ok = OpenThreadToken(GetCurrentThread(), access, as_self, &raw);
+  observed.status = ok ? ERROR_SUCCESS : GetLastError();
+  observed.called = 1;
+  observed.succeeded = static_cast<DWORD>(ok != FALSE);
+  observed.returned_token = static_cast<DWORD>(raw && raw != INVALID_HANDLE_VALUE);
+  const Handle close(raw);
+  return observed;
+}
 TokenCallEvidence ObserveNativeLowbox(CreateDiagnosticNativeLowbox create, HANDLE token,
                                      const SECURITY_CAPABILITIES& capabilities) {
   TokenCallEvidence observed;
@@ -409,6 +446,11 @@ void ObserveTokenPhase(HANDLE token, PSID private_user, SECURITY_CAPABILITIES ca
   // No throwing C++ operations occur while impersonating. The raw kernel call
   // precedes the private-only wrapper, which may initialize namespace objects.
   observed->impersonate = ERROR_SUCCESS;
+  observed->thread_query_private = ObserveThreadReopen(TOKEN_QUERY, FALSE);
+  observed->thread_query_self = ObserveThreadReopen(TOKEN_QUERY, TRUE);
+  constexpr DWORD combined = TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE;
+  observed->thread_combined_private = ObserveThreadReopen(combined, FALSE);
+  observed->thread_combined_self = ObserveThreadReopen(combined, TRUE);
   observed->duplicate_launch = ObserveDuplicate(token, TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY);
   observed->duplicate_all = ObserveDuplicate(token, TOKEN_ALL_ACCESS);
   observed->native_private = ObserveNativeLowbox(native, token, capabilities);
@@ -422,6 +464,127 @@ void ObserveTokenPhase(HANDLE token, PSID private_user, SECURITY_CAPABILITIES ca
     if (raw && raw != INVALID_HANDLE_VALUE) CloseHandle(raw);
   }
   if (!RevertToSelf()) std::abort();
+}
+bool SafeNamespacePath(std::wstring_view value) {
+  if (value.empty() || value.size() >= kNamespacePathCharacters || value.find(L"\\\\") != std::wstring_view::npos) return false;
+  for (wchar_t c : value) {
+    if (!((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') ||
+        c == L'\\' || c == L'-' || c == L'_')) return false;
+  }
+  return true;
+}
+void ObserveNamespacePath(HANDLE token, PSID package, NamespacePathEvidence* observed) {
+  ULONG returned = 0;
+  const BOOL ok = GetAppContainerNamedObjectPath(token, package,
+      static_cast<ULONG>(std::size(observed->path)), observed->path, &returned);
+  observed->status = ok ? ERROR_SUCCESS : GetLastError();
+  observed->succeeded = static_cast<DWORD>(ok != FALSE);
+  observed->returned_length = returned;
+  const wchar_t* end = std::wmemchr(observed->path, L'\0', std::size(observed->path));
+  if (ok && returned && returned <= std::size(observed->path) && end &&
+      SafeNamespacePath({observed->path, static_cast<size_t>(end - observed->path)})) {
+    observed->validation = ERROR_SUCCESS;
+  } else observed->validation = ERROR_INVALID_DATA;
+}
+// Microsoft documents this read-only native entry point and its access masks:
+// learn.microsoft.com/windows/win32/devnotes/ntopendirectoryobject.
+using OpenDiagnosticDirectory = LONG(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+Handle ObserveDirectoryOpen(OpenDiagnosticDirectory open, const wchar_t* path, size_t length,
+                            ACCESS_MASK access, DirectoryCallEvidence* observed) {
+  if (!open || !path || !length || length >= kNamespacePathCharacters) return {};
+  UNICODE_STRING name{};
+  name.Buffer = const_cast<wchar_t*>(path);
+  name.Length = static_cast<USHORT>(length * sizeof(wchar_t));
+  name.MaximumLength = name.Length;
+  OBJECT_ATTRIBUTES attributes{};
+  attributes.Length = sizeof(attributes);
+  attributes.ObjectName = &name;
+  attributes.Attributes = OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE;
+  HANDLE raw = nullptr;
+  const LONG status = open(&raw, access, &attributes);
+  observed->called = 1;
+  observed->status = static_cast<DWORD>(status);
+  observed->returned_handle = static_cast<DWORD>(raw && raw != INVALID_HANDLE_VALUE);
+  Handle handle(raw);
+  if (status < 0 || !observed->returned_handle) return {};
+  return handle;
+}
+void AddNamespaceCandidate(std::wstring path, DWORD candidate, NamespaceEvidence* observed) {
+  // One exact leaf and at most three ancestors, without enumeration. Shared
+  // ancestors are deduplicated across the two explicitly labeled candidates.
+  for (DWORD depth = 0; depth <= 3; ++depth) {
+    Require(SafeNamespacePath(path) && path.front() == L'\\', "diagnostic-namespace-candidate", ERROR_INVALID_NAME);
+    bool existing = false;
+    for (DWORD i = 0; i < observed->count; ++i) {
+      if (path == observed->directories[i].path) {
+        observed->directories[i].candidates |= candidate;
+        existing = true;
+        break;
+      }
+    }
+    if (!existing) {
+      Require(observed->count < std::size(observed->directories), "diagnostic-namespace-count", ERROR_MORE_DATA);
+      auto& added = observed->directories[observed->count++];
+      added.candidates = candidate;
+      added.depth = depth;
+      std::wmemcpy(added.path, path.c_str(), path.size() + 1);
+    }
+    const size_t separator = path.find_last_of(L'\\');
+    if (separator == 0 || separator == std::wstring::npos) break;
+    path.resize(separator);
+  }
+}
+void ObserveNamespace(HANDLE token, const storage::AuthorityLaunchSpec& spec, NamespaceEvidence* observed) {
+  try {
+    DWORD bytes = 0;
+    Require(ProcessIdToSessionId(GetCurrentProcessId(), &observed->worker_session), "diagnostic-worker-session");
+    Require(GetTokenInformation(token, TokenSessionId, &observed->token_session, sizeof(observed->token_session), &bytes),
+        "diagnostic-token-session");
+    ObserveNamespacePath(token, spec.capabilities.AppContainerSid, &observed->system_path);
+    if (ImpersonateLoggedOnUser(token)) {
+      observed->private_impersonate = ERROR_SUCCESS;
+      ObserveNamespacePath(token, spec.capabilities.AppContainerSid, &observed->private_path);
+      if (!RevertToSelf()) std::abort();
+    } else observed->private_impersonate = GetLastError();
+    const bool private_valid = observed->private_path.validation == ERROR_SUCCESS;
+    const auto& selected = private_valid ? observed->private_path : observed->system_path;
+    observed->source_private = static_cast<DWORD>(private_valid);
+    Require(selected.validation == ERROR_SUCCESS, "diagnostic-namespace-path", ERROR_INVALID_DATA);
+    const std::wstring path(selected.path);
+    const std::wstring suffix = L"\\" + SidText(spec.capabilities.AppContainerSid);
+    Require(path.size() > suffix.size() && path.ends_with(suffix), "diagnostic-namespace-package", ERROR_INVALID_SID);
+    if (path.front() == L'\\') AddNamespaceCandidate(path, 1, observed);
+    else {
+      // Historical Chromium CreateLowBoxObjectDirectory and the original
+      // Cygwin AppContainer patch use this session-root shape. These are
+      // candidate roots based on actual observed IDs, not an assertion about
+      // which namespace the failed Windows wrapper used.
+      AddNamespaceCandidate(L"\\Sessions\\" + std::to_wstring(observed->worker_session) + L"\\" + path, 2, observed);
+      AddNamespaceCandidate(L"\\Sessions\\" + std::to_wstring(observed->token_session) + L"\\" + path, 4, observed);
+    }
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto open = ntdll ? reinterpret_cast<OpenDiagnosticDirectory>(
+        reinterpret_cast<void*>(GetProcAddress(ntdll, "NtOpenDirectoryObject"))) : nullptr;
+    observed->directory_export = open ? ERROR_SUCCESS : (ntdll ? ERROR_PROC_NOT_FOUND : ERROR_MOD_NOT_FOUND);
+    Check(observed->directory_export, "diagnostic-directory-export");
+    constexpr ACCESS_MASK query_traverse = 0x0001 | 0x0002;
+    for (DWORD i = 0; i < observed->count; ++i) {
+      auto& directory = observed->directories[i];
+      const size_t length = std::wcslen(directory.path);
+      const Handle query = ObserveDirectoryOpen(open, directory.path, length, query_traverse, &directory.system_query);
+      const Handle security = ObserveDirectoryOpen(open, directory.path, length, READ_CONTROL, &directory.system_security);
+      if (security) directory.security = ObserveTokenObject(security.get(), spec.desktop_user);
+      if (!ImpersonateLoggedOnUser(token)) { directory.impersonate = GetLastError(); continue; }
+      directory.impersonate = ERROR_SUCCESS;
+      {
+        const Handle private_query = ObserveDirectoryOpen(open, directory.path, length, query_traverse, &directory.private_query);
+        const Handle private_security = ObserveDirectoryOpen(open, directory.path, length, READ_CONTROL, &directory.private_security);
+      }
+      if (!RevertToSelf()) std::abort();
+    }
+    observed->status = ERROR_SUCCESS;
+  } catch (const Failure& failure) { observed->status = failure.status; }
+  catch (...) { observed->status = ERROR_NOT_ENOUGH_MEMORY; }
 }
 void ObserveEquivalentToken(HANDLE token, const storage::AuthorityLaunchSpec& spec, EquivalentTokenEvidence* observed) {
   observed->attempted = 1;
@@ -473,6 +636,7 @@ void ObserveEquivalentToken(HANDLE token, const storage::AuthorityLaunchSpec& sp
     TOKEN_DEFAULT_DACL defaults{acl};
     Require(SetTokenInformation(raw, TokenDefaultDacl, &defaults, sizeof(defaults)), "diagnostic-seal-default-dacl");
     ObserveTokenPhase(raw, spec.desktop_user, spec.capabilities, wrapper, native, &observed->after);
+    ObserveNamespace(raw, spec, &observed->object_namespace);
     observed->status = ERROR_SUCCESS;
     std::snprintf(observed->stage, sizeof(observed->stage), "%s", "complete");
   } catch (const Failure& failure) {
@@ -524,10 +688,80 @@ void PrintTokenPhase(const char* phase, const TokenPhaseEvidence& observed) {
   std::printf("Protected launch: equivalent-token phase=%s private-impersonation-win32=%lu\n",
       phase, static_cast<unsigned long>(observed.impersonate));
   PrintTokenCall(phase, "native-system-zero-handles", observed.native_system, true);
+  PrintTokenCall(phase, "thread-query-open-as-private", observed.thread_query_private);
+  PrintTokenCall(phase, "thread-query-open-as-self", observed.thread_query_self);
+  PrintTokenCall(phase, "thread-combined-open-as-private", observed.thread_combined_private);
+  PrintTokenCall(phase, "thread-combined-open-as-self", observed.thread_combined_self);
   PrintTokenCall(phase, "duplicate-private-launch-rights", observed.duplicate_launch);
   PrintTokenCall(phase, "duplicate-private-all-rights", observed.duplicate_all);
   PrintTokenCall(phase, "native-private-zero-handles", observed.native_private, true);
   PrintTokenCall(phase, "wrapper-private", observed.wrapper);
+}
+const wchar_t* NamespacePathForPrint(const wchar_t* path) {
+  const wchar_t* end = std::wmemchr(path, L'\0', kNamespacePathCharacters);
+  if (!end || !SafeNamespacePath({path, static_cast<size_t>(end - path)})) return L"<unavailable>";
+  return path;
+}
+void PrintNamespacePath(const char* context, const NamespacePathEvidence& observed) {
+  std::printf("Protected launch: namespace-api context=%s win32=%lu api-success=%lu returned-length=%lu validation-win32=%lu path=%ls\n",
+      context, static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.succeeded),
+      static_cast<unsigned long>(observed.returned_length), static_cast<unsigned long>(observed.validation),
+      NamespacePathForPrint(observed.path));
+}
+void PrintDirectoryCall(DWORD index, const char* operation, const DirectoryCallEvidence& observed) {
+  if (!observed.called) {
+    std::printf("Protected launch: namespace-directory=%lu operation=%s called=0\n", static_cast<unsigned long>(index), operation);
+  } else {
+    std::printf("Protected launch: namespace-directory=%lu operation=%s ntstatus=0x%08lx returned-handle=%lu\n",
+        static_cast<unsigned long>(index), operation, static_cast<unsigned long>(observed.status),
+        static_cast<unsigned long>(observed.returned_handle));
+  }
+}
+void PrintNamespace(const NamespaceEvidence& observed) {
+  std::printf("Protected launch: namespace-observation win32=%lu worker-session=%lu token-session=%lu private-impersonation-win32=%lu directory-export-win32=%lu source-private=%lu count=%lu\n",
+      static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.worker_session),
+      static_cast<unsigned long>(observed.token_session), static_cast<unsigned long>(observed.private_impersonate),
+      static_cast<unsigned long>(observed.directory_export), static_cast<unsigned long>(observed.source_private),
+      static_cast<unsigned long>(observed.count));
+  PrintNamespacePath("system", observed.system_path);
+  PrintNamespacePath("private", observed.private_path);
+  bool valid = observed.count <= std::size(observed.directories);
+  for (DWORD i = 0; valid && i < observed.count; ++i) {
+    const auto& directory = observed.directories[i];
+    const wchar_t* end = std::wmemchr(directory.path, L'\0', std::size(directory.path));
+    valid = end && SafeNamespacePath({directory.path, static_cast<size_t>(end - directory.path)}) &&
+        directory.path[0] == L'\\' && directory.candidates != 0 && (directory.candidates & ~7u) == 0 && directory.depth <= 3 &&
+        directory.security.recorded <= std::size(directory.security.aces) && directory.security.recorded <= directory.security.count;
+  }
+  if (!valid) {
+    // Malformed optional observations must not replace the earlier production
+    // failure. Do not traverse or print unvalidated directory records.
+    std::puts("Protected launch: namespace-observation invalid-bounded-evidence");
+    return;
+  }
+  for (DWORD i = 0; i < observed.count; ++i) {
+    const auto& directory = observed.directories[i];
+    std::printf("Protected launch: namespace-directory=%lu absolute-api=%lu worker-session-candidate=%lu token-session-candidate=%lu depth=%lu private-impersonation-win32=%lu path=%ls\n",
+        static_cast<unsigned long>(i), static_cast<unsigned long>((directory.candidates & 1) != 0),
+        static_cast<unsigned long>((directory.candidates & 2) != 0), static_cast<unsigned long>((directory.candidates & 4) != 0),
+        static_cast<unsigned long>(directory.depth),
+        static_cast<unsigned long>(directory.impersonate), directory.path);
+    PrintDirectoryCall(i, "system-query-traverse", directory.system_query);
+    PrintDirectoryCall(i, "system-read-control", directory.system_security);
+    PrintDirectoryCall(i, "private-query-traverse", directory.private_query);
+    PrintDirectoryCall(i, "private-read-control", directory.private_security);
+    const auto& object = directory.security;
+    std::printf("Protected launch: namespace-directory=%lu system-security-query-win32=%lu owner=%s control=0x%04lx dacl-present=%lu defaulted=%lu null=%lu aces=%lu recorded=%lu\n",
+        static_cast<unsigned long>(i), static_cast<unsigned long>(object.status), TrusteeName(object.owner),
+        static_cast<unsigned long>(object.control), static_cast<unsigned long>(object.present), static_cast<unsigned long>(object.defaulted),
+        static_cast<unsigned long>(object.null_acl), static_cast<unsigned long>(object.count), static_cast<unsigned long>(object.recorded));
+    for (DWORD j = 0; j < object.recorded; ++j) {
+      const auto& ace = object.aces[j];
+      std::printf("Protected launch: namespace-directory=%lu ace=%lu type=%lu flags=0x%02lx mask=0x%08lx trustee=%s\n",
+          static_cast<unsigned long>(i), static_cast<unsigned long>(j), static_cast<unsigned long>(ace.type),
+          static_cast<unsigned long>(ace.flags), static_cast<unsigned long>(ace.mask), TrusteeName(ace.trustee));
+    }
+  }
 }
 void PrintEquivalentToken(const EquivalentTokenEvidence& observed) {
   if (!observed.attempted) return;
@@ -538,6 +772,7 @@ void PrintEquivalentToken(const EquivalentTokenEvidence& observed) {
   // production wrapper or earlier observations; they are not isolated retries.
   PrintTokenPhase("before-default-seal", observed.before);
   PrintTokenPhase("after-default-seal", observed.after);
+  PrintNamespace(observed.object_namespace);
 }
 Evidence RunSystem() {
   Evidence evidence;
