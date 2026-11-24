@@ -83,6 +83,24 @@ EXPORT int glapp_cpu_draw(ANativeWindow* window, char* out, size_t n) {
 // --- EGL and GLES ---------------------------------------------------------------------------------
 
 static EGLDisplay g_display = EGL_NO_DISPLAY;
+// Test-only (gl_window_test): draw on ANGLE's own WARP display, uncapped (ES 3),
+// reached through eglGetPlatformDisplayEXT's pass-through, instead of Android's
+// default display. Keeps the ES 3 paths covered on a machine without a GPU,
+// whose default display gives ES 2.0 only. Never what an app gets by default.
+static int g_angle_warp = 0;
+
+EXPORT void glapp_use_angle_warp(int on) { g_angle_warp = on; }
+
+static EGLDisplay angle_warp_display(void) {
+  PFNEGLGETPLATFORMDISPLAYEXTPROC get =
+      (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+  // D3D11, WARP, no feature level cap; a display key of its own (with the
+  // device id ANGLE requires beside it, ignored for WARP): ANGLE keys displays
+  // by platform type and key, not device type, so without one this would be
+  // Android's default display itself.
+  static const EGLint attribs[] = {0x3203, 0x3208, 0x3209, 0x320B, 0x34D7, 0x8c, 0x34DC, 0x7e57, EGL_NONE};
+  return get != NULL ? get(0x3202, EGL_DEFAULT_DISPLAY, attribs) : EGL_NO_DISPLAY;
+}
 static EGLSurface g_surface = EGL_NO_SURFACE;
 static EGLContext g_context = EGL_NO_CONTEXT;
 
@@ -237,6 +255,7 @@ static int es3_refused(char* out, size_t n) {
   EGLint count = 0;
   if (!eglGetConfigs(g_display, NULL, 0, &count) || count <= 0) FAIL("eglGetConfigs 0x%x", eglGetError());
   EGLConfig* all = malloc(sizeof(EGLConfig) * (size_t)count);
+  if (all == NULL) FAIL("malloc of %d configs", count);
   eglGetConfigs(g_display, all, count, &count);
   int es3_bits = 0;
   for (EGLint i = 0; i < count; i++) {
@@ -266,7 +285,7 @@ static int es3_refused(char* out, size_t n) {
 
 EXPORT int glapp_gl_draw(ANativeWindow* window, int es, char* out, size_t n) {
   out[0] = 0;
-  g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+  g_display = g_angle_warp ? angle_warp_display() : eglGetDisplay(EGL_DEFAULT_DISPLAY);
   if (g_display == EGL_NO_DISPLAY) FAIL("eglGetDisplay");
   EGLint major = 0, minor = 0;
   if (!eglInitialize(g_display, &major, &minor)) FAIL("eglInitialize 0x%x", eglGetError());
@@ -356,6 +375,7 @@ EXPORT int glapp_gl_draw(ANativeWindow* window, int es, char* out, size_t n) {
   glDrawArrays(GL_TRIANGLES, 0, 3);
 
   unsigned char* pixels = malloc((size_t)w * h * 4);
+  if (pixels == NULL) FAIL("malloc of %dx%d pixels", w, h);
   glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
   GLenum gl_error = glGetError();
   int green = 0, blue = 0, other = 0;

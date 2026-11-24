@@ -82,7 +82,9 @@ symbol ([0020](0020-native-libs-libandroid.md)).
   untested), the rest fails visibly when called. ES 3.0 only on a hardware
   Direct3D 11 device: without a GPU (WARP, the CI runners' Basic Render
   Driver) the default display is WARP capped at feature level 10_0, ES 2.0
-  only, and that is what the device declares (docs/system-features.md,
+  only, and that is what the device declares. Every process of a boot then
+  gives exactly the boot's declaration whatever its adapter has become, and
+  no context above it (no ES 3.1 on an ES 3.0 device; docs/system-features.md,
   "OpenGL ES version").
 - dalvikvm starts without ANGLE; `eglGetDisplay` gives `EGL_NO_DISPLAY` with
   a message when the DLLs are missing.

@@ -40,45 +40,122 @@ public final class PackageServiceQueriesTest {
      * an answer passes through, a probe that hangs gives -2 (no version declared) after the
      * timeout instead of blocking the start, and a LinkageError reaches the caller.
      */
+    /**
+     * PackageManagerService.lateGlEsVersion: a late answer is declared once nothing was;
+     * a known version stays. Run only where it cannot write ro.opengles.version for real
+     * (no property natives, or the property already set); the fields are restored.
+     */
+    private static void checkLateGlesVersion() throws ReflectiveOperationException {
+        boolean propertySet;
+        try {
+            propertySet = android.os.SystemProperties.getInt("ro.opengles.version", 0) != 0;
+        } catch (LinkageError e) {
+            propertySet = true;  // no property natives: nothing can be written
+        }
+        if (!propertySet) return;
+        Field known = PackageManagerService.class.getDeclaredField("sGlEsVersionKnown");
+        Field version = PackageManagerService.class.getDeclaredField("sGlEsVersion");
+        known.setAccessible(true);
+        version.setAccessible(true);
+        java.lang.reflect.Method late = PackageManagerService.class.getDeclaredMethod("lateGlEsVersion", int.class);
+        late.setAccessible(true);
+        synchronized (PackageManagerService.class) {
+            boolean savedKnown = known.getBoolean(null);
+            int savedVersion = version.getInt(null);
+            try {
+                known.setBoolean(null, true);
+                version.setInt(null, FeatureInfo.GL_ES_VERSION_UNDEFINED);
+                late.invoke(null, 0x30000);
+                require(PackageManagerService.glEsVersion() == 0x30000,
+                        "a late GLES answer was not declared after a timeout");
+                late.invoke(null, 0x20000);
+                require(PackageManagerService.glEsVersion() == 0x30000,
+                        "a second late GLES answer replaced a known version");
+            } finally {
+                known.setBoolean(null, savedKnown);
+                version.setInt(null, savedVersion);
+            }
+        }
+    }
+
     private static void checkBoundedGlesProbe() {
         try {
             java.lang.reflect.Method bounded = PackageManagerService.class.getDeclaredMethod(
-                    "boundedProbe", java.util.function.IntSupplier.class, long.class);
+                    "boundedProbe", java.util.function.IntSupplier.class, long.class,
+                    java.util.function.IntConsumer.class);
             bounded.setAccessible(true);
+            final int[] late = {0};
+            final java.util.concurrent.CountDownLatch lateAnswer = new java.util.concurrent.CountDownLatch(1);
+            java.util.function.IntConsumer onLate = v -> {
+                late[0] = v;
+                lateAnswer.countDown();
+            };
             require((Integer) bounded.invoke(null,
-                            (java.util.function.IntSupplier) () -> 0x20000, 5000L) == 0x20000,
-                    "bounded GLES probe did not pass its answer through");
-            java.util.concurrent.CountDownLatch never = new java.util.concurrent.CountDownLatch(1);
+                            (java.util.function.IntSupplier) () -> 0x20000, 5000L, onLate) == 0x20000
+                            && late[0] == 0,
+                    "bounded GLES probe did not pass its answer through (or called late)");
+            java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
             long start = System.nanoTime();
             int hung = (Integer) bounded.invoke(null, (java.util.function.IntSupplier) () -> {
                 try {
-                    never.await();
+                    release.await();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
                 return 0x30000;
-            }, 200L);
+            }, 200L, onLate);
             long millis = (System.nanoTime() - start) / 1_000_000;
-            never.countDown();
             require(hung == -2 && millis >= 150 && millis < 3000,
                     "hung GLES probe gave " + hung + " after " + millis + " ms");
+            require(late[0] == 0, "late answer delivered before the probe answered");
+            release.countDown();
+            require(lateAnswer.await(5, java.util.concurrent.TimeUnit.SECONDS) && late[0] == 0x30000,
+                    "the answer after the timeout did not reach the late handler: 0x"
+                            + Integer.toHexString(late[0]));
             boolean thrown = false;
             try {
                 bounded.invoke(null, (java.util.function.IntSupplier) () -> {
                     throw new UnsatisfiedLinkError("no natives");
-                }, 5000L);
+                }, 5000L, onLate);
             } catch (java.lang.reflect.InvocationTargetException e) {
                 thrown = e.getCause() instanceof UnsatisfiedLinkError;
             }
             require(thrown, "bounded GLES probe swallowed a LinkageError");
+            checkLateGlesVersion();
             System.out.println("system features: bounded GLES probe: answer, timeout (" + millis
-                    + " ms) and LinkageError");
-        } catch (ReflectiveOperationException e) {
+                    + " ms), the late answer, and LinkageError");
+        } catch (ReflectiveOperationException | InterruptedException e) {
             throw new AssertionError("PackageManagerService.boundedProbe: " + e, e);
         }
     }
 
+    /**
+     * The boot's OpenGL ES probe may answer after GL_PROBE_TIMEOUT_MS (a loaded machine,
+     * an interpreted runtime); its late answer is then declared (lateGlEsVersion). With
+     * the natives, wait until the probe has answered (WindowsHost.glEsVersion waits for
+     * it) and its answer has been declared, so the checks below see one version.
+     */
+    private static void awaitGlesProbe() {
+        int answer;
+        try {
+            answer = com.gesher.server.WindowsHost.glEsVersion();
+        } catch (LinkageError e) {
+            return;
+        }
+        if (answer <= 0) return;
+        long deadline = System.nanoTime() + 30_000_000_000L;
+        while (PackageManagerService.glEsVersion() != answer && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
     private static void checkSystemFeatures(PackageManagerService service) {
+        awaitGlesProbe();
         List<FeatureInfo> list = service.getSystemAvailableFeatures().getList();
         // CI runs this class without libandroid_runtime (no property natives); through
         // ServiceFixtureRunner it has them. Each expectation follows what this process has.

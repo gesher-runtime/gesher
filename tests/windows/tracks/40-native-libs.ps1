@@ -252,13 +252,83 @@ Check 'native libs: gesher-app runs nativeapp.apk; libandroid assets/looper and 
 # on the window's HWND, a triangle checked with glReadPixels, eglSwapBuffers.
 $glTestOut = & "$Dir/gl_window_test.exe" (NoDrive "$Dir/libglapp.so") 2>&1 | Out-String
 $glTestExit = $LASTEXITCODE
-# OpenGL ES 3 only on a hardware Direct3D 11 device (docs/system-features.md):
-# the default display's line says what it declared. The runners have no GPU (the
-# Basic Render Driver), so there the device declares ES 2.0, has no ES 3 config
-# and refuses ES 3 contexts; on a GPU the ES 3 checks run.
-$glEs3 = $glTestOut -match 'declared OpenGL ES 3\.0'
+# OpenGL ES 3 only on a hardware Direct3D 11 device (docs/system-features.md).
+# Whether this machine has one is asked of Windows directly, not of the tested
+# binaries: the adapter ANGLE's hardware device takes (DXGI enumeration, as
+# Renderer11 chooses) is a GPU (not flagged DXGI_ADAPTER_FLAG_SOFTWARE, not the
+# Basic Render Driver 1414:008c) at Direct3D feature level 10_1 or more. The runners have no GPU,
+# so there the default display gives and declares ES 2.0, has no ES 3 config
+# and refuses ES 3 contexts; the ES 3 paths then run on ANGLE's own uncapped
+# WARP display (test-only, through eglGetPlatformDisplayEXT). On a GPU the ES 3
+# checks run on the default display.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class GesherDxgiProbe {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct Desc1 {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Description;
+    public uint VendorId, DeviceId, SubSysId, Revision;
+    public UIntPtr DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory;
+    public uint LuidLow; public int LuidHigh; public uint Flags;
+  }
+  [DllImport("dxgi.dll")] static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr factory);
+  [DllImport("d3d11.dll")] static extern int D3D11CreateDevice(IntPtr adapter, int driverType, IntPtr software,
+      uint flags, IntPtr levels, uint count, uint sdk, IntPtr device, out int level, IntPtr context);
+  delegate int EnumAdapters1(IntPtr self, uint index, out IntPtr adapter);
+  delegate int GetDesc1(IntPtr self, out Desc1 desc);
+  delegate uint Release(IntPtr self);
+  static T Slot<T>(IntPtr obj, int slot) {
+    return Marshal.GetDelegateForFunctionPointer<T>(Marshal.ReadIntPtr(Marshal.ReadIntPtr(obj), slot * IntPtr.Size));
+  }
+  // The adapter ANGLE's Direct3D 11 hardware device takes (Renderer11: the
+  // first adapter not of Microsoft's vendor id, else the first adapter), as
+  // "vendor:device flags level" (the Direct3D 11 feature level it gives), or
+  // "none".
+  public static string HardwareDeviceAdapter() {
+    Guid iid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");  // IDXGIFactory1
+    IntPtr factory;
+    if (CreateDXGIFactory1(ref iid, out factory) < 0) return "none";
+    IntPtr chosen = IntPtr.Zero;
+    Desc1 chosenDesc = new Desc1();
+    IntPtr adapter;
+    // IDXGIFactory1::EnumAdapters1 (slot 12), IDXGIAdapter1::GetDesc1 (slot 10).
+    for (uint i = 0; Slot<EnumAdapters1>(factory, 12)(factory, i, out adapter) >= 0; i++) {
+      Desc1 desc;
+      bool described = Slot<GetDesc1>(adapter, 10)(adapter, out desc) >= 0;
+      if (described && (chosen == IntPtr.Zero || (chosenDesc.VendorId == 0x1414 && desc.VendorId != 0x1414))) {
+        if (chosen != IntPtr.Zero) Slot<Release>(chosen, 2)(chosen);
+        chosen = adapter;
+        chosenDesc = desc;
+      } else {
+        Slot<Release>(adapter, 2)(adapter);
+      }
+    }
+    string result = "none";
+    if (chosen != IntPtr.Zero) {
+      int level;
+      // D3D_DRIVER_TYPE_UNKNOWN on that adapter, the default feature levels (11_0 down to 9_1).
+      if (D3D11CreateDevice(chosen, 0, IntPtr.Zero, 0, IntPtr.Zero, 0, 7, IntPtr.Zero, out level, IntPtr.Zero) < 0) level = 0;
+      result = String.Format("{0:x4}:{1:x4} {2} {3:x}", chosenDesc.VendorId, chosenDesc.DeviceId, chosenDesc.Flags, level);
+      Slot<Release>(chosen, 2)(chosen);
+    }
+    Slot<Release>(factory, 2)(factory);
+    return result;
+  }
+}
+'@
+$hardwareDevice = [GesherDxgiProbe]::HardwareDeviceAdapter()
+$glEs3 = $false
+if ($hardwareDevice -match '^([0-9a-f]{4}):([0-9a-f]{4}) (\d+) ([0-9a-f]+)$') {
+  $glEs3 = (([int]$Matches[3] -band 2) -eq 0) -and ("$($Matches[1]):$($Matches[2])" -ne '1414:008c') -and
+           ([Convert]::ToInt32($Matches[4], 16) -ge 0xa100)
+}
+Write-Host "INFO  native libs: ANGLE's hardware device adapter $hardwareDevice (vendor:device flags feature level): OpenGL ES 3 expected $glEs3"
 $es3Refused = @('es3 unavailable: no EGL_OPENGL_ES3_BIT_KHR config', 'ES 3 context refused with EGL_BAD_MATCH',
                 'es3: unavailable on this device, ES 3 refused as on Android')
+# The ES 3 paths on ANGLE's uncapped WARP display where the default display has no ES 3.
+$es3OnAngleWarp = @('es3 (ANGLE WARP display, uncapped, test-only): EGL 1.5', 'GL_VERSION=OpenGL ES 3.',
+                    'swap=ok, buffer ranges=ok', 'es3-angle-warp window read back from PrintWindow(PW_RENDERFULLCONTENT): triangle ok')
 Check 'native libs: ANativeWindow_lock from an NDK .so into a Win32 window, read back with PrintWindow' {
   $global:LASTEXITCODE = $glTestExit
   $glTestOut
@@ -301,7 +371,10 @@ if ($glEs3) {
     $glTestOut
   } @('es3: EGL 1.5', 'swap=ok, buffer ranges=ok', 'gl_window_test all passed')
 } else {
-  Write-Host 'INFO  native libs: GLES 3 buffer ranges need ES 3, which this device (no GPU) does not give'
+  Check 'native libs: GLES 3 buffer ranges and the GLES 3 window on ANGLE''s uncapped WARP display (no GPU; test-only)' {
+    $global:LASTEXITCODE = $glTestExit
+    $glTestOut
+  } ($es3OnAngleWarp + @('gl_window_test all passed'))
 }
 
 # What DWM composed from the swap chain, read back with PrintWindow
@@ -324,7 +397,7 @@ Check 'native libs: the same EGL/GLES window surfaces on WARP' {
   $glWarpOut
 } (@('gesher EGL: default display: ANGLE, Direct3D 11 WARP device, feature level 10_0',
      'ES 3 configs no), declared OpenGL ES 2.0', 'GL_VERSION=OpenGL ES 2.', 'readpixels=ok, swap=ok',
-     'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed') + $es3Refused)
+     'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed') + $es3Refused + $es3OnAngleWarp)
 
 # AHardwareBuffer, the EGL native buffer/fence extensions and ASurfaceControl
 # (ADR 0089): surface_control_test.so (tests/native/surface_control_test.c)
@@ -357,6 +430,8 @@ Check 'native libs: AHardwareBuffer, EGL images and native fences, and ASurfaceC
     'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
     'ok: the window after its layers left: 0 pixel(s) not black',
     $(if ($glEs3) { 'surface_control_test: EGL with ES 3 contexts' } else { 'surface_control_test: EGL with ES 2 contexts' }),
+    $(if ($glEs3) { 'surface_control: ok: contexts current on two threads draw into their own framebuffers' }
+      else { 'surface_control_test: ES 3 contexts on two threads on ANGLE''s uncapped WARP display (test-only)' }),
     'surface_control_test all passed')
 
 Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP, without a descriptor broker' {
@@ -368,6 +443,7 @@ Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP,
   }
 } @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device',
     'surface_control_test: EGL with ES 2 contexts',
+    'surface_control_test: ES 3 contexts on two threads on ANGLE''s uncapped WARP display (test-only)',
     'surface_control: ok: sendHandleToUnixSocket without a descriptor broker fails',
     'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
     'surface_control_test all passed')
@@ -413,6 +489,27 @@ Check 'native libs: WARP declares OpenGL ES 2.0 and gives no more (no ES 3 confi
     'ok: no ES 3 configs: an ES 3 context refused with EGL_BAD_MATCH',
     'ok: no ES 3 configs: GL_VERSION OpenGL ES 2', 'gpu_keepalive_test all passed')
 
+# An app process follows the boot's declaration (ro.opengles.version, set by
+# the system server's probe), whatever its adapter has become: the test sets
+# it in a property session of its own (--declared). Declared 3.0 with WARP (as
+# after a Remote Desktop reconnect onto the Basic Render Driver): WARP
+# uncapped, ES 3.0, no ES 3.1. Declared 2.0 (on a GPU here, or on the runners'
+# Basic Render Driver): capped, ES 3 refused.
+Check 'native libs: a boot that declared OpenGL ES 3.0 gives ES 3.0 on WARP, and no ES 3.1' {
+  $env:GESHER_EGL_DEVICE = 'warp'
+  try {
+    & "$Dir/gpu_keepalive_test.exe" --declared 0x30000
+  } finally {
+    Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
+  }
+} @('ok: ro.opengles.version set for this process''s boot', 'ok: boot declared 3.0: this process''s display gives ES 3.0',
+    'ok: an ES 3.0 display: an ES 3.1 context refused with EGL_BAD_MATCH', 'gpu_keepalive_test all passed')
+
+Check 'native libs: a boot that declared OpenGL ES 2.0 gives ES 2.0 only, on whatever device' {
+  & "$Dir/gpu_keepalive_test.exe" --declared 0x20000
+} @('ok: ro.opengles.version set for this process''s boot', 'ok: boot declared 2.0: this process''s display gives ES 2.0 only',
+    'ok: no ES 3 configs: an ES 3 context refused with EGL_BAD_MATCH', 'gpu_keepalive_test all passed')
+
 Check 'native libs: GESHER_GPU_KEEPALIVE=0 turns the GPU keep-alive off' {
   $env:GESHER_GPU_KEEPALIVE = '0'
   try {
@@ -429,8 +526,10 @@ Check 'native libs: GESHER_GPU_KEEPALIVE=0 turns the GPU keep-alive off' {
 # returned pointer is read back.
 Check 'native libs: the entry points of every advertised GL extension from an NDK .so' {
   & "$Dir/gl_extension_test.exe" (NoDrive "$Dir/gl_extension_procs_test.so")
-} @('GL_ANGLE_provoking_vertex: glProvokingVertexANGLE', 'is read back',
-    'gl_extension_procs: all passed', 'gl_extension_test all passed')
+} (@('GL_ANGLE_provoking_vertex: glProvokingVertexANGLE', 'is read back',
+     'gl_extension_procs: all passed', 'gl_extension_test all passed') +
+   $(if ($glEs3) { @('an ES 3 context') }
+     else { @('on ANGLE''s WARP display, uncapped (test-only)', 'an ES 3 context on ANGLE''s uncapped WARP display') }))
 
 # Through gesher-app: glapp.apk's Activity makes windows with gesher-app's
 # NativeWindow and passes their android.view.Surface to the library, which

@@ -18,6 +18,7 @@
 #include <timeapi.h>
 
 #include <gesher/egl_angle.h>
+#include <gesher/system_properties.h>
 
 #include <chrono>
 #include <cstdint>
@@ -90,7 +91,7 @@ uint64_t Frames(void* display, std::chrono::microseconds period, std::chrono::mi
 constexpr int32_t kEglNone = 0x3038, kEglRenderableType = 0x3040, kEglConformant = 0x3042,
                   kEglSurfaceType = 0x3033, kEglPbufferBit = 0x0001, kEglWidth = 0x3057,
                   kEglHeight = 0x3056, kEglContextClientVersion = 0x3098, kEglOpenglEs2Bit = 0x0004,
-                  kEglOpenglEs3Bit = 0x0040, kEglBadMatch = 0x3009;
+                  kEglOpenglEs3Bit = 0x0040, kEglBadMatch = 0x3009, kEglContextMinorVersion = 0x30FB;
 constexpr uint32_t kGlVersion = 0x1F02;
 
 // ANGLE's functions (Microsoft ABI, as this executable).
@@ -118,14 +119,18 @@ bool AnyEs3Config(void* display) {
 
 // A context of `version` on a pbuffer: its GL_VERSION, or "" with *error set
 // to the EGL error when the context is refused.
-std::string ContextVersion(void* display, int32_t version, int32_t* error) {
+std::string ContextVersion(void* display, int32_t version, int32_t* error, int32_t minor = 0) {
   using CreateContext = void* (*)(void*, void*, void*, const int32_t*);
   using CreatePbuffer = void* (*)(void*, void*, const int32_t*);
   using MakeCurrent = unsigned (*)(void*, void*, void*, void*);
   using Destroy = unsigned (*)(void*, void*);
   using GetError = int32_t (*)();
   using GetString = const char* (*)(uint32_t);
-  auto create_context = Angle<CreateContext>("eglCreateContext");
+  // As an app's eglCreateContext: through Gesher's (no version above what the
+  // default display gives).
+  CreateContext create_context = [](void* d, void* c, void* s, const int32_t* a) {
+    return gesher_egl_create_context(d, c, s, a);
+  };
   auto create_pbuffer = Angle<CreatePbuffer>("eglCreatePbufferSurface");
   auto make_current = Angle<MakeCurrent>("eglMakeCurrent");
   auto destroy_context = Angle<Destroy>("eglDestroyContext");
@@ -144,7 +149,7 @@ std::string ContextVersion(void* display, int32_t version, int32_t* error) {
     *error = get_error();
     return "";
   }
-  const int32_t context_attribs[] = {kEglContextClientVersion, version, kEglNone};
+  const int32_t context_attribs[] = {kEglContextClientVersion, version, kEglContextMinorVersion, minor, kEglNone};
   void* context = create_context(display, config, nullptr, context_attribs);
   if (context == nullptr) {
     *error = get_error();
@@ -167,8 +172,38 @@ bool StartsWith(const std::string& s, const char* prefix) { return s.rfind(prefi
 
 }  // namespace
 
-int main() {
+// Test-only: this process's boot declared `declared` (ro.opengles.version), in
+// a property session and data directory of its own, as an app process sees
+// the system server's declaration (egl_gles_version.h). 0 for none.
+int DeclareForThisProcess(int argc, char** argv) {
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::strcmp(argv[i], "--declared") != 0) continue;
+    const int declared = static_cast<int>(std::strtol(argv[i + 1], nullptr, 0));
+    char temp[MAX_PATH];
+    GetTempPathA(sizeof temp, temp);
+    const std::string session = "gpu-keepalive-test-" + std::to_string(GetCurrentProcessId());
+    const std::string data = std::string(temp) + session;
+    CreateDirectoryA(data.c_str(), nullptr);
+    SetEnvironmentVariableA("GESHER_BINDER", nullptr);
+    SetEnvironmentVariableA("GESHER_PROPERTY_SESSION", session.c_str());
+    SetEnvironmentVariableA("ANDROID_DATA", data.c_str());
+    _putenv_s("GESHER_BINDER", "");
+    _putenv_s("GESHER_PROPERTY_SESSION", session.c_str());
+    _putenv_s("ANDROID_DATA", data.c_str());
+    const bool set = gesher::properties::Set("ro.opengles.version", std::to_string(declared));
+    std::string read;
+    const bool got = gesher::properties::Get("ro.opengles.version", &read);
+    std::printf("this process's boot declared OpenGL ES 0x%x (ro.opengles.version=%s)\n", declared,
+                got ? read.c_str() : "unset");
+    Expect(set && got && read == std::to_string(declared), "ro.opengles.version set for this process's boot");
+    return declared;
+  }
+  return 0;
+}
+
+int main(int argc, char** argv) {
   timeBeginPeriod(1);
+  const int declared = DeclareForThisProcess(argc, argv);
   // Asked first, as the system server does at boot: the display is chosen and
   // terminated again.
   const int probed = gesher_egl_gles_version();
@@ -184,7 +219,12 @@ int main() {
                 software_display ? "software" : "hardware", es3 ? "yes" : "no");
     Expect(gesher_egl_gles_version() == probed, "the declared version is the default display's");
     Expect(probed == (es3 ? 0x30000 : 0x20000), "the declared version is what the configs give");
-    if (software_display) {
+    if (declared != 0) {
+      // An app process follows the boot's declaration, whatever the adapter.
+      Expect(probed == declared, declared == 0x30000
+                                     ? "boot declared 3.0: this process's display gives ES 3.0"
+                                     : "boot declared 2.0: this process's display gives ES 2.0 only");
+    } else if (software_display) {
       Expect(!es3, "a software adapter: no EGL_OPENGL_ES3_BIT_KHR config");
       Expect(probed == 0x20000, "a software adapter declares OpenGL ES 2.0, not 3.0");
     }
@@ -192,7 +232,12 @@ int main() {
     const std::string v3 = ContextVersion(display, 3, &error);
     if (es3) {
       std::printf("ES 3 context: GL_VERSION %s\n", v3.c_str());
-      Expect(StartsWith(v3, "OpenGL ES 3."), "ES 3 configs: an ES 3 context, GL_VERSION OpenGL ES 3");
+      Expect(StartsWith(v3, "OpenGL ES 3.0"), "ES 3 configs: an ES 3 context, GL_VERSION OpenGL ES 3.0");
+      // Never more than declared: no ES 3.1 context (ANGLE's Direct3D 11 backend
+      // could give one), refused as a 3.0 driver refuses it.
+      const std::string v31 = ContextVersion(display, 3, &error, 1);
+      std::printf("ES 3.1 context refused: EGL error 0x%x\n", static_cast<unsigned>(error));
+      Expect(v31.empty() && error == kEglBadMatch, "an ES 3.0 display: an ES 3.1 context refused with EGL_BAD_MATCH");
     } else {
       std::printf("ES 3 context refused: EGL error 0x%x\n", static_cast<unsigned>(error));
       Expect(v3.empty() && error == kEglBadMatch, "no ES 3 configs: an ES 3 context refused with EGL_BAD_MATCH");

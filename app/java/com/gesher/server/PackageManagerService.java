@@ -1307,29 +1307,91 @@ public final class PackageManagerService extends IPackageManager.Default {
     /**
      * {@code probe}'s answer, on a thread of its own, or -2 when it has not answered in
      * {@code timeoutMillis} (a hung display driver must not stop the system server's
-     * start; the thread is left to finish or hang, a daemon). Then no version is declared,
-     * as nothing proved one. A LinkageError from the probe is thrown here.
+     * start; the thread is left to finish or hang, a daemon). An answer that comes after
+     * the timeout goes to {@code late}, on the probe's thread. A LinkageError from the probe
+     * is thrown here; another failure gives -1.
      */
-    static int boundedProbe(java.util.function.IntSupplier probe, long timeoutMillis) {
-        java.util.concurrent.FutureTask<Integer> task =
-                new java.util.concurrent.FutureTask<>(probe::getAsInt);
-        Thread thread = new Thread(task, "gesher-gles-probe");
+    static int boundedProbe(java.util.function.IntSupplier probe, long timeoutMillis,
+            java.util.function.IntConsumer late) {
+        final Object lock = new Object();
+        // [0]: 0 waiting, 1 answered in time, 2 timed out; [1]: the answer.
+        final int[] state = {0, 0};
+        final Throwable[] failure = {null};
+        Thread thread = new Thread(() -> {
+            int answer;
+            try {
+                answer = probe.getAsInt();
+            } catch (Throwable e) {
+                synchronized (lock) {
+                    failure[0] = e;
+                    if (state[0] == 0) state[0] = 1;
+                    lock.notifyAll();
+                }
+                return;
+            }
+            boolean afterTimeout;
+            synchronized (lock) {
+                afterTimeout = state[0] == 2;
+                state[1] = answer;
+                if (!afterTimeout) state[0] = 1;
+                lock.notifyAll();
+            }
+            if (afterTimeout && late != null) late.accept(answer);
+        }, "gesher-gles-probe");
         thread.setDaemon(true);
         thread.start();
-        try {
-            return task.get(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
-        } catch (java.util.concurrent.TimeoutException e) {
-            SystemServer.log("OpenGL ES probe: no answer in " + timeoutMillis
-                    + " ms (Direct3D device creation hung); no OpenGL ES version declared");
-            return -2;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return -2;
-        } catch (java.util.concurrent.ExecutionException e) {
-            if (e.getCause() instanceof LinkageError) throw (LinkageError) e.getCause();
-            SystemServer.log("OpenGL ES probe failed: " + e.getCause());
-            return -1;
+        final long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
+        synchronized (lock) {
+            while (state[0] == 0) {
+                long left = (deadline - System.nanoTime()) / 1_000_000L;
+                if (left <= 0) {
+                    state[0] = 2;
+                    SystemServer.log("OpenGL ES probe: no answer in " + timeoutMillis
+                            + " ms (Direct3D device creation hung); no OpenGL ES version declared"
+                            + " until it answers");
+                    return -2;
+                }
+                try {
+                    lock.wait(left);
+                } catch (InterruptedException e) {
+                    state[0] = 2;
+                    Thread.currentThread().interrupt();
+                    return -2;
+                }
+            }
+            if (failure[0] instanceof LinkageError) throw (LinkageError) failure[0];
+            if (failure[0] != null) {
+                SystemServer.log("OpenGL ES probe failed: " + failure[0]);
+                return -1;
+            }
+            return state[1];
         }
+    }
+
+    /**
+     * The probe's answer after its timeout: from now on it is declared (the property for
+     * processes started after it, getSystemAvailableFeatures and getDeviceConfigurationInfo);
+     * processes started before saw none declared. Nothing changes once a version is known.
+     */
+    static void lateGlEsVersion(int probed) {
+        if (probed <= 0) return;
+        synchronized (PackageManagerService.class) {
+            if (sGlEsVersionKnown
+                    && sGlEsVersion != android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED) {
+                return;
+            }
+            try {
+                if (android.os.SystemProperties.getInt("ro.opengles.version", 0) == 0) {
+                    android.os.SystemProperties.set("ro.opengles.version", Integer.toString(probed));
+                }
+            } catch (RuntimeException | LinkageError e) {
+                SystemServer.log("ro.opengles.version not set: " + e);
+            }
+            sGlEsVersion = probed;
+            sGlEsVersionKnown = true;
+        }
+        SystemServer.log("OpenGL ES probe answered after its timeout: 0x" + Integer.toHexString(probed)
+                + " declared from now on");
     }
 
     // Guarded by PackageManagerService.class. No initializers: FEATURES' static block,
@@ -1344,8 +1406,8 @@ public final class PackageManagerService extends IPackageManager.Default {
      * Android's default EGL display runs on (WindowsHost.glEsVersion,
      * docs/system-features.md): ES 3.0 only on a hardware Direct3D 11 device that gives it,
      * ES 2.0 on WARP (capped there, so EGL gives no more) or a GPU without ES 3.0, nothing
-     * without ANGLE or a Direct3D device, or when the probe does not answer within
-     * GL_PROBE_TIMEOUT_MS.
+     * without ANGLE or a Direct3D device, or while the probe has not answered (it is waited
+     * for GL_PROBE_TIMEOUT_MS; a later answer is declared then, lateGlEsVersion).
      */
     public static synchronized int glEsVersion() {
         if (sGlEsVersionKnown) return sGlEsVersion;
@@ -1353,7 +1415,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         try {
             version = android.os.SystemProperties.getInt("ro.opengles.version", version);
             if (version == android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED) {
-                int probed = boundedProbe(WindowsHost::glEsVersion, GL_PROBE_TIMEOUT_MS);
+                int probed = boundedProbe(WindowsHost::glEsVersion, GL_PROBE_TIMEOUT_MS,
+                        PackageManagerService::lateGlEsVersion);
                 if (probed > 0) {
                     version = probed;
                     try {

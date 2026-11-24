@@ -558,9 +558,10 @@ static uint32_t Pixel(void) {
 }
 
 // A program filling the viewport with the uniform `color` (ES 3: a triangle
-// made from gl_VertexID, no buffers; ES 2: the same triangle from a buffer);
-// 0 on failure.
-static GLuint ColorProgram(GLint* color) {
+// made from gl_VertexID, no buffers; ES 2: the same triangle from a buffer,
+// *buffer, which the caller deletes with the program); 0 on failure.
+static GLuint ColorProgram(GLint* color, GLuint* buffer) {
+  *buffer = 0;
   static const char* vs3 =
       "#version 300 es\n"
       "void main() {\n"
@@ -604,9 +605,8 @@ static GLuint ColorProgram(GLint* color) {
   if (g_es < 3) {
     // The ES 3 shader's triangle, from a buffer of this context (left bound).
     static const GLfloat kTriangle[] = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
-    GLuint buffer = 0;
-    glGenBuffers(1, &buffer);
-    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glGenBuffers(1, buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, *buffer);
     glBufferData(GL_ARRAY_BUFFER, sizeof kTriangle, kTriangle, GL_STATIC_DRAW);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
     glEnableVertexAttribArray(0);
@@ -631,13 +631,13 @@ static void* OtherContextThread(void* arg) {
   g_other_ready = context != EGL_NO_CONTEXT && surface != EGL_NO_SURFACE &&
                   eglMakeCurrent(g_display, surface, surface, context);
   WaitTurn(1);
-  GLuint texture = 0, framebuffer = 0, program = 0;
+  GLuint texture = 0, framebuffer = 0, program = 0, vertices = 0;
   GLint color = -1;
   if (g_other_ready) {
     MakeFramebuffer(&texture, &framebuffer);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    program = ColorProgram(&color);
+    program = ColorProgram(&color, &vertices);
     g_other_ready = program != 0;
     if (program != 0) DrawColor(color, 0, 0, 1);  // blue, between the other context's two draws
   }
@@ -649,6 +649,7 @@ static void* OtherContextThread(void* arg) {
     glDeleteFramebuffers(1, &framebuffer);
     glDeleteTextures(1, &texture);
     if (program != 0) glDeleteProgram(program);
+    if (vertices != 0) glDeleteBuffers(1, &vertices);
     eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
   }
   if (surface != EGL_NO_SURFACE) eglDestroySurface(g_display, surface);
@@ -670,7 +671,8 @@ static void TestTwoThreads(void) {
   glClearColor(0, 0, 0, 1);
   glClear(GL_COLOR_BUFFER_BIT);
   GLint color = -1;
-  GLuint program = ColorProgram(&color);
+  GLuint vertices = 0;
+  GLuint program = ColorProgram(&color, &vertices);
   if (program != 0) DrawColor(color, 1, 0, 0);  // red: this framebuffer and program in the device state
   GiveTurn(1);
   WaitTurn(0);
@@ -681,10 +683,12 @@ static void TestTwoThreads(void) {
   pthread_join(other, NULL);
   glUseProgram(0);
   if (program != 0) glDeleteProgram(program);
+  if (vertices != 0) glDeleteBuffers(1, &vertices);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glDeleteFramebuffers(1, &framebuffer);
   glDeleteTextures(1, &texture);
-  CHECK(program != 0 && g_other_ready, "a second ES 3 context current on a second thread, a program in each");
+  CHECK(program != 0 && g_other_ready, "a second ES %d context current on a second thread, a program in each",
+        (int)g_es);
   CHECK(mine == GREEN && g_other_px == BLUE,
         "contexts current on two threads draw into their own framebuffers (0x%08x and 0x%08x; want 0x%08x and "
         "0x%08x)",
@@ -912,6 +916,61 @@ static void TestSurfaceControl(ANativeWindow* window) {
   }
 }
 
+// Without ES 3 on the default display (no GPU, as on the CI runners): the
+// two-thread ES 3 checks (gl_VertexID shaders, ANGLE's per-call context check)
+// on ANGLE's own WARP display, uncapped, through eglGetPlatformDisplayEXT's
+// pass-through. Test-only, so the ES 3 path stays covered; never what an app
+// gets by default. AHardwareBuffer images stay on the default display.
+static void TestTwoThreadsEs3OnAngleWarp(void) {
+  if (g_es >= 3 || g_display == EGL_NO_DISPLAY) return;
+  PFNEGLGETPLATFORMDISPLAYEXTPROC get =
+      (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+  // D3D11, WARP, no feature level cap; a display key of its own (with the
+  // device id ANGLE requires beside it, ignored for WARP): ANGLE keys displays
+  // by platform type and key, not device type, so without one this would be
+  // Android's default display itself.
+  static const EGLint display_attribs[] = {0x3203, 0x3208, 0x3209, 0x320B, 0x34D7, 0x8c, 0x34DC, 0x7e57,
+                                           EGL_NONE};
+  EGLDisplay warp = get != NULL ? get(0x3202, EGL_DEFAULT_DISPLAY, display_attribs) : EGL_NO_DISPLAY;
+  CHECK(warp != EGL_NO_DISPLAY && eglInitialize(warp, NULL, NULL), "ANGLE's uncapped WARP display (test-only)");
+  if (warp == EGL_NO_DISPLAY) return;
+  const EGLint config_attribs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                                   EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+                                   EGL_NONE};
+  EGLConfig config;
+  EGLint n = 0;
+  if (!eglChooseConfig(warp, config_attribs, &config, 1, &n) || n < 1) {
+    CHECK(0, "an ES 3 config on ANGLE's uncapped WARP display");
+    return;
+  }
+  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+  const EGLint surface_attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+  EGLContext context = eglCreateContext(warp, config, EGL_NO_CONTEXT, context_attribs);
+  EGLSurface surface = eglCreatePbufferSurface(warp, config, surface_attribs);
+  if (context == EGL_NO_CONTEXT || surface == EGL_NO_SURFACE || !eglMakeCurrent(warp, surface, surface, context)) {
+    CHECK(0, "an ES 3 context current on ANGLE's uncapped WARP display");
+  } else {
+    printf("surface_control_test: ES 3 contexts on two threads on ANGLE's uncapped WARP display (test-only)\n");
+    EGLDisplay saved_display = g_display;
+    EGLConfig saved_config = g_config;
+    EGLContext saved_context = g_context;
+    EGLint saved_es = g_es;
+    g_display = warp;
+    g_config = config;
+    g_context = context;
+    g_es = 3;
+    TestTwoThreads();
+    g_display = saved_display;
+    g_config = saved_config;
+    g_context = saved_context;
+    g_es = saved_es;
+    eglMakeCurrent(warp, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+  }
+  if (surface != EGL_NO_SURFACE) eglDestroySurface(warp, surface);
+  if (context != EGL_NO_CONTEXT) eglDestroyContext(warp, context);
+  eglMakeCurrent(g_display, g_surface, g_surface, g_context);
+}
+
 // --- entry points --------------------------------------------------------------------------------
 
 int sc_test_run(ANativeWindow* window, char* out, size_t n) {
@@ -919,6 +978,7 @@ int sc_test_run(ANativeWindow* window, char* out, size_t n) {
   TestBuffers();
   TestEgl();
   TestTwoThreads();
+  TestTwoThreadsEs3OnAngleWarp();
   TestSurfaceControl(window);
   snprintf(out, n, "%d failure(s)", g_failures);
   return g_failures;

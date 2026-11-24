@@ -46,7 +46,16 @@ ES 3.0**. Without a GPU the device is a software one, WARP, and it is capped
 so that it gives only ES 2.0, which it declares (0x20000), as an Android device
 whose GPU does not support ES 3.0 does. What the device declares
 (`PackageManager`, `ConfigurationInfo`) and what EGL gives (configs, contexts,
-`GL_VERSION`) are the same (CDD 7.1.4.1).
+`GL_VERSION`) are the same (CDD 7.1.4.1), in every process of a boot.
+
+**Who gets ES 2.0.** Machines without a GPU, or whose Direct3D hardware device
+is the Microsoft Basic Render Driver: virtual machines without GPU
+passthrough or paravirtualization, Remote Desktop / Remote Desktop Services
+sessions that have no GPU, Windows Server without a display driver, and the CI
+runners. Before this change they got ES 3.0 on WARP; now they get ES 2.0, and
+apps that require ES 3.0 (`<uses-feature android:glEsVersion="0x00030000">`,
+which Google Play also filters on) are incompatible there, as on an Android
+device without ES 3.0. A GPU below feature level 10_1 keeps ES 2.0 on the GPU.
 
 All of Android's EGL paths (an app's `.so`, `android.opengl.EGL14`/`GLSurfaceView`,
 hwui) use one default display, `gesher_egl_default_display()`
@@ -54,7 +63,9 @@ hwui) use one default display, `gesher_egl_default_display()`
 commit (ab6a82e0, `renderer11_utils.cpp` `GetMaximumClientVersion`) gives
 ES 3.0 from feature level 10_1, ES 3.1 from 11_0, and ES 2.0 below 10_1. One
 policy (`compat/bionic/egl_gles_version.h`) chooses the display and the
-version:
+version.
+
+**At boot**, the system server probes with nothing declared yet:
 
 | ANGLE's device | Default display | Declared |
 | --- | --- | --- |
@@ -64,18 +75,48 @@ version:
 | the hardware device failed or had no ES configs, or `GESHER_EGL_DEVICE=warp` | WARP at feature level 10_0 | 0x20000 |
 | none (no ANGLE DLLs, or no Direct3D 11 device at all) | `EGL_NO_DISPLAY` | none (`GL_ES_VERSION_UNDEFINED`) |
 
-WARP is opened with ANGLE's `EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE` 10 and
-`..._MINOR_ANGLE` 0 (`Renderer11` then asks Direct3D for feature level 10_0 at
-most), ANGLE's own cap: no config carries `EGL_OPENGL_ES3_BIT_KHR` in
-`EGL_RENDERABLE_TYPE` or `EGL_CONFORMANT`, so `eglChooseConfig` with that bit
-finds nothing; `eglCreateContext` with `EGL_CONTEXT_CLIENT_VERSION` 3 fails
-with `EGL_BAD_MATCH` (ANGLE's `ValidateCreateContext`, as `EGL_KHR_create_context`
-specifies for a version the config does not support); an ES 2 context's
-`GL_VERSION` is "OpenGL ES 2.0". The policy reads the declared version from the
-configs of the display it keeps, and does not keep a software display that
-still has ES 3.0 configs (no default display then, rather than a declaration
-that disagrees with EGL). hwui's SkiaGL and Skia's Ganesh use ES 2 contexts and
-work on it (`GESHER_HWUI_RENDERER=skiagl` with `GESHER_EGL_DEVICE=warp`).
+**Every process after that** reads the boot's `ro.opengles.version` and
+chooses the display that gives exactly that version, whatever the adapter has
+become meanwhile: the console's GPU at boot and then a Remote Desktop
+reconnect onto the Basic Render Driver, a driver update or a device reset
+falling back to the Basic Render Driver, or `GESHER_EGL_DEVICE=warp` for one
+process. Declared 3.0: the GPU if it still gives ES 3.0, else WARP uncapped,
+which gives ES 3.0 in software (slower, but what the device declared).
+Declared 2.0: the GPU or WARP, both capped at feature level 10_0, so a GPU that
+appeared later still gives ES 2.0 only. A display that would give another
+version is not kept (no default display rather than a disagreement). The
+declaration changes only with the next boot (Gesher's restart), as on Android.
+
+WARP and a device declared 2.0 are opened with ANGLE's
+`EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE` 10 and `..._MINOR_ANGLE` 0
+(`Renderer11` then asks Direct3D for feature level 10_0 at most; this works on
+the hardware device type too), ANGLE's own cap: no config carries
+`EGL_OPENGL_ES3_BIT_KHR` in `EGL_RENDERABLE_TYPE` or `EGL_CONFORMANT`, so
+`eglChooseConfig` with that bit finds nothing; `eglCreateContext` with
+`EGL_CONTEXT_CLIENT_VERSION` 3 fails with `EGL_BAD_MATCH` (ANGLE's
+`ValidateCreateContext`, as `EGL_KHR_create_context` specifies for a version
+the config does not support); an ES 2 context's `GL_VERSION` is "OpenGL ES
+2.0". hwui's SkiaGL and Skia's Ganesh use ES 2 contexts and work on it
+(`GESHER_HWUI_RENDERER=skiagl` with `GESHER_EGL_DEVICE=warp`).
+
+**ES 3.1 and 3.2 are not declared, and not given.** On a GPU at feature level
+11_0 ANGLE would create ES 3.1 contexts, but its Direct3D 11 backend reports
+3.0 as its highest conformant version (`Renderer11::getMaxConformantESVersion`,
+"3.1 support is in progress"), and declaring 0x30001 would claim what Gesher
+has not verified (Android declares ES 3.1 only on drivers that pass it; AEP,
+`android.hardware.opengles.aep`, needs 3.1 plus more and is not reported
+either). Capping the GPU at feature level 10_1 would also cap ES at 3.0, but it
+drops what the hardware gives within ES 3.0 (for example 16384-pixel textures,
+and extensions only feature level 11 has). So the GPU keeps its feature level
+and the EGL entry points refuse a context above the version the default
+display gives (an ES 3.1 or 3.2 context on an ES 3.0 display) with
+`EGL_BAD_MATCH`, as a 3.0 driver refuses it: `eglCreateContext` of an app's
+`.so` (`compat/bionic/egl_gles.cc`) and of the Java bindings and hwui
+(`compat/hwui/gl/angle_gl.cc`, through `gesher_egl_create_context`). The error
+is ANGLE's own (it is asked for ES 3.9, which its validation refuses with
+`EGL_BAD_MATCH`), so `eglGetError` reports it as for any refused context.
+Contexts on other displays (an app's own ANGLE display through
+`eglGetPlatformDisplay`'s pass-through) are ANGLE's.
 
 "Hardware" is decided from the display's own Direct3D 11 device
 (`EGL_EXT_device_query`, `EGL_D3D11_DEVICE_ANGLE`, then the DXGI adapter's
@@ -85,29 +126,29 @@ query cannot identify is not hardware. ANGLE's "hardware" device type alone is
 not evidence: without a display driver it runs on the Basic Render Driver.
 
 The system server asks once at boot (`PackageManagerService.glEsVersion`,
-`WindowsHost.glEsVersion`, `gesher_egl_gles_version`): it makes the same choice
-an app process makes, sets `ro.opengles.version` for every process of that
-boot, and terminates the display again, so it keeps no Direct3D device. That
-costs one ANGLE initialization (one or two Direct3D 11 devices) at boot, and
-ANGLE's DLLs and the Direct3D/driver DLLs it loaded stay loaded in the system
-server (about 3.7 MB, as measured in review). The probe runs on a thread of its own and the
-system server waits at most 5 s (`GL_PROBE_TIMEOUT_MS`): a display driver that
-hangs device creation does not stop the start, and then no version is declared
-(nothing proved one), with a log line. A display that was already initialized
-in the process (an app's own through `eglGetPlatformDisplay`'s pass-through
-with the same attributes) is not terminated; the system server loads no app
-code. A value already in the property (an explicit `build.prop` line) is kept,
-as on a device.
+`WindowsHost.glEsVersion`, `gesher_egl_gles_version`): it makes the choice with
+nothing declared, sets `ro.opengles.version` for every process of that boot,
+and terminates the display again, so it keeps no Direct3D device. That costs
+one ANGLE initialization (one or two Direct3D 11 devices) at boot, and ANGLE's
+DLLs and the Direct3D/driver DLLs it loaded stay loaded in the system server
+(about 3.7 MB, as measured in review). The probe runs on a thread of its own
+and the system server waits at most 5 s (`GL_PROBE_TIMEOUT_MS`): a display
+driver that hangs device creation does not stop the start. Until the probe
+answers, no version is declared and the property stays unset (apps started
+meanwhile see none declared and choose their display as the probe would);
+an answer that comes later is declared then (`lateGlEsVersion`: the property,
+`getSystemAvailableFeatures`, `getDeviceConfigurationInfo`), with a log line. A
+display that was already initialized in the process (an app's own through
+`eglGetPlatformDisplay`'s pass-through with the same attributes) is not
+terminated; the system server loads no app code. A value already in the
+property (an explicit `build.prop` line) is kept, as on a device.
 
-A GPU below feature level 10_1 runs apps' GL as ES 2.0 on the GPU. Without the
-ANGLE DLLs, or without any Direct3D 11 device, there is no GLES and no version
-is declared.
+Without the ANGLE DLLs, or without any Direct3D 11 device, there is no GLES and
+no version is declared.
 
 Not reported:
 
-- **ES 3.1 / 3.2.** ANGLE's `Renderer11::getMaxConformantESVersion` caps at 3.0
-  ("3.1 support is in progress"), and Gesher has not verified ES 3.1 on a real
-  GPU (docs/angle.md).
+- **ES 3.1 / 3.2** (above).
 - **`android.hardware.opengles.aep`.** AEP needs ES 3.1 plus geometry and
   tessellation shaders and the other AEP extensions, which ANGLE's Direct3D 11
   backend does not provide.
@@ -189,23 +230,32 @@ promises. Absent (c): nothing implements it.
   `ro.opengles.version`, which is the default display's version
   (`WindowsHost.glEsVersion`; 2.0 under `GESHER_EGL_DEVICE=warp`), and builds a
   `SystemFeaturesCache`. It also runs the bounded probe with an answer, with a
-  probe that hangs (-2, no version, after the timeout) and with a LinkageError. The helpers claim
+  probe that hangs (-2, no version, after the timeout, then its late answer
+  reaching the late handler) and with a LinkageError, and `lateGlEsVersion`
+  (declared after a timeout; a known version kept). The helpers claim
   nothing for unknown or absent hardware, and the unimplemented features above
   are absent.
 - `tests/native/egl_gles_version_test.cc` (in `tools/test_hwui_renderer_policy.py`):
-  the policy, hardware ES 3.0 → 0x30000; capped WARP → 0x20000; a software or
-  unidentified display still offering ES 3.0 refused; `EGL_NO_DISPLAY` → none;
-  which device the default display keeps; and over all 80 combinations, that a
-  kept display declares exactly what its configs give. A negative-control build
-  (commit 28143d85a's policy: 2.0 declared on WARP while its ES 3.0 configs
-  stay) must fail. `tests/native/gpu_keepalive_test.cc` (CI track 40, also with
-  `GESHER_EGL_DEVICE=warp`) checks real ANGLE: the declared version equals what
-  the configs give; on a software adapter no config with the ES 3 bit, an ES 3
-  context refused with `EGL_BAD_MATCH` and `GL_VERSION` "OpenGL ES 2.0"; with
-  ES 3 configs an ES 3 context with `GL_VERSION` "OpenGL ES 3.0".
-  `libglapp.so`'s ES 3 run (`gl_window_test`, glapp.apk) checks the same refusal
-  where there is no ES 3, and `surface_control_test`/`gl_extension_procs_test`
-  use ES 2 contexts there.
+  the probe (hardware ES 3.0 → 0x30000; capped WARP → 0x20000; a software or
+  unidentified display offering ES 3.0 refused), the processes of a boot that
+  declared 3.0 (the GPU, else uncapped WARP) or 2.0 (capped GPU or WARP), the
+  context versions allowed (no ES 3.1 on a 3.0 display), and over all 240
+  combinations that a kept display gives exactly the declaration. A
+  negative-control build (commit 7d0bd340d's policy, which ignores the
+  declaration) must fail. `tests/native/gpu_keepalive_test.cc` (CI track 40)
+  checks real ANGLE: the version equals what the configs give; on a software
+  adapter no config with the ES 3 bit, an ES 3 context refused with
+  `EGL_BAD_MATCH`, `GL_VERSION` "OpenGL ES 2.0"; with ES 3 configs an ES 3.0
+  context and an ES 3.1 one refused; and, with `--declared` (a property session
+  of its own), a boot that declared 3.0 under `GESHER_EGL_DEVICE=warp` gets
+  uncapped WARP with ES 3.0, one that declared 2.0 on a GPU gets the GPU capped
+  with ES 3 refused. Where the default display has no ES 3 (the CI runners),
+  `libglapp.so` (`gl_window_test`), `surface_control_test`,
+  `gl_extension_procs_test` and `ImageReaderEglTest` check the refusal and run
+  their ES 3 paths on ANGLE's own uncapped WARP display, reached through
+  `eglGetPlatformDisplay(EXT)`'s pass-through (test-only); track 40 decides
+  which from its own DXGI enumeration of the adapter ANGLE's hardware device
+  takes, not from the tested output.
 - `tools/test_camera_selection_and_orientation.py`: `camera.external` for an
   unconfigured camera, not for a configured rear one.
 - CI runs `PackageServiceQueriesTest` without `libandroid_runtime`. Without

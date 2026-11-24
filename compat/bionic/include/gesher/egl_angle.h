@@ -40,6 +40,11 @@ void* gesher_egl_default_display(void);
  * is kept for the process. */
 int gesher_egl_gles_version(void);
 
+/* eglCreateContext: on the default display a context version above what it
+ * gives (ES 3.1/3.2 on an ES 3.0 display) is refused with EGL_BAD_MATCH;
+ * otherwise ANGLE's eglCreateContext. */
+void* gesher_egl_create_context(void* display, void* config, void* share, const int32_t* attribs);
+
 /* eglChooseConfig / eglGetConfigAttrib with Android's attributes
  * (EGL_RECORDABLE_ANDROID, EGL_FRAMEBUFFER_TARGET_ANDROID,
  * EGL_NATIVE_VISUAL_ID as a HAL pixel format). */
