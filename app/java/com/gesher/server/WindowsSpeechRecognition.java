@@ -33,6 +33,9 @@ public final class WindowsSpeechRecognition {
     public static final int REASON_NO_RECOGNIZER = 2;
     public static final int REASON_RECOGNIZER_FAILED = 3;
 
+    /** A requested maximum is an upper bound, not a promise to return that many texts. */
+    public static final int MAX_ALTERNATES = 64;
+
     private static final int RECOGNIZER_FIELDS = 4;
 
     private WindowsSpeechRecognition() {
@@ -144,7 +147,8 @@ public final class WindowsSpeechRecognition {
         int[] out = new int[2];
         long handle;
         try {
-            handle = nativeStart(language, sampleRate, hypotheses, Math.max(1, maxAlternates), out);
+            handle = nativeStart(language, sampleRate, hypotheses,
+                    Math.min(MAX_ALTERNATES, Math.max(1, maxAlternates)), out);
         } catch (UnsatisfiedLinkError e) {
             throw new StartException(REASON_WINDOWS, 0x80004001);  // E_NOTIMPL
         }
