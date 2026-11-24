@@ -4644,14 +4644,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     affectedTasks.add(r.taskId);
                     continue;
                 }
+                // A launch that lost its process before drawing or becoming idle must
+                // report failure, even with no saved state and removal below. A drawn
+                // activity has already launched even if its looper never becomes idle.
+                if (!launched(r) && !r.finishing && r.state != State.DESTROYED) r.launchFailed = true;
                 recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
-                    // Gone before it drew or was idle, without finishing: a launch waiting
-                    // for it failed (a crash in onCreate), not a deliberate finish.
-                    if (!r.finishing && r.state != State.DESTROYED && !launched(r)) {
-                        r.launchFailed = true;
-                    }
                     r.state = State.DESTROYED;
                     accountActivityFinished(r);
                     mActivities.remove(r);
@@ -4662,7 +4661,6 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         mTaskRotation.delete(r.taskId);
                     }
                 } else {
-                    if (!launched(r)) r.launchFailed = true;
                     r.app = null;
                     r.launchGeneration = null;
                     r.launchScheduled = false;

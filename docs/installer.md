@@ -5,9 +5,10 @@
 administrator rights, into `%LOCALAPPDATA%\Programs\Gesher`, puts `gesher`
 and `gesher-app` on the user's `PATH`, adds Start menu entries (including the
 Gesher Control Center), offers optional 1-click Google Play services (microG)
-and Aurora Store installation, and associates `.apk`, `.apks` and `.xapk` files
-with gesher-app. Apps installed with gesher-app get Start menu shortcuts of
-their own ([below](#installed-apps-in-the-start-menu)).
+and Aurora Store installation, and registers Explorer associations for `.apk`,
+`.apks`, `.xapk`, `.apkm` and `.apk+`. If another program owns an extension,
+Gesher is available in **Open with**. Apps installed with gesher-app get their
+own [Start menu shortcuts](#installed-apps-in-the-start-menu).
 
 Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 `tools/icons/make-icons.py`), is Setup's (`SetupIconFile`), Add/Remove
@@ -137,7 +138,7 @@ runs the installed `gesher-launch install uiapp.apk` (no splash) and
 with `Gesher UI` and `Gesher.App.com.gesher.uiapp`, is gone within 5 s of the
 app's `GesherWindow` being visible.
 
-Each `.apk`, `.apks` and `.xapk` file's icon comes from `gesher_shellext.dll`
+Each APK or split APK bundle's icon comes from `gesher_shellext.dll`
 (`compat/shell/gesher_shellext.cc`), loaded by Explorer: its app's icon. It
 parses no APK: it looks the file (its size and last write time) up in
 `%LOCALAPPDATA%\Gesher\data\system\apk-icons.list`, which `gesher-app install`
@@ -280,6 +281,16 @@ gone.
 
 ## The Gesher device and (un)installing
 
+Open an APK or bundle from Explorer or use the Control Center's install
+dialog. Bundle formats supported here are ZIP archives containing one base
+APK, its companion split APKs and optional dex metadata. Installers that
+produce an APK set with multiple alternative bases need to export a single
+matching set first. Game expansion files (`.obb`) are outside this install path.
+
+Apps using Android's system file or folder picker can select Windows files and
+folders through the [Storage Access Framework](services.md#storage-access-framework-documents).
+Apps browsing Android shared storage directly see Gesher's shared volume.
+
 The Control Center's [Updates card](updates.md) discovers stable GitHub releases
 and starts the verified installer for the current installation directory. Setup
 writes `gesher-version.ini` from its own `AppVersion`; the updater also verifies
@@ -305,9 +316,9 @@ names and extensions stay as they are (a non-ASCII leaf leaves the whole path in
 long form).
 
 User-supplied paths are not rewritten: the APK given to `gesher-app` (`install`,
-`launch`, a double-clicked `.apk`/`.apks`/`.xapk`) and the dex given to `gesher`
+`launch`, a double-clicked APK or split APK bundle) and the dex given to `gesher`
 are passed in long form (`UserPath`), so the installer still sees the real file
-name, recognizes `.apks`/`.xapk` bundles by their suffix and finds a `.dm` file
+name, recognizes APK bundles by their suffix and finds a `.dm` file
 beside the APK.
 
 Limitations:

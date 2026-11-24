@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -98,7 +99,10 @@ public final class BluetoothLeScanner {
     }
 
     private static final Object sLock = new Object();
+    // A callback can lose its framework lookup while its service registration remains active.
+    // In particular, Android removes its wrapper before the service can reject a stop.
     private static final Map<Object, Client> sClients = new LinkedHashMap<>();
+    private static final Set<Client> sActiveClients = new LinkedHashSet<>();
     private static final Map<String, byte[]> sAdvertisements = bounded();
     private static final Map<String, byte[]> sResponses = bounded();
     private static final Map<String, Integer> sRssi = bounded();
@@ -159,7 +163,8 @@ public final class BluetoothLeScanner {
         try {
             for (;;) {
                 synchronized (sLock) {
-                    if (sClients.isEmpty()) {
+                    if (sThread != Thread.currentThread()) return;
+                    if (sActiveClients.isEmpty()) {
                         sThread = null;
                         return;
                     }
@@ -167,7 +172,8 @@ public final class BluetoothLeScanner {
                 meta[5] = 0;
                 byte[] data = WindowsBluetooth.nativeScanNext(scan, 200, meta);
                 if (data != null) {
-                    deliver(result(data, meta));
+                    ScanResult report = result(data, meta);
+                    if (report != null) deliver(report);
                 } else if (meta[5] != 0) {
                     Log.w(TAG, "Windows ended the LE scan: " + WindowsBluetooth.hresult((int) meta[5]));
                     failAll(ScanCallback.SCAN_FAILED_INTERNAL_ERROR);
@@ -191,8 +197,9 @@ public final class BluetoothLeScanner {
         boolean connectable = (flags & 1) != 0;
         boolean scanResponse = (flags & 2) != 0;
         boolean legacy = (flags & 4) != 0;
-        byte[] merged;
+        ScanRecord record;
         synchronized (sLock) {
+            if (sThread != Thread.currentThread()) return null;
             sRssi.put(address, (int) meta[2]);
             byte[] adv;
             byte[] response;
@@ -208,13 +215,13 @@ public final class BluetoothLeScanner {
             }
             if (adv == null) adv = new byte[0];
             if (response == null) response = new byte[0];
-            merged = new byte[adv.length + response.length];
+            byte[] merged = new byte[adv.length + response.length];
             System.arraycopy(adv, 0, merged, 0, adv.length);
             System.arraycopy(response, 0, merged, adv.length, response.length);
+            record = ScanRecord.parseFromBytes(merged);
+            BluetoothHost.sawLe(address, record == null ? null : record.getDeviceName());
         }
-        ScanRecord record = ScanRecord.parseFromBytes(merged);
         BluetoothDevice device = BluetoothDevice.createFromHost(address, (int) meta[1]);
-        BluetoothHost.sawLe(address, record == null ? null : record.getDeviceName());
         int eventType = (connectable ? 0x01 : 0) | (scanResponse ? 0x08 : 0) | (legacy ? 0x10 : 0);
         return new ScanResult(device, eventType, BluetoothDevice.PHY_LE_1M, ScanResult.PHY_UNUSED,
                 ScanResult.SID_NOT_PRESENT, (int) meta[3], (int) meta[2],
@@ -225,7 +232,8 @@ public final class BluetoothLeScanner {
         String address = result.getDevice().getAddress();
         List<Runnable> calls = new ArrayList<>();
         synchronized (sLock) {
-            for (Client c : sClients.values()) {
+            if (sThread != Thread.currentThread()) return;
+            for (Client c : sActiveClients) {
                 if (!c.mayReceive || !c.matches(result)) continue;
                 ScanResult forClient = withContext(result, c.context);
                 int type = c.callbackType();
@@ -273,7 +281,8 @@ public final class BluetoothLeScanner {
         List<Runnable> calls = new ArrayList<>();
         long lostBefore = SystemClock.elapsedRealtimeNanos() - LOST_AFTER_MS * 1_000_000L;
         synchronized (sLock) {
-            for (Client c : sClients.values()) {
+            if (sThread != Thread.currentThread()) return;
+            for (Client c : sActiveClients) {
                 long delay = c.settings.getReportDelayMillis();
                 if (delay > 0 && now - c.batchAt >= delay) {
                     c.batchAt = now;
@@ -307,7 +316,7 @@ public final class BluetoothLeScanner {
 
     private static boolean active(Client c) {
         synchronized (sLock) {
-            return sClients.get(c.key) == c;
+            return sActiveClients.contains(c);
         }
     }
 
@@ -344,18 +353,23 @@ public final class BluetoothLeScanner {
             c.intent.send(c.context, 0, fill);
         } catch (PendingIntent.CanceledException e) {
             synchronized (sLock) {
-                sClients.remove(c.key);
+                unregisterLocked(c);
             }
         }
     }
 
     private static void failAll(int error) {
+        boolean radioOn = BluetoothHost.on();
         List<Client> failed;
         synchronized (sLock) {
-            failed = new ArrayList<>(sClients.values());
-            sClients.clear();
+            if (sThread != Thread.currentThread()) return;
+            // Radio shutdown removes scanner registrations silently. A failure from
+            // a live scanner reaches all its service registrations, even detached wrappers.
+            failed = radioOn ? new ArrayList<>(sActiveClients) : List.of();
+            clearScansLocked();
             sThread = null;
         }
+        if (failed.isEmpty()) return;
         Handler h = handler();
         for (Client c : failed) {
             h.post(() -> {
@@ -389,7 +403,7 @@ public final class BluetoothLeScanner {
             PendingIntent intent) {
         if (callback == null && intent == null) throw new IllegalArgumentException("callback is null");
         if (settings == null) throw new IllegalArgumentException("settings is null");
-        if (!BluetoothHost.on()) {
+        if (!radioAvailable()) {
             Log.w(TAG, "BLE is not available");
             return error(callback, ScanCallback.SCAN_FAILED_INTERNAL_ERROR);
         }
@@ -413,7 +427,9 @@ public final class BluetoothLeScanner {
             if (!c.mayReceive) {
                 Log.w(TAG, "scan results withheld: no location permission (and no neverForLocation)");
             }
-            sClients.put(key, c);
+            Client replaced = sClients.put(key, c);
+            if (replaced != null) sActiveClients.remove(replaced);
+            sActiveClients.add(c);
             startHub();
         }
         return ScanCallback.NO_ERROR;
@@ -425,44 +441,105 @@ public final class BluetoothLeScanner {
         return ScanCallback.NO_ERROR;
     }
 
+    /**
+     * As Android 16: with BLE off, or for a callback without an active scan, nothing happens
+     * (the module looks the callback up locally and never reaches the service). Stopping an
+     * active scan reaches the service, which enforces BLUETOOTH_SCAN; the callback is
+     * removed from the framework lookup before that check. A rejected stop leaves the
+     * backend registration active until the Bluetooth service shuts down.
+     *
+     * <p>With BLE off the scan is forgotten without a check: Android's module drops every
+     * scan client when the Bluetooth service goes down, and Windows may report the end of
+     * its watcher only after the app saw STATE_OFF.
+     */
     public void stopScan(ScanCallback callback) {
-        BluetoothHost.enforceScan(mContext);
+        if (!radioAvailable()) {
+            Log.w(TAG, "BLE is not available");
+            return;
+        }
         synchronized (sLock) {
-            sClients.remove(callback);
+            Client client = sClients.remove(callback);
+            if (client == null) {
+                Log.d(TAG, "could not find callback wrapper");
+                return;
+            }
+            BluetoothHost.enforceScan(mContext);
+            unregisterLocked(client);
         }
     }
 
+    /**
+     * As Android 16: with BLE off nothing happens; otherwise the request goes to the service,
+     * which enforces BLUETOOTH_SCAN whether or not the PendingIntent has a scan. With BLE
+     * off its scan is forgotten without a check, as for a callback.
+     */
     public void stopScan(PendingIntent callbackIntent) {
+        if (!radioAvailable()) {
+            Log.w(TAG, "BLE is not available");
+            return;
+        }
         BluetoothHost.enforceScan(mContext);
         synchronized (sLock) {
-            sClients.remove(callbackIntent);
+            Client client = sClients.get(callbackIntent);
+            if (client != null) unregisterLocked(client);
         }
     }
 
-    /** Delivers a scan's batched results now. */
+    /**
+     * Delivers a scan's batched results now. As Android 16: nothing with BLE off or for a
+     * callback without an active scan; BLUETOOTH_SCAN is enforced for an active one.
+     */
     public void flushPendingScanResults(ScanCallback callback) {
+        if (!radioAvailable()) {
+            Log.w(TAG, "BLE is not available");
+            return;
+        }
         if (callback == null) throw new IllegalArgumentException("callback cannot be null!");
-        BluetoothHost.enforceScan(mContext);
         List<ScanResult> results = null;
         Client client;
         synchronized (sLock) {
             client = sClients.get(callback);
-            if (client != null && !client.batch.isEmpty()) {
+            if (client == null) return;
+            BluetoothHost.enforceScan(mContext);
+            if (!client.batch.isEmpty()) {
                 results = new ArrayList<>(client.batch);
                 client.batch.clear();
                 client.batchAt = SystemClock.elapsedRealtime();
             }
         }
-        if (client != null && results != null) {
+        if (results != null) {
             final List<ScanResult> flushed = results;
             handler().post(() -> batch(client, flushed));
         }
     }
 
+    /** Retires only this registration, even if its key has since been reused. */
+    private static void unregisterLocked(Client client) {
+        sClients.remove(client.key, client);
+        sActiveClients.remove(client);
+    }
+
+    private static boolean radioAvailable() {
+        if (BluetoothHost.on()) return true;
+        synchronized (sLock) {
+            // A concurrent restart must not lose registrations admitted after our first read.
+            if (BluetoothHost.on()) return true;
+            clearScansLocked();
+            // A new radio session must not reuse a watcher from before shutdown.
+            sThread = null;
+            return false;
+        }
+    }
+
+    private static void clearScansLocked() {
+        sClients.clear();
+        sActiveClients.clear();
+    }
+
     /** @hide */
     public void cleanup() {
         synchronized (sLock) {
-            sClients.clear();
+            clearScansLocked();
         }
     }
 }
