@@ -115,6 +115,7 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   com.android.internal.telephony.ISub \
   com.android.internal.telephony.ITelephonyRegistry \
   android.app.trust.ITrustManager \
+  android.hardware.biometrics.IAuthService \
   android.content.pm.IShortcutService \
   android.content.pm.ICrossProfileApps \
   android.view.ISensitiveContentProtectionManager \
