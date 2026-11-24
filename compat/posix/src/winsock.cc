@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "internal.h"
+#include "ipv4_broadcast.h"
 #include "socket_internal.h"
 #include "socket_user_copy.h"
 
@@ -947,6 +948,8 @@ LPFN_WSARECVMSG RecvMsgFunction(SOCKET s) {
 // The host's IPv4 unicast addresses (host byte order), and the local address
 // recently chosen toward a few senders, kept for a second: a broadcast or
 // multicast receive asks for them per datagram (a unicast one never does).
+// `broadcasts` republishes the subnets' broadcast addresses for the unicast
+// check, which reads them without the mutex.
 struct LocalIpv4 {
   uint32_t address, mask, ifindex;
 };
@@ -959,6 +962,8 @@ struct SpecificDestinationCache {
     uint32_t source = 0, local = 0;
   } routes[8];
   size_t next_route = 0;
+  gesher::net::DirectedBroadcastSet broadcasts;
+  std::atomic<ULONGLONG> published{0};  // GetTickCount64 of the last refresh attempt
 };
 constexpr ULONGLONG kLocalAddressLifetimeMs = 1000;
 
@@ -974,8 +979,12 @@ void RefreshLocalAddresses(SpecificDestinationCache& cache) {
   cache.valid = false;
   cache.addresses.clear();
   for (auto& route : cache.routes) route = {};
+  cache.published.store(now, std::memory_order_relaxed);
   MIB_UNICASTIPADDRESS_TABLE* table = nullptr;
-  if (GetUnicastIpAddressTable(AF_INET, &table) != NO_ERROR) return;
+  if (GetUnicastIpAddressTable(AF_INET, &table) != NO_ERROR) {
+    cache.broadcasts.Invalidate();
+    return;
+  }
   for (ULONG i = 0; i < table->NumEntries; ++i) {
     const MIB_UNICASTIPADDRESS_ROW& row = table->Table[i];
     // Linux selects among usable (not tentative or duplicate) addresses.
@@ -990,6 +999,10 @@ void RefreshLocalAddresses(SpecificDestinationCache& cache) {
   FreeMibTable(table);
   cache.loaded = now;
   cache.valid = true;
+  std::vector<gesher::net::Ipv4Interface> interfaces;
+  interfaces.reserve(cache.addresses.size());
+  for (const LocalIpv4& local : cache.addresses) interfaces.push_back({local.address, local.mask});
+  cache.broadcasts.Publish(interfaces.data(), interfaces.size());
 }
 
 // ipi_spec_dst of an IPv4 datagram (host byte order), as Linux's
@@ -998,13 +1011,25 @@ void RefreshLocalAddresses(SpecificDestinationCache& cache) {
 // or multicast destination, the preferred source address of the route back to
 // the sender, or with no sender address (0.0.0.0) an address of the interface
 // it arrived on. `received_flags` are WSARecvMsg's: Windows marks a datagram
-// received as a broadcast (MSG_BCAST) or multicast (MSG_MCAST), so a unicast
-// one, the common case, needs neither the cache nor its lock.
+// received as a link-layer broadcast (MSG_BCAST) or multicast (MSG_MCAST),
+// but a subnet-directed broadcast this host sent to itself carries no
+// MSG_BCAST, so the destination is also compared with the local subnets'
+// broadcast addresses. That comparison reads a lock-free snapshot, refreshed
+// at most once a second by whichever receive finds the mutex free, so a
+// unicast datagram, the common case, never waits for the mutex.
 uint32_t SpecificDestination(uint32_t ifindex, uint32_t destination, uint32_t source, DWORD received_flags) {
+  auto& cache = LocalAddressCache();
+  if (GetTickCount64() - cache.published.load(std::memory_order_relaxed) >= kLocalAddressLifetimeMs) {
+    std::unique_lock<std::mutex> lock(cache.mutex, std::try_to_lock);
+    if (lock.owns_lock()) RefreshLocalAddresses(cache);
+  }
+  if (gesher::net::ClassifyIpv4Destination(destination, (received_flags & MSG_BCAST) != 0,
+                                           (received_flags & MSG_MCAST) != 0, cache.broadcasts) ==
+      gesher::net::Ipv4DestinationKind::kUnicast) {
+    return destination;
+  }
   const bool multicast = (destination >> 28) == 0xe;
   bool broadcast = destination == 0xffffffffu;
-  if (!multicast && !broadcast && (received_flags & (MSG_BCAST | MSG_MCAST)) == 0) return destination;
-  auto& cache = LocalAddressCache();
   uint32_t on_interface = 0, on_sender_subnet = 0;
   {
     std::lock_guard<std::mutex> lock(cache.mutex);

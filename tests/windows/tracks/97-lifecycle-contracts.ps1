@@ -42,6 +42,11 @@ foreach ($fixture in @(
 )) {
   $lifecycleOut = RunTimed "$Dir/$($fixture.Exe)" @() 90
   $lifecycleCode = $LASTEXITCODE
+  # A case the runner could not exercise: shown (as a workflow warning on
+  # GitHub Actions), not only in a failing check's output.
+  foreach ($skip in (($lifecycleOut | Out-String) -split "`r?`n" | Where-Object { $_ -match '^SKIP: ' })) {
+    Write-Host "::warning title=$($fixture.Exe)::$skip"
+  }
   Check ('lifecycle: ' + $fixture.Label) {
     $global:LASTEXITCODE = $lifecycleCode
     $lifecycleOut

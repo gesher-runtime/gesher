@@ -5,6 +5,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -16,7 +17,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <initializer_list>
+
+// The destination classification behind ipi_spec_dst (winsock.cc), checked
+// with a synthetic interface list below.
+#include "../../compat/posix/src/ipv4_broadcast.h"
 
 // Gesher's socket transfer (internal.h: SCM_RIGHTS through binderd), and the
 // Win32 calls that stand in for binderd's handle duplication.
@@ -30,6 +36,16 @@ extern "C" __declspec(dllimport) int __stdcall DuplicateHandle(void*, void*, voi
 
 static int g_checks = 0;
 static int g_failures = 0;
+static int g_skipped = 0;
+
+// A case this host cannot exercise. The CI track (97-lifecycle-contracts.ps1)
+// raises each "SKIP:" line as a workflow warning, since a passing test's
+// output is otherwise not shown.
+#define SKIP(...)                 \
+  do {                            \
+    ++g_skipped;                  \
+    printf("SKIP: " __VA_ARGS__); \
+  } while (0)
 
 #define CHECK(cond)                                                          \
   do {                                                                       \
@@ -268,7 +284,7 @@ static void TestDualStack() {
     r = ReceiveOne(fd, 256);
     CHECK(r.ok && !r.found);
   } else {
-    printf("note: no IPv6 loopback; IPv6 datagram case skipped\n");
+    SKIP("no IPv6 loopback; IPv6 datagram case skipped\n");
   }
   if (v6 >= 0) close(v6);
   close(fd);
@@ -277,10 +293,96 @@ static void TestDualStack() {
 // A broadcast datagram's ipi_spec_dst is the local address facing its sender
 // (Linux's fib_compute_spec_dst), not the broadcast address: for the limited
 // broadcast and a local subnet's directed broadcast alike.
+// The directed-broadcast check of ClassifyIpv4Destination, which needs no
+// real broadcast: a destination that Windows delivered without MSG_BCAST
+// (as for a directed broadcast this host sent to itself) is a broadcast when
+// it is a local subnet's broadcast address, and otherwise unicast.
+static gesher::net::DirectedBroadcastSet g_set;
+static std::atomic<bool> g_stop{false};
+static std::atomic<int> g_absent{0};
+
+static void* ReadBroadcastSet(void*) {
+  while (!g_stop.load(std::memory_order_relaxed)) {
+    if (g_set.Contains(0xc0a801ffu) == gesher::net::DirectedBroadcastSet::Match::kNo) g_absent.fetch_add(1);
+  }
+  return nullptr;
+}
+
+static void TestDestinationClassification() {
+  using gesher::net::ClassifyIpv4Destination;
+  using gesher::net::DirectedBroadcastSet;
+  using gesher::net::Ipv4Interface;
+  using Kind = gesher::net::Ipv4DestinationKind;
+  // Nothing published yet: the caller must consult the interfaces itself.
+  CHECK(ClassifyIpv4Destination(0xc0a8010au, false, false, g_set) == Kind::kUnknown);
+  CHECK(ClassifyIpv4Destination(0xffffffffu, false, false, g_set) == Kind::kBroadcast);
+  CHECK(ClassifyIpv4Destination(0xeffe4d0du, false, false, g_set) == Kind::kMulticast);
+
+  const Ipv4Interface interfaces[] = {
+      {0xc0a8010au, 0xffffff00u},  // 192.168.1.10/24
+      {0x0a000005u, 0xff000000u},  // 10.0.0.5/8
+      {0xac100001u, 0xfffffffeu},  // 172.16.0.1/31: no broadcast address
+      {0xac100102u, 0xffffffffu},  // 172.16.1.2/32: none either
+      {0x7f000001u, 0xff000000u},  // 127.0.0.1/8
+  };
+  const size_t interface_count = sizeof(interfaces) / sizeof(interfaces[0]);
+  g_set.Publish(interfaces, interface_count);
+  CHECK(ClassifyIpv4Destination(0xc0a801ffu, false, false, g_set) == Kind::kBroadcast);
+  CHECK(ClassifyIpv4Destination(0x0affffffu, false, false, g_set) == Kind::kBroadcast);
+  CHECK(ClassifyIpv4Destination(0x7fffffffu, false, false, g_set) == Kind::kBroadcast);
+  CHECK(ClassifyIpv4Destination(0xc0a8010au, false, false, g_set) == Kind::kUnicast);
+  CHECK(ClassifyIpv4Destination(0xc0a80affu, false, false, g_set) == Kind::kUnicast);  // another /24
+  CHECK(ClassifyIpv4Destination(0xac100001u, false, false, g_set) == Kind::kUnicast);
+  CHECK(ClassifyIpv4Destination(0xac100102u, false, false, g_set) == Kind::kUnicast);
+  // Windows' flags still decide a destination the set does not list.
+  CHECK(ClassifyIpv4Destination(0xc0a8010au, true, false, g_set) == Kind::kBroadcast);
+  CHECK(ClassifyIpv4Destination(0xc0a8010au, false, true, g_set) == Kind::kMulticast);
+  CHECK(ClassifyIpv4Destination(0xeffe4d0du, false, false, g_set) == Kind::kMulticast);
+
+  // More subnets than the set holds: listed ones still match, but a miss is
+  // no proof of unicast.
+  static Ipv4Interface many[DirectedBroadcastSet::kCapacity + 1];
+  for (size_t i = 0; i < sizeof(many) / sizeof(many[0]); ++i) {
+    many[i] = {0x0a000001u | static_cast<uint32_t>(i) << 8, 0xffffff00u};  // 10.0.i.1/24
+  }
+  g_set.Publish(many, sizeof(many) / sizeof(many[0]));
+  CHECK(ClassifyIpv4Destination(0x0a0000ffu, false, false, g_set) == Kind::kBroadcast);
+  CHECK(ClassifyIpv4Destination(0xc0a8010au, false, false, g_set) == Kind::kUnknown);
+  g_set.Publish(interfaces, interface_count);
+  CHECK(ClassifyIpv4Destination(0xc0a8010au, false, false, g_set) == Kind::kUnicast);
+  g_set.Invalidate();
+  CHECK(ClassifyIpv4Destination(0xc0a801ffu, false, false, g_set) == Kind::kUnknown);
+
+  // Readers racing a writer never see a torn set: 192.168.1.255 is in both
+  // versions (at different positions), so it is never reported absent.
+  const Ipv4Interface first[] = {{0xc0a8010au, 0xffffff00u}, {0x0a000005u, 0xff000000u}};
+  const Ipv4Interface second[] = {{0xac100005u, 0xffff0000u}, {0xac110005u, 0xffff0000u},
+                                  {0xc0a8010au, 0xffffff00u}};
+  g_set.Publish(first, 2);
+  pthread_t readers[2];
+  bool started[2] = {};
+  for (int i = 0; i < 2; ++i) {
+    started[i] = pthread_create(&readers[i], nullptr, ReadBroadcastSet, nullptr) == 0;
+    CHECK(started[i]);
+  }
+  for (int i = 0; i < 200000; ++i) {
+    if (i % 2 == 0) {
+      g_set.Publish(second, 3);
+    } else {
+      g_set.Publish(first, 2);
+    }
+  }
+  g_stop.store(true);
+  for (int i = 0; i < 2; ++i) {
+    if (started[i]) pthread_join(readers[i], nullptr);
+  }
+  CHECK(g_absent.load() == 0);
+}
+
 static void TestBroadcast() {
   ifaddrs* list = nullptr;
   if (getifaddrs(&list) != 0) {
-    printf("note: getifaddrs failed; broadcast cases skipped\n");
+    SKIP("getifaddrs failed; broadcast cases skipped\n");
     return;
   }
   in_addr local = {}, mask = {};
@@ -299,7 +401,7 @@ static void TestBroadcast() {
   }
   freeifaddrs(list);
   if (local.s_addr == 0) {
-    printf("note: no IPv4 interface with a broadcast address; broadcast cases skipped\n");
+    SKIP("no IPv4 interface with a broadcast address; broadcast cases skipped\n");
     return;
   }
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -333,12 +435,12 @@ static void TestBroadcast() {
   for (in_addr target : {directed, limited}) {
     to.sin_addr = target;
     if (!SendTo(fd, to)) {
-      printf("note: broadcast send to %s failed (errno=%d); case skipped\n", inet_ntoa(target), errno);
+      SKIP("broadcast send to %s failed (errno=%d); case skipped\n", inet_ntoa(target), errno);
       continue;
     }
     if (!Readable(fd, 2000)) {
       // Windows Firewall may drop a broadcast this host sent to itself.
-      printf("note: broadcast to %s not received within 2 s (dropped by a firewall?); case skipped\n",
+      SKIP("broadcast to %s not received within 2 s (dropped by a firewall?); case skipped\n",
              inet_ntoa(target));
       continue;
     }
@@ -375,19 +477,19 @@ static void TestMulticast() {
   if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &join, sizeof(join)) != 0 ||
       setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &loopback, sizeof(loopback)) != 0 ||
       setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &on, sizeof(on)) != 0) {
-    printf("note: no multicast on the loopback interface (errno=%d); multicast case skipped\n", errno);
+    SKIP("no multicast on the loopback interface (errno=%d); multicast case skipped\n", errno);
     close(fd);
     return;
   }
   sockaddr_in to = self;
   to.sin_addr = join.imr_multiaddr;
   if (!SendTo(fd, to)) {
-    printf("note: multicast send failed (errno=%d); multicast case skipped\n", errno);
+    SKIP("multicast send failed (errno=%d); multicast case skipped\n", errno);
     close(fd);
     return;
   }
   if (!Readable(fd, 2000)) {
-    printf("note: looped-back multicast not received within 2 s (dropped by a firewall?); case skipped\n");
+    SKIP("looped-back multicast not received within 2 s (dropped by a firewall?); case skipped\n");
     close(fd);
     return;
   }
@@ -403,6 +505,7 @@ static void TestMulticast() {
 int main() {
   TestLoopback();
   TestDualStack();
+  TestDestinationClassification();
   TestBroadcast();
   TestMulticast();
 
@@ -426,6 +529,6 @@ int main() {
     close(sv[1]);
   }
 
-  printf("udp pktinfo contracts: %d checks, %d failures\n", g_checks, g_failures);
+  printf("udp pktinfo contracts: %d checks, %d failures, %d skipped\n", g_checks, g_failures, g_skipped);
   return g_failures == 0 ? 0 : 1;
 }
