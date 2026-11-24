@@ -125,6 +125,8 @@ int BlockError(DWORD error) {
       error == ERROR_BROKEN_PIPE || error == ERROR_OPERATION_ABORTED ||
       error == ERROR_NO_MEDIA_IN_DRIVE) return errno = ENODEV, -1;
   if (error == ERROR_WRITE_PROTECT) return errno = EROFS, -1;
+  if (error == ERROR_READ_FAULT || error == ERROR_WRITE_FAULT || error == ERROR_CRC ||
+      error == ERROR_SECTOR_NOT_FOUND || error == ERROR_IO_DEVICE) return errno = EIO, -1;
   return errno = ErrnoFromWin32(error), -1;
 }
 
@@ -333,14 +335,32 @@ bool IoLocal(const DescriptorSnapshotPtr& snapshot, void* data, unsigned size,
     const uint64_t position = requested_offset < 0 ? block->position : requested_offset;
     const uint64_t bytes = block->extent.bytes;
     if (position >= bytes) return writing ? (errno = ENOSPC, -1) : 0;
-    const auto count = std::min<uint64_t>({size, usb_storage::kBlockTransferLimit, bytes - position});
-    auto payload = std::span(static_cast<std::byte*>(data), static_cast<size_t>(count));
+    const auto count = std::min<uint64_t>({size,
+        static_cast<uint64_t>(std::numeric_limits<int>::max()), bytes - position});
+    if (position > UINT64_MAX - block->extent.offset ||
+        count > UINT64_MAX - block->extent.offset - position) return errno = EOVERFLOW, -1;
     const uint64_t disk_position = block->extent.offset + position;
-    const DWORD error = writing ? block->session->client.Write(disk_position, payload)
-                                : block->session->client.Read(disk_position, payload);
-    if (error != ERROR_SUCCESS) return BlockError(error);
-    if (requested_offset < 0) block->position += count;
-    return static_cast<int>(count);
+    uint64_t completed = 0;
+    while (completed < count) {
+      if (!block->session->Live()) {
+        errno = ENODEV;
+        return completed ? static_cast<int>(completed) : -1;
+      }
+      // The wire limit bounds one transaction, not a successful POSIX call.
+      // Each exchange revalidates the live grant and actual media at the
+      // authority. Stop at the first failure; count only acknowledged chunks.
+      const auto chunk = std::min<uint64_t>(count - completed, usb_storage::kBlockTransferLimit);
+      auto payload = std::span(static_cast<std::byte*>(data) + completed, static_cast<size_t>(chunk));
+      const DWORD error = writing ? block->session->client.Write(disk_position + completed, payload)
+                                  : block->session->client.Read(disk_position + completed, payload);
+      if (error != ERROR_SUCCESS) {
+        BlockError(error);
+        return completed ? static_cast<int>(completed) : -1;
+      }
+      completed += chunk;
+      if (requested_offset < 0) block->position += chunk;
+    }
+    return static_cast<int>(completed);
   };
   *result = io();
   return true;

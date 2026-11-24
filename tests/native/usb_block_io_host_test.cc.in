@@ -1,0 +1,315 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// The actual production IoLocal and error mapping are inserted below. Only
+// this host fixture models the broker/session boundary with isolated bytes.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <fcntl.h>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+using DWORD = uint32_t;
+constexpr DWORD ERROR_SUCCESS = 0, ERROR_ACCESS_DENIED = 5, ERROR_WRITE_PROTECT = 19,
+    ERROR_CRC = 23, ERROR_SECTOR_NOT_FOUND = 27, ERROR_WRITE_FAULT = 29, ERROR_READ_FAULT = 30,
+    ERROR_BROKEN_PIPE = 109, ERROR_OPERATION_ABORTED = 995, ERROR_MEDIA_CHANGED = 1110,
+    ERROR_NO_MEDIA_IN_DRIVE = 1112, ERROR_IO_DEVICE = 1117, ERROR_DEVICE_NOT_CONNECTED = 1167;
+static std::atomic<unsigned> checks{0};
+static void Require(bool value, const char* message) {
+  ++checks;
+  if (!value) throw std::runtime_error(message);
+}
+
+namespace gesher {
+// Relevant generic fallback from internal.cc: disk errors are not globally
+// mapped to EIO. The extracted production BlockError must supply that mapping.
+int ErrnoFromWin32(DWORD error) { return error == ERROR_ACCESS_DENIED ? EACCES : EINVAL; }
+namespace usb_storage {
+@TRANSFER_LIMIT@
+}
+namespace usb_block {
+struct Request { uint64_t offset; size_t bytes; bool writing; };
+struct Boundary {
+  std::mutex mutex;
+  std::vector<std::byte> bytes = std::vector<std::byte>(12 * 1024 * 1024, std::byte{0x55});
+  std::vector<Request> requests;
+  std::atomic<bool> live{true};
+  std::atomic<unsigned> live_queries{0};
+  bool consent = true;
+  unsigned fail_at = 0;
+  DWORD failure = ERROR_WRITE_FAULT;
+  unsigned acknowledged = 0;
+  std::function<void(Boundary&)> after_success;
+};
+
+struct Client {
+  std::shared_ptr<Boundary> boundary;
+  DWORD Transfer(uint64_t offset, std::span<std::byte> data, bool writing) {
+    std::lock_guard lock(boundary->mutex);
+    Require(!data.empty() && data.size() <= usb_storage::kBlockTransferLimit,
+            "production adapter exceeded the actual wire limit");
+    Require(offset <= boundary->bytes.size() && data.size() <= boundary->bytes.size() - offset,
+            "production adapter addressed bytes outside the isolated disk");
+    boundary->requests.push_back({offset, data.size(), writing});
+    if (!boundary->live.load()) return ERROR_OPERATION_ABORTED;
+    if (writing && !boundary->consent) return ERROR_ACCESS_DENIED;
+    if (boundary->fail_at && boundary->requests.size() == boundary->fail_at) return boundary->failure;
+    if (writing) std::memcpy(boundary->bytes.data() + offset, data.data(), data.size());
+    else std::memcpy(data.data(), boundary->bytes.data() + offset, data.size());
+    ++boundary->acknowledged;
+    if (boundary->after_success) boundary->after_success(*boundary);
+    std::this_thread::yield();
+    return ERROR_SUCCESS;
+  }
+  DWORD Read(uint64_t offset, std::span<std::byte> data) { return Transfer(offset, data, false); }
+  DWORD Write(uint64_t offset, std::span<const std::byte> data) {
+    return Transfer(offset, std::span(const_cast<std::byte*>(data.data()), data.size()), true);
+  }
+};
+
+struct Session {
+  Client client;
+  bool Live() const { ++client.boundary->live_queries; return client.boundary->live.load(); }
+};
+struct Description {
+  std::shared_ptr<Session> session;
+  std::mutex mutex;
+  struct { uint64_t offset = 1024 * 1024; uint64_t bytes = 8 * 1024 * 1024; } extent;
+  uint64_t position = 0;
+};
+struct FileDescription {
+  std::shared_ptr<Description> usb_block;
+  int flags = O_RDWR;
+  int Flags() const { return flags; }
+};
+struct DescriptorSnapshot { std::shared_ptr<FileDescription> description; };
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+
+@BLOCK_ERROR@
+
+@IO_LOCAL@
+
+struct Fixture {
+  std::shared_ptr<Boundary> boundary = std::make_shared<Boundary>();
+  std::shared_ptr<Description> block = std::make_shared<Description>();
+  DescriptorSnapshotPtr snapshot = std::make_shared<DescriptorSnapshot>();
+  Fixture() {
+    block->session = std::make_shared<Session>(Session{Client{boundary}});
+    snapshot->description = std::make_shared<FileDescription>();
+    snapshot->description->usb_block = block;
+  }
+  int Io(std::span<std::byte> bytes, bool writing, int64_t offset = -1) {
+    int result = -123;
+    errno = 0;
+    Require(IoLocal(snapshot, bytes.data(), static_cast<unsigned>(bytes.size()), writing, offset, &result),
+            "USB description was not handled by production IoLocal");
+    return result;
+  }
+};
+
+static std::vector<std::byte> Pattern(size_t length, unsigned salt = 0) {
+  std::vector<std::byte> data(length);
+  for (size_t i = 0; i < length; ++i) data[i] = static_cast<std::byte>((i * 29 + salt) % 251);
+  return data;
+}
+
+static void ExtentGuards(const Fixture& fixture) {
+  Require(std::all_of(fixture.boundary->bytes.begin(),
+      fixture.boundary->bytes.begin() + fixture.block->extent.offset,
+      [](std::byte value) { return value == std::byte{0x55}; }), "write changed bytes before partition");
+  Require(std::all_of(fixture.boundary->bytes.begin() + fixture.block->extent.offset + fixture.block->extent.bytes,
+      fixture.boundary->bytes.end(), [](std::byte value) { return value == std::byte{0x55}; }),
+      "write changed bytes after partition");
+}
+
+static void Large() {
+  Fixture fixture;
+  const size_t length = 4 * 1024 * 1024 + 73;
+  auto input = Pattern(length);
+  std::vector<std::byte> output(length, std::byte{0xcc});
+  fixture.block->position = 307;
+  Require(fixture.Io(input, true, 23) == static_cast<int>(length), "large positioned write was truncated");
+  Require(fixture.block->position == 307, "pwrite changed the ordinary cursor");
+  Require(fixture.Io(output, false, 23) == static_cast<int>(length) && input == output,
+          "large positioned read was truncated or changed data");
+  Require(fixture.block->position == 307, "pread changed the ordinary cursor");
+  Require(fixture.boundary->requests.size() == 10 && fixture.boundary->acknowledged == 10,
+          "large operation omitted bounded transactions");
+  for (size_t i = 0; i < 10; ++i) {
+    const auto& request = fixture.boundary->requests[i];
+    Require(request.offset == fixture.block->extent.offset + 23 + (i % 5) * usb_storage::kBlockTransferLimit &&
+        request.bytes == (i % 5 == 4 ? 73 : usb_storage::kBlockTransferLimit) && request.writing == (i < 5),
+        "large operation used incorrect chunk offsets or lengths");
+  }
+  Require(fixture.boundary->live_queries >= 12, "grant liveness was not rechecked for every chunk");
+  fixture.block->position = 11;
+  Require(fixture.Io(input, true) == static_cast<int>(length) && fixture.block->position == 11 + length,
+          "large sequential write count or cursor was wrong");
+  fixture.block->position = 11;
+  Require(fixture.Io(output, false) == static_cast<int>(length) && input == output &&
+      fixture.block->position == 11 + length, "large sequential read count, data or cursor was wrong");
+  ExtentGuards(fixture);
+}
+
+static void Partial() {
+  for (DWORD error : {ERROR_READ_FAULT, ERROR_WRITE_FAULT, ERROR_CRC, ERROR_SECTOR_NOT_FOUND, ERROR_IO_DEVICE}) {
+    errno = 0;
+    Require(BlockError(error) == -1 && errno == EIO, "real disk I/O error was not mapped to EIO");
+  }
+  for (DWORD error : {ERROR_MEDIA_CHANGED, ERROR_DEVICE_NOT_CONNECTED, ERROR_BROKEN_PIPE,
+                      ERROR_OPERATION_ABORTED, ERROR_NO_MEDIA_IN_DRIVE}) {
+    Require(BlockError(error) == -1 && errno == ENODEV, "media removal mapping changed");
+  }
+  Require(BlockError(ERROR_WRITE_PROTECT) == -1 && errno == EROFS, "write protection mapping changed");
+  Require(BlockError(ERROR_ACCESS_DENIED) == -1 && errno == EACCES, "denial mapping changed");
+  Require(BlockError(0xffffffff) == -1 && errno == EINVAL, "generic unknown-error fallback was hidden");
+  constexpr size_t length = 3 * 1024 * 1024 + 7;
+  for (bool writing : {false, true}) for (bool positioned : {false, true}) {
+    Fixture fixture;
+    fixture.block->position = 37;
+    fixture.boundary->fail_at = 2;
+    std::vector<std::byte> data(length, std::byte{0x7a});
+    const int64_t offset = positioned ? 100 : -1;
+    const uint64_t actual = positioned ? 100 : 37;
+    Require(fixture.Io(data, writing, offset) == static_cast<int>(usb_storage::kBlockTransferLimit) && errno == EIO,
+            "partial failure lost the acknowledged count or underlying error");
+    Require(fixture.block->position == (positioned ? 37 : 37 + usb_storage::kBlockTransferLimit),
+            "partial failure advanced the cursor past acknowledged bytes");
+    Require(fixture.boundary->requests.size() == 2 && fixture.boundary->acknowledged == 1,
+            "partial failure retried or fabricated completion");
+    const auto first = writing ? fixture.boundary->bytes.begin() + fixture.block->extent.offset + actual : data.begin();
+    Require(std::all_of(first, first + usb_storage::kBlockTransferLimit, [writing](std::byte value) {
+      return value == (writing ? std::byte{0x7a} : std::byte{0x55}); }), "acknowledged bytes mismatch");
+    Require(std::all_of(first + usb_storage::kBlockTransferLimit, first + length, [writing](std::byte value) {
+      return value == (writing ? std::byte{0x55} : std::byte{0x7a}); }), "unacknowledged bytes changed");
+    ExtentGuards(fixture);
+  }
+  for (DWORD error : {ERROR_READ_FAULT, ERROR_WRITE_FAULT, ERROR_CRC, ERROR_SECTOR_NOT_FOUND, ERROR_IO_DEVICE,
+                      ERROR_WRITE_PROTECT, ERROR_ACCESS_DENIED}) for (bool writing : {false, true}) {
+    Fixture fixture;
+    fixture.boundary->fail_at = 1;
+    fixture.boundary->failure = error;
+    auto data = Pattern(length);
+    Require(fixture.Io(data, writing) == -1 && errno ==
+        (error == ERROR_WRITE_PROTECT ? EROFS : error == ERROR_ACCESS_DENIED ? EACCES : EIO),
+        "first transport failure did not preserve its mapped errno");
+    Require(fixture.block->position == 0 && fixture.boundary->acknowledged == 0,
+            "failed first chunk advanced state");
+  }
+}
+
+static void Revocation() {
+  for (bool positioned : {false, true}) {
+    Fixture fixture;
+    fixture.block->position = 37;
+    fixture.boundary->after_success = [](Boundary& boundary) { boundary.live = false; };
+    auto data = Pattern(3 * 1024 * 1024);
+    Require(fixture.Io(data, true, positioned ? 100 : -1) == static_cast<int>(usb_storage::kBlockTransferLimit) &&
+        errno == ENODEV, "revocation lost the acknowledged prefix");
+    Require(fixture.boundary->requests.size() == 1 && fixture.boundary->acknowledged == 1,
+            "revoked grant allowed another chunk");
+    Require(fixture.block->position == (positioned ? 37 : 37 + usb_storage::kBlockTransferLimit),
+            "revocation corrupted cursor semantics");
+    Require(fixture.Io(data, false) == -1 && errno == ENODEV, "expired session allowed later I/O");
+    ExtentGuards(fixture);
+  }
+  Fixture fixture;
+  fixture.boundary->after_success = [](Boundary& boundary) { boundary.consent = false; };
+  auto data = Pattern(3 * 1024 * 1024);
+  Require(fixture.Io(data, true) == static_cast<int>(usb_storage::kBlockTransferLimit) && errno == EACCES,
+          "write consent change was not enforced on the next transaction");
+  Require(fixture.boundary->requests.size() == 2 && fixture.boundary->acknowledged == 1,
+          "denied write chunk was counted as complete");
+  Require(fixture.Io(data, true) == -1 && errno == EACCES, "absent write consent allowed later write");
+}
+
+static void Bounds() {
+  Fixture fixture;
+  auto input = Pattern(2 * 1024 * 1024);
+  const size_t remaining = usb_storage::kBlockTransferLimit + 33;
+  fixture.block->position = fixture.block->extent.bytes - remaining;
+  Require(fixture.Io(input, true) == static_cast<int>(remaining) &&
+      fixture.block->position == fixture.block->extent.bytes, "extent-end short write was hidden or overran");
+  Require(fixture.Io(input, true) == -1 && errno == ENOSPC, "write beyond the partition did not fail");
+  Require(fixture.Io(input, false) == 0, "read at partition EOF did not return zero");
+  std::vector<std::byte> output(input.size(), std::byte{0xcc});
+  Require(fixture.Io(output, false, fixture.block->extent.bytes - remaining) == static_cast<int>(remaining),
+          "extent-end short read was hidden");
+  Require(std::equal(output.begin(), output.begin() + remaining, input.begin()) &&
+      std::all_of(output.begin() + remaining, output.end(), [](std::byte value) { return value == std::byte{0xcc}; }),
+      "extent-end read filled bytes that were not read");
+  ExtentGuards(fixture);
+  fixture.snapshot->description->flags = O_RDONLY;
+  Require(fixture.Io(input, true, 0) == -1 && errno == EBADF, "read-only descriptor accepted write");
+  fixture.snapshot->description->flags = O_WRONLY;
+  Require(fixture.Io(input, false, 0) == -1 && errno == EBADF, "write-only descriptor accepted read");
+  fixture.snapshot->description->flags = O_RDWR;
+  int result = -123;
+  Require(IoLocal(fixture.snapshot, nullptr, 0, false, 0, &result) && result == 0, "zero-byte request failed");
+  Require(IoLocal(fixture.snapshot, nullptr, 1, false, 0, &result) && result == -1 && errno == EFAULT,
+          "null nonempty buffer was accepted");
+  Require(!IoLocal({}, nullptr, 0, false, 0, &result), "missing snapshot claimed USB ownership");
+  auto ordinary = std::make_shared<DescriptorSnapshot>();
+  Require(!IoLocal(ordinary, nullptr, 0, false, 0, &result), "missing description claimed USB ownership");
+  ordinary->description = std::make_shared<FileDescription>();
+  Require(!IoLocal(ordinary, nullptr, 0, false, 0, &result), "ordinary descriptor claimed USB ownership");
+  const size_t before = fixture.boundary->requests.size();
+  fixture.block->extent.offset = UINT64_MAX - 10;
+  fixture.block->extent.bytes = 100;
+  Require(fixture.Io(input, true, 20) == -1 && errno == EOVERFLOW, "disk offset addition overflowed");
+  Require(fixture.Io(input, true, 0) == -1 && errno == EOVERFLOW, "disk end addition overflowed");
+  Require(fixture.boundary->requests.size() == before, "overflow reached the transport");
+}
+
+static void Concurrent() {
+  Fixture fixture;
+  const size_t length = 2 * 1024 * 1024 + 73;
+  auto first = Pattern(length, 1), second = Pattern(length, 7);
+  int a = -1, b = -1;
+  std::atomic<bool> start{false};
+  std::thread one([&] { while (!start.load()) std::this_thread::yield(); a = fixture.Io(first, true); });
+  std::thread two([&] { while (!start.load()) std::this_thread::yield(); b = fixture.Io(second, true); });
+  start = true;
+  one.join(); two.join();
+  Require(a == static_cast<int>(length) && b == static_cast<int>(length) && fixture.block->position == length * 2,
+          "shared OFD lost a large sequential write or cursor update");
+  const auto at = fixture.boundary->bytes.begin() + fixture.block->extent.offset;
+  Require((std::equal(first.begin(), first.end(), at) && std::equal(second.begin(), second.end(), at + length)) ||
+      (std::equal(second.begin(), second.end(), at) && std::equal(first.begin(), first.end(), at + length)),
+      "chunks from concurrent sequential calls interleaved");
+  Require(fixture.boundary->requests.size() == 6, "concurrent calls omitted chunks");
+  ExtentGuards(fixture);
+}
+}  // namespace usb_block
+}  // namespace gesher
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  try {
+    using namespace gesher::usb_block;
+    const std::string name = argv[1];
+    if (name == "large") Large();
+    else if (name == "partial") Partial();
+    else if (name == "revocation") Revocation();
+    else if (name == "bounds") Bounds();
+    else if (name == "concurrent") Concurrent();
+    else return 2;
+    std::printf("USB_BLOCK_IO %s checks=%u; isolated transport, no Windows or physical-device claim\n",
+                argv[1], checks.load());
+    return 0;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "%s: %s\n", argv[1], error.what());
+    return 1;
+  }
+}

@@ -11,6 +11,7 @@
 #include "../../compat/usb_storage/block_channel.h"
 #include <gesher/usb_block.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -29,6 +30,10 @@ using Handle = std::unique_ptr<void, Close>;
 constexpr size_t kMediaBytes = 128 * 1024 * 1024;
 constexpr size_t kPartition = 1024 * 1024;
 constexpr const char* kNode = "/dev/block/sdb1";
+constexpr size_t kIoOffset = 2 * 1024 * 1024;
+constexpr size_t kIoBytes = 4 * 1024 * 1024 + 73;
+
+enum class IoFault { kNone, kRead, kWrite, kRevoke, kConsent };
 
 uint16_t U16(const uint8_t* at) { return at[0] | (uint16_t{at[1]} << 8); }
 uint32_t U32(const uint8_t* at) { return U16(at) | (uint32_t{U16(at + 2)} << 16); }
@@ -41,7 +46,9 @@ struct Media {
   bool readonly = false;
   DWORD flush_error = ERROR_SUCCESS;
   DWORD readonly_error = ERROR_SUCCESS;
+  IoFault io_fault = IoFault::kNone;
   std::atomic<uint64_t> writes{0};
+  std::atomic<uint64_t> written_bytes{0};
   std::atomic<uint64_t> flushes{0};
   explicit Media(uint8_t partition_type) {
     bytes[510] = 0x55; bytes[511] = 0xaa;
@@ -107,16 +114,35 @@ bool Serve(BlockChannel& channel, Media& media) {
       if (!Reply(channel, error)) return true;
       continue;
     }
-    if (!request.length || request.length > kBlockTransferLimit || request.offset > media.bytes.size() ||
+    if ((request.operation != BlockOperation::kRead && request.operation != BlockOperation::kWrite) ||
+        !request.length || request.length > kBlockTransferLimit || request.offset > media.bytes.size() ||
         request.length > media.bytes.size() - request.offset) return false;
+    if (request.operation == BlockOperation::kWrite && !Transfer(channel, buffer.data(), request.length, false)) {
+      return true;
+    }
+    // Faults exist only in this isolated protocol fixture. Triggering them on
+    // the second data request proves the first reply was consumed before
+    // revocation; there is no race about which bytes were acknowledged.
+    if (media.io_fault != IoFault::kNone && request.offset >= kPartition + kIoOffset + kBlockTransferLimit) {
+      if (media.io_fault == IoFault::kRevoke) {
+        return channel.Revoke() == ERROR_SUCCESS;
+      }
+      if (media.io_fault == IoFault::kConsent) media.consent = false;
+      const bool fail = (media.io_fault == IoFault::kRead && request.operation == BlockOperation::kRead) ||
+          (media.io_fault == IoFault::kWrite && request.operation == BlockOperation::kWrite);
+      if (fail) {
+        if (!Reply(channel, request.operation == BlockOperation::kRead ? ERROR_READ_FAULT : ERROR_WRITE_FAULT)) return true;
+        continue;
+      }
+    }
     if (request.operation == BlockOperation::kRead) {
       if (!Reply(channel, 0, media.bytes.data() + request.offset, request.length)) return true;
     } else if (request.operation == BlockOperation::kWrite) {
-      if (!Transfer(channel, buffer.data(), request.length, false)) return true;
       DWORD error = !media.consent ? ERROR_ACCESS_DENIED : media.readonly ? ERROR_WRITE_PROTECT : 0;
       if (!error) {
         std::memcpy(media.bytes.data() + request.offset, buffer.data(), request.length);
         ++media.writes;
+        media.written_bytes += request.length;
       }
       if (!Reply(channel, error)) return true;
     } else return false;
@@ -245,6 +271,89 @@ void Clean(const Result& result, const char* message) {
   Require(result.protocol && !result.timeout && result.code == 0, message);
 }
 
+std::vector<uint8_t> IoPattern() {
+  std::vector<uint8_t> bytes(kIoBytes);
+  for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<uint8_t>((i * 29 + 7) % 251);
+  return bytes;
+}
+
+void CheckIoGuest(const std::string& mode) {
+  const int fd = open(kNode, O_RDWR);
+  Require(fd >= 0, "large-I/O fixture could not open its isolated partition");
+  struct CloseFd { int value; ~CloseFd() { close(value); } } close_fd{fd};
+  const auto input = IoPattern();
+  std::vector<uint8_t> output(kIoBytes, 0xcc);
+  Require(lseek(fd, 123, SEEK_SET) == 123, "large-I/O initial cursor failed");
+  if (mode == "large") {
+    Require(pwrite(fd, input.data(), input.size(), kIoOffset) == static_cast<ssize_t>(input.size()),
+        "healthy large pwrite was truncated at the transport limit");
+    Require(lseek(fd, 0, SEEK_CUR) == 123, "large pwrite changed ordinary cursor");
+    Require(pread(fd, output.data(), output.size(), kIoOffset) == static_cast<ssize_t>(output.size()) && output == input,
+        "healthy large pread was truncated or changed bytes");
+    Require(lseek(fd, 0, SEEK_CUR) == 123, "large pread changed ordinary cursor");
+    Require(lseek(fd, kIoOffset, SEEK_SET) == kIoOffset &&
+        write(fd, input.data(), input.size()) == static_cast<ssize_t>(input.size()) &&
+        lseek(fd, 0, SEEK_CUR) == kIoOffset + kIoBytes, "large write count or cursor failed");
+    std::fill(output.begin(), output.end(), 0xcc);
+    Require(lseek(fd, kIoOffset, SEEK_SET) == kIoOffset &&
+        read(fd, output.data(), output.size()) == static_cast<ssize_t>(output.size()) && output == input &&
+        lseek(fd, 0, SEEK_CUR) == kIoOffset + kIoBytes, "large read count, cursor or bytes failed");
+    return;
+  }
+  const bool reading = mode == "read-error";
+  const bool positioned = reading || mode == "consent";
+  Require(reading || mode == "write-error" || mode == "revoked" || mode == "consent",
+      "unknown large-I/O fixture mode");
+  if (!positioned) Require(lseek(fd, kIoOffset, SEEK_SET) == kIoOffset, "partial-write seek failed");
+  const ssize_t count = reading ? pread(fd, output.data(), output.size(), kIoOffset)
+      : positioned ? pwrite(fd, input.data(), input.size(), kIoOffset)
+      : write(fd, input.data(), input.size());
+  Require(count == kBlockTransferLimit, "partial I/O did not report exactly its acknowledged first chunk");
+  Require(lseek(fd, 0, SEEK_CUR) == (positioned ? 123 : kIoOffset + kBlockTransferLimit),
+      "partial I/O advanced ordinary cursor beyond acknowledged bytes");
+  if (reading) {
+    Require(std::equal(output.begin(), output.begin() + kBlockTransferLimit, input.begin()) &&
+        std::all_of(output.begin() + kBlockTransferLimit, output.end(), [](uint8_t value) { return value == 0xcc; }),
+        "partial read invented bytes beyond the completed chunk");
+  }
+  uint8_t value = 0xa5;
+  errno = 0;
+  const ssize_t retry = reading ? pread(fd, &value, 1, kIoOffset + kBlockTransferLimit)
+                               : pwrite(fd, &value, 1, kIoOffset + kBlockTransferLimit);
+  Require(retry == -1 && errno == (mode == "revoked" ? ENODEV : mode == "consent" ? EACCES : EIO),
+      "later I/O hid the actual transport error, revocation or lost consent");
+}
+
+void CheckChunkedIo() {
+  const auto input = IoPattern();
+  for (const char* mode : {"large", "read-error", "write-error", "revoked", "consent"}) {
+    Media media(0x83);
+    const size_t start = kPartition + kIoOffset;
+    std::array<uint8_t, 512> mbr{};
+    std::copy_n(media.bytes.begin(), mbr.size(), mbr.begin());
+    if (std::strcmp(mode, "read-error") == 0) {
+      media.io_fault = IoFault::kRead;
+      std::copy(input.begin(), input.end(), media.bytes.begin() + start);
+    } else if (std::strcmp(mode, "write-error") == 0) media.io_fault = IoFault::kWrite;
+    else if (std::strcmp(mode, "revoked") == 0) media.io_fault = IoFault::kRevoke;
+    else if (std::strcmp(mode, "consent") == 0) media.io_fault = IoFault::kConsent;
+    Clean(Run(media, {"--usb-fixture-io", mode}), "bounded large-I/O Windows fixture failed");
+    const bool reading = media.io_fault == IoFault::kRead;
+    const bool full = media.io_fault == IoFault::kNone;
+    const size_t changed = full || reading ? kIoBytes : kBlockTransferLimit;
+    Require(std::equal(input.begin(), input.begin() + changed, media.bytes.begin() + start),
+        "broker bytes differ from the acknowledged I/O result");
+    Require(media.written_bytes == (reading ? 0 : full ? 2 * kIoBytes : kBlockTransferLimit) &&
+        media.writes == (reading ? 0 : full ? 10 : 1), "broker acknowledged an incorrect write total");
+    Require(std::equal(mbr.begin(), mbr.end(), media.bytes.begin()) &&
+        std::all_of(media.bytes.begin() + mbr.size(), media.bytes.begin() + start,
+                    [](uint8_t value) { return value == 0; }) &&
+        std::all_of(media.bytes.begin() + start + changed, media.bytes.end(),
+                    [](uint8_t value) { return value == 0; }),
+        "I/O changed the MBR or bytes outside the acknowledged range");
+  }
+}
+
 void CheckMediaControls() {
   Media media(0x0c);
   auto result = Run(media, {"--tool", "sync"});
@@ -299,6 +408,12 @@ void CheckFilesystems(const std::wstring& tools) {
         "formatter must fail without write consent and leave fixture bytes untouched");
   }
   unsigned failures = 0;
+  try {
+    CheckChunkedIo();
+  } catch (const std::exception& failure) {
+    std::fprintf(stderr, "Large block I/O fixture failed: %s\n", failure.what());
+    ++failures;
+  }
   for (const int filesystem : {0, 1, 2}) {
     try {
       Media media(filesystem == 0 ? 0x0c : filesystem == 1 ? 0x07 : 0x83);
@@ -357,7 +472,7 @@ void CheckFilesystems(const std::wstring& tools) {
   Require(failures == 0, "one or more upstream filesystem scenarios failed");
 }
 
-int Guest(bool hang) {
+int Guest(bool hang, const std::string& io_mode = {}) {
   BlockGuestHandles handles;
   DWORD received = 0;
   if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), &handles, sizeof(handles), &received, nullptr) ||
@@ -366,6 +481,16 @@ int Guest(bool hang) {
   for (HANDLE handle : {handles.pipe, handles.gate, handles.revoked}) CloseHandle(handle);
   if (attached) return 122;
   if (hang) { Sleep(INFINITE); return 123; }
+  if (!io_mode.empty()) {
+    try {
+      CheckIoGuest(io_mode);
+      std::printf("Windows block I/O fixture passed: %s\n", io_mode.c_str());
+      return 0;
+    } catch (const std::exception& failure) {
+      std::fprintf(stderr, "Windows block I/O fixture %s failed: %s\n", io_mode.c_str(), failure.what());
+      return 124;
+    }
+  }
   return GesherFilesystemGuestMain();
 }
 }  // namespace fs_fixture
@@ -378,6 +503,7 @@ int main() {
   LocalFree(raw);
   if (count >= 2 && (args[1] == L"--elf" || args[1] == L"--tool")) return fs_fixture::Guest(false);
   if (count == 2 && args[1] == L"--usb-fixture-hang") return fs_fixture::Guest(true);
+  if (count == 3 && args[1] == L"--usb-fixture-io") return fs_fixture::Guest(false, ex::Narrow(args[2]));
   std::wstring tools;
   if (count == 3 && args[1] == L"--tools") tools = args[2];
   else if (count == 1) {

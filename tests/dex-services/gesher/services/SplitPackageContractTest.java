@@ -20,6 +20,7 @@ import android.util.DisplayMetrics;
 import com.android.internal.os.ApplicationSharedMemory;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.PackageManagerService;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -29,6 +30,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -123,10 +125,10 @@ public final class SplitPackageContractTest {
                 && Arrays.equals(info.splitNames, ai.splitNames),
                 "Split names came from filenames or did not survive PackageInfo generation");
         require(ai.splitSourceDirs.length == 2
-                && ai.splitSourceDirs[0].endsWith("/split_z_core.apk")
-                && ai.splitSourceDirs[1].endsWith("/split_a_entry.apk")
+                && ai.splitSourceDirs[0].endsWith("/split_feature.core.apk")
+                && ai.splitSourceDirs[1].endsWith("/split_feature.entry.apk")
                 && Arrays.equals(ai.splitSourceDirs, ai.splitPublicSourceDirs),
-                "Split paths were not aligned with sorted manifest names");
+                "Split paths were not the manifest-named files aligned with sorted split names");
         require(Arrays.equals(ai.splitClassLoaderNames, new String[]{"dalvik.system.PathClassLoader",
                 "dalvik.system.DelegateLastClassLoader"}) && ai.requestsIsolatedSplitLoading(),
                 "Isolated split class-loader policy was discarded");
@@ -298,17 +300,25 @@ public final class SplitPackageContractTest {
             result = (String[]) install.invoke(installer, equivalent.getPath());
             require("unchanged".equals(result[1]), extension + " changed identical installed APKs");
         }
+        // The content, not the suffix, decides: a lone base APK saved as .xapk is that APK.
+        File plainNamedBundle = new File(data, "base-only.xapk");
+        Files.write(plainNamedBundle.toPath(), inputs.get("base"));
+        result = (String[]) install.invoke(installer, plainNamedBundle.getPath());
+        require("unchanged".equals(result[1]), "A base APK saved as .xapk was not installed as that APK");
+        metadata(pm.get(PACKAGE));
         Map<String, byte[]> arbitraryNames = new LinkedHashMap<>();
         arbitraryNames.put("apks/display.apk", inputs.get("entry"));
         arbitraryNames.put("apks/assets.apk", inputs.get("core"));
         arbitraryNames.put("apks/application.apk", inputs.get("base"));
         File renamed = cluster(data, "renamed", ".apk+", arbitraryNames);
         result = (String[]) install.invoke(installer, renamed.getPath());
-        require("updated".equals(result[1]), "APK+ did not install the manifest-identified cluster");
+        // Files are named by their manifests, so other archive names are the same install.
+        require("unchanged".equals(result[1]), "APK+ entry names changed the manifest-identified cluster");
         ApplicationInfo renamedInfo = pm.get(PACKAGE).applicationInfo(0);
         require(Arrays.equals(renamedInfo.splitNames, new String[]{"feature.core", "feature.entry"}),
                 "Arbitrary archive names dropped required feature splits");
         loadFeature(renamedInfo);
+        bundletoolApkSet(data, inputs, pm, installer, install);
         cachedSourceUpdates(data, inputs);
         codeRootBoundary(data, installerType);
         inheritedSplitSessions(data, inputs);
@@ -336,6 +346,67 @@ public final class SplitPackageContractTest {
         } finally {
             android.system.Os.setenv("ANDROID_DATA", original, true);
         }
+    }
+
+    /**
+     * A bundletool APK set: toc.pb (BuildApksResult, bundletool's commands.proto) lists a
+     * standalone variant below SDK 21 and a split variant from SDK 21, whose APKs are the
+     * installed cluster. Its standalone APK is another base, so all of its APKs together are
+     * not one install; the installer must take the split variant the device gets.
+     */
+    private static void bundletoolApkSet(File data, Map<String, byte[]> inputs, PackageManagerService pm,
+            Object installer, Method install) throws Exception {
+        byte[] base = pb(1, "base", 6, 1);  // ModuleMetadata: name, delivery_type INSTALL_TIME
+        byte[] standalone = pb(1, pb(1, sdkTargeting(15, 21)),
+                2, pb(1, base, 2, pb(2, "standalones/standalone.apk", 4, pb())));
+        byte[] split = pb(1, pb(1, sdkTargeting(21, 15)), 2, pb(1, base,
+                2, pb(2, "splits/base-master.apk", 3, pb(2, 1)),
+                2, pb(2, "splits/base-core.apk", 3, pb(1, "core")),
+                2, pb(2, "splits/base-entry.apk", 3, pb(1, "entry"))));
+        Map<String, byte[]> files = new LinkedHashMap<>();
+        files.put("toc.pb", pb(1, standalone, 1, split));
+        files.put("standalones/standalone.apk", inputs.get("base-required"));
+        files.put("splits/base-master.apk", inputs.get("base"));
+        files.put("splits/base-core.apk", inputs.get("core"));
+        files.put("splits/base-entry.apk", inputs.get("entry"));
+        ApkPackage before = pm.get(PACKAGE);
+        String[] result = (String[]) install.invoke(installer, cluster(data, "bundletool", files).getPath());
+        require("unchanged".equals(result[1]) && pm.get(PACKAGE) == before,
+                "The APK set's split variant was not the installed cluster");
+        metadata(pm.get(PACKAGE));
+    }
+
+    /** SdkVersionTargeting: value {min {value}}, alternatives {min {value}}. */
+    private static byte[] sdkTargeting(int min, int alternative) {
+        return pb(1, pb(1, pb(1, min)), 2, pb(1, pb(1, alternative)));
+    }
+
+    /** A protobuf message from field, value pairs: an Integer is a varint, a String or byte[] length-delimited. */
+    private static byte[] pb(Object... pairs) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (int i = 0; i < pairs.length; i += 2) {
+            int field = (Integer) pairs[i];
+            Object value = pairs[i + 1];
+            if (value instanceof Integer) {
+                varint(out, field << 3);
+                varint(out, (Integer) value);
+            } else {
+                byte[] bytes = value instanceof String
+                        ? ((String) value).getBytes(StandardCharsets.UTF_8) : (byte[]) value;
+                varint(out, (field << 3) | 2);
+                varint(out, bytes.length);
+                out.write(bytes, 0, bytes.length);
+            }
+        }
+        return out.toByteArray();
+    }
+
+    private static void varint(ByteArrayOutputStream out, long value) {
+        while ((value & ~0x7fL) != 0) {
+            out.write((int) ((value & 0x7f) | 0x80));
+            value >>>= 7;
+        }
+        out.write((int) value);
     }
 
     private static String[] codeGenerations(File data) {
@@ -414,6 +485,13 @@ public final class SplitPackageContractTest {
         metadata(pm.get(PACKAGE));
         require(base.length() == baseLength && base.lastModified() == baseTimestamp,
                 "Cache regression accidentally modified the base source");
+        // Another app's split beside the base (a shared Downloads folder) is not a companion.
+        File unrelated = new File(source, "config.unrelated.apk");
+        Files.write(unrelated.toPath(), inputs.get("foreign"));
+        result = (String[]) install.invoke(installer, base.getPath());
+        require("unchanged".equals(result[1]), "Another package's split beside the base joined its install");
+        metadata(pm.get(PACKAGE));
+        Files.delete(unrelated.toPath());
 
         Files.delete(core.toPath());
         Files.delete(entry.toPath());

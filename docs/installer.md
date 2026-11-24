@@ -321,9 +321,40 @@ gone.
 
 Open an APK or bundle from Explorer or use the Control Center's install
 dialog. Bundle formats supported here are ZIP archives containing one base
-APK, its companion split APKs and optional dex metadata. Installers that
-produce an APK set with multiple alternative bases need to export a single
-matching set first. Game expansion files (`.obb`) are outside this install path.
+APK, its companion split APKs and optional dex metadata, and bundletool APK
+sets (`bundletool build-apks` output, `.apks` with a `toc.pb`). From an APK set
+the installer takes what `bundletool install-apks` would install on Gesher's
+device (`com.gesher.app.ApkSetToc`, after bundletool's `ApkMatcher`): the one
+variant matching its SDK level and ABIs (x86_64, then arm64-v8a), so a
+standalone or `universal.apk` only when no split variant fits; the install-time
+modules with their dependencies; their splits for the preferred ABI; and the
+install-time asset packs. Device tier, country set and device group targeting
+take the set's own defaults (tier 0, the fallback country split and no group when
+it names none), as `install-apks` does for a device spec without them. It keeps
+every density and language split of those modules: Gesher's density is set per launch and its languages follow Windows
+and per-app locales, and no store delivers a missing split later
+([ADR 0091](decisions/0091-apk-bundle-selection.md)). An XAPK
+(APKPure's format) whose `manifest.json` lists `split_apks` installs those
+files; any other archive without a `toc.pb` (`.apkm`, `.apk+`, an older
+`.xapk`) installs every `.apk` in it. Installed files are named from their
+manifests (`base.apk`, `split_<split name>.apk`), as Android's package
+installer names them, whatever the archive calls them. A loose APK's
+`split_*.apk` and `config.*.apk` neighbours are its companions only when their
+manifests name its package; others are left out and logged.
+
+Not installed:
+
+- Expansion files (`.obb`, an XAPK's `expansions`). Android keeps them in shared
+  storage, `Android/obb/<package>/`, where Google Play or an XAPK installer
+  copies them; a package install, `adb install-multiple` included, does not.
+  Gesher installs the APKs and logs the expansion files it left in the archive
+  (`install <package>: ... also holds expansion files`); an app that needs them
+  finds its OBB folder as it is.
+- Encrypted `.apkm` files. APKMirror distributed some `.apkm` files encrypted
+  for its own installer. Gesher has no key for them: such a file, which is not
+  a ZIP, is refused with `INSTALL_FAILED_INVALID_APK: ... an encrypted
+  APKMirror bundle`. Unencrypted `.apkm` files (a ZIP of `base.apk`,
+  `split_config.*.apk` and `info.json`) install.
 
 Apps using Android's system file or folder picker can select Windows files and
 folders through the [Storage Access Framework](services.md#storage-access-framework-documents).
@@ -356,8 +387,10 @@ long form).
 User-supplied paths are not rewritten: the APK given to `gesher-app` (`install`,
 `launch`, a double-clicked APK or split APK bundle) and the dex given to `gesher`
 are passed in long form (`UserPath`), so the installer still sees the real file
-name, recognizes APK bundles by their suffix and finds a `.dm` file
-beside the APK.
+name and finds a `.dm` file beside the APK. Whether a file is an APK or a
+bundle is decided by its content, not its suffix: an APK has
+`AndroidManifest.xml` at its root, a bundle is a ZIP of `.apk` files. A single
+APK saved as `.xapk` installs as that APK.
 
 Limitations:
 

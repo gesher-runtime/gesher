@@ -16,7 +16,7 @@ $ordinary = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
 $ordinaryExisted = Test-Path -LiteralPath $ordinary
 $privateRoot = Join-Path $env:ProgramData 'Gesher Protected Android'
 $privateRootExisted = Test-Path -LiteralPath $privateRoot
-$fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('gesher-identity-' + [guid]::NewGuid())
+$fixtureRoot = Join-Path $env:ProgramFiles ('gesher-identity-' + [guid]::NewGuid())
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -47,41 +47,70 @@ function Read-ServiceAcl([string]$Name = $service) {
     [Security.AccessControl.RawSecurityDescriptor]::new($sddl)
 }
 
-# These probes use the real SCM service token and a filtered copy of the test
-# desktop account. No media, mocked device or guest security bypass is involved.
+# The negative probes stay in this process with a filtered copy of the real
+# desktop token. A separate disposable LocalSystem task below queries the
+# private service token, matching the production authority's caller. Debug
+# privilege on a desktop process does not bypass the private token's DACL.
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 public static class GesherIdentityProbe {
-    [StructLayout(LayoutKind.Sequential)] struct Luid { public uint Low; public int High; }
-    [StructLayout(LayoutKind.Sequential)] struct Privilege { public uint Count; public Luid Luid; public uint Attributes; }
     [StructLayout(LayoutKind.Sequential)] struct SidAndAttributes { public IntPtr Sid; public uint Attributes; }
+    [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes { public int Size; public IntPtr Descriptor; public int Inherit; }
     [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
-    [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
-    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool LookupPrivilegeValue(string system, string name, out Luid luid);
-    [DllImport("advapi32.dll", SetLastError=true)] static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref Privilege privilege, uint length, IntPtr previous, IntPtr returned);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool CreateRestrictedToken(IntPtr token, uint flags, uint disableCount, [In] SidAndAttributes[] disabled, uint deleteCount, IntPtr deleted, uint restrictedCount, IntPtr restricted, out IntPtr result);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool ImpersonateLoggedOnUser(IntPtr token);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool RevertToSelf();
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateFile(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", EntryPoint="CreateFileW", ExactSpelling=true, CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateProtectedFile(string path, uint access, uint share, ref SecurityAttributes security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateDirectory(string path, ref SecurityAttributes security);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text, uint revision, out IntPtr descriptor, IntPtr size);
+    [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool WriteFile(IntPtr file, byte[] bytes, uint count, out uint written, IntPtr overlapped);
     [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool WTSQuerySessionInformation(IntPtr server, uint session, int info, out IntPtr value, out uint size);
     [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr value);
     static IntPtr desktopToken;
-    static IntPtr runtimeToken;
-    static void Require(bool result) { if (!result) throw new Win32Exception(Marshal.GetLastWin32Error()); }
-    public static string Initialize(uint holderPid) {
-        IntPtr self;
-        Require(OpenProcessToken(GetCurrentProcess(), 0xF01FF, out self));
+    static void Require(bool result, string operation) {
+        if (!result) {
+            int error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error, operation + " failed with Win32 " + error);
+        }
+    }
+    static SecurityAttributes ProbeSecurity(bool directory) {
+        IntPtr descriptor;
+        string flags = directory ? "OICI" : "";
+        Require(ConvertStringSecurityDescriptorToSecurityDescriptor(
+            "O:BAG:BAD:P(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;BA)",
+            1, out descriptor, IntPtr.Zero), "ConvertStringSecurityDescriptorToSecurityDescriptor(test fixture)");
+        return new SecurityAttributes { Size=Marshal.SizeOf(typeof(SecurityAttributes)), Descriptor=descriptor, Inherit=0 };
+    }
+    public static void CreatePrivateDirectory(string path) {
+        var security = ProbeSecurity(true);
+        try { Require(CreateDirectory(path, ref security), "CreateDirectory(protected test ancestor)"); }
+        finally { LocalFree(security.Descriptor); }
+    }
+    public static void WritePrivateFile(string path, byte[] content) {
+        var security = ProbeSecurity(false);
+        IntPtr file;
         try {
-            Luid debug; Require(LookupPrivilegeValue(null, "SeDebugPrivilege", out debug));
-            var privilege = new Privilege { Count=1, Luid=debug, Attributes=2 };
-            Require(AdjustTokenPrivileges(self, false, ref privilege, 0, IntPtr.Zero, IntPtr.Zero));
-            if (Marshal.GetLastWin32Error() != 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+            file = CreateProtectedFile(path, 0x40000000, 0, ref security, 1, 0, IntPtr.Zero);
+            Require(file != new IntPtr(-1), "CreateFile(protected test helper/request, GENERIC_WRITE|CREATE_NEW)");
+        } finally { LocalFree(security.Descriptor); }
+        try {
+            uint written;
+            Require(WriteFile(file, content, (uint)content.Length, out written, IntPtr.Zero), "WriteFile(protected test helper/request)");
+            if (written != content.Length) throw new Win32Exception(29, "Short protected test file write");
+        } finally { CloseHandle(file); }
+    }
+    public static void InitializeDesktop() {
+        IntPtr self;
+        Require(OpenProcessToken(GetCurrentProcess(), 0xA, out self),
+            "OpenProcessToken(desktop, TOKEN_QUERY|TOKEN_DUPLICATE=0xA)");
+        try {
             var admin = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
             var bytes = new byte[admin.BinaryLength]; admin.GetBinaryForm(bytes, 0);
             var sid = Marshal.AllocHGlobal(bytes.Length);
@@ -89,33 +118,21 @@ public static class GesherIdentityProbe {
                 Marshal.Copy(bytes, 0, sid, bytes.Length);
                 Require(CreateRestrictedToken(self, 2, 1,
                     new[] { new SidAndAttributes { Sid=sid, Attributes=0 } },
-                    0, IntPtr.Zero, 0, IntPtr.Zero, out desktopToken));
+                    0, IntPtr.Zero, 0, IntPtr.Zero, out desktopToken),
+                    "CreateRestrictedToken(desktop, DISABLE_MAX_PRIVILEGE, Administrators deny-only)");
             } finally { Marshal.FreeHGlobal(sid); }
         } finally { CloseHandle(self); }
-        IntPtr process = OpenProcess(0x1000, false, holderPid);
-        if (process == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-        try { Require(OpenProcessToken(process, 0xE, out runtimeToken)); }
-        finally { CloseHandle(process); }
-        using (var identity = new WindowsIdentity(runtimeToken)) { return identity.User.Value; }
-    }
-    public static string ProcessUser(uint pid) {
-        IntPtr process = OpenProcess(0x1000, false, pid), token;
-        if (process == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-        try { Require(OpenProcessToken(process, 8, out token)); }
-        finally { CloseHandle(process); }
-        try { using (var identity = new WindowsIdentity(token)) { return identity.User.Value; } }
-        finally { CloseHandle(token); }
     }
     public static int OpenAsDesktop(string path, uint access) {
-        Require(ImpersonateLoggedOnUser(desktopToken));
+        Require(ImpersonateLoggedOnUser(desktopToken), "ImpersonateLoggedOnUser(filtered desktop)");
         try {
             IntPtr file = CreateFile(path, access, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
             if (file == new IntPtr(-1)) return Marshal.GetLastWin32Error();
             CloseHandle(file); return 0;
-        } finally { Require(RevertToSelf()); }
+        } finally { if (!RevertToSelf()) Environment.FailFast("RevertToSelf(filtered desktop) failed"); }
     }
-    public static int CreateProbe(string path, bool runtime) {
-        Require(ImpersonateLoggedOnUser(runtime ? runtimeToken : desktopToken));
+    public static int CreateProbe(string path) {
+        Require(ImpersonateLoggedOnUser(desktopToken), "ImpersonateLoggedOnUser(filtered desktop)");
         try {
             IntPtr file = CreateFile(path, 0x40000000, 7, IntPtr.Zero, 1, 0, IntPtr.Zero);
             if (file == new IntPtr(-1)) return Marshal.GetLastWin32Error();
@@ -124,7 +141,7 @@ public static class GesherIdentityProbe {
                 if (!WriteFile(file, new byte[] { 71, 83, 72 }, 3, out written, IntPtr.Zero)) return Marshal.GetLastWin32Error();
                 return written == 3 ? 0 : 29;
             } finally { CloseHandle(file); }
-        } finally { Require(RevertToSelf()); }
+        } finally { if (!RevertToSelf()) Environment.FailFast("RevertToSelf(filtered desktop) failed"); }
     }
     public static bool InteractiveSession(uint session) {
         if (session == 0) return false;
@@ -138,12 +155,113 @@ public static class GesherIdentityProbe {
         finally { WTSFreeMemory(value); }
     }
     public static void Dispose() {
-        if (runtimeToken != IntPtr.Zero) CloseHandle(runtimeToken);
         if (desktopToken != IntPtr.Zero) CloseHandle(desktopToken);
-        runtimeToken = desktopToken = IntPtr.Zero;
+        desktopToken = IntPtr.Zero;
     }
 }
 '@
+
+function New-ProtectedProbeDirectory([string]$Path) {
+    [GesherIdentityProbe]::CreatePrivateDirectory($Path)
+}
+
+function Invoke-SystemIdentityProbe([string]$Operation, [uint32]$HolderProcessId,
+    [string]$FixturePath = '', [uint32[]]$GuestProcessIds = @()) {
+    $probeName = 'GesherIdentityProbe-' + [guid]::NewGuid().ToString('N')
+    # Program Files prevents an ordinary desktop process replacing an ancestor
+    # while the SYSTEM task starts. The copied helper, request and result have
+    # only SYSTEM/Administrators grants and trusted owners.
+    $probeDirectory = Join-Path $env:ProgramFiles $probeName
+    $nonce = [guid]::NewGuid().ToString('N')
+    $registered = $false
+    try {
+        New-ProtectedProbeDirectory $probeDirectory
+        $helperPath = Join-Path $probeDirectory 'probe.ps1'
+        [GesherIdentityProbe]::WritePrivateFile($helperPath,
+            [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'UsbAuthorityIdentityProbe.ps1')))
+        $requestPath = Join-Path $probeDirectory 'request.json'
+        $resultPath = Join-Path $probeDirectory 'result.json'
+        $requestBody = @{
+            Nonce = $nonce
+            Operation = $Operation
+            HolderProcessId = $HolderProcessId
+            FixturePath = $FixturePath
+            GuestProcessIds = @($GuestProcessIds)
+        } | ConvertTo-Json -Depth 4
+        [GesherIdentityProbe]::WritePrivateFile($requestPath, [Text.Encoding]::UTF8.GetBytes($requestBody))
+        foreach ($path in $probeDirectory, $helperPath, $requestPath) {
+            Assert-ProtectedOwner $path
+            Assert-DesktopDenied $path
+        }
+        # Register the SYSTEM task with its final owner/DACL atomically. A
+        # desktop-owned default task followed by an ACL repair leaves a gap.
+        $scheduler = New-Object -ComObject 'Schedule.Service'
+        $scheduler.Connect()
+        $taskFolder = $scheduler.GetFolder('\')
+        $definition = $scheduler.NewTask(0)
+        $definition.Principal.UserId = 'SYSTEM'
+        $definition.Principal.LogonType = 5 # TASK_LOGON_SERVICE_ACCOUNT
+        $definition.Principal.RunLevel = 1 # TASK_RUNLEVEL_HIGHEST
+        $definition.Settings.ExecutionTimeLimit = 'PT60S'
+        $definition.Settings.DisallowStartIfOnBatteries = $false
+        $definition.Settings.StopIfGoingOnBatteries = $false
+        $action = $definition.Actions.Create(0) # TASK_ACTION_EXEC
+        $action.Path = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $action.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $helperPath + '" -Request "' + $requestPath + '"'
+        $task = $taskFolder.RegisterTaskDefinition($probeName, $definition, 0x12, 'SYSTEM', $null, 5,
+            'O:BAG:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)') # TASK_CREATE | TASK_DONT_ADD_PRINCIPAL_ACE
+        $registered = $true
+        $taskSecurity = [Security.AccessControl.RawSecurityDescriptor]::new($task.GetSecurityDescriptor(5))
+        if ($taskSecurity.Owner.Value -ne 'S-1-5-32-544' -or -not $taskSecurity.DiscretionaryAcl -or
+            $taskSecurity.DiscretionaryAcl.Count -ne 2) { throw 'The disposable SYSTEM task has an unprotected owner or ACL.' }
+        foreach ($ace in $taskSecurity.DiscretionaryAcl) {
+            if ($ace.AceType -ne [Security.AccessControl.AceType]::AccessAllowed -or
+                $ace.SecurityIdentifier.Value -notin 'S-1-5-18', 'S-1-5-32-544') {
+                throw 'The disposable SYSTEM task has an untrusted grant.'
+            }
+        }
+        $previousRun = (Get-ScheduledTaskInfo -TaskName $probeName).LastRunTime
+        Start-ScheduledTask -TaskName $probeName
+        $deadline = [DateTime]::UtcNow.AddSeconds(75)
+        do {
+            $state = (Get-ScheduledTask -TaskName $probeName).State
+            $info = Get-ScheduledTaskInfo -TaskName $probeName
+            if ((Test-Path -LiteralPath $resultPath) -and $state -notin 'Running', 'Queued' -and
+                $info.LastRunTime -gt $previousRun -and $info.LastTaskResult -ne 267009) { break }
+            if ([DateTime]::UtcNow -ge $deadline) {
+                $taskResult = (Get-ScheduledTaskInfo -TaskName $probeName).LastTaskResult
+                throw "The LocalSystem identity probe timed out (task state=$state, result=$taskResult)."
+            }
+            Start-Sleep -Milliseconds 100
+        } while ($true)
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        $taskResult = (Get-ScheduledTaskInfo -TaskName $probeName).LastTaskResult
+        if ($result.Nonce -cne $nonce -or -not $result.Success -or $taskResult -ne 0) {
+            throw "LocalSystem identity probe failed (task result=$taskResult): $($result.Error)"
+        }
+        Write-Output $result
+    } finally {
+        try {
+            if ($registered) {
+                try {
+                    Stop-ScheduledTask -TaskName $probeName -ErrorAction SilentlyContinue
+                    $stopDeadline = [DateTime]::UtcNow.AddSeconds(10)
+                    while ((Get-ScheduledTask -TaskName $probeName).State -in 'Running', 'Queued') {
+                        if ([DateTime]::UtcNow -ge $stopDeadline) { throw 'The disposable identity probe did not stop.' }
+                        Start-Sleep -Milliseconds 100
+                    }
+                } finally {
+                    Unregister-ScheduledTask -TaskName $probeName -Confirm:$false
+                    if (Get-ScheduledTask -TaskName $probeName -ErrorAction SilentlyContinue) {
+                        throw 'The disposable LocalSystem identity-probe task was not removed.'
+                    }
+                }
+            }
+        } finally {
+            if (Test-Path -LiteralPath $probeDirectory) { Remove-Item -LiteralPath $probeDirectory -Recurse -Force }
+        }
+    }
+}
 
 function Assert-DesktopDenied([string]$Path) {
     foreach ($right in [uint32]0x40000000, [uint32]0x00040000, [uint32]0x00010000) {
@@ -162,7 +280,7 @@ function Stop-Authority {
 
 function Read-SharedText([string]$Path) {
     $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
-        [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
     $reader = [IO.StreamReader]::new($stream)
     try { $reader.ReadToEnd() } finally { $reader.Dispose() }
 }
@@ -256,31 +374,30 @@ try {
         $holder.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(20))
     } finally { $holder.Dispose() }
     $runtimeConfiguration = Get-CimInstance Win32_Service -Filter "Name='$runtimeService'"
-    $runtimeSid = [GesherIdentityProbe]::Initialize([uint32]$runtimeConfiguration.ProcessId)
+    [GesherIdentityProbe]::InitializeDesktop()
     $expectedSid = ([Security.Principal.NTAccount]::new('NT SERVICE', $runtimeService)).Translate(
         [Security.Principal.SecurityIdentifier]).Value
-    if ($runtimeSid -ne $expectedSid -or $runtimeSid -eq $identity.User.Value) {
-        throw 'The SCM runtime process does not have its distinct private TokenUser.'
-    }
     Assert-DesktopDenied $folder
     Assert-DesktopDenied $exe
     Assert-DesktopDenied (Join-Path $folder 'runtime\dalvikvm.exe')
 
-    New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
+    # The protected ancestor also denies desktop DELETE_CHILD. A fixture under
+    # the desktop user's own temp directory would not prove deletion denial.
+    New-ProtectedProbeDirectory $fixtureRoot
     $positive = Join-Path $fixtureRoot 'desktop-control'
     New-Item -ItemType Directory -Path $positive | Out-Null
     $acl = Get-Acl -LiteralPath $positive
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
         $identity.User, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
     Set-Acl -LiteralPath $positive -AclObject $acl
-    $controlError = [GesherIdentityProbe]::CreateProbe((Join-Path $positive 'written.bin'), $false)
+    $controlError = [GesherIdentityProbe]::CreateProbe((Join-Path $positive 'written.bin'))
     if ($controlError -ne 0) { throw "Filtered desktop token control write failed: $controlError" }
     $privateFixture = Join-Path $fixtureRoot 'private-account'
     New-Item -ItemType Directory -Path $privateFixture | Out-Null
     $acl = [Security.AccessControl.DirectorySecurity]::new()
     $acl.SetAccessRuleProtection($true, $false)
     $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
-    foreach ($sid in 'S-1-5-18', 'S-1-5-32-544', $runtimeSid) {
+    foreach ($sid in 'S-1-5-18', 'S-1-5-32-544', $expectedSid) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             [Security.Principal.SecurityIdentifier]::new($sid), 'FullControl',
             'ContainerInherit,ObjectInherit', 'None', 'Allow'))
@@ -288,12 +405,16 @@ try {
     Set-Acl -LiteralPath $privateFixture -AclObject $acl
     Assert-DesktopDenied $privateFixture
     $privateFile = Join-Path $privateFixture 'runtime-write.bin'
-    if ([GesherIdentityProbe]::CreateProbe($privateFile, $false) -ne 5) {
+    if ([GesherIdentityProbe]::CreateProbe($privateFile) -ne 5) {
         throw 'An ordinary desktop token could create a file in the private-account fixture.'
     }
-    $runtimeWrite = [GesherIdentityProbe]::CreateProbe($privateFile, $true)
-    if ($runtimeWrite -ne 0 -or [IO.File]::ReadAllText($privateFile) -ne 'GSH') {
-        throw "The real private SCM token could not write its NTFS fixture: $runtimeWrite"
+    $runtimeProbe = Invoke-SystemIdentityProbe 'WriteRuntimeFixture' ([uint32]$runtimeConfiguration.ProcessId) $privateFile
+    $runtimeSid = $runtimeProbe.RuntimeSid
+    if ($runtimeSid -ne $expectedSid -or $runtimeSid -eq $identity.User.Value) {
+        throw 'The SCM runtime process does not have its distinct private TokenUser.'
+    }
+    if ($runtimeProbe.WriteError -ne 0 -or [IO.File]::ReadAllText($privateFile) -ne 'GSH') {
+        throw "The real private SCM token could not write its NTFS fixture: $($runtimeProbe.WriteError)"
     }
     Assert-DesktopDenied $privateFile
     Write-Output 'PASS: actual SCM virtual TokenUser, protected installation ACLs, desktop denial and private-token write in isolated NTFS fixture'
@@ -337,8 +458,13 @@ try {
                 $_.ExecutablePath -ieq (Join-Path $folder 'runtime\dalvikvm.exe')
             })
             if ($guestProcesses.Count -lt 2) { throw 'Protected startup did not retain both system_server and the original app.' }
-            foreach ($guest in $guestProcesses) {
-                if ([GesherIdentityProbe]::ProcessUser([uint32]$guest.ProcessId) -ne $runtimeSid) {
+            $guestIds = @($guestProcesses | ForEach-Object { [uint32]$_.ProcessId })
+            $guestProbe = Invoke-SystemIdentityProbe 'QueryGuestUsers' ([uint32]$runtimeConfiguration.ProcessId) '' $guestIds
+            if ($guestProbe.RuntimeSid -ne $runtimeSid -or @($guestProbe.Guests).Count -ne $guestIds.Count) {
+                throw 'The protected guest identity probe did not retain the expected private account and process set.'
+            }
+            foreach ($guest in $guestProbe.Guests) {
+                if ($guest.UserSid -ne $runtimeSid -or [uint32]$guest.ProcessId -notin $guestIds) {
                     throw 'A protected Android guest is running under the desktop account.'
                 }
             }

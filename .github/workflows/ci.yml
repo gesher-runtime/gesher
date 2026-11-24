@@ -102,6 +102,22 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Launch failure text with native Windows direction classification
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX tests/native/launch_failure_text_test.cc /Fe:launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
+          & .\launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
+      - name: Shared media log byte snapshots on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/test-shared-log-bytes.ps1
+      - name: Shared media log byte snapshots on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: tests/windows/test-shared-log-bytes.ps1
       - name: Build actual UIA query cancellation and lifecycle controls
         if: ${{ !cancelled() }}
         shell: cmd
@@ -402,6 +418,7 @@ jobs:
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
+          python3 tools/test_usb_block_io_contracts.py --sanitize
           python3 tools/test_ofd_transfer_contracts.py --sanitize
           python3 tools/test_file_io_contracts.py --sanitize
           python3 tools/test_pipe_io_contracts.py --sanitize
