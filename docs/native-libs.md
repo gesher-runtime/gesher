@@ -732,8 +732,9 @@ see "After that" for what is left._
   creation records asynchronous DXGI completion. Exporting a native fd waits
   for completion outside ANGLE's mutex and returns an immutable native event;
   this preserves server-wait isolation with ANGLE's shared immediate queue,
-  but native export still costs CPU/GPU overlap. `sync_file` ioctls remain
-  unsupported. GPU writes to a buffer reach another process's mapping
+  but native export still costs CPU/GPU overlap. Of the `sync_file`
+  ioctls only `SYNC_IOC_FILE_INFO` is provided (one signaled fence, timed
+  when Gesher saw it complete); `SYNC_IOC_MERGE` fails with `ENOTTY`. GPU writes to a buffer reach another process's mapping
   only after the writing process reads the buffer back (a CPU lock there, or
   when it sends the buffer); a window's layers and frames the app posts to
   the same window directly replace each other; damage regions, data spaces,
