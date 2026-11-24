@@ -12,7 +12,6 @@ import android.os.RemoteException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -136,23 +135,38 @@ public final class CountryDetectorService extends ICountryDetector.Default {
                 // not added (and the caller sees no error).
                 return;
             }
+            // The first listener: subscribe to Windows before taking the snapshot, so a change
+            // made from here on is either in the snapshot or signalled. The signal is
+            // handled under mLock (onWindowsChange), i.e. after this registration and its
+            // initial callback, which keeps the listener's country callbacks in order.
+            boolean first = mReceivers.isEmpty();
+            Backend windows = mWindows;
+            if (first && windows != null && mUnwatch == null) {
+                mUnwatch = windows.watch(this::onWindowsChange);
+            }
             Country country = current();
             if (country != null) {
                 try {
                     listener.onCountryDetected(country);
                 } catch (RemoteException failed) {
                     receiver.key.unlinkToDeath(receiver, 0);
+                    if (first) stopWatchLocked();
                     return;
                 }
             }
             Receiver previous = mReceivers.put(receiver.key, receiver);
             if (previous != null) previous.key.unlinkToDeath(previous, 0);
-            if (mReceivers.size() == 1) {
-                mLastNotified = country;
-                Backend windows = mWindows;
-                if (windows != null && mUnwatch == null) mUnwatch = windows.watch(this::onWindowsChange);
-            }
+            if (first) mLastNotified = country;
         }
+    }
+
+    /** Guarded by mLock: stops the Windows watch when no listener is left. */
+    private void stopWatchLocked() {
+        if (!mReceivers.isEmpty() || mUnwatch == null) return;
+        Runnable unwatch = mUnwatch;
+        mUnwatch = null;
+        mLastNotified = null;
+        unwatch.run();
     }
 
     @Override
@@ -176,22 +190,23 @@ public final class CountryDetectorService extends ICountryDetector.Default {
         if (unwatch != null) unwatch.run();
     }
 
-    /** Windows' settings changed: tell the listeners if the country did. */
+    /**
+     * Windows' settings changed: tell the listeners if the country did. Delivery happens
+     * under mLock, as the initial callback of addCountryListener does, so a listener never
+     * sees an older country after a newer one. (The callbacks are one-way binder calls.)
+     */
     void onWindowsChange() {
-        List<Receiver> receivers;
-        Country country;
         synchronized (mLock) {
             if (mReceivers.isEmpty()) return;
-            country = current();
+            Country country = current();
             if (country == null || country.equals(mLastNotified)) return;
             mLastNotified = country;
-            receivers = new ArrayList<>(mReceivers.values());
-        }
-        for (Receiver receiver : receivers) {
-            try {
-                receiver.listener.onCountryDetected(country);
-            } catch (RemoteException failed) {
-                // As CountryDetectorService.notifyReceivers: the death notice removes it.
+            for (Receiver receiver : new ArrayList<>(mReceivers.values())) {
+                try {
+                    receiver.listener.onCountryDetected(country);
+                } catch (RemoteException failed) {
+                    // As CountryDetectorService.notifyReceivers: the death notice removes it.
+                }
             }
         }
     }
