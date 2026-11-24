@@ -88,7 +88,7 @@ public final class CredentialManagerService extends ICredentialManager.Default {
     // winerror.h
     private static final int NTE_EXISTS = 0x8009000F;
     private static final int NTE_NOT_FOUND = 0x80090011;
-    private static final int NTE_DEVICE_NOT_FOUND = 0x80090030;
+    private static final int NTE_DEVICE_NOT_FOUND = 0x80090035;
     private static final int NTE_USER_CANCELLED = 0x80090036;
     private static final int E_CANCELLED = 0x800704C7;  // HRESULT_FROM_WIN32(ERROR_CANCELLED)
 

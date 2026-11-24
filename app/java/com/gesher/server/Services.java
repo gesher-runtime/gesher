@@ -307,6 +307,14 @@ public final class Services {
         services.put(Context.TRUST_SERVICE, StandIn.of(
                 android.app.trust.ITrustManager.class,
                 new DeviceServices.TrustService()).asBinder());
+        // credential: CredentialManager for passkeys (docs/passkeys.md, ADR 0092). The system
+        // server is the one credential provider, over Windows' WebAuthn API (WindowsWebAuthn,
+        // null without its natives). Without that API, and for other credential types, the
+        // answers are AOSP's for a device without a provider.
+        services.put(Context.CREDENTIAL_SERVICE, StandIn.of(
+                android.credentials.ICredentialManager.class,
+                new CredentialManagerService(new CredentialManagerHost(am, pm),
+                        WindowsWebAuthn.create(), new AssetLinks.Https())).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
                 new DeviceServices.ShortcutService(pm, am.callers())).asBinder());
