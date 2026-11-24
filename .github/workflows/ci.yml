@@ -825,6 +825,7 @@ jobs:
           cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
+          cp -r out/dlopen-fixtures dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
