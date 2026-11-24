@@ -29,6 +29,7 @@
  *   ptrace-contract <self> sleeper             sleeps 3 s
  *   ptrace-contract <self> sharedreader <fd> <pipe>  reads a pipe its parent shares
  *   ptrace-contract <self> stream <wfd> <rfd> <fd>  writes and reads large pipe streams
+ *   ptrace-contract <self> bigwriter <wfd> <fd>  one 1 MB write() to a shared pipe
  *   ptrace-contract <self> [no]exitkill <fd>   seizes a child (PTRACE_O_EXITKILL
  *       or not) and exits
  * Lock files go next to the program.
@@ -986,6 +987,128 @@ static void parent_stream(int seize, int cycles) {
   check(eintr == 0 && errors == 0, name);
 }
 
+/* --- a write description shared by the tracer and a stopped writer (qa8) ----
+ * The tracee blocks in one 1 MB write() to a pipe whose write description the
+ * tracer shares (inherited). While the tracee is stopped: it makes no more
+ * progress than the pipe holds, and the tracer's poll(POLLOUT), write() and
+ * F_SETFL on that shared description work at once, as on Linux. */
+#define BIGWRITE 1000000
+static int child_bigwriter(int wfd, int report) {
+  unsigned char* buf = malloc(BIGWRITE);
+  for (int i = 0; i < BIGWRITE; ++i) buf[i] = stream_byte((uint64_t)i);
+  if (write(report, "R", 1) != 1) return 2;
+  ssize_t n = write(wfd, buf, BIGWRITE);
+  char text[32];
+  int len = snprintf(text, sizeof text, "%zd\n", n);
+  if (write(report, text, (size_t)len) != len) return 3;
+  return n == BIGWRITE ? 0 : 4;
+}
+static volatile int sw_done;
+static volatile ssize_t sw_result;
+static int sw_fd;
+static void* shared_writer(void* arg) {
+  (void)arg;
+  char x[16];
+  memset(x, 'X', sizeof x);
+  sw_result = write(sw_fd, x, sizeof x);
+  sw_done = 1;
+  return NULL;
+}
+static void parent_shared_write(void) {
+  int pa[2], rp[2];
+  if (pipe2(pa, O_CLOEXEC) != 0 || pipe2(rp, O_CLOEXEC) != 0) {
+    check(0, "shared write: pipes");
+    return;
+  }
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_adddup2(&fa, pa[1], 20);
+  posix_spawn_file_actions_adddup2(&fa, rp[1], 22);
+  char* args[] = {"ptrace-contract", (char*)self_path, "bigwriter", "20", "22", NULL};
+  pid_t pid = -1;
+  const int spawned = posix_spawn(&pid, self_path, &fa, NULL, args, environ) == 0;
+  posix_spawn_file_actions_destroy(&fa);
+  close(rp[1]);
+  char c = 0;
+  if (!spawned || read(rp[0], &c, 1) != 1) {
+    check(0, "shared write: the writer started");
+    return;
+  }
+  sw_fd = pa[1]; /* the same write description as the tracee's fd 20 */
+  sw_done = 0;
+  sleep_ms(300); /* its 1 MB write has filled the pipe and blocks */
+  check(ptrace(PTRACE_ATTACH, pid, 0, 0) == 0, "shared write: ATTACH");
+  int status = 0, stopped = 0;
+  int64_t t0 = now_ms();
+  while (!stopped && now_ms() - t0 < 5000) {
+    if (waitpid(pid, &status, WNOHANG | __WALL) == pid) stopped = status == 0x137f;
+    else sleep_ms(2);
+  }
+  check(stopped, "shared write: the writer blocked in a 1 MB write() stops");
+  /* Drain what the stopped writer has in the pipe. */
+  fcntl(pa[0], F_SETFL, O_NONBLOCK);
+  unsigned char* buf = malloc(65536);
+  uint64_t got = 0, mismatches = 0;
+  t0 = now_ms();
+  while (now_ms() - t0 < 1000) {
+    ssize_t n = read(pa[0], buf, 65536);
+    if (n > 0) {
+      for (ssize_t i = 0; i < n; ++i) mismatches += buf[i] != stream_byte(got + (uint64_t)i);
+      got += (uint64_t)n;
+      continue;
+    }
+    sleep_ms(5);
+  }
+  const uint64_t while_stopped = got;
+  printf("INFO  ptrace: shared write: %llu bytes read while the writer was stopped\n",
+         (unsigned long long)while_stopped);
+  check(while_stopped <= 65536 + 4096,
+        "shared write: a stopped writer makes no progress beyond what the pipe holds");
+  struct pollfd pf = {.fd = pa[1], .events = POLLOUT};
+  const int polled = poll(&pf, 1, 0);
+  check(polled == 1 && (pf.revents & POLLOUT) != 0,
+        "shared write: the tracer's poll(POLLOUT) on the shared write description");
+  /* While the pipe is empty: Gesher's F_SETFL on a pipe fails with EOPNOTSUPP
+   * while the pipe holds data (Windows refuses the mode change then), stopped
+   * writer or not. */
+  const int flags = fcntl(pa[1], F_GETFL);
+  const int set = fcntl(pa[1], F_SETFL, flags | O_NONBLOCK);
+  check(set == 0, "shared write: F_SETFL on the shared description");
+  if (set == 0) fcntl(pa[1], F_SETFL, flags);
+  pthread_t w;
+  pthread_create(&w, NULL, shared_writer, NULL);
+  t0 = now_ms();
+  while (!sw_done && now_ms() - t0 < 3000) sleep_ms(1);
+  check(sw_done && sw_result == 16, "shared write: the tracer's write() on the shared description completes at once");
+  check(ptrace(PTRACE_DETACH, pid, 0, 0) == 0, "shared write: DETACH");
+  pthread_join(w, NULL);
+  close(pa[1]);
+  fcntl(pa[0], F_SETFL, 0);
+  uint64_t xs = 0;
+  for (;;) {
+    ssize_t n = read(pa[0], buf, 65536);
+    if (n <= 0) break;
+    for (ssize_t i = 0; i < n; ++i) {
+      if (buf[i] == 'X' && stream_byte(got) != 'X') {
+        ++xs;
+        continue;
+      }
+      mismatches += buf[i] != stream_byte(got);
+      ++got;
+    }
+  }
+  free(buf);
+  char text[64] = {0};
+  if (read(rp[0], text, sizeof text - 1) < 0) text[0] = 0;
+  close(rp[0]);
+  close(pa[0]);
+  const int code = wait_exit(pid);
+  check(code == 0 && atoll(text) == BIGWRITE,
+        "shared write: the writer's write() returns all 1 MB after it is resumed");
+  check(got == BIGWRITE && xs == 16 && mismatches == 0,
+        "shared write: every byte arrives once, the tracer's 16 between whole pieces");
+}
+
 /* PTRACE_O_EXITKILL: the tracer's exit kills the tracee; without it the
  * tracee runs on. */
 static void parent_exitkill(void) {
@@ -1034,6 +1157,7 @@ int main(int argc, char** argv) {
   if (argc >= 4 && strcmp(argv[2], "spinvictim") == 0) return child_codevictim(atoi(argv[3]), 1);
   if (argc >= 4 && strcmp(argv[2], "pipetracer") == 0) return child_pipetracer(atoi(argv[3]));
   if (argc >= 3 && strcmp(argv[2], "sleeper") == 0) return child_sleeper();
+  if (argc >= 5 && strcmp(argv[2], "bigwriter") == 0) return child_bigwriter(atoi(argv[3]), atoi(argv[4]));
   if (argc >= 6 && strcmp(argv[2], "stream") == 0) return child_stream(atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
   if (argc >= 5 && strcmp(argv[2], "sharedreader") == 0) return child_sharedreader(atoi(argv[4]), atoi(argv[3]));
   if (argc >= 5 && strcmp(argv[2], "lockvictim") == 0) return child_lockvictim(atoi(argv[3]), argv[4]);
@@ -1151,6 +1275,7 @@ int main(int argc, char** argv) {
   parent_poke_code("spinvictim", PTRACE_POKETEXT);
   parent_pipe();
   parent_shared_pipe();
+  parent_shared_write();
   parent_stream(0, 60);
   parent_stream(1, 60);
   parent_attach_at_spawn();

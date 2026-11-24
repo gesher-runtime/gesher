@@ -261,7 +261,6 @@ static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
 // host process: no wait is ever interrupted for a stop.
 namespace gesher::ptrace {
 struct ParkedScope {
-  ParkedScope(HANDLE, bool) {}
   void SetIo(HANDLE, OVERLAPPED*) {}
   bool Interrupted() const { return false; }
 };
@@ -481,6 +480,29 @@ int main() {
   release.store(true); holder.join();
 
   Check("blocking mode restored for cancellation", Mode(r, false) == 0);
+  {
+    // A blocking write larger than the pipe goes in pieces that fit its room
+    // (and single blocking bytes), never pending whole: every byte arrives
+    // once, in order, and the call returns the full count.
+    Check("blocking writer mode", Mode(w, false) == 0);
+    const size_t total = static_cast<size_t>(capacity) * 3 + 123;
+    std::vector<char> big(total), got;
+    for (size_t i = 0; i != total; ++i) big[i] = static_cast<char>(i * 7 + i / 251);
+    std::thread drain([&] {
+      std::vector<char> chunk(1000);
+      while (got.size() < total) {
+        const ssize_t n = read(reader.fd, chunk.data(), chunk.size());
+        if (n <= 0) break;
+        got.insert(got.end(), chunk.begin(), chunk.begin() + n);
+        Sleep(0);
+      }
+    });
+    Check("blocking write larger than the pipe returns its full count",
+          gesher::TransferPipe(w, big.data(), static_cast<unsigned>(total), true) == static_cast<int>(total));
+    drain.join();
+    Check("blocking write's bytes arrive once, in order", got == big);
+    Check("blocking write releases every wait and handle", live_waits.load() == 0 && live_handles.load() == 0);
+  }
   for (int iteration = 0; iteration != 32; ++iteration) {
     ReaderTask task{r}; pthread_t caller;
     Require("blocking caller starts", pthread_create(&caller, nullptr, BlockedRead, &task) == 0);

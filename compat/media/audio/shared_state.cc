@@ -21,7 +21,7 @@ struct SharedAudioState {
   uint32_t version;
   volatile LONG generation;
   volatile LONG next_session;
-  volatile LONG lock;  // the updates' spin lock, only without the named mutex
+  volatile LONG lock;  // the updates' spin lock, taken inside the named mutex
   int32_t index[kNumStreamTypes];
   int32_t min_index[kNumStreamTypes];
   int32_t max_index[kNumStreamTypes];
@@ -116,6 +116,9 @@ class SpinLock {
   explicit SpinLock(SharedAudioState* s) : s_(s), mutex_(LockMutex()) {
     if (mutex_ != nullptr) {
       const DWORD wait = WaitForSingleObject(mutex_, INFINITE);
+      // A holder that died inside the mutex may have left the spin lock
+      // taken; with the mutex, no one else holds it.
+      if (wait == WAIT_ABANDONED) InterlockedExchange(&s_->lock, 0);
       if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) mutex_ = nullptr;
     }
     for (int spins = 0; InterlockedCompareExchange(&s_->lock, 1, 0) != 0; spins++) {

@@ -105,8 +105,7 @@ int CompletePipeIo(BOOL done, DWORD transferred, DWORD error, bool writing) {
 // transfer before it moved a byte: the caller restarts it (ADR 0093).
 constexpr int kPipeTransferRestart = -2;
 int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
-                       bool immediate, HANDLE canceled, HANDLE interrupted,
-                       HANDLE gate = nullptr) {
+                       bool immediate, HANDLE canceled, HANDLE interrupted) {
   DWORD transferred = 0;
   if (immediate) {
     const BOOL done = writing ? WriteFile(file, bytes, count, &transferred, nullptr)
@@ -140,17 +139,12 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
   {
     // Blocked for data or room (in ReadFile/WriteFile itself for a
     // synchronous handle, else in GetOverlappedResult) while owning the
-    // description's gate: a safe point for a ptrace stop (ADR 0093), as a
-    // Linux stop takes a thread blocked in read() or write() on a pipe.
-    //  - A read is interrupted (and restarted after the stop), so that the
-    //    gate and the handle are free while the process is stopped: a
-    //    cancelled read has taken no data.
-    //  - A write is not: a pending write larger than the room in the pipe is
-    //    partly read while it waits, and a cancelled one reports none of it
-    //    (its bytes would be written twice). It stays pending while the
-    //    process is stopped, and the stop leaves it its gate, which no other
-    //    writer could use before it completes anyway (the pipe is full).
-    gesher::ptrace::ParkedScope parked(gate, !writing);
+    // description's gate: a ptrace stop interrupts it (ADR 0093), as a Linux
+    // stop interrupts a blocked read() or write(), so that the gate and the
+    // handle are free while the process is stopped. A cancelled read has
+    // taken no data; a blocking write that can be pending here is a single
+    // byte (WriteInPieces), which a cancellation cannot split.
+    gesher::ptrace::ParkedScope parked;
     parked.SetIo(file, &operation.overlapped);
     done = writing ? WriteFile(file, bytes, count, &transferred, &operation.overlapped)
                    : ReadFile(file, bytes, count, &transferred, &operation.overlapped);
@@ -159,17 +153,85 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
       done = GetOverlappedResult(file, &operation.overlapped, &transferred, TRUE);
       error = done ? ERROR_SUCCESS : GetLastError();
     }
-    // A read the ptrace guard cancelled: it is the only canceller besides
-    // the caller's cancellation events, so an aborted read with neither
-    // event set restarts (also one the guard reached after its target read
-    // completed).
-    restart = !writing && !done && error == ERROR_OPERATION_ABORTED && transferred == 0 &&
+    // A transfer the ptrace guard cancelled: it is the only canceller
+    // besides the caller's cancellation events, so an aborted transfer that
+    // moved nothing, with neither event set, restarts (also one the guard
+    // reached after its target request completed).
+    restart = !done && error == ERROR_OPERATION_ABORTED && transferred == 0 &&
               !(canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) &&
               !(interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0);
   }
   operation.active.store(false, std::memory_order_release);
   if (restart) return kPipeTransferRestart;
   return CompletePipeIo(done, transferred, error, writing);
+}
+
+bool Signaled(HANDLE event) { return event && WaitForSingleObject(event, 0) == WAIT_OBJECT_0; }
+
+// A blocking write to a Gesher pipe, so that no write of it is ever pending in
+// the kernel with more than one byte. A pending write larger than the room in
+// the pipe is partly read while it waits, a cancelled one (a ptrace stop, a
+// signal) then reports none of it although some of it was read, and the
+// thread that issued it holds the handle's file object (and the
+// description's gate) until it completes, also while it is stopped. So:
+//  - the bytes go in pieces that fit the free buffer space the pipe reports
+//    (WriteQuotaAvailable): such a write is buffered at once, complete;
+//  - the pipe reports no room both when its buffer is full and when a read is
+//    pending on its other end (its buffer is then empty). One byte is then
+//    written blocking: it completes at once into the pending read, or when
+//    the reader frees room; a ptrace stop or a signal cancels it without
+//    ambiguity (it was read or it was not). The next piece fits the room
+//    reported again;
+//  - a write of at most PIPE_BUF bytes is written whole when the reported
+//    room holds it, and otherwise waits (1 ms polls, nothing pending, where a
+//    stop can take it) while the buffer is partly full; when the pipe reports
+//    no room at all it starts with the blocking byte, and its rest follows
+//    as above (atomic unless a stop or signal falls in between and another
+//    writer of the same description writes meanwhile).
+// (Switching the endpoint to PIPE_NOWAIT for each piece would not need the
+// reported room, but Windows refuses that switch with ERROR_PIPE_BUSY while
+// the pipe holds data, which is when a blocking write needs it.)
+// `*total` counts the bytes in the pipe so far, across interruptions.
+// Returns the total when done, -1 with errno, or kPipeTransferRestart when a
+// ptrace stop interrupted it (the caller waits for the stop to end without
+// the gate and continues with `*total`).
+int WriteInPieces(HANDLE file, const char* bytes, unsigned count, unsigned* total,
+                  HANDLE canceled, HANDLE interrupted) {
+  constexpr unsigned kPipeBuf = 4096;
+  bool atomic = count <= kPipeBuf;
+  auto partial = [&](int error) { return *total != 0 ? static_cast<int>(*total) : (errno = error, -1); };
+  while (*total < count) {
+    if (Signaled(canceled) || Signaled(interrupted)) return partial(EINTR);
+    const unsigned remaining = count - *total;
+    FILE_PIPE_LOCAL_INFORMATION info{};
+    if (QueryPipe(file, &info, sizeof(info), FilePipeLocalInformation) < 0) return partial(errno);
+    const unsigned room = static_cast<unsigned>(info.WriteQuotaAvailable);
+    if (info.NamedPipeState == 3 && room != 0 && (!atomic || room >= remaining)) {
+      const int written = NativePipeTransfer(file, const_cast<char*>(bytes) + *total,
+                                             std::min(remaining, room), true, true, nullptr, nullptr);
+      if (written < 0) return partial(errno);
+      *total += static_cast<unsigned>(written);
+      continue;
+    }
+    if (info.NamedPipeState == 3 && room != 0) {
+      // A PIPE_BUF write and a partly full buffer: wait for room for all of
+      // it, with nothing pending.
+      gesher::ptrace::ParkedScope parked;
+      if (parked.Interrupted()) return kPipeTransferRestart;
+      Sleep(1);
+      if (parked.Interrupted()) return kPipeTransferRestart;
+      continue;
+    }
+    // No room reported (full, or a read pending on the other end), or the
+    // reader is gone (the write reports it): one byte, blocking.
+    const int one = NativePipeTransfer(file, const_cast<char*>(bytes) + *total, 1, true, false,
+                                       canceled, interrupted);
+    if (one == kPipeTransferRestart) return kPipeTransferRestart;
+    if (one < 0) return partial(errno);
+    *total += static_cast<unsigned>(one);
+    atomic = false;  // its rest follows in pieces
+  }
+  return static_cast<int>(*total);
 }
 }
 
@@ -241,9 +303,11 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
 namespace {
 int TransferPipeBody(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count,
                      bool writing, HANDLE canceled, HANDLE interrupted) {
+  unsigned written = 0;  // a blocking write's bytes already in the pipe
   for (;;) {
-    if (canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
-    if (interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
+    if (Signaled(canceled) || Signaled(interrupted)) {
+      return written != 0 ? static_cast<int>(written) : (errno = EINTR, -1);
+    }
     int result;
     {
       auto& description = *snapshot->description;
@@ -263,13 +327,18 @@ int TransferPipeBody(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigne
           amount = std::min(amount, quota);
         }
       }
-      result = NativePipeTransfer(snapshot->handle, bytes, amount, writing, immediate, canceled,
-                                  interrupted, description.pipe_mutex);
+      if (writing && !immediate && description.OwnedPipe() && description.KnownPipeStatus()) {
+        result = WriteInPieces(snapshot->handle, static_cast<const char*>(bytes), count, &written,
+                               canceled, interrupted);
+      } else {
+        result = NativePipeTransfer(snapshot->handle, bytes, amount, writing, immediate, canceled,
+                                    interrupted);
+      }
     }
     if (result != kPipeTransferRestart) return result;
     // A ptrace stop interrupted the blocked transfer: wait for the stop to
-    // end without the gate, then restart the transfer, as Linux restarts the
-    // call (ADR 0093).
+    // end without the gate, then go on (a write with the bytes it already
+    // wrote), as Linux restarts the call (ADR 0093).
     gesher::ptrace::WaitWhileStopping();
   }
 }

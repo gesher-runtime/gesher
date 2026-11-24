@@ -74,10 +74,11 @@ constexpr int kStatusEventStop = 0x80057f;  // SIGTRAP | PTRACE_EVENT_STOP << 8
 constexpr int kWnowait = 0x01000000, kWclone = static_cast<int>(0x80000000u),
               kWall = 0x40000000;
 constexpr int kMaxSignal = 64;
-// How long ATTACH waits for a process that has just started to publish its
+// How long after a process's creation ATTACH waits for it to publish its
 // ptrace state and start its guard (its executable's start-up, before main;
-// a loaded machine can take seconds).
-constexpr int kStartupWaitMs = 10000;
+// a loaded machine can take seconds). A process older than that without a
+// state is not a Gesher process: EPERM at once.
+constexpr ULONGLONG kStartupWaitMs = 10000;
 
 enum class TraceeState { kRunning, kStopPending, kStopped };
 
@@ -204,7 +205,13 @@ int64_t Attach(int pid, bool seize, uint64_t addr, uint64_t options) {
     // guard during its start-up: wait for them a bounded time. One that
     // publishes no state, or has no guard to stop it (gesher-base only in a
     // DLL), cannot be stopped as Linux stops a tracee.
-    const ULONGLONG deadline = GetTickCount64() + kStartupWaitMs;
+    FILETIME now_time;
+    GetSystemTimeAsFileTime(&now_time);
+    const int64_t now = static_cast<int64_t>(
+        (static_cast<uint64_t>(now_time.dwHighDateTime) << 32) | now_time.dwLowDateTime);
+    const ULONGLONG age_ms = now > start ? static_cast<ULONGLONG>(now - start) / 10000 : 0;
+    const ULONGLONG deadline =
+        GetTickCount64() + (age_ms < kStartupWaitMs ? kStartupWaitMs - age_ms : 0);
     for (;;) {
       DWORD code = 0;
       if (!GetExitCodeProcess(process, &code) || code != STILL_ACTIVE) {

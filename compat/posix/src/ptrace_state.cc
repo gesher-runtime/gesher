@@ -19,17 +19,16 @@
 //  1. suspends every other thread of its process (GetThreadContext waits
 //     until each really is), repeating until a pass finds none running;
 //  2. looks for a Gesher mutex (its name starts with "gesher", any case) that
-//     one of them owns. A thread blocked in a pipe write (ParkedScope, not
-//     restartable) owns its pipe description's gate at a safe point: that
-//     gate is left to it. Otherwise it resumes them all; if the owner is
-//     blocked in a pipe read (ParkedScope, restartable), it cancels that
-//     read, as a Linux stop interrupts a blocked read(): the owner releases
-//     the gate and waits for the stop to end outside it, then restarts its
-//     read. It waits (20 ms at a time, redoing the pass) for the mutex, and
-//     once it has it suspends them all again holding it (no thread can take
-//     it again before all are suspended), releases it and checks again;
+//     one of them owns. It resumes them all; if the owner is parked in one of
+//     Gesher's blocking waits (ParkedScope: a pipe transfer holds its
+//     description's gate while it blocks), it interrupts that wait, as a
+//     Linux stop interrupts a blocked read() or write(): the owner releases
+//     the gate and waits for the stop to end outside it, then goes on. It
+//     waits (20 ms at a time, redoing the pass) for the mutex, and once it
+//     has it suspends them all again holding it (no thread can take it again
+//     before all are suspended), releases it and checks again;
 //  3. publishes `stopped` only when every other thread is suspended and none
-//     owns a Gesher mutex but a blocked writer's gate. A step that cannot be
+//     owns a Gesher mutex. A step that cannot be
 //     completed (a thread it cannot suspend, a handle list it cannot read)
 //     never publishes a stop: it retries.
 // While stopped it rescans every 20 ms; a thread the system started meanwhile
@@ -103,8 +102,7 @@ enum class Walk { kComplete, kIncomplete };
 Walk SuspendOthers(int* added = nullptr) {
   const DWORD self = GetCurrentThreadId();
   constexpr ACCESS_MASK kAccess = THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
-                                  THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE |
-                                  THREAD_TERMINATE;  // CancelSynchronousIo
+                                  THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
   Walk result = Walk::kComplete;
   for (bool changed = true; changed;) {
     changed = false;
@@ -217,11 +215,10 @@ bool GesherMutex(HANDLE handle) {
 
 enum class Owned { kNone, kFound, kUnknown };
 
-// A duplicate of a Gesher mutex a suspended thread owns, and its owner,
-// except the gate a thread owns while parked in a wait a stop leaves as it
-// is. kUnknown when the handles cannot be listed or a Gesher mutex cannot be
+// A duplicate of a Gesher mutex a suspended thread owns, and its owner.
+// kUnknown when the handles cannot be listed or a Gesher mutex cannot be
 // examined; other mutexes (a Windows DLL's, the app's) are not looked at.
-Owned OwnedMutex(SharedState* state, HANDLE* out, DWORD* owner_tid) {
+Owned OwnedMutex(HANDLE* out, DWORD* owner_tid) {
   *out = nullptr;
   *owner_tid = 0;
   if (g_query_process == nullptr || g_query_mutant == nullptr || g_query_object == nullptr ||
@@ -269,10 +266,7 @@ Owned OwnedMutex(SharedState* state, HANDLE* out, DWORD* owner_tid) {
         g_query_mutant(query, kMutantOwnerInformation, &owner, sizeof(owner), nullptr);
     const DWORD thread = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(owner.thread));
     const bool ours = status >= 0 && thread != 0 && AlreadySuspended(thread);
-    const ParkedSlot* parked = ours ? FindParked(state, thread) : nullptr;
-    const bool left = parked != nullptr && parked->restartable == 0 &&
-                      parked->gate == static_cast<LONG64>(reinterpret_cast<intptr_t>(entry.handle));
-    if (status < 0 || !ours || left) {
+    if (status < 0 || !ours) {
       if (copy != nullptr) CloseHandle(copy);
       if (status < 0) return Owned::kUnknown;
       continue;
@@ -365,21 +359,22 @@ bool ReachSafePoint(SharedState* state, int64_t tracer) {
     }
     HANDLE mutex = nullptr;
     DWORD owner = 0;
-    const Owned owned = OwnedMutex(state, &mutex, &owner);
+    const Owned owned = OwnedMutex(&mutex, &owner);
     if (owned == Owned::kNone) return true;
-    // A suspended thread owns a Gesher mutex. Parked in an interruptible
-    // blocking wait (a pipe read), it is interrupted: it gives the mutex back
-    // and waits for the stop outside it. The request is identified while
-    // the thread is suspended (its handle and OVERLAPPED) and cancelled once
-    // it runs again: cancelling a thread's synchronous I/O waits for that
-    // thread, so it cannot be done while it is suspended. CancelIoEx with
-    // that OVERLAPPED reaches no other request than that read, or a later
-    // read of the same thread on the same pipe, which then restarts too.
+    // A suspended thread owns a Gesher mutex. Parked in one of Gesher's
+    // blocking waits, it is interrupted: it gives the mutex back and waits
+    // for the stop outside it. A wait in I/O is identified while the thread
+    // is suspended (its handle and OVERLAPPED) and cancelled once it runs
+    // again: cancelling a thread's synchronous I/O waits for that thread, so
+    // it cannot be done while it is suspended. CancelIoEx with that
+    // OVERLAPPED reaches no other request than that one, or a later one of
+    // the same thread with the same OVERLAPPED on the same handle, which is
+    // then interrupted as harmlessly (a transfer that moved nothing restarts).
     HANDLE cancel_file = nullptr;
     OVERLAPPED* cancel_overlapped = nullptr;
     if (owned == Owned::kFound) {
       ParkedSlot* slot = FindParked(state, owner);
-      if (slot != nullptr && slot->restartable != 0) {
+      if (slot != nullptr) {
         InterlockedExchange(&slot->restart, 1);
         cancel_file = reinterpret_cast<HANDLE>(static_cast<intptr_t>(slot->file));
         cancel_overlapped = reinterpret_cast<OVERLAPPED*>(static_cast<intptr_t>(slot->overlapped));
@@ -475,7 +470,7 @@ DWORD WINAPI GuardMain(void* parameter) {
       HANDLE mutex = nullptr;
       DWORD owner = 0;
       const Owned owned =
-          walk == Walk::kComplete ? OwnedMutex(state, &mutex, &owner) : Owned::kUnknown;
+          walk == Walk::kComplete ? OwnedMutex(&mutex, &owner) : Owned::kUnknown;
       if (owned == Owned::kNone) continue;
       if (mutex != nullptr) CloseHandle(mutex);
       // Not at a safe point any more: withdraw the stop until it is again.
@@ -541,9 +536,7 @@ void CreateLocked(DWORD pid) {
     for (int i = 0; i < kParkedSlots; ++i) {
       InterlockedExchange(&state->parked[i].tid, 0);
       InterlockedExchange(&state->parked[i].restart, 0);
-      InterlockedExchange(&state->parked[i].restartable, 0);
-      InterlockedExchange64(&state->parked[i].gate, 0);
-      InterlockedExchange(&state->parked[i].reserved, 0);
+      InterlockedExchange(&state->parked[i].taken, 0);
     }
     InterlockedExchange(&state->pid, static_cast<LONG>(pid));
   }
@@ -609,8 +602,15 @@ SharedState* Self() {
 }
 
 int64_t SelfTracerId() {
-  static const int64_t start = ProcessStartTime(GetCurrentProcess());
-  return TracerId(GetCurrentProcessId(), start);
+  // Cached per process: a process cloned from this one (fork) has another
+  // pid and creation time, and computes its own.
+  static volatile LONG64 cached_id = 0;
+  const DWORD pid = GetCurrentProcessId();
+  const int64_t cached = cached_id;
+  if (cached != 0 && TracerIdPid(cached) == pid) return cached;
+  const int64_t id = TracerId(pid, ProcessStartTime(GetCurrentProcess()));
+  InterlockedExchange64(&cached_id, id);
+  return id;
 }
 
 int GetDumpable() {
@@ -705,20 +705,18 @@ const PublishedCodeWrites* CodeWrites() { return &g_code_writes; }
 
 void SetHaltHook(HaltHook hook) { g_halt_hook = hook; }
 
-ParkedScope::ParkedScope(HANDLE gate, bool restartable) {
+ParkedScope::ParkedScope() {
   SharedState* state = Self();
   if (state == nullptr) return;
   const LONG tid = static_cast<LONG>(GetCurrentThreadId());
   // The slot is filled before its thread id is, so that the guard never sees
-  // a thread with another's gate.
+  // a thread with another's request.
   for (int i = 0; i < kParkedSlots; ++i) {
     ParkedSlot& slot = state->parked[i];
-    if (InterlockedCompareExchange(&slot.reserved, 1, 0) != 0) continue;  // claimed
+    if (InterlockedCompareExchange(&slot.taken, 1, 0) != 0) continue;
     InterlockedExchange(&slot.restart, 0);
-    InterlockedExchange64(&slot.gate, static_cast<LONG64>(reinterpret_cast<intptr_t>(gate)));
     InterlockedExchange64(&slot.file, 0);
     InterlockedExchange64(&slot.overlapped, 0);
-    InterlockedExchange(&slot.restartable, restartable ? 1 : 0);
     InterlockedExchange(&slot.tid, tid);
     slot_ = &slot;
     return;
@@ -739,9 +737,7 @@ ParkedScope::~ParkedScope() {
   InterlockedExchange64(&slot_->file, 0);
   InterlockedExchange64(&slot_->overlapped, 0);
   InterlockedExchange(&slot_->restart, 0);
-  InterlockedExchange64(&slot_->gate, 0);
-  InterlockedExchange(&slot_->restartable, 0);
-  InterlockedExchange(&slot_->reserved, 0);  // free
+  InterlockedExchange(&slot_->taken, 0);
 }
 
 void WaitWhileStopping() {

@@ -37,9 +37,8 @@ constexpr int kCodeWrites = 64;  // a ring; older writes than that clear everyth
 struct ParkedSlot {
   volatile LONG tid;
   volatile LONG restart;      // the guard interrupted its wait for a stop
-  volatile LONG restartable;  // a stop interrupts the wait (else it is left)
-  volatile LONG reserved;     // the slot is taken
-  volatile LONG64 gate;       // the mutex it owns (its handle value here)
+  volatile LONG taken;        // the slot is in use
+  volatile LONG reserved;
   volatile LONG64 file;       // the handle and OVERLAPPED of its pending I/O
   volatile LONG64 overlapped;
 };
@@ -70,7 +69,7 @@ struct SharedState {
   // the stop to end outside it, and restarts its call.
   ParkedSlot parked[kParkedSlots];
 };
-constexpr LONG kStateVersion = 7;
+constexpr LONG kStateVersion = 8;
 constexpr LONG kOptExitkill = 0x100000;  // PTRACE_O_EXITKILL
 
 // A tracer's identity: its pid in the low half, the low 32 bits of its
@@ -143,20 +142,20 @@ using HaltHook = void (*)();
 void SetHaltHook(HaltHook hook);
 
 // Marks the calling thread as parked in a Gesher blocking wait while it owns
-// the Gesher mutex `gate`, for the scope's lifetime. A stop interrupts a
-// restartable wait (CancelSynchronousIo): the caller then sees
-// Interrupted(), releases the mutex, calls WaitWhileStopping() and restarts
-// its call, as Linux restarts a system call a stop interrupted. A wait that
-// cannot be interrupted without losing track of its progress (a pipe write)
-// is a safe point as it is: the stop leaves it pending, owning `gate`.
+// one of Gesher's cross-process mutexes, for the scope's lifetime. A stop
+// interrupts the wait: it sets Interrupted() and, for a wait in I/O, cancels
+// that very request (CancelIoEx; the guard identifies it while the thread is
+// suspended and cancels it once the thread runs again). The caller then
+// releases the mutex, calls WaitWhileStopping() and goes on, as Linux
+// restarts a system call a stop interrupted. The wait must lose nothing when
+// interrupted: a read that took no data, a one-byte write, a poll.
 class ParkedScope {
  public:
-  explicit ParkedScope(HANDLE gate = nullptr, bool restartable = true);
+  ParkedScope();
   ~ParkedScope();
   ParkedScope(const ParkedScope&) = delete;
   ParkedScope& operator=(const ParkedScope&) = delete;
-  // The I/O the wait is for: a stop cancels exactly that request
-  // (CancelIoEx), with the thread still suspended in it.
+  // The I/O the wait is for (a stop cancels exactly that request).
   void SetIo(HANDLE file, OVERLAPPED* overlapped);
   // Whether a stop interrupted the wait.
   bool Interrupted() const { return slot_ != nullptr && slot_->restart != 0; }
