@@ -81,6 +81,36 @@ path of apps that name the library, and of apps targeting API 27 or lower,
 which get it without naming it, as Android's OrgApacheHttpLegacyUpdater
 adds it. FrameworkFixesTest's track (94) checks it with `HttpLegacyTest`.
 
+`android.test.base`, `android.test.mock` and `android.test.runner`
+(frameworks/base/test-base, test-mock and test-runner, with JUnit 3 from
+test-junit) are the libraries Android declares in platform.xml; GloryFit and
+some system APKs name `android.test.runner` in `<uses-library>`. Each is built
+the same way, against the framework's classes:
+
+```
+for m in android.test.base android.test.mock android.test.runner; do
+  tools/framework/build.py $m --aosp <aosp> --out out/$m --core-classes out/coremod \
+    --classpath out/framework/classes --provided framework \
+    --provided framework-annotations-lib --provided app-compat-annotations \
+    --provided unsupportedappusage --checkout
+done
+```
+
+`--provided` names libraries the `--classpath` already holds compiled, which
+the planner then leaves out (android.test.mock's `libs` include `framework`).
+android.test.runner compiles against the other two's implementations
+(`impl_only_libs`). frameworks/base's sparse set needs no change:
+`tools/sparse-bp.sh` adds the projects' `.bp` files and `--checkout` the
+sources. The jars and their declarations
+(`tools/package/etc/permissions/android.test.*.xml`, platform.xml's, with
+android.test.runner depending on the other two) are installed as above, and
+JUnit's license (CPL 1.0) as `licenses/JUNIT-CPL-NOTICES.txt`.
+`SharedLibraryRegistry.withImplicit` adds what PackageBackwardCompatibility
+adds: android.test.mock and android.test.base with android.test.runner
+(AndroidTestRunnerSplitUpdater, AndroidTestBaseUpdater), and android.test.base
+for apps targeting API 29 or lower. Track 94 checks them with
+`AndroidTestLibrariesTest`.
+
 ## gesher-app.jar without building the framework
 `app/build.sh` needs framework.jar's classes and libcore's java.base, not the
 framework build: the `framework-classes` artifact of a CI run (the `ci`

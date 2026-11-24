@@ -186,9 +186,13 @@ public final class BluetoothAdapter {
         return DEFAULT_MAC_ADDRESS;
     }
 
+    // As Android 16, the scan-mode and discovery calls answer a radio that is not on before
+    // reaching the service; the service enforces BLUETOOTH_SCAN when the radio is on.
+
     public int getScanMode() {
+        if (!isEnabled()) return SCAN_MODE_NONE;
         BluetoothHost.enforceScan(mContext);
-        return isEnabled() ? SCAN_MODE_CONNECTABLE : SCAN_MODE_NONE;
+        return SCAN_MODE_CONNECTABLE;
     }
 
     // --- devices ---------------------------------------------------------------------------
@@ -224,20 +228,21 @@ public final class BluetoothAdapter {
     }
 
     public boolean startDiscovery() {
-        BluetoothHost.enforceScan(mContext);
         if (!isEnabled()) return false;
+        BluetoothHost.enforceScan(mContext);
         return BluetoothManagerService.Client.startDiscovery();
     }
 
     public boolean cancelDiscovery() {
-        BluetoothHost.enforceScan(mContext);
         if (!isEnabled()) return false;
+        BluetoothHost.enforceScan(mContext);
         return BluetoothManagerService.Client.cancelDiscovery();
     }
 
     public boolean isDiscovering() {
+        if (!isEnabled()) return false;
         BluetoothHost.enforceScan(mContext);
-        return isEnabled() && BluetoothManagerService.Client.isDiscovering();
+        return BluetoothManagerService.Client.isDiscovering();
     }
 
     // --- LE ------------------------------------------------------------------------------
@@ -355,12 +360,15 @@ public final class BluetoothAdapter {
 
     @Deprecated
     public void stopLeScan(LeScanCallback callback) {
+        // As Android 16: nothing with BLE off or for a callback that never started; the
+        // scanner enforces BLUETOOTH_SCAN when an active scan is stopped.
+        BluetoothLeScanner scanner = getBluetoothLeScanner();
+        if (scanner == null) return;
         ScanCallback wrapper;
         synchronized (mLeScans) {
             wrapper = mLeScans.remove(callback);
         }
-        BluetoothLeScanner scanner = getBluetoothLeScanner();
-        if (wrapper != null && scanner != null) scanner.stopScan(wrapper);
+        if (wrapper != null) scanner.stopScan(wrapper);
     }
 
     // --- profiles ----------------------------------------------------------------------

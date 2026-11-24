@@ -135,6 +135,8 @@ public final class GraphicsTest {
       }
     }
 
+    files(bitmap, outDir);
+
     BitmapFactory.Options options = new BitmapFactory.Options();
     options.inJustDecodeBounds = true;
     ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -142,6 +144,69 @@ public final class GraphicsTest {
     BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.size(), options);
     check(options.outWidth == 32 && options.outHeight == 16 && "image/png".equals(options.outMimeType),
         "BitmapFactory: inJustDecodeBounds (32x16 image/png)");
+  }
+
+  /**
+   * Decoding from a file goes through a file descriptor: BitmapFactory.decodeFile and
+   * decodeFileDescriptor, and ImageDecoder's File source (image loaders such as Coil decode
+   * their disk cache this way). The descriptor's offset is restored after BitmapFactory reads.
+   */
+  private static void files(Bitmap bitmap, File dir) throws Exception {
+    File file = File.createTempFile("graphics_test", ".jpg", dir);
+    try {
+      try (java.io.FileOutputStream f = new java.io.FileOutputStream(file)) {
+        check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, f), "Bitmap.compress JPEG into a file");
+      }
+      Bitmap decoded = BitmapFactory.decodeFile(file.getPath());
+      check(decodedImage(decoded), "BitmapFactory.decodeFile");
+
+      try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+        decoded = BitmapFactory.decodeFileDescriptor(in.getFD());
+        long position = in.getChannel().position();
+        check(decodedImage(decoded) && position == 0,
+            "BitmapFactory.decodeFileDescriptor, the offset restored (" + position + ")");
+      }
+
+      // An image after other data: decoded from the descriptor's offset, which is restored.
+      File prefixed = File.createTempFile("graphics_test_prefixed", ".bin", dir);
+      try {
+        byte[] jpeg = java.nio.file.Files.readAllBytes(file.toPath());
+        try (java.io.FileOutputStream f = new java.io.FileOutputStream(prefixed)) {
+          f.write(new byte[37]);
+          f.write(jpeg);
+        }
+        try (java.io.FileInputStream in = new java.io.FileInputStream(prefixed)) {
+          in.getChannel().position(37);
+          decoded = BitmapFactory.decodeFileDescriptor(in.getFD());
+          long position = in.getChannel().position();
+          check(decodedImage(decoded) && position == 37,
+              "BitmapFactory.decodeFileDescriptor at offset 37, the offset restored (" + position
+                  + ")");
+        }
+      } finally {
+        prefixed.delete();
+      }
+
+      String error = "";
+      try {
+        decoded = android.graphics.ImageDecoder.decodeBitmap(
+            android.graphics.ImageDecoder.createSource(file),
+            (decoder, info, source) -> decoder.setAllocator(
+                android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE));
+      } catch (Exception e) {
+        decoded = null;
+        error = " (" + e + ")";
+      }
+      check(decodedImage(decoded), "ImageDecoder: a File source" + error);
+    } finally {
+      file.delete();
+    }
+  }
+
+  private static boolean decodedImage(Bitmap decoded) {
+    return decoded != null && decoded.getWidth() == 32 && decoded.getHeight() == 16
+        && near(decoded.getPixel(4, 8), Color.rgb(0xf0, 0x80, 0x10), 24)
+        && near(decoded.getPixel(28, 8), Color.rgb(0x20, 0x60, 0xc0), 24);
   }
 
   private static void text(String fontPath) {
