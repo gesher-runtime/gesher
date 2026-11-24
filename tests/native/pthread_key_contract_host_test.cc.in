@@ -4,9 +4,14 @@
 #include "pthread_cleanup.h"
 
 #include <cerrno>
+#include <array>
+#include <atomic>
+#include <barrier>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <future>
 #include <mutex>
 #include <pthread.h>
 #include <thread>
@@ -184,6 +189,10 @@ static void test_generation_limit() {
   check("pthread keys: last generation is usable",
         gesher_bionic_pthread_key_create(&key, nullptr) == 0 && key == 0 &&
         g_key_generations[0] == UINT64_MAX);
+  int value = 19;
+  check("pthread keys: last generation retains its local value",
+        gesher_bionic_pthread_setspecific(key, &value) == 0 &&
+        gesher_bionic_pthread_getspecific(key) == &value);
   check("pthread keys: exhausted generation retires without wrap",
         gesher_bionic_pthread_key_delete(key) == 0 &&
         gesher_bionic_pthread_key_create(&next, nullptr) == kEAGAIN && next == -1 &&
@@ -192,6 +201,117 @@ static void test_generation_limit() {
   std::puts("SKIP generation boundary: baseline has no generation state");
 #endif
 }
+
+struct KeyReader {
+  int calls = 0;
+  bool valid = true;
+};
+static void ReaderExit(void* value) { ++static_cast<KeyReader*>(value)->calls; }
+
+static void test_readers() {
+  for (int count : {1, 8, 32}) for (bool distinct : {false, true}) {
+    const int key_count = distinct ? count : 1;
+    std::array<int32_t, 32> keys{};
+    bool created = true;
+    for (int i = 0; i < key_count; ++i)
+      created &= gesher_bionic_pthread_key_create(&keys[i], ReaderExit) == 0;
+    check("pthread keys: create independent or shared reader keys", created);
+    if (!created) return;
+    std::array<KeyReader, 32> states;
+    std::array<std::thread, 32> readers;
+    std::barrier start(count + 2);
+    std::atomic<bool> writer_ok{true};
+    for (int i = 0; i < count; ++i) readers[i] = std::thread([&, i] {
+      auto& state = states[i];
+      const int32_t key = keys[distinct ? i : 0];
+      state.valid = gesher_bionic_pthread_setspecific(key, &state) == 0;
+      start.arrive_and_wait();
+      for (int n = 0; n < 4000; ++n) {
+        errno = ERANGE;
+        state.valid &= gesher_bionic_pthread_getspecific(key) == &state && errno == ERANGE;
+      }
+    });
+    std::thread writer([&] {
+      start.arrive_and_wait();
+      for (int n = 0; n < 1000; ++n) {
+        int32_t key = -1;
+        if (gesher_bionic_pthread_key_create(&key, nullptr) != 0 ||
+            gesher_bionic_pthread_key_delete(key) != 0) writer_ok = false;
+      }
+    });
+    start.arrive_and_wait();
+    for (int i = 0; i < count; ++i) readers[i].join();
+    writer.join();
+    for (int i = 0; i < count; ++i)
+      check("pthread keys: concurrent read keeps own value, errno and one exit callback",
+            states[i].valid && states[i].calls == 1);
+    check("pthread keys: unrelated key churn completes", writer_ok.load());
+    for (int i = 0; i < key_count; ++i)
+      check("pthread keys: retire reader key after native exit", gesher_bionic_pthread_key_delete(keys[i]) == 0);
+  }
+
+  int32_t key = -1;
+  check("pthread keys: create synchronized reuse key", gesher_bionic_pthread_key_create(&key, ReaderExit) == 0);
+  std::array<KeyReader, 8> states;
+  std::array<std::thread, 8> readers;
+  std::barrier phase(9);
+  for (int i = 0; i < 8; ++i) readers[i] = std::thread([&, i] {
+    auto& state = states[i];
+    for (int epoch = 0; epoch < 64; ++epoch) {
+      state.valid &= gesher_bionic_pthread_setspecific(key, &state) == 0;
+      phase.arrive_and_wait();
+      phase.arrive_and_wait();
+      errno = EDOM;
+      state.valid &= gesher_bionic_pthread_getspecific(key) == nullptr && errno == EDOM;
+      phase.arrive_and_wait();
+    }
+  });
+  for (int epoch = 0; epoch < 64; ++epoch) {
+    phase.arrive_and_wait();
+    int32_t replacement = -1;
+    const bool replaced = gesher_bionic_pthread_key_delete(key) == 0 &&
+        gesher_bionic_pthread_key_create(&replacement, ReaderExit) == 0 && replacement == key;
+    check("pthread keys: synchronized same-slot generation publication", replaced);
+    phase.arrive_and_wait();
+    phase.arrive_and_wait();
+  }
+  for (auto& reader : readers) reader.join();
+  for (const auto& state : states)
+    check("pthread keys: published reuse clears every old local generation", state.valid && state.calls == 0);
+  check("pthread keys: retire synchronized reuse key", gesher_bionic_pthread_key_delete(key) == 0);
+  errno = EDOM;
+  check("pthread keys: invalid and deleted reads preserve errno",
+        gesher_bionic_pthread_getspecific(-1) == nullptr &&
+        gesher_bionic_pthread_getspecific(INT32_MAX) == nullptr &&
+        gesher_bionic_pthread_getspecific(key) == nullptr && errno == EDOM);
+}
+
+static void test_read_progress(bool require_progress) {
+  int32_t key = -1;
+  check("pthread keys: create registry-independence key", gesher_bionic_pthread_key_create(&key, nullptr) == 0);
+  std::promise<void> ready, go, returned;
+  auto ready_future = ready.get_future(), go_future = go.get_future(), returned_future = returned.get_future();
+  bool value_ok = false;
+  std::thread reader([&] {
+    int local = 1;
+    value_ok = gesher_bionic_pthread_setspecific(key, &local) == 0;
+    ready.set_value();
+    go_future.wait();
+    value_ok &= gesher_bionic_pthread_getspecific(key) == &local;
+    returned.set_value();
+  });
+  ready_future.wait();
+  std::unique_lock<std::mutex> registry(g_keys_mutex);
+  go.set_value();
+  const bool progressed = returned_future.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+  registry.unlock();  // Also release an unchanged-baseline reader before joining it.
+  reader.join();
+  check("pthread keys: registry-independence read returns its real local value", value_ok);
+  if (require_progress) check("pthread keys: local read proceeds while key registry is locked", progressed);
+  else std::printf("OBSERVE local read while key registry locked: %d\n", int(progressed));
+  check("pthread keys: retire registry-independence key", gesher_bionic_pthread_key_delete(key) == 0);
+}
+
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   if (std::strcmp(argv[1], "public") == 0) test_pthread_key_contracts();
@@ -199,6 +319,9 @@ int main(int argc, char** argv) {
   else if (std::strcmp(argv[1], "exit_order") == 0) test_exit_order();
   else if (std::strcmp(argv[1], "host_exit") == 0) test_host_exit();
   else if (std::strcmp(argv[1], "generation_limit") == 0) test_generation_limit();
+  else if (std::strcmp(argv[1], "readers") == 0) test_readers();
+  else if (std::strcmp(argv[1], "read_progress") == 0) test_read_progress(true);
+  else if (std::strcmp(argv[1], "observe_read_progress") == 0) test_read_progress(false);
   else return 2;
   return failures == 0 ? 0 : 1;
 }

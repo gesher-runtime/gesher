@@ -39,12 +39,17 @@ struct key_contract_work {
   pthread_cond_t* condition;
   int* ready;
   int* released;
-  int assign_new, saw_null, result;
+  int assign_new, saw_null, local_reads, result;
   struct key_contract_payload old_value, new_value;
 };
 static void* key_contract_worker(void* context) {
   struct key_contract_work* work = (struct key_contract_work*)context;
   work->result = work->api.set(work->old_key, &work->old_value);
+  work->local_reads = 1;
+  for (int n = 0; n < 4096; ++n) {
+    errno = ERANGE;
+    work->local_reads &= work->api.get(work->old_key) == &work->old_value && errno == ERANGE;
+  }
   pthread_mutex_lock(work->mutex);
   ++*work->ready;
   pthread_cond_broadcast(work->condition);
@@ -111,6 +116,7 @@ static void test_pthread_key_contracts(void) {
   pthread_mutex_unlock(&mutex);
   for (int i = 0; i < started; ++i) pthread_join(workers[i], NULL);
   if (started == 2) {
+    check("pthread keys: concurrent callers retain own values and errno", work[0].local_reads && work[1].local_reads);
     check("pthread keys: another thread sees empty replacement", work[0].saw_null);
     check("pthread keys: new assignment gets its destructor", work[0].result == 0 && work[0].new_value.calls == 1);
     check("pthread keys: obsolete values never reach replacement destructor",
