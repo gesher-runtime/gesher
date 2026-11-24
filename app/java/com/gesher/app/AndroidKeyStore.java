@@ -66,11 +66,18 @@ import javax.security.auth.x500.X500Principal;
  * Cipher, Signature and Mac of the other providers use them. Key pairs get a self-signed
  * certificate from the spec's subject, serial and validity, as KeyMint gives them.
  *
- * <p>The keys of an app are in its data directory ({@value #FILE}), unencrypted: the
- * Windows user's profile protects them, nothing binds them to the hardware or to the
- * user's authentication. Authorizations in the spec (purposes, user authentication,
- * StrongBox, attestation) are not enforced. Before the app's Application exists, keys
- * are kept in memory and written to the file once it does.
+ * <p>The keys of an app are in its data directory ({@value #FILE}). A key that does not
+ * require user authentication is there unencrypted: the Windows user's profile protects
+ * it, nothing binds it to the hardware. A key that requires user authentication
+ * (KeyGenParameterSpec or KeyProtection {@code setUserAuthenticationRequired(true)}) is
+ * there only as a blob sealed by the system server to a Windows Hello key, and is used
+ * through {@link AndroidKeyStoreAuth} under Android's rules (ADR 0092); when that cannot
+ * be done, making the key fails as on a device without a secure lock screen or without
+ * an enrolled biometric. The other authorizations in the spec (purposes, validity dates,
+ * StrongBox, attestation) are not enforced. Keys from before ADR 0092 did not record
+ * whether they required user authentication; they stay as they were, marked as such.
+ * Before the app's Application exists, keys are kept in memory and written to the file
+ * once it does.
  */
 public final class AndroidKeyStore extends Provider {
     static final String NAME = "AndroidKeyStore";
@@ -87,6 +94,8 @@ public final class AndroidKeyStore extends Provider {
         put("KeyGenerator.HmacSHA512", HmacSha512.class.getName());
         put("KeyPairGenerator.RSA", Rsa.class.getName());
         put("KeyPairGenerator.EC", Ec.class.getName());
+        // Cipher, Signature and Mac for keys that require user authentication only.
+        AndroidKeyStoreAuth.register(this, this::putService);
     }
 
     /**
@@ -113,20 +122,82 @@ public final class AndroidKeyStore extends Provider {
     private static final int SECRET = 1;
     private static final int PRIVATE = 2;
     private static final int TRUSTED = 3;
-    private static final int MAGIC = 0x474b5331;  // "GKS1"
+    private static final int MAGIC = 0x474b5331;   // "GKS1": before ADR 0092
+    private static final int MAGIC2 = 0x474b5332;  // "GKS2"
+    private static final int FLAG_SEALED = 1;
+    private static final int FLAG_LEGACY = 2;
 
     /** One alias: a secret key, a private key and its chain, or a trusted certificate. */
-    private static final class Entry {
+    static final class Entry {
         final int kind;
-        final Key key;               // SECRET, PRIVATE
+        final Key key;               // SECRET, PRIVATE; null when sealed
         final Certificate[] chain;   // PRIVATE: the key's chain; TRUSTED: the certificate
         final Date created;
+        final String algorithm;      // the key's; "" for TRUSTED
+        /** A key that requires user authentication: its blob (ADR 0092), else null. */
+        final byte[] sealed;
+        final int authTimeout;       // seconds; 0: every use is authorized
+        final int authType;          // KeyProperties.AUTH_*
+        /** Read from a GKS1 file: whether it required user authentication is not known. */
+        final boolean legacy;
 
         Entry(int kind, Key key, Certificate[] chain, Date created) {
+            this(kind, key, chain, created, key != null ? key.getAlgorithm() : "", null, 0, 0,
+                    false);
+        }
+
+        Entry(int kind, Key key, Certificate[] chain, Date created, String algorithm,
+                byte[] sealed, int authTimeout, int authType, boolean legacy) {
             this.kind = kind;
             this.key = key;
             this.chain = chain;
             this.created = created;
+            this.algorithm = algorithm;
+            this.sealed = sealed;
+            this.authTimeout = authTimeout;
+            this.authType = authType;
+            this.legacy = legacy;
+        }
+
+        /** The key object an app gets: the key, or an opaque one for a sealed key. */
+        Key key(String alias) {
+            if (sealed == null) return key;
+            if (kind == SECRET) return new AndroidKeyStoreAuth.AuthSecretKey(alias, algorithm);
+            return AndroidKeyStoreAuth.privateKey(alias, chain[0].getPublicKey());
+        }
+    }
+
+    /** The entry of {@code alias} now, for {@link AndroidKeyStoreAuth}. */
+    static Entry entry(String alias) {
+        return Store.get(alias);
+    }
+
+    /**
+     * What a spec's user authentication asks, checked as KeyStore2ParameterUtils does:
+     * null when none is required, else {timeout seconds (0: every use), type}.
+     *
+     * @throws IllegalStateException when such a key cannot be made on this device
+     */
+    static int[] userAuth(boolean required, int validitySeconds, int type) {
+        if (!required) return null;
+        AndroidKeyStoreAuth.check(type);
+        return new int[] {Math.max(validitySeconds, 0), type};
+    }
+
+    /** A new key's entry: plain, or sealed when {@code auth} is set. */
+    private static Entry newEntry(String alias, int kind, Key key, Certificate[] chain,
+            int[] auth) throws java.security.GeneralSecurityException {
+        if (auth == null) return new Entry(kind, key, chain, new Date());
+        byte[] material = key.getEncoded();
+        if (material == null) {
+            throw new KeyStoreException("the key has no encoding: " + key.getClass().getName());
+        }
+        try {
+            byte[] sealed = AndroidKeyStoreAuth.seal(alias, material, auth[0], auth[1]);
+            return new Entry(kind, null, chain, new Date(), key.getAlgorithm(), sealed, auth[0],
+                    auth[1], false);
+        } finally {
+            java.util.Arrays.fill(material, (byte) 0);
         }
     }
 
@@ -203,7 +274,10 @@ public final class AndroidKeyStore extends Provider {
             if (!f.exists()) return out;
             try (DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(
                     new FileInputStream(f)))) {
-                if (in.readInt() != MAGIC) throw new IOException("not a Gesher key store");
+                int magic = in.readInt();
+                if (magic != MAGIC && magic != MAGIC2) {
+                    throw new IOException("not a Gesher key store");
+                }
                 int n = in.readInt();
                 CertificateFactory x509 = null;
                 for (int i = 0; i < n; i++) {
@@ -211,20 +285,28 @@ public final class AndroidKeyStore extends Provider {
                     int kind = in.readByte();
                     Date created = new Date(in.readLong());
                     String algorithm = in.readUTF();
+                    int flags = magic == MAGIC ? FLAG_LEGACY : in.readByte();
                     byte[] encoded = bytes(in);
+                    boolean sealed = (flags & FLAG_SEALED) != 0;
+                    int authTimeout = sealed ? in.readInt() : 0;
+                    int authType = sealed ? in.readInt() : 0;
                     Certificate[] chain = new Certificate[in.readInt()];
                     for (int c = 0; c < chain.length; c++) {
                         if (x509 == null) x509 = CertificateFactory.getInstance("X.509");
                         chain[c] = x509.generateCertificate(new ByteArrayInputStream(bytes(in)));
                     }
                     Key key = null;
-                    if (kind == SECRET) {
+                    if (sealed) {
+                        // The blob is the key; only the system server opens it.
+                    } else if (kind == SECRET) {
                         key = new SecretKeySpec(encoded, algorithm);
                     } else if (kind == PRIVATE) {
                         key = KeyFactory.getInstance(algorithm)
                                 .generatePrivate(new PKCS8EncodedKeySpec(encoded));
                     }
-                    out.put(alias, new Entry(kind, key, chain, created));
+                    out.put(alias, new Entry(kind, key, chain, created, algorithm,
+                            sealed ? encoded : null, authTimeout, authType,
+                            (flags & FLAG_LEGACY) != 0));
                 }
             } catch (IOException | java.security.GeneralSecurityException e) {
                 log("cannot read " + f + ", its keys are not used: " + e);
@@ -238,16 +320,22 @@ public final class AndroidKeyStore extends Provider {
             try {
                 try (DataOutputStream out = new DataOutputStream(new java.io.BufferedOutputStream(
                         new FileOutputStream(tmp)))) {
-                    out.writeInt(MAGIC);
+                    out.writeInt(MAGIC2);
                     out.writeInt(sEntries.size());
                     for (Map.Entry<String, Entry> e : sEntries.entrySet()) {
                         Entry entry = e.getValue();
                         out.writeUTF(e.getKey());
                         out.writeByte(entry.kind);
                         out.writeLong(entry.created.getTime());
-                        out.writeUTF(entry.key != null ? entry.key.getAlgorithm() : "");
+                        out.writeUTF(entry.algorithm);
+                        out.writeByte((entry.sealed != null ? FLAG_SEALED : 0)
+                                | (entry.legacy ? FLAG_LEGACY : 0));
                         byte[][] parts = encode(entry);
                         writeBytes(out, parts[0]);
+                        if (entry.sealed != null) {
+                            out.writeInt(entry.authTimeout);
+                            out.writeInt(entry.authType);
+                        }
                         out.writeInt(parts.length - 1);
                         for (int i = 1; i < parts.length; i++) writeBytes(out, parts[i]);
                     }
@@ -269,7 +357,9 @@ public final class AndroidKeyStore extends Provider {
         private static byte[][] encode(Entry entry) throws KeyStoreException {
             byte[][] parts = new byte[1 + (entry.chain != null ? entry.chain.length : 0)][];
             parts[0] = new byte[0];
-            if (entry.key != null) {
+            if (entry.sealed != null) {
+                parts[0] = entry.sealed;
+            } else if (entry.key != null) {
                 parts[0] = entry.key.getEncoded();
                 if (parts[0] == null) {
                     throw new KeyStoreException("the key has no encoding: "
@@ -309,7 +399,7 @@ public final class AndroidKeyStore extends Provider {
         @Override
         public Key engineGetKey(String alias, char[] password) {
             Entry e = alias != null ? Store.get(alias) : null;
-            return e != null ? e.key : null;
+            return e != null && e.kind != TRUSTED ? e.key(alias) : null;
         }
 
         @Override
@@ -333,16 +423,35 @@ public final class AndroidKeyStore extends Provider {
         @Override
         public void engineSetKeyEntry(String alias, Key key, char[] password,
                 Certificate[] chain) throws KeyStoreException {
+            setKeyEntry(alias, key, chain, null);
+        }
+
+        /** {@code auth}: {@link #userAuth}'s answer for the entry's KeyProtection. */
+        private void setKeyEntry(String alias, Key key, Certificate[] chain, int[] auth)
+                throws KeyStoreException {
             if (alias == null || key == null) throw new KeyStoreException("alias and key needed");
-            if (key instanceof SecretKey) {
-                Store.put(alias, new Entry(SECRET, key, new Certificate[0], new Date()));
-            } else if (key instanceof PrivateKey) {
-                if (chain == null || chain.length == 0) {
-                    throw new KeyStoreException("a private key needs its certificate chain");
+            if (key instanceof AndroidKeyStoreAuth.AuthKey) {
+                // AndroidKeyStoreSpi keeps a key of its own under its own alias only.
+                Entry e = Store.get(alias);
+                if (e != null && key.equals(e.key(alias))) return;
+                throw new KeyStoreException("A key that requires user authentication cannot be"
+                        + " stored under another alias");
+            }
+            try {
+                if (key instanceof SecretKey) {
+                    Store.put(alias, newEntry(alias, SECRET, key, new Certificate[0], auth));
+                } else if (key instanceof PrivateKey) {
+                    if (chain == null || chain.length == 0) {
+                        throw new KeyStoreException("a private key needs its certificate chain");
+                    }
+                    Store.put(alias, newEntry(alias, PRIVATE, key, chain.clone(), auth));
+                } else {
+                    throw new KeyStoreException("unsupported key: " + key.getClass().getName());
                 }
-                Store.put(alias, new Entry(PRIVATE, key, chain.clone(), new Date()));
-            } else {
-                throw new KeyStoreException("unsupported key: " + key.getClass().getName());
+            } catch (KeyStoreException e) {
+                throw e;
+            } catch (java.security.GeneralSecurityException e) {
+                throw new KeyStoreException("Failed to import key " + alias, e);
             }
         }
 
@@ -430,24 +539,41 @@ public final class AndroidKeyStore extends Provider {
             if (e == null) return null;
             switch (e.kind) {
                 case SECRET:
-                    return new KeyStore.SecretKeyEntry((SecretKey) e.key);
+                    return new KeyStore.SecretKeyEntry((SecretKey) e.key(alias));
                 case PRIVATE:
-                    return new KeyStore.PrivateKeyEntry((PrivateKey) e.key, e.chain.clone());
+                    return new KeyStore.PrivateKeyEntry((PrivateKey) e.key(alias),
+                            e.chain.clone());
                 default:
                     return new KeyStore.TrustedCertificateEntry(e.chain[0]);
             }
         }
 
-        /** Imports a key or certificate; the protection (KeyProtection) is not enforced. */
+        /**
+         * Imports a key or certificate. Of the protection (KeyProtection) the user
+         * authentication is kept and enforced; AndroidKeyStoreSpi reports a key that cannot
+         * require it here as a KeyStoreException.
+         */
         @Override
         public void engineSetEntry(String alias, KeyStore.Entry entry,
                 KeyStore.ProtectionParameter param) throws KeyStoreException {
+            int[] auth = null;
+            if (param instanceof android.security.keystore.KeyProtection
+                    && !(entry instanceof KeyStore.TrustedCertificateEntry)) {
+                android.security.keystore.KeyProtection protection =
+                        (android.security.keystore.KeyProtection) param;
+                try {
+                    auth = userAuth(protection.isUserAuthenticationRequired(),
+                            protection.getUserAuthenticationValidityDurationSeconds(),
+                            protection.getUserAuthenticationType());
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    throw new KeyStoreException(e);
+                }
+            }
             if (entry instanceof KeyStore.SecretKeyEntry) {
-                engineSetKeyEntry(alias, ((KeyStore.SecretKeyEntry) entry).getSecretKey(), null,
-                        null);
+                setKeyEntry(alias, ((KeyStore.SecretKeyEntry) entry).getSecretKey(), null, auth);
             } else if (entry instanceof KeyStore.PrivateKeyEntry) {
                 KeyStore.PrivateKeyEntry p = (KeyStore.PrivateKeyEntry) entry;
-                engineSetKeyEntry(alias, p.getPrivateKey(), null, p.getCertificateChain());
+                setKeyEntry(alias, p.getPrivateKey(), p.getCertificateChain(), auth);
             } else if (entry instanceof KeyStore.TrustedCertificateEntry) {
                 engineSetCertificateEntry(alias,
                         ((KeyStore.TrustedCertificateEntry) entry).getTrustedCertificate());
@@ -477,6 +603,7 @@ public final class AndroidKeyStore extends Provider {
         private final int defaultBits;
         private String alias;
         private int bits;
+        private int[] auth;
         private SecureRandom random;
 
         SecretKeyGenerator(String algorithm, int defaultBits) {
@@ -513,6 +640,14 @@ public final class AndroidKeyStore extends Provider {
             if (!validSize(size)) {
                 throw new InvalidAlgorithmParameterException("Unsupported key size: " + size);
             }
+            try {
+                auth = userAuth(spec.isUserAuthenticationRequired(),
+                        spec.getUserAuthenticationValidityDurationSeconds(),
+                        spec.getUserAuthenticationType());
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                alias = null;
+                throw new InvalidAlgorithmParameterException(e);
+            }
             alias = spec.getKeystoreAlias();
             bits = size;
             this.random = random != null ? random : new SecureRandom();
@@ -525,11 +660,14 @@ public final class AndroidKeyStore extends Provider {
             random.nextBytes(raw);
             SecretKey key = new SecretKeySpec(raw, algorithm);
             try {
-                Store.put(alias, new Entry(SECRET, key, new Certificate[0], new Date()));
-            } catch (KeyStoreException e) {
-                throw new java.security.ProviderException("Failed to store " + alias, e);
+                Entry entry = newEntry(alias, SECRET, key, new Certificate[0], auth);
+                Store.put(alias, entry);
+                return (SecretKey) entry.key(alias);
+            } catch (java.security.GeneralSecurityException e) {
+                throw new java.security.ProviderException("Keystore key generation failed", e);
+            } finally {
+                if (auth != null) java.util.Arrays.fill(raw, (byte) 0);
             }
-            return key;
         }
     }
 
@@ -589,6 +727,7 @@ public final class AndroidKeyStore extends Provider {
         private BigInteger serial;
         private Date notBefore;
         private Date notAfter;
+        private int[] auth;
         private SecureRandom random;
 
         PairGenerator(String algorithm) {
@@ -616,6 +755,14 @@ public final class AndroidKeyStore extends Provider {
                 serial = spec.getCertificateSerialNumber();
                 notBefore = spec.getCertificateNotBefore();
                 notAfter = spec.getCertificateNotAfter();
+                try {
+                    auth = userAuth(spec.isUserAuthenticationRequired(),
+                            spec.getUserAuthenticationValidityDurationSeconds(),
+                            spec.getUserAuthenticationType());
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    alias = null;
+                    throw new InvalidAlgorithmParameterException(e);
+                }
             } else if (params instanceof android.security.KeyPairGeneratorSpec) {
                 android.security.KeyPairGeneratorSpec spec =
                         (android.security.KeyPairGeneratorSpec) params;
@@ -623,6 +770,7 @@ public final class AndroidKeyStore extends Provider {
                     throw new InvalidAlgorithmParameterException("Key type " + spec.getKeyType()
                             + " does not match " + algorithm);
                 }
+                auth = null;
                 alias = spec.getKeystoreAlias();
                 bits = spec.getKeySize();
                 keyParams = spec.getAlgorithmParameterSpec();
@@ -658,9 +806,11 @@ public final class AndroidKeyStore extends Provider {
                 g.initialize(keyGenParams(bits, keyParams), random);
                 KeyPair pair = g.generateKeyPair();
                 Certificate cert = selfSigned(pair);
-                Store.put(alias, new Entry(PRIVATE, pair.getPrivate(), new Certificate[] {cert},
-                        new Date()));
-                return pair;
+                Entry entry = newEntry(alias, PRIVATE, pair.getPrivate(),
+                        new Certificate[] {cert}, auth);
+                Store.put(alias, entry);
+                return auth == null ? pair
+                        : new KeyPair(pair.getPublic(), (PrivateKey) entry.key(alias));
             } catch (java.security.GeneralSecurityException | IOException e) {
                 throw new java.security.ProviderException("Failed to generate key pair " + alias, e);
             }

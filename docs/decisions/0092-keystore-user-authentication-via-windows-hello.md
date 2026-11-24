@@ -293,7 +293,7 @@ key today).
 
 Only the `operationId != 0` path changes. Such a request is accepted when
 `KeystoreAuthorization` holds that operation for the caller's uid, and it is confirmed by
-the binding's signature (`KeyOperations.authorize`) instead of UserConsentVerifier: one
+the binding's signature (`KeystoreOperations.authorize`) instead of UserConsentVerifier: one
 Windows Hello prompt, and `onAuthenticationSucceeded` only when the operation got its
 key. Any other operation id still ends with `BIOMETRIC_ERROR_HW_UNAVAILABLE`.
 

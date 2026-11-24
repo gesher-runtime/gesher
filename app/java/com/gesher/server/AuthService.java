@@ -77,13 +77,19 @@ public final class AuthService extends IAuthService.Default {
 
     private final Host mHost;
     private final WindowsHelloBackend mBackend;  // null: no Windows Hello natives
+    private final KeystoreOperations mKeys;           // null: no keystore authorization
     private final Object mLock = new Object();
     private long mNextRequestId = 1;  // guarded by mLock
     private Session mSession;         // guarded by mLock: the prompt being shown
 
     public AuthService(Host host, WindowsHelloBackend backend) {
+        this(host, backend, null);
+    }
+
+    public AuthService(Host host, WindowsHelloBackend backend, KeystoreOperations keys) {
         mHost = java.util.Objects.requireNonNull(host);
         mBackend = backend;
+        mKeys = keys;
     }
 
     // --- binder calls ---------------------------------------------------------------------
@@ -251,8 +257,13 @@ public final class AuthService extends IAuthService.Default {
         synchronized (mLock) {
             mSession = session;
             try {
-                session.verification = mBackend.verify(session.request,
-                        result -> mHost.post(() -> verified(session, result)));
+                WindowsHelloBackend.Completion completion =
+                        result -> mHost.post(() -> verified(session, result));
+                // A keystore operation is confirmed by the signature that releases its key:
+                // one Windows Hello prompt, and success only with the key (ADR 0092).
+                session.verification = session.operationId != 0
+                        ? mKeys.authorize(session.request, session.operationId, completion)
+                        : mBackend.verify(session.request, completion);
             } catch (RuntimeException e) {
                 SystemServer.log("auth: Windows Hello verification did not start: " + e);
                 mHost.post(() -> verified(session, WindowsHelloBackend.FAILED));
@@ -262,11 +273,17 @@ public final class AuthService extends IAuthService.Default {
 
     /**
      * Why a credential confirmation cannot be offered, or BIOMETRIC_SUCCESS. A request bound
-     * to a keystore operation cannot be honoured: Gesher's keystore cannot receive the auth
-     * token AuthSession would add (ADR 0091), so it is never reported as confirmed.
+     * to a keystore operation is honoured only for an operation of the caller that the
+     * keystore authorization holds (ADR 0092); any other operation id cannot be authorized,
+     * so it is never reported as confirmed.
      */
     private int unavailable(Session session) {
-        if (session.operationId != 0 || mBackend == null) {
+        if (session.operationId != 0) {
+            return mKeys != null && mKeys.isPending(session.request.uid, session.operationId)
+                    ? BiometricConstants.BIOMETRIC_SUCCESS
+                    : BiometricConstants.BIOMETRIC_ERROR_HW_UNAVAILABLE;
+        }
+        if (mBackend == null) {
             return BiometricConstants.BIOMETRIC_ERROR_HW_UNAVAILABLE;
         }
         switch (mBackend.availability()) {
