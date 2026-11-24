@@ -600,7 +600,7 @@ HRESULT StartSession(const SessionOptions& options, std::unique_ptr<Session>* ou
   int index = FindRecognizer(recognizers, options.language);
   if (index < 0) return kSpErrNotFound;
   SessionOptions bounded = options;
-  bounded.max_alternates = std::min(options.max_alternates, kMaxAlternates);
+  bounded.max_alternates = (std::min)(options.max_alternates, kMaxAlternates);
   auto session = std::make_unique<SapiSession>(bounded, recognizers[index].token_id);
   hr = session->Start(recognizer_failed);
   if (FAILED(hr)) return hr;
