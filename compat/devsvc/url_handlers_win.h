@@ -20,4 +20,9 @@ enum class UrlHandler {
 // null, receives the HRESULT (a long, so that this header needs no <windows.h>) of the last query (S_OK/S_FALSE when one was found).
 UrlHandler QueryUrlHandler(const wchar_t* scheme, long* last_error);
 
+// Explicit ACTION_DIAL review. Shows Gesher's number/choice with Cancel selected,
+// on the calling worker thread. A false/failed lifetime cancels the live dialog.
+bool ConfirmDial(const wchar_t* package_name, const wchar_t* number, unsigned long owner_pid,
+                 bool (*active)(void*), void* context);
+
 }  // namespace dev
