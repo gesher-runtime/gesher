@@ -1,21 +1,24 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 //
-// Windows host test of compat/devsvc/url_handlers_win.cc (no UI, nothing is launched):
+// Windows host test of compat/devsvc/url_handlers_win.cc (nothing is launched):
 // a scheme is "registered" exactly when Windows resolves a protocol handler for it.
 // It registers two throwaway per-user schemes under HKCU\Software\Classes (one with an
 // open command, one with only "URL Protocol"), asks, and removes them. Then it prints
 // the runner's own answers for mailto/tel/sms/geo/http, which are not asserted.
+// Real Gesher confirmation dialogs are inspected and automatically dismissed by
+// a thread-local CBT hook. No phone app or tel URI is opened.
 //
 //   cl /nologo /std:c++17 /EHsc /W4 /WX compat\devsvc\url_handlers_win.cc
 //      tests\uri-handlers\url_handlers_windows_test.cc /Fe:url-handlers-test.exe
-//      shlwapi.lib shell32.lib advapi32.lib
+//      shlwapi.lib shell32.lib advapi32.lib user32.lib
 #include "../../compat/devsvc/url_handlers_win.h"
 
 #include <windows.h>
 #include <shlobj.h>
 
 #include <cstdio>
+#include <cwchar>
 #include <initializer_list>
 #include <string>
 
@@ -23,6 +26,12 @@ namespace {
 
 int g_failures = 0;
 int g_checks = 0;
+
+void Check(bool condition, const char* what) {
+  ++g_checks;
+  if (!condition) ++g_failures;
+  std::printf("%s %s\n", condition ? "ok  " : "FAIL", what);
+}
 
 const char* Name(dev::UrlHandler h) {
   switch (h) {
@@ -60,6 +69,71 @@ bool SetValue(HKEY root, const std::wstring& path, const wchar_t* name, const st
 
 // Tells the shell that associations changed, as an installer does.
 void Notify() { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr); }
+
+struct DialogTest {
+  bool active = true;
+  bool observed = false;
+  int choice = IDCANCEL;  // zero: invalidate the request and let its real timer cancel.
+  HWND owner = nullptr;
+};
+DialogTest* dialog_test = nullptr;
+
+bool IsActive(void* context) { return static_cast<DialogTest*>(context)->active; }
+
+LRESULT CALLBACK DialogHook(int code, WPARAM parameter, LPARAM extra) {
+  if (code == HCBT_ACTIVATE && dialog_test) {
+    HWND window = reinterpret_cast<HWND>(parameter);
+    wchar_t title[64]{};
+    GetWindowTextW(window, title, 64);
+    if (std::wcscmp(title, L"Gesher - Confirm dialing") == 0) {
+      DialogTest& test = *dialog_test;
+      test.observed = true;
+      Check(LOWORD(SendMessageW(window, DM_GETDEFID, 0, 0)) == IDCANCEL, "Cancel is the default button");
+      wchar_t message[2048]{};
+      GetWindowTextW(GetDlgItem(window, 0xFFFF), message, 2048);
+      Check(std::wcsstr(message, L"+15551234;ext=9") != nullptr, "dialog displays the actual number and extension");
+      Check(std::wcsstr(message, L"com.gesher.fixture") != nullptr, "dialog identifies the requesting package");
+      Check(std::wcsstr(message, L"may place the call immediately") != nullptr,
+            "dialog explains the actual shell handoff");
+      if (test.owner) {
+        Check(GetWindow(window, GW_OWNER) == test.owner, "confirmation belongs to the caller window");
+        Check(!IsWindowEnabled(test.owner), "caller window is disabled while confirmation is modal");
+      }
+      if (test.choice) PostMessageW(window, WM_COMMAND, static_cast<WPARAM>(test.choice), 0);
+      else test.active = false;
+    }
+  }
+  return CallNextHookEx(nullptr, code, parameter, extra);
+}
+
+void ConfirmationContracts() {
+  DialogTest expired;
+  expired.active = false;
+  Check(!dev::ConfirmDial(L"com.gesher.fixture", L"+15551234;ext=9", 0, IsActive, &expired),
+        "retired request opens no dialog");
+  Check(!dev::ConfirmDial(L"com.gesher.fixture", L"", 0, IsActive, &expired), "empty phone number fails closed");
+  HHOOK hook = SetWindowsHookExW(WH_CBT, DialogHook, nullptr, GetCurrentThreadId());
+  Check(hook != nullptr, "dialog inspection hook installed");
+  if (!hook) return;
+  HWND owner = CreateWindowExW(0, L"STATIC", L"Gesher dial fixture owner", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+      CW_USEDEFAULT, CW_USEDEFAULT, 320, 160, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+  Check(owner != nullptr, "caller window created");
+  for (int choice : {IDCANCEL, IDOK, 0}) {
+    DialogTest test;
+    test.choice = choice;
+    test.owner = owner;
+    dialog_test = &test;
+    bool result = dev::ConfirmDial(L"com.gesher.fixture", L"+15551234;ext=9",
+        owner ? GetCurrentProcessId() : 0, IsActive, &test);
+    dialog_test = nullptr;
+    Check(test.observed, "real confirmation dialog was inspected");
+    Check(result == (choice == IDOK), choice == 0 ? "timer cancels a retired live dialog"
+        : choice == IDOK ? "explicit OK accepts review" : "Cancel declines review");
+    if (owner) Check(IsWindowEnabled(owner), "caller window is enabled after confirmation");
+  }
+  if (owner) DestroyWindow(owner);
+  UnhookWindowsHookEx(hook);
+}
 
 }  // namespace
 
@@ -107,6 +181,8 @@ int main() {
     dev::UrlHandler h = dev::QueryUrlHandler(scheme, &hr);
     std::printf("info %ls: %s (hr 0x%08lx)\n", scheme, Name(h), static_cast<unsigned long>(hr));
   }
+
+  ConfirmationContracts();
 
   std::printf("%s: %d checks, %d failures\n", g_failures == 0 ? "url-handlers PASSED" : "url-handlers FAILED",
               g_checks, g_failures);
