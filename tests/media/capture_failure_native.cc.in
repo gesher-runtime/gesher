@@ -189,6 +189,39 @@ int main(int argc, char** argv) {
     Check(Await([&] { return stream->Available() >= 8; }), "a data signal pulls and publishes at once");
     Check(Await([] { return fixture::waiting.load() == 1; }) && fixture::pulls == 1, "one signal, one pull");
     stream->Release();
+  } else if (!std::strcmp(test, "event-command")) {
+    fixture::signalled_source = true;
+    auto first = Open();
+    Check(first->Start() == kOk && Await([] { return fixture::waiting.load() == 1; }),
+          "first recorder leaves the worker waiting for source data");
+    std::shared_ptr<CaptureStream> second;
+    std::atomic<bool> prepared{false}, started{false};
+    std::thread prepare([&] { second = Open(); prepared = true; });
+    const bool prepared_without_data = Await([&] { return prepared.load(); });
+    // Unblock and join even the negative control before reporting its failure.
+    if (!prepared_without_data) first->Stop();
+    prepare.join();
+    Check(prepared_without_data,
+          "prepare command interrupts data wait without requiring a source signal or timeout");
+    Check(Await([] { return fixture::waiting.load() == 1; }),
+          "worker resumes data wait after preparation");
+    int result = kInvalidOperation;
+    std::thread start([&] { result = second->Start(); started = true; });
+    const bool started_without_data = Await([&] { return started.load(); });
+    if (!started_without_data) first->Stop();
+    start.join();
+    if (!started_without_data) {
+      second->Stop();
+      Check(Await([] { return fixture::waiting.load() == 0; }), "failed start probe retires its data wait");
+    }
+    Check(started_without_data,
+          "start command interrupts data wait without requiring a source signal or timeout");
+    Check(result == kOk && second->started() && first->started(),
+          "both recorder activations survive command interruption");
+    Check(fixture::signals == 0 && fixture::interrupts >= 2,
+          "control commands wake through Interrupt, not synthetic sample signals");
+    second->Release();
+    first->Release();
   } else if (!std::strcmp(test, "event-wake")) {
     for (const bool release : {false, true}) {
       fixture::signalled_source = true;
