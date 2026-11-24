@@ -102,5 +102,7 @@ sqlite-jdbc, and transfers over real sockets from a local HTTP server: admission
 ownership, strict SQL, redirects, HTTP failures, cut connections with resumption,
 network requirements, charging and idle requirements (from a stand-in power status and
 display-off time), cleartext refusal, file naming, removal and restart recovery.
-`DownloadProvider` (Binder, permissions, grants, Windows networks and proxy) is not
-exercised by that host test.
+It runs on Linux and on a Windows JVM (`windows-host-contracts`), where canonical
+paths use backslashes; the path rules compare whole path components, never a `/`
+prefix. `DownloadProvider` (Binder, permissions, grants, Windows networks and proxy) is
+not exercised by that host test.

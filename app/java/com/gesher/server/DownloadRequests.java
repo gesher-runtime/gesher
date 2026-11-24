@@ -439,7 +439,7 @@ final class DownloadRequests {
         Uri uri = Uri.parse(fileUri);
         if (!"file".equals(uri.getScheme())) throw new IllegalArgumentException("Not a file URI: " + null);
         String path = uri.getPath();
-        if (path == null || ("/" + path + "/").contains("/../")) {
+        if (path == null || hasParentReference(path)) {
             throw new IllegalArgumentException("Invalid file URI: " + uri);
         }
         File file;
@@ -454,7 +454,7 @@ final class DownloadRequests {
 
     private void checkDownloadedFilePath(Caller caller, ContentValues values) {
         String path = values.getAsString(Downloads.Impl._DATA);
-        if (path == null || ("/" + path + "/").contains("/../")) {
+        if (path == null || hasParentReference(path)) {
             throw new IllegalArgumentException("Invalid file path: " + (path == null ? "null" : path));
         }
         File file;
@@ -1204,13 +1204,28 @@ final class DownloadRequests {
 
     // ---- path rules (Helpers), against Gesher's shared volume -----------------------
 
-    /** FileUtils.contains on canonical files. */
+    /**
+     * AOSP's {@code ("/" + path + "/").contains("/../")}, with both separators: Gesher's
+     * file layer takes a backslash as a separator too (docs/decisions/0010-paths.md), and a
+     * Windows JVM does.
+     */
+    static boolean hasParentReference(String path) {
+        for (String segment : path.split("[/\\\\]", -1)) {
+            if (segment.equals("..")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * FileUtils.contains on canonical files, by whole path components rather than a
+     * {@code "/"} prefix, so it holds for any separator the platform canonicalizes to.
+     */
     static boolean within(File dir, File file) {
-        String dirPath = dir.getAbsolutePath();
-        String filePath = file.getAbsolutePath();
-        if (dirPath.equals(filePath)) return true;
-        if (!dirPath.endsWith("/")) dirPath += "/";
-        return filePath.startsWith(dirPath);
+        File container = dir.getAbsoluteFile();
+        for (File f = file.getAbsoluteFile(); f != null; f = f.getParentFile()) {
+            if (f.equals(container)) return true;
+        }
+        return false;
     }
 
     private static boolean withinCanonical(File dir, File file) {
@@ -1221,22 +1236,24 @@ final class DownloadRequests {
         }
     }
 
-    /** The path below the shared volume's root as segments, or null when outside it. */
+    /**
+     * The canonical path's components below the shared volume's root, or null when it is
+     * not below it; components, not a {@code "/"}-separated string, for any separator.
+     */
     private List<String> relative(File file) {
         File root = externalRoot();
-        String path;
+        File canonical;
         try {
-            path = file.getCanonicalPath();
+            canonical = file.getCanonicalFile();
         } catch (IOException e) {
             return null;
         }
-        String base = root.getPath().endsWith("/") ? root.getPath() : root.getPath() + "/";
-        if (!path.startsWith(base)) return null;
-        List<String> segments = new ArrayList<>();
-        for (String segment : path.substring(base.length()).split("/")) {
-            if (!segment.isEmpty()) segments.add(segment);
+        java.util.LinkedList<String> segments = new java.util.LinkedList<>();
+        for (File f = canonical; f != null; f = f.getParentFile()) {
+            if (f.equals(root)) return segments.isEmpty() ? null : segments;
+            segments.addFirst(f.getName());
         }
-        return segments;
+        return null;
     }
 
     /** PATTERN_ANDROID_DIRS: <volume>/Android/(data|obb|media)/.+ (case-insensitive). */
