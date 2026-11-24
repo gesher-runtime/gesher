@@ -7,7 +7,7 @@
     "compat/posix/src/system.cc",
     "compat/posix/src/winsock.cc"
   ],
-  "patch_sha256": "edfff94a924def1d8897e63378ad1a19bbfcd5fda73e76db35fd235f65bd1bde",
+  "patch_sha256": "9ee2f32e66053405e4b283bbfc5ba1302aa2456d75bbaa1872913bfe6dfc0f33",
   "source_sha256": {
     "compat/posix/src/ofd.cc": "2cd9960d954105ae987ab8eff7c319b59c6da96a6410c5610c5c0e78e04a2df1",
     "compat/posix/src/ofd_internal.h": "fa97f2675731123a03896ed179d73c8cb2701273b5d94d2078c484a1b16b37da",
@@ -59,7 +59,7 @@
     "compat/posix/src/font_environment.cc": "4b7401dd93967ee63de6072f87b4e535627caef888dfb186a71852807fced499",
     "compat/posix/src/system_properties.cc": "a7891115d788a0a89745d389325cbe90a0b3b8c940651b2b3940f27693ac9989",
     "compat/bionic/posix_bionic.cc": "2c70a33b692e1b4522cf4a686187797e4bc2e37ed01c264410c38e743602c7d8",
-    "compat/bionic/shim.cc": "fecd77f2d4790089a7636dda40103576536d1e400fb827629007921d217e2e72",
+    "compat/bionic/shim.cc": "bbbeff8a70f7e69730510a6a2228310f7d4c6889d07dc3b66f65dd44205ec8dd",
     "compat/elf/exec/gesher_exec.cc": "6c86da7c77affc2f18871d4e83adc3175552925c10bdeda3f40523e6e1b2199f",
     "compat/elf/exec/exec_spawn.h": "6328b7ecffbb2c7287caff900912aa250c09fce61e9fe7e4694499fa60e315ea",
     "compat/elf/exec/spawn_actions.h": "b5acb3a95c4e5df7a783e6b16a3b2b02baf401250719a6ad0773a8d6055dc5ff",
