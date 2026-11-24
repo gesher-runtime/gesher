@@ -15,7 +15,6 @@ import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.*;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.BrowserPackageSupport;
-import com.gesher.server.GmsPackageSupport;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.SharedLibraryGraph;
 import java.lang.reflect.*;
@@ -169,9 +168,6 @@ public final class IntentCandidateIndexTest {
         }
         if (kind == Kind.ACTIVITY && !packages.containsKey(BrowserPackageSupport.PACKAGE)) {
             result.addAll(BrowserPackageSupport.queryIntentActivities(intent, type, flags));
-        }
-        if (kind == Kind.SERVICE && result.isEmpty() && !packages.containsKey(GmsPackageSupport.PACKAGE_GMS)) {
-            result.addAll(GmsPackageSupport.querySyntheticServices(intent, type, flags));
         }
         return result;
     }
@@ -365,8 +361,7 @@ public final class IntentCandidateIndexTest {
                         List<ResolveInfo> results = query(pm, kind, intents[scenario], null, 0);
                         if (scenario != 1) check(results.size() == 1 && info(results.get(0)).applicationInfo.uid == 20000 + count - 1,
                                 "Measured query changed its result");
-                        else check(results.isEmpty() || kind == Kind.SERVICE && results.size() == 1
-                                && info(results.get(0)).packageName.equals(GmsPackageSupport.PACKAGE_GMS), "Miss changed fallback behavior");
+                        else check(results.isEmpty(), "A miss resolved to a component");
                     }
                     work[scenario][0] = visits.get(); work[scenario][1] = reads.get();
                 }

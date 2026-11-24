@@ -12,6 +12,10 @@ public class Context {
 
     private final LocationManager mLocationManager = new LocationManager();
 
+    public android.content.pm.PackageManager getPackageManager() {
+        return new android.content.pm.PackageManager();
+    }
+
     public Context getApplicationContext() {
         return this;
     }

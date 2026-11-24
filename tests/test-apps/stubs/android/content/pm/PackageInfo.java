@@ -16,6 +16,10 @@ public class PackageInfo {
     public ServiceInfo[] services;
     public ActivityInfo[] receivers;
 
+    public long getLongVersionCode() {
+        return versionCode;
+    }
+
     public void setLongVersionCode(long code) {
         versionCode = (int) code;
     }

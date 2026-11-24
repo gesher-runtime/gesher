@@ -1,4 +1,4 @@
-# microG / Google Play Services compatibility track (GMS, FCM, Location, Auth, Synthetic Packages).
+# Google client-library fixture track without microG (GMS availability, FCM, Location, Auth).
 # Dot-sourced by run-tests.ps1, using Check, NoDrive, $Dir, $root, $bcpApp and $failed from there.
 
 if (-not (Test-Path "$Dir/gmsapp.apk")) {
@@ -35,20 +35,19 @@ GmsCheck 'microg-gms (single process): client SDK classes come from the APK, non
   'gms: client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path'
 )
 
-# Play services' code from its package context, as the client library's ProviderInstaller
-# loads it (GmsPackageSupport: the synthetic package's code is gesher-camera.apk).
-GmsCheck 'microg-gms (single process): ProviderInstaller loads Play services'' code from its package context' $outSingle $codeSingle @(
-  'gms: ProviderInstaller: Play services'' code loads from its package context, insertProvider runs'
+# Without microG there is no Play services package (#335): no package context for the
+# client library's ProviderInstaller, SERVICE_MISSING, and neither package is listed.
+GmsCheck 'microg-gms (single process): no Play services package context without microG' $outSingle $codeSingle @(
+  'gms: ProviderInstaller: no Play services package context without Play services (NameNotFoundException)'
 )
 
-GmsCheck 'microg-gms (single process): GoogleApiAvailability stand-ins' $outSingle $codeSingle @(
-  'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)',
-  'gms: GoogleApiAvailability: makeGooglePlayServicesAvailable completed'
+GmsCheck 'microg-gms (single process): GoogleApiAvailability reports SERVICE_MISSING' $outSingle $codeSingle @(
+  'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SERVICE_MISSING (1)',
+  'gms: GoogleApiAvailability: makeGooglePlayServicesAvailable failed without Play services'
 )
 
-GmsCheck 'microg-gms (single process): PackageManager synthetic GMS & Vending packages' $outSingle $codeSingle @(
-  'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google''s certificate)',
-  'gms: PackageManager: com.android.vending synthetic package present, enabled'
+GmsCheck 'microg-gms (single process): PackageManager has no GMS or Vending without microG' $outSingle $codeSingle @(
+  'gms: PackageManager: com.google.android.gms and com.android.vending absent without microG'
 )
 
 GmsCheck 'microg-gms (single process): FusedLocationProviderClient connected to LocationManagerService' $outSingle $codeSingle @(
@@ -78,9 +77,9 @@ $outDevice += "`n" + (Get-Content $appLog -Raw -ErrorAction SilentlyContinue)
 
 GmsCheck 'microg-gms (device): full GMS compatibility suite in system server' $outDevice $codeDevice @(
   'gms: client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path',
-  'gms: ProviderInstaller: Play services'' code loads from its package context, insertProvider runs',
-  'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)',
-  'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google''s certificate)',
+  'gms: ProviderInstaller: no Play services package context without Play services (NameNotFoundException)',
+  'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SERVICE_MISSING (1)',
+  'gms: PackageManager: com.google.android.gms and com.android.vending absent without microG',
   'gms: FusedLocationProviderClient: connected to LocationManagerService, updates received',
   'gms: GoogleSignIn: dummy account user@gesher.local signed in with idToken',
   'gms: FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received',

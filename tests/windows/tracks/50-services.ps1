@@ -722,8 +722,8 @@ $ok = CheckOrdered 'services: gesher-app install and list: base.apk in data/app/
   '/app/com.gesher.lifecycle-1',
   'gesher-app: installed com.gesher.peer (version 1) in ',
   'gesher-app: com.gesher.lifecycle is installed and unchanged',
-  # 2 installed + the synthetic com.google.android.gms and com.android.vending (GmsPackageSupport).
-  'gesher-app: 4 installed packages',
+  # The 2 installed packages: no Play services or Play Store without microG (#335).
+  'gesher-app: 2 installed packages',
   'package:com.gesher.lifecycle version 1.0 (1) ',
   '/app/com.gesher.lifecycle-1/base.apk, 1 activities, 0 services, 0 providers',
   'package:com.gesher.peer version 1.0 (1) ',

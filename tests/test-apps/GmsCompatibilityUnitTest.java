@@ -13,7 +13,6 @@ import android.location.Location;
 import android.location.LocationManager;
 import android.os.Bundle;
 
-import com.gesher.server.GmsPackageSupport;
 import com.google.android.gms.auth.GoogleAuthUtil;
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
@@ -48,7 +47,6 @@ public final class GmsCompatibilityUnitTest {
         testGoogleAuthUtil();
         testFirebaseMessagingAndRemoteMessage();
         testFusedLocationProviderClient();
-        testGmsPackageSupport();
         System.out.println("ALL GMS COMPATIBILITY UNIT TESTS PASSED");
     }
 
@@ -97,10 +95,13 @@ public final class GmsCompatibilityUnitTest {
 
     private static void testGoogleApiAvailability() {
         GoogleApiAvailabilityLight light = GoogleApiAvailabilityLight.getInstance();
-        assertEquals(ConnectionResult.SUCCESS, light.isGooglePlayServicesAvailable(null),
-                "isGooglePlayServicesAvailable should return SUCCESS");
-        assertEquals(ConnectionResult.SUCCESS, light.isGooglePlayServicesAvailable(null, 200000000),
-                "isGooglePlayServicesAvailable with minVersion should return SUCCESS");
+        // The host Context has no installed packages: no Play services (#335).
+        Context ctx = new Context();
+        assertEquals(ConnectionResult.SERVICE_MISSING, light.isGooglePlayServicesAvailable(ctx),
+                "isGooglePlayServicesAvailable without Play services should return SERVICE_MISSING");
+        assertEquals(ConnectionResult.SERVICE_MISSING, light.isGooglePlayServicesAvailable(ctx, 200000000),
+                "isGooglePlayServicesAvailable with minVersion should return SERVICE_MISSING");
+        assertEquals(0, light.getApkVersion(ctx), "no Play services version without the package");
         assertEquals("SUCCESS", light.getErrorString(ConnectionResult.SUCCESS), "Error string mismatch");
         assertTrue(!light.isUserResolvableError(ConnectionResult.SUCCESS),
                 "SUCCESS should not be user resolvable error");
@@ -189,33 +190,5 @@ public final class GmsCompatibilityUnitTest {
         assertTrue(rmTask.isSuccessful(), "removeLocationUpdates should succeed");
 
         System.out.println("PASS: testFusedLocationProviderClient");
-    }
-
-    private static void testGmsPackageSupport() {
-        assertTrue(GmsPackageSupport.isSyntheticPackage("com.google.android.gms"), "isSyntheticPackage GMS");
-        assertTrue(GmsPackageSupport.isSyntheticPackage("com.android.vending"), "isSyntheticPackage Vending");
-        assertTrue(!GmsPackageSupport.isSyntheticPackage("com.example.app"), "isSyntheticPackage negative");
-
-        PackageInfo gmsInfo = GmsPackageSupport.createSyntheticPackageInfo(
-                GmsPackageSupport.PACKAGE_GMS, PackageManager.GET_SIGNATURES);
-        assertTrue(gmsInfo != null, "gmsInfo not null");
-        assertEquals("com.google.android.gms", gmsInfo.packageName, "gmsInfo packageName");
-        assertEquals(GmsPackageSupport.GMS_VERSION_CODE, gmsInfo.versionCode, "gmsInfo versionCode");
-        assertTrue(gmsInfo.versionCode >= 264280000, "gmsInfo versionCode current");
-        PackageInfo signing = GmsPackageSupport.createSyntheticPackageInfo(
-                GmsPackageSupport.PACKAGE_GMS, PackageManager.GET_SIGNING_CERTIFICATES);
-        assertTrue(signing.signingInfo != null
-                && signing.signingInfo.getApkContentsSigners().length == 1, "gmsInfo signingInfo");
-        assertTrue(gmsInfo.signatures != null && gmsInfo.signatures.length > 0, "gmsInfo signatures");
-        assertTrue(gmsInfo.applicationInfo != null && gmsInfo.applicationInfo.enabled, "gmsInfo applicationInfo enabled");
-
-        PackageInfo vendingInfo = GmsPackageSupport.createSyntheticPackageInfo(
-                GmsPackageSupport.PACKAGE_VENDING, PackageManager.GET_SIGNATURES);
-        assertTrue(vendingInfo != null, "vendingInfo not null");
-        assertEquals("com.android.vending", vendingInfo.packageName, "vendingInfo packageName");
-        assertEquals(83000000, vendingInfo.versionCode, "vendingInfo versionCode");
-        assertTrue(vendingInfo.signatures != null && vendingInfo.signatures.length > 0, "vendingInfo signatures");
-
-        System.out.println("PASS: testGmsPackageSupport");
     }
 }

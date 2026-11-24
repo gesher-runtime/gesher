@@ -197,12 +197,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mPermissions.isProtectedBroadcast(action);
     }
 
-    private boolean synthetic(String name) {
-        return GmsPackageSupport.isSyntheticPackage(name)
-                && (!GmsPackageSupport.PACKAGE_VENDING.equals(name)
-                        || get(GmsPackageSupport.PACKAGE_GMS) == null);
-    }
-
     private PackageInfo installedInfo(ApkPackage pkg, long flags) {
         PackageInfo info = mPermissions.annotate(pkg.packageInfo(flags));
         // The compatibility parser can collect an unverified signing block. In real
@@ -531,7 +525,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public boolean isPackageAvailable(String packageName, int userId) {
         if (userId != 0) return false;
         if ("android".equals(packageName)) return true;
-        return get(packageName) != null || synthetic(packageName)
+        return get(packageName) != null
                 || BrowserPackageSupport.isBrowserPackage(packageName);
     }
 
@@ -555,9 +549,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage p = get(packageName);
         if (p != null) {
             return installedInfo(p, flags);
-        }
-        if (synthetic(packageName)) {
-            return GmsPackageSupport.createSyntheticPackageInfo(packageName, flags);
         }
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return BrowserPackageSupport.createPackageInfo(flags);
@@ -596,9 +587,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage p = get(packageName);
         if (p != null) {
             return p.applicationInfo(flags);
-        }
-        if (synthetic(packageName)) {
-            return GmsPackageSupport.createSyntheticApplicationInfo(packageName, flags);
         }
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return BrowserPackageSupport.createApplicationInfo(flags);
@@ -704,7 +692,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (String removing : mRemoving.keySet()) packages.remove(removing);
         ApkPackage caller = packages.get(source);
         if (caller == null) return false;
-        PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
+        PackageVisibility visibility = new PackageVisibility(packages, false,
                 mPermissions::isDeclaredProtectedBroadcast);
         // Package admission assigns isolated or authenticated shared identities
         // in both signature-spoofing modes.
@@ -717,9 +705,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.SERVICE)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentServices(intent, resolvedType, flags));
-        }
-        if (result.isEmpty() && intent != null && get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.addAll(GmsPackageSupport.querySyntheticServices(intent, resolvedType, flags));
         }
         return result;
     }
@@ -865,13 +850,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : mPackages.values()) {
             result.add(installedInfo(p, flags));
         }
-        if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_GMS, flags));
-        }
-        if (get(GmsPackageSupport.PACKAGE_VENDING) == null
-                && get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
-        }
         return new ParceledListSlice<>(result);
     }
 
@@ -907,13 +885,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : mPackages.values()) {
             result.add(p.applicationInfo(flags));
         }
-        if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_GMS, flags));
-        }
-        if (get(GmsPackageSupport.PACKAGE_VENDING) == null
-                && get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
-        }
         return new ParceledListSlice<>(result);
     }
 
@@ -929,9 +900,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage installed = get(pkg);
         if (installed != null) return installed.componentEnabledState(componentName.getClassName());
         // As Settings.getComponentEnabledSettingLPr: an unknown package throws, an unknown
-        // class of a known package is DEFAULT. Gesher's synthetic GMS/Play and browser
-        // packages are known packages whose components keep their manifest state.
-        if (get(pkg) == null && !synthetic(pkg) && !BrowserPackageSupport.isBrowserPackage(pkg)) {
+        // class of a known package is DEFAULT. Gesher's browser package is a known
+        // package whose components keep their manifest state.
+        if (get(pkg) == null && !BrowserPackageSupport.isBrowserPackage(pkg)) {
             throw new IllegalArgumentException("Unknown package: " + pkg);
         }
         return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
@@ -1145,8 +1116,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         enforceCrossUser(userId);
         ApkPackage installed = get(packageName);
         if (installed != null) return installed.applicationEnabledState();
-        if (synthetic(packageName)
-                || BrowserPackageSupport.isBrowserPackage(packageName)) {
+        if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
         }
         throw new IllegalArgumentException("Unknown package: " + packageName);
@@ -1373,19 +1343,14 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     private PackageVisibility packageVisibility() {
         Map<String, ApkPackage> packages;
-        boolean browser, gms, vending;
+        boolean browser;
         synchronized (this) {
             packages = new LinkedHashMap<>(mPackages);
             for (String removing : mRemoving.keySet()) packages.remove(removing);
             browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
                     && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
-            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
-            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
-                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
         }
-        return new PackageVisibility(packages, browser, gms, vending,
+        return new PackageVisibility(packages, browser,
                 mPermissions::isDeclaredProtectedBroadcast);
     }
 
@@ -1504,7 +1469,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         synchronized (this) {
             ApkPackage target = get(packageName);
             if (isRemovalPending(packageName) || (target == null && !"android".equals(packageName)
-                    && !synthetic(packageName) && !BrowserPackageSupport.isBrowserPackage(packageName))) {
+                    && !BrowserPackageSupport.isBrowserPackage(packageName))) {
                 return null;
             }
             // Revalidate the authenticated caller under the same lock as target, source, UID and

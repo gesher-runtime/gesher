@@ -35,7 +35,6 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.messaging.FirebaseMessaging;
 
-import java.lang.reflect.Method;
 import java.util.List;
 
 public final class GmsUnitSteps {
@@ -49,7 +48,7 @@ public final class GmsUnitSteps {
         testClientSdkFromApk();
         testProviderInstallerCode();
         testGoogleApiAvailability();
-        testPackageManagerSyntheticGms();
+        testPackageManagerWithoutGms();
         testFusedLocationProviderClient();
         testGoogleSignInAndAccountManager();
         testFirebaseAndFcmRouting();
@@ -91,29 +90,29 @@ public final class GmsUnitSteps {
     }
 
     /**
-     * Play services' code, as the client library's ProviderInstaller loads it (Gmail
-     * refuses its mail servers without): the package context with CONTEXT_INCLUDE_CODE,
-     * its class loader, ProviderInstallerImpl's insertProvider and reportRequestStats2.
+     * What the client library's ProviderInstaller loads: Play services' package context
+     * with CONTEXT_INCLUDE_CODE. Without Play services there is no such package, and
+     * createPackageContext throws NameNotFoundException, as on Android (#335).
      */
     public void testProviderInstallerCode() throws Exception {
-        Context gms = mActivity.createPackageContext("com.google.android.gms",
-                Context.CONTEXT_INCLUDE_CODE | Context.CONTEXT_IGNORE_SECURITY);
-        Class<?> impl = gms.getClassLoader().loadClass("com.google.android.gms.common.security.ProviderInstallerImpl");
-        Method insert = impl.getMethod("insertProvider", Context.class);
-        insert.invoke(null, gms);
-        Method stats = impl.getMethod("reportRequestStats2", Context.class, long.class, long.class);
-        stats.invoke(null, mActivity, 0L, 1L);
-        Report.line("ProviderInstaller: Play services' code loads from its package context, insertProvider runs");
+        try {
+            mActivity.createPackageContext("com.google.android.gms",
+                    Context.CONTEXT_INCLUDE_CODE | Context.CONTEXT_IGNORE_SECURITY);
+            throw new AssertionError("Play services' package context exists without Play services");
+        } catch (PackageManager.NameNotFoundException expected) {
+            // as on Android without Play services
+        }
+        Report.line("ProviderInstaller: no Play services package context without Play services (NameNotFoundException)");
     }
 
     public void testGoogleApiAvailability() throws Exception {
         GoogleApiAvailability api = GoogleApiAvailability.getInstance();
         int code = api.isGooglePlayServicesAvailable(mActivity);
-        if (code != ConnectionResult.SUCCESS) {
-            throw new AssertionError("isGooglePlayServicesAvailable returned " + code + ", expected SUCCESS");
+        if (code != ConnectionResult.SERVICE_MISSING) {
+            throw new AssertionError("isGooglePlayServicesAvailable returned " + code + ", expected SERVICE_MISSING");
         }
         int utilCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(mActivity);
-        if (utilCode != ConnectionResult.SUCCESS) {
+        if (utilCode != ConnectionResult.SERVICE_MISSING) {
             throw new AssertionError("GooglePlayServicesUtil returned " + utilCode);
         }
 
@@ -127,73 +126,31 @@ public final class GmsUnitSteps {
         }
 
         Task<Void> task = api.makeGooglePlayServicesAvailable(mActivity);
-        Tasks.await(task);
-        if (!task.isSuccessful()) {
-            throw new AssertionError("makeGooglePlayServicesAvailable task was not successful");
+        try {
+            Tasks.await(task);
+            throw new AssertionError("makeGooglePlayServicesAvailable succeeded without Play services");
+        } catch (java.util.concurrent.ExecutionException expected) {
+            // the task fails: nothing installed Play services
         }
-        Report.line("GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)");
-        Report.line("GoogleApiAvailability: makeGooglePlayServicesAvailable completed");
+        Report.line("GoogleApiAvailability: isGooglePlayServicesAvailable SERVICE_MISSING (1)");
+        Report.line("GoogleApiAvailability: makeGooglePlayServicesAvailable failed without Play services");
     }
 
-    public void testPackageManagerSyntheticGms() throws Exception {
+    /** Without microG, Play services and the Play Store are not installed packages (#335). */
+    public void testPackageManagerWithoutGms() throws Exception {
         PackageManager pm = mActivity.getPackageManager();
-
-        // Check com.google.android.gms
-        PackageInfo gmsInfo = pm.getPackageInfo("com.google.android.gms",
-                PackageManager.GET_SIGNATURES | PackageManager.GET_SERVICES);
-        if (gmsInfo == null) {
-            throw new AssertionError("getPackageInfo(com.google.android.gms) returned null");
+        for (String name : new String[] {"com.google.android.gms", "com.android.vending"}) {
+            try {
+                pm.getPackageInfo(name, PackageManager.GET_SIGNATURES | PackageManager.GET_SERVICES);
+                throw new AssertionError(name + " reported without being installed");
+            } catch (PackageManager.NameNotFoundException expected) {
+                // as on Android without the package
+            }
+            for (PackageInfo pi : pm.getInstalledPackages(0)) {
+                if (name.equals(pi.packageName)) throw new AssertionError(name + " listed as installed");
+            }
         }
-        if (!"com.google.android.gms".equals(gmsInfo.packageName)) {
-            throw new AssertionError("unexpected package name: " + gmsInfo.packageName);
-        }
-        if (gmsInfo.versionCode < 233013000) {
-            throw new AssertionError("unexpected gms versionCode: " + gmsInfo.versionCode);
-        }
-        if (gmsInfo.signatures == null || gmsInfo.signatures.length == 0) {
-            throw new AssertionError("com.google.android.gms has no signatures");
-        }
-        // Google's own certificate, which the real client libraries' GoogleSignatureVerifier
-        // requires (Gmail: "signature is invalid", error 9, with any other).
-        byte[] sha1 = java.security.MessageDigest.getInstance("SHA-1")
-                .digest(gmsInfo.signatures[0].toByteArray());
-        StringBuilder hex = new StringBuilder();
-        for (byte b : sha1) hex.append(String.format("%02x", b & 0xff));
-        if (!"38918a453d07199354f8b19af05ec6562ced5788".equals(hex.toString())) {
-            throw new AssertionError("com.google.android.gms is not signed with Google's certificate: "
-                    + hex);
-        }
-        if (gmsInfo.applicationInfo == null || !gmsInfo.applicationInfo.enabled) {
-            throw new AssertionError("com.google.android.gms applicationInfo not enabled");
-        }
-
-        // Check com.android.vending
-        PackageInfo vendingInfo = pm.getPackageInfo("com.android.vending", PackageManager.GET_SIGNATURES);
-        if (vendingInfo == null) {
-            throw new AssertionError("getPackageInfo(com.android.vending) returned null");
-        }
-        if (!"com.android.vending".equals(vendingInfo.packageName)) {
-            throw new AssertionError("unexpected vending package: " + vendingInfo.packageName);
-        }
-        if (vendingInfo.signatures == null || vendingInfo.signatures.length == 0) {
-            throw new AssertionError("com.android.vending has no signatures");
-        }
-
-        // Check installed packages
-        List<PackageInfo> installed = pm.getInstalledPackages(0);
-        boolean hasGms = false;
-        boolean hasVending = false;
-        for (PackageInfo pi : installed) {
-            if ("com.google.android.gms".equals(pi.packageName)) hasGms = true;
-            if ("com.android.vending".equals(pi.packageName)) hasVending = true;
-        }
-        if (!hasGms || !hasVending) {
-            throw new AssertionError("installed packages missing synthetic GMS/Vending: gms="
-                    + hasGms + " vending=" + hasVending);
-        }
-
-        Report.line("PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google's certificate)");
-        Report.line("PackageManager: com.android.vending synthetic package present, enabled");
+        Report.line("PackageManager: com.google.android.gms and com.android.vending absent without microG");
     }
 
     public void testFusedLocationProviderClient() throws Exception {
