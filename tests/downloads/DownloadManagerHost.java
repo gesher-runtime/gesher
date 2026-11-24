@@ -468,6 +468,31 @@ public final class DownloadManagerHost {
             check(expect(SecurityException.class, () -> enqueue(f, app, request(server.url("/file.bin"),
                     Uri.fromFile(new File(otherAppDir, "x.bin")).toString()))) != null,
                     "another app's external files directory is refused");
+            // Path rules compare whole path components of canonical files, with the platform's
+            // separator: Windows JVMs canonicalize to backslashes, and Gesher's file layer
+            // takes both separators (docs/decisions/0010-paths.md).
+            File ownFiles = new File(f.external, "Android/data/" + APP + "/files").getCanonicalFile();
+            File sibling = new File(f.external, "Android/data/" + APP + "2/files/x.bin").getCanonicalFile();
+            check(DownloadRequests.within(ownFiles, new File(ownFiles, "Download" + File.separator + "file.bin"))
+                    && DownloadRequests.within(ownFiles, ownFiles),
+                    "a directory contains itself and its descendants (" + File.separator + " separators)");
+            check(!DownloadRequests.within(new File(f.external, "Android/data/" + APP).getCanonicalFile(), sibling),
+                    "a sibling whose name starts with the package name is not inside it");
+            check(f.requests.isFilenameValidInExternalPackage(new File(ownFiles, "Download/file.bin"), APP)
+                    && !f.requests.isFilenameValidInExternalPackage(sibling, APP),
+                    "the requester's own Android/data directory is its external package directory");
+            File ext = f.requests.externalRoot();
+            check(f.requests.isFileInPrivateExternalAndroidDirs(new File(ext, "Android/data/" + OTHER + "/files"))
+                    && !f.requests.isFileInPrivateExternalAndroidDirs(new File(ext, "Android/data"))
+                    && !f.requests.isFileInPrivateExternalAndroidDirs(f.root)
+                    && f.requests.isFilenameValidInKnownPublicDir(new File(ext, "Pictures/a.png"))
+                    && !f.requests.isFilenameValidInKnownPublicDir(new File(ext, "Pictures")),
+                    "Android/(data|obb) and public directories are matched by path components below the volume");
+            File escape = new File(ownFiles, "Download");
+            String escapeUri = Uri.fromFile(escape).toString() + "/..%5C..%5C..%5C" + OTHER + "%5Cfiles%5Cx.bin";
+            check(expect(IllegalArgumentException.class, () -> enqueue(f, app,
+                    request(server.url("/file.bin"), escapeUri))) != null,
+                    "a parent reference written with backslashes is refused like /../");
             check(expect(IllegalArgumentException.class, () -> f.requests.insert(app,
                     Uri.parse("content://downloads/all_downloads"), request(server.url("/file.bin"), null))) != null,
                     "insert is only accepted on my_downloads");
