@@ -755,6 +755,7 @@ jobs:
           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
           ninja -C out native3_unicode_test
           ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
+          ninja -C out thread_watch_clock_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
