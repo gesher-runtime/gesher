@@ -2,7 +2,7 @@
 //
 // - android.media.ImageReader and its SurfaceImage: Gesher's own natives (the
 //   framework's need libgui's BufferItemConsumer). A reader is a queue of
-//   images in process memory. RGBA readers also expose a native QueueSurface
+//   images in process memory. RGBA and PRIVATE readers also expose a native QueueSurface
 //   so Canvas, NDK and EGL producers can publish images, including Flutter's
 //   platform-view render targets. CameraFrames retains its direct YUV/JPEG path.
 // - android.hardware.camera2.utils.SurfaceUtils: a reader's size and format,
@@ -68,6 +68,7 @@ namespace {
 // IMPLEMENTATION_DEFINED (0x22, PRIVATE) are stored as I420.
 constexpr int kHalRgba8888 = 1;
 constexpr int kHalBlob = 0x21;
+constexpr int kHalPrivate = 0x22;          // IMPLEMENTATION_DEFINED, ImageFormat.PRIVATE
 constexpr int kBadValue = -22;             // -EINVAL, as SurfaceUtils' BAD_VALUE
 // GRALLOC_USAGE_SW_READ_OFTEN | HW_TEXTURE (what a preview consumer has).
 constexpr int64_t kUsagePreview = 0x100 | 0x3;
@@ -84,6 +85,10 @@ struct Image {
   int64_t timestampNs = 0;
   int dataSpace = 0;
   int halFormat = 0;
+  // Pixels a producer drew into the reader's Surface (RGBA, width x height),
+  // as opposed to a camera or decoder frame. Only these can be a snapshot
+  // HardwareBuffer; a PRIVATE reader's camera frames are opaque I420.
+  bool producerRgba = false;
 };
 
 struct Reader {
@@ -179,6 +184,7 @@ void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
   image->timestampNs = timestamp;
   image->dataSpace = r->dataSpace;
   image->halFormat = r->halFormat;
+  image->producerRgba = true;
   image->data.resize(static_cast<size_t>(r->width) * r->height * 4);
   auto* output = reinterpret_cast<uint32_t*>(image->data.data());
   for (int y = 0; y < r->height; y++)
@@ -199,7 +205,11 @@ void ImageReader_init(JNIEnv* env, jobject thiz, jobject weakSelf, jint w, jint 
   r->halFormat = halFormat;
   r->dataSpace = dataSpace;
   r->usage = usage;
-  if (halFormat == kHalRgba8888) {
+  // RGBA readers, and PRIVATE ones (a GPU-sampled reader such as Flutter's
+  // platform-view target: ImageReader.Builder with PRIVATE and GPU_SAMPLED_IMAGE)
+  // take drawn frames through a native producer Surface. A PRIVATE reader also
+  // keeps receiving camera frames by Surface identity (ReaderForSurface).
+  if (halFormat == kHalRgba8888 || halFormat == kHalPrivate) {
     r->producer = gesher::media::MakeReaderSurface(w, h,
         [weak = std::weak_ptr<Reader>(r)](const uint32_t* pixels, int width, int height, int64_t timestamp) {
           QueueRgba(weak, pixels, width, height, timestamp);
@@ -316,6 +326,8 @@ jobjectArray Image_createPlanes(JNIEnv* env, jobject thiz, jint numPlanes, jint,
     jniThrowException(env, "java/lang/IllegalStateException", "Image is not initialized");
     return nullptr;
   }
+  // PRIVATE images have no CPU planes (their contents are for the GPU).
+  if (i->halFormat == kHalPrivate) numPlanes = 0;
   int n = std::min<int>(numPlanes, static_cast<int>(i->planes.size()));
   jobjectArray planes = env->NewObjectArray(numPlanes, gIr.planeClass, nullptr);
   if (planes == nullptr) return nullptr;
@@ -347,7 +359,11 @@ jint Image_getFenceFd(JNIEnv*, jobject) { return -1; }
 
 jobject Image_getHardwareBuffer(JNIEnv* env, jobject thiz) {
   Image* image = ImageOf(env, thiz);
-  if (image == nullptr || image->halFormat != kHalRgba8888) return nullptr;
+  if (image == nullptr) return nullptr;
+  // Only an RGBA image of the reader's own format, or a drawn PRIVATE one, has
+  // pixels a snapshot can hold (a camera frame in a PRIVATE reader does not).
+  if (!(image->halFormat == kHalRgba8888 || (image->halFormat == kHalPrivate && image->producerRgba)))
+    return nullptr;
   return gesher::media::ReaderHardwareBuffer(env, image->data.data(), image->width, image->height);
 }
 
