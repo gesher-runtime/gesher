@@ -51,6 +51,7 @@
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
 #include "../windows/host_dialog_theme.h"
+#include "launch_failure_text.h"
 
 #include <algorithm>
 #include <cstring>
@@ -192,10 +193,11 @@ std::wstring TakeErrorText(const std::wstring& path) {
 void ShowLaunchFailure(const std::wstring& reason) {
   if (reason.empty()) return;
   const auto language = GesherUiCurrentLanguage();
+  const std::wstring formatted = GesherFormatLaunchFailureReason(reason, GesherUiRtl(language));
   std::wstring text = GesherUiText(language, "launch_failed");
   const size_t at = text.find(L"{0}");
-  if (at != std::wstring::npos) text.replace(at, 3, reason);
-  else text = reason;
+  if (at != std::wstring::npos) text.replace(at, 3, formatted);
+  else text = formatted;
   GesherHostPrompt(GesherUiText(language, "brand"), text.c_str(),
                    GesherUiText(language, "cp_dialog_ok"), nullptr,
                    GesherUiRtl(language), nullptr);
