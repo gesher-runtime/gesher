@@ -35,8 +35,8 @@ public final class WindowsTtsService extends TextToSpeechService {
 
     private final SpeechBackend mBackend;
     private final Object mLock = new Object();
-    // Guarded by mLock.
-    private SpeechBackend.Synthesis mCurrent;
+    // Guarded by mLock: the utterance onSynthesizeText is working on, from its first line.
+    private Utterance mCurrent;
     private volatile VoiceCatalog mCatalog;
     private volatile String[] mLanguage = {"", "", ""};
 
@@ -118,15 +118,43 @@ public final class WindowsTtsService extends TextToSpeechService {
         return TextToSpeech.SUCCESS;
     }
 
+    /**
+     * One onSynthesizeText call. TextToSpeechService calls onStop from another thread once
+     * the item's callback exists, so the stop can come before Windows has returned a
+     * synthesis to cancel; it is recorded here and applied to that utterance only.
+     */
+    private static final class Utterance {
+        // Guarded by mLock.
+        boolean stopped;
+        SpeechBackend.Synthesis synthesis;
+    }
+
     @Override
     protected void onStop() {
         synchronized (mLock) {
-            if (mCurrent != null) mCurrent.cancel();
+            if (mCurrent == null) return;  // nothing in progress: nothing to carry over
+            mCurrent.stopped = true;
+            if (mCurrent.synthesis != null) mCurrent.synthesis.cancel();
         }
     }
 
     @Override
     protected void onSynthesizeText(SynthesisRequest request, SynthesisCallback callback) {
+        Utterance utterance = new Utterance();
+        synchronized (mLock) {
+            mCurrent = utterance;
+        }
+        try {
+            synthesize(request, callback, utterance);
+        } finally {
+            synchronized (mLock) {
+                if (mCurrent == utterance) mCurrent = null;
+            }
+        }
+    }
+
+    private void synthesize(SynthesisRequest request, SynthesisCallback callback,
+            Utterance utterance) {
         VoiceCatalog catalog = catalog(false);
         VoiceCatalog.Entry voice = catalog.byName(request.getVoiceName());
         if (voice == null) {
@@ -149,6 +177,10 @@ public final class WindowsTtsService extends TextToSpeechService {
         double pitch = clamp(request.getPitch() / 100.0, SpeechBackend.MIN_PITCH,
                 SpeechBackend.MAX_PITCH);
 
+        synchronized (mLock) {
+            // Stopped already: the callback reports onStop; Windows is not asked to speak.
+            if (utterance.stopped) return;
+        }
         SpeechBackend.Synthesis synthesis;
         try {
             synthesis = mBackend.start(text, voice.voice.id, rate, pitch, true);
@@ -163,7 +195,10 @@ public final class WindowsTtsService extends TextToSpeechService {
         byte[] audio = null;
         long[] words = null;
         synchronized (mLock) {
-            mCurrent = synthesis;
+            utterance.synthesis = synthesis;
+            // A stop that came while Windows was starting: cancel what it returned now,
+            // so await below ends at once instead of after the whole rendering.
+            if (utterance.stopped) synthesis.cancel();
         }
         try {
             status = synthesis.await(SYNTHESIS_TIMEOUT_MS);
@@ -173,7 +208,7 @@ public final class WindowsTtsService extends TextToSpeechService {
             }
         } finally {
             synchronized (mLock) {
-                mCurrent = null;
+                utterance.synthesis = null;
             }
             synthesis.release();
         }
