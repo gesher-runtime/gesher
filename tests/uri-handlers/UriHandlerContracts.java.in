@@ -166,10 +166,12 @@ public final class UriHandlerContracts {
         equal(null, resolved(all, other), "another package named");
         Intent named = intent(Intent.ACTION_SENDTO, "mailto:a@example.com").setPackage(WindowsUriHandlers.PACKAGE);
         equal(MAIL, resolved(all, named), "this package named");
-        Intent explicit = new Intent().setComponent(new ComponentName(WindowsUriHandlers.PACKAGE, MAIL));
+        Intent explicit = intent(Intent.ACTION_SENDTO, "mailto:a@example.com")
+                .setComponent(new ComponentName(WindowsUriHandlers.PACKAGE, MAIL));
         equal(MAIL, resolved(all, explicit), "explicit component while registered");
         WindowsUriHandlers mailOnly = new WindowsUriHandlers(new TestWindows("mailto"));
-        Intent explicitDialer = new Intent().setComponent(new ComponentName(WindowsUriHandlers.PACKAGE, DIALER));
+        Intent explicitDialer = intent(Intent.ACTION_DIAL, "tel:+15551234")
+                .setComponent(new ComponentName(WindowsUriHandlers.PACKAGE, DIALER));
         equal(null, resolved(mailOnly, explicitDialer), "explicit component without its Windows handler");
 
         ResolveInfo withFilter = all.queryIntentActivities(intent(Intent.ACTION_SENDTO, "mailto:a@example.com"), null,
@@ -179,6 +181,47 @@ public final class UriHandlerContracts {
         check(withFilter.isDefault && withFilter.match > 0, "isDefault and match");
         check(WindowsUriHandlers.handlesScheme("SMSTO") && !WindowsUriHandlers.handlesScheme("https")
                 && !WindowsUriHandlers.handlesScheme(null), "handlesScheme");
+    }
+
+    /**
+     * An explicit component is one handler: the request must be one that handler hands to
+     * Windows (its action and data scheme) while Windows has it. Otherwise nothing resolves,
+     * and startActivity is ActivityNotFoundException, never another handler's launch.
+     */
+    static void explicitComponentIsOneHandler() {
+        ComponentName mail = new ComponentName(WindowsUriHandlers.PACKAGE, MAIL);
+        ComponentName maps = new ComponentName(WindowsUriHandlers.PACKAGE, MAPS);
+        WindowsUriHandlers mailOnly = new WindowsUriHandlers(new TestWindows("mailto"));
+
+        // The reviewer's case: only mail registered, the mail component with a maps URI.
+        Intent geoToMail = intent(Intent.ACTION_VIEW, "geo:32.08,34.78?q=Tel%20Aviv").setComponent(mail);
+        equal(null, resolved(mailOnly, geoToMail), "mail component with a geo URI");
+        Intent telToMail = intent(Intent.ACTION_VIEW, "tel:+15551234").setComponent(mail);
+        equal(null, resolved(mailOnly, telToMail), "mail component with a tel URI");
+        // The handler's scheme with an action it does not take.
+        Intent dialMail = intent(Intent.ACTION_DIAL, "mailto:a@example.com").setComponent(mail);
+        equal(null, resolved(mailOnly, dialMail), "mail component with ACTION_DIAL");
+        Intent sendMail = new Intent(Intent.ACTION_SEND).setData(Uri.parse("mailto:a@example.com")).setComponent(mail);
+        equal(null, resolved(mailOnly, sendMail), "mail component with ACTION_SEND");
+        // Nothing to hand to Windows: no data.
+        Intent bare = new Intent(Intent.ACTION_VIEW).setComponent(mail);
+        equal(null, resolved(mailOnly, bare), "mail component without data");
+        Intent empty = new Intent().setComponent(mail);
+        equal(null, resolved(mailOnly, empty), "mail component without action or data");
+
+        // Matching action and scheme: resolves, with or without CATEGORY_DEFAULT.
+        equal(MAIL, resolved(mailOnly, intent(Intent.ACTION_SENDTO, "mailto:a@example.com").setComponent(mail)),
+                "mail component with SENDTO mailto");
+        equal(MAIL, resolved(mailOnly, intent(Intent.ACTION_VIEW, "mailto:a@example.com").setComponent(mail)),
+                "mail component with VIEW mailto");
+        // The maps component with its own URI, but Windows has no geo handler.
+        equal(null, resolved(mailOnly, intent(Intent.ACTION_VIEW, "geo:0,0?q=Haifa").setComponent(maps)),
+                "maps component without a Windows geo handler");
+        WindowsUriHandlers mapsToo = new WindowsUriHandlers(new TestWindows("mailto", "geo"));
+        equal(MAPS, resolved(mapsToo, intent(Intent.ACTION_VIEW, "geo:0,0?q=Haifa").setComponent(maps)),
+                "maps component with VIEW geo");
+        equal(null, resolved(mapsToo, intent(Intent.ACTION_VIEW, "mailto:a@example.com").setComponent(maps)),
+                "maps component with a mailto URI, both registered");
     }
 
     static void windowsUris() {
@@ -234,6 +277,7 @@ public final class UriHandlerContracts {
         withoutWindows();
         onlyRegisteredSchemes();
         filtersOfAospApps();
+        explicitComponentIsOneHandler();
         windowsUris();
         System.out.println("uri-handler contracts: " + sChecks + " checks passed");
     }
