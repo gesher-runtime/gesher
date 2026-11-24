@@ -402,6 +402,7 @@ final class AndroidKeyStoreAuth {
         private SecureRandom mRandom;
         private boolean mInitialized;
         private Exception mCachedException;
+        private boolean mIvUsed;
 
         AuthCipher(String transformation) {
             mTransformation = transformation;
@@ -473,6 +474,7 @@ final class AndroidKeyStoreAuth {
             mInitialized = false;
             mDelegate = null;
             mCachedException = null;
+            mIvUsed = false;
             boolean encrypt = opmode == Cipher.ENCRYPT_MODE || opmode == Cipher.WRAP_MODE;
             if (key instanceof PrivateKey && encrypt) {
                 throw new InvalidKeyException("Encryption with a private key is not supported");
@@ -498,6 +500,13 @@ final class AndroidKeyStoreAuth {
 
         private Cipher delegate(Key key) throws InvalidKeyException,
                 InvalidAlgorithmParameterException {
+            boolean encrypt = mOpmode == Cipher.ENCRYPT_MODE || mOpmode == Cipher.WRAP_MODE;
+            if (gcm() && encrypt && mIvUsed) {
+                // AndroidKeyStoreAuthenticatedAESCipherSpi rejects a new encryption
+                // operation with the IV of a completed one, even while its key is authorized.
+                throw new IllegalStateException("IV has already been used. Reinitialize the"
+                        + " cipher before encrypting again.");
+            }
             try {
                 Cipher cipher = other();
                 // WRAP and UNWRAP are done here, over encryption and decryption.
@@ -508,6 +517,7 @@ final class AndroidKeyStoreAuth {
                 } else {
                     cipher.init(mode, key, mRandom != null ? mRandom : new SecureRandom());
                 }
+                if (gcm() && encrypt) mIvUsed = true;
                 return cipher;
             } catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
                 throw new InvalidKeyException("No provider for " + mTransformation, e);
