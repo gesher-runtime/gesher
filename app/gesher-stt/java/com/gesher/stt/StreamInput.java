@@ -44,24 +44,33 @@ final class StreamInput implements AudioInput {
         mIn = new ParcelFileDescriptor.AutoCloseInputStream(mSource);
     }
 
+    /**
+     * Fills {@code pcm} with the samples the pipe has delivered, at least one: a short read that
+     * ends mid-sample (one byte of two) keeps reading until the sample is complete. 0 only at
+     * the end of the audio or after {@link #stop()}. A single trailing byte at the end of the
+     * stream is half a sample and is dropped: no 16-bit value can be made of it.
+     */
     @Override
     public int read(short[] pcm) throws IOException {
-        if (mStopped || mIn == null) return 0;
+        if (mStopped || mIn == null || pcm.length == 0) return 0;
         byte[] bytes = new byte[pcm.length * 2];
         int filled = 0;
         if (mPending >= 0) {
             bytes[filled++] = (byte) mPending;
             mPending = -1;
         }
-        int n;
-        try {
-            n = mIn.read(bytes, filled, bytes.length - filled);
-        } catch (IOException e) {
+        while (filled < 2) {
+            int n;
+            try {
+                n = mIn.read(bytes, filled, bytes.length - filled);
+            } catch (IOException e) {
+                if (mStopped) return 0;
+                throw e;
+            }
+            if (n < 0) return 0;  // end of the audio; a lone byte is dropped
+            filled += n;
             if (mStopped) return 0;
-            throw e;
         }
-        if (n < 0) return 0;
-        filled += n;
         if ((filled & 1) != 0) mPending = bytes[--filled] & 0xff;
         for (int i = 0; i < filled / 2; i++) {  // little-endian, as Android's PCM
             pcm[i] = (short) ((bytes[2 * i] & 0xff) | (bytes[2 * i + 1] << 8));
