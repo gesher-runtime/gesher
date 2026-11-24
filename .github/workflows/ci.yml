@@ -110,6 +110,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
           & .\launch-failure-text-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
+      - name: Shared media log byte snapshots on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/test-shared-log-bytes.ps1
+      - name: Shared media log byte snapshots on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: tests/windows/test-shared-log-bytes.ps1
       - name: Build actual UIA query cancellation and lifecycle controls
         if: ${{ !cancelled() }}
         shell: cmd
