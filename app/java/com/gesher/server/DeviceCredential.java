@@ -17,8 +17,23 @@ package com.gesher.server;
  * <li>Windows is build {@value #MINIMUM_WINDOWS_BUILD} or later, the minimum Microsoft
  *     documents for {@code IUserConsentVerifierInterop::RequestVerificationForWindowAsync};
  * <li>the device supports a secure lock screen ({@link #supported});
- * <li>Windows answers {@code Available} now.
+ * <li>Windows answers {@code Available} now, or answers that a prompt cannot start right now
+ *     ({@code DeviceBusy}, or a query that failed) after having answered {@code Available}
+ *     within the last {@value #BUSY_TRUST_MS} ms.
  * </ul>
+ *
+ * <p>The last clause keeps two questions apart that Android keeps apart: whether the user
+ * <em>has</em> a credential ({@link #available}: {@code isDeviceSecure}, {@code isKeyguardSecure},
+ * {@code canAuthenticate}, FEATURE_SECURE_LOCK_SCREEN) and whether a prompt can start <em>now</em>
+ * ({@link #state}: a prompt that cannot start ends with {@code BIOMETRIC_ERROR_HW_UNAVAILABLE},
+ * never {@code NO_DEVICE_CREDENTIAL}). {@code DeviceBusy} says only that the device is occupied
+ * (Microsoft: "The authentication device is performing an operation"); it says nothing about
+ * the user's credential, so it neither creates one nor removes one. Only a definite answer
+ * ({@code Available}, {@code NotConfiguredForUser}, {@code DisabledByPolicy},
+ * {@code DeviceNotPresent}) changes what is remembered, and it does so at once.
+ * The remembered answer is trusted for {@value #BUSY_TRUST_MS} ms: a busy device is
+ * normally occupied for seconds, while one that stays unresponsive for minutes is a failing
+ * Windows Hello, about which Gesher can no longer state that a credential exists.
  *
  * <p>{@link #supported} is {@code FEATURE_SECURE_LOCK_SCREEN}, which Android fixes at boot.
  * It is decided once, from Windows' answer when the system server starts: {@code Available}
@@ -32,18 +47,43 @@ package com.gesher.server;
 final class DeviceCredential {
     /** Microsoft's minimum build for RequestVerificationForWindowAsync (Windows 11). */
     static final int MINIMUM_WINDOWS_BUILD = 22000;
+    /** How long a transient answer keeps the last definite one (decision 7 of ADR 0091). */
+    static final long BUSY_TRUST_MS = 10 * 60 * 1000;
+    /** Re-asks at start when Windows answers busy or fails, before FEATURE_SECURE_LOCK_SCREEN. */
+    private static final int START_RETRIES = 3;
+    private static final long START_RETRY_MS = 250;
 
     private static DeviceCredential sSystem;
 
     private final WindowsHelloBackend mBackend;  // null: no natives, or Windows is too old
     private final int mStartState;
     private final boolean mSupported;
+    private final java.util.function.LongSupplier mClockMs;
+
+    // The last definite answer (not DeviceBusy, not a failed query), and when it was given.
+    private final Object mLock = new Object();
+    private boolean mKnown;
+    private boolean mKnownEnrolled;
+    private long mKnownAtMs;
 
     /**
      * @param backend Windows Hello, or null without its natives
      * @param windowsBuild Windows' build number (RtlGetVersion), 0 when unknown
      */
     DeviceCredential(WindowsHelloBackend backend, int windowsBuild) {
+        this(backend, windowsBuild, () -> System.nanoTime() / 1_000_000, millis -> {
+            try {
+                Thread.sleep(millis);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        });
+    }
+
+    /** As above, with the clock and the wait between start-up queries (milliseconds) given. */
+    DeviceCredential(WindowsHelloBackend backend, int windowsBuild,
+            java.util.function.LongSupplier clockMs, java.util.function.LongConsumer sleepMs) {
+        mClockMs = clockMs;
         if (backend == null) {
             mBackend = null;
             mStartState = WindowsHelloBackend.FAILED;
@@ -54,7 +94,15 @@ final class DeviceCredential {
                     + MINIMUM_WINDOWS_BUILD + ": no device credential");
         } else {
             mBackend = backend;
-            mStartState = backend.availability();
+            int answer = backend.availability();
+            // A busy device or a failed query at start is usually brief, and the answer fixes
+            // FEATURE_SECURE_LOCK_SCREEN for the whole run: ask again before giving up.
+            for (int retry = 0; isTransient(answer) && retry < START_RETRIES; retry++) {
+                sleepMs.accept(START_RETRY_MS);
+                answer = backend.availability();
+            }
+            mStartState = answer;
+            remember(answer);
         }
         mSupported = mBackend != null && (mStartState == WindowsHelloBackend.AVAILABLE
                 || mStartState == WindowsHelloBackend.NOT_CONFIGURED_FOR_USER);
@@ -84,12 +132,38 @@ final class DeviceCredential {
      */
     int state() {
         if (!mSupported) return mStartState;
-        return mBackend.availability();
+        int answer = mBackend.availability();
+        remember(answer);
+        return answer;
     }
 
-    /** The user has a credential that can be confirmed now. */
+    /**
+     * The user has a credential. It does not say that a prompt can start now: a busy Windows
+     * Hello leaves this unchanged (for {@value #BUSY_TRUST_MS} ms after a definite answer),
+     * and {@link #state} then says why no prompt can start.
+     */
     boolean available() {
-        return state() == WindowsHelloBackend.AVAILABLE;
+        if (!mSupported) return false;
+        int answer = state();
+        if (answer == WindowsHelloBackend.AVAILABLE) return true;
+        if (!isTransient(answer)) return false;
+        synchronized (mLock) {
+            return mKnown && mKnownEnrolled && mClockMs.getAsLong() - mKnownAtMs <= BUSY_TRUST_MS;
+        }
+    }
+
+    /** DeviceBusy or a failed query: nothing is known about the credential right now. */
+    private static boolean isTransient(int answer) {
+        return answer == WindowsHelloBackend.DEVICE_BUSY || answer == WindowsHelloBackend.FAILED;
+    }
+
+    private void remember(int answer) {
+        if (isTransient(answer)) return;
+        synchronized (mLock) {
+            mKnown = true;
+            mKnownEnrolled = answer == WindowsHelloBackend.AVAILABLE;
+            mKnownAtMs = mClockMs.getAsLong();
+        }
     }
 
     /** What confirms the credential; null when none can be offered. */

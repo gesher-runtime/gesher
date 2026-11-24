@@ -331,12 +331,38 @@ Phase 2b turns it on. Sources as above (`android-16.0.0_r4` GitHub mirrors;
 7. **One availability decision, `DeviceCredential`.** The credential is available when
    the Windows Hello natives are in the runtime, Windows' build (`RtlGetVersion`) is
    22000 or later, the device supports a secure lock screen (decision 8) and
-   `CheckAvailabilityAsync` answers `Available` now (cached for 5 s). `trust`'s
+   `CheckAvailabilityAsync` answers `Available` now (cached for 5 s), or answers
+   `DeviceBusy` or fails after an `Available` within the last 10 minutes (see below). `trust`'s
    `isDeviceSecure`, the window manager's `isKeyguardSecure`, `auth` (through `trust`, as
    PreAuthInfo, and directly before a prompt) and the confirm-credential activity read
    this one object. `isDeviceLocked` and `isKeyguardLocked` stay false: an app runs in
    the user's unlocked Windows session. Below build 22000 the device is simply not
    secure, whatever Windows Hello's state.
+   **A busy Windows Hello is not "no credential"** (review of #470). Android keeps two
+   questions apart: does the user have a credential (`PreAuthInfo`'s `credentialAvailable`
+   from `ITrustManager.isDeviceSecure`, `CREDENTIAL_NOT_ENROLLED` ->
+   `BIOMETRIC_ERROR_NO_DEVICE_CREDENTIAL` -> `BIOMETRIC_ERROR_NONE_ENROLLED`), and can the
+   authenticator work now (`Utils.biometricConstantsToBiometricManager`/`authenticatorStatusToBiometricConstant`:
+   every other status, `default:` after `BIOMETRIC_HARDWARE_NOT_DETECTED`, ->
+   `BIOMETRIC_ERROR_HW_UNAVAILABLE`; android-16.0.0_r4 `services/core/java/com/android/server/biometrics/Utils.java`).
+   Windows' `DeviceBusy` ("The authentication device is performing an operation") and a failed
+   query answer only the second question. So:
+   - `DeviceCredential.available()` (`isDeviceSecure`, `isKeyguardSecure`,
+     `canAuthenticate(DEVICE_CREDENTIAL)`, the confirm-credential activity) keeps the last
+     definite answer across a busy or failed reading: enrolled stays enrolled, not enrolled
+     stays not enrolled (a busy reading never creates a credential).
+   - A definite answer (`Available`, `NotConfiguredForUser`, `DisabledByPolicy`,
+     `DeviceNotPresent`) replaces what is remembered at once.
+   - **Trust bound: 10 minutes** (`BUSY_TRUST_MS`) from the last definite answer. A device
+     that is occupied for seconds is busy; one that does not answer for 10 minutes is a
+     failing Windows Hello, and Gesher can no longer say that a credential exists, so
+     `isDeviceSecure` becomes false then. AOSP has no "unknown" for it. This is the one
+     deliberate edge of the rule, and the bound is a constant, not a Windows fact.
+   - A prompt attempted while busy ends with `BIOMETRIC_ERROR_HW_UNAVAILABLE`
+     (`AuthService.unavailable`: `DeviceCredential.state()` is the live answer), with no
+     Windows prompt; a confirm-credential intent ends `RESULT_CANCELED`.
+   - At start, a busy or failed first answer is asked again 3 times, 250 ms apart, before
+     decision 8 reads it.
 8. **`FEATURE_SECURE_LOCK_SCREEN` is decided once, when the system server starts**, as
    Android fixes features at boot: declared when Windows then answers `Available` or
    `NotConfiguredForUser` (Windows has a verifier; the user has or has not set it up, as
@@ -349,7 +375,8 @@ Phase 2b turns it on. Sources as above (`android-16.0.0_r4` GitHub mirrors;
    - no feature at start → Windows Hello appears later: the device stays not secure
      until Gesher's system server restarts. This keeps AOSP's invariant that a device
      without the feature is never secure (LockSettingsService above), at the cost of a
-     restart; a transient `DeviceBusy` or a slow first query at start has the same cost.
+     restart; a `DeviceBusy` or failed query that lasts through the start-up retries (decision 7)
+     has the same cost.
 9. **`ACTION_CONFIRM_DEVICE_CREDENTIAL` is answered by the activity manager**
    (`ConfirmCredential`, `ActivityTaskManagerService.confirmDeviceCredential`): Gesher has
    no Settings package, as for the Bluetooth consent activities. It matches the action

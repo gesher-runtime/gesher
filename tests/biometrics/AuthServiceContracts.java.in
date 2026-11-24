@@ -515,6 +515,7 @@ public final class AuthServiceContracts {
         backend.script.clear();
         backend.script.add(WindowsHelloBackend.DEVICE_BUSY);
         backend.script.add(WindowsHelloBackend.NOT_CONFIGURED_FOR_USER);
+        backend.availability = WindowsHelloBackend.NOT_CONFIGURED_FOR_USER;
         credential = new DeviceCredential(backend, WINDOWS_11, () -> now, millis -> now += millis);
         check(credential.supported() && !credential.available(),
                 "busy at start, then NotConfiguredForUser: supported, not secure");
