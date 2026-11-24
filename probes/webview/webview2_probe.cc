@@ -12,8 +12,13 @@
 //      (WebResourceRequested with a deferral): a blue page.
 //
 //   webview2_probe.exe [user-data-dir]
+//   webview2_probe.exe --quota-registry
+//   webview2_probe.exe --worker-response
 // Exit code 0 when 1, 2, 3 (preview) and 4 pass; 2 when no runtime is
-// installed.
+// installed. The separate quota diagnostic returns 0 only after qualification,
+// 3 for an unavailable runtime route, and 1 for a harness/semantic failure.
+// The separate worker diagnostic returns 0 for valid recorded observations,
+// 2 for an absent source-filter interface, and 1 for a harness failure.
 
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +31,8 @@
 
 #include "webview_host.h"
 #include "browser_session_probe.h"
+#include "quota_registry_probe.h"
+#include "worker_response_probe.h"
 
 using gesher::webview::Host;
 using gesher::webview::HostOptions;
@@ -239,6 +246,8 @@ int wmain(int argc, wchar_t** argv) {
   _putenv("GESHER_WEBVIEW_DEBUG=1");  // the bridge reports how it is called
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   int failures = 0;
+  const bool quota_registry = argc == 2 && wcscmp(argv[1], L"--quota-registry") == 0;
+  const bool worker_response = argc == 2 && wcscmp(argv[1], L"--worker-response") == 0;
   Log(std::wstring(L"loader: ") + std::wstring(gesher::webview::LoaderKind(),
                                               gesher::webview::LoaderKind() +
                                                   strlen(gesher::webview::LoaderKind())));
@@ -252,8 +261,10 @@ int wmain(int argc, wchar_t** argv) {
 
   wchar_t temp[MAX_PATH];
   GetTempPathW(MAX_PATH, temp);
-  std::wstring user_data = argc > 1 ? argv[1] : std::wstring(temp) + L"gesher-webview2-probe";
-  Host::Configure(user_data, L"");
+  if (!quota_registry && !worker_response) {
+    std::wstring user_data = argc > 1 ? argv[1] : std::wstring(temp) + L"gesher-webview2-probe";
+    Host::Configure(user_data, L"");
+  }
 
   WNDCLASSEXW wc = {};
   wc.cbSize = sizeof(wc);
@@ -266,6 +277,13 @@ int wmain(int argc, wchar_t** argv) {
   HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Gesher WebView2 probe",
                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, 50, 50, r.right - r.left,
                               r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
+  if (quota_registry || worker_response) {
+    int result = hwnd ? (quota_registry ? quota_registry_probe::Run(hwnd) : worker_response_probe::Run(hwnd)) : 1;
+    if (!hwnd) wprintf(L"FAIL  %ls: owner window creation failed\n", quota_registry ? L"quota-registry" : L"worker-response");
+    else DestroyWindow(hwnd);
+    CoUninitialize();
+    return result;
+  }
   ShowWindow(hwnd, SW_SHOWNOACTIVATE);
   UpdateWindow(hwnd);
 

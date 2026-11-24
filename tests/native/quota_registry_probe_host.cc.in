@@ -1,0 +1,70 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// The real probe's bounded JSON and inventory acceptance functions are inserted
+// verbatim. These isolated inputs test its evidence gates, not browser support.
+#include <algorithm>
+#include <cstdint>
+#include <iostream>
+#include <map>
+#include <set>
+#include <string>
+#include <string_view>
+#include <vector>
+
+@JSON_READER@
+@INVENTORY@
+
+int main() {
+  unsigned checks = 0, failures = 0;
+  auto check = [&](bool result, const char* name) {
+    ++checks;
+    if (!result) { ++failures; std::cerr << "FAIL " << name << '\n'; }
+  };
+  const Observation a{L"A", L"https://a.test", L"https://a.test/"};
+  const Observation ca{L"C-under-A", L"https://c.test", L"https://c.test/^0https://a.test"};
+  const Observation b{L"B", L"https://b.test", L"https://b.test/"};
+  const Observation cb{L"C-under-B", L"https://c.test", L"https://c.test/^0https://b.test"};
+  const Observation ab{L"A-under-B", L"https://a.test", L"https://a.test/^0https://b.test"};
+  const std::vector<Observation> all{a, ca, b, cb, ab};
+  const std::vector<Bucket> persisted{{a.key, L"1", L"_default", 103}, {ca.key, L"2", L"_default", 107}};
+  std::vector<Bucket> live = persisted;
+  live.push_back({b.key, L"3", L"_default", 109});
+  live.push_back({cb.key, L"4", L"_default", 113});
+  live.push_back({ab.key, L"5", L"_default", 127});
+  check(InventoryMatches(persisted, {a, ca}, {}), "persisted complete inventory accepted");
+  check(!InventoryMatches({}, {a, ca}, {}), "uninitialized empty inventory rejected");
+  check(!InventoryMatches({persisted[1]}, {a, ca}, {}), "missing persisted origin rejected");
+  check(InventoryMatches(live, all, {}), "five distinct live storage keys accepted");
+  auto wrong = live; wrong[3].key = ca.key;
+  check(!InventoryMatches(wrong, all, {}), "collapsed third-party partition rejected");
+  wrong = live; wrong[4].key = a.key;
+  check(!InventoryMatches(wrong, all, {}), "collapsed first/third-party identity rejected");
+  check(!InventoryMatches(live, {a, ca, b, cb, a}, {}), "duplicate expected key rejected");
+  wrong = live; wrong[3].key = L"https://c.test/^0https://unrelated.test";
+  check(!InventoryMatches(wrong, all, {}), "same origin in unrelated partition rejected");
+  check(!InventoryMatches(live, {b, cb, ab}, {a, ca}), "ack without actual deletion rejected");
+  auto deleted = live; deleted[0].usage = 0;
+  check(!InventoryMatches(deleted, {b, cb, ab}, {a, ca}), "first-party-only deletion rejected");
+  deleted[1].usage = 0;
+  check(InventoryMatches(deleted, {b, cb, ab}, {a, ca}), "zero-usage retired buckets accepted");
+  check(InventoryMatches({live[2], live[3], live[4]}, {b, cb, ab}, {a, ca}), "absent retired buckets accepted");
+  for (size_t i = 2; i != live.size(); ++i) {
+    wrong = deleted; wrong[i].usage = 0;
+    check(!InventoryMatches(wrong, {b, cb, ab}, {a, ca}), "overbroad deletion rejected");
+  }
+  auto parse = [](const std::wstring& input) {
+    Json value; std::vector<Bucket> buckets;
+    return JsonReader(input).Read(&value) && ReadBuckets(value, &buckets);
+  };
+  const std::wstring prefix = LR"({"entries":[{"storageKey":"https://a.test/","bucketId":"1","name":"_default","usage":)";
+  check(parse(prefix + L"\"103\"}]}"), "actual stringified bigint shape accepted");
+  check(!parse(prefix + L"103}]}"), "unqualified numeric coercion rejected");
+  for (const auto& invalid : {L"-1", L"1.0", L"NaN", L"9223372036854775808", L"", L"1e5"}) {
+    check(!parse(prefix + L"\"" + invalid + L"\"}]}"), "invalid measurement rejected");
+  }
+  check(!parse(LR"({"entries":[{"storageKey":"","bucketId":"1","name":"_default","usage":"1"}]})"), "missing key rejected");
+  check(!parse(LR"({"entries":[{"storageKey":"https://a.test/","bucketId":"1","name":"_default","usage":"1"},{"storageKey":"https://b.test/","bucketId":"1","name":"_default","usage":"1"}]})"), "duplicate bucket identity rejected");
+  check(!parse(LR"({"entries":[],"entries":[]})"), "duplicate JSON member rejected");
+  check(!parse(std::wstring(kMaxJson + 1, L' ')), "overlong JSON rejected");
+  std::cout << "Quota registry evidence gates: " << checks << " checks, " << failures << " failures\n";
+  return failures ? 1 : 0;
+}

@@ -155,6 +155,20 @@ if (Test-Path "$Dir/webview2_probe.exe") {
   $script:failed++
 }
 
+# A separate bounded process qualifies the live registry without consuming the
+# existing visual/bridge probe's budget or changing production feature gates.
+# The windowing shard preloads this original helper. The unsharded runner reaches
+# track37 before track50, so load that same definition without running its tests.
+if (-not (Get-Command RunTimed -CommandType Function -ErrorAction SilentlyContinue)) {
+  . "$PSScriptRoot/../helpers/CloseProcessReaders.ps1"
+  $webviewHelperPlan = & "$PSScriptRoot/../helpers/Get-TestTrackPlan.ps1" -Shard windowing
+  foreach ($definition in $webviewHelperPlan.Helpers) {
+    . ([scriptblock]::Create($definition))
+  }
+}
+. "$PSScriptRoot/../webview/QuotaRegistry.ps1"
+. "$PSScriptRoot/../webview/WorkerResponse.ps1"
+
 # --- 2. webapp.apk ----------------------------------------------------------
 $bcpWebView = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $dvmWebView = @("-Xbootclasspath:$bcpWebView", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')

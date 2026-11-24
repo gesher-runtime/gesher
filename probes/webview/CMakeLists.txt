@@ -19,7 +19,7 @@ add_link_options(-static -municode)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/webview2_sdk.cmake)
 set(_wv ${CMAKE_CURRENT_LIST_DIR}/../../compat/webview)
-set(_libs ole32 oleaut32 uuid shlwapi urlmon user32 gdi32 advapi32 bcrypt windowscodecs)
+set(_libs ole32 oleaut32 uuid shlwapi urlmon user32 gdi32 advapi32 bcrypt windowscodecs ws2_32)
 
 foreach(_variant static dll)
   if(_variant STREQUAL "static")
@@ -27,7 +27,8 @@ foreach(_variant static dll)
   else()
     set(_name webview2_probe_dll)
   endif()
-  add_executable(${_name} ${CMAKE_CURRENT_LIST_DIR}/webview2_probe.cc ${_wv}/webview_host.cc
+  add_executable(${_name} ${CMAKE_CURRENT_LIST_DIR}/webview2_probe.cc
+    ${CMAKE_CURRENT_LIST_DIR}/worker_response_server.cc ${_wv}/webview_host.cc
     ${_wv}/webview2_loader.cc)
   target_include_directories(${_name} PRIVATE ${_wv})
   target_include_directories(${_name} SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
