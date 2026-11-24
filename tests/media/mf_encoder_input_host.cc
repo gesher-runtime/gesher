@@ -94,6 +94,8 @@ struct State {
   int reject_inputs = 0, fail_create_type = 0;
   bool null_create_type = false, stream_info_error = false;
   bool stream_change_once = false, stream_change_provides = false, replace_output_sample = false;
+  bool output_type_pending = false, reject_output_type = false, current_type_error = false;
+  size_t output_types_set = 0;
   bool output_error = false, emit = false, provides = true, hold = false, clean = false;
   bool next_idr = true;
   int64_t seen_time = 0, seen_duration = 0;
@@ -277,7 +279,17 @@ struct Transform final : IMFTransform {
   }
   ULONG AddRef() override { return ++refs; }
   ULONG Release() override { const auto n = --refs; if (!n) delete this; return n; }
-  HRESULT SetOutputType(DWORD, IMFMediaType*, DWORD) override { return S_OK; }
+  HRESULT SetOutputType(DWORD, IMFMediaType*, DWORD) override {
+    ++state.output_types_set;
+    if (state.reject_output_type) return E_FAIL;
+    state.output_type_pending = false;
+    return S_OK;
+  }
+  HRESULT GetOutputCurrentType(DWORD, IMFMediaType** out) override {
+    if (state.current_type_error) return E_FAIL;
+    *out = new MediaType;
+    return S_OK;
+  }
   HRESULT SetInputType(DWORD, IMFMediaType*, DWORD) override { return S_OK; }
   HRESULT ProcessMessage(MFT_MESSAGE_TYPE message, uintptr_t) override {
     ++state.messages[static_cast<size_t>(message)]; return S_OK;
@@ -328,8 +340,15 @@ struct Transform final : IMFTransform {
   HRESULT ProcessOutput(DWORD, DWORD count, MFT_OUTPUT_DATA_BUFFER* output, DWORD*) override {
     ++state.outputs;
     Check(count == 1, "one output buffer requested");
+    // Real MFTs require SetOutputType after a format-change notification. Fail
+    // promptly here instead of letting a broken client spin forever in the test.
+    if (state.output_type_pending) {
+      Check(false, "STREAM_CHANGE requires output type negotiation before retry");
+      return E_FAIL;
+    }
     if (state.stream_change_once) {
       state.stream_change_once = false;
+      state.output_type_pending = true;
       state.out_cb_size = state.stream_change_cb_size;
       if (state.stream_change_provides) state.provides = true;
       if (state.replace_output_sample) {
@@ -689,11 +708,14 @@ void OutputReuseAndHardening() {
         "120 !provides frames allocate 1 output IMFMediaBuffer and 1 IMFSample total");
   // (b) MF_E_TRANSFORM_STREAM_CHANGE grows cached buffer when si.cbSize increases.
   const size_t infos_before = state.stream_infos;
+  const size_t types_before = state.output_types_set;
   state.stream_change_once = true;
   state.stream_change_cb_size = 16384;
   state.emit = true;
   Check(encoder->Encode(frame, false, &out) && state.stream_infos >= infos_before + 2,
         "STREAM_CHANGE re-queries GetOutputStreamInfo");
+  Check(state.output_types_set == types_before + 1,
+        "STREAM_CHANGE acknowledges the configured media type before retrying output");
   Check(state.last_buffer_capacity == 16384 && state.buffers == 1 && state.samples == 1,
         "cached output buffer grew to 16384 and retired prior buffer");
   state.stream_change_once = true;
@@ -704,6 +726,21 @@ void OutputReuseAndHardening() {
   state.stream_info_error = true;
   Check(!encoder->Encode(frame, false, &out), "GetOutputStreamInfo failure returns false");
   encoder.reset(); Empty();
+
+  for (bool fail_current : {false, true}) {
+    Reset(); encoder = Encoder(8, 6);
+    state.provides = false;
+    state.emit = true;
+    state.stream_change_once = true;
+    state.current_type_error = fail_current;
+    state.reject_output_type = !fail_current;
+    out.clear();
+    Check(!encoder->Encode(frame, false, &out) && out.empty(),
+          "failed output-type negotiation reports failure without retrying indefinitely");
+    Check(state.buffers == 0 && state.samples == 0,
+          "failed output-type negotiation releases the output cache");
+    encoder.reset(); Empty();
+  }
 
   // (c) MFT returning a replaced db.pSample != provided releases replacement cleanly.
   for (int mode = 0; mode < 4; ++mode) {
