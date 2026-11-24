@@ -243,15 +243,22 @@ with the tombstones before it, otherwise. A root removed from Windows is
 removed at the next sync. Two records name the entries Gesher wrote and their
 SHA-256, and either one is enough: the manifest `misc/user/0/.gesher-user-cacerts`
 (next to the directory), written before the entries it adds, and an NTFS named
-stream `:gesher-owner` on each entry, written on the temporary file so the
-rename moves data and mark together. A lost or unwritable manifest, or a crash
+stream `:gesher-owner` on each entry (the entry's name and SHA-256), written
+on the temporary file so the rename moves data and mark together. A lost or unwritable manifest, or a crash
 between writes, so leaves no entry behind that outlives its root (nothing in
 Gesher could remove it: there is no KeyChain or Settings). If the manifest
 cannot be written, no entry is written (a volume without named streams would
 have no other record). An entry Gesher did not write, or whose contents
-changed since, is never touched, including a file someone put there that
-holds the same certificate (it has no mark). The manifest is read leniently
-(CRLF, case, malformed lines skip only themselves). As in Conscrypt's
+changed since, is never touched. That includes a file someone put there with
+the same certificate, and a copy of Gesher's entry at another name (copies
+carry the stream, but it names the original). It does not include a file
+with Gesher's certificate put at the very name Gesher's records give: that
+one cannot be told from Gesher's own and goes with its root. A new entry
+never replaces a file: if one appears at its name after the scan, the entry
+takes the next index. Removing an entry opens it shared, so a reader does
+not keep it from going; one that still cannot be removed stays recorded,
+goes at a later sync, and does not hold up new entries. The manifest is read
+leniently (CRLF, case, malformed lines skip only themselves). As in Conscrypt's
 `findCert`, the indexes of a hash end at the first one that is not a file: a
 directory there leaves the certificate out (the sync reports a failure)
 rather than writing it past the directory, where it would be unreachable.
