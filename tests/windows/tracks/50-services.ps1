@@ -704,6 +704,20 @@ if ($codeA -eq 0 -and $codeB -eq 0 -and $started -eq 1 -and $connected -eq 1 -an
   $failed++
 }
 
+# Bundled packages depend on this PC's real capabilities (for example, TTS
+# voices). Record their inventory before adding our fixtures, then require
+# exactly two additional packages throughout the install/uninstall checks.
+$initialList = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
+$initialListCode = $LASTEXITCODE
+$initialPackageCount = ([regex]::Matches($initialList, '(?m)^package:')).Count
+if ($initialListCode -ne 0 -or -not $initialList.Contains("gesher-app: $initialPackageCount installed packages") -or
+    $initialList -match '(?m)^package:com\.gesher\.(lifecycle|peer|components) ') {
+  Write-Host "FAIL  services: initial package inventory is consistent and contains no install fixtures (exit $initialListCode)"
+  Write-Host $initialList
+  $failed++
+}
+$expectedInstalledPackageCount = $initialPackageCount + 2
+
 # Installed packages: install (copied into data/app/<package>-1/base.apk,
 # listed in packages.list), the same APK again (unchanged), list
 # (IPackageManager.getInstalledPackages and getPackageInfo across processes).
@@ -722,8 +736,7 @@ $ok = CheckOrdered 'services: gesher-app install and list: base.apk in data/app/
   '/app/com.gesher.lifecycle-1',
   'gesher-app: installed com.gesher.peer (version 1) in ',
   'gesher-app: com.gesher.lifecycle is installed and unchanged',
-  # 2 installed + the synthetic com.google.android.gms and com.android.vending (GmsPackageSupport).
-  'gesher-app: 4 installed packages',
+  "gesher-app: $expectedInstalledPackageCount installed packages",
   'package:com.gesher.lifecycle version 1.0 (1) ',
   '/app/com.gesher.lifecycle-1/base.apk, 1 activities, 0 services, 0 providers',
   'package:com.gesher.peer version 1.0 (1) ',
@@ -918,7 +931,8 @@ $code = $LASTEXITCODE
 $out += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $code = [Math]::Max($code, $LASTEXITCODE)
 $ok = CheckOrdered 'services: gesher-app uninstall: the package''s code, data and entry removed' $out @(
-  'gesher-app: uninstalled com.gesher.peer', 'gesher-app: 4 installed packages',
+  # The components fixture installed above replaces the removed peer fixture.
+  'gesher-app: uninstalled com.gesher.peer', "gesher-app: $expectedInstalledPackageCount installed packages",
   'package:com.gesher.lifecycle ', 'package:com.gesher.components ') $code
 if ($ok -and ($out.Contains('package:com.gesher.peer') -or (Test-Path (Join-Path $root 'data/app/com.gesher.peer-1')) -or
     (Get-Content (Join-Path $root 'data/system/packages.list') -Raw) -match 'com\.gesher\.peer')) {
