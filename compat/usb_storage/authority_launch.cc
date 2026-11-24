@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <string>
@@ -35,6 +36,7 @@ static_assert(PROCESS_ALL_ACCESS == 0x001fffff && THREAD_ALL_ACCESS == 0x001ffff
 // default-owned objects. OWNER RIGHTS denies the desktop user's implicit DACL
 // changes on newly-created objects that it may otherwise own as a user SID.
 constexpr wchar_t kDefaultPolicy[] = L"D:P(D;;WDWO;;;OW)(A;;GA;;;SY)";
+constexpr DWORD kMaximumCapabilities = 64;
 
 template <class T>
 bool Query(HANDLE token, TOKEN_INFORMATION_CLASS kind, T* result, DWORD size = sizeof(T)) {
@@ -148,14 +150,23 @@ DWORD SortedEnvironment(std::span<const wchar_t> input, std::vector<wchar_t>* ou
 }
 
 bool ValidSpec(const AuthorityLaunchSpec& spec) {
-  return spec.executable && spec.directory && AbsolutePath(spec.executable) &&
+  if (!(spec.executable && spec.directory && AbsolutePath(spec.executable) &&
       AbsolutePath(spec.directory) && spec.arguments.size() <= 32767 &&
       spec.arguments.find(L'\0') == std::wstring_view::npos &&
       CompleteEnvironment(spec.environment) && spec.desktop_user &&
       IsValidSid(spec.desktop_user) && spec.desktop_session != 0 &&
       spec.capabilities.AppContainerSid && IsValidSid(spec.capabilities.AppContainerSid) &&
+      spec.capabilities.CapabilityCount <= kMaximumCapabilities &&
       (!spec.capabilities.CapabilityCount || spec.capabilities.Capabilities) &&
-      spec.capabilities.Reserved == 0;
+      spec.capabilities.Reserved == 0)) return false;
+  for (DWORD i = 0; i < spec.capabilities.CapabilityCount; ++i) {
+    const auto& capability = spec.capabilities.Capabilities[i];
+    if (!capability.Sid || !IsValidSid(capability.Sid) || capability.Attributes != SE_GROUP_ENABLED) return false;
+    for (DWORD j = 0; j < i; ++j) {
+      if (EqualSid(capability.Sid, spec.capabilities.Capabilities[j].Sid)) return false;
+    }
+  }
+  return true;
 }
 
 DWORD MakeDescriptor(const wchar_t* policy, LocalMemory* output) {
@@ -218,6 +229,72 @@ bool HasOnlyTraversePrivilege(HANDLE token) {
   return only.LowPart == traverse.LowPart && only.HighPart == traverse.HighPart;
 }
 
+DWORD VerifyCapabilities(HANDLE token, const SECURITY_CAPABILITIES& expected) {
+  DWORD bytes = 0;
+  if (GetTokenInformation(token, TokenCapabilities, nullptr, 0, &bytes)) return ERROR_INVALID_DATA;
+  const DWORD error = GetLastError();
+  if (error != ERROR_INSUFFICIENT_BUFFER) return error ? error : ERROR_GEN_FAILURE;
+  if (bytes < sizeof(DWORD) || bytes > 16384) return ERROR_INVALID_DATA;
+  std::vector<std::byte> buffer(bytes);
+  DWORD received = 0;
+  if (!GetTokenInformation(token, TokenCapabilities, buffer.data(), bytes, &received)) return GetLastError();
+  if (received < sizeof(DWORD) || received > bytes) return ERROR_INVALID_DATA;
+  DWORD count = 0;
+  std::memcpy(&count, buffer.data(), sizeof(count));
+  if (count != expected.CapabilityCount) return ERROR_ACCESS_DENIED;
+  if (count == 0) return ERROR_SUCCESS;
+  if (count > kMaximumCapabilities ||
+      offsetof(TOKEN_GROUPS, Groups) + count * sizeof(SID_AND_ATTRIBUTES) > received) return ERROR_INVALID_DATA;
+  const auto* actual = reinterpret_cast<const TOKEN_GROUPS*>(buffer.data());
+  bool matched[kMaximumCapabilities]{};
+  for (DWORD i = 0; i < count; ++i) {
+    const auto& capability = actual->Groups[i];
+    if (!capability.Sid || !IsValidSid(capability.Sid)) return ERROR_INVALID_SID;
+    bool found = false;
+    for (DWORD j = 0; j < count; ++j) {
+      if (!EqualSid(capability.Sid, expected.Capabilities[j].Sid)) continue;
+      if (matched[j] || capability.Attributes != expected.Capabilities[j].Attributes) return ERROR_ACCESS_DENIED;
+      matched[j] = true;
+      found = true;
+      break;
+    }
+    if (!found) return ERROR_ACCESS_DENIED;
+  }
+  return ERROR_SUCCESS;
+}
+
+DWORD SealAndVerifyToken(HANDLE token, const Identity& desktop, const AuthorityLaunchSpec& spec,
+                        PACL default_acl, const char** startup_stage, bool child) {
+  const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+  Identity identity;
+  stage(child ? "child.token-identity" : "lowbox.token-identity");
+  if (!identity.Read(token)) return ERROR_INVALID_DATA;
+  const LUID& actual = identity.stats.AuthenticationId;
+  const LUID& expected = desktop.stats.AuthenticationId;
+  if (!identity.MatchesDesktop(spec) || identity.contained != TRUE ||
+      !IsWellKnownSid(identity.Integrity(), WinLowLabelSid) || actual.LowPart != expected.LowPart ||
+      actual.HighPart != expected.HighPart || !HasOnlyTraversePrivilege(token)) {
+    return ERROR_ACCESS_DENIED;
+  }
+  alignas(TOKEN_APPCONTAINER_INFORMATION)
+      BYTE buffer[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE]{};
+  stage(child ? "child.appcontainer-sid" : "lowbox.appcontainer-sid");
+  if (!Query(token, TokenAppContainerSid, buffer, sizeof(buffer))) return GetLastError();
+  PSID package = reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(buffer)->TokenAppContainer;
+  if (!package || !IsValidSid(package) || !EqualSid(package, spec.capabilities.AppContainerSid)) return ERROR_ACCESS_DENIED;
+  stage(child ? "child.capabilities" : "lowbox.capabilities");
+  const DWORD capabilities = VerifyCapabilities(token, spec.capabilities);
+  if (capabilities != ERROR_SUCCESS) return capabilities;
+
+  TOKEN_DEFAULT_DACL acl{default_acl};
+  stage(child ? "child.seal-default-dacl" : "lowbox.seal-default-dacl");
+  if (!SetTokenInformation(token, TokenDefaultDacl, &acl, sizeof(acl))) return GetLastError();
+  alignas(TOKEN_DEFAULT_DACL) BYTE installed[256]{};
+  if (!Query(token, TokenDefaultDacl, installed, sizeof(installed))) return GetLastError();
+  return SameAcl(default_acl, reinterpret_cast<const TOKEN_DEFAULT_DACL*>(installed)->DefaultDacl)
+      ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+}
+
 DWORD SealAndVerifyChild(HANDLE process, const Identity& desktop, const AuthorityLaunchSpec& spec,
                          PACL default_acl, const char** startup_stage) {
   const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
@@ -225,34 +302,12 @@ DWORD SealAndVerifyChild(HANDLE process, const Identity& desktop, const Authorit
   HANDLE found = nullptr;
   if (!OpenProcessToken(process, TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, &found)) return GetLastError();
   const Handle token(found);
-  Identity child;
-  stage("child.token-identity");
-  if (!child.Read(found)) return ERROR_INVALID_DATA;
-  const LUID& actual = child.stats.AuthenticationId;
-  const LUID& expected = desktop.stats.AuthenticationId;
-  if (!child.MatchesDesktop(spec) || child.contained != TRUE ||
-      !IsWellKnownSid(child.Integrity(), WinLowLabelSid) || actual.LowPart != expected.LowPart ||
-      actual.HighPart != expected.HighPart || !HasOnlyTraversePrivilege(found)) {
-    return ERROR_ACCESS_DENIED;
-  }
-  alignas(TOKEN_APPCONTAINER_INFORMATION)
-      BYTE buffer[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE]{};
-  stage("child.appcontainer-sid");
-  if (!Query(found, TokenAppContainerSid, buffer, sizeof(buffer))) return GetLastError();
-  PSID package = reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(buffer)->TokenAppContainer;
-  if (!package || !EqualSid(package, spec.capabilities.AppContainerSid)) return ERROR_ACCESS_DENIED;
+  const DWORD status = SealAndVerifyToken(found, desktop, spec, default_acl, startup_stage, true);
+  if (status != ERROR_SUCCESS) return status;
   DWORD session = 0;
   stage("child.desktop-session");
   if (!ProcessIdToSessionId(GetProcessId(process), &session)) return GetLastError();
-  if (session != spec.desktop_session) return ERROR_ACCESS_DENIED;
-
-  TOKEN_DEFAULT_DACL acl{default_acl};
-  stage("child.seal-default-dacl");
-  if (!SetTokenInformation(found, TokenDefaultDacl, &acl, sizeof(acl))) return GetLastError();
-  alignas(TOKEN_DEFAULT_DACL) BYTE installed[256]{};
-  if (!Query(found, TokenDefaultDacl, installed, sizeof(installed))) return GetLastError();
-  return SameAcl(default_acl, reinterpret_cast<const TOKEN_DEFAULT_DACL*>(installed)->DefaultDacl)
-      ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+  return session == spec.desktop_session ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
 }
 
 }  // namespace
@@ -326,7 +381,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
 
   SIZE_T needed = 0;
   stage("launch.attributes");
-  const DWORD attribute_count = spec.job ? 3 : 2;
+  const DWORD attribute_count = spec.job ? 2 : 1;
   InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &needed);
   if (!needed) return GetLastError();
   std::vector<std::byte> memory(needed);
@@ -336,13 +391,10 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   const std::unique_ptr<std::remove_pointer_t<LPPROC_THREAD_ATTRIBUTE_LIST>, decltype(cleanup)>
       release(attributes, cleanup);
 
-  SECURITY_CAPABILITIES capabilities = spec.capabilities;
   // The desktop is interactive. Prevent global Windows hooks and other
   // legacy extension points from loading code into the protected guest.
   DWORD64 mitigations = PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON;
-  if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-          &capabilities, sizeof(capabilities), nullptr, nullptr) ||
-      !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+  if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
           &mitigations, sizeof(mitigations), nullptr, nullptr)) return GetLastError();
   HANDLE jobs[] = {spec.job};
   if (spec.job && !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
@@ -360,12 +412,43 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   stage("launch.environment-order");
   status = SortedEnvironment(spec.environment, &environment);
   if (status != ERROR_SUCCESS) return status;
-  // Per-user profile APIs run under the target identity during preparation.
-  // Process creation stays in the authority context: CreateProcessAsUser also
-  // needs access to its caller's primary token, which is never granted to the
-  // target account. The explicit target token and environment select the guest.
+
+  // The KernelBase wrapper creates the lowbox namespace as well as its token.
+  // Keep that per-user work in the verified target context, separate from the
+  // SYSTEM-only process creation. There is no non-lowbox fallback.
+  stage("lowbox.resolve-export");
+  using CreateLowbox = BOOL(WINAPI*)(HANDLE, PSECURITY_CAPABILITIES, PHANDLE);
+  const HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+  if (!kernelbase) {
+    const DWORD error = GetLastError();
+    return error ? error : ERROR_MOD_NOT_FOUND;
+  }
+  const auto create_lowbox = reinterpret_cast<CreateLowbox>(
+      reinterpret_cast<void*>(GetProcAddress(kernelbase, "CreateAppContainerToken")));
+  if (!create_lowbox) return ERROR_PROC_NOT_FOUND;
+  SECURITY_CAPABILITIES capabilities = spec.capabilities;
+  HANDLE raw_lowbox = nullptr;
+  stage("lowbox.impersonate-target");
+  if (!ImpersonateLoggedOnUser(restricted)) return GetLastError();
+  stage("lowbox.create-token");
+  const BOOL converted = create_lowbox(restricted, &capabilities, &raw_lowbox);
+  const DWORD conversion_error = converted ? ERROR_SUCCESS : GetLastError();
+  if (!RevertToSelf()) {
+    stage("lowbox.restore-authority-context");
+    if (raw_lowbox && raw_lowbox != INVALID_HANDLE_VALUE) CloseHandle(raw_lowbox);
+    std::abort();
+  }
+  const Handle lowbox(raw_lowbox == INVALID_HANDLE_VALUE ? nullptr : raw_lowbox);
+  if (!converted) return conversion_error ? conversion_error : ERROR_GEN_FAILURE;
+  if (!raw_lowbox || raw_lowbox == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
+  status = SealAndVerifyToken(raw_lowbox, desktop, spec, default_acl, startup_stage, false);
+  if (status != ERROR_SUCCESS) return status;
+
+  // SECURITY_CAPABILITIES is deliberately absent: the verified primary token
+  // is already a lowbox. Re-converting it here would re-enter profile setup in
+  // the SYSTEM context. Mitigation and atomic job attributes remain installed.
   stage("launch.create-process-as-user");
-  if (!CreateProcessAsUserW(restricted, spec.executable, command.data(), &private_objects,
+  if (!CreateProcessAsUserW(raw_lowbox, spec.executable, command.data(), &private_objects,
           &private_objects, FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
           CREATE_SUSPENDED | CREATE_NO_WINDOW, environment.data(), spec.directory,
           &startup.StartupInfo, &launch->guest_)) {

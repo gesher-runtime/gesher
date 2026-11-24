@@ -38,6 +38,11 @@ void Require(bool ok, const char* stage, DWORD status = ERROR_SUCCESS) {
   }
 }
 void Check(DWORD status, const char* stage) { Require(status == ERROR_SUCCESS, stage, status); }
+struct ProfileDeletionEvidence {
+  DWORD attempts = 0;
+  DWORD api_status = ERROR_NOT_READY;
+  DWORD hive_status = ERROR_NOT_READY;
+};
 struct Evidence {
   DWORD magic = 0x47504c54;
   DWORD status = ERROR_SUCCESS;
@@ -143,7 +148,7 @@ void AbsentRuntimeProfile(PSID sid) {
   Require(result == ERROR_FILE_NOT_FOUND, "refuse-preexisting-runtime-profile",
       result == ERROR_SUCCESS ? ERROR_ALREADY_EXISTS : static_cast<DWORD>(result));
 }
-DWORD DeleteOwnedProfile(const std::wstring& directory) {
+DWORD DeleteOwnedProfile(const std::wstring& directory, ProfileDeletionEvidence* observed) {
   const std::wstring marker = directory + L"\\profile.sid";
   if (GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES) {
     const DWORD error = GetLastError();
@@ -154,9 +159,26 @@ DWORD DeleteOwnedProfile(const std::wstring& directory) {
     Require(sid.size() >= 8 && IsValidSid(const_cast<BYTE*>(sid.data())) &&
         GetLengthSid(const_cast<BYTE*>(sid.data())) == sid.size(), "owned-profile-marker", ERROR_INVALID_SID);
     const std::wstring text = SidText(const_cast<BYTE*>(sid.data()));
-    if (!DeleteProfileW(text.c_str(), nullptr, nullptr)) {
-      const DWORD error = GetLastError();
-      if (error != ERROR_FILE_NOT_FOUND && error != ERROR_NOT_FOUND) return error;
+    const ULONGLONG deadline = GetTickCount64() + 5000;
+    for (;;) {
+      ++observed->attempts;
+      const BOOL deleted = DeleteProfileW(text.c_str(), nullptr, nullptr);
+      const DWORD error = deleted ? ERROR_SUCCESS : GetLastError();
+      observed->api_status = error;
+      if (deleted || error == ERROR_FILE_NOT_FOUND || error == ERROR_NOT_FOUND) break;
+      const ULONGLONG now = GetTickCount64();
+      if ((error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) &&
+          observed->attempts < 21 && now < deadline) {
+        // All exact children and the owned holder have already stopped. Allow
+        // a bounded OS release delay, without forcing hive unload or deletion.
+        const ULONGLONG remaining = deadline - now;
+        Sleep(static_cast<DWORD>(remaining < 250 ? remaining : 250));
+        if (GetTickCount64() < deadline) continue;
+      }
+      HKEY hive = nullptr;
+      observed->hive_status = static_cast<DWORD>(RegOpenKeyExW(HKEY_USERS, text.c_str(), 0, KEY_READ, &hive));
+      if (hive) RegCloseKey(hive);
+      return error ? error : ERROR_GEN_FAILURE;
     }
     return DeleteFileW(marker.c_str()) ? ERROR_SUCCESS : GetLastError();
   } catch (const Failure& failure) { return failure.status; }
@@ -254,7 +276,7 @@ void ObserveLaunchAccess(HANDLE token, Evidence* evidence) {
 }
 Evidence RunSystem() {
   Evidence evidence;
-  bool installed = false, owns_profile = false;
+  bool installed = false;
   storage::ProtectedIdentityCleanup cleanup;
   std::unique_ptr<storage::ProtectedIdentity> identity;
   std::unique_ptr<storage::AuthorityLaunch> child;
@@ -275,7 +297,6 @@ Evidence RunSystem() {
     // This protected marker is written only after proving there is no earlier
     // profile. The controller can finish owned cleanup after a service timeout.
     WriteNew(config.directory + L"\\profile.sid", sid.data(), static_cast<DWORD>(sid.size()));
-    owns_profile = true;
     const DWORD identity_status = storage::ProtectedIdentity::Create(config.image, config.session, &identity, &stage, &cleanup);
     Check(identity_status, stage);
     Require(EqualSid(identity->sid(), sid.data()), "actual-private-token-user", ERROR_ACCESS_DENIED);
@@ -421,9 +442,8 @@ Evidence RunSystem() {
     const DWORD removed = storage::UninstallRuntimeIdentityService(config.image);
     record_cleanup(removed, "remove-runtime-holder");
   }
-  if (owns_profile && evidence.cleanup == ERROR_SUCCESS) {
-    record_cleanup(DeleteOwnedProfile(config.directory), "delete-owned-profile");
-  }
+  // Leave the protected ownership marker for the controller. The user profile
+  // is deleted only after this profile-calling process has itself exited.
   record_cleanup(cleanup.profile_error.load(), "recorded-profile-cleanup");
   record_cleanup(cleanup.privilege_restore_error, "restore-profile-privileges");
   return evidence;
@@ -602,6 +622,7 @@ DWORD Controller() {
     }
   };
   bool worker_stopped = !service;
+  bool worker_exit_verified = false;
   if (service) {
     SERVICE_STATUS state{};
     ControlService(service.get(), SERVICE_CONTROL_STOP, &state);
@@ -609,7 +630,10 @@ DWORD Controller() {
       if (!TerminateProcess(process.get(), ERROR_TIMEOUT)) record_cleanup(GetLastError(), "terminate-system-worker");
       else if (WaitForSingleObject(process.get(), 5000) != WAIT_OBJECT_0) record_cleanup(ERROR_TIMEOUT, "wait-terminated-system-worker");
     }
-    if (process) worker_stopped = WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0;
+    if (process) {
+      worker_exit_verified = WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0;
+      worker_stopped = worker_exit_verified;
+    }
     else {
       SERVICE_STATUS_PROCESS final{};
       DWORD bytes = 0;
@@ -636,15 +660,28 @@ DWORD Controller() {
     } while (GetTickCount64() < deadline);
     if (!job_empty) record_cleanup(ERROR_TIMEOUT, "wait-empty-desktop-job");
   }
-  if (own_directory && worker_stopped && job_empty) {
+  bool profile_cleanup_verified = true;
+  if (own_directory && !worker_exit_verified) {
+    const DWORD marker = GetFileAttributesW((directory + L"\\profile.sid").c_str());
+    const DWORD error = marker == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_PROCESS_ABORTED;
+    if (marker != INVALID_FILE_ATTRIBUTES || error != ERROR_FILE_NOT_FOUND) {
+      profile_cleanup_verified = false;
+      record_cleanup(error, "verify-profile-worker-exit");
+    }
+  }
+  if (own_directory && worker_stopped && job_empty && profile_cleanup_verified) {
     const DWORD removed = storage::UninstallRuntimeIdentityService(image);
     if (removed != ERROR_SUCCESS && removed != ERROR_SERVICE_DOES_NOT_EXIST) {
       record_cleanup(removed, "remove-runtime-holder");
     } else {
       // The holder is a separate SCM process outside the desktop job. Keep
       // the owned profile marker and files if its removal is unconfirmed.
-      const DWORD profile = DeleteOwnedProfile(directory);
+      ProfileDeletionEvidence observed;
+      const DWORD profile = DeleteOwnedProfile(directory, &observed);
       record_cleanup(profile, "delete-owned-profile");
+      std::printf("Protected launch: controller-profile-delete-attempts=%lu api=%lu hive=%lu\n",
+          static_cast<unsigned long>(observed.attempts), static_cast<unsigned long>(observed.api_status),
+          static_cast<unsigned long>(observed.hive_status));
       DeleteFileW((directory + L"\\private-data\\guest.bin").c_str());
       RemoveDirectoryW((directory + L"\\private-data").c_str());
       DeleteFileW((directory + L"\\result.bin").c_str());
