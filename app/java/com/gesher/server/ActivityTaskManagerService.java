@@ -350,6 +350,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final List<PendingWork> mPendingWork = new ArrayList<>();
     private final PermissionRequests mPermissionRequests;
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
+    private volatile AuthService mAuth; // confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0091)
     private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
@@ -1225,6 +1226,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         : android.app.Activity.RESULT_OK, result);
         if (resumeCovered) { realStartActivity(session.covered); resume(session.covered); }
         updateTopResumed();
+    }
+
+    /** The auth service that confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0091). */
+    void setAuthService(AuthService auth) {
+        mAuth = auth;
     }
 
     /** Lets the server start app processes on demand ({@link #startProcess}). */
@@ -2198,6 +2204,93 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final BluetoothRequests requests = mBluetoothRequests;
         // Validate before consuming a forwarded result route or scheduling host work.
         requests.validate(action, pkg, captured);
+        return startSystemUi("Bluetooth", intent, callingProcess, internalCreator, delegated,
+                publication, resultToToken, resultWho, requestCode,
+                (source, lifetime, awaitPause, completion) ->
+                        requests.request(action, pkg, captured, lifetime, awaitPause, completion));
+    }
+
+    /** The work of a system activity that Gesher shows as Windows UI over the caller. */
+    private interface SystemUiRequest {
+        /**
+         * Starts the work. {@code completion} gets the activity result exactly once;
+         * {@code lifetime} says whether the request's caller is still there to receive it.
+         */
+        void start(ProcessRecord source, java.util.function.BooleanSupplier lifetime,
+                Runnable awaitPause, java.util.function.IntConsumer completion);
+    }
+
+    /**
+     * ACTION_CONFIRM_DEVICE_CREDENTIAL (ConfirmCredential, ADR 0091): Windows Hello's prompt
+     * over the calling activity, owned by the calling process's window, RESULT_OK only
+     * when Windows verified the user. The request ends as canceled when its caller goes
+     * away, which also closes Windows' prompt.
+     */
+    private int confirmDeviceCredential(Intent intent, String verifiedCaller,
+            ProcessRecord callingProcess, boolean internalCreator,
+            java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode) {
+        final AuthService auth = mAuth;
+        final Intent request = new Intent(intent);
+        return startSystemUi("Credential", intent, callingProcess, internalCreator, delegated,
+                publication, resultToToken, resultWho, requestCode,
+                (source, lifetime, awaitPause, completion) -> {
+                    // The prompt's owner is the process that asked: the activity that gets
+                    // the result, or else the caller itself. Never another app's window.
+                    final ProcessRecord owner = source != null ? source : callingProcess;
+                    final String pkg = owner != null && owner.packageName != null
+                            ? owner.packageName : verifiedCaller;
+                    Thread worker = new Thread(() -> {
+                        long identity = Binder.clearCallingIdentity();
+                        try {
+                            awaitPause.run();
+                            if (owner == null || !lifetime.getAsBoolean()) {
+                                completion.accept(android.app.Activity.RESULT_CANCELED);
+                                return;
+                            }
+                            final java.util.concurrent.atomic.AtomicBoolean done =
+                                    new java.util.concurrent.atomic.AtomicBoolean();
+                            AuthService.Confirmation confirmation = ConfirmCredential.request(auth,
+                                    request, owner.uid, owner.pid, pkg, result -> {
+                                        done.set(true);
+                                        completion.accept(result);
+                                    });
+                            // The caller finishing or dying ends the request (Settings'
+                            // activity would be destroyed with its task): close the prompt.
+                            while (confirmation != null && !done.get()) {
+                                if (!lifetime.getAsBoolean()) {
+                                    confirmation.cancel();
+                                    break;
+                                }
+                                try {
+                                    Thread.sleep(250);
+                                } catch (InterruptedException interrupted) {
+                                    confirmation.cancel();
+                                    break;
+                                }
+                            }
+                        } catch (RuntimeException | LinkageError failure) {
+                            SystemServer.log("confirm-credential: request failed: " + failure);
+                            completion.accept(android.app.Activity.RESULT_CANCELED);
+                        } finally {
+                            Binder.restoreCallingIdentity(identity);
+                        }
+                    }, "confirm-credential");
+                    worker.setDaemon(true);
+                    worker.start();
+                });
+    }
+
+    /**
+     * Starts a system activity that is Windows UI: covers and pauses the caller's activity
+     * (BluetoothActivity), routes the result as ActivityStarter does (to the caller, or
+     * forwarded), and resumes the caller when the work completes.
+     */
+    private int startSystemUi(String what, Intent intent, ProcessRecord callingProcess,
+            boolean internalCreator, java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode, SystemUiRequest work) {
         final ActivityRecord source, recipient;
         final ProcessRecord sourceProcess, expectedProcess;
         final String targetWho;
@@ -2210,10 +2303,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || source.finishing || source.state == State.DESTROYED || !activityEnabled(source)
                     || (internalCreator ? publication == null || !publication.getAsBoolean()
                             : callingProcess == null || source.app != callingProcess))) {
-                throw new SecurityException("Bluetooth result must belong to its live caller activity");
+                throw new SecurityException(what + " result must belong to its live caller activity");
             }
             if (requestCode >= 0 && source == null) {
-                throw new SecurityException("Bluetooth result requires a live activity");
+                throw new SecurityException(what + " result requires a live activity");
             }
             sourceProcess = source == null ? null : source.app;
             forwarded = source != null && (intent.getFlags() & Intent.FLAG_ACTIVITY_FORWARD_RESULT) != 0;
@@ -2276,7 +2369,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             activity.pauseCovered((intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
             updateTopResumed();
-            requests.request(action, pkg, captured, lifetime, activity::awaitPause, completion);
+            work.start(sourceProcess, lifetime, activity::awaitPause, completion);
         } catch (SecurityException revoked) {
             // Permission may be revoked after admission consumed a forwarded route.
             // That accepted launch must finish with cancellation, not lose its result.
@@ -2442,6 +2535,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     }
                 }
                 return requestBluetoothState(intent, verifiedCaller, originalProcess,
+                        internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
+            }
+            if (requiredTask == null && mAuth != null
+                    && ConfirmCredential.handles(intent, resolvedType)) {
+                // Settings' ConfirmDeviceCredentialActivity on Android; here Windows Hello's
+                // prompt over the caller. A caller without a live app process has no
+                // window to own the prompt: its request ends as canceled.
+                return confirmDeviceCredential(intent, verifiedCaller, originalProcess,
                         internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
             }
             if (DocumentPicker.handles(intent)) {
