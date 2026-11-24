@@ -10,8 +10,10 @@
 // (compat/art/jni_invocation_static.cc) and BuildProps.java (the same forms,
 // written out there).
 //
-// Accepted forms: decimal digits ("196608"), or 0x/0X and hexadecimal digits
-// ("0x30000"); no sign, spaces, other prefixes or suffixes.
+// Accepted forms: decimal digits without a leading zero ("196608"), or 0x/0X
+// and hexadecimal digits ("0x30000"); no sign, spaces, other prefixes or
+// suffixes. ("0196608" is refused: strtol with base 0 would read it as octal.)
+// egl_gles.cc reads the boot's declaration with the same parser.
 #pragma once
 
 #include <string_view>
@@ -28,6 +30,7 @@ inline bool ParseGlEsVersion(std::string_view text, long long* value) {
     text.remove_prefix(2);
   }
   if (text.empty() || text.size() > 10) return false;
+  if (base == 10 && text.size() > 1 && text[0] == '0') return false;
   long long v = 0;
   for (char c : text) {
     int digit;

@@ -31,8 +31,9 @@ final class BuildProps {
      */
     static boolean servedGlEsVersion(String key, String value) {
         if (!"ro.opengles.version".equals(key)) return true;
-        // The forms gesher/gles_version_property.h accepts: decimal digits, or 0x/0X and
-        // hexadecimal digits, at most 10 digits; nothing else (no sign, "#", spaces).
+        // The forms gesher/gles_version_property.h accepts: decimal digits without a leading
+        // zero, or 0x/0X and hexadecimal digits, at most 10 digits; nothing else (no sign,
+        // "#", spaces).
         int radix = 10;
         String digits = value;
         if (value.length() > 2 && value.charAt(0) == '0'
@@ -41,6 +42,7 @@ final class BuildProps {
             digits = value.substring(2);
         }
         if (digits.isEmpty() || digits.length() > 10) return false;
+        if (radix == 10 && digits.length() > 1 && digits.charAt(0) == '0') return false;
         long v = 0;
         for (int i = 0; i < digits.length(); i++) {
             int digit = Character.digit(digits.charAt(i), radix);

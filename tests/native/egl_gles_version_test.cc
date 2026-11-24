@@ -160,13 +160,22 @@ int main() {
 
   // build.prop's ro.opengles.version: only served versions, in exactly the forms
   // every loader accepts (the same table is in PackageServiceQueriesTest).
-  for (const char* served : {"196608", "131072", "0x30000", "0X30000", "0x20000", "0196608"}) {
+  for (const char* served : {"196608", "131072", "0x30000", "0X30000", "0x20000"}) {
     Check(gesher::properties::ServedBuildProperty("ro.opengles.version", served), served);
   }
-  for (const char* refused : {"196609", "0x30001", "65536", "#30000", "+196608", "-196608", " 196608", "196608 ", "0x", "", "three", "0x3000G", "1966080000000"}) {
+  for (const char* refused : {"196609", "0x30001", "65536", "#30000", "+196608", "-196608", " 196608", "196608 ", "0x", "", "three", "0x3000G", "1966080000000", "0196608", "00x30000"}) {
     Check(!gesher::properties::ServedBuildProperty("ro.opengles.version", refused), refused);
   }
   Check(gesher::properties::ServedBuildProperty("ro.product.model", "196609"), "other properties kept");
+  // What app processes read as the boot's declaration (egl_gles.cc BootDeclaration:
+  // ParseGlEsVersion, then Declaration) agrees with what the loaders keep.
+  for (const char* value : {"196608", "131072", "0x30000", "0X30000", "0x20000", "196609", "0x30001",
+                            "#30000", "+196608", " 196608", "0196608", "00x30000", "three", ""}) {
+    long long parsed = 0;
+    const bool declared = gesher::properties::ParseGlEsVersion(value, &parsed) &&
+                          Declaration(static_cast<int>(parsed)) != kGlEsVersionUndefined;
+    Check(declared == gesher::properties::ServedBuildProperty("ro.opengles.version", value), value);
+  }
 
   if (failures != 0) {
     std::fprintf(stderr, "egl gles version: %d failed\n", failures);

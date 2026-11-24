@@ -150,10 +150,10 @@ Gesher serves (0x30000 or 0x20000). Any other value in a `build.prop` is not
 loaded by any of its three loaders (the property area's initial values,
 `compat/posix/src/system_properties.cc`; dalvikvm's, `compat/art/jni_invocation_static.cc`,
 with a log line; `BuildProps.java`, with a log line), which share one rule
-(`gesher/gles_version_property.h`: decimal digits or `0x`/`0X` and hexadecimal
-digits, nothing else; the property area also reads the `build.prop` of an
-`ANDROID_ROOT` on another drive, `/mnt/<drive>/...`), so the property stays
-unset and the probe declares; a value set some
+(`gesher/gles_version_property.h`: decimal digits without a leading zero or
+`0x`/`0X` and hexadecimal digits, nothing else; app processes read the boot's
+declaration with the same parser, egl_gles.cc), so the property stays unset
+and the probe declares; a value set some
 other way that Gesher does not serve is not a declaration either, for
 PackageManagerService (which declares the probed version) and for the EGL
 display choice alike.

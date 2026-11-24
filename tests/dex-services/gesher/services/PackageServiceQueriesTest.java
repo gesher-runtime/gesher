@@ -148,11 +148,11 @@ public final class PackageServiceQueriesTest {
             served.setAccessible(true);
             String key = "ro.opengles.version";
             // The same table as tests/native/egl_gles_version_test.cc (gles_version_property.h).
-            for (String value : new String[] {"196608", "131072", "0x30000", "0X30000", "0x20000", "0196608"}) {
+            for (String value : new String[] {"196608", "131072", "0x30000", "0X30000", "0x20000"}) {
                 require((Boolean) served.invoke(null, key, value),
                         "build.prop: the served OpenGL ES version \"" + value + "\" was refused");
             }
-            for (String value : new String[] {"196609", "0x30001", "65536", "#30000", "+196608", "-196608", " 196608", "196608 ", "0x", "", "three", "0x3000G", "1966080000000"}) {
+            for (String value : new String[] {"196609", "0x30001", "65536", "#30000", "+196608", "-196608", " 196608", "196608 ", "0x", "", "three", "0x3000G", "1966080000000", "0196608", "00x30000"}) {
                 require(!(Boolean) served.invoke(null, key, value),
                         "build.prop: \"" + value + "\" was kept as an OpenGL ES version");
             }

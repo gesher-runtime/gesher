@@ -15,7 +15,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
-#include <cwctype>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -232,18 +231,6 @@ std::string Trim(const std::string& text) {
   if (start == std::string::npos) return {};
   return text.substr(start, text.find_last_not_of(" \t\r\n") - start + 1);
 }
-// A guest path's Windows form for reading: "/mnt/<drive>/..." (ADR 0045, how
-// ANDROID_ROOT names a root on a drive other than C:) is that drive's path;
-// anything else goes through FullPath as before.
-std::wstring HostPath(const std::wstring& path) {
-  if (path.size() >= 6 && path.compare(0, 5, L"/mnt/") == 0 && iswalpha(path[5]) &&
-      (path.size() == 6 || path[6] == L'/' || path[6] == L'\\')) {
-    std::wstring rest = path.substr(6);
-    std::replace(rest.begin(), rest.end(), L'/', L'\\');
-    return std::wstring(1, static_cast<wchar_t>(towupper(path[5]))) + L":" + (rest.empty() ? L"\\" : rest);
-  }
-  return FullPath(path);
-}
 Snapshot Initial() {
   Snapshot values;
   for (const auto& pair : {
@@ -257,7 +244,7 @@ Snapshot Initial() {
   std::wstring root = Environment(L"ANDROID_ROOT");
   if (root.empty()) return values;
   std::string data;
-  if (!Read(HostPath(root + L"/build.prop"), &data, true)) return values;
+  if (!Read(FullPath(root + L"/build.prop"), &data, true)) return values;
   size_t at = 0;
   while (at < data.size()) {
     size_t end = data.find('\n', at);

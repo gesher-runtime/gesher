@@ -53,6 +53,7 @@
 #include <gesher/elf_loader.h>
 #include <gesher/symbol_table.h>
 #include <gesher/system_properties.h>
+#include <gesher/gles_version_property.h>
 
 #include <android/native_window.h>
 
@@ -320,9 +321,10 @@ struct DisplayChoice {
 int BootDeclaration() {
   std::string value;
   if (!gesher::properties::Get("ro.opengles.version", &value)) return kGlEsVersionUndefined;
-  char* end = nullptr;
-  long v = std::strtol(value.c_str(), &end, 0);
-  return end != value.c_str() && *end == '\0' ? Declaration(static_cast<int>(v)) : kGlEsVersionUndefined;
+  // The parser every build.prop loader uses (gesher/gles_version_property.h).
+  long long v = 0;
+  if (!gesher::properties::ParseGlEsVersion(value, &v)) return kGlEsVersionUndefined;
+  return Declaration(static_cast<int>(v));
 }
 
 // Android's default display for the declaration `declared` (egl_gles_version.h,
