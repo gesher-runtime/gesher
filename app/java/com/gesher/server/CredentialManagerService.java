@@ -67,6 +67,12 @@ public final class CredentialManagerService extends ICredentialManager.Default {
             "androidx.credentials.BUNDLE_KEY_REGISTRATION_RESPONSE_JSON";
     static final String KEY_AUTHENTICATION_RESPONSE_JSON =
             "androidx.credentials.BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON";
+    /**
+     * androidx.credentials' preferImmediatelyAvailableCredentials: return at once when
+     * nothing on this device can serve the request, instead of offering remote options.
+     */
+    static final String KEY_PREFER_IMMEDIATELY_AVAILABLE =
+            "androidx.credentials.BUNDLE_KEY_PREFER_IMMEDIATELY_AVAILABLE_CREDENTIALS";
     /** The error types androidx.credentials parses back into DOM exceptions. */
     static final String CREATE_DOM_EXCEPTION =
             "androidx.credentials.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_DOM_EXCEPTION";
@@ -158,6 +164,8 @@ public final class CredentialManagerService extends ICredentialManager.Default {
             return transport;
         }
         String json = requestJson;
+        boolean immediate = request.getData() != null
+                && request.getData().getBoolean(KEY_PREFER_IMMEDIATELY_AVAILABLE);
         Session session = new Session(transport, callback.asBinder()) {
             @Override
             void error(String type, String message) throws RemoteException {
@@ -166,7 +174,7 @@ public final class CredentialManagerService extends ICredentialManager.Default {
         };
         mHost.execute(() -> {
             try {
-                Bundle data = authenticate(session, json, callingPackage, pid);
+                Bundle data = authenticate(session, json, callingPackage, pid, immediate);
                 if (data == null) return;  // canceled by the application
                 GetCredentialResponse response =
                         new GetCredentialResponse(new Credential(TYPE_PUBLIC_KEY_CREDENTIAL, data));
@@ -205,6 +213,8 @@ public final class CredentialManagerService extends ICredentialManager.Default {
             return transport;
         }
         String json = requestJson;
+        boolean immediate =
+                request.getCredentialData().getBoolean(KEY_PREFER_IMMEDIATELY_AVAILABLE);
         Session session = new Session(transport, callback.asBinder()) {
             @Override
             void error(String type, String message) throws RemoteException {
@@ -213,7 +223,7 @@ public final class CredentialManagerService extends ICredentialManager.Default {
         };
         mHost.execute(() -> {
             try {
-                Bundle data = register(session, json, callingPackage, pid);
+                Bundle data = register(session, json, callingPackage, pid, immediate);
                 if (data == null) return;  // canceled by the application
                 CreateCredentialResponse response = new CreateCredentialResponse(data);
                 session.respond(() -> callback.onResponse(response));
@@ -487,9 +497,25 @@ public final class CredentialManagerService extends ICredentialManager.Default {
         return PasskeyRequests.origin(certificates[0]);
     }
 
+    /**
+     * Whether the platform authenticator may hold a credential the request accepts: one of
+     * {@code allow}, or any when that list is empty. True when Windows cannot list its
+     * credentials ({@code ids} is null): then only its dialog can tell.
+     */
+    private static boolean onThisDevice(byte[][] ids, PasskeyBackend.Descriptor[] allow) {
+        if (ids == null) return true;
+        if (allow.length == 0) return ids.length > 0;
+        for (byte[] id : ids) {
+            for (PasskeyBackend.Descriptor descriptor : allow) {
+                if (java.util.Arrays.equals(id, descriptor.id)) return true;
+            }
+        }
+        return false;
+    }
+
     /** One registration ceremony; null when the application canceled it. */
-    private Bundle register(Session session, String json, String callingPackage, int pid)
-            throws Failure {
+    private Bundle register(Session session, String json, String callingPackage, int pid,
+            boolean immediate) throws Failure {
         PasskeyRequests.Creation creation;
         try {
             creation = PasskeyRequests.parseCreation(json);
@@ -501,6 +527,12 @@ public final class CredentialManagerService extends ICredentialManager.Default {
         request.pid = pid;
         request.clientDataJson =
                 PasskeyRequests.clientData("webauthn.create", creation.challenge, origin);
+        // Without a platform authenticator Windows' dialog can only offer a security key or
+        // a phone: the remote options an application with this preference does not want.
+        if (immediate && mBackend.platformAuthenticator() == 0) {
+            throw Failure.framework(CreateCredentialException.TYPE_NO_CREATE_OPTIONS, null,
+                    NO_CREATE_OPTIONS);
+        }
         PasskeyBackend.Cancellation cancellation = mBackend.newCancellation();
         if (!session.begin(cancellation)) return null;
         PasskeyBackend.Attestation attestation = mBackend.makeCredential(request, cancellation);
@@ -519,8 +551,8 @@ public final class CredentialManagerService extends ICredentialManager.Default {
     }
 
     /** One assertion ceremony; null when the application canceled it. */
-    private Bundle authenticate(Session session, String json, String callingPackage, int pid)
-            throws Failure {
+    private Bundle authenticate(Session session, String json, String callingPackage, int pid,
+            boolean immediate) throws Failure {
         PasskeyRequests.Authentication authentication;
         try {
             authentication = PasskeyRequests.parseAuthentication(json);
@@ -532,6 +564,12 @@ public final class CredentialManagerService extends ICredentialManager.Default {
         request.pid = pid;
         request.clientDataJson =
                 PasskeyRequests.clientData("webauthn.get", authentication.challenge, origin);
+        // Asked only once the relying party is known to have delegated to the caller, so
+        // that no other application learns which sites the user has passkeys for.
+        if (immediate && !onThisDevice(mBackend.platformCredentials(request.rpId), request.allow)) {
+            throw Failure.framework(null, GetCredentialException.TYPE_NO_CREDENTIAL,
+                    NO_CREDENTIAL);
+        }
         PasskeyBackend.Cancellation cancellation = mBackend.newCancellation();
         if (!session.begin(cancellation)) return null;
         PasskeyBackend.Assertion assertion = mBackend.getAssertion(request, cancellation);

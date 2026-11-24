@@ -77,6 +77,17 @@ the device does not support Credential Manager.
 5. **Answer.** The response JSON is built from the bytes Windows returned and nothing
    else. See the tables below.
 
+An application may ask not to be shown remote options
+(`preferImmediatelyAvailableCredentials`, typically for a sign-in offer at start-up).
+After step 2 Gesher then asks Windows what this PC holds, and answers without a
+dialog when it holds nothing: `TYPE_NO_CREDENTIAL` when
+`WebAuthNGetPlatformCredentialList` has no credential for the relying party (or none
+on the allow list), and `TYPE_NO_CREATE_OPTIONS` when
+`WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable` says Windows Hello cannot
+verify the user. When Windows cannot tell (no list before API version 4, a failed
+query), the ceremony runs and Windows' dialog decides. The list is consulted only
+for an associated caller, so no other application learns where the user has passkeys.
+
 The application's `CancellationSignal` and the death of its callback cancel the
 ceremony (`WebAuthNCancelCurrentOperation`); as in AOSP's canceled session, no
 callback follows. Every request answers at most once. Requests of different

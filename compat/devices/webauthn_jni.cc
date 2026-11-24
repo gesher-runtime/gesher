@@ -110,6 +110,33 @@ jint WindowsWebAuthn_apiVersion(JNIEnv*, jclass) {
   return static_cast<jint>(webauthn::ApiVersion());
 }
 
+// 1 or 0 as Windows answers; -1 when it did not.
+jint WindowsWebAuthn_platformAuthenticator(JNIEnv*, jclass) {
+  bool available = false;
+  HRESULT hr = webauthn::IsUserVerifyingPlatformAuthenticatorAvailable(&available);
+  if (hr != S_OK) return -1;
+  return available ? 1 : 0;
+}
+
+// The platform credential ids of a relying party; null when Windows cannot list them.
+jobjectArray WindowsWebAuthn_platformCredentials(JNIEnv* env, jclass, jstring rpId) {
+  if (rpId == nullptr) return nullptr;
+  std::wstring rp = WideString(env, rpId);
+  std::vector<webauthn::PlatformCredential> credentials;
+  HRESULT hr = webauthn::PlatformCredentials(rp.c_str(), &credentials);
+  if (hr != S_OK) return nullptr;
+  jclass bytes = env->FindClass("[B");
+  if (bytes == nullptr) return nullptr;
+  jobjectArray ids = env->NewObjectArray(static_cast<jsize>(credentials.size()), bytes, nullptr);
+  env->DeleteLocalRef(bytes);
+  if (ids == nullptr) return nullptr;
+  for (size_t i = 0; i < credentials.size(); i++) {
+    SetBytes(env, ids, static_cast<jsize>(i), credentials[i].id);
+    if (env->ExceptionCheck()) return nullptr;
+  }
+  return ids;
+}
+
 jbyteArray WindowsWebAuthn_newCancellation(JNIEnv* env, jclass) {
   GUID guid{};
   HRESULT hr = webauthn::GetCancellationId(&guid);
@@ -231,6 +258,9 @@ jint WindowsWebAuthn_getAssertion(JNIEnv* env, jclass, jint pid, jstring rpId,
 
 const JNINativeMethod gMethods[] = {
     {"nativeApiVersion", "()I", GESHER_JNI(WindowsWebAuthn_apiVersion)},
+    {"nativePlatformAuthenticator", "()I", GESHER_JNI(WindowsWebAuthn_platformAuthenticator)},
+    {"nativePlatformCredentials", "(Ljava/lang/String;)[[B",
+     GESHER_JNI(WindowsWebAuthn_platformCredentials)},
     {"nativeNewCancellation", "()[B", GESHER_JNI(WindowsWebAuthn_newCancellation)},
     {"nativeCancel", "([B)I", GESHER_JNI(WindowsWebAuthn_cancel)},
     {"nativeMakeCredential",

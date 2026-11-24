@@ -292,6 +292,16 @@ bool VerifyAssertion(const CoseKey& key, const Bytes& authenticator_data,
   return status == 0;
 }
 
+// Gesher calls Windows from a plain worker thread (a Java thread inside JNI, with no
+// message loop and no COM apartment of its own), so the probe does too.
+template <typename Call>
+HRESULT OnWorker(Call call) {
+  HRESULT hr = E_FAIL;
+  std::thread worker([&] { hr = call(); });
+  worker.join();
+  return hr;
+}
+
 int failures;
 
 void Check(bool ok, const char* what) {
@@ -347,7 +357,8 @@ int RoundTrip(HWND owner) {
   Bytes create_data = ClientData("webauthn.create", Random(32));
   webauthn::MakeCredentialRequest registration = Registration(create_data);
   webauthn::Attestation attestation;
-  HRESULT hr = webauthn::MakeCredential(owner, registration, nullptr, &attestation);
+  HRESULT hr = OnWorker(
+      [&] { return webauthn::MakeCredential(owner, registration, nullptr, &attestation); });
   printf("WebAuthNAuthenticatorMakeCredential: 0x%08lx (%ls)\n", Hex(hr),
          webauthn::ErrorName(hr).c_str());
   Check(hr == S_OK, "a credential was made");
@@ -382,7 +393,7 @@ int RoundTrip(HWND owner) {
   descriptor.transports = webauthn::kTransportInternal;
   authentication.allow.push_back(descriptor);
   webauthn::Assertion assertion;
-  hr = webauthn::GetAssertion(owner, authentication, nullptr, &assertion);
+  hr = OnWorker([&] { return webauthn::GetAssertion(owner, authentication, nullptr, &assertion); });
   printf("WebAuthNAuthenticatorGetAssertion: 0x%08lx (%ls)\n", Hex(hr),
          webauthn::ErrorName(hr).c_str());
   Check(hr == S_OK, "an assertion was returned");
@@ -426,8 +437,9 @@ int Cancel(HWND owner) {
   });
   webauthn::Attestation attestation;
   ULONGLONG start = GetTickCount64();
-  hr = webauthn::MakeCredential(owner, Registration(ClientData("webauthn.create", Random(32))),
-                                &id, &attestation);
+  webauthn::MakeCredentialRequest registration =
+      Registration(ClientData("webauthn.create", Random(32)));
+  hr = OnWorker([&] { return webauthn::MakeCredential(owner, registration, &id, &attestation); });
   ULONGLONG elapsed = GetTickCount64() - start;
   canceler.join();
   printf("WebAuthNAuthenticatorMakeCredential: 0x%08lx (%ls) after %llu ms\n", Hex(hr),

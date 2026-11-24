@@ -33,6 +33,19 @@ public interface PasskeyBackend {
     int apiVersion();
 
     /**
+     * {@code WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable}: 1 when this PC can
+     * verify the user itself (Windows Hello), 0 when it cannot, -1 when Windows did not say.
+     */
+    int platformAuthenticator();
+
+    /**
+     * The ids of the credentials this PC's platform authenticator holds for {@code rpId}
+     * ({@code WebAuthNGetPlatformCredentialList}); null when this Windows cannot list them
+     * (before API version 4, or the query failed).
+     */
+    byte[][] platformCredentials(String rpId);
+
+    /**
      * A cancellation id for one ceremony ({@code WebAuthNGetCancellationId}), or null when
      * Windows gave none: that ceremony then cannot be canceled from here.
      */

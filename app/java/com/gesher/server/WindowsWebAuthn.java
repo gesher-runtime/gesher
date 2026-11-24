@@ -32,6 +32,17 @@ final class WindowsWebAuthn implements PasskeyBackend {
     }
 
     @Override
+    public int platformAuthenticator() {
+        int answer = nativePlatformAuthenticator();
+        return answer == 0 || answer == 1 ? answer : -1;
+    }
+
+    @Override
+    public byte[][] platformCredentials(String rpId) {
+        return nativePlatformCredentials(rpId);
+    }
+
+    @Override
     public Cancellation newCancellation() {
         byte[] id = nativeNewCancellation();
         return id == null ? null : new Id(id);
@@ -113,6 +124,10 @@ final class WindowsWebAuthn implements PasskeyBackend {
     }
 
     private static native int nativeApiVersion();
+
+    private static native int nativePlatformAuthenticator();
+
+    private static native byte[][] nativePlatformCredentials(String rpId);
 
     private static native byte[] nativeNewCancellation();
 
