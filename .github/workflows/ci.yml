@@ -194,6 +194,16 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: Build actual background data restriction reader (ConnectionCost)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\background_data_win.cc tests\metered-network\background_data_windows_test.cc /Fe:background-data-test.exe ole32.lib
+      - name: Background data restriction answers with the Network List Manager's internet
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\background-data-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows background data restriction checks failed' }
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -571,6 +581,9 @@ jobs:
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
+
+      - name: Restrict-background contracts (AOSP android-16 ConnectivityManager constants)
+        run: python3 tools/test_metered_network_contracts.py --java-home "$JAVA_HOME"
 
       - name: Portable code relocation, shell ownership and native profile selection
         run: |

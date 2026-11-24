@@ -44,3 +44,12 @@ Check 'services: concurrent Control Center requests stay whole on the runtime fi
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.ControlCenterRequestsTest
 } @('ControlCenterRequestsTest all passed:')
+
+# Restrict background (ConnectivityManager.getRestrictBackgroundStatus): Windows'
+# background-data restriction on the internet connection, read by the network snapshot's
+# natives. Read only.
+Check 'services: restrict-background status follows Windows'' background data restriction' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.RestrictBackgroundTest
+} @('RestrictBackgroundTest: Windows background data ',
+  'RestrictBackgroundTest all passed')

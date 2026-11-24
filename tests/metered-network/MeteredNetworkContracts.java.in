@@ -1,0 +1,46 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package com.gesher.net;
+
+import android.net.ConnectivityManager;
+
+/**
+ * Host contracts of the unchanged production BackgroundRestriction (the network snapshot's
+ * "background" value and ConnectivityManager.getRestrictBackgroundStatus's answer) against
+ * AOSP's own ConnectivityManager constants (android-all 16). No test double.
+ */
+public final class MeteredNetworkContracts {
+    private static int sChecks;
+
+    private static void equal(Object expected, Object actual, String what) {
+        if (expected == null ? actual != null : !expected.equals(actual)) {
+            throw new AssertionError(what + ": expected <" + expected + "> but was <" + actual + ">");
+        }
+        sChecks++;
+    }
+
+    public static void main(String[] args) {
+        equal(1, ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED, "AOSP DISABLED");
+        equal(3, ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED, "AOSP ENABLED");
+
+        equal(Boolean.TRUE, BackgroundRestriction.parse("1"), "1: restricted");
+        equal(Boolean.FALSE, BackgroundRestriction.parse("0"), "0: not restricted");
+        for (String other : new String[] { null, "", "x", "2", "-1", "true" }) {
+            equal(null, BackgroundRestriction.parse(other), "'" + other + "': unknown");
+        }
+        equal(ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED, BackgroundRestriction.status(Boolean.TRUE),
+                "Windows restricts background data: ENABLED");
+        equal(ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED, BackgroundRestriction.status(Boolean.FALSE),
+                "not restricted: DISABLED");
+        equal(ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED, BackgroundRestriction.status(null),
+                "unknown: DISABLED (never a restriction Windows did not report)");
+        // Never WHITELISTED: Gesher has no per-app allowance to report.
+        for (Boolean b : new Boolean[] { Boolean.TRUE, Boolean.FALSE, null }) {
+            equal(false, BackgroundRestriction.status(b) == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_WHITELISTED,
+                    "never WHITELISTED (" + b + ")");
+        }
+        System.out.println("metered-network contracts: " + sChecks + " checks passed");
+    }
+}
