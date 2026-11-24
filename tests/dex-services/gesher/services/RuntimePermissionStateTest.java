@@ -58,8 +58,13 @@ public final class RuntimePermissionStateTest {
     private static final String UNDEFINED_GROUP = "android.permission-group.UNDEFINED";
     private static final int USER_SET = PackageManager.FLAG_PERMISSION_USER_SET;
     private static final int USER_FIXED = PackageManager.FLAG_PERMISSION_USER_FIXED;
+    private static final int APPLY = PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+    private static final int INSTALLER_EXEMPT = PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+    private static final int SYSTEM_EXEMPT = PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT;
+    private static final int ANY_EXEMPT = PackageManager.FLAGS_PERMISSION_RESTRICTION_ANY_EXEMPT;
+    private static final int GRANTED = PackageManager.PERMISSION_GRANTED, DENY = PackageManager.PERMISSION_DENIED;
     // These are the actual JNI/controller protocol values, not injected permission results.
-    private static final int DISMISSED = 0, DENIED = 1, ALLOWED = 2;
+    private static final int DISMISSED = 0, DENIED = 1, ALLOWED = 2, FOREGROUND_ONLY = 3, ALWAYS = 4;
     private static final List<String> RUNTIME = List.of(CAMERA, AUDIO, ANSWER, CONTACTS, WRITE_CONTACTS, FINE, COARSE, BACKGROUND, STORAGE);
     private static final List<String> CUSTOM = List.of(CUSTOM_READ, CUSTOM_WRITE, CUSTOM_OTHER);
     private static int checks;
@@ -228,10 +233,16 @@ public final class RuntimePermissionStateTest {
             owner = replacement; set(process, "packageCode", owner);
         }
         Object controller(Executor executor, ToIntBiFunction<String, String> choice) throws Exception {
+            return controller(executor, choice, choice);
+        }
+        /** Separate injected answers for the foreground and the background dialog. */
+        Object controller(Executor executor, ToIntBiFunction<String, String> choice,
+                ToIntBiFunction<String, String> background) throws Exception {
             Class<?> requests = type("PermissionRequests"), decisions = type("PermissionRequests$Decision");
             Object decision = Proxy.newProxyInstance(decisions.getClassLoader(), new Class<?>[]{decisions},
                     (proxy, method, args) -> {
-                        int result = choice.applyAsInt((String)args[0], (String)args[1]);
+                        int result = (method.getName().equals("decideBackground") ? background : choice)
+                                .applyAsInt((String)args[0], (String)args[1]);
                         // Allow the same test to expose missing denial history on
                         // the baseline's older boolean-only injection boundary.
                         if (method.getReturnType() == boolean.class) return result == ALLOWED;
@@ -263,23 +274,29 @@ public final class RuntimePermissionStateTest {
                 "microphone retry changed an unrelated contacts decision");
 
         // PermissionController keeps a separate denial history for the
-        // foreground and background halves of a split permission group.
+        // foreground and background halves of a split permission group. The
+        // background half has its own choice, offered once the foreground is granted.
         final int decisionFlags = USER_SET | USER_FIXED;
         final int exempt = PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT;
+        Object foregroundOnly = h.controller(Runnable::run, (owner, names) -> DENIED, (owner, names) -> FOREGROUND_ONLY);
         h.reset();
         h.flags(BACKGROUND, exempt);
         h.request(deny, FINE);
-        h.request(deny, BACKGROUND);
+        h.policy.grantRuntimePermission(NAME, FINE, "default:0", 0);
+        h.request(foregroundOnly, BACKGROUND);
         check((h.flags(BACKGROUND) & decisionFlags) == USER_SET,
                 "Foreground denial fixed the first background decision");
         check(h.state(BACKGROUND) == Context.PERMISSION_REQUEST_STATE_REQUESTABLE,
                 "First background denial remained unavailable");
-        h.request(deny, BACKGROUND);
+        h.request(foregroundOnly, BACKGROUND);
         check((h.flags(BACKGROUND) & decisionFlags) == decisionFlags,
                 "Repeated background denial failed to retain its own history");
         h.reset();
         h.flags(BACKGROUND, exempt);
-        h.request(deny, BACKGROUND);
+        h.policy.grantRuntimePermission(NAME, COARSE, "default:0", 0);
+        h.request(foregroundOnly, BACKGROUND);
+        check((h.flags(BACKGROUND) & decisionFlags) == USER_SET, "Background-only choice lost its user decision");
+        h.policy.revokeRuntimePermission(NAME, COARSE, "default:0", 0, "fixture");
         h.request(deny, COARSE);
         check((h.flags(COARSE) & decisionFlags) == USER_SET,
                 "Background denial fixed the first foreground decision");
@@ -388,8 +405,10 @@ public final class RuntimePermissionStateTest {
         check(h.rationale(STORAGE) && h.policy.canRequest(NAME, STORAGE), "soft restriction was treated as hard denial");
         Reply soft = h.request(choose(h, ALLOWED, new AtomicInteger()), STORAGE);
         check(soft.grant(0) == PackageManager.PERMISSION_GRANTED, "soft-restricted permission grant was fabricated or dropped");
+        // AOSP SoftRestrictedPermissionPolicy: from target Q the soft restriction limits only
+        // OP_LEGACY_STORAGE; the permission's own AppOp follows the grant.
         check(h.pm.appOps().checkOperationRaw(AppOpsManager.OP_READ_EXTERNAL_STORAGE, UID, NAME, null)
-                == AppOpsManager.MODE_IGNORED, "permission consent removed the soft AppOps restriction");
+                == AppOpsManager.MODE_ALLOWED, "soft restriction withheld a Q+ target's storage AppOp");
         h.flags(CAMERA, USER_SET);
         h.asApp(() -> {
             check(!h.query.shouldShowRequestPermissionRationale(PEER, CAMERA, 0, 0), "rationale exposed another UID");
@@ -487,10 +506,329 @@ public final class RuntimePermissionStateTest {
         h.install(pkg(NAME, UID, 36, (byte)7));
         h.reset(); h.flush();
     }
+    private static int allowlist(Harness h, String pkg, int flags) {
+        List<String> list = h.policy.getAllowlistedRestrictedPermissions(pkg, flags, 0);
+        int result = 0;
+        if (list != null) {
+            if (list.contains(BACKGROUND)) result |= 1;
+            if (list.contains(STORAGE)) result |= 2;
+        }
+        return result;
+    }
+    private static void rejects(Class<? extends Throwable> type, Checked action, String message) throws Exception {
+        try { action.run(); }
+        catch (Throwable failure) {
+            Throwable cause = failure;
+            while (cause instanceof java.lang.reflect.InvocationTargetException wrapped && wrapped.getCause() != null) cause = wrapped.getCause();
+            if (type.isInstance(cause)) { checks++; return; }
+            throw new AssertionError(message + ": " + cause, cause);
+        }
+        throw new AssertionError(message);
+    }
+    private static int flagsOf(PermissionPolicy policy, String pkg, String permission) {
+        return policy.getPermissionFlags(pkg, permission, "default:0", 0);
+    }
+    /** A new APK with its own UID, published through PM like a completed install. */
+    private static ApkPackage admit(Harness h, String name, int uid, java.util.Collection<String> allowlist,
+            boolean recorded, boolean systemAddon) throws Exception {
+        ApkPackage apk = pkg(name, uid, 36, (byte)9);
+        if (recorded) {
+            call(apk, "setRestrictedPermissionAllowlist", new Class<?>[]{java.util.Collection.class}, allowlist);
+        }
+        // Fixture boundary: an already verified microG system addon (no APK bytes here).
+        if (systemAddon) set(apk, "mSystemAddon", true);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, apk);
+        return apk;
+    }
+    private static void retire(Harness h, ApkPackage apk) throws Exception {
+        h.policy.forgetPackage(apk.packageName);
+        call(h.pm, "remove", new Class<?>[]{String.class}, apk.packageName);
+    }
+    /** AOSP install-time restriction exemptions, the boot migration and the allowlist API. */
+    private static void exemptions(Harness h) throws Exception {
+        // Boot admission of a package with no recorded state: the installer allowlist
+        // (AOSP's default) exempts every requested restricted permission.
+        check((h.flags(BACKGROUND) & (INSTALLER_EXEMPT | APPLY)) == INSTALLER_EXEMPT
+                && (h.flags(STORAGE) & (INSTALLER_EXEMPT | APPLY)) == INSTALLER_EXEMPT,
+                "admitted package kept APPLY_RESTRICTION without an installer exemption");
+        check((h.flags(CAMERA) & (ANY_EXEMPT | APPLY)) == 0, "unrestricted permission received a restriction flag");
+        check(allowlist(h, NAME, PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER) == 3
+                && allowlist(h, NAME, PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) == 0,
+                "installer allowlist does not report the admitted exemptions");
+        check(h.state(BACKGROUND) == Context.PERMISSION_REQUEST_STATE_REQUESTABLE && h.policy.canRequest(NAME, BACKGROUND),
+                "exempt hard-restricted permission remained unrequestable");
+        check(h.policy.checkPermission(NAME, BACKGROUND) == DENY, "an exemption granted a permission without consent");
+
+        // Session installs: AOSP's default allowlists everything; an explicit list
+        // (pm install --restrict-permissions: empty) keeps the others restricted.
+        ApkPackage all = admit(h, "fixture.permission.install.all", UID + 11, null, true, false);
+        check((flagsOf(h.policy, all.packageName, BACKGROUND) & (INSTALLER_EXEMPT | APPLY)) == INSTALLER_EXEMPT
+                && (flagsOf(h.policy, all.packageName, STORAGE) & (INSTALLER_EXEMPT | APPLY)) == INSTALLER_EXEMPT,
+                "default install allowlist did not exempt restricted permissions");
+        ApkPackage restricted = admit(h, "fixture.permission.install.restricted", UID + 12, List.of(), true, false);
+        check((flagsOf(h.policy, restricted.packageName, BACKGROUND) & (ANY_EXEMPT | APPLY)) == APPLY
+                && (flagsOf(h.policy, restricted.packageName, STORAGE) & (ANY_EXEMPT | APPLY)) == APPLY,
+                "an install opting out of the allowlist lost its restriction");
+        check(!h.policy.canRequest(restricted.packageName, BACKGROUND),
+                "an opted-out hard-restricted permission became requestable");
+        h.policy.grantRuntimePermission(restricted.packageName, BACKGROUND, "default:0", 0);
+        check(h.policy.checkPermission(restricted.packageName, BACKGROUND) == DENY,
+                "a restricted permission was granted without an exemption");
+        ApkPackage partial = admit(h, "fixture.permission.install.partial", UID + 13, List.of(BACKGROUND), true, false);
+        check((flagsOf(h.policy, partial.packageName, BACKGROUND) & (ANY_EXEMPT | APPLY)) == INSTALLER_EXEMPT
+                && (flagsOf(h.policy, partial.packageName, STORAGE) & (ANY_EXEMPT | APPLY)) == APPLY,
+                "an explicit allowlist was not applied exactly");
+        // An update with an opt-out keeps existing exemptions (AOSP adds, never removes).
+        ApkPackage update = pkg(partial.packageName, partial.uid(), 36, (byte)9);
+        call(update, "setRestrictedPermissionAllowlist", new Class<?>[]{java.util.Collection.class}, List.of());
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, update);
+        check((flagsOf(h.policy, partial.packageName, BACKGROUND) & (ANY_EXEMPT | APPLY)) == INSTALLER_EXEMPT,
+                "an update's install request removed an existing exemption");
+        // A verified system addon (microG) has the system exemption without any name rule.
+        ApkPackage addon = admit(h, "fixture.permission.addon", UID + 14, List.of(), true, true);
+        check((flagsOf(h.policy, addon.packageName, BACKGROUND) & (ANY_EXEMPT | APPLY)) == SYSTEM_EXEMPT,
+                "system addon did not receive the system restriction exemption");
+        check(allowlist(h, addon.packageName, PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) == 3,
+                "system allowlist does not report the system addon's exemptions");
+
+        // The allowlist API: AOSP flag semantics, restoring the restriction on removal.
+        check(h.policy.removeAllowlistedRestrictedPermission(all.packageName, BACKGROUND,
+                PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0), "system could not remove an allowlist entry");
+        check((flagsOf(h.policy, all.packageName, BACKGROUND) & (ANY_EXEMPT | APPLY)) == APPLY
+                && !h.policy.canRequest(all.packageName, BACKGROUND),
+                "removing the last exemption did not restore APPLY_RESTRICTION");
+        check(!h.policy.removeAllowlistedRestrictedPermission(all.packageName, BACKGROUND,
+                PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0), "removing an absent entry reported a change");
+        check(h.policy.addAllowlistedRestrictedPermission(all.packageName, BACKGROUND,
+                PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE, 0)
+                && (flagsOf(h.policy, all.packageName, BACKGROUND) & (ANY_EXEMPT | APPLY))
+                        == PackageManager.FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT,
+                "upgrade allowlist did not record its own exemption");
+        check(!h.policy.addAllowlistedRestrictedPermission(all.packageName, UNKNOWN,
+                PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE, 0), "an unknown permission was allowlisted");
+        rejects(IllegalArgumentException.class, () -> h.policy.addAllowlistedRestrictedPermission(all.packageName,
+                CAMERA, PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER | PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE, 0),
+                "a change to two allowlists at once was accepted");
+        rejects(IllegalArgumentException.class, () -> h.policy.getAllowlistedRestrictedPermissions(NAME, 64, 0),
+                "an unknown allowlist flag was accepted");
+        check(h.policy.getAllowlistedRestrictedPermissions("missing.package", PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0) == null,
+                "a missing package reported an allowlist");
+        // Caller checks: an app that is neither the installer of record nor holds
+        // WHITELIST_RESTRICTED_PERMISSIONS cannot read or change any allowlist.
+        h.asApp(() -> {
+            IPermissionManager query = h.query;
+            rejects(SecurityException.class, () -> query.getAllowlistedRestrictedPermissions(NAME,
+                    PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0), "an app read its installer allowlist");
+            rejects(SecurityException.class, () -> query.getAllowlistedRestrictedPermissions(NAME,
+                    PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM, 0), "an app read the system allowlist");
+            rejects(SecurityException.class, () -> query.addAllowlistedRestrictedPermission(NAME, BACKGROUND,
+                    PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0), "an app allowlisted its own permission");
+            rejects(SecurityException.class, () -> query.removeAllowlistedRestrictedPermission(NAME, STORAGE,
+                    PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0), "an app changed an immutably restricted permission");
+        });
+        check((h.flags(BACKGROUND) & INSTALLER_EXEMPT) != 0, "a rejected caller changed the allowlist");
+        for (ApkPackage apk : List.of(all, restricted, partial, addon)) retire(h, apk);
+
+        // One-time boot migration of a ledger written before exemptions existed: the
+        // exemption is added, APPLY_RESTRICTION cleared and the user's decisions kept.
+        h.flags(BACKGROUND, USER_SET | USER_FIXED | APPLY);
+        h.flags(STORAGE, APPLY);
+        h.policy.grantRuntimePermission(NAME, STORAGE, "default:0", 0);
+        java.util.Properties ledger = (java.util.Properties)get(h.policy, "mDecisions");
+        synchronized (h.policy) {
+            check(ledger.remove("restriction-exemptions") != null, "migration version was not recorded");
+            call(h.policy, "scheduleWrite", new Class<?>[0]);
+        }
+        h.flush();
+        PermissionPolicy migrated = h.reopen();
+        call(migrated, "initializePackages", new Class<?>[0]);
+        check((Boolean)call(get(migrated, "mWriter"), "flush", new Class<?>[0]), "migration was not persisted");
+        check(flagsOf(migrated, NAME, BACKGROUND) == (USER_SET | USER_FIXED | INSTALLER_EXEMPT),
+                "migration lost a fixed user denial or kept APPLY_RESTRICTION: " + flagsOf(migrated, NAME, BACKGROUND));
+        check(!migrated.canRequest(NAME, BACKGROUND) && migrated.checkPermission(NAME, BACKGROUND) == DENY,
+                "migration overrode the user's fixed denial");
+        check((flagsOf(migrated, NAME, STORAGE) & (INSTALLER_EXEMPT | APPLY)) == INSTALLER_EXEMPT
+                && migrated.checkPermission(NAME, STORAGE) == GRANTED, "migration lost an explicit grant");
+        // Versioned: later boots never add an exemption to a recorded restriction.
+        migrated.updatePermissionFlags(NAME, BACKGROUND, PackageManager.MASK_PERMISSION_FLAGS_ALL, APPLY, true, "default:0", 0);
+        call(migrated, "initializePackages", new Class<?>[0]);
+        check(flagsOf(migrated, NAME, BACKGROUND) == APPLY, "the migration ran again on a later boot");
+        check((Boolean)call(get(migrated, "mWriter"), "flush", new Class<?>[0]), "restored ledger flush failed");
+        h.reset();
+        h.flags(BACKGROUND, INSTALLER_EXEMPT);
+        h.flags(STORAGE, INSTALLER_EXEMPT);
+        h.flush();
+    }
+    private static final class Prompts {
+        final List<String> foreground = new ArrayList<>(), background = new ArrayList<>();
+    }
+    private static Object background(Harness h, Prompts prompts, int foregroundChoice, int backgroundChoice) throws Exception {
+        return h.controller(Runnable::run, (owner, names) -> { prompts.foreground.add(names); return foregroundChoice; },
+                (owner, names) -> { prompts.background.add(names); return backgroundChoice; });
+    }
+    private static void resetLocation(Harness h) throws Exception {
+        h.reset();
+        h.flags(BACKGROUND, INSTALLER_EXEMPT);
+    }
+    /** Android 16 BackgroundGrantBehavior with the separate background dialog. */
+    private static void backgroundConsent(Harness h) throws Exception {
+        // Target R+: foreground and background in one request reject everything, without UI.
+        resetLocation(h);
+        Prompts prompts = new Prompts();
+        Reply combined = h.request(background(h, prompts, ALLOWED, ALWAYS), FINE, COARSE, BACKGROUND, CAMERA);
+        check(prompts.foreground.isEmpty() && prompts.background.isEmpty() && combined.count == 1
+                && combined.grant(0) == DENY && combined.grant(2) == DENY && combined.grant(3) == DENY,
+                "target R+ combined foreground/background request showed UI or granted");
+        check(h.flags(FINE) == 0 && (h.flags(BACKGROUND) & (USER_SET | USER_FIXED)) == 0,
+                "a request rejected without UI recorded a user decision");
+        // Background alone without its foreground: rejected without UI.
+        Reply alone = h.request(background(h, prompts, ALLOWED, ALWAYS), BACKGROUND);
+        check(prompts.background.isEmpty() && alone.grant(0) == DENY, "background without foreground was offered");
+        // The foreground Allow never grants background access.
+        Reply foreground = h.request(background(h, prompts, ALLOWED, ALWAYS), FINE, COARSE);
+        check(prompts.foreground.size() == 1 && prompts.background.isEmpty() && foreground.grant(0) == GRANTED
+                && h.policy.checkPermission(NAME, BACKGROUND) == DENY, "foreground Allow granted background access");
+        check(h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, UID, NAME, null) == AppOpsManager.MODE_FOREGROUND,
+                "foreground grant did not limit location to the foreground");
+        // Target R+, background alone after the foreground: its own dialog (Settings on a phone).
+        Reply always = h.request(background(h, prompts, DENIED, ALWAYS), BACKGROUND);
+        check(prompts.foreground.size() == 1 && prompts.background.size() == 1
+                && prompts.background.get(0).contains(BACKGROUND) && !prompts.background.get(0).contains(FINE),
+                "background request did not show only the background dialog");
+        check(always.grant(0) == GRANTED && (h.flags(BACKGROUND) & (USER_SET | USER_FIXED)) == USER_SET
+                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, UID, NAME, null) == AppOpsManager.MODE_ALLOWED,
+                "\"Allow all the time\" did not grant background location");
+
+        // Target < R (microG targets 29): the foreground dialog, then the background dialog.
+        h.install(pkg(NAME, UID, 29, (byte)7));
+        resetLocation(h);
+        prompts = new Prompts();
+        Reply legacy = h.request(background(h, prompts, ALLOWED, FOREGROUND_ONLY), COARSE, FINE, BACKGROUND);
+        check(prompts.foreground.size() == 1 && prompts.background.size() == 1
+                && prompts.foreground.get(0).contains(FINE) && !prompts.foreground.get(0).contains(BACKGROUND),
+                "target 29 did not ask foreground and background separately");
+        check(legacy.grant(0) == GRANTED && legacy.grant(1) == GRANTED && legacy.grant(2) == DENY,
+                "\"Allow only while using the app\" results are wrong");
+        check((h.flags(BACKGROUND) & (USER_SET | USER_FIXED)) == USER_SET && (h.flags(FINE) & USER_FIXED) == 0,
+                "\"Allow only while using the app\" did not record the first background decision");
+        // UPGRADE_SETTINGS_LINK: foreground granted, the background is asked again; a
+        // repeated refusal is fixed, and a fixed choice is never shown again.
+        h.request(background(h, prompts, ALLOWED, FOREGROUND_ONLY), COARSE, FINE, BACKGROUND);
+        check(prompts.foreground.size() == 1 && prompts.background.size() == 2
+                && (h.flags(BACKGROUND) & (USER_SET | USER_FIXED)) == (USER_SET | USER_FIXED),
+                "repeated background refusal was not fixed");
+        h.request(background(h, prompts, ALLOWED, ALWAYS), BACKGROUND);
+        check(prompts.background.size() == 2 && h.policy.checkPermission(NAME, BACKGROUND) == DENY,
+                "a fixed background refusal was asked again");
+        // A foreground denial leaves the background unasked.
+        resetLocation(h);
+        prompts = new Prompts();
+        Reply denied = h.request(background(h, prompts, DENIED, ALWAYS), COARSE, FINE, BACKGROUND);
+        check(prompts.foreground.size() == 1 && prompts.background.isEmpty() && denied.grant(2) == DENY
+                && (h.flags(BACKGROUND) & USER_SET) == 0, "background was asked after a foreground denial");
+        // A dismissed background dialog is not a decision.
+        resetLocation(h);
+        h.request(background(h, prompts, ALLOWED, DISMISSED), COARSE, FINE, BACKGROUND);
+        check(h.policy.checkPermission(NAME, FINE) == GRANTED && h.flags(BACKGROUND) == INSTALLER_EXEMPT,
+                "a dismissed background dialog recorded a decision");
+        // "Don't allow" denies the whole group, each half with its own history.
+        Reply deny = h.request(background(h, prompts, ALLOWED, DENIED), BACKGROUND);
+        check(deny.grant(0) == DENY && h.policy.checkPermission(NAME, FINE) == DENY
+                && h.policy.checkPermission(NAME, COARSE) == DENY
+                && (h.flags(BACKGROUND) & (USER_SET | USER_FIXED)) == USER_SET
+                && (h.flags(FINE) & (USER_SET | USER_FIXED)) == USER_SET,
+                "\"Don't allow\" did not deny foreground and background");
+
+        // microG's path: its own App info while a background choice is pending. The
+        // dialog replaces the Control Center, and Settings returns after the choice.
+        resetLocation(h);
+        h.policy.grantRuntimePermission(NAME, FINE, "default:0", 0);
+        List<Runnable> queue = new ArrayList<>();
+        prompts = new Prompts();
+        Prompts settingsPrompts = prompts;
+        Object settings = h.controller(queue::add, (owner, names) -> DENIED,
+                (owner, names) -> { settingsPrompts.background.add(names); return ALWAYS; });
+        AtomicInteger returned = new AtomicInteger();
+        boolean shown = (Boolean)call(settings, "backgroundSettings", new Class<?>[]{ApkPackage.class, Runnable.class},
+                h.owner, (Runnable)returned::incrementAndGet);
+        check(shown && returned.get() == 0 && queue.size() == 1,
+                "App info did not wait for the background choice off the caller thread");
+        queue.remove(0).run();
+        check(returned.get() == 1 && prompts.background.size() == 1
+                && h.policy.checkPermission(NAME, BACKGROUND) == GRANTED,
+                "App info result was not delivered after the background choice");
+        boolean again = (Boolean)call(settings, "backgroundSettings", new Class<?>[]{ApkPackage.class, Runnable.class},
+                h.owner, (Runnable)returned::incrementAndGet);
+        check(!again && queue.isEmpty() && returned.get() == 1,
+                "App info without a pending background choice did not fall back to the Control Center");
+        appInfo(h);
+        h.install(pkg(NAME, UID, 36, (byte)7));
+        h.reset(); h.flush();
+    }
+    /**
+     * The production activity starter: an app's own App info with a pending background
+     * choice shows the background dialog instead of the Control Center, and its
+     * startActivityForResult result arrives only after the choice.
+     */
+    @SuppressWarnings("unchecked")
+    private static void appInfo(Harness h) throws Exception {
+        resetLocation(h);
+        h.policy.grantRuntimePermission(NAME, FINE, "default:0", 0);
+        Class<?> recordType = type("ActivityTaskManagerService$ActivityRecord");
+        android.content.pm.ActivityInfo info = new android.content.pm.ActivityInfo();
+        info.packageName = NAME; info.name = NAME + ".AskPermissionActivity";
+        Object activity = make(recordType, new Class<?>[]{h.atm.getClass(), android.content.pm.ActivityInfo.class,
+                Intent.class, int.class, int.class, String.class, recordType, String.class, int.class},
+                h.atm, info, new Intent(), 1, PID, NAME, null, null, 0);
+        set(activity, "app", h.process);
+        ((List<Object>)get(h.atm, "mActivities")).add(activity);
+        ((List<Object>)get(h.process, "activities")).add(activity);
+        List<Runnable> queue = new ArrayList<>();
+        Prompts prompts = new Prompts();
+        Object requests = h.controller(queue::add, (owner, names) -> DENIED,
+                (owner, names) -> { prompts.background.add(names); return ALWAYS; });
+        Field requestsField = field(h.atm.getClass(), "mPermissionRequests");
+        Object previousRequests = requestsField.get(h.atm);
+        requestsField.set(h.atm, requests);
+        Field center = field(type("ControlCenter"), "sOpen");
+        Object previousCenter = center.get(null);
+        List<String> centers = new ArrayList<>();
+        center.set(null, (java.util.function.Predicate<String>)pkg -> centers.add(String.valueOf(pkg)));
+        Method start = null;
+        for (Method method : h.atm.getClass().getDeclaredMethods()) {
+            if (method.getName().equals("start") && method.getParameterCount() == 8) start = method;
+        }
+        start.setAccessible(true);
+        Method starter = start;
+        IApplicationThread thread = (IApplicationThread)get(h.process, "thread");
+        IBinder token = (IBinder)get(activity, "token");
+        List<Object> pending = (List<Object>)get(activity, "pendingResults");
+        Intent details = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.fromParts("package", NAME, null));
+        try {
+            Object[] status = new Object[1];
+            h.asApp(() -> status[0] = starter.invoke(h.atm, thread, details, null, NAME, token, null, 121, null));
+            check(Integer.valueOf(android.app.ActivityManager.START_SUCCESS).equals(status[0]) && centers.isEmpty()
+                    && queue.size() == 1 && pending.isEmpty(),
+                    "App info with a pending background choice opened the Control Center or returned at once");
+            queue.remove(0).run();
+            check(prompts.background.size() == 1 && h.policy.checkPermission(NAME, BACKGROUND) == GRANTED
+                    && pending.size() == 1, "App info did not return its result after the background choice");
+            h.asApp(() -> status[0] = starter.invoke(h.atm, thread, details, null, NAME, token, null, 122, null));
+            check(centers.equals(List.of(NAME)) && queue.isEmpty() && pending.size() == 2,
+                    "App info without a pending choice did not keep opening the Control Center");
+        } finally {
+            center.set(null, previousCenter);
+            requestsField.set(h.atm, previousRequests);
+            ((List<Object>)get(h.atm, "mActivities")).remove(activity);
+            ((List<Object>)get(h.process, "activities")).remove(activity);
+        }
+    }
     public static int run(boolean binderTransport) throws Exception {
         binder = binderTransport; checks = 0;
         Harness harness = new Harness();
-        decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
+        exemptions(harness); decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
+        backgroundConsent(harness);
         return checks;
     }
     public static void main(String[] args) throws Exception {

@@ -67,8 +67,13 @@ platform's fuller fine-location grant when applicable. UID queries include these
 computed nondefault modes, even when there is no independently stored mode.
 
 `PermissionPolicy` retains UID permission decisions and API flags together.
-`REVOKED_COMPAT` and soft restrictions can deny AppOps while leaving the binary
-permission granted. Hard restrictions deny a modern runtime grant. A legacy
+`REVOKED_COMPAT` can deny AppOps while leaving the binary permission granted.
+Hard restrictions deny a modern runtime grant and its AppOp. As in AOSP
+`SoftRestrictedPermissionPolicy`, a soft-restricted storage permission without an
+exemption withholds the grant and its AppOp only from a UID whose minimum target
+SDK is below Q; from Q the restriction concerns only `OP_LEGACY_STORAGE`, which
+this policy does not derive or grant. Restriction exemptions are described in
+[microg.md](microg.md#restricted-and-background-permissions). A legacy
 requester supplies an automatic grant only for a runtime permission without
 runtime-only protection, and compatibility flags control that grant's AppOps
 access. The minimum target SDK is computed separately for each permission from
@@ -255,7 +260,7 @@ and generation-reentry regressions remain required.
 
 The Windows `framework-fixes` track runs the fixture through generated AppOps and
 PermissionChecker Binder Parcel transports. Its required success marker includes
-`489 checks; binder=true`. `tools/test_appops.py` runs the same service contracts on a host JDK
+`492 checks; binder=true`. `tools/test_appops.py` runs the same service contracts on a host JDK
 with the existing declared JNI identity/clock boundary. Its host-only setup also
 supplies the pinned permission definitions, including their background and
 restriction metadata, when framework assets are

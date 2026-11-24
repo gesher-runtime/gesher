@@ -112,6 +112,7 @@ Java_com_gesher_server_AccountSecretStore_nativeUnprotect(JNIEnv* env, jclass cl
 }
 
 #include "permission_dialog.inc"
+#include "background_permission_dialog.inc"
 #include "exact_alarm_dialog.inc"
 
 JNIEXPORT jboolean GESHER_NATIVE
@@ -155,10 +156,9 @@ done:
   return result;
 }
 
-JNIEXPORT jint GESHER_NATIVE
-Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
-                                                       jstring label, jstring permissions) {
-  (void)cls;
+typedef int (*ConsentDialog)(enum GesherUiLanguage, const WCHAR*, const WCHAR*);
+
+static jint Consent(JNIEnv* env, jstring label, jstring permissions, ConsentDialog show) {
   // Both runtime entry points host PermissionRequests, whose Java service
   // authenticates the requesting APK/activity. Account storage and account
   // token consent continue to require the separate system-server role.
@@ -178,9 +178,23 @@ Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
   (*env)->GetStringRegion(env, label, 0, ln, (jchar*)text);
   (*env)->GetStringRegion(env, permissions, 0, pn, (jchar*)permission_text);
   if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return PERMISSION_DISMISSED; }
-  int decision = PermissionDialog(lang, text, permission_text);
+  int decision = show(lang, text, permission_text);
   HeapFree(GetProcessHeap(), 0, text);
   return decision;
+}
+
+JNIEXPORT jint GESHER_NATIVE
+Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
+                                                       jstring label, jstring permissions) {
+  (void)cls;
+  return Consent(env, label, permissions, PermissionDialog);
+}
+
+JNIEXPORT jint GESHER_NATIVE
+Java_com_gesher_server_PermissionRequests_nativeConfirmBackground(JNIEnv* env, jclass cls,
+                                                                 jstring label, jstring permissions) {
+  (void)cls;
+  return Consent(env, label, permissions, BackgroundPermissionDialog);
 }
 
 JNIEXPORT jboolean GESHER_NATIVE
