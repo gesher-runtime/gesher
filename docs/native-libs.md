@@ -297,7 +297,7 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     ART's (libsigchain): `sigaction` (bionic's LP64 layout, System V
     handlers, `SA_SIGINFO` with a Linux `siginfo_t`, `SA_RESETHAND`,
     `SA_NODEFER`), `signal`, per-thread masks, `raise`/`kill`/`sigqueue`/
-    `pthread_kill`, `sigpending`, `sigwait*`, `sigsuspend`, `pause`,
+    `pthread_kill`/`tgkill`/`tkill`, `sigpending`, `sigwait*`, `sigsuspend`, `pause`,
     `strsignal`, and `abort()` running a `SIGABRT` handler first. See "Not
     done" for what Windows does not allow.
   - `time_bionic.cc`: bionic's 56-byte `struct tm` (`tm_gmtoff`, `tm_zone`):
@@ -795,11 +795,27 @@ see "After that" for what is left._
   report errors.
 - **Signals** (`signal_bionic.cc`) are the shim's own bookkeeping, since
   Windows has none: a signal for the calling thread runs its handler before
-  `raise`/`kill`/`pthread_kill` returns; one for another thread (or blocked)
-  is pending and runs at that thread's next delivery point (lowering its
-  mask, `sigsuspend`/`pause`, and the shim's sleeps, `poll`, `select`,
-  `epoll_wait`, `ALooper_pollOnce`), so it cannot interrupt a thread busy or
-  blocked elsewhere. Not done: **synchronous signals from faults** (`SIGSEGV`,
+  `raise`/`kill`/`pthread_kill`/`tgkill` returns; one for another thread (or
+  blocked) is pending and runs at that thread's next delivery point (lowering
+  its mask, `sigsuspend`/`pause`, and the shim's sleeps, `poll`, `select`,
+  `epoll_wait`, `ALooper_pollOnce`). `tgkill`/`tkill` (also as raw
+  `syscall(SYS_tgkill/SYS_tkill)`, both ABIs' numbers) address any live thread
+  of the process by its `gettid()` ID with Linux's errors (`EINVAL` for a bad
+  signal or ID, `ESRCH` for an exited or unknown thread or another thread
+  group; signal 0 checks existence); a thread of another process can only be
+  checked (signal 0), a signal for it is `ENOSYS`. A thread running
+  translated ARM64 code is stopped at the translator's next block boundary to
+  take a signal queued for it, and an ARM64 `SA_SIGINFO` handler gets Bionic's
+  arm64 `ucontext_t` with the guest registers there (as Chromium's SIGURG
+  stack sampler reads them; its FPCR/FPSR changes do not reach the interrupted
+  code). A thread-directed signal the target does not block also interrupts
+  its futex wait (`syscall(SYS_futex, FUTEX_WAIT*)`: the handler runs, then an
+  untimed wait restarts under `SA_RESTART`; a timed one, or one whose handler
+  lacks `SA_RESTART`, returns `EINTR`, as Linux's restart rules give) and the
+  shim's pthread waits (a spurious wake after the handler), through
+  `gesher/futex_interrupt.h`. x86-64
+  code cannot be interrupted, and other blocking calls take the signal only at
+  a delivery point. Not done: **synchronous signals from faults** (`SIGSEGV`,
   `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGTRAP`) do not reach the `.so`'s handlers
   (a crash reporter's): Windows exceptions in loaded code go to ART's fault
   handling and the loader's diagnostics; the handler gets no machine context

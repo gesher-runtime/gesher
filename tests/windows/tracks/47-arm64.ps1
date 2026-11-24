@@ -88,7 +88,7 @@ Check 'arm64: TEXTREL pages relocate before guest constructors and selftest' {
 Check 'arm64: an arm64-v8a libc/pthread .so runs its checks through the shim' {
   A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/libc_test_arm64.so"), (NoDrive "$a64"))
 } @('libc_test: all passed', 'sleep contracts: complete', 'arm64_elf_test all passed',
-    'Bionic realtime range contracts: all passed')
+    'Bionic realtime range contracts: all passed', 'Bionic tgkill contracts: all passed')
 
 # bionic's libstdc++.so from a translated guest (tests/native/libstdcxx_test.cc):
 # dlopen/dlsym of every export, operator new/delete crossing malloc/free, and

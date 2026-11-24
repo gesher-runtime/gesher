@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cfenv>
 #include <cstdio>
@@ -810,6 +811,41 @@ struct ThreadCounters {
 class Env;
 std::mutex g_envs_mutex;
 std::vector<Env*> g_envs;  // every Env with a live thread (for the profiler)
+// Every Env with a live thread, by thread ID, for thread-directed signals
+// (gesher_arm64_interrupt_thread). Under g_attached_mutex.
+std::mutex g_attached_mutex;
+std::unordered_map<DWORD, Env*> g_attached;
+
+// The shim's delivery of this thread's pending signals (signal_bionic.cc),
+// called where the translator stopped guest code for a signal.
+using DeliverSignalsFn = void(GESHER_SYSV*)();
+DeliverSignalsFn DeliverSignals() {
+  static DeliverSignalsFn fn = reinterpret_cast<DeliverSignalsFn>(
+      g_host != nullptr && g_host->resolve != nullptr ? g_host->resolve("__gesher_deliver_signals")
+                                                      : nullptr);
+  return fn;
+}
+
+// The kernel's arm64 struct sigcontext (asm/sigcontext.h) and the FPSIMD
+// record at the start of its __reserved area, for an SA_SIGINFO handler's
+// ucontext (uc_mcontext); signal_bionic.cc places it in Bionic's ucontext_t.
+struct alignas(16) A64Sigcontext {
+  uint64_t fault_address;
+  uint64_t regs[31];
+  uint64_t sp;
+  uint64_t pc;
+  uint64_t pstate;
+  alignas(16) uint8_t reserved[4096];
+};
+static_assert(offsetof(A64Sigcontext, reserved) == 288);
+struct A64FpsimdContext {
+  uint32_t magic;  // FPSIMD_MAGIC
+  uint32_t size;
+  uint32_t fpsr;
+  uint32_t fpcr;
+  uint64_t vregs[64];  // V0..V31, low half first
+};
+static_assert(sizeof(A64FpsimdContext) == 528);
 
 class Env final : public A64::UserCallbacks {
  public:
@@ -862,6 +898,14 @@ class Env final : public A64::UserCallbacks {
     event_ = false;
     wait_pc_ = 0;
     tid_ = GetCurrentThreadId();
+    signal_interrupt_.store(false, std::memory_order_relaxed);
+    {
+      // unordered_map's load-factor arithmetic must not leave flags in the
+      // caller's (native or guest) floating-point environment.
+      HostFenvScope fenv;
+      std::lock_guard<std::mutex> lock(g_attached_mutex);
+      g_attached.insert_or_assign(tid_, this);
+    }
     // This private guest allocation differs from the native callback stack.
     // Only values cross the boundary; the host registry owns pthread lifetime.
     using PublishStack = int(GESHER_SYSV*)(void*, uint64_t, uint64_t);
@@ -882,6 +926,12 @@ class Env final : public A64::UserCallbacks {
 
   // The thread is exiting. Afterwards the Env may be pooled for another thread.
   void Detach() {
+    {
+      HostFenvScope fenv;  // as in Attach()
+      std::lock_guard<std::mutex> lock(g_attached_mutex);
+      auto found = g_attached.find(tid_);
+      if (found != g_attached.end() && found->second == this) g_attached.erase(found);
+    }
     if (thread_ != nullptr) {
       {
         std::lock_guard<std::mutex> lock(g_envs_mutex);  // not while being sampled
@@ -1323,7 +1373,12 @@ class Env final : public A64::UserCallbacks {
       int saved_running = t_guest_running;
       t_guest_running = 1;
       counters_.runs.Bump();
-      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_relaxed);
+      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_seq_cst);
+      // A signal queued while this thread was not running guest code: stop
+      // at once. (Interrupt() sets the flag, then halts the running Jit.)
+      if (signal_interrupt_.load(std::memory_order_seq_cst)) {
+        jit->HaltExecution(kSignalHalt);
+      }
       const Dynarmic::HaltReason halt = jit->Run();
       running_jit_.store(saved_jit, std::memory_order_relaxed);
       t_guest_running = saved_running;
@@ -1333,9 +1388,12 @@ class Env final : public A64::UserCallbacks {
       // SVC saves its following PC; NoExecuteFault saves X30. Returning from
       // Run restores host MXCSR before executing arbitrary native host code.
       // A fresh dispatch then uses the actual (possibly changed) guest FPCR.
-      PendingHostCall pending = pending_call_;
+      // Taken before a signal handler runs: its nested guest code reuses
+      // pending_call_, and the call this block queued must still be made.
+      const PendingHostCall pending = pending_call_;
       if (pending.undefined) {
-        // The SYS instruction is at PC - 4 (dynarmic set PC past it).
+        // The SYS instruction is at PC - 4 (dynarmic set PC past it). As the
+        // kernel delivers a synchronous signal first, before queued ones.
         const uint64_t pc = jit->GetPC() - 4;
         uint32_t insn = 0;
         if (InGuestCode(pc)) std::memcpy(&insn, reinterpret_cast<void*>(pc), 4);
@@ -1344,6 +1402,13 @@ class Env final : public A64::UserCallbacks {
                       "undefined instruction 0x%08x (IC IALLU/IALLUIS: EL1 only, UNDEFINED at EL0)",
                       insn);
         GuestCrash(kSigIll, 1, "ILL_ILLOPC", pc, detail);
+      }
+      if (Dynarmic::Has(halt, kSignalHalt)) {
+        jit->ClearHalt(kSignalHalt);
+        if (signal_interrupt_.exchange(false, std::memory_order_seq_cst)) TakeSignals(jit);
+        pending_call_ = pending;
+        // Stopped only for the signal: carry on with the guest code.
+        if (halt == kSignalHalt && pending.fn == nullptr && !pending.syscall) continue;
       }
       if (pending.syscall) {
         HostFenvScope host_fenv;
@@ -1366,6 +1431,24 @@ class Env final : public A64::UserCallbacks {
     }
   }
 
+  // Runs this thread's pending signals where its guest code was stopped (at
+  // a block boundary, every register in `jit`): as for a host call, a handler
+  // runs below the guest's live frames, and its frame's machine context is
+  // this state (gesher_arm64_guest_context).
+  void TakeSignals(A64::Jit* jit) {
+    DeliverSignalsFn deliver = DeliverSignals();
+    if (deliver == nullptr) return;
+    HostFenvScope host_fenv;
+    uint64_t saved_stack_cur = stack_cur_;
+    stack_cur_ = jit->GetSP();
+    int saved_running = t_guest_running;
+    t_guest_running = 0;
+    deliver();
+    t_guest_running = saved_running;
+    stack_cur_ = saved_stack_cur;
+  }
+
+  static constexpr Dynarmic::HaltReason kSignalHalt = Dynarmic::HaltReason::UserDefined3;
   static constexpr size_t kStackSize = 8 << 20;
   static constexpr size_t kGuardSize = 0x10000;
 
@@ -1476,6 +1559,55 @@ class Env final : public A64::UserCallbacks {
   // For the profiler (another thread reads these while this one runs).
   ThreadCounters counters_;
   std::atomic<A64::Jit*> running_jit_{nullptr};  // the Jit in Run(), if any
+  std::atomic<bool> signal_interrupt_{false};    // a signal was queued for this thread
+
+  // Another thread queued a signal for this one: its guest code stops at the
+  // next block boundary (or before it next runs) and takes it.
+  void Interrupt() {
+    signal_interrupt_.store(true, std::memory_order_seq_cst);
+    A64::Jit* jit = running_jit_.load(std::memory_order_seq_cst);
+    if (jit != nullptr) jit->HaltExecution(kSignalHalt);
+  }
+
+  // Saves (restore = false) or restores the FPCR/FPSR of the guest code
+  // GuestContext describes, around a signal handler: Enter() hands a nested
+  // call's FP mode back to its caller, which sigreturn does not.
+  bool GuestFp(bool restore, uint32_t* state) {
+    A64::Jit* jit = CurrentJit();
+    if (jit == nullptr || t_guest_running) return false;
+    if (restore) {
+      jit->SetFpcr(state[0]);
+      jit->SetFpsr(state[1]);
+      fpcr_ = state[0];
+      fpsr_ = state[1];
+    } else {
+      state[0] = jit->GetFpcr();
+      state[1] = jit->GetFpsr();
+    }
+    return true;
+  }
+
+  // The guest registers of the code running on this thread, or that called
+  // the host function it is in: false if there is none.
+  bool GuestContext(A64Sigcontext* sc) {
+    A64::Jit* jit = CurrentJit();
+    if (jit == nullptr || t_guest_running) return false;
+    if (sc == nullptr) return true;
+    sc->fault_address = 0;
+    for (int r = 0; r < 31; ++r) sc->regs[r] = jit->GetRegister(r);
+    sc->sp = jit->GetSP();
+    sc->pc = jit->GetPC();
+    sc->pstate = jit->GetPstate();
+    A64FpsimdContext fp{0x46508001u, sizeof(A64FpsimdContext), jit->GetFpsr(), jit->GetFpcr(), {}};
+    for (int v = 0; v < 32; ++v) {
+      const A64::Vector vector = jit->GetVector(v);
+      fp.vregs[2 * v] = vector[0];
+      fp.vregs[2 * v + 1] = vector[1];
+    }
+    std::memcpy(sc->reserved, &fp, sizeof(fp));
+    std::memset(sc->reserved + sizeof(fp), 0, 8);  // the terminating null record
+    return true;
+  }
   std::atomic<void*> sampled_host_fn_{nullptr};  // the host function called from guest code
   std::atomic<uint64_t> last_syscall_{~uint64_t{0}};
   HANDLE thread_ = nullptr;  // only while profiling
@@ -2568,6 +2700,31 @@ extern "C" __declspec(dllexport) void* gesher_arm64_bind(void* fn) { return Bind
 // For the host's abort report (signal_bionic.cc): the calling thread's guest
 // state, if it is a guest thread.
 extern "C" __declspec(dllexport) void gesher_arm64_print_guest_state() { PrintGuestState(); }
+
+// For signal_bionic.cc's SA_SIGINFO frame of a guest handler: the kernel's
+// arm64 struct sigcontext of the calling thread's guest code (`sc` may be
+// nullptr to ask). 0 if no guest code is under way on this thread.
+extern "C" __declspec(dllexport) int gesher_arm64_guest_context(void* sc) {
+  Env* env = t_env_raw;
+  return env != nullptr && env->GuestContext(static_cast<A64Sigcontext*>(sc)) ? 1 : 0;
+}
+
+// For signal_bionic.cc, around a guest signal handler: saves (restore = 0)
+// or restores the FPCR/FPSR of the calling thread's interrupted guest code.
+extern "C" __declspec(dllexport) int gesher_arm64_guest_fp(int restore, uint32_t* state) {
+  Env* env = t_env_raw;
+  return env != nullptr && env->GuestFp(restore != 0, state) ? 1 : 0;
+}
+
+// For signal_bionic.cc: a signal was queued for thread `tid`; if it runs
+// guest code, that code stops at its next block boundary and takes it.
+extern "C" __declspec(dllexport) int gesher_arm64_interrupt_thread(uint32_t tid) {
+  std::lock_guard<std::mutex> lock(g_attached_mutex);
+  auto found = g_attached.find(static_cast<DWORD>(tid));
+  if (found == g_attached.end()) return 0;
+  found->second->Interrupt();
+  return 1;
+}
 
 extern "C" __declspec(dllexport) const gesher_arm64_api* gesher_arm64_init(
     const gesher_arm64_host* host) {
