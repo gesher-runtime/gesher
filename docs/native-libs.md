@@ -307,7 +307,12 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     (`AInputTransferToken_*`; `AInputReceiver_create*` return null: Gesher's
     window manager grants no input channels to layers). Checked by
     `tests/native/surface_control_test.c` through
-    `surface_control_host_test.exe`.
+    `surface_control_host_test.exe`. `hardware_buffer_java.cc` adds
+    `AHardwareBuffer_fromHardwareBuffer` for the HardwareBuffers of an
+    `ImageReader`'s images (the reader snapshots of
+    `compat/media/surface/reader_surface.cc`, [media.md](media.md)): an
+    RGBA8 AHardwareBuffer of the snapshot's pixels, made on first request and
+    owned by the snapshot, checked by `tests/native/reader_buffer_test.c`.
 
 - **NativeActivity** ([0032](decisions/0032-native-libs-native-activity.md),
   `compat/bionic/native_activity.cmake`: the OBJECT library
@@ -705,8 +710,9 @@ see "After that" for what is left._
   fail cleanly), OBB mounting (unsupported; scanning works),
   AChoreographer's vsync (a 60 Hz clock, not the display's). Not provided at
   all (they bind to the aborting stubs):
-  `ASurfaceTexture_*`, `AHardwareBuffer_fromHardwareBuffer`/`toHardwareBuffer`
-  (Java HardwareBuffer has no natives), `ASurfaceTransaction_fromJava`,
+  `ASurfaceTexture_*`, `AHardwareBuffer_toHardwareBuffer` (the only Java
+  HardwareBuffers are ImageReader snapshots, which
+  `AHardwareBuffer_fromHardwareBuffer` imports), `ASurfaceTransaction_fromJava`,
   `ASurfaceTransaction_setLuts`, `AThermal_*`,
   `ASharedMemory_dupFromJava`, `android_getaddrinfofornetwork` & co.
   AInputReceivers are refused (null): no input channels for layers.
@@ -766,7 +772,8 @@ see "After that" for what is left._
 ### After that (not started)
 
 - The remaining shim gaps as real apps need them; `ASurfaceTexture`; Java
-  HardwareBuffer's natives (and `AHardwareBuffer_fromHardwareBuffer`); YUV
+  HardwareBuffer's natives beyond ImageReader snapshots (and
+  `AHardwareBuffer_toHardwareBuffer`); YUV
   hardware buffers (AImageReader); RGB_565 windows.
 - Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers
   (crash reporters), chained with ART's fault handling; asynchronous delivery

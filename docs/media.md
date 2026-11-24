@@ -5,12 +5,29 @@ Design: [0042](decisions/0042-media-audio-engine-and-codecs.md). Tests:
 `media_probe.exe` and `tests/apps/mediaapp` (`mediaapp.apk`, built by
 `.github/workflows/media.yml` against the run's framework classes).
 
-RGBA `ImageReader` surfaces accept Canvas, NDK and EGL producers through the
-in-process `QueueSurface`. Swapped frames supply the reader's image queue and
+RGBA and PRIVATE `ImageReader` surfaces accept Canvas, NDK and EGL producers
+through the in-process `QueueSurface`; a PRIVATE reader (what Flutter's
+platform views create: `ImageReader.Builder`, PRIVATE, `GPU_SAMPLED_IMAGE`)
+is drawn into with `lockHardwareCanvas`, `lockCanvas` or EGL like an RGBA one.
+Its images report the reader's PRIVATE format, have no CPU planes
+(`getPlanes()` is empty, as Android's), and `getHardwareBuffer()` gives the
+drawn RGBA pixels as a snapshot; a camera or decoder frame in a PRIVATE reader
+is opaque I420 and has no snapshot (`getHardwareBuffer()` is null), and camera
+frames still reach the reader by its Surface. Swapped frames supply the reader's image queue and
 availability notifications. `Image.getHardwareBuffer()` retains an independent
 CPU snapshot; `Bitmap.wrapHardwareBuffer()` converts it to an immutable software
 bitmap that remains drawable after the image or buffer closes. This supports
 Flutter's platform-view display path without changing the application's APK.
+An NDK library imports a snapshot with `AHardwareBuffer_fromHardwareBuffer`
+(`compat/bionic/hardware_buffer_java.cc`): an RGBA8888
+`GPU_SAMPLED_IMAGE | CPU_READ_OFTEN` AHardwareBuffer made from the snapshot's
+pixels on first request, kept with the snapshot, and no reference taken (it
+lives as long as the Java object, as the NDK says). It describes, locks and
+becomes an EGLImage (`EGL_NATIVE_BUFFER_ANDROID`) like any other
+AHardwareBuffer, which is how Flutter's raster thread samples a platform view.
+`AHardwareBuffer_toHardwareBuffer` is not provided. Tested by
+`tests/dex-graphics/gesher/ImageReaderPrivateTest.java` with
+`tests/native/reader_buffer_test.c`.
 These snapshots do not implement general HardwareBuffer allocation, Android GPU
 imports, parcel transport or protected content. Other ImageReader formats retain
 the existing direct CameraFrames delivery path. See the
