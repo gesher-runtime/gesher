@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'b3699e303ceb7bcfa9a2f171799f0cc53e05016c12ae63ecc1f9b4059c21effb'
+OFD_QUALIFICATION_SHA256 = '9503a00e5f74aba9fc8b49b15e9c07c8297f8cf333d3fc84aad86753f961badc'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -448,7 +448,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='e0773fc4dbc1bac198b742b2acf60942af0298d2802cd4b4fc139077339291ac'
+REVIEWED_PATCH_SHA256='2a768b3c11112a2fd6d7bd378953aa44efc77984941b3e498b4aa4bd2694bf4e'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH

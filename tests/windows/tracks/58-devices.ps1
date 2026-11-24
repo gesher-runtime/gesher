@@ -81,6 +81,10 @@ Check 'devices: camera callback/request admission bounds real native metadata an
   DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
     'gesher.services.CameraCallbackAdmissionTest') 90
 } @('CameraCallbackAdmissionTest: real native metadata, bounded requests/callbacks, ordered flush and nonjoining close passed')
+Check 'devices: camera autofocus is reported only where the driver focuses, with Android AF states' {
+  DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+    'gesher.services.CameraAutofocusContractTest') 90
+} @('CameraAutofocusContractTest: device flags, rear-only autofocus feature, AF modes, legacy focus modes and Android AF state transitions passed')
 $d = 'devices: location: '
 
 # The location checks of devices.apk's LocationSteps (both modes).

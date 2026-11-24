@@ -97,11 +97,21 @@ public final class PackageServiceQueriesTest {
                         "ro.opengles.version", FeatureInfo.GL_ES_VERSION_UNDEFINED),
                 "Available features list lacks the OpenGL ES version entry: " + unnamed
                         + " unnamed, version 0x" + Integer.toHexString(glEs));
-        // The network location provider is always registered; GNSS is not claimed.
+        // The network location provider is always registered; GPS follows a real GNSS
+        // receiver exactly (none without the runtime natives).
         require(service.hasSystemFeature(PackageManager.FEATURE_LOCATION, 0)
                         && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_NETWORK, 0)
-                        && !service.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS, 0),
-                "Location features do not match the network-only provider");
+                        && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS, 0)
+                                == com.gesher.server.WindowsLocation.hasGnssReceiver(),
+                "Location features do not match the providers and the GNSS receiver");
+        for (boolean gnss : new boolean[] {false, true}) {
+            android.util.ArrayMap<String, FeatureInfo> located = new android.util.ArrayMap<>();
+            PackageManagerService.addLocationFeatures(located, gnss);
+            require(located.containsKey(PackageManager.FEATURE_LOCATION)
+                            && located.containsKey(PackageManager.FEATURE_LOCATION_NETWORK)
+                            && located.containsKey(PackageManager.FEATURE_LOCATION_GPS) == gnss,
+                    "FEATURE_LOCATION_GPS does not follow the receiver (" + gnss + ")");
+        }
         // FEATURE_MICROPHONE follows the audio input exactly, as this process's
         // AudioSystem reports it (none where its natives are unavailable).
         boolean input;

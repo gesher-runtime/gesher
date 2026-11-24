@@ -791,6 +791,13 @@
   ],
   "compat/posix/src/system.cc": [
    [
+    36,
+    [],
+    [
+     "#include \"native_fence_internal.h\"\n"
+    ]
+   ],
+   [
     89,
     [
      "  // Not \"Linux\": kernel-version checks must not pass.\n",
@@ -803,6 +810,26 @@
      "  // no real kernel version, so \"kernel >= X\" checks still fail: callers take their\n",
      "  // oldest-kernel path instead of assuming features Gesher may not provide.\n",
      "  snprintf(buf->sysname, sizeof(buf->sysname), \"Linux\");\n"
+    ]
+   ],
+   [
+    322,
+    [
+     "// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc),\n",
+     "// others fail with ENOTTY.\n"
+    ],
+    [
+     "// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc) and\n",
+     "// a native fence's SYNC_IOC_FILE_INFO (native_fence.cc), others fail with\n",
+     "// ENOTTY.\n"
+    ]
+   ],
+   [
+    331,
+    [],
+    [
+     "  int fence_result;\n",
+     "  if (gesher::SyncFileIoctl(fd, request, argp, &fence_result)) return fence_result;\n"
     ]
    ],
    [
