@@ -80,7 +80,11 @@ struct Verification {
   IAsyncOperation<int>* operation = nullptr;
   IAsyncInfo* info = nullptr;
   std::mutex lock;
-  std::atomic<bool> cancel{false};
+  // GetTickCount64 at the first Cancel (never 0 once requested): the start of
+  // Await's grace period.
+  std::atomic<ULONGLONG> cancel_tick{0};
+  // Await gave up on an operation Windows did not end after Cancel.
+  std::atomic<bool> abandoned{false};
   bool released = false;
 };
 
@@ -186,12 +190,29 @@ Verification* Wrap(IAsyncOperation<int>* operation, HRESULT* hr) {
 
 }  // namespace internal
 
-int Await(Verification* v, DWORD /*cancel_grace_ms*/) {
-  // A user may take minutes: no time-out, 1 -> 20 ms back-off.
+int Await(Verification* v, DWORD cancel_grace_ms) {
+  // The awaiting thread is WindowsHello's own daemon thread: its first WinRT
+  // call is here, so it joins the apartment itself (spec section 5).
+  HRESULT r = winrt::EnsureApartment();
+  if (FAILED(r)) Log("RoInitialize (await)", r);
+  // A user may take minutes: no time-out while nobody canceled, 1 -> 20 ms
+  // back-off.
   int status = kStarted;
   DWORD delay = 1;
-  HRESULT r;
   while (SUCCEEDED(r = v->info->get_Status(&status)) && status == kStarted) {
+    ULONGLONG requested = v->cancel_tick.load();
+    if (requested != 0 && GetTickCount64() - requested >= cancel_grace_ms) {
+      // Windows refused the cancel or ignores it. The session is over for the
+      // app (AuthService reported the cancel when it was requested), so the
+      // operation is abandoned: Release drops the references without reading
+      // a result, and whatever Windows' prompt reports later reaches nobody.
+      fprintf(stderr,
+              "gesher hello: Windows did not end a canceled verification within %lu ms; "
+              "abandoning it\n",
+              static_cast<unsigned long>(cancel_grace_ms));
+      v->abandoned.store(true);
+      return kResultCanceled;
+    }
     Sleep(delay);
     if (delay < 20) delay *= 2;
   }
@@ -216,9 +237,16 @@ int Await(Verification* v, DWORD /*cancel_grace_ms*/) {
 }
 
 void Cancel(Verification* v) {
+  // Called from AuthService's thread or a binder thread.
+  HRESULT r = winrt::EnsureApartment();
+  if (FAILED(r)) Log("RoInitialize (cancel)", r);
   std::lock_guard<std::mutex> guard(v->lock);
-  if (v->released || v->cancel.exchange(true)) return;
-  HRESULT r = v->info->Cancel();
+  if (v->released || v->cancel_tick.load() != 0) return;
+  // The grace period runs from the request, also when the call below fails or
+  // takes long.
+  ULONGLONG now = GetTickCount64();
+  v->cancel_tick.store(now != 0 ? now : 1);
+  r = v->info->Cancel();
   if (FAILED(r)) Log("IAsyncInfo::Cancel", r);
 }
 
@@ -226,7 +254,9 @@ void Release(Verification* v) {
   {
     std::lock_guard<std::mutex> guard(v->lock);
     v->released = true;
-    v->info->Close();
+    // IAsyncInfo::Close is only legal on a finished operation; an abandoned one
+    // still runs inside Windows and ends there.
+    if (!v->abandoned.load()) v->info->Close();
     winrt::Release(v->info);
     winrt::Release(v->operation);
   }

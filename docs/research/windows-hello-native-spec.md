@@ -119,12 +119,25 @@ same lock unless released. No JNI callbacks into Java, no attached native thread
 
 ## 6. Cancellation
 
-`nativeCancel` → `IAsyncInfo::Cancel()`; the operation then completes with status
-Canceled (2) → `nativeAwait` returns 6 (CANCELED). AuthService has already told the app
+`nativeCancel` -> `IAsyncInfo::Cancel()`; the operation then completes with status
+Canceled (2) -> `nativeAwait` returns 6 (CANCELED). AuthService has already told the app
 `BIOMETRIC_ERROR_CANCELED` and drops this late result; a CANCELED it did not request is
-the user's (`BIOMETRIC_ERROR_USER_CANCELED`). **Verify on Windows** that Cancel closes the
-visible Hello dialog; if it does not, document that the dialog lingers and its eventual
-result is ignored.
+the user's (`BIOMETRIC_ERROR_USER_CANCELED`).
+
+The wait after a cancel is bounded. `Cancel` records when it was requested, also when
+`IAsyncInfo::Cancel` fails. If the operation is still Started `kCancelGraceMs` (5 s) later,
+`Await` abandons it and returns CANCELED: the Java daemon thread ends, and `Release` drops
+Gesher's references without calling `Close` (illegal on a running operation) and without
+reading a result. Windows keeps the operation alive until its own prompt ends; whatever it
+reports then reaches nobody, so an abandoned verification can never be reported as
+Verified. Ownership: the awaiting Java thread is the only caller of `Await` and `Release`;
+`Cancel` may come from any thread until `Release` (guarded in `WindowsHello.Session`).
+`Await`, `Cancel` and `Start` each join the WinRT apartment on their own thread.
+
+`tests/biometrics/hello_windows_test.cc` drives these paths with scripted operations
+(completion, a cancel honored late, refused, ignored). **Verify on Windows** that Cancel
+closes the visible Hello dialog; if it does not, the dialog lingers and its result is
+ignored as above.
 
 ## 7. Error mapping (native → `WindowsHelloBackend` → Android)
 
