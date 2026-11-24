@@ -30,6 +30,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import javax.crypto.Cipher;
 import javax.crypto.KeyAgreement;
@@ -143,6 +144,7 @@ public final class KeystoreAuthorization implements KeystoreOperations {
     private final HelloKeyBackend mBackend;  // null: no Windows Hello natives
     private final File mFile;
     private final LongSupplier mClock;       // elapsed milliseconds, monotonic
+    private final BooleanSupplier mDeviceSecure;  // DeviceCredential.available()
     private final SecureRandom mRandom = new SecureRandom();
     private final Object mLock = new Object();
     private final Object mEnrollLock = new Object();
@@ -155,17 +157,27 @@ public final class KeystoreAuthorization implements KeystoreOperations {
     private long mLiveAt = Long.MIN_VALUE;
     private final LinkedHashMap<Long, Op> mOps = new LinkedHashMap<>();
 
-    public KeystoreAuthorization(HelloKeyBackend backend, File file, LongSupplier elapsedMillis) {
+    /**
+     * @param deviceSecure whether the device has a secure lock screen as apps are told
+     *     ({@code DeviceCredential.available()}, trust's {@code isDeviceSecure}). Android
+     *     makes a key that requires user authentication only then.
+     */
+    public KeystoreAuthorization(HelloKeyBackend backend, File file, LongSupplier elapsedMillis,
+            BooleanSupplier deviceSecure) {
         mBackend = backend;
         mFile = file;
         mClock = elapsedMillis;
+        mDeviceSecure = java.util.Objects.requireNonNull(deviceSecure);
     }
 
     // --- the app's keystore ---------------------------------------------------------------
 
-    /** OK when keys that require user authentication can be made, else UNAVAILABLE. */
+    /**
+     * OK when keys that require user authentication can be made, else UNAVAILABLE: the
+     * device is secure as apps are told, and Windows can make Hello keys.
+     */
     public int availability() {
-        if (mBackend == null) return UNAVAILABLE;
+        if (mBackend == null || !mDeviceSecure.getAsBoolean()) return UNAVAILABLE;
         synchronized (mLock) {
             if (load() != null) return OK;
         }
@@ -177,7 +189,7 @@ public final class KeystoreAuthorization implements KeystoreOperations {
      * the binding, which asks the user for Windows Hello over {@code pid}'s window.
      */
     public Reply seal(int pid, byte[] material, int timeoutSeconds, int authType) {
-        if (mBackend == null) return Reply.of(UNAVAILABLE);
+        if (mBackend == null || !mDeviceSecure.getAsBoolean()) return Reply.of(UNAVAILABLE);
         if (material == null || timeoutSeconds < 0 || (authType & AUTH_DEVICE_CREDENTIAL) == 0) {
             return Reply.of(FAILED);  // a biometric-only key cannot be satisfied here
         }

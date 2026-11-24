@@ -320,7 +320,8 @@ Consequence: in that case Windows' prompt does not show the app's message, becau
 
 Trust, keyguard and the confirm-credential activity belong to phase 2b
 (`feat/hello-device-credential`). Until `trust` reports a secure device, no credential
-prompt starts, so this path is not reachable in production from this change alone.
+prompt starts, so this path is not reachable in production from this change alone; item 8
+describes the combination.
 
 ### 7. Migration
 
@@ -334,6 +335,29 @@ every old key (would demand authentication for keys that never asked for it, and
 at upgrade). This leaves legacy keys that asked for authentication unenforced, as they
 were; that is an open question for maintainers below. A `GKS2` file is not readable by
 an older Gesher.
+
+### 8. Combined with phase 2b (`feat/hello-combined`)
+
+On its own, this change decides "a secure lock screen" from `KeyCredentialManager.IsSupportedAsync`
+while #366's `trust` answers `isDeviceSecure` = false: an app could make a key that requires
+user authentication on a device it is told is not secure, which Android never allows
+(`getRootSid` above). Combined with phase 2b, one `DeviceCredential` (ADR 0091 decision 7)
+decides both:
+
+- `KeystoreAuthorization.availability()` and `seal` answer `UNAVAILABLE` unless
+  `DeviceCredential.available()` (what `isDeviceSecure` and `isKeyguardSecure` report) is
+  true, besides Windows supporting Hello keys. The app then gets
+  `IllegalStateException("Secure lock screen must be enabled ...")` as in the table in item 4.
+  Keys already made are not touched by a later "not secure" answer here: a Windows Hello
+  reset removes the Hello key, and item 4's invalidation applies.
+- A `CryptoObject` prompt (`operationId != 0`) passes the same checks as any credential
+  prompt: `trust` (PreAuthInfo) and then `DeviceCredential.state()` now. A busy Windows Hello
+  or a failed query ends it with `BIOMETRIC_ERROR_HW_UNAVAILABLE` before any key prompt;
+  without Windows Hello's verifier (no natives, Windows older than build 22000) it is
+  `BIOMETRIC_ERROR_HW_UNAVAILABLE` too, never a key signature.
+- A plain confirmation, including `ACTION_CONFIRM_DEVICE_CREDENTIAL`, goes through
+  `KeystoreOperations.confirming`, which is `KeyBoundHello` for the real keystore, so keys
+  with a timeout are released by that confirmation as by an auth token.
 
 ## Open questions for maintainers
 

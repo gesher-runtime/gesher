@@ -316,11 +316,12 @@ public final class Services {
         // gesher.keystore: AndroidKeyStore keys that require user authentication are sealed
         // to a Windows Hello key and released under Android's rules (ADR 0092). Without the
         // natives there is no such service, and making such a key fails in the app as on a
-        // device without a secure lock screen.
+        // device without a secure lock screen; so does it while the device credential that
+        // trust reports is not there.
         WindowsHelloKey helloKey = WindowsHelloKey.create();
         KeystoreAuthorization keystore = helloKey == null ? null : new KeystoreAuthorization(
                 helloKey, new java.io.File(Device.dataDir(), "system/gesher-keystore-binding"),
-                android.os.SystemClock::elapsedRealtime);
+                android.os.SystemClock::elapsedRealtime, credential::available);
         if (keystore != null) {
             services.put(KeystoreAuthorizationService.NAME,
                     new KeystoreAuthorizationService(keystore));

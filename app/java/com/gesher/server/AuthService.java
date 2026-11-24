@@ -437,12 +437,13 @@ public final class AuthService extends IAuthService.Default {
      * so it is never reported as confirmed.
      */
     private int unavailable(Session session) {
-        if (session.operationId != 0) {
-            return mKeys != null && mKeys.isPending(session.request.uid, session.operationId)
-                    ? BiometricConstants.BIOMETRIC_SUCCESS
-                    : BiometricConstants.BIOMETRIC_ERROR_HW_UNAVAILABLE;
-        }
         if (mCredential.backend() == null) {
+            return BiometricConstants.BIOMETRIC_ERROR_HW_UNAVAILABLE;
+        }
+        // A keystore operation is confirmed under the same rule as any credential prompt:
+        // Windows' answer now (a busy Windows Hello cannot start the key's prompt either).
+        if (session.operationId != 0
+                && (mKeys == null || !mKeys.isPending(session.request.uid, session.operationId))) {
             return BiometricConstants.BIOMETRIC_ERROR_HW_UNAVAILABLE;
         }
         switch (mCredential.state()) {
