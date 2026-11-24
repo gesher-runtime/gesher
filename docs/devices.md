@@ -25,7 +25,12 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 - Providers `passive`, `network`, `fused`, `gps`. gps, network and fused are
   Windows' location service (gps asks for high accuracy); passive gets what
-  the others report. `isLocationEnabled()` is Windows' setting for desktop
+  the others report.
+- Features: `android.hardware.location` and `location.network` always;
+  `location.gps` only when Windows has a GNSS receiver (a present device
+  interface of the GNSS driver class, `GUID_DEVINTERFACE_GNSS`, which Windows'
+  location service uses for high-accuracy fixes). Google Play filters apps that
+  require `location.gps` on it. `isLocationEnabled()` is Windows' setting for desktop
   apps ("Let desktop apps access your location"), or a test provider being on.
 - Permissions: the app's manifest must ask for ACCESS_FINE_LOCATION or
   ACCESS_COARSE_LOCATION (Gesher grants what an app requests; there is no
@@ -112,10 +117,43 @@ Windows without them (no location service, no Media Foundation) gets clean
   timing. A virtual camera (`MFCreateVirtualCamera`, Windows 11) needs the
   source as a registered COM server and the Frame Server service; not done.
 - Characteristics: an EXTERNAL-level camera (as Android's USB cameras): fixed
-  focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
+  focus unless the camera really focuses (below), auto exposure and white
+  balance, YUV_420_888, PRIVATE and JPEG at the
   device's sizes, LENS_FACING_FRONT unless configured as the rear camera
   (`GESHER_CAMERA_REAR_ID`; the test camera: BACK), one partial
   result, the available request/result/characteristics keys.
+- Autofocus: a camera has it when its driver's focus control
+  (`IAMCameraControl`, which Media Foundation's capture source answers to
+  `QueryInterface`; UVC's Focus (Absolute) and Focus, Auto controls) reports
+  both the automatic and the manual flag over a range of lens positions
+  (`HasAutofocus` in camera_mf.cc; the device line's `af` flag,
+  `WindowsCamera.Device.autofocus`). The test camera has fixed focus. Such a
+  camera offers CONTROL_AF_AVAILABLE_MODES AUTO, CONTINUOUS_VIDEO and
+  CONTINUOUS_PICTURE (not OFF: manual focus by LENS_FOCUS_DISTANCE is not
+  implemented), a nonzero LENS_INFO_MINIMUM_FOCUS_DISTANCE (10) in the
+  unspecified units of UNCALIBRATED distances (it claims no real distance), no AF regions, and continuous focus in the default
+  requests (CONTINUOUS_VIDEO for record and video snapshot). A fixed-focus
+  camera keeps `{OFF}`, 0 and AF state INACTIVE as before.
+  `CameraAutoFocus` runs Android's AF state machine on the capture thread: the
+  driver focuses (its automatic focus on in the continuous modes and during an
+  AUTO scan) and a lock turns it off with the lens kept where it is (the
+  position read back and set as manual). A UVC control does not say when a scan
+  has ended, so Gesher observes it: converged when the reported lens position
+  and the centre's sharpness (normalised luma gradient) stay still for 400 ms
+  after at least 600 ms of scanning; failed after 4 s (a dark or featureless
+  picture never converges). A converged scan is locked, then the picture must
+  keep 80% of its sharpness 150 ms later, else NOT_FOCUSED_LOCKED. Triggers
+  follow CaptureResult's tables: AUTO's START scans (ACTIVE_SCAN, then
+  FOCUSED_LOCKED or NOT_FOCUSED_LOCKED), CANCEL stops; in the continuous modes
+  the driver's scans are PASSIVE_SCAN/PASSIVE_FOCUSED/PASSIVE_UNFOCUSED, START
+  locks (CONTINUOUS_PICTURE during a scan once it ends), CANCEL resumes.
+  LENS_STATE is MOVING during a scan. `FEATURE_CAMERA_AUTOFOCUS` is reported
+  only when the camera reported as `FEATURE_CAMERA` (a configured rear camera)
+  has autofocus, as Android defines it for the rear camera. Not verified
+  without such a camera: drivers that report a stale lens position while
+  focusing automatically would move the lens at the lock (the sharpness check
+  then reports NOT_FOCUSED_LOCKED), and whether a driver keeps a locked focus
+  when the legacy `takePicture` reopens the device (Gesher locks it again).
 - Orientation (maintainer-approved desktop adaptation, CONTRIBUTING.md): the
   frames are upright for the desktop monitor and Gesher does not rotate preview
   buffers for the legacy `setDisplayOrientation`. So SENSOR_ORIENTATION and the
@@ -168,11 +206,15 @@ Windows without them (no location service, no Media Foundation) gets clean
 - Legacy `android.hardware.Camera` (hwsvc2, ADR 0051): the same devices as
   Camera2, in the app's process (`LegacyCamera`, natives in camera_frames.cc that
   call it): ids in Windows' order, a PC's camera FRONT, the test camera BACK;
-  parameters of a fixed-focus camera without flash, zoom or face detection; preview
+  parameters of a camera without flash, zoom or face detection; preview
   callbacks (NV21 or YV12, callback buffers) and a preview surface with a native
   window; `setPreviewTexture` accepted without frames; `takePicture` (shutter, a
   null raw image, postview, JPEG at the picture size; the preview stops);
-  `autoFocus` succeeds at once; a current CAMERA grant is required, else `Fail to connect to
+  `autoFocus` succeeds at once with fixed focus; on a camera with autofocus the
+  focus modes are auto (the default), continuous-video and continuous-picture,
+  `autoFocus` (while previewing) is the AF trigger of the preview's
+  `CameraAutoFocus` and answers success or failure when the lens is locked, and
+  `cancelAutoFocus` cancels it; a current CAMERA grant is required, else `Fail to connect to
   camera service`. Without a camera: `getNumberOfCameras()` 0, `open()` null.
 - `MediaStore.ACTION_IMAGE_CAPTURE`: Gesher Camera (`app/gesher-camera`,
   `gesher-camera.apk` next to dalvikvm.exe; `CameraApp`): the persistent device
