@@ -214,6 +214,16 @@ jobs:
         run: |
           & .\caption-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows caption style checks failed' }
+      - name: Build production caption reader with scripted Windows SDK properties
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc tests\captioning\caption_read_test.cc /Fe:caption-read-test.exe ole32.lib uuid.lib
+      - name: Caption defaults, required computed colors and failure lifetime contracts
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\caption-read-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Caption Read boundary contracts failed' }
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell

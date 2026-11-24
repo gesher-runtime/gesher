@@ -113,17 +113,27 @@ HRESULT Read(Properties* out) {
   Properties p = {};
   Color font = {}, background = {}, region = {};
   if (SUCCEEDED(hr)) hr = statics->get_FontColor(&p.font_color);
-  if (SUCCEEDED(hr)) hr = statics->get_ComputedFontColor(&font);
   if (SUCCEEDED(hr)) hr = statics->get_FontOpacity(&p.font_opacity);
+  // Default color + opacity leaves the choice to the player. Windows can return
+  // E_INVALIDARG for its computed color in that state; CaptioningSettings ignores
+  // that field anyway. Read it whenever either preference is specified, so a
+  // failure cannot silently invent the missing RGB or alpha of a partial choice.
+  if (SUCCEEDED(hr) && (p.font_color != 0 || p.font_opacity != 0)) {
+    hr = statics->get_ComputedFontColor(&font);
+  }
   if (SUCCEEDED(hr)) hr = statics->get_FontSize(&p.font_size);
   if (SUCCEEDED(hr)) hr = statics->get_FontStyle(&p.font_style);
   if (SUCCEEDED(hr)) hr = statics->get_FontEffect(&p.font_effect);
   if (SUCCEEDED(hr)) hr = statics->get_BackgroundColor(&p.background_color);
-  if (SUCCEEDED(hr)) hr = statics->get_ComputedBackgroundColor(&background);
   if (SUCCEEDED(hr)) hr = statics->get_BackgroundOpacity(&p.background_opacity);
+  if (SUCCEEDED(hr) && (p.background_color != 0 || p.background_opacity != 0)) {
+    hr = statics->get_ComputedBackgroundColor(&background);
+  }
   if (SUCCEEDED(hr)) hr = statics->get_RegionColor(&p.region_color);
-  if (SUCCEEDED(hr)) hr = statics->get_ComputedRegionColor(&region);
   if (SUCCEEDED(hr)) hr = statics->get_RegionOpacity(&p.region_opacity);
+  if (SUCCEEDED(hr) && (p.region_color != 0 || p.region_opacity != 0)) {
+    hr = statics->get_ComputedRegionColor(&region);
+  }
   statics->Release();
   if (FAILED(hr)) return hr;
   p.computed_font_color = Argb(font);

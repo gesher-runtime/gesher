@@ -14,7 +14,8 @@ namespace gesher::devices::captions {
 
 // Windows' own enum values (ClosedCaptionColor, ClosedCaptionOpacity, ClosedCaptionSize,
 // ClosedCaptionStyle, ClosedCaptionEdgeEffect; 0 is Default in each) and the computed
-// colors as 0xAARRGGBB (Windows.UI.Color).
+// colors as 0xAARRGGBB (Windows.UI.Color). A computed color is unused and zero
+// when its color and opacity are both Default (the player chooses both).
 struct Properties {
   int32_t font_color;
   uint32_t computed_font_color;
@@ -32,8 +33,9 @@ struct Properties {
 
 constexpr int kValues = 12;  // Properties as an int array, in declaration order
 
-// Reads every property. E_NOTIMPL without combase's WinRT functions; another failure is
-// the first failing getter's HRESULT (nothing is reported then).
+// Reads every enum and each computed color whose color or opacity is specified.
+// E_NOTIMPL without combase's WinRT functions; another failure is the first
+// required getter's HRESULT (nothing is reported then).
 HRESULT Read(Properties* out);
 
 // PropertiesChanged (IClosedCaptionPropertiesStatics2): after StartWatch, each change
