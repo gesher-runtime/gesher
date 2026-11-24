@@ -58,7 +58,10 @@ def generate(ref: str | None) -> tuple[str, dict]:
             raise ValueError("fixture marker changed: " + marker)
         fixture = fixture.replace(marker, body)
     hashes = {p: hashlib.sha256(s.encode()).hexdigest() for p, s in [(READER, reader), (CODEC, codec)]}
-    return f"#define NATIVE_DELIVERY {int(native)}\n" + fixture, hashes
+    # PRIVATE readers take RGBA frames (like RGBA_8888) where the source knows kHalPrivate.
+    private_rgba = "kHalPrivate = 0x22" in reader
+    return (f"#define NATIVE_DELIVERY {int(native)}\n#define PRIVATE_IS_RGBA {int(private_rgba)}\n" +
+            fixture, hashes)
 
 
 def run(work: Path, label: str, ref: str | None, args, baseline: bool) -> dict:
@@ -115,7 +118,10 @@ def main() -> int:
                 if old[field] != new[field]:
                     raise AssertionError("output/work differs: " + field)
             payload = new["width"] * new["height"] * 3 // 2 * new["frames"]
-            if (old["native_allocated_bytes"] - new["native_allocated_bytes"] != payload
+            # Each image's own struct is allocated too; one that grew between the refs
+            # (a pooled-buffer pointer) adds exactly that much per frame to the candidate.
+            struct_growth = (new["image_struct_bytes"] - old["image_struct_bytes"]) * new["frames"]
+            if (old["native_allocated_bytes"] - new["native_allocated_bytes"] != payload - struct_growth
                     or old["java_array_bytes"] != payload or new["java_array_bytes"] != 0
                     or old["java_copy_bytes"] != payload or new["java_copy_bytes"] != 0):
                 raise AssertionError("full-frame intermediate reduction missing")
