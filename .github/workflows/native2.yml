@@ -6,6 +6,8 @@ name: native2
 # (tests/windows/tracks/44-native2.ps1):
 #   - libnative2.so (tests/native2/native2_test.cpp) with libnative2_helper.so
 #     and libc++_shared.so, and gesher.Native2Test's dex, for dalvikvm;
+#   - libeglcontextdestroy.so (tests/native2/egl_context_destroy_jni.cpp,
+#     issue #485) for gesher.EglContextDestroyTest in dalvikvm;
 #   - native2app.apk (x86_64) and native2app-arm64.apk (arm64-v8a only);
 #   - popular NDK libraries' own test programs (build-third-party.sh);
 #   - symbols-<abi>.txt: what those programs, the e2e apps' NDK libraries and
@@ -151,6 +153,9 @@ jobs:
               -Wl,-soname,libnet4resolver.so -o "$o/libnet4resolver.so" tests/native2/net4_resolver_jni.cpp
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
               -o "$o/net4_resolver_test" tests/native2/net4_resolver_main.cpp
+            "$llvm/bin/${triple}29-clang++" -std=c++20 -shared -fPIC -O2 -fstack-protector-strong -Wall -Werror \
+              -Wl,-soname,libeglcontextdestroy.so -o "$o/libeglcontextdestroy.so" tests/native2/egl_context_destroy_jni.cpp \
+              -lEGL -lGLESv2
             "$llvm/bin/${triple}29-clang" -O2 -Wall -Werror -o "$o/fonts_standalone" tests/native2/fonts_standalone.c -ldl
             "$llvm/bin/${triple}29-clang" -O2 -Wall -Werror -shared -fPIC -Dmain=font_contract_main -o "$o/libfonts_standalone.so" tests/native2/fonts_standalone.c tests/native2/fonts_standalone_jni.c -ldl
             echo "--- $abi libnative2.so: needed"
@@ -231,6 +236,7 @@ jobs:
             sets+=("libcxx2=$o/libcxx2_test,$o/libc++_shared.so")
             sets+=("native2=$o/libnative2.so,$o/libnative2_helper.so,$o/libc++_shared.so")
             sets+=("net4resolver=$o/net4_resolver_test,$o/libnet4resolver.so")
+            sets+=("eglcontextdestroy=$o/libeglcontextdestroy.so")
             sets+=("net-dns=$o/net_dns_wire")
             sets+=("net-udp=$o/net_udp_trunc,$o/net_udp_fault")
             sets+=("libc++_shared=$o/libc++_shared.so")
