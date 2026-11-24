@@ -128,6 +128,20 @@ jobs:
         run: |
           & .\query-pool-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
+      - name: Build actual Windows speech recognition contracts (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\speech\speech_recognition_windows_test.cc compat\devices\speech_recognition_win.cc /Fe:speech-recognition-windows.exe ole32.lib uuid.lib
+      - name: SAPI recognizers enumerate and recognize handed-over PCM without a microphone
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\speech-recognition-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech recognition contracts failed' }
+      - name: Speech recognition service contracts on Windows' JVM (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
@@ -559,6 +573,9 @@ jobs:
           python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
+
+      - name: Speech recognition service contracts (docs/speech-recognition.md)
+        run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
 
       - name: MediaDataSource adapter contracts with checked JNI and UBSan
         run: python3 tools/test_media_callback_adapter.py
