@@ -9,6 +9,7 @@
 // - com.gesher.server.WindowsCamera: Media Foundation's cameras (camera_mf.cc);
 //   CameraMetadataNative (camera_metadata_jni.cc); ImageReader, SurfaceUtils
 //   and com.gesher.server.CameraFrames (camera_frames.cc).
+// - com.gesher.server.WindowsCaptions: Windows' caption style (caption_jni.cc).
 
 #include <jni.h>
 #include <log/log.h>
@@ -179,12 +180,14 @@ int register_gesher_sensors(JNIEnv* env);  // sensors_jni.cc
 int register_gesher_camera_metadata(JNIEnv* env);  // camera_metadata_jni.cc
 int register_gesher_camera_frames(JNIEnv* env);  // camera_frames.cc
 int register_gesher_bluetooth(JNIEnv* env);  // bluetooth_jni.cc
+int register_gesher_captions(JNIEnv* env);  // caption_jni.cc
 
 int register_gesher_devices(JNIEnv* env) {
   register_gesher_sensors(env);
   register_gesher_camera_metadata(env);
   register_gesher_camera_frames(env);
   register_gesher_bluetooth(env);
+  register_gesher_captions(env);
   RegisterGesherNatives(env, "com/gesher/server/WindowsCamera", gWindowsCameraMethods,
                         NELEM(gWindowsCameraMethods));
   RegisterGesherNatives(env, "com/gesher/server/WindowsLocation", gWindowsLocationMethods,

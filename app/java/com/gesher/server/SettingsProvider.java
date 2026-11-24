@@ -183,6 +183,17 @@ final class SettingsProvider extends ContentProvider {
         synchronized (provider) { return provider.mTables.get(SECURE).get(name); }
     }
 
+    /**
+     * Sets (or, for null, removes) a Settings.Secure value from the system server: values
+     * that mirror a Windows setting (CaptioningBridge). Observers are notified.
+     */
+    static void putSecure(String name, String value) {
+        SettingsProvider p = sInstance;
+        if (p == null) return;
+        if (value == null) p.remove(SECURE, name);
+        else p.put(SECURE, name, value, false);
+    }
+
     /** Server-local numeric global setting, with the same malformed-value fallback as Settings. */
     static long globalLong(String name, long defaultValue) {
         SettingsProvider provider = sInstance;

@@ -51,6 +51,24 @@ Windows without them (no location service, no Media Foundation) gets clean
 - `ActivityManagerService.isIntentSenderTargetedToPackage` (as Android's): the
   client checks it before registering a PendingIntent.
 
+## Caption style (`CaptioningManager`)
+
+`android.view.accessibility.CaptioningManager` reads Settings.Secure keys
+(android-16.0.0_r4). `CaptioningBridge` keeps the style keys equal to Windows' caption
+style (Settings > Accessibility > Captions; `Windows.Media.ClosedCaptioning.ClosedCaptionProperties`,
+read by `compat/devices/caption_win.cc`), at start and on Windows' `PropertiesChanged`
+(where Windows has it) and WM_SETTINGCHANGE. The mapping (`CaptioningSettings`): named
+colors and opacities become ARGB (Windows' computed color when only the opacity is set),
+the edge effect an edge type (Uniform is an outline), the font style one of Settings'
+typeface names, the size a font scale (50 to 200 %). A Windows "Default" is an
+unspecified field of the custom style (`COLOR_UNSPECIFIED`, `EDGE_TYPE_UNSPECIFIED`), so a
+player keeps its own; all Default means no key, CaptioningManager's own default preset.
+Windows has no "show captions" or caption-language preference, so
+`ACCESSIBILITY_CAPTIONING_ENABLED` and `_LOCALE` keep Android's defaults. A changed key
+notifies its observers, which is how CaptioningManager's listeners hear of it.
+Tests: `tools/test_captioning_contracts.py`, `tests/captioning/caption_windows_test.cc`
+(windows-host-contracts) and `gesher.services.CaptioningWindowsTest` (track 95-browser.ps1).
+
 ## Sensors
 
 - Windows.Devices.Sensors' default accelerometer, gyrometer, magnetometer,

@@ -196,6 +196,19 @@ final class ContentProviders {
         mCallers = new CallerIdentity(pm, atm);
         mUriGrants = new UriGrants(pm, atm, this);
         mSettings = new SettingsProvider(pm, atm);
+        // CaptioningManager's Secure keys follow Windows' caption style (CaptioningBridge).
+        WindowsCaptions captions = WindowsCaptions.create();
+        if (captions != null) {
+            new CaptioningBridge(captions, new CaptioningBridge.Secure() {
+                @Override public String get(String key) {
+                    return SettingsProvider.secureString(key);
+                }
+
+                @Override public void set(String key, String value) {
+                    SettingsProvider.putSecure(key, value);
+                }
+            }).start();
+        }
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
         mCallLog = new CallLogProvider(this, mUriGrants);
         mContacts = new ContactsProvider(this, pm, atm, mUriGrants);
