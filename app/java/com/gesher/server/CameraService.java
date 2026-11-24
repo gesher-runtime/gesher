@@ -56,7 +56,9 @@ import java.util.Map;
  * transaction could carry. Camera ids are "0", "1"... in Windows' order.
  *
  * <p>Characteristics describe an EXTERNAL-level camera (as Android's USB cameras): fixed
- * focus, auto exposure and white balance only, outputs YUV_420_888, JPEG and PRIVATE at the
+ * focus, or for a camera whose driver really focuses automatically
+ * ({@link WindowsCamera.Device#autofocus}) the AF modes {@link CameraAutoFocus} runs; auto
+ * exposure and white balance only, outputs YUV_420_888, JPEG and PRIVATE at the
  * device's sizes (frames are scaled for other sizes). Opening needs a current CAMERA grant
  * for the actual application UID. No torch, no reprocessing, no offline sessions, no extensions.
  */
@@ -297,8 +299,7 @@ public final class CameraService extends ICameraService.Default {
         m.set(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, Range.create(0, 0));
         m.set(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, new Rational(1, 1));
         m.set(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE, false);
-        m.set(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES,
-                new int[] {CameraMetadata.CONTROL_AF_MODE_OFF});
+        m.set(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES, afModes(d));
         m.set(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES,
                 new int[] {CameraMetadata.CONTROL_AWB_MODE_AUTO});
         m.set(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE, false);
@@ -314,7 +315,12 @@ public final class CameraService extends ICameraService.Default {
         m.set(CameraCharacteristics.FLASH_INFO_AVAILABLE, false);
         m.set(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS, new float[] {3.5f});
         m.set(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES, new float[] {2.0f});
-        m.set(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE, 0f);
+        // 0: fixed focus. A focusing lens needs a nonzero nearest focus; Windows does not
+        // report one, and with UNCALIBRATED distances (below) the value is in unspecified
+        // units (Android: the largest focus position), so it marks a focusable lens and
+        // claims no distance (no LENS_FOCUS_DISTANCE is reported).
+        m.set(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE,
+                d.autofocus ? NOMINAL_MINIMUM_FOCUS_DIOPTERS : 0f);
         m.set(CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION,
                 CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED);
         m.set(CameraCharacteristics.JPEG_AVAILABLE_THUMBNAIL_SIZES,
@@ -337,6 +343,22 @@ public final class CameraService extends ICameraService.Default {
                         0)));
         m.set(CameraCharacteristics.REQUEST_AVAILABLE_SESSION_KEYS, new int[0]);
         return m;
+    }
+
+    /** The nominal nearest focus of a focusing PC camera (uncalibrated diopters). */
+    static final float NOMINAL_MINIMUM_FOCUS_DIOPTERS = 10f;
+
+    /**
+     * The AF modes: OFF alone for fixed focus; for real autofocus the modes
+     * {@link CameraAutoFocus} runs over the driver's focus. OFF is not offered then: it would
+     * mean manual focus by LENS_FOCUS_DISTANCE, which Windows' uncalibrated lens positions
+     * cannot honour.
+     */
+    static int[] afModes(WindowsCamera.Device d) {
+        if (!d.autofocus) return new int[] {CameraMetadata.CONTROL_AF_MODE_OFF};
+        return new int[] {CameraMetadata.CONTROL_AF_MODE_AUTO,
+                CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+                CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE};
     }
 
     /** CameraDevice.TEMPLATE_PREVIEW (ICameraDeviceUser's too). */
@@ -465,7 +487,15 @@ public final class CameraService extends ICameraService.Default {
         m.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range.create(15, 30));
         m.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                 CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE);
-        m.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
+        int afMode = CameraMetadata.CONTROL_AF_MODE_OFF;
+        if (d.autofocus) {
+            // As Android's cameras default: continuous focus, the video flavour for video.
+            afMode = intent == CameraMetadata.CONTROL_CAPTURE_INTENT_VIDEO_RECORD
+                    || intent == CameraMetadata.CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT
+                    ? CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+                    : CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+        }
+        m.set(CaptureRequest.CONTROL_AF_MODE, afMode);
         m.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE);
         m.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO);
         m.set(CaptureRequest.CONTROL_AWB_LOCK, false);

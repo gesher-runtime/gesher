@@ -431,6 +431,14 @@ public final class SurfaceParcelTest {
         require(wrong == 0, wrong + " of 2048 pixels differ from the producer's frame");
         require(timestamp >= before && timestamp <= after, "the frame's time stamp " + timestamp
                 + " is not the producer's (between " + before + " and " + after + ")");
+        // The reader keeps its own pool of frame buffers (AHardwareBuffers, one memfd
+        // each, reused frame after frame: compat/devices/camera_frames.cc), so its first
+        // frame may add one descriptor here. What the producer sent must add none: the
+        // count is taken again after that first frame, and must not grow with the next five.
+        int ownPool = memfds() - own;
+        require(ownPool >= 0 && ownPool <= 1, "the first frame left " + ownPool
+                + " descriptors here, not at most the reader's one pooled buffer");
+        own += ownPool;
         say("an ImageReader's Surface drawn by process " + attached.pid + ": 64x32, 0 pixels differ,"
                 + " the producer's time stamp");
 
@@ -476,6 +484,10 @@ public final class SurfaceParcelTest {
         require(drawn.is(64, 32), "the producer draws " + drawn + " into the SurfaceTexture");
         require(frames.tryAcquire(5, TimeUnit.SECONDS), "no onFrameAvailable for the producer's frame");
         reader.close();
+        // Closing the reader frees its pooled frame buffer: back to the count before it.
+        require(memfds() == own - ownPool, "closing the reader left " + (memfds() - (own - ownPool))
+                + " of its descriptors open: its pooled buffer was not freed");
+        say("closing the reader frees its pooled buffer's descriptor");
         say("a SurfaceTexture's Surface read into the producer's releases the earlier one; its frames"
                 + " reach the SurfaceTexture");
 

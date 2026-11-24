@@ -768,6 +768,12 @@ public final class AppShell {
         String packageName = "-";
         String what;
         try (IconApks inputs = IconApks.open(apk)) {
+            if (ApkPackage.PLATFORM_PACKAGE.equals(
+                    ApkPackage.declaredPackageName(new File(inputs.base)))) {
+                // framework-res.apk (Gesher's own, beside the runtime): the platform's
+                // resources, not an app; no app package may be "android".
+                throw new PlatformPackage();
+            }
             ApkPackage pkg = ApkPackage.parse(inputs.base);
             packageName = pkg.packageName;
             AppIcon icon = AppIcon.load(inputs.paths, pkg.applicationInfo(0),
@@ -782,6 +788,8 @@ public final class AppShell {
             } else {
                 what = packageName + ": no icon drawn (" + icon.source + ")";
             }
+        } catch (PlatformPackage p) {
+            what = "the Android platform's resources (package android), not an app";
         } catch (Throwable t) {
             what = "not read: " + t;
         }
@@ -807,6 +815,13 @@ public final class AppShell {
         }
         apkIconLog(windowsApk + ": " + what);
         return 0;
+    }
+
+    /** {@link #apkIcon}: the file is the platform package, recorded with Gesher's icon. */
+    private static final class PlatformPackage extends Exception {
+        PlatformPackage() {
+            super(null, null, false, false);
+        }
     }
 
     /** A line in {@code <logs>/apk-icons.log} (and on the output); never throws. */
