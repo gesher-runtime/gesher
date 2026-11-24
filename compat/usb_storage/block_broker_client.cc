@@ -133,7 +133,8 @@ DWORD BlockClient::Describe(ClientDiskInfo* info) {
   DWORD error = Exchange({kBlockProtocolVersion, BlockOperation::kDescribe, 0, 0, 0},
                          {}, buffer, &record);
   if (error != ERROR_SUCCESS) return error;
-  const char* text = reinterpret_cast<const char*>(buffer.data() + sizeof(record));
+  const auto payload = std::span{buffer}.subspan<sizeof(BlockDescription)>();
+  const char* text = reinterpret_cast<const char*>(payload.data());
   info->disk = record;
   info->model.assign(text, record.model_bytes);
   info->serial.assign(text + record.model_bytes, record.serial_bytes);

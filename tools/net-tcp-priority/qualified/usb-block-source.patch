@@ -475,7 +475,7 @@ index a3bc4dfdd..ad04b5572 100644
 +    return 0;
 +  }
 diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
-index 8e960fbb5..f81c448cb 100644
+index 8e960fbb5..a4d52af71 100644
 --- a/compat/posix/src/system_properties.cc
 +++ b/compat/posix/src/system_properties.cc
 @@ -26,0 +27,2 @@ constexpr DWORD kCapacity = 4 * 1024 * 1024;
@@ -487,18 +487,23 @@ index 8e960fbb5..f81c448cb 100644
 @@ -41 +43 @@ struct Header {
 -  uint32_t used;
 +  uint32_t used[2];
-@@ -42,0 +45 @@ struct Header {
-+constexpr DWORD kAreaSize = sizeof(Header) + 2 * kPayloadCapacity;
-@@ -61,0 +65 @@ struct Area {
+@@ -42,0 +45,6 @@ struct Header {
++struct AreaLayout {
++  Header header;
++  char banks[2][kPayloadCapacity];
++};
++static_assert(sizeof(AreaLayout) == sizeof(Header) + 2 * kPayloadCapacity);
++constexpr DWORD kAreaSize = sizeof(AreaLayout);
+@@ -61,0 +70 @@ struct Area {
 +  bool read_only = false;
-@@ -68,0 +73,6 @@ bool Valid(const std::string& name, const std::string& value);
+@@ -68,0 +78,6 @@ bool Valid(const std::string& name, const std::string& value);
 +bool InAppContainer() {
 +  DWORD contained = 0, size = 0;
 +  return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
 +                             &contained, sizeof(contained), &size) && contained != 0;
 +}
 +
-@@ -264,8 +274,22 @@ bool Refresh(Area* area) {
+@@ -264,8 +279,22 @@ bool Refresh(Area* area) {
 -  const auto* header = static_cast<Header*>(area->view);
 -  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
@@ -507,8 +512,8 @@ index 8e960fbb5..f81c448cb 100644
 -  if (!Decode(data, &area->values)) return false;
 -  area->cached_generation = generation;
 -  return true;
-+  const auto* header = static_cast<const Header*>(area->view);
-+  const char* banks = static_cast<const char*>(area->view) + sizeof(Header);
++  const auto* layout = static_cast<const AreaLayout*>(area->view);
++  const Header* header = &layout->header;
 +  // Writers serialize in the existing mutex. A read-only process reads the
 +  // published bank without being able to block a writer. A second publication
 +  // can reuse our bank, so verify the generation after copying it.
@@ -519,7 +524,7 @@ index 8e960fbb5..f81c448cb 100644
 +    const unsigned bank = generation & 1u;
 +    const uint32_t used = __atomic_load_n(&header->used[bank], __ATOMIC_RELAXED);
 +    if (used > kPayloadCapacity) return false;
-+    std::string data(banks + bank * kPayloadCapacity, used);
++    std::string data(layout->banks[bank], used);
 +    __atomic_thread_fence(__ATOMIC_ACQ_REL);
 +    if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
 +    if (!Decode(data, &area->values)) return false;
@@ -529,10 +534,9 @@ index 8e960fbb5..f81c448cb 100644
 +  // A writer can publish repeatedly while the reader is copying a snapshot.
 +  // Keep the last coherent values, and retry the new generation on next use.
 +  return area->cached_generation != 0;
-@@ -275 +299 @@ bool Publish(Area* area, Snapshot values) {
+@@ -275,10 +304,17 @@ bool Publish(Area* area, Snapshot values) {
 -  if (data.size() > kCapacity - sizeof(Header)) return false;
-+  if (data.size() > kPayloadCapacity) return false;
-@@ -277,8 +301,15 @@ bool Publish(Area* area, Snapshot values) {
+-  auto* header = static_cast<Header*>(area->view);
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
 -  if (!generation) generation = 1;
 -  std::memcpy(static_cast<char*>(area->view) + sizeof(Header), data.data(), data.size());
@@ -541,14 +545,16 @@ index 8e960fbb5..f81c448cb 100644
 -  header->used = static_cast<uint32_t>(data.size());
 -  // The unlocked fast path reads this field atomically. Publish it last,
 -  // without a whole-header store overlapping the independently read word.
++  if (data.size() > kPayloadCapacity) return false;
++  auto* layout = static_cast<AreaLayout*>(area->view);
++  Header* header = &layout->header;
 +  const uint32_t previous = __atomic_load_n(&header->generation, __ATOMIC_RELAXED);
 +  uint32_t generation = previous + 1;
 +  if (!generation) generation = 2;  // leave zero unused, and still switch banks
 +  const unsigned bank = generation & 1u;
 +  // Publish the previous generation before reusing its inactive bank.
 +  __atomic_thread_fence(__ATOMIC_SEQ_CST);
-+  std::memcpy(static_cast<char*>(area->view) + sizeof(Header) + bank * kPayloadCapacity,
-+              data.data(), data.size());
++  std::memcpy(layout->banks[bank], data.data(), data.size());
 +  __atomic_store_n(&header->used[bank], static_cast<uint32_t>(data.size()), __ATOMIC_RELAXED);
 +  // The first publication also commits the initialized header. A terminated
 +  // writer leaves the currently published bank intact.
@@ -556,22 +562,22 @@ index 8e960fbb5..f81c448cb 100644
 +    header->magic = kMagic;
 +    header->version = kVersion;
 +  }
-@@ -353,2 +384,3 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -353,2 +389,3 @@ Area* Current() { // LocalMutex is held by every caller.
 -  std::wstring path = dir + L"\\" + Key(session) + L".area";
 -  if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
 +  // The previous format has a single bank. Keep an older live process from
 +  // attaching to the new layout during a runtime upgrade.
 +  std::wstring path = dir + L"\\" + Key(session + L"/3") + L".area";
-@@ -356,0 +389 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -356,0 +394 @@ Area* Current() { // LocalMutex is held by every caller.
 +  area->read_only = InAppContainer();
-@@ -358 +391,5 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -358 +396,5 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +  if (!area->read_only) {
 +    if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
 +    area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +    if (!area->mutex.value) return nullptr;
 +  }
-@@ -360,3 +397,4 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -360,3 +402,4 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!lock.held) return nullptr;
 -  area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
 -                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
@@ -579,21 +585,21 @@ index 8e960fbb5..f81c448cb 100644
 +  area->file.value = CreateFileW(path.c_str(), area->read_only ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
 +                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
 +                                 area->read_only ? OPEN_EXISTING : OPEN_ALWAYS,
-@@ -365 +403,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -365 +408,2 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
 +  area->mapping.value = CreateFileMappingW(area->file.value, nullptr,
 +      area->read_only ? PAGE_READONLY : PAGE_READWRITE, 0, area->read_only ? 0 : kAreaSize, nullptr);
-@@ -367 +406,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -367 +411,2 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
 +  area->view = MapViewOfFile(area->mapping.value, area->read_only ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS,
 +                            0, 0, kAreaSize);
-@@ -370 +410 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -370 +415 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!header->magic) {
 +  if (!area->read_only && !__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) {
-@@ -381 +421 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -381 +426 @@ Area* Current() { // LocalMutex is held by every caller.
 -  RemoveOldAreas(dir, path);
 +  if (!result->read_only) RemoveOldAreas(dir, path);
-@@ -422,6 +462,2 @@ namespace {
+@@ -422,6 +467,2 @@ namespace {
 -// few properties (log.tag.*). Without the cross-process mutex, this reads only
 -// the header's 32-bit generation (one aligned load) and never the shared
 -// values: when it equals the generation this process last decoded under the
@@ -602,37 +608,37 @@ index 8e960fbb5..f81c448cb 100644
 -// different generation takes the mutex and decodes again.
 +// few properties (log.tag.*). Refresh uses the unlocked generation fast path
 +// and decodes a bank only when another process has published new values.
-@@ -432,3 +468,2 @@ Area* Refreshed() {
+@@ -432,3 +473,2 @@ Area* Refreshed() {
 -  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
 -    MutexLock lock(area->mutex.value);
 -    if (!lock.held || !Refresh(area)) return nullptr;
 +  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) == area->cached_generation) {
 +    return area;
-@@ -436 +471,2 @@ Area* Refreshed() {
+@@ -436 +476,2 @@ Area* Refreshed() {
 -  return area;
 +  MutexLock lock(area->mutex.value);
 +  return (area->read_only || lock.held) && Refresh(area) ? area : nullptr;
-@@ -470 +506 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -470 +511 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (!area) return false;
 +  if (!area || area->read_only) return false;
-@@ -479 +515 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -479 +520 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
 +  if (Encode(values).size() > kPayloadCapacity) return false;
-@@ -485,4 +521,2 @@ Snapshot List() {
+@@ -485,4 +526,2 @@ Snapshot List() {
 -  Area* area = Current();
 -  if (!area) return {};
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->values : Snapshot{};
 +  Area* area = Refreshed();
 +  return area ? area->values : Snapshot{};
-@@ -492,4 +526,2 @@ uint32_t AreaSerial() {
+@@ -492,4 +531,2 @@ uint32_t AreaSerial() {
 -  Area* area = Current();
 -  if (!area) return 0;
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->cached_generation : 0;
 +  Area* area = Refreshed();
 +  return area ? area->cached_generation : 0;
-@@ -523 +555 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+@@ -523 +560 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
 -      if (!lock.held || !Refresh(area)) return false;
 +      if ((!area->read_only && !lock.held) || !Refresh(area)) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc

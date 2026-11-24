@@ -42,7 +42,12 @@ struct Header {
   uint32_t generation;
   uint32_t used[2];
 };
-constexpr DWORD kAreaSize = sizeof(Header) + 2 * kPayloadCapacity;
+struct AreaLayout {
+  Header header;
+  char banks[2][kPayloadCapacity];
+};
+static_assert(sizeof(AreaLayout) == sizeof(Header) + 2 * kPayloadCapacity);
+constexpr DWORD kAreaSize = sizeof(AreaLayout);
 
 struct Handle {
   HANDLE value = nullptr;
@@ -271,8 +276,8 @@ Snapshot Initial() {
   return values;
 }
 bool Refresh(Area* area) {
-  const auto* header = static_cast<const Header*>(area->view);
-  const char* banks = static_cast<const char*>(area->view) + sizeof(Header);
+  const auto* layout = static_cast<const AreaLayout*>(area->view);
+  const Header* header = &layout->header;
   // Writers serialize in the existing mutex. A read-only process reads the
   // published bank without being able to block a writer. A second publication
   // can reuse our bank, so verify the generation after copying it.
@@ -283,7 +288,7 @@ bool Refresh(Area* area) {
     const unsigned bank = generation & 1u;
     const uint32_t used = __atomic_load_n(&header->used[bank], __ATOMIC_RELAXED);
     if (used > kPayloadCapacity) return false;
-    std::string data(banks + bank * kPayloadCapacity, used);
+    std::string data(layout->banks[bank], used);
     __atomic_thread_fence(__ATOMIC_ACQ_REL);
     if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
     if (!Decode(data, &area->values)) return false;
@@ -297,15 +302,15 @@ bool Refresh(Area* area) {
 bool Publish(Area* area, Snapshot values) {
   std::string data = Encode(values);
   if (data.size() > kPayloadCapacity) return false;
-  auto* header = static_cast<Header*>(area->view);
+  auto* layout = static_cast<AreaLayout*>(area->view);
+  Header* header = &layout->header;
   const uint32_t previous = __atomic_load_n(&header->generation, __ATOMIC_RELAXED);
   uint32_t generation = previous + 1;
   if (!generation) generation = 2;  // leave zero unused, and still switch banks
   const unsigned bank = generation & 1u;
   // Publish the previous generation before reusing its inactive bank.
   __atomic_thread_fence(__ATOMIC_SEQ_CST);
-  std::memcpy(static_cast<char*>(area->view) + sizeof(Header) + bank * kPayloadCapacity,
-              data.data(), data.size());
+  std::memcpy(layout->banks[bank], data.data(), data.size());
   __atomic_store_n(&header->used[bank], static_cast<uint32_t>(data.size()), __ATOMIC_RELAXED);
   // The first publication also commits the initialized header. A terminated
   // writer leaves the currently published bank intact.

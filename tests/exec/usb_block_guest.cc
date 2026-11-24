@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <span>
 #include <thread>
 
 #include "../../compat/usb_storage/block_broker.h"
@@ -57,7 +58,8 @@ bool Serve(const BlockChannel& channel) {
   BlockDescription description{8192, 4096, kBlockWritable | kBlockRemovable, 3, 0};
   std::array<std::byte, sizeof(description) + 3> bytes{};
   std::memcpy(bytes.data(), &description, sizeof(description));
-  std::memcpy(bytes.data() + sizeof(description), "USB", 3);
+  const auto model = std::span{bytes}.last<3>();
+  std::memcpy(model.data(), "USB", model.size());
   if (!Send(channel, bytes.data(), bytes.size())) return false;
 
   char payload[] = {'r', 'a', 'w'};

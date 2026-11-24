@@ -399,7 +399,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # is checked against historical main bytes; the socket ownership and poll
 # checks still compare live code.
 USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
-USB_BLOCK_TRANSITION_SHA256 = '177f70e257f8b0e0220702e795ba009f297a70fbcff91d61fcd1f483fce3d209'
+USB_BLOCK_TRANSITION_SHA256 = 'f79545565b89c3931d1551fa28dc8904c915ba33ee913c117db302d9635bbd8b'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

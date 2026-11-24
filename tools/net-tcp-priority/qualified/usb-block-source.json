@@ -14,7 +14,7 @@
     "compat/posix/src/ofd_internal.h": "8e6c686f7f42d05cb980724cfa600823576d48c46bca37b0054f29018f95ac9b",
     "compat/posix/src/procfs.cc": "09202bd750893e89684be559c2d380074f35ccbdec4a68627b02df1d1a9a6e56",
     "compat/posix/src/system.cc": "2dd756ed879890c5daf81fe7c70bc96ea52ab2c5530c5c6f6a8002b63626cdcb",
-    "compat/posix/src/system_properties.cc": "a5a8c29d17120b6bf1d5e7cb4db1c1d3120a339fcc0ce1bd77cd4a38f7a40866",
+    "compat/posix/src/system_properties.cc": "3116f20da153678da6c6fa228af20faf08eaf13bcfc06ced504a135062494aa2",
     "compat/posix/src/unistd.cc": "a1e8e136be67d4f3187ef369a2f1341ccc5a0ecb628d61f90af9e5b5429a018c",
     "compat/posix/src/unix_rights.cc": "d3c39bbc3d9ae6a9c4c443eb9e060e6eaa7697becbb968cb13b32f696891a0d5",
     "tests/art-temp/entry_test.cc": "d3333da142df37551d72996008734fd1293950c3f79cb80ecf6445a658f44ba3",
@@ -32,8 +32,8 @@
     "compat/posix/src/usb_block.cc": "2de236769f94f593b727a4d19b7fb4dea64c4fac00e743a18f760fde66321f3b",
     "compat/posix/src/usb_block_internal.h": "9ee0b45c7667985a90dcf110af5342bb926ef9676ce79b1c99bdfb7512ec5788",
     "compat/usb_storage/block_broker.h": "3d088db96f596d1874a908bff9f6f470a1122cd03e8dfd5c255def4b505cb872",
-    "compat/usb_storage/block_broker_client.cc": "60e61a05023f458e3bf9acaec814f6798fa1f8500d806fbd644c62e9b87d6fb5",
+    "compat/usb_storage/block_broker_client.cc": "db6c2b89601cce59650d74f54abc0b57260911b7306be677a516bbf440785bdf",
     "compat/usb_storage/block_broker_client.h": "be97fa633582846452caf40e752a4932e88ea7747d407ed43bfa6163b2c9bc89"
   },
-  "patch_sha256": "52704df8e02e3309ae2db2068588160035b566f0d3e72fc04088170cf75a5c18"
+  "patch_sha256": "fe81823a9cf93700c999b2e90da1bd9708bd50214099db439264ec246a2b2c22"
 }
