@@ -519,6 +519,18 @@ telemetry.
   `/system` path under `$ANDROID_ROOT` and adds it for apps targeting API 27
   or lower. Gmail's account setup died on NoClassDefFoundError for
   `BasicHttpParams` (`HttpLegacyTest`, track 94).
+- **android.test.base, android.test.mock, android.test.runner**
+  ([framework-build.md](framework-build.md#shared-libraries)): built from
+  frameworks/base/test-*, declared as platform.xml declares them, with
+  PackageBackwardCompatibility's implicit additions. GloryFit and system APKs
+  naming `android.test.runner` failed with INSTALL_FAILED_MISSING_SHARED_LIBRARY
+  (issue #426; `AndroidTestLibrariesTest`, track 94).
+- **Shared-library declarations read once** (`SharedLibraryRegistry`): kept as a
+  snapshot, with the graphs resolved from it, while the XML files and declared
+  jars keep their size and modification time, as SystemConfig reads them once at
+  boot. A bindService resolving a service's ApplicationInfo parsed every XML file
+  and hashed every jar, and the app's StrictMode reported the unbuffered reads
+  (`SharedLibrarySnapshotTest`, track 94).
 - **Real apps** ([e2e.md](e2e.md), ADR 0034; ci run 40077182991): stand-ins
   for `power`, `thermalservice`, `alarm`, `clipboard`, `appops`, `appwidget`
   and `search` (`DeviceServices.java`), a primary shared storage volume in

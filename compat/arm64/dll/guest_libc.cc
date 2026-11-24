@@ -421,7 +421,8 @@ const SyscallMap kSyscalls[] = {
     {85, "timerfd_create", 'i'}, {86, "timerfd_settime", 'i'}, {87, "timerfd_gettime", 'i'},
     {101, "nanosleep", 'i'},  {113, "clock_gettime", 'i'}, {114, "clock_getres", 'i'},
     {124, "sched_yield", 'i'}, {123, "sched_getaffinity", 'i'}, {129, "kill", 'i'},
-    {131, "tgkill", 'i'},     {132, "sigaltstack", 'i'}, {160, "uname", 'i'},
+    {130, "tkill", 'i'},      {131, "tgkill", 'i'},     {132, "sigaltstack", 'i'},
+    {160, "uname", 'i'},
     {163, "getrlimit", 'i'},
     {165, "getrusage", 'i'},  {167, "prctl", 'i'},       {169, "gettimeofday", 'i'},
     {172, "getpid", 'i'},     {173, "getppid", 'i'},     {174, "getuid", 'i'},
@@ -759,6 +760,7 @@ bool InitGuestLibc() {
   AddPointerVariadicFunction(Host("sscanf"), Host("vsscanf"), 2);
   AddPointerVariadicFunction(Host("fscanf"), Host("vfscanf"), 2);
   AddPointerVariadicFunction(Host("scanf"), Host("vscanf"), 1);
+  AddPointerVariadicFunction(Host("execl"), Host("__gesher_vexecl"), 2);
 
   for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
     std::string entry = std::string("__gesher_arm64_") + name;

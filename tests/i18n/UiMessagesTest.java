@@ -20,6 +20,15 @@ public class UiMessagesTest {
         equal("קובץ ההרחבה אינו קיים: C:\\שלום\\{1}.apk",
                 UiMessages.text("microg_missing", "he-IL", "C:\\שלום\\{1}.apk"));
         equal("proxy of name{1}: direct", UiMessages.text("proxy_launch", "en", "name{1}", "direct", ""));
+        String enNoAbi = UiMessages.text("install_no_matching_abis", "en", "app.apk", "armeabi-v7a");
+        equal(true, enNoAbi.contains("app.apk"));
+        equal(true, enNoAbi.contains("armeabi-v7a"));
+        equal(true, enNoAbi.contains("arm64-v8a"));
+        String heNoAbi = UiMessages.text("install_no_matching_abis", "he", "מוביט.apk", "armeabi-v7a");
+        equal(true, heNoAbi.contains("מוביט.apk"));
+        equal(true, heNoAbi.contains("armeabi-v7a"));
+        equal(true, heNoAbi.contains("arm64-v8a"));
+        equal(true, heNoAbi.contains("\u202aמוביט.apk\u202c"));
         try {
             UiMessages.text("unknown", "en");
             throw new AssertionError("Unknown keys must fail");

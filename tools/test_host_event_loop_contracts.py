@@ -71,6 +71,7 @@ def main():
     eventfd_state = between(epoll, eventfd_namespace, '\nnamespace {\n\nstruct Epoll;')
     pieces = {
         'epoll': {
+            '@VIRTUAL_OWNER@': '#define HAS_VIRTUAL_OWNER 1' if 'struct ObjectOwner {' in epoll else '',
             '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', 'class EpollWaiter {'),
             '@EPOLL_CONVERSION@': between(epoll, '// epoll\'s event bits below', '// Linux permits at most five'),
             '@EPOLL_WAIT@': between(epoll, 'static int EpollWaitImpl(', '\nint epoll_wait('),
@@ -86,11 +87,16 @@ def main():
         },
         'select': {'@SELECT_SOURCE@': re.sub(r'^#include[^\n]*\n', '', select, flags=re.M)},
         'scratch': {
+            '@VIRTUAL_OWNER@': '#define HAS_VIRTUAL_OWNER 1' if 'struct ObjectOwner {' in epoll else '',
             '@EVENTFD_STATE@': eventfd_state.removeprefix(eventfd_namespace),
             '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', '// fd -> object,'),
             '@EPOLL_CONVERSION@': between(epoll, '// epoll\'s event bits below', '// Linux permits at most five'),
-            '@POLL_EVENTFD@': between(epoll, 'short PollEventFd(', '\nbool IsNonBlocking('),
-            '@POLL_EPOLL@': between(epoll, 'bool PollEpoll(', '\nstd::shared_ptr<EventFd> LookupEventFd('),
+            '@POLL_EVENTFD@': between(epoll, 'short PollEventFd(',
+                '\nint SampleVirtualEntries(EpollPollScratch& scratch, bool prepare_wait) {'
+                if 'struct ObjectOwner {' in epoll else '\nbool IsNonBlocking('),
+            '@POLL_EPOLL@': between(epoll,
+                'bool PollEpollOwned(' if 'struct ObjectOwner {' in epoll else 'bool PollEpoll(',
+                '\nstd::shared_ptr<EventFd> LookupEventFd('),
             '@POLL_FDS@': between(fd, '// --- poll ', '\nextern "C" int poll('),
             '@EPOLL_WAIT@': between(epoll, 'static int EpollWaitImpl(', '\nint epoll_wait('),
             '@HAS_SCRATCH@': '#define HAS_POLL_SCRATCH 1' if 'PollScratchLease<FdPollScratch>' in fd else '',
@@ -151,8 +157,11 @@ def main():
     if args.case in (None, 'epoll'):
         # Complete eventfd producers and epoll state complement the declared
         # fairness adapter above, under the same maintained CI gate.
+        # Whole production registry/ctl/owners are exercised independently of
+        # the deliberately numeric descriptor boundaries in the older corpora.
         for script, case in [('test_epoll_eventfd_edges.py', 'eventfd-edge'),
-                             ('test_epoll_readonly_edges.py', 'readonly-edge')]:
+                             ('test_epoll_readonly_edges.py', 'readonly-edge'),
+                             ('test_epoll_virtual_owners.py', 'virtual-owner')]:
             command = [sys.executable, str(ROOT / 'tools' / script), '--cxx', args.cxx]
             if args.source_ref:
                 command += ['--source-ref', args.source_ref]

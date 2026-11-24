@@ -13,7 +13,9 @@ try {
 
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+. (Join-Path $here 'gesher-panel-view.ps1')
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
 $script:UpdateDirectory = Join-Path $root 'updates'
 
 # One Control Center. A second start (the Start menu again, or an app's "App info", which
@@ -31,8 +33,9 @@ $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
 $script:PanelInstanceCreated = $false
-$script:PanelInstance = [System.Threading.Mutex]::new($false, 'Local\Gesher.ControlPanel', [ref] $script:PanelInstanceCreated)
-$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, 'Local\Gesher.ControlPanel.Show')
+$panelName = Get-GesherControlPanelName $root
+$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
+$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
 if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
     $null = $script:PanelShowEvent.Set()
     exit 0
@@ -482,260 +485,7 @@ function Get-InstalledApps {
 }
 
 # Build WPF Window in XAML
-[xml]$xaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="$(Get-GesherText 'cp_title')"
-        Width="920" Height="820" MinWidth="800" MinHeight="600"
-        WindowStartupLocation="CenterScreen"
-        FlowDirection="$flowDirection"
-        FontFamily="Segoe UI, Tahoma, Arial"
-        Background="#F5F6F8"
-        AllowDrop="True">
-    <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="14,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#D0D5DD"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#344054"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F2F4F7"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#1570EF"/>
-            <Setter Property="BorderBrush" Value="#1570EF"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#175CD3"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#FFF1F3"/>
-            <Setter Property="BorderBrush" Value="#FDA29B"/>
-            <Setter Property="Foreground" Value="#B42318"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#FEE4E2"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </Window.Resources>
-    <ScrollViewer Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <!-- Bound the first measure too, before SizeChanged adjusts the viewport. -->
-    <Grid Name="PanelLayout" Margin="24" MinHeight="640" Height="640">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <!-- Header -->
-        <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20,16" Margin="0,0,0,16">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                    <TextBlock Text="$(Get-GesherText 'cp_title')" FontSize="20" FontWeight="Bold" Foreground="#101828"/>
-                    <TextBlock Text="$(Get-GesherText 'cp_subtitle')" FontSize="13" Foreground="#667085" Margin="0,4,0,0"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Name="DeviceIndicator" Width="12" Height="12" CornerRadius="6" Background="#98A2B3" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                    <TextBlock Name="DeviceStatusText" Text="$(Get-GesherText 'cp_device_stopped')" FontSize="13" FontWeight="SemiBold" Foreground="#344054" VerticalAlignment="Center" Margin="0,0,16,0"/>
-                    <Button Name="BtnToggleDevice" Content="$(Get-GesherText 'cp_btn_start')"/>
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <!-- Services Cards (Google Play & Aurora Store) -->
-        <Grid Name="ServicesCards" Grid.Row="1" Margin="0,0,0,16">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="16"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- Card 1: Google Play (microG) -->
-            <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18">
-                <StackPanel>
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="$(Get-GesherText 'cp_microg_title')" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
-                        <Border Grid.Column="1" Name="MicrogBadge" CornerRadius="12" Padding="8,2" Background="#F2F4F7">
-                            <TextBlock Name="MicrogBadgeText" Text="$(Get-GesherText 'cp_microg_disabled')" FontSize="11" FontWeight="SemiBold" Foreground="#475467"/>
-                        </Border>
-                    </Grid>
-                    <TextBlock Text="$(Get-GesherText 'cp_microg_desc')" TextWrapping="Wrap" FontSize="12" Foreground="#667085" Margin="0,0,0,16"/>
-                    <WrapPanel Orientation="Horizontal">
-                        <Button Name="BtnEnableMicrog" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_enable_microg')" Margin="0,0,8,8"/>
-                        <Button Name="BtnGoogleLogin" Content="$(Get-GesherText 'cp_btn_google_login')" Margin="0,0,8,8"/>
-                        <Button Name="BtnMicrogSettings" Content="$(Get-GesherText 'cp_btn_microg_settings')" Margin="0,0,8,8"/>
-                        <Button Name="BtnDisableMicrog" Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_disable_microg')" Margin="0,0,8,8"/>
-                    </WrapPanel>
-                </StackPanel>
-            </Border>
-
-            <!-- Card 2: App Store (Aurora Store) -->
-            <Border Grid.Column="2" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18">
-                <StackPanel>
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="$(Get-GesherText 'cp_store_title')" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
-                        <Border Grid.Column="1" Name="StoreBadge" CornerRadius="12" Padding="8,2" Background="#F2F4F7">
-                            <TextBlock Name="StoreBadgeText" Text="$(Get-GesherText 'cp_store_not_installed')" FontSize="11" FontWeight="SemiBold" Foreground="#475467"/>
-                        </Border>
-                    </Grid>
-                    <TextBlock Text="$(Get-GesherText 'cp_store_desc')" TextWrapping="Wrap" FontSize="12" Foreground="#667085" Margin="0,0,0,16"/>
-                    <WrapPanel Orientation="Horizontal">
-                        <Button Name="BtnInstallStore" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_install_store')" Margin="0,0,8,8"/>
-                        <Button Name="BtnOpenStore" Content="$(Get-GesherText 'cp_btn_open_store')" Margin="0,0,8,8"/>
-                    </WrapPanel>
-                </StackPanel>
-            </Border>
-        </Grid>
-
-        <!-- Runtime updates: network work never runs on the WPF dispatcher. -->
-        <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Margin="0,0,14,0">
-                    <TextBlock Text="$(Get-GesherText 'cp_update_title')" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
-                    <TextBlock Name="UpdateVersionText" FontSize="12" Foreground="#667085" Margin="0,4,0,0"/>
-                    <TextBlock Name="UpdateStatusText" TextWrapping="Wrap" FontSize="12" Foreground="#475467" Margin="0,5,0,0"/>
-                    <CheckBox Name="AutomaticUpdateChecks" Content="$(Get-GesherText 'cp_update_automatic')" ToolTip="$(Get-GesherText 'cp_update_automatic_hint')" FontSize="12" Foreground="#475467" Margin="0,9,0,0"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <WrapPanel HorizontalAlignment="Right" MaxWidth="330">
-                        <Button Name="BtnCheckUpdate" Content="$(Get-GesherText 'cp_update_check')" Margin="0,0,8,6"/>
-                        <Button Name="BtnInstallUpdate" Content="$(Get-GesherText 'cp_update_download_install')" Style="{StaticResource PrimaryButton}" Margin="0,0,0,6" Visibility="Collapsed"/>
-                        <Button Name="BtnCancelUpdate" Content="$(Get-GesherText 'cp_update_cancel')" Margin="0,0,0,6" Visibility="Collapsed"/>
-                        <Button Name="BtnReopenPanel" Content="$(Get-GesherText 'cp_update_reopen')" Style="{StaticResource PrimaryButton}" Margin="0,0,0,6" Visibility="Collapsed"/>
-                    </WrapPanel>
-                    <Button Name="BtnUpdateNotes" Content="$(Get-GesherText 'cp_update_notes')" HorizontalAlignment="Right" Padding="8,3" FontSize="12" BorderThickness="0" Foreground="#175CD3" Visibility="Collapsed"/>
-                    <ProgressBar Name="UpdateProgress" Height="4" IsIndeterminate="True" Margin="0,8,0,0" Visibility="Collapsed"/>
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <!-- Installed Applications Section -->
-        <Border Name="ApplicationsSection" Grid.Row="3" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <Grid Grid.Row="0" Margin="0,0,0,16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0">
-                        <TextBlock Text="$(Get-GesherText 'cp_apps_title')" FontSize="16" FontWeight="Bold" Foreground="#101828"/>
-                        <TextBlock Text="$(Get-GesherText 'cp_drag_drop_hint')" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Name="BtnProxyAll" Content="$(Get-GesherText 'cp_btn_proxy_all')" ToolTip="$(Get-GesherText 'cp_proxy_desc')" Margin="0,0,8,0"/>
-                        <Button Name="BtnInstallApk" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_install_apk')"/>
-                    </StackPanel>
-                </Grid>
-
-                    <ItemsControl Name="AppsList" Grid.Row="1"
-                                  ScrollViewer.CanContentScroll="True"
-                                  VirtualizingPanel.IsVirtualizing="True"
-                                  VirtualizingPanel.VirtualizationMode="Recycling"
-                                  VirtualizingPanel.ScrollUnit="Pixel">
-                        <ItemsControl.Template>
-                            <ControlTemplate TargetType="ItemsControl">
-                                <ScrollViewer Name="AppsViewport" CanContentScroll="True"
-                                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                    <ItemsPresenter Name="ItemsPresenter"/>
-                                </ScrollViewer>
-                            </ControlTemplate>
-                        </ItemsControl.Template>
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border BorderBrush="#F2F4F7" BorderThickness="0,0,0,1" Padding="12,10" Background="Transparent">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="48"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Image Grid.Column="0" Source="{Binding IconImage}" Width="36" Height="36" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,12,0">
-                                            <TextBlock Text="{Binding Label}" FontSize="14" FontWeight="SemiBold" Foreground="#101828"/>
-                                            <TextBlock Text="{Binding Package}" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
-                                            <TextBlock Text="{Binding ProxyText}" Visibility="{Binding ProxyVisibility}" FontSize="12" Foreground="#175CD3" Margin="0,2,0,0"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <CheckBox Content="$(Get-GesherText 'cp_separate_windows')" ToolTip="$(Get-GesherText 'cp_separate_windows_tip')" IsChecked="{Binding SeparateWindows, Mode=OneWay}" Tag="{Binding Package}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                            <Button Content="$(Get-GesherText 'cp_btn_proxy')" ToolTip="$(Get-GesherText 'cp_btn_proxy_tip')" Tag="{Binding Package}" Margin="0,0,8,0"/>
-                                            <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Visibility="{Binding LaunchVisibility}" Margin="0,0,8,0"/>
-                                            <Button Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_uninstall')" Tag="{Binding Package}"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-            </Grid>
-        </Border>
-
-        <!-- Status & Progress Footer -->
-        <Border Grid.Row="4" Margin="0,12,0,0">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Name="StatusMessage" Grid.Column="0" Text="$(Get-GesherText 'cp_status_ready')" FontSize="12" Foreground="#475467" VerticalAlignment="Center"/>
-                <ProgressBar Name="ActivityBar" Grid.Column="1" Width="140" Height="6" IsIndeterminate="False" Visibility="Hidden" VerticalAlignment="Center"/>
-            </Grid>
-        </Border>
-    </Grid>
-    </ScrollViewer>
-</Window>
-"@
-
-$reader = [System.Xml.XmlNodeReader]::new($xaml)
-$window = [System.Windows.Markup.XamlReader]::Load($reader)
+$window = New-PanelView 'dashboard' @{ PanelFlowDirection = [System.Windows.FlowDirection]$flowDirection }
 $window.MaxHeight = [System.Windows.SystemParameters]::WorkArea.Height
 $window.MinHeight = [Math]::Min($window.MinHeight, $window.MaxHeight)
 $window.Height = [Math]::Min($window.Height, $window.MaxHeight)
@@ -1379,108 +1129,8 @@ function Show-ModernConfirmDialog {
     $badgeFg = if ($IsDanger) { '#D92D20' } elseif ($IsWarning) { '#DC6803' } else { '#344054' }
     $btnStyle = if ($IsDanger) { 'DangerActionButton' } else { 'PrimaryButton' }
 
-    [xml]$dialogXaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="460" SizeToContent="Height"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False"
-        FlowDirection="$flowDirection"
-        FontFamily="Segoe UI, Tahoma, Arial"
-        Background="#FFFFFF">
-    <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#D0D5DD"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#344054"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F2F4F7"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#1570EF"/>
-            <Setter Property="BorderBrush" Value="#1570EF"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#175CD3"/>
-                    <Setter Property="BorderBrush" Value="#175CD3"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="DangerActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#D92D20"/>
-            <Setter Property="BorderBrush" Value="#D92D20"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#B42318"/>
-                    <Setter Property="BorderBrush" Value="#B42318"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </Window.Resources>
-    <Border Padding="22">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="20"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" Margin="0,0,0,14">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="14"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Border Name="IconContainer" Grid.Column="0" Width="44" Height="44" CornerRadius="10" Background="$badgeBg" VerticalAlignment="Top">
-                    <Image Name="AppIconImage" Width="32" Height="32" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
-                </Border>
-                <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                    <TextBlock Name="DialogTitle" FontSize="16" FontWeight="Bold" Foreground="#101828"/>
-                    <TextBlock Name="DialogSubTitle" FontSize="12" Foreground="#667085" Margin="0,2,0,0" Visibility="Collapsed"/>
-                </StackPanel>
-            </Grid>
-
-            <StackPanel Grid.Row="1">
-                <TextBlock Name="DialogMessage" FontSize="13" FontWeight="SemiBold" Foreground="#344054" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                <TextBlock Name="DialogDetail" FontSize="12" Foreground="#667085" TextWrapping="Wrap" Visibility="Collapsed"/>
-            </StackPanel>
-
-            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Name="BtnCancel" IsCancel="True" MinWidth="85"/>
-                <Border Width="10"/>
-                <Button Name="BtnConfirm" Style="{StaticResource $btnStyle}" IsDefault="True" MinWidth="85"/>
-            </StackPanel>
-        </Grid>
-    </Border>
-</Window>
-"@
-    $reader = [System.Xml.XmlNodeReader]::new($dialogXaml)
-    $dialog = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dialog = New-PanelView 'confirm' @{ PanelFlowDirection = [System.Windows.FlowDirection]$flowDirection; PanelBadgeBackground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($badgeBg) }
+    $dialog.Resources['PanelConfirmStyle'] = $dialog.Resources[$btnStyle]
     # Set literal strings after XAML loading: XML attributes normalize newlines
     # and tabs, and XAML can interpret a leading brace as a markup extension.
     $dialog.Title = $Title
@@ -1555,75 +1205,7 @@ function Show-ModernMessageDialog {
     $badgeBg = if ($IsError) { '#FEE4E2' } else { '#E0F2FE' }
     $badgeFg = if ($IsError) { '#D92D20' } else { '#0284C7' }
 
-    [xml]$dialogXaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="440" SizeToContent="Height"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False"
-        FlowDirection="$flowDirection"
-        FontFamily="Segoe UI, Tahoma, Arial"
-        Background="#FFFFFF">
-    <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#D0D5DD"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#344054"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F2F4F7"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </Window.Resources>
-    <Border Padding="22">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="20"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <Grid Grid.Row="0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="14"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Border Grid.Column="0" Width="40" Height="40" CornerRadius="20" Background="$badgeBg" VerticalAlignment="Top">
-                    <TextBlock Text="$(if ($IsError) { '!' } else { 'i' })" FontWeight="Bold" FontSize="18" Foreground="$badgeFg" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <ScrollViewer Name="DialogMessageScroll" Grid.Column="2" MaxHeight="400" VerticalScrollBarVisibility="Auto">
-                    <TextBlock Name="DialogMessage" FontSize="13" Foreground="#344054" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                </ScrollViewer>
-            </Grid>
-            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Name="BtnOk" IsDefault="True" IsCancel="True" MinWidth="85"/>
-            </StackPanel>
-        </Grid>
-    </Border>
-</Window>
-"@
-    $reader = [System.Xml.XmlNodeReader]::new($dialogXaml)
-    $dialog = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dialog = New-PanelView 'message' @{ PanelFlowDirection = [System.Windows.FlowDirection]$flowDirection; PanelBadgeBackground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($badgeBg); PanelBadgeForeground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($badgeFg); PanelMessageSymbol = $(if ($IsError) { '!' } else { 'i' }) }
     $dialog.Title = $Title
     $dialog.FindName('DialogMessage').Text = $Message
     $dialog.FindName('BtnOk').Content = Get-GesherText 'cp_dialog_ok'
@@ -1803,275 +1385,7 @@ $btnDisableMicrog.Add_Click({
     [void](Start-PanelAction 'Microg' @{ Enable = $false })
 })
 
-# Installs an APK through gesher-app.ps1; on failure throws the panel's message with the
-# reason com.gesher.app.Launcher wrote to GESHER_LAUNCH_ERROR_FILE (for example a
-# different signing key than the installed app's), not only "failed".
-function Install-PanelApk([string] $file, [string] $displayName) {
-    $errorFile = $null
-    try { $errorFile = [System.IO.Path]::GetTempFileName() } catch { }
-    $previous = $env:GESHER_LAUNCH_ERROR_FILE
-    if ($errorFile) { $env:GESHER_LAUNCH_ERROR_FILE = $errorFile }
-    else { Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue }
-    $reason = ''
-    try {
-        & (Join-Path $here 'gesher-app.ps1') install "$file"
-        $code = $LASTEXITCODE
-    } finally {
-        if ($null -eq $previous) { Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue }
-        else { $env:GESHER_LAUNCH_ERROR_FILE = $previous }
-        # Also when gesher-app.ps1 throws: the temporary file never stays behind.
-        if ($errorFile) {
-            try { $reason = [System.IO.File]::ReadAllText($errorFile, [System.Text.Encoding]::UTF8).Trim() } catch { }
-            Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
-        }
-    }
-    if ($code -ne 0) {
-        $message = Get-GesherText 'cp_install_failed' @($displayName)
-        if ($reason) { $message += "`n`n" + $reason }
-        throw $message
-    }
-}
-
-# One background owner runs profile mutations. Arguments are data and no WPF
-# objects enter its runspace. Existing helper scripts retain their own process
-# lifetimes; the panel never aborts a possibly committing install on close.
-function New-PanelActionWorker([string] $operation, $request) {
-    $powerShell = [PowerShell]::Create()
-    try {
-        $work = {
-            param($here, $operation, $request, $installDefinition, $language)
-            $ErrorActionPreference = 'Stop'
-            $ProgressPreference = 'SilentlyContinue'
-            # This process already has the panel's chosen display language.
-            # Reuse it without compiling a native language reader, and without
-            # changing GESHER_LOCALES (which also configures Android apps).
-            $env:GESHER_PANEL_UI_LANGUAGE = $language
-            # Includes nested microG staging helpers. Bound transport waits;
-            # committing an installation is deliberately never force-stopped.
-            $PSDefaultParameterValues = @{ 'Invoke-WebRequest:TimeoutSec' = 120 }
-            . (Join-Path $here 'gesher-ui.ps1')
-            $script:GesherUiLanguage = $language
-            # Trusted source from this panel, shared with the synchronous helper
-            # contracts. No path, label or package is interpolated into source.
-            . ([scriptblock]::Create("function Install-PanelApk {`n$installDefinition`n}"))
-            function Invoke-PanelApp([string[]] $arguments) {
-                $global:LASTEXITCODE = 0
-                & (Join-Path $here 'gesher-app.ps1') @arguments 6>$null | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw (Get-GesherText 'cp_action_failed' @($LASTEXITCODE)) }
-            }
-            $failures = [Collections.Generic.List[string]]::new()
-            try {
-                switch ($operation) {
-                    'Device' { Invoke-PanelApp @([string]$request.Command) }
-                    'Microg' {
-                        Invoke-PanelApp @('shutdown')
-                        $global:LASTEXITCODE = 0
-                        if ($request.Enable) {
-                            & (Join-Path $here 'gesher-app-microg.ps1') -AutoDownload 6>$null | Out-Null
-                        } else {
-                            & (Join-Path $here 'gesher-app-microg.ps1') -Disable 6>$null | Out-Null
-                        }
-                        if ($LASTEXITCODE -ne 0) { throw (Get-GesherText 'cp_action_failed' @($LASTEXITCODE)) }
-                        Invoke-PanelApp @('start')
-                    }
-                    'Install' {
-                        foreach ($file in $request.Files) {
-                            try {
-                                Install-PanelApk ([string]$file) ([IO.Path]::GetFileName([string]$file)) 6>$null | Out-Null
-                            } catch { $failures.Add($_.Exception.Message) }
-                        }
-                    }
-                    'Store' {
-                        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore-4.8.4.apk'
-                        if (-not (Test-Path -LiteralPath $storeApk)) {
-                            $temporary = [IO.Path]::GetTempFileName()
-                            try {
-                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
-                                Move-Item -LiteralPath $temporary -Destination $storeApk -Force
-                            } finally {
-                                if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-                            }
-                        }
-                        Install-PanelApk $storeApk 'Aurora Store' 6>$null | Out-Null
-                    }
-                    'Uninstall' {
-                        $global:LASTEXITCODE = 0
-                        & (Join-Path $here 'gesher-app.ps1') uninstall ([string]$request.Package) 6>$null | Out-Null
-                        if ($LASTEXITCODE -ne 0) { throw (Get-GesherText 'cp_uninstall_failed' @([string]$request.Label)) }
-                    }
-                    default { throw 'Unknown dashboard operation.' }
-                }
-            } catch { $failures.Add($_.Exception.Message) }
-            [PSCustomObject]@{ Errors = $failures.ToArray() }
-        }
-        $owner = {
-            param($body, $here, $operation, $request, $installDefinition, $language)
-            $ErrorActionPreference = 'Stop'
-            # ConsoleHost preserves the packaged helpers' native stderr semantics.
-            # A bare PowerShell API runspace turns even successful ART diagnostics
-            # into terminating errors under ErrorActionPreference=Stop.
-            # Declare Unicode Win32 entry points in memory. Runtime CodeDOM compilation
-            # uses ANSI-dependent native temporary-path code on some .NET Framework builds.
-            # Sequential value types keep pointer-size-dependent layout with the CLR marshaler.
-            function Initialize-PanelActionNative {
-                if ('Gesher.PanelActionNative' -as [type]) { return }
-                $name = [Reflection.AssemblyName]::new('Gesher.PanelActionNative')
-                if ($PSVersionTable.PSEdition -eq 'Core') {
-                    $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
-                } else {
-                    $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
-                }
-                $module=$assembly.DefineDynamicModule('Native')
-                function Define-Struct([string] $name, $fields) {
-                    $builder=$module.DefineType($name,[Reflection.TypeAttributes]'Public,Sealed,SequentialLayout',[ValueType])
-                    foreach($name in $fields.Keys) { $null=$builder.DefineField($name,$fields[$name],[Reflection.FieldAttributes]::Public) }
-                    $builder.CreateType()
-                }
-                $security=Define-Struct 'Gesher.PanelActionSecurity' ([ordered]@{Length=[int];Descriptor=[IntPtr];Inherit=[int]})
-                $startup=Define-Struct 'Gesher.PanelActionStartup' ([ordered]@{
-                    Size=[int];Reserved=[IntPtr];Desktop=[IntPtr];Title=[IntPtr]
-                    X=[int];Y=[int];Width=[int];Height=[int];CharsX=[int];CharsY=[int];Fill=[int];Flags=[int]
-                    Show=[int16];ReservedSize=[int16];ReservedBytes=[IntPtr];Input=[IntPtr];Output=[IntPtr];Error=[IntPtr]
-                })
-                $extended=Define-Struct 'Gesher.PanelActionExtendedStartup' ([ordered]@{Startup=$startup;Attributes=[IntPtr]})
-                $process=Define-Struct 'Gesher.PanelActionProcessInfo' ([ordered]@{Process=[IntPtr];Thread=[IntPtr];ProcessId=[uint32];ThreadId=[uint32]})
-                $builder=$module.DefineType('Gesher.PanelActionNative',[Reflection.TypeAttributes]'Public,Abstract,Sealed')
-                $lastError = $builder.DefineField('LastError', [int], [Reflection.FieldAttributes]'Public,Static')
-                $threadStatic = [Reflection.Emit.CustomAttributeBuilder]::new([ThreadStaticAttribute].GetConstructor(@()), [object[]]@())
-                $lastError.SetCustomAttribute($threadStatic)
-                $getLastError = [Runtime.InteropServices.Marshal].GetMethod('GetLastWin32Error')
-                $constructor=[Runtime.InteropServices.DllImportAttribute].GetConstructor(@([string]))
-                $fields=[Reflection.FieldInfo[]]@([Runtime.InteropServices.DllImportAttribute].GetField('CharSet'),[Runtime.InteropServices.DllImportAttribute].GetField('SetLastError'),[Runtime.InteropServices.DllImportAttribute].GetField('EntryPoint'))
-                foreach($signature in @(
-                    @{Name='CreateFileW';Return=[IntPtr];Parameters=[Type[]]@([string],[uint32],[uint32],$security.MakeByRefType(),[uint32],[uint32],[IntPtr])},
-                    @{Name='InitializeProcThreadAttributeList';Return=[bool];Parameters=[Type[]]@([IntPtr],[int],[uint32],[IntPtr].MakeByRefType())},
-                    @{Name='UpdateProcThreadAttribute';Return=[bool];Parameters=[Type[]]@([IntPtr],[uint32],[IntPtr],[IntPtr],[IntPtr],[IntPtr],[IntPtr])},
-                    @{Name='DeleteProcThreadAttributeList';Return=[void];Parameters=[Type[]]@([IntPtr])},
-                    @{Name='CreateProcessW';Return=[bool];Parameters=[Type[]]@([string],[Text.StringBuilder],[IntPtr],[IntPtr],[bool],[uint32],[IntPtr],[string],$extended.MakeByRefType(),$process.MakeByRefType())},
-                    @{Name='WaitForSingleObject';Return=[uint32];Parameters=[Type[]]@([IntPtr],[uint32])},
-                    @{Name='GetExitCodeProcess';Return=[bool];Parameters=[Type[]]@([IntPtr],[uint32].MakeByRefType())},
-                    @{Name='CloseHandle';Return=[bool];Parameters=[Type[]]@([IntPtr])}
-                )) {
-                    $values=[object[]]@([Runtime.InteropServices.CharSet]::Unicode,$true,$signature.Name)
-                    $attribute=[Reflection.Emit.CustomAttributeBuilder]::new($constructor,[object[]]@('kernel32.dll'),$fields,$values)
-                    $native=$builder.DefineMethod(('Native'+$signature.Name),[Reflection.MethodAttributes]'Private,Static,PinvokeImpl',$signature.Return,$signature.Parameters)
-                    $native.SetCustomAttribute($attribute)
-                    $native.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
-                    # PowerShell's binder can invoke other APIs before a later
-                    # GetLastWin32Error call. Preserve this call's error in managed
-                    # IL before crossing that boundary, isolated per native thread.
-                    $method=$builder.DefineMethod($signature.Name,[Reflection.MethodAttributes]'Public,Static',$signature.Return,$signature.Parameters)
-                    $il=$method.GetILGenerator()
-                    for($argument=0;$argument -lt $signature.Parameters.Count;$argument++) {
-                        $il.Emit([Reflection.Emit.OpCodes]::Ldarg,[int16]$argument)
-                    }
-                    $il.Emit([Reflection.Emit.OpCodes]::Call,$native)
-                    $result=$null
-                    if($signature.Return -ne [void]) {
-                        $result=$il.DeclareLocal($signature.Return)
-                        $il.Emit([Reflection.Emit.OpCodes]::Stloc,$result)
-                    }
-                    $il.Emit([Reflection.Emit.OpCodes]::Call,$getLastError)
-                    $il.Emit([Reflection.Emit.OpCodes]::Stsfld,$lastError)
-                    if($result) { $il.Emit([Reflection.Emit.OpCodes]::Ldloc,$result) }
-                    $il.Emit([Reflection.Emit.OpCodes]::Ret)
-                }
-                $null=$builder.CreateType()
-            }
-
-            function Invoke-PanelActionNative([string] $executable,[string] $entry,[string] $here) {
-                Initialize-PanelActionNative
-                $security=[Gesher.PanelActionSecurity]::new()
-                $security.Length=[Runtime.InteropServices.Marshal]::SizeOf([type][Gesher.PanelActionSecurity])
-                $security.Inherit=1
-                $inputHandle=[IntPtr]::Zero; $outputHandle=[IntPtr]::Zero; $attributes=[IntPtr]::Zero; $handles=[IntPtr]::Zero
-                $initialized=$false
-                $process=[Gesher.PanelActionProcessInfo]::new()
-                function Throw-NativeFailure {
-                    $errorCode=[Gesher.PanelActionNative]::LastError
-                    throw [ComponentModel.Win32Exception]::new($errorCode)
-                }
-                function Valid([IntPtr] $handle) { $handle -ne [IntPtr]::Zero -and $handle -ne [IntPtr]::new(-1) }
-                try {
-                    $inputHandle=[Gesher.PanelActionNative]::CreateFileW('NUL',2147483648,3,[ref]$security,3,0,[IntPtr]::Zero)
-                    if(-not (Valid $inputHandle)) { Throw-NativeFailure }
-                    $outputHandle=[Gesher.PanelActionNative]::CreateFileW('NUL',1073741824,3,[ref]$security,3,0,[IntPtr]::Zero)
-                    if(-not (Valid $outputHandle)) { Throw-NativeFailure }
-                    $size=[IntPtr]::Zero
-                    $null=[Gesher.PanelActionNative]::InitializeProcThreadAttributeList([IntPtr]::Zero,1,0,[ref]$size)
-                    if($size -eq [IntPtr]::Zero) { Throw-NativeFailure }
-                    $attributes=[Runtime.InteropServices.Marshal]::AllocHGlobal($size)
-                    if(-not [Gesher.PanelActionNative]::InitializeProcThreadAttributeList($attributes,1,0,[ref]$size)) { Throw-NativeFailure }
-                    $initialized=$true
-                    $handles=[Runtime.InteropServices.Marshal]::AllocHGlobal(2*[IntPtr]::Size)
-                    [Runtime.InteropServices.Marshal]::WriteIntPtr($handles,0,$inputHandle)
-                    [Runtime.InteropServices.Marshal]::WriteIntPtr($handles,[IntPtr]::Size,$outputHandle)
-                    if(-not [Gesher.PanelActionNative]::UpdateProcThreadAttribute($attributes,0,[IntPtr]::new(0x20002),$handles,[IntPtr]::new(2*[IntPtr]::Size),[IntPtr]::Zero,[IntPtr]::Zero)) { Throw-NativeFailure }
-                    $startup=[Gesher.PanelActionStartup]::new()
-                    $startup.Size=[Runtime.InteropServices.Marshal]::SizeOf([type][Gesher.PanelActionExtendedStartup])
-                    $startup.Flags=0x100; $startup.Input=$inputHandle; $startup.Output=$outputHandle; $startup.Error=$outputHandle
-                    $extended=[Gesher.PanelActionExtendedStartup]::new()
-                    $extended.Startup=$startup; $extended.Attributes=$attributes
-                    $command=[Text.StringBuilder]::new('"'+$executable+'" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$entry+'"')
-                    if(-not [Gesher.PanelActionNative]::CreateProcessW($executable,$command,[IntPtr]::Zero,[IntPtr]::Zero,$true,0x08080000,[IntPtr]::Zero,$here,[ref]$extended,[ref]$process)) { Throw-NativeFailure }
-                    $null=[Gesher.PanelActionNative]::CloseHandle($process.Thread); $process.Thread=[IntPtr]::Zero
-                    if([Gesher.PanelActionNative]::WaitForSingleObject($process.Process,[uint32]::MaxValue) -ne 0) { Throw-NativeFailure }
-                    $code=[uint32]0
-                    if(-not [Gesher.PanelActionNative]::GetExitCodeProcess($process.Process,[ref]$code)) { Throw-NativeFailure }
-                    return [int][BitConverter]::ToInt32([BitConverter]::GetBytes($code),0)
-                } finally {
-                    if(Valid $process.Thread) { $null=[Gesher.PanelActionNative]::CloseHandle($process.Thread) }
-                    if(Valid $process.Process) { $null=[Gesher.PanelActionNative]::CloseHandle($process.Process) }
-                    if($initialized) { [Gesher.PanelActionNative]::DeleteProcThreadAttributeList($attributes) }
-                    if($attributes -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($attributes) }
-                    if($handles -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($handles) }
-                    if(Valid $inputHandle) { $null=[Gesher.PanelActionNative]::CloseHandle($inputHandle) }
-                    if(Valid $outputHandle) { $null=[Gesher.PanelActionNative]::CloseHandle($outputHandle) }
-                }
-            }
-            $directory = Join-Path ([IO.Path]::GetTempPath()) ('gesher-panel-action-' + [guid]::NewGuid().ToString('N'))
-            $null = [IO.Directory]::CreateDirectory($directory)
-            $configuration = Join-Path $directory 'request.json'
-            $resultPath = Join-Path $directory 'result.json'
-            $entry = Join-Path $directory 'action.ps1'
-            try {
-                $data = @{ Body = $body; Here = $here; Operation = $operation; Request = $request
-                    InstallDefinition = $installDefinition; Language = $language }
-                [IO.File]::WriteAllText($configuration, ($data | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($true))
-                $hostScript = @'
-$ErrorActionPreference = 'Stop'
-$resultPath = Join-Path $PSScriptRoot 'result.json'
-try {
-    $config = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'request.json')) | ConvertFrom-Json
-    $result = & ([scriptblock]::Create($config.Body)) $config.Here $config.Operation $config.Request $config.InstallDefinition $config.Language
-    [IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($true))
-} catch {
-    [IO.File]::WriteAllText($resultPath, ([PSCustomObject]@{ Errors = @($_.Exception.Message) } | ConvertTo-Json), [Text.UTF8Encoding]::new($true))
-    exit 1
-}
-'@
-                [IO.File]::WriteAllText($entry, $hostScript, [Text.UTF8Encoding]::new($true))
-                $executable = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
-                $exitCode = (Invoke-PanelActionNative $executable $entry $here)
-                if (-not [IO.File]::Exists($resultPath)) { throw "Dashboard operation exited without a result (exit code $exitCode)." }
-                [IO.File]::ReadAllText($resultPath) | ConvertFrom-Json
-            } finally {
-                # Only this owner's three known files and empty directory are
-                # removed, after its native process has exited. No recursive delete.
-                foreach ($path in $entry, $configuration, $resultPath) { [IO.File]::Delete($path) }
-                [IO.Directory]::Delete($directory, $false)
-            }
-        }
-        $null = $powerShell.AddScript($owner.ToString()).AddArgument($work.ToString()).AddArgument($here).AddArgument($operation).
-            AddArgument($request).AddArgument((Get-Command Install-PanelApk).Definition).AddArgument($script:GesherUiLanguage)
-        $handle = $powerShell.BeginInvoke()
-        return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $handle; Disposed = $false }
-    } catch {
-        $powerShell.Dispose()
-        throw
-    }
-}
+. (Join-Path $here 'gesher-panel-actions.ps1')
 
 function Start-PanelAction([string] $operation, $request, [string] $message = '') {
     $state = $script:ActionState
@@ -2144,7 +1458,7 @@ $btnOpenStore.Add_Click({
 $btnInstallApk.Add_Click({
     if ($script:IsBusy) { return }
     $ofd = [Microsoft.Win32.OpenFileDialog]::new()
-    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk)|*.apk;*.apks;*.xapk|All Files (*.*)|*.*"
+    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk;*.apkm;*.apk+)|*.apk;*.apks;*.xapk;*.apkm;*.apk+|All Files (*.*)|*.*"
     if ($ofd.ShowDialog() -eq $true) {
         $file = $ofd.FileName
         $fileName = [System.IO.Path]::GetFileName($file)
@@ -2158,7 +1472,7 @@ $window.Add_Drop({
     if ($script:IsBusy) { return }
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
-        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk' })
+        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk', '.apkm', '.apk+' })
         if ($packages.Count) {
             [void](Start-PanelAction 'Install' @{ Files = $packages } (Get-GesherText 'cp_installing' @([IO.Path]::GetFileName($packages[0]))))
         }
@@ -2296,6 +1610,22 @@ $script:OnAppProxy = {
 $btnProxyAll.Add_Click({
     if ($script:IsBusy) { return }
     if (Show-ProxyDialog) { $statusMessage.Text = Get-GesherText 'cp_proxy_saved' }
+})
+
+# The profile's logs folder (gesher-app.ps1 writes it; a portable install keeps its profile
+# beside the runtime), opened in File Explorer. Created first so a new install opens it too.
+function Open-PanelLogsFolder([string] $logs) {
+    [void][IO.Directory]::CreateDirectory($logs)
+    Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('"' + $logs + '"')
+}
+
+$btnOpenLogs = $window.FindName('BtnOpenLogs')
+$btnOpenLogs.ToolTip = Join-Path $root 'logs'
+$btnOpenLogs.Add_Click({
+    try { Open-PanelLogsFolder (Join-Path $root 'logs') }
+    catch {
+        Show-ModernMessageDialog -Title (Get-GesherText 'cp_title') -Message (Get-GesherText 'cp_open_logs_failed' @($_.Exception.Message)) -IsError $true
+    }
 })
 
 # Attach click events through visual tree dispatcher
