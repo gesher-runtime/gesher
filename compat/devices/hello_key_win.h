@@ -8,6 +8,7 @@
 #pragma once
 
 #include <windows.h>
+#include <unknwn.h>
 #include <stdint.h>
 
 #include <vector>
