@@ -3,6 +3,7 @@
 
 #include <gesher/usb_block.h>
 #include <fcntl.h>
+#include <linux/fs.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -53,6 +54,14 @@ int VerifyGuestDisk(BlockChannel& channel, const BlockGuestHandles& handles, Hos
 
   const GuestFd fd{open(kGuestDisk, O_RDONLY)};
   if (fd.value < 0) return GuestError("Open guest disk");
+  int readonly = -1;
+  if (ioctl(fd.value, BLKROGET, &readonly) < 0) {
+    return GuestError("Get guest disk read-only state");
+  }
+  if (readonly != 1) {
+    std::fputs("Expected BLKROGET to report a read-only guest disk\n", stderr);
+    return 1;
+  }
   uint64_t bytes = 0;
   int sector_bytes = 0;
   if (ioctl(fd.value, kGetBytes, &bytes) < 0 ||

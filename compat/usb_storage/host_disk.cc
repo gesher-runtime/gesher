@@ -250,9 +250,9 @@ DWORD HostDisk::Open(const std::wstring& path, Access access,
   selected->track_media_ = status == ERROR_SUCCESS;
   status = Geometry(selected->handle_, &selected->info_);
   if (status != ERROR_SUCCESS) return status;
-  status = selected->CheckMedia();
-  if (status != ERROR_SUCCESS) return status;
   selected->info_.writable = writable;
+  status = selected->Validate();
+  if (status != ERROR_SUCCESS) return status;
   *disk = std::move(selected);
   return ERROR_SUCCESS;
 }
@@ -264,8 +264,12 @@ HostDisk::~HostDisk() {
 
 DWORD HostDisk::Validate() {
   std::lock_guard lock(mutex_);
-  if (disconnected_) return ERROR_MEDIA_CHANGED;
-  if (track_media_) return CheckMedia();
+  const DWORD media = CheckMedia();
+  if (media != ERROR_SUCCESS) return media;
+  // The effective write grant must still match the pinned host session when its
+  // description is published. A lost offline or writable state is an error.
+  if (info_.writable) return VerifyOfflineWritable(handle_);
+  if (track_media_) return ERROR_SUCCESS;
   // A fixed USB disk may not supply a change sequence. It cannot swap media,
   // but a failed live status query still retires this handle permanently.
   const DWORD status = DescribeUsb(handle_, nullptr);
