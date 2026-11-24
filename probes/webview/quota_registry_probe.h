@@ -92,6 +92,38 @@ inline bool InventoryMatches(const std::vector<Bucket>& buckets,
   return true;
 }
 
+inline std::wstring NodeId(const Json* value) {
+  if (!value || value->kind != L'#' || value->text.empty() || value->text.size() > 10) return {};
+  uint64_t number = 0;
+  for (wchar_t c : value->text) {
+    if (c < L'0' || c > L'9') return {};
+    number = number * 10 + (c - L'0');
+  }
+  return number > 0 && number <= INT32_MAX ? value->text : std::wstring();
+}
+
+inline bool FrameOwnerId(const Json& result, const std::wstring& expected_node,
+                         const std::wstring& expected_url, std::wstring* frame_id) {
+  const Json* node = result.Get(L"node", L'{');
+  const Json* name = node ? node->Get(L"nodeName", L'"') : nullptr;
+  const Json* type = node ? node->Get(L"nodeType", L'#') : nullptr;
+  const Json* frame = node ? node->Get(L"frameId", L'"') : nullptr;
+  const Json* attrs = node ? node->Get(L"attributes", L'[') : nullptr;
+  if (!node || NodeId(node->Get(L"nodeId", L'#')) != expected_node || expected_node.empty() ||
+      !name || name->text != L"IFRAME" || !type || type->text != L"1" ||
+      !frame || frame->text.empty() || frame->text.size() > 128 ||
+      !attrs || attrs->items.size() > 64 || attrs->items.size() % 2 != 0) return false;
+  std::map<std::wstring, std::wstring> attributes;
+  for (size_t i = 0; i < attrs->items.size(); i += 2) {
+    const Json& key = attrs->items[i]; const Json& value = attrs->items[i + 1];
+    if (key.kind != L'"' || value.kind != L'"' ||
+        !attributes.emplace(key.text, value.text).second) return false;
+  }
+  if (attributes[L"id"] != L"quota-child" || attributes[L"src"] != expected_url) return false;
+  *frame_id = frame->text;
+  return true;
+}
+
 struct State {
   Com<ICoreWebView2Environment> environment;
   Com<ICoreWebView2Controller> controller;
@@ -398,14 +430,38 @@ inline void FindFrames(const Json& tree, const std::wstring& url, std::vector<st
   if (children) for (const auto& child : children->items) FindFrames(child, url, ids);
 }
 
-inline bool CaptureKey(const std::shared_ptr<State>& state, Observation* item) {
-  Json frames, key;
-  if (!Call(state, L"Page.getFrameTree", L"{}", &frames)) return false;
-  const Json* tree = frames.Get(L"frameTree", L'{');
-  std::vector<std::wstring> ids;
-  if (tree) FindFrames(*tree, item->origin + L"/storage.html", &ids);
-  if (ids.size() != 1) return state->Fail(L"expected exactly one real frame for " + item->label);
-  if (!Call(state, L"Storage.getStorageKeyForFrame", L"{\"frameId\":" + Quote(ids[0]) + L"}", &key)) return false;
+inline bool CaptureKey(const std::shared_ptr<State>& state, Observation* item, bool frame = false) {
+  Json key;
+  std::wstring frame_id;
+  if (frame) {
+    // Page.getFrameTree is renderer-scoped and can omit an out-of-process
+    // child. Its iframe owner remains in the parent DOM and carries the real
+    // child frame token, including for OOPIFs; never synthesize a storage key.
+    Json document, selected, described;
+    if (!Call(state, L"DOM.getDocument", L"{\"depth\":0}", &document)) return false;
+    const Json* root = document.Get(L"root", L'{');
+    const std::wstring root_id = NodeId(root ? root->Get(L"nodeId", L'#') : nullptr);
+    if (root_id.empty()) return state->Fail(L"missing actual DOM document for " + item->label);
+    if (!Call(state, L"DOM.querySelectorAll", L"{\"nodeId\":" + root_id +
+        L",\"selector\":\"iframe#quota-child\"}", &selected)) return false;
+    const Json* owners = selected.Get(L"nodeIds", L'[');
+    if (!owners || owners->items.size() != 1) return state->Fail(L"expected exactly one actual iframe owner for " + item->label);
+    const std::wstring node_id = NodeId(&owners->items[0]);
+    if (node_id.empty()) return state->Fail(L"missing actual iframe owner for " + item->label);
+    if (!Call(state, L"DOM.describeNode", L"{\"nodeId\":" + node_id + L",\"depth\":0}", &described)) return false;
+    if (!FrameOwnerId(described, node_id, item->origin + L"/storage.html", &frame_id)) {
+      return state->Fail(L"invalid actual iframe owner for " + item->label);
+    }
+  } else {
+    Json frames;
+    if (!Call(state, L"Page.getFrameTree", L"{}", &frames)) return false;
+    const Json* tree = frames.Get(L"frameTree", L'{');
+    std::vector<std::wstring> ids;
+    if (tree) FindFrames(*tree, item->origin + L"/storage.html", &ids);
+    if (ids.size() != 1) return state->Fail(L"expected exactly one real frame for " + item->label);
+    frame_id = ids[0];
+  }
+  if (!Call(state, L"Storage.getStorageKeyForFrame", L"{\"frameId\":" + Quote(frame_id) + L"}", &key)) return false;
   const Json* result = key.Get(L"storageKey", L'"');
   if (!result || result->text.empty() || result->text.size() > 4096) return state->Fail(L"missing actual storage key");
   item->key = result->text;
@@ -502,7 +558,7 @@ inline int Run(HWND parent) {
   do {
     if (!Start(seed, parent, profile, {a, b, c}) || !Navigate(seed, a + L"/storage.html") ||
         !Content(seed, first, L"write", false) || !CaptureKey(seed, &first) ||
-        !Content(seed, embedded_a, L"write", true) || !CaptureKey(seed, &embedded_a)) break;
+        !Content(seed, embedded_a, L"write", true) || !CaptureKey(seed, &embedded_a, true)) break;
     // No registry API ran in the writer environment. Observe full process exit,
     // then discover persisted entries before any fixture origin is revisited.
     if (!seed->Close(std::min(end, GetTickCount64() + 20000))) break;
@@ -514,8 +570,8 @@ inline int Run(HWND parent) {
     if (inspect->served != 0) { inspect->Fail(L"persisted inventory revisited an origin before discovery"); break; }
     Log(L"PASS", L"persisted discovery after browser exit without revisiting fixture origins");
     if (!Navigate(inspect, b + L"/storage.html") || !Content(inspect, live, L"write", false) || !CaptureKey(inspect, &live) ||
-        !Content(inspect, embedded_b, L"write", true) || !CaptureKey(inspect, &embedded_b) ||
-        !Content(inspect, a_under_b, L"write", true) || !CaptureKey(inspect, &a_under_b)) break;
+        !Content(inspect, embedded_b, L"write", true) || !CaptureKey(inspect, &embedded_b, true) ||
+        !Content(inspect, a_under_b, L"write", true) || !CaptureKey(inspect, &a_under_b, true)) break;
     if (embedded_a.key == embedded_b.key || first.key == a_under_b.key) {
       inspect->Unavailable(L"runtime did not expose distinct first-/third-party storage keys"); break;
     }

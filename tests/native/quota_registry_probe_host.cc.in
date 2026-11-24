@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <string_view>
@@ -12,6 +13,24 @@
 
 @JSON_READER@
 @INVENTORY@
+
+// Exact CaptureKey runs against explicitly isolated CDP response adapters.
+// This checks request identity/ordering, not actual DOM or browser support.
+struct State {
+  std::map<std::wstring, std::wstring> replies;
+  std::vector<std::pair<std::wstring, std::wstring>> calls;
+  bool failed = false;
+  bool Fail(const std::wstring&) { failed = true; return false; }
+};
+inline bool Call(const std::shared_ptr<State>& state, const wchar_t* method,
+                 const std::wstring& params, Json* result) {
+  state->calls.emplace_back(method, params);
+  auto reply = state->replies.find(method);
+  return reply != state->replies.end() && JsonReader(reply->second).Read(result);
+}
+inline void Log(const wchar_t*, const std::wstring&) { }
+
+@CAPTURE@
 
 int main() {
   unsigned checks = 0, failures = 0;
@@ -65,6 +84,65 @@ int main() {
   check(!parse(LR"({"entries":[{"storageKey":"https://a.test/","bucketId":"1","name":"_default","usage":"1"},{"storageKey":"https://b.test/","bucketId":"1","name":"_default","usage":"1"}]})"), "duplicate bucket identity rejected");
   check(!parse(LR"({"entries":[],"entries":[]})"), "duplicate JSON member rejected");
   check(!parse(std::wstring(kMaxJson + 1, L' ')), "overlong JSON rejected");
+
+  const std::wstring child = L"11223344556677889900AABBCCDDEEFF";
+  const std::wstring owner = LR"({"node":{"nodeId":7,"nodeType":1,"nodeName":"IFRAME","frameId":"11223344556677889900AABBCCDDEEFF","attributes":["id","quota-child","src","https://c.test/storage.html"]}})";
+  auto replace = [](std::wstring text, const std::wstring& before, const std::wstring& after) {
+    const size_t at = text.find(before);
+    if (at != std::wstring::npos) text.replace(at, before.size(), after);
+    return text;
+  };
+  auto ownerAccepted = [](const std::wstring& text) {
+    Json value; std::wstring id;
+    return JsonReader(text).Read(&value) && FrameOwnerId(value, L"7", L"https://c.test/storage.html", &id);
+  };
+  check(ownerAccepted(owner), "actual iframe owner metadata accepted");
+  check(!ownerAccepted(replace(owner, L"\"nodeId\":7", L"\"nodeId\":8")), "different DOM owner rejected");
+  check(!ownerAccepted(replace(owner, L"IFRAME", L"DIV")), "non-iframe owner rejected");
+  check(!ownerAccepted(replace(owner, L"\"nodeType\":1", L"\"nodeType\":9")), "non-element owner rejected");
+  check(!ownerAccepted(replace(owner, L"quota-child", L"unrelated")), "wrong fixture id rejected");
+  check(!ownerAccepted(replace(owner, L"https://c.test/storage.html", L"https://other.test/storage.html")), "wrong iframe origin rejected");
+  check(!ownerAccepted(replace(owner, L"storage.html", L"other.html")), "wrong iframe path rejected");
+  check(!ownerAccepted(replace(owner, child, L"")), "missing child frame token rejected");
+  check(!ownerAccepted(replace(owner, child, std::wstring(129, L'x'))), "overlong child frame token rejected");
+  check(!ownerAccepted(replace(owner, L"\"id\",\"quota-child\",", L"\"id\",\"quota-child\",\"id\",\"quota-child\",")), "duplicate owner attributes rejected");
+  check(!ownerAccepted(replace(owner, L"\"id\",\"quota-child\",", L"\"id\",")), "odd owner attributes rejected");
+  for (const auto& text : {L"0", L"-1", L"1.0", L"1e2", L"2147483648", L"\"7\""}) {
+    Json value;
+    check(JsonReader(text).Read(&value) && NodeId(&value).empty(), "invalid DOM node id rejected");
+  }
+  auto fixture = [&] {
+    auto state = std::make_shared<State>();
+    // The actual failure shape: parent renderer tree has no childFrames even
+    // after the cross-site child has committed its storage operation.
+    state->replies[L"Page.getFrameTree"] = LR"({"frameTree":{"frame":{"id":"PARENT","url":"https://a.test/storage.html"}}})";
+    state->replies[L"DOM.getDocument"] = LR"({"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}})";
+    state->replies[L"DOM.querySelectorAll"] = LR"({"nodeIds":[7]})";
+    state->replies[L"DOM.describeNode"] = owner;
+    state->replies[L"Storage.getStorageKeyForFrame"] = LR"({"storageKey":"https://c.test/^0https://a.test"})";
+    return state;
+  };
+  auto embedded = fixture(); Observation observed = ca; observed.key.clear();
+  check(CaptureKey(embedded, &observed, true) && !embedded->failed && observed.key == ca.key,
+      "OOPIF owner resolves real child key");
+  const std::vector<std::pair<std::wstring, std::wstring>> expected_calls{
+    {L"DOM.getDocument", L"{\"depth\":0}"},
+    {L"DOM.querySelectorAll", L"{\"nodeId\":1,\"selector\":\"iframe#quota-child\"}"},
+    {L"DOM.describeNode", L"{\"nodeId\":7,\"depth\":0}"},
+    {L"Storage.getStorageKeyForFrame", L"{\"frameId\":\"" + child + L"\"}"}};
+  check(embedded->calls == expected_calls, "observed DOM identities reach exact storage-key query");
+  auto first_party = fixture(); observed = a; observed.key.clear();
+  first_party->replies[L"Storage.getStorageKeyForFrame"] = LR"({"storageKey":"https://a.test/"})";
+  check(CaptureKey(first_party, &observed) && observed.key == a.key && first_party->calls.size() == 2 &&
+      first_party->calls[0].first == L"Page.getFrameTree", "original first-party capture retained");
+  for (const auto& response : {LR"({"nodeIds":[]})", LR"({"nodeIds":[7,8]})", LR"({"nodeIds":[0]})"}) {
+    auto bad = fixture(); bad->replies[L"DOM.querySelectorAll"] = response; observed = ca; observed.key.clear();
+    check(!CaptureKey(bad, &observed, true) && observed.key.empty(), "missing or ambiguous iframe owner rejected");
+  }
+  auto stale = fixture(); stale->replies[L"DOM.describeNode"] = replace(owner, L"https://c.test/", L"https://wrong.test/");
+  observed = ca; observed.key.clear();
+  check(!CaptureKey(stale, &observed, true) && observed.key.empty() && stale->calls.size() == 3,
+      "wrong-origin owner cannot reach storage-key query");
   std::cout << "Quota registry evidence gates: " << checks << " checks, " << failures << " failures\n";
   return failures ? 1 : 0;
 }
