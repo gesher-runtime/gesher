@@ -85,6 +85,16 @@ Source: "{#BuildDir}\org.apache.http.legacy.jar"; DestDir: "{app}"; Flags: ignor
 Source: "etc\permissions\org.apache.http.legacy.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\com.android.location.provider.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "etc\permissions\com.android.location.provider.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+; Android's android.test.base, android.test.mock and android.test.runner shared
+; libraries (frameworks/base/test-*; JUnit 3 under the CPL, JUNIT-CPL-NOTICES.txt),
+; with their declarations: gesher-app.ps1 installs them under $ANDROID_ROOT.
+Source: "{#BuildDir}\android.test.base.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\android.test.base.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "{#BuildDir}\android.test.mock.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\android.test.mock.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "{#BuildDir}\android.test.runner.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\android.test.runner.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "licenses\JUNIT-CPL-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "etc\permissions\privapp-permissions-microg.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion

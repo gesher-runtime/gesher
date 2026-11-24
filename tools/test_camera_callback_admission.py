@@ -40,11 +40,12 @@ STUBS = {
  final int id; final long last; public SubmitInfo(int id,long last){this.id=id;this.last=last;}
  public int getRequestId(){return id;} public long getLastFrameNumber(){return last;} }''',
 'android/hardware/camera2/CameraMetadata.java': '''package android.hardware.camera2; public class CameraMetadata {
- public static final int CONTROL_AE_STATE_CONVERGED=2,CONTROL_AF_STATE_INACTIVE=0,CONTROL_AWB_STATE_CONVERGED=2,FLASH_STATE_UNAVAILABLE=0,LENS_STATE_STATIONARY=0; }''',
+ public static final int CONTROL_AE_STATE_CONVERGED=2,CONTROL_AF_STATE_INACTIVE=0,CONTROL_AWB_STATE_CONVERGED=2,FLASH_STATE_UNAVAILABLE=0,LENS_STATE_STATIONARY=0,
+ LENS_STATE_MOVING=1,CONTROL_AF_MODE_OFF=0,CONTROL_AF_TRIGGER_IDLE=0; }''',
 'android/hardware/camera2/CaptureResult.java': '''package android.hardware.camera2; public class CaptureResult {
  public static final Object SENSOR_TIMESTAMP=new Object(),SENSOR_EXPOSURE_TIME=new Object(),SENSOR_FRAME_DURATION=new Object(),REQUEST_PIPELINE_DEPTH=new Object(),CONTROL_AE_STATE=new Object(),CONTROL_AF_STATE=new Object(),CONTROL_AWB_STATE=new Object(),FLASH_STATE=new Object(),LENS_STATE=new Object(); }''',
 'android/hardware/camera2/CaptureRequest.java': '''package android.hardware.camera2; import android.hardware.camera2.impl.CameraMetadataNative;
- public class CaptureRequest { public static final Object JPEG_QUALITY=new Object(); public long bytes=128; public int[] streams=new int[0],surfaces=new int[0];
+ public class CaptureRequest { public static final Object JPEG_QUALITY=new Object(),CONTROL_AF_MODE=new Object(),CONTROL_AF_TRIGGER=new Object(); public long bytes=128; public int[] streams=new int[0],surfaces=new int[0];
  public CameraMetadataNative getNativeCopy(){CameraMetadataNative.copies++;return new CameraMetadataNative(bytes);}
  public int[] getStreamIds(){return streams;} public int[] getSurfaceIds(){return surfaces;} }''',
 'android/hardware/camera2/impl/CameraMetadataNative.java': '''package android.hardware.camera2.impl;
@@ -94,6 +95,10 @@ STUBS = {
  class CameraService {static final int HAL_BLOB=33;static final long FRAME_DURATION_NS=33333333;
  static void log(String s){} static CameraMetadataNative defaultRequest(WindowsCamera.Device d,int i){return new CameraMetadataNative();}
  static CameraMetadataNative characteristics(WindowsCamera.Device d){return new CameraMetadataNative();} void closed(String s,CameraDeviceUser u){} }''',
+'com/gesher/server/CameraAutoFocus.java': '''package com.gesher.server;
+ final class CameraAutoFocus {interface Lens{} CameraAutoFocus(Lens l){throw new AssertionError("fixed focus");}
+ static Lens lensOf(WindowsCamera.Capture c,String id){return null;} int frame(int m,int t,long n,double s){return 0;}
+ boolean lensMoving(){return false;} static double sharpness(byte[] b,int w,int h){return 0;} }''',
 'com/gesher/server/CameraFrames.java': '''package com.gesher.server; import android.view.Surface;
  class CameraFrames {static final int OK=0;static boolean isReader(Surface s){return false;}
  static byte[] jpeg(byte[] a,int w,int h,int tw,int th,int q){return new byte[0];}
@@ -101,7 +106,7 @@ STUBS = {
  static int deliver(Surface s,byte[] a,int w,int h,long t,byte[] j){
  Runnable hook=afterDelivery;if(hook!=null)hook.run();return OK;} }''',
 'com/gesher/server/WindowsCamera.java': '''package com.gesher.server;
- class WindowsCamera {static final class Device{final String id="host",name="explicit capture adapter";}
+ class WindowsCamera {static final class Device{final String id="host",name="explicit capture adapter";final boolean autofocus=false;}
  static final class OpenException extends Exception{} static volatile boolean failRead;static volatile int reads,closes;
  static volatile java.util.concurrent.CountDownLatch readEntered,readRelease;
  static final class Capture{final int width=16,height=16;int read(byte[] b){synchronized(WindowsCamera.class){reads++;}
