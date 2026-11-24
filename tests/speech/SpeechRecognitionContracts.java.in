@@ -720,6 +720,8 @@ final class Looper {
     });
     static Looper getMainLooper() { return MAIN; }
     static Looper main() { return MAIN; }
+    /** Whether the calling thread is this looper's (Looper.myLooper() == this). */
+    boolean isCurrentThread() { return Thread.currentThread().getName().equals("main"); }
     void flush() throws Exception { thread.submit(() -> { }).get(10, TimeUnit.SECONDS); }
     void quit() { thread.shutdownNow(); }
 }
@@ -1087,12 +1089,14 @@ abstract class RecognitionService extends Context {
     Context createContext(ContextParams params) {
         AttributionSource next = params.getNextAttributionSource();
         if (next != null) {
-            // handleAttributionContextCreation, posted when off the handler's thread.
-            mHandler.post(() -> {
+            // handleAttributionContextCreation: at once on the handler's thread, else posted.
+            Runnable created = () -> {
                 for (Callback c : mSessions.values()) {
                     if (c.mCallingAttributionSource == next) c.mAttributionContextCreated = true;
                 }
-            });
+            };
+            if (Looper.main().isCurrentThread()) created.run();
+            else mHandler.post(created);
         }
         return super.createContext(params);
     }
