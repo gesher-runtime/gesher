@@ -1,4 +1,4 @@
-// Real GDI on Windows, declared GDI on other hosts. Window/desktop publication is an adapter.
+﻿// Real GDI on Windows, declared GDI on other hosts. Window/desktop publication is an adapter.
 #include <algorithm>
 #include <array>
 #include <atomic>
