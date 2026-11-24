@@ -664,9 +664,15 @@ int wmain(int argc, wchar_t** argv) {
   if ((verb == L"launch-apk" || verb == L"launch-apk-no-media") && argc == 3) {
     if (!Elevated()) return ERROR_ELEVATION_REQUIRED;
     std::wstring image, directory;
+    const char* stage = "launch.trusted-image";
     DWORD status = TrustedImage(&image, &directory);
-    if (status == ERROR_SUCCESS) status = ValidateRuntime(directory);
-    if (status == ERROR_SUCCESS) status = gesher::usb_storage::LaunchProtectedApk(directory + L"\\" + kImage, argv[2], verb == L"launch-apk");
+    if (status == ERROR_SUCCESS) { stage = "launch.validate-runtime"; status = ValidateRuntime(directory); }
+    if (status == ERROR_SUCCESS) status = gesher::usb_storage::LaunchProtectedApk(
+        directory + L"\\" + kImage, argv[2], verb == L"launch-apk", &stage);
+    if (status != ERROR_SUCCESS) {
+      std::fprintf(stderr, "Gesher protected launch: stage=%s win32=%lu\n", stage,
+                   static_cast<unsigned long>(status));
+    }
     if (status != ERROR_SUCCESS && status != ERROR_CANCELLED && verb == L"launch-apk") {
       const std::wstring message = status == ERROR_BUSY ?
           L"A protected Android session is already running. Finish that session before starting another application." :

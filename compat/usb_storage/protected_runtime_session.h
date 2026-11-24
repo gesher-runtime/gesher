@@ -27,5 +27,5 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
                           const ProtectedSessionOptions& options, HANDLE stop);
 // The explicit elevated launch entry point. The service ACL remains admin-only.
 DWORD LaunchProtectedApk(const std::wstring& executable, const wchar_t* apk_path,
-                         bool select_storage = true);
+                         bool select_storage = true, const char** startup_stage = nullptr);
 }  // namespace gesher::usb_storage

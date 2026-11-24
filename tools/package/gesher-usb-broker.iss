@@ -46,6 +46,7 @@ Source: "{#BrokerSource}"; DestDir: "{#BrokerDir}"; Flags: ignoreversion
 Name: "{#RuntimeDir}\art"
 
 [UninstallDelete]
+Type: files; Name: "{#BrokerDir}\protected-startup.log"
 Type: dirifempty; Name: "{#BrokerDir}"
 
 [Code]

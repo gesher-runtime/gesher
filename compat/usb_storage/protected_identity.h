@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <windows.h>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,21 +18,35 @@ int RunRuntimeIdentityService();
 // window presentation access only; it never grants access to protected data.
 DWORD PrepareRuntimeDesktop(const wchar_t* runtime_sid, const wchar_t* capability_sid);
 
+// Kept by the authority beyond session destruction so cleanup never replaces
+// an earlier startup error. These contain status codes, never token resources.
+struct ProtectedIdentityCleanup {
+  std::atomic<DWORD> profile_error{ERROR_SUCCESS};
+  DWORD privilege_restore_error = ERROR_SUCCESS;
+};
+
 class ProtectedIdentity {
  public:
   static DWORD Create(const std::wstring& executable, DWORD desktop_session,
-                      std::unique_ptr<ProtectedIdentity>* result);
+                      std::unique_ptr<ProtectedIdentity>* result,
+                      const char** startup_stage,
+                      ProtectedIdentityCleanup* cleanup);
   ~ProtectedIdentity();
   ProtectedIdentity(const ProtectedIdentity&) = delete;
   ProtectedIdentity& operator=(const ProtectedIdentity&) = delete;
   HANDLE token() const { return token_; }
   PSID sid() const { return const_cast<BYTE*>(sid_.data()); }
   DWORD session() const { return session_; }
+  // Call after every process using the profile has stopped. A failed bounded
+  // teardown is reported and must not be mistaken for a successful unload.
+  DWORD UnloadProfile(DWORD users_stopped = ERROR_SUCCESS);
  private:
-  ProtectedIdentity() = default;
+  explicit ProtectedIdentity(ProtectedIdentityCleanup* cleanup) : cleanup_(cleanup) {}
   HANDLE token_ = nullptr;
   HANDLE profile_ = nullptr;
   DWORD session_ = 0;
+  ProtectedIdentityCleanup* cleanup_;
+  bool unload_attempted_ = false;
   std::vector<BYTE> sid_;
 };
 }  // namespace gesher::usb_storage

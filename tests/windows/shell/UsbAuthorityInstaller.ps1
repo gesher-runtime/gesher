@@ -17,6 +17,8 @@ $ordinaryExisted = Test-Path -LiteralPath $ordinary
 $privateRoot = Join-Path $env:ProgramData 'Gesher Protected Android'
 $privateRootExisted = Test-Path -LiteralPath $privateRoot
 $fixtureRoot = Join-Path $env:ProgramFiles ('gesher-identity-' + [guid]::NewGuid())
+$launchStdout = Join-Path $fixtureRoot 'protected-launch.stdout.log'
+$launchStderr = Join-Path $fixtureRoot 'protected-launch.stderr.log'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -285,6 +287,27 @@ function Read-SharedText([string]$Path) {
     try { $reader.ReadToEnd() } finally { $reader.Dispose() }
 }
 
+function Write-StartupEvidence([string]$Path) {
+    # Startup evidence must not hide the original launch failure. Read only a
+    # bounded record before uninstall removes the installed diagnostics file.
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+        $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        $reader = [IO.StreamReader]::new($stream)
+        try {
+            $buffer = [char[]]::new(4096)
+            $length = $reader.Read($buffer, 0, $buffer.Length)
+            if ($length -gt 0) {
+                Write-Output ("--- protected startup evidence: " + [IO.Path]::GetFileName($Path))
+                Write-Output ([string]::new($buffer, 0, $length))
+            }
+        } finally { $reader.Dispose() }
+    } catch {
+        Write-Output ("LIMITATION: could not read protected startup diagnostics: " + $_.Exception.Message)
+    }
+}
+
 $setupPath = [IO.Path]::GetFullPath($Setup)
 $outside = Start-Process -FilePath ([IO.Path]::GetFullPath($BrokerImage)) `
     -ArgumentList 'install-service' -PassThru -Wait -WindowStyle Hidden
@@ -431,7 +454,10 @@ try {
         } else {
             if ($privateRootExisted) { throw 'Original APK boot requires an empty disposable protected-data root.' }
             Stop-Authority
-            $launch = Start-Process -FilePath $exe -ArgumentList ('launch-apk-no-media "' + $apk + '"') -PassThru
+            [GesherIdentityProbe]::WritePrivateFile($launchStdout, [byte[]]@())
+            [GesherIdentityProbe]::WritePrivateFile($launchStderr, [byte[]]@())
+            $launch = Start-Process -FilePath $exe -ArgumentList ('launch-apk-no-media "' + $apk + '"') `
+                -RedirectStandardOutput $launchStdout -RedirectStandardError $launchStderr -PassThru
             try {
                 if (-not $launch.WaitForExit(120000)) {
                     $launch.Kill()
@@ -500,6 +526,9 @@ try {
     }
     # Exercise the uninstall stop path with the service still running.
 } finally {
+    Write-StartupEvidence $launchStdout
+    Write-StartupEvidence $launchStderr
+    Write-StartupEvidence (Join-Path $folder 'protected-startup.log')
     if (Test-Path -LiteralPath $privateRoot) {
         Get-ChildItem -LiteralPath $privateRoot -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.log', '.logcat' } | ForEach-Object {

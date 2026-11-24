@@ -29,6 +29,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
 #include <cstdlib>
 #include <cwchar>
 #include <map>
@@ -189,6 +190,63 @@ DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
   return ERROR_SUCCESS;
 }
 
+// Only RunProtectedAndroid calls this, after the installed LocalSystem
+// entrypoint validated the fixed installation and its ancestors. The bounded
+// last-startup record is outside the guest runtime/data and is never an input.
+// Do not accept a caller-selected filename, export resources, or change the
+// actual startup result if writing diagnostics fails.
+void RecordStartup(const std::wstring& directory, const char* stage, DWORD status,
+                   const ProtectedIdentityCleanup& cleanup = {}) noexcept {
+  struct PreserveError {
+    DWORD value = GetLastError();
+    ~PreserveError() { SetLastError(value); }
+  } preserve_error;
+  try {
+    PSECURITY_DESCRIPTOR raw = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)", SDDL_REVISION_1, &raw, nullptr)) return;
+    const LocalMemory security(raw);
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), raw, FALSE};
+    const Handle file(CreateFileW((directory + L"\\protected-startup.log").c_str(),
+        FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL, FILE_SHARE_READ,
+        &attributes, OPEN_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (file.get() == INVALID_HANDLE_VALUE) return;
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (GetFileType(file.get()) != FILE_TYPE_DISK || !GetFileInformationByHandle(file.get(), &information) ||
+        information.nNumberOfLinks != 1 || (information.dwFileAttributes &
+        (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE))) return;
+    PSID owner = nullptr;
+    PACL acl = nullptr;
+    PSECURITY_DESCRIPTOR actual = nullptr;
+    const DWORD queried = GetSecurityInfo(file.get(), SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &acl, nullptr, &actual);
+    const LocalMemory actual_security(actual);
+    if (queried != ERROR_SUCCESS || !owner || !acl || !IsValidAcl(acl) ||
+        (!IsWellKnownSid(owner, WinLocalSystemSid) && !IsWellKnownSid(owner, WinBuiltinAdministratorsSid))) return;
+    for (DWORD i = 0; i < acl->AceCount; ++i) {
+      void* entry = nullptr;
+      if (!GetAce(acl, i, &entry)) return;
+      const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(entry);
+      if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE) return;
+      PSID principal = const_cast<DWORD*>(&ace->SidStart);
+      if (!IsWellKnownSid(principal, WinLocalSystemSid) &&
+          !IsWellKnownSid(principal, WinBuiltinAdministratorsSid)) return;
+    }
+    char record[256]{};
+    const int length = std::snprintf(record, sizeof(record),
+        "Gesher protected startup: stage=%s win32=%lu profile_cleanup_win32=%lu privilege_restore_win32=%lu\r\n",
+        stage, static_cast<unsigned long>(status), static_cast<unsigned long>(cleanup.profile_error.load()),
+        static_cast<unsigned long>(cleanup.privilege_restore_error));
+    if (length <= 0 || static_cast<size_t>(length) >= sizeof(record)) return;
+    LARGE_INTEGER zero{};
+    if (!SetFilePointerEx(file.get(), zero, nullptr, FILE_BEGIN) || !SetEndOfFile(file.get())) return;
+    DWORD written = 0;
+    WriteFile(file.get(), record, static_cast<DWORD>(length), &written, nullptr);
+  } catch (...) {
+    // Diagnostics are optional; the original API status remains authoritative.
+  }
+}
+
 DWORD PipeSecurity(HANDLE process, LocalMemory* descriptor) {
   HANDLE raw = nullptr;
   if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) return GetLastError();
@@ -290,26 +348,54 @@ struct UsbQuery {
 
 class Session {
  public:
-  Session(std::wstring directory, const ProtectedSessionOptions& options, HANDLE stop)
-      : directory_(std::move(directory)), options_(options), stop_(stop) {}
+  Session(std::wstring directory, const ProtectedSessionOptions& options, HANDLE stop,
+          ProtectedIdentityCleanup& cleanup)
+      : directory_(std::move(directory)), options_(options), stop_(stop), cleanup_(cleanup) {}
   ~Session() {
     SetEvent(stop_);
-    {
-      std::lock_guard lock(mutex_);
-      for (auto& [id, entry] : processes_) {
-        if (entry->launch && WaitForSingleObject(entry->launch->process(), 0) == WAIT_TIMEOUT) {
-          TerminateProcess(entry->launch->process(), ERROR_OPERATION_ABORTED);
+    DWORD users_stopped = ERROR_SUCCESS;
+    const auto terminate = [&users_stopped](const AuthorityLaunch* launch) {
+      if (!launch || WaitForSingleObject(launch->process(), 0) == WAIT_OBJECT_0) return;
+      if (!TerminateProcess(launch->process(), ERROR_OPERATION_ABORTED)) {
+        const DWORD error = GetLastError();
+        if (WaitForSingleObject(launch->process(), 0) != WAIT_OBJECT_0 && users_stopped == ERROR_SUCCESS) {
+          users_stopped = error;
         }
       }
+    };
+    {
+      std::lock_guard lock(mutex_);
+      for (auto& [id, entry] : processes_) terminate(entry->launch.get());
     }
+    terminate(manager_.get());
+    terminate(broker_.get());
     if (reaper_worker_.joinable()) reaper_worker_.join();
     for (auto& [id, entry] : processes_) if (entry->worker.joinable()) entry->worker.join();
-    processes_.clear();
     if (listener_worker_.joinable()) listener_worker_.join();
+    // TerminateProcess is asynchronous. Retain and wait on the exact creation
+    // handles before unloading a hive which any guest may still be using.
+    // A shared deadline bounds the wait even with many admitted commands.
+    const ULONGLONG deadline = GetTickCount64() + 15000;
+    const auto wait_stopped = [&users_stopped, deadline](AuthorityLaunch* launch) {
+      if (!launch) return;
+      const ULONGLONG now = GetTickCount64();
+      const DWORD status = launch->Stop(now < deadline ? static_cast<DWORD>(deadline - now) : 0);
+      if (status != ERROR_SUCCESS && users_stopped == ERROR_SUCCESS) users_stopped = status;
+    };
+    for (auto& [id, entry] : processes_) wait_stopped(entry->launch.get());
+    wait_stopped(manager_.get());
+    wait_stopped(broker_.get());
+    processes_.clear();
     manager_.reset();
     broker_.reset();
+    factory_.reset();
+    registration_.reset();
+    listeners_.reset();
+    service_profile_.reset();
+    if (identity_) identity_->UnloadProfile(users_stopped);
   }
   DWORD Run(const std::wstring& executable, std::unique_ptr<HostDisk> selected);
+  const char* startup_stage() const { return startup_stage_; }
  private:
   DWORD PrepareData(HANDLE desktop, const std::wstring& executable);
   DWORD CreateProfile(const std::wstring& name, std::shared_ptr<Profile>* profile);
@@ -337,6 +423,7 @@ class Session {
   std::wstring directory_, runtime_, root_, data_, stage_, base_environment_, binder_data_, desktop_sid_;
   ProtectedSessionOptions options_;
   HANDLE stop_;
+  ProtectedIdentityCleanup& cleanup_;
   Handle ready_;
   Handle staged_apk_;
   std::wstring staged_path_;
@@ -360,6 +447,7 @@ class Session {
   std::unique_ptr<HostDisk> selected_;
   uint64_t next_id_ = 3;
   bool application_started_ = false;
+  const char* startup_stage_ = "runtime.begin";
 };
 
 DWORD Session::CreateProfile(const std::wstring& name, std::shared_ptr<Profile>* profile) {
@@ -409,28 +497,33 @@ bool Session::AllowedEnvironment(const std::wstring& value, bool command) const 
 }
 
 DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
+  startup_stage_ = "data.program-data-location";
   PWSTR raw = nullptr;
   if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_DONT_VERIFY, nullptr, &raw))) return ERROR_PATH_NOT_FOUND;
   std::wstring parent(raw);
   CoTaskMemFree(raw);
   if (!LocalPath(parent) || GetDriveTypeW(parent.substr(0, 3).c_str()) != DRIVE_FIXED) return ERROR_ACCESS_DENIED;
   parent += L"\\Gesher Protected Android";
+  startup_stage_ = "data.protected-parent";
   DWORD status = PrivateDirectory(parent, identity_->sid());
   if (status != ERROR_SUCCESS) return status;
   status = container::Grant(parent, identity_->sid(), FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, false);
   if (status != ERROR_SUCCESS) return status;
   alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
   DWORD bytes = 0;
+  startup_stage_ = "data.desktop-token-user";
   if (!GetTokenInformation(desktop, TokenUser, user, sizeof(user), &bytes)) return GetLastError();
   desktop_sid_ = SidText(reinterpret_cast<TOKEN_USER*>(user)->User.Sid);
   if (desktop_sid_.empty()) return ERROR_INVALID_SID;
   root_ = parent + L"\\" + desktop_sid_;
+  startup_stage_ = "data.desktop-private-root";
   status = PrivateDirectory(root_, identity_->sid());
   if (status != ERROR_SUCCESS) return status;
   status = container::Grant(root_, identity_->sid(), FILE_ALL_ACCESS, true);
   if (status != ERROR_SUCCESS) return status;
   data_ = root_ + L"\\data";
   stage_ = root_ + L"\\stage";
+  startup_stage_ = "data.protected-directories";
   for (const auto& path : {data_, stage_, root_ + L"\\logs", root_ + L"\\tmp"}) {
     status = PrivateDirectory(path, identity_->sid());
     if (status != ERROR_SUCCESS) return status;
@@ -438,9 +531,13 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
     if (status != ERROR_SUCCESS) return status;
   }
   std::wstring profile_name;
+  startup_stage_ = "data.server-profile-name";
   status = ProtectedProfileName(desktop_sid_, {}, {}, &profile_name);
-  if (status == ERROR_SUCCESS) status = CreateProfile(profile_name, &service_profile_);
   if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "data.server-appcontainer-profile";
+  status = CreateProfile(profile_name, &service_profile_);
+  if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "data.server-acls";
   for (const auto& path : {root_, data_, stage_, root_ + L"\\logs", root_ + L"\\tmp"}) {
     // Each trusted root intentionally protects its DACL from inheritance.
     // Give the server its explicit lowbox grant on every such boundary.
@@ -450,6 +547,7 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
   status = container::Grant(parent, service_profile_->sid.value,
       FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, false);
   if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "data.runtime-read-execute-acls";
   status = container::Grant(runtime_, identity_->sid(), FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, true);
   if (status == ERROR_SUCCESS) status = container::Grant(runtime_, runtime_capability_.value,
                                                         FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, true);
@@ -458,6 +556,7 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
   // The desktop helper can only grant the distinct runtime principal access to
   // windows. Its complete arguments are chosen here, and its process remains
   // owned by SYSTEM, with legacy extension-point injection disabled.
+  startup_stage_ = "data.desktop-helper-attributes";
   const std::wstring sid = SidText(identity_->sid()), capability = SidText(runtime_capability_.value);
   std::wstring command = Quote(executable) + L" prepare-desktop " + Quote(sid) + L" " + Quote(capability);
   PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -480,10 +579,12 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
   startup.StartupInfo.lpDesktop = desktop_name;
   startup.lpAttributeList = attributes;
   PROCESS_INFORMATION process{};
+  startup_stage_ = "data.desktop-helper-create";
   if (!CreateProcessAsUserW(desktop, executable.c_str(), command.data(), &security, &security,
       FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, directory_.c_str(),
       &startup.StartupInfo, &process)) return GetLastError();
   const Handle helper(process.hProcess), thread(process.hThread);
+  startup_stage_ = "data.desktop-helper-completion";
   const DWORD waited = WaitForSingleObject(helper.get(), 15000);
   if (waited != WAIT_OBJECT_0) { TerminateProcess(helper.get(), ERROR_TIMEOUT); return ERROR_TIMEOUT; }
   DWORD exit_code = 0;
@@ -492,6 +593,7 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
 
   // Open the user-selected source under that user's real token. The authority
   // cannot be used to copy an APK from a file that desktop user cannot read.
+  startup_stage_ = "data.apk-source-open-as-desktop";
   if (!ImpersonateLoggedOnUser(desktop)) return GetLastError();
   HANDLE source = CreateFileW(options_.source_apk.c_str(), GENERIC_READ, FILE_SHARE_READ,
       nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
@@ -503,14 +605,17 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
   if (!GetFileInformationByHandle(source, &source_info)) return GetLastError();
   if (source_info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) return ERROR_ACCESS_DENIED;
   std::wstring source_digest;
+  startup_stage_ = "data.apk-source-digest";
   status = Hash(source, &source_digest);
   if (status != ERROR_SUCCESS || source_digest != options_.apk_sha256) return status ? status : ERROR_FILE_INVALID;
   const std::wstring staged_directory = stage_ + L"\\" + source_digest;
+  startup_stage_ = "data.apk-staging-directory";
   status = PrivateDirectory(staged_directory, identity_->sid());
   if (status == ERROR_SUCCESS) status = container::Grant(staged_directory, identity_->sid(), FILE_ALL_ACCESS, true);
   if (status == ERROR_SUCCESS) status = container::Grant(staged_directory, service_profile_->sid.value, FILE_ALL_ACCESS, true);
   if (status != ERROR_SUCCESS) return status;
   staged_path_ = staged_directory + L"\\base.apk";
+  startup_stage_ = "data.apk-staging-file";
   HANDLE output = CreateFileW(staged_path_.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
       nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (output == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
@@ -534,6 +639,7 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
   staged_apk_.reset(output);
   if (output == INVALID_HANDLE_VALUE) return GetLastError();
   std::wstring staged_digest;
+  startup_stage_ = "data.apk-staged-digest";
   status = Hash(output, &staged_digest);
   return status == ERROR_SUCCESS && staged_digest != source_digest ? ERROR_FILE_INVALID : status;
 }
@@ -601,7 +707,7 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
   const SECURITY_CAPABILITIES capabilities{entry->profile->sid.value, caps.data(), static_cast<DWORD>(caps.size()), 0};
   const std::wstring& working = entry->working_directory.empty() ? runtime_ : entry->working_directory;
   const AuthorityLaunchSpec spec{binary.c_str(), working.c_str(), arguments, environment,
-      capabilities, identity_->sid(), identity_->session()};
+      capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error};
   status = AuthorityLaunch::Create(identity_->token(), spec, &entry->launch);
   if (status != ERROR_SUCCESS) return status;
   entry->start_time = CreationTime(entry->launch->process());
@@ -1018,6 +1124,13 @@ void Session::Reap() {
       for (auto found = processes_.begin(); found != processes_.end();) {
         Entry& entry = *found->second;
         if (entry.system_server || !entry.finished.load()) { ++found; continue; }
+        if (WaitForSingleObject(entry.launch->process(), 0) != WAIT_OBJECT_0) {
+          // A completed IPC worker may have reported a termination timeout.
+          // Keep its exact process for final teardown and profile-user checks.
+          SetEvent(stop_);
+          ++found;
+          continue;
+        }
         DWORD code = ERROR_PROCESS_ABORTED;
         GetExitCodeProcess(entry.launch->process(), &code);
         if (!entry.exit_observed) {
@@ -1057,24 +1170,30 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   selected_ = std::move(selected);
   runtime_ = directory_ + L"\\runtime";
   HANDLE desktop_raw = nullptr;
+  startup_stage_ = "runtime.wts-desktop-token";
   if (!WTSQueryUserToken(options_.desktop_session, &desktop_raw)) return GetLastError();
   const Handle desktop(desktop_raw);
-  DWORD status = ProtectedIdentity::Create(executable, options_.desktop_session, &identity_);
+  DWORD status = ProtectedIdentity::Create(executable, options_.desktop_session, &identity_,
+                                           &startup_stage_, &cleanup_);
   if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "runtime.files-capability";
   status = container::CapabilitySid(container::kRuntimeFilesCapability, &runtime_capability_);
   if (status != ERROR_SUCCESS) return status;
   std::wstring registration, listeners;
+  startup_stage_ = "runtime.binder-locators";
   status = BinderAuthorityControl::CreateLocator(&registration);
   if (status == ERROR_SUCCESS) status = BinderAuthorityControl::CreateLocator(&listeners);
   if (status == ERROR_SUCCESS) status = BinderListenerFactory::CreateLocator(&binder_data_);
   if (status != ERROR_SUCCESS) return status;
   status = PrepareData(desktop.get(), executable);
   if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "runtime.open-readiness-event";
   if (!options_.ready_event.empty()) {
     ready_.reset(OpenEventW(EVENT_MODIFY_STATE, FALSE, options_.ready_event.c_str()));
     if (!ready_) return GetLastError();
   }
   wchar_t windows[MAX_PATH]{};
+  startup_stage_ = "runtime.windows-directory";
   const UINT length = GetWindowsDirectoryW(windows, MAX_PATH);
   if (!length || length >= MAX_PATH) return ERROR_PATH_NOT_FOUND;
   const std::vector<std::wstring> base = {
@@ -1090,12 +1209,15 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   const std::wstring broker_image = runtime_ + L"\\binderd.exe";
   const std::wstring broker_arguments = L"--gesher-protected-binder " + registration + L" " + listeners + L" " + binder_data_;
   const AuthorityLaunchSpec broker_spec{broker_image.c_str(), runtime_.c_str(), broker_arguments,
-      environment, capabilities, identity_->sid(), identity_->session()};
+      environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error};
+  startup_stage_ = "runtime.create-binder-broker";
   status = AuthorityLaunch::Create(identity_->token(), broker_spec, &broker_);
   if (status != ERROR_SUCCESS) return status;
   PSID packages[] = {service_profile_->sid.value};
+  startup_stage_ = "runtime.binder-listener-factory";
   status = BinderListenerFactory::Create(*broker_, binder_data_, packages, &factory_);
   if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "runtime.binder-authority-connect";
   status = BinderAuthorityControl::Connect(*broker_, registration, listeners, stop_, &registration_, &listeners_);
   if (status != ERROR_SUCCESS) return status;
   listener_worker_ = std::thread([this] { listeners_->ServeListeners(*factory_); SetEvent(stop_); });
@@ -1103,7 +1225,8 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   const std::wstring manager_arguments = L"--gesher-protected-services " + binder_data_ + L" " +
       std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(options_.desktop_session);
   const AuthorityLaunchSpec manager_spec{manager_image.c_str(), runtime_.c_str(), manager_arguments,
-      environment, capabilities, identity_->sid(), identity_->session()};
+      environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error};
+  startup_stage_ = "runtime.create-service-manager";
   status = AuthorityLaunch::Create(identity_->token(), manager_spec, &manager_);
   if (status == ERROR_SUCCESS) status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);
   if (status == ERROR_SUCCESS) status = manager_->Resume();
@@ -1113,15 +1236,19 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   system->uid = 1000;
   system->system_server = true;
   system->profile = service_profile_;
+  startup_stage_ = "runtime.server-logs";
   status = MakeLogs(*system);
   if (status != ERROR_SUCCESS) return status;
   Entry* server = nullptr;
   const std::wstring arguments = VmOptions() + L" -Xusejit:false com.gesher.server.SystemServer --launch-initial-apk " + Quote(GuestPath(staged_path_));
   {
     std::lock_guard lock(mutex_);
+    startup_stage_ = "runtime.create-system-server";
     status = StartEntry(std::move(system), runtime_ + L"\\dalvikvm.exe", arguments, {}, &server);
   }
   if (status != ERROR_SUCCESS) return status;
+  RecordStartup(directory_, "runtime.system-server-created", ERROR_SUCCESS);
+  startup_stage_ = "runtime.guest-lifetime";
   reaper_worker_ = std::thread([this] { Reap(); });
   const HANDLE waits[] = {stop_, server->launch->process(), manager_->process(), broker_->process()};
   const DWORD waited = WaitForMultipleObjects(4, waits, FALSE, INFINITE);
@@ -1412,43 +1539,74 @@ DWORD SelectDisk(std::wstring_view application, std::wstring* selected_path, boo
 }  // namespace
 
 DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& executable,
-    const ProtectedSessionOptions& options, HANDLE stop) try {
-  if (!stop || !LocalPath(options.source_apk) || !HexDigest(options.apk_sha256)) return ERROR_INVALID_PARAMETER;
-  std::unique_ptr<HostDisk> selected;
-  DWORD status = ImportSelection(executable, options, &selected);
+    const ProtectedSessionOptions& options, HANDLE stop) {
+  RecordStartup(directory, "runtime.begin", ERROR_SUCCESS);
+  if (!stop || !LocalPath(options.source_apk) || !HexDigest(options.apk_sha256)) {
+    RecordStartup(directory, "runtime.arguments", ERROR_INVALID_PARAMETER);
+    return ERROR_INVALID_PARAMETER;
+  }
+  ProtectedIdentityCleanup cleanup;
+  const char* stage = "runtime.import-selection";
+  DWORD status = ERROR_SUCCESS;
+  try {
+    std::unique_ptr<HostDisk> selected;
+    status = ImportSelection(executable, options, &selected);
+    if (status == ERROR_SUCCESS) {
+      Session session(directory, options, stop, cleanup);
+      status = session.Run(executable, std::move(selected));
+      stage = session.startup_stage();
+    }  // Guest teardown and profile unload finish before reporting the status.
+  } catch (const std::bad_alloc&) {
+    stage = "runtime.allocation-failure";
+    status = ERROR_NOT_ENOUGH_MEMORY;
+  } catch (const std::system_error&) {
+    stage = "runtime.worker-failure";
+    status = ERROR_NOT_READY;
+  }
+  if (status != ERROR_SUCCESS || cleanup.profile_error.load() != ERROR_SUCCESS ||
+      cleanup.privilege_restore_error != ERROR_SUCCESS) RecordStartup(directory, stage, status, cleanup);
   if (status != ERROR_SUCCESS) return status;
-  Session session(directory, options, stop);
-  return session.Run(executable, std::move(selected));
-} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
-catch (const std::system_error&) { return ERROR_NOT_READY; }
+  const DWORD profile_error = cleanup.profile_error.load();
+  return profile_error != ERROR_SUCCESS ? profile_error : cleanup.privilege_restore_error;
+}
 
-DWORD LaunchProtectedApk(const std::wstring& executable, const wchar_t* apk_path, bool select_storage) try {
+DWORD LaunchProtectedApk(const std::wstring& executable, const wchar_t* apk_path, bool select_storage,
+    const char** startup_stage) try {
+  const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+  stage("launch.arguments");
   if (!apk_path || !LocalPath(apk_path)) return ERROR_INVALID_PARAMETER;
   // Check before selecting, locking or dismounting media. An existing realm
   // keeps its processes and grants; a second launch cannot replace it.
+  stage("launch.open-scm");
   const Service state_manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
   if (!state_manager) return GetLastError();
+  stage("launch.open-authority");
   const Service state_service(OpenServiceW(state_manager.get(), L"GesherUsbAuthority", SERVICE_QUERY_STATUS));
   if (!state_service) return GetLastError();
   SERVICE_STATUS_PROCESS initial{};
   DWORD initial_bytes = 0;
+  stage("launch.query-idle-authority");
   if (!QueryServiceStatusEx(state_service.get(), SC_STATUS_PROCESS_INFO, reinterpret_cast<BYTE*>(&initial),
       sizeof(initial), &initial_bytes)) return GetLastError();
   if (initial.dwCurrentState != SERVICE_STOPPED) return ERROR_BUSY;
+  stage("launch.open-apk");
   const Handle source(CreateFileW(apk_path, GENERIC_READ, FILE_SHARE_READ, nullptr,
       OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   if (source.get() == INVALID_HANDLE_VALUE) return GetLastError();
   std::wstring digest;
+  stage("launch.hash-apk");
   DWORD status = Hash(source.get(), &digest);
   if (status != ERROR_SUCCESS) return status;
   std::wstring selected_path;
   bool allow_write = false;
   std::unique_ptr<HostDisk> disk;
+  stage("launch.storage-consent");
   status = select_storage ? SelectDisk(apk_path, &selected_path, &allow_write, &disk) : ERROR_SUCCESS;
   if (status != ERROR_SUCCESS) return status;
   HANDLE selected_raw = nullptr;
   HostDiskIdentity identity{};
   std::vector<HANDLE> volume_handles;
+  stage("launch.selected-storage-handoff");
   status = disk ? disk->DuplicateForAuthority(&selected_raw, &identity, &volume_handles) : ERROR_SUCCESS;
   if (status != ERROR_SUCCESS) return status;
   const Handle selected(selected_raw);
@@ -1457,10 +1615,12 @@ DWORD LaunchProtectedApk(const std::wstring& executable, const wchar_t* apk_path
     ~CloseVolumes() { for (HANDLE handle : handles) CloseHandle(handle); }
   } close_volumes{volume_handles};
   DWORD desktop_session = 0;
+  stage("launch.desktop-session");
   if (!ProcessIdToSessionId(GetCurrentProcessId(), &desktop_session) || !desktop_session) return ERROR_ACCESS_DENIED;
   const uint64_t created = CreationTime(GetCurrentProcess());
   if (!created) return ERROR_INVALID_DATA;
   std::wstring nonce;
+  stage("launch.readiness-event");
   status = BinderAuthorityControl::CreateLocator(&nonce);
   if (status != ERROR_SUCCESS) return status;
   const std::wstring event_name = L"Global\\GesherProtectedReady." + nonce.substr(nonce.size() - 32);
@@ -1471,6 +1631,7 @@ DWORD LaunchProtectedApk(const std::wstring& executable, const wchar_t* apk_path
   SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
   const Handle ready(CreateEventW(&security, TRUE, FALSE, event_name.c_str()));
   if (!ready || GetLastError() == ERROR_ALREADY_EXISTS) return ERROR_ALREADY_EXISTS;
+  stage("launch.open-startable-authority");
   const Service manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
   if (!manager) return GetLastError();
   const Service service(OpenServiceW(manager.get(), L"GesherUsbAuthority",
@@ -1479,6 +1640,7 @@ DWORD LaunchProtectedApk(const std::wstring& executable, const wchar_t* apk_path
   // The elevated entry point already validated its own fixed installed image.
   // Verify SCM still launches that exact authority, not another registration.
   DWORD bytes = 0;
+  stage("launch.validate-authority-image");
   QueryServiceConfigW(service.get(), nullptr, 0, &bytes);
   if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !bytes || bytes > 16384) return ERROR_INVALID_DATA;
   std::vector<BYTE> config_bytes(bytes);
@@ -1494,10 +1656,12 @@ DWORD LaunchProtectedApk(const std::wstring& executable, const wchar_t* apk_path
   for (HANDLE volume : volume_handles) arguments.push_back(std::to_wstring(reinterpret_cast<uintptr_t>(volume)));
   std::vector<const wchar_t*> argv;
   for (const auto& value : arguments) argv.push_back(value.c_str());
+  stage("launch.start-protected-session");
   if (!StartServiceW(service.get(), static_cast<DWORD>(argv.size()), argv.data())) {
     const DWORD error = GetLastError();
     return error == ERROR_SERVICE_ALREADY_RUNNING ? ERROR_BUSY : error;
   }
+  stage("launch.await-native-readiness");
   const ULONGLONG deadline = GetTickCount64() + 90000;
   while (GetTickCount64() < deadline) {
     if (WaitForSingleObject(ready.get(), 100) == WAIT_OBJECT_0) {

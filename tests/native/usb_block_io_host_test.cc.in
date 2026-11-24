@@ -221,7 +221,7 @@ static void Revocation() {
             "revoked grant allowed another chunk");
     Require(fixture.block->position == (positioned ? 37 : 37 + usb_storage::kBlockTransferLimit),
             "revocation corrupted cursor semantics");
-    Require(fixture.Io(data, false) == -1 && errno == ENODEV, "expired session allowed later I/O");
+    Require(fixture.Io(data, false) == -1 && errno == ENODEV, "revoked session allowed later I/O");
     ExtentGuards(fixture);
   }
   Fixture fixture;

@@ -207,11 +207,31 @@ DWORD SealAndVerifyChild(HANDLE process, const Identity& desktop, const Authorit
 }  // namespace
 
 AuthorityLaunch::~AuthorityLaunch() {
-  if (guest_.hProcess && WaitForSingleObject(guest_.hProcess, 0) == WAIT_TIMEOUT) {
-    TerminateProcess(guest_.hProcess, ERROR_OPERATION_ABORTED);
-  }
+  Stop(5000);
   if (guest_.hThread) CloseHandle(guest_.hThread);
   if (guest_.hProcess) CloseHandle(guest_.hProcess);
+}
+
+DWORD AuthorityLaunch::Stop(DWORD timeout_milliseconds) {
+  if (stop_attempted_ || !guest_.hProcess) return stop_status_;
+  stop_attempted_ = true;
+  DWORD wait = WaitForSingleObject(guest_.hProcess, 0);
+  if (wait == WAIT_TIMEOUT) {
+    if (!TerminateProcess(guest_.hProcess, ERROR_OPERATION_ABORTED)) {
+      const DWORD error = GetLastError();
+      if (WaitForSingleObject(guest_.hProcess, 0) != WAIT_OBJECT_0) stop_status_ = error;
+    } else {
+      wait = WaitForSingleObject(guest_.hProcess, timeout_milliseconds);
+      if (wait != WAIT_OBJECT_0) stop_status_ = wait == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
+    }
+  } else if (wait != WAIT_OBJECT_0) {
+    stop_status_ = wait == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE;
+  }
+  if (stop_status_ != ERROR_SUCCESS && termination_error_) {
+    DWORD expected = ERROR_SUCCESS;
+    termination_error_->compare_exchange_strong(expected, stop_status_);
+  }
+  return stop_status_;
 }
 
 DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& spec,
@@ -244,6 +264,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   SECURITY_ATTRIBUTES private_objects{sizeof(private_objects), object_descriptor.get(), FALSE};
   auto launch = std::unique_ptr<AuthorityLaunch>(new (std::nothrow) AuthorityLaunch);
   if (!launch) return ERROR_NOT_ENOUGH_MEMORY;
+  launch->termination_error_ = spec.termination_error;
 
   SIZE_T needed = 0;
   InitializeProcThreadAttributeList(nullptr, 2, 0, &needed);
@@ -295,6 +316,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
 }
 
 DWORD AuthorityLaunch::Resume() {
+  if (stop_attempted_) return ERROR_PROCESS_ABORTED;
   if (resumed_) return ERROR_ALREADY_ASSIGNED;
   const DWORD previous = ResumeThread(guest_.hThread);
   if (previous == static_cast<DWORD>(-1)) return GetLastError();

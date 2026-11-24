@@ -196,6 +196,19 @@ void Positive(const wchar_t* executable, DWORD session) {
   Require(WaitForSingleObject(launch->process(), kWait) == WAIT_OBJECT_0, "wait for test guest");
   DWORD code = 0;
   Require(GetExitCodeProcess(launch->process(), &code) && code == 0, "run trusted environment witness", code);
+  std::atomic<DWORD> cleanup{ERROR_SUCCESS};
+  AuthorityLaunchSpec stopped_spec = spec;
+  stopped_spec.termination_error = &cleanup;
+  std::unique_ptr<AuthorityLaunch> stopped;
+  error = AuthorityLaunch::Create(desktop.get(), stopped_spec, &stopped);
+  Require(error == ERROR_SUCCESS && stopped, "create suspended teardown witness", error);
+  Require(stopped->Stop(kWait) == ERROR_SUCCESS &&
+      WaitForSingleObject(stopped->process(), 0) == WAIT_OBJECT_0,
+      "stop waits for the exact suspended process");
+  Require(stopped->Stop(0) == ERROR_SUCCESS && stopped->Resume() == ERROR_PROCESS_ABORTED,
+      "stop is idempotent and forbids resume");
+  stopped.reset();
+  Require(cleanup.load() == ERROR_SUCCESS, "preserve successful cleanup status after destruction");
   std::puts("USB authority launch: LocalSystem child and same-user rights checks passed");
 }
 

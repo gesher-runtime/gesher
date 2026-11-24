@@ -315,7 +315,7 @@ public final class ApkPackage {
     }
 
     static ApkLite codeApkLite(File file) throws IOException {
-        if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        if (file == null || !Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
         }
         ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(

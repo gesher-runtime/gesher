@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -20,6 +21,9 @@ struct AuthorityLaunchSpec {
   SECURITY_CAPABILITIES capabilities{};
   PSID desktop_user = nullptr;
   DWORD desktop_session = 0;
+  // Optional trusted caller status, which must outlive the launch. This also
+  // records cleanup of a suspended child if Create fails before enrollment.
+  std::atomic<DWORD>* termination_error = nullptr;
 };
 
 class AuthorityLaunch {
@@ -41,11 +45,17 @@ class AuthorityLaunch {
   // The authority serializes launch, handle handoff and resume. It retains the
   // launch object for the lifetime of the session. Destruction stops the guest.
   DWORD Resume();
+  // Idempotent termination with an exact-process wait. Callers may share one
+  // deadline across several children; destruction does not repeat that wait.
+  DWORD Stop(DWORD timeout_milliseconds);
 
  private:
   AuthorityLaunch() = default;
   PROCESS_INFORMATION guest_{};
   bool resumed_ = false;
+  bool stop_attempted_ = false;
+  DWORD stop_status_ = ERROR_SUCCESS;
+  std::atomic<DWORD>* termination_error_ = nullptr;
 };
 
 }  // namespace gesher::usb_storage

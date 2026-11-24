@@ -10,7 +10,9 @@
 #include <userenv.h>
 #include <wtsapi32.h>
 
+#include <cstddef>
 #include <cstring>
+#include <iterator>
 #include <new>
 #include <string_view>
 #include <type_traits>
@@ -23,6 +25,51 @@ struct ServiceClose { void operator()(SC_HANDLE value) const { if (value) CloseS
 using Handle = std::unique_ptr<void, Close>;
 using LocalMemory = std::unique_ptr<void, Local>;
 using Service = std::unique_ptr<std::remove_pointer_t<SC_HANDLE>, ServiceClose>;
+
+class ProfilePrivileges {
+ public:
+  explicit ProfilePrivileges(ProtectedIdentityCleanup* cleanup) : cleanup_(cleanup) {}
+  ~ProfilePrivileges() { Restore(); }
+  DWORD Enable() {
+    HANDLE raw = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &raw)) return GetLastError();
+    token_.reset(raw);
+    alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
+    DWORD bytes = 0;
+    if (!GetTokenInformation(raw, TokenUser, user, sizeof(user), &bytes)) return GetLastError();
+    if (!IsWellKnownSid(reinterpret_cast<TOKEN_USER*>(user)->User.Sid, WinLocalSystemSid)) return ERROR_ACCESS_DENIED;
+    struct TwoPrivileges { DWORD count; LUID_AND_ATTRIBUTES entries[2]; } requested{2, {}};
+    if (!LookupPrivilegeValueW(nullptr, L"SeBackupPrivilege", &requested.entries[0].Luid) ||
+        !LookupPrivilegeValueW(nullptr, L"SeRestorePrivilege", &requested.entries[1].Luid)) return GetLastError();
+    for (auto& privilege : requested.entries) privilege.Attributes = SE_PRIVILEGE_ENABLED;
+    SetLastError(ERROR_SUCCESS);
+    const BOOL adjusted = AdjustTokenPrivileges(raw, FALSE, reinterpret_cast<TOKEN_PRIVILEGES*>(&requested),
+        sizeof(previous_), reinterpret_cast<TOKEN_PRIVILEGES*>(previous_), &bytes);
+    const DWORD error = GetLastError();
+    if (!adjusted) return error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE;
+    changed_ = true;
+    // TRUE alone does not mean both requested privileges were assigned.
+    return error;
+  }
+  DWORD Restore() {
+    if (!changed_) return ERROR_SUCCESS;
+    changed_ = false;
+    SetLastError(ERROR_SUCCESS);
+    const BOOL restored = AdjustTokenPrivileges(token_.get(), FALSE,
+        reinterpret_cast<TOKEN_PRIVILEGES*>(previous_), 0, nullptr, nullptr);
+    DWORD error = GetLastError();
+    if (!restored && error == ERROR_SUCCESS) error = ERROR_GEN_FAILURE;
+    if (error != ERROR_SUCCESS && cleanup_->privilege_restore_error == ERROR_SUCCESS) {
+      cleanup_->privilege_restore_error = error;
+    }
+    return error;
+  }
+ private:
+  Handle token_;
+  ProtectedIdentityCleanup* cleanup_;
+  alignas(TOKEN_PRIVILEGES) BYTE previous_[offsetof(TOKEN_PRIVILEGES, Privileges) + 2 * sizeof(LUID_AND_ATTRIBUTES)]{};
+  bool changed_ = false;
+};
 
 bool Same(std::wstring_view a, std::wstring_view b) {
   return a.size() == b.size() && CompareStringOrdinal(a.data(), static_cast<int>(a.size()),
@@ -232,13 +279,35 @@ DWORD PrepareRuntimeDesktop(const wchar_t* runtime_sid, const wchar_t* capabilit
 }
 
 ProtectedIdentity::~ProtectedIdentity() {
-  if (profile_ && token_) UnloadUserProfile(token_, profile_);
+  UnloadProfile();
   if (token_) CloseHandle(token_);
 }
 
+DWORD ProtectedIdentity::UnloadProfile(DWORD users_stopped) {
+  if (!profile_ || unload_attempted_) return cleanup_->profile_error.load();
+  unload_attempted_ = true;
+  DWORD status = users_stopped != ERROR_SUCCESS ? users_stopped : cleanup_->profile_error.load();
+  ProfilePrivileges privileges(cleanup_);
+  if (status == ERROR_SUCCESS) status = privileges.Enable();
+  if (status == ERROR_SUCCESS) {
+    if (!UnloadUserProfile(token_, profile_)) status = GetLastError();
+    else profile_ = nullptr;
+  }
+  const DWORD restore = privileges.Restore();
+  if (status != ERROR_SUCCESS) {
+    DWORD expected = ERROR_SUCCESS;
+    cleanup_->profile_error.compare_exchange_strong(expected, status);
+  }
+  return status != ERROR_SUCCESS ? status : restore;
+}
+
 DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_session,
-    std::unique_ptr<ProtectedIdentity>* result) try {
-  if (!desktop_session || !result || *result) return ERROR_INVALID_PARAMETER;
+    std::unique_ptr<ProtectedIdentity>* result, const char** startup_stage,
+    ProtectedIdentityCleanup* cleanup) try {
+  const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+  stage("identity.arguments");
+  if (!desktop_session || !result || *result || !cleanup) return ERROR_INVALID_PARAMETER;
+  stage("identity.authority-token");
   HANDLE raw_self = nullptr;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_self)) return GetLastError();
   const Handle self(raw_self);
@@ -246,16 +315,21 @@ DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_se
   DWORD bytes = 0;
   if (!GetTokenInformation(raw_self, TokenUser, system, sizeof(system), &bytes) ||
       !IsWellKnownSid(reinterpret_cast<TOKEN_USER*>(system)->User.Sid, WinLocalSystemSid)) return ERROR_ACCESS_DENIED;
+  stage("identity.open-scm");
   const Service manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
   if (!manager) return GetLastError();
+  stage("identity.open-service");
   const Service service(OpenServiceW(manager.get(), kRuntimeIdentityService,
       SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_START | READ_CONTROL));
   if (!service) return GetLastError();
+  stage("identity.validate-service");
   DWORD status = Validate(service.get(), executable);
   if (status != ERROR_SUCCESS) return status;
+  stage("identity.start-service");
   if (!StartServiceW(service.get(), 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) return GetLastError();
   SERVICE_STATUS_PROCESS state{};
   const ULONGLONG deadline = GetTickCount64() + 15000;
+  stage("identity.wait-service");
   do {
     status = QueryService(service.get(), &state);
     if (status != ERROR_SUCCESS) return status;
@@ -265,43 +339,76 @@ DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_se
     Sleep(25);
   } while (true);
   if (!state.dwProcessId || state.dwServiceType != SERVICE_WIN32_OWN_PROCESS) return ERROR_ACCESS_DENIED;
+  stage("identity.pin-process");
   const Handle holder(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, state.dwProcessId));
   if (!holder) return GetLastError();
   std::wstring image(32768, L'\0');
   DWORD length = static_cast<DWORD>(image.size());
+  stage("identity.process-image");
   if (!QueryFullProcessImageNameW(holder.get(), 0, image.data(), &length)) return GetLastError();
   image.resize(length);
   if (!Same(image, executable) || WaitForSingleObject(holder.get(), 0) != WAIT_TIMEOUT) return ERROR_ACCESS_DENIED;
   HANDLE raw_token = nullptr;
+  stage("identity.open-primary-token");
   if (!OpenProcessToken(holder.get(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw_token)) return GetLastError();
   const Handle token(raw_token);
-  auto identity = std::unique_ptr<ProtectedIdentity>(new ProtectedIdentity);
+  auto identity = std::unique_ptr<ProtectedIdentity>(new ProtectedIdentity(cleanup));
+  stage("identity.resolve-account-sid");
   status = Sid(&identity->sid_);
   if (status != ERROR_SUCCESS) return status;
   alignas(TOKEN_USER) BYTE actual[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
+  stage("identity.verify-token-user");
   if (!GetTokenInformation(raw_token, TokenUser, actual, sizeof(actual), &bytes) ||
       !EqualSid(reinterpret_cast<TOKEN_USER*>(actual)->User.Sid, identity->sid())) return ERROR_ACCESS_DENIED;
   SERVICE_STATUS_PROCESS second{};
+  stage("identity.recheck-scm-process");
   status = QueryService(service.get(), &second);
   if (status != ERROR_SUCCESS) return status;
   if (second.dwCurrentState != SERVICE_RUNNING || second.dwProcessId != state.dwProcessId) return ERROR_PROCESS_ABORTED;
+  stage("identity.duplicate-primary-token");
   if (!DuplicateTokenEx(raw_token, TOKEN_ALL_ACCESS, nullptr, SecurityImpersonation, TokenPrimary,
                          &identity->token_)) return GetLastError();
   identity->session_ = desktop_session;
+  stage("identity.set-desktop-session");
   if (!SetTokenInformation(identity->token_, TokenSessionId, &desktop_session, sizeof(desktop_session))) return GetLastError();
   PSID medium = nullptr;
+  stage("identity.set-integrity");
   if (!ConvertStringSidToSidW(L"S-1-16-8192", &medium)) return GetLastError();
   const LocalMemory medium_owner(medium);
   TOKEN_MANDATORY_LABEL integrity{{medium, SE_GROUP_INTEGRITY}};
   if (!SetTokenInformation(identity->token_, TokenIntegrityLevel, &integrity,
       sizeof(integrity) + GetLengthSid(medium))) return GetLastError();
+  // A manually started virtual-account token holder does not establish a
+  // loaded interactive user profile. Provision the local profile for the
+  // exact verified TokenUser SID before loading its hive for AppContainer
+  // profile APIs. The bare name is the profile directory's base name, not a
+  // replacement identity; LoadUserProfile still receives the pinned token.
+  stage("identity.profile-sid");
+  wchar_t* sid_text = nullptr;
+  if (!ConvertSidToStringSidW(identity->sid(), &sid_text)) return GetLastError();
+  const LocalMemory own_sid_text(sid_text);
+  wchar_t account[] = L"GesherProtectedRuntime";
+  wchar_t profile_path[32768]{};
+  stage("identity.enable-profile-privileges");
+  ProfilePrivileges privileges(cleanup);
+  status = privileges.Enable();
+  if (status != ERROR_SUCCESS) return status;
+  stage("identity.create-profile");
+  const HRESULT created = CreateProfile(sid_text, account, profile_path,
+      static_cast<DWORD>(std::size(profile_path)));
+  if (created != S_OK && created != HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
+    return HRESULT_CODE(created) ? HRESULT_CODE(created) : ERROR_GEN_FAILURE;
+  }
   PROFILEINFOW profile{};
   profile.dwSize = sizeof(profile);
   profile.dwFlags = PI_NOUI;
-  wchar_t account[] = L"GesherProtectedRuntime";
   profile.lpUserName = account;
+  stage("identity.load-profile");
   if (!LoadUserProfileW(identity->token_, &profile)) return GetLastError();
   identity->profile_ = profile.hProfile;
+  stage("identity.restore-profile-privileges");
+  status = privileges.Restore();
+  if (status != ERROR_SUCCESS) return status;
   *result = std::move(identity);
   return ERROR_SUCCESS;
 } catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }

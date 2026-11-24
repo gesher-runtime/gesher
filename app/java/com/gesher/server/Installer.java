@@ -339,8 +339,12 @@ final class Installer {
 
     /** Conventional companion filenames for a loose APK. */
     private static File[] companionSplits(File apk) {
+        if (apk == null) return null;
         File dir = apk.getParentFile();
+        if (dir == null) dir = apk.getAbsoluteFile().getParentFile();
         if (dir == null) return null;
+        // Keep discovery independent of parsing: even an unreadable candidate must
+        // invalidate the base-only source cache and reach companionsOf's validation.
         return dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
                 && name.endsWith(".apk") && !name.equals(apk.getName()));
     }
@@ -348,7 +352,8 @@ final class Installer {
     /**
      * The companions of {@code pkg} among a loose APK's {@code companions}: a folder such as
      * Downloads also holds other apps' split_*.apk and config.*.apk files, which are not part
-     * of this install and are left out rather than failing it.
+     * of this install and are left out rather than failing it. An unreadable manifest cannot
+     * establish a different owner, so its parse error still rejects the installation.
      */
     private static File[] companionsOf(String pkg, File[] companions) throws IOException {
         if (companions == null) return null;

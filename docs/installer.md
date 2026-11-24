@@ -340,7 +340,11 @@ files; any other archive without a `toc.pb` (`.apkm`, `.apk+`, an older
 manifests (`base.apk`, `split_<split name>.apk`), as Android's package
 installer names them, whatever the archive calls them. A loose APK's
 `split_*.apk` and `config.*.apk` neighbours are its companions only when their
-manifests name its package; others are left out and logged.
+manifests name its package; APKs whose manifests identify a different package
+are left out and logged. An unreadable or malformed companion cannot establish
+that it belongs to another package, so it rejects the installation. The previous
+installation and its data remain in place, including when the base APK itself
+has not changed.
 
 Not installed:
 
