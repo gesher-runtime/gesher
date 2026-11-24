@@ -5,8 +5,10 @@ Windows production acceptance is sqlite_path_test.exe (CMake/CI). This portable
 fixture compiles the exact patched winFullPathname callback and sqlite_path.cc,
 plus the unchanged DiskPath/MapPath/DrivePath/Lengthen/virtual classifier. Its
 UTF conversion, GetFullPathNameW, font lookup and procfs/device backends are
-adapters; file IO, URI parsing, transactions, ATTACH, WAL and journals use the
-pinned SQLite engine's real Unix VFS. It does not execute Win32 or ART.
+adapters. No Windows drop channel or rooted-storage broker is attached in this
+fixture; authenticated broker access remains a Windows runtime gate. File IO,
+URI parsing, transactions, ATTACH, WAL and journals use the pinned SQLite
+engine's real Unix VFS. It does not execute Win32 or ART.
 """
 from __future__ import annotations
 
@@ -84,6 +86,11 @@ def function(source: str, signature: str) -> str:
 def namespace_fixture() -> str:
     source = (ROOT / "compat/posix/src/path.cc").read_text()
     internal = (ROOT / "compat/posix/src/internal.h").read_text()
+    drop_header = (ROOT / "compat/posix/include/gesher/drop_mount.h").read_text()
+    drop_prefix = [line for line in drop_header.splitlines()
+                   if line.startswith("inline constexpr char kAndroidPrefix[] = ") and line.endswith(";")]
+    if len(drop_prefix) != 1:
+        raise ValueError("production drop-mount prefix declaration changed")
     kinds = internal[internal.index("enum class PathKind {"):]
     kinds = kinds[:kinds.index("};") + 2]
     prologue = r'''
@@ -125,6 +132,12 @@ std::string Narrow(const wchar_t* input) {
 static bool BinderDeviceExists() { return false; }
 static int SystemFontPath(const char*, std::wstring*) { return 0; }
 namespace procfs { static unsigned Type(const std::wstring&) { return 0; } }
+namespace drop_mount {
+@DROP_ANDROID_PREFIX@
+// No authenticated Windows Channel::Attach runs in this portable fixture.
+// Keep the same unavailable backend as a process with no attached channel.
+static bool Enabled() { return false; }
+}
 namespace storage_root {
 struct Selection {
   int error = 0;
@@ -133,6 +146,7 @@ struct Selection {
 static Selection Lookup(const std::wstring&) { return {}; }
 }
 '''
+    prologue = prologue.replace("@DROP_ANDROID_PREFIX@", drop_prefix[0])
     signatures = ["bool IsDriveLetter(", "std::string_view NextPart(", "PathKind VirtualKind(",
                   "bool DrivePath(", "void Lengthen(", "PathKind MapPath(", "bool DiskPath("]
     return prologue + kinds + "\n" + "\n".join(function(source, name) for name in signatures) + "\n}\n"
@@ -176,6 +190,12 @@ def main() -> None:
         flags = ["-O1", "-g", "-fno-omit-frame-pointer"]
         if args.sanitize:
             flags += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all"]
+        # Exercise the actual extracted mapper with the explicitly unattached
+        # backend before using it as SQLite's filename boundary.
+        namespace_test = work / "namespace-boundary"
+        run(shlex.split(args.cxx) + flags + ["-std=c++20", "-Wall", "-Wextra", "-Werror", "-fno-exceptions",
+            "-I", str(work), str(ROOT / "tests/native/sqlite_path_namespace_test.cc"), "-o", str(namespace_test)])
+        run([str(namespace_test)])
         # Match production's path-relevant options. ICU/collators and the ART
         # integration are exercised by the Windows runtime fixtures, not here.
         run(shlex.split(args.cc) + flags + ["-std=c17", "-DSQLITE_THREADSAFE=2", "-DSQLITE_TEMP_STORE=3",
