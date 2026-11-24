@@ -174,6 +174,25 @@ Pending items left behind expire: `deleteOrExtendExpiredItems` (line 2180:
 extends older ones by a week. AOSP runs it in idle maintenance; Gesher runs it when the
 provider starts and after each package removal.
 
+**Moves, deletes and failures.** Placement columns (`_display_name`, `relative_path`,
+`mime_type`, `is_pending`, `is_trashed`) move a file only for a single item, as
+`MediaProvider.updateInternal` (line 9370) allows; a collection update that changes them
+throws `IllegalArgumentException: Movement of <uri> which isn't part of well-defined
+collection not allowed` before anything moves. An actual move takes a unique
+destination (`ensureUniqueFileColumns`, line 9440), so renaming an item onto an existing
+name gives `name (1).ext`. AOSP renames the file (`Os.rename`, line 9463) and then
+writes the row; when the row write fails or the process dies in between, Android's
+scanner reconciles later (`ModernMediaScanner.reconcileAndClean` deletes rows whose file
+it did not find; the moved file is scanned as a new, ownerless item). Gesher has no
+full volume scan, so the index keeps the two together itself: every file move or
+delete is first appended to a journal in `external-file-ops/` next to the database and
+forced to disk; when the transaction does not commit, completed moves are reversed;
+the journal is removed after the commit. A journal found when the provider starts
+means the system server stopped in between: a move whose row still names the old path
+is undone (the item keeps its id, owner and pending state), and a delete whose row
+still names a missing file completes by deleting the row. This covers rename/move,
+pending -> published, trash/untrash, `delete` and pending/trashed expiry.
+
 **Scanning** (`MediaProvider.getResultForScanFile`, line 7802:
 `res.putParcelable(Intent.EXTRA_STREAM, uri);`; client `MediaStore.scanFile`:
 `resolver.call(AUTHORITY, SCAN_FILE_CALL, file.getAbsolutePath(), null)` then
@@ -218,7 +237,7 @@ path, so `..` segments and links cannot place a row outside the volume.
 `tests/mediastore/MediaStoreHost.java` over a real database file and real files:
 
 ```
-MediaStoreIndex SHA256 b9e2fe4410f054f7094c648bec86b4279ffd0e31a99038dddb0669b99afda0fe
+MediaStoreIndex SHA256 6e6f0fa98a8e028ffbf9a8183f2110ac9b7c40fb0cf7e50515a6e045f3af0236
 PASS  media: insert(RELATIVE_PATH, IS_PENDING=1) -> openFileDescriptor("w") -> update(IS_PENDING=0) places Pictures/Gesher/sunset.png, publishes it, and indexes its real size and 640x480
 PASS  media: an app sees and edits its own rows; READ_MEDIA_IMAGES (READ_EXTERNAL_STORAGE below API 33) reads others' images; writing others' needs consent -> SecurityException; legacy writers keep access
 PASS  media: MediaProvider placement rules: DCIM/Pictures only for images, MIME family checks, _data rejected for API 34+, unique names, default directories, internal volume unattached
@@ -231,7 +250,9 @@ PASS  media: createWriteRequest/createDeleteRequest arguments are validated as A
 PASS  media: MediaStore.getVersion / getGeneration from the index (generation grows with every change)
 PASS  media: the index (rows, owners, generation, version) persists across a system-server restart
 PASS  media: package removal orphans published media and drops missing Android/media rows; expired pending items (and their files) are deleted
-media: 85 checks passed
+PASS  media: update moves files only for single items (collection movement -> IllegalArgumentException), picks a unique destination, and reverses every completed move when the transaction fails
+PASS  media: a system server killed between a file move/delete and the SQLite commit (rename, pending -> published, delete, expiry) restarts with every row and file consistent
+media: 102 checks passed
 ```
 
 Before the change (`--source-ref upstream/main`), exit status 1:

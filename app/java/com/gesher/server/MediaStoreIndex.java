@@ -16,8 +16,13 @@ import android.net.Uri;
 import android.os.Environment;
 import android.webkit.MimeTypeMap;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.EOFException;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -126,6 +131,12 @@ final class MediaStoreIndex {
         File volumeRoot();
         void notifyChange(Uri uri);
         long currentTimeMillis();
+        /**
+         * Directory for the write-ahead journal of file moves and deletes that precede a
+         * database commit ({@link FileOperations}), next to the database; null for an
+         * in-memory index, which keeps no state across a restart.
+         */
+        default File journalDirectory() { return null; }
     }
 
     /** Arguments of a query besides projection: the Bundle keys AOSP reads. */
@@ -174,6 +185,7 @@ final class MediaStoreIndex {
                     mDb.endTransaction();
                 }
             }
+            recoverFileOperations();
         }
     }
 
@@ -1282,33 +1294,53 @@ final class MediaStoreIndex {
         if (match == IMAGES_MEDIA_ID || match == VIDEO_MEDIA_ID || match == AUDIO_MEDIA_ID) {
             enforceItemWrite(access, uri, match);
         }
+        // MediaProvider.updateInternal: placement columns move a file only for a single
+        // item ("We only support movement under well-defined collections"). DATE_EXPIRES
+        // is not a mutable column, so updateInternal has already dropped it for a
+        // collection URI (isPending() is false there) before this check.
+        if (!access.self && !requested.containsKey("_data") && !isItem(match)) {
+            for (String column : requested.keySet()) {
+                if (PLACEMENT.contains(column) && !"date_expires".equals(column)) {
+                    throw new IllegalArgumentException("Movement of " + uri
+                            + " which isn't part of well-defined collection not allowed");
+                }
+            }
+        }
         int count = 0;
         List<Integer> types = new ArrayList<>();
         synchronized (mLock) {
             SQLiteQueryBuilder qb = builder(access, true, uri, match, args.matchPending,
                     args.matchTrashed, args.matchFavorite);
             List<Row> rows = rows(qb, args.selection, args.selectionArgs);
-            mDb.beginTransaction();
+            FileOperations ops = new FileOperations();
             try {
-                long generation = rows.isEmpty() ? 0 : nextGeneration();
-                for (Row row : rows) {
-                    if (updateRow(access, uri, collection(match), row, new ContentValues(requested),
-                            generation)) {
-                        count++;
-                        types.add(row.mediaType);
+                mDb.beginTransaction();
+                try {
+                    long generation = rows.isEmpty() ? 0 : nextGeneration();
+                    for (Row row : rows) {
+                        if (updateRow(access, uri, collection(match), row,
+                                new ContentValues(requested), generation, ops)) {
+                            count++;
+                            types.add(row.mediaType);
+                        }
                     }
+                    mDb.setTransactionSuccessful();
+                } finally {
+                    mDb.endTransaction();
                 }
-                mDb.setTransactionSuccessful();
-            } finally {
-                mDb.endTransaction();
+            } catch (RuntimeException | Error e) {
+                // The rows rolled back: put every file this update moved where they point.
+                ops.abort();
+                throw e;
             }
+            ops.finish();
         }
         if (count > 0) notifyCollections(volume, types);
         return count;
     }
 
     private boolean updateRow(Access access, Uri uri, int collection, Row row, ContentValues values,
-            long generation) {
+            long generation, FileOperations ops) {
         boolean publishing = false;
         if (!access.self) {
             // Column values controlled by the scanner are only writable while pending.
@@ -1350,8 +1382,15 @@ final class MediaStoreIndex {
             if (values.containsKey("_data")) {
                 placementValues.put("_data", values.getAsString("_data"));
             }
-            ensureFileColumns(access, collection == DOWNLOADS || collection == FILES
-                    ? collection : collection, uri, placementValues, false, row.data);
+            // ensureNonUniqueFileColumns probes the path; an actual movement then takes a
+            // unique destination (ensureUniqueFileColumns), as MediaProvider.updateInternal.
+            ContentValues resolved = new ContentValues(placementValues);
+            ensureFileColumns(access, collection, uri, resolved, false, row.data);
+            if (row.data != null && !resolved.getAsString("_data").equalsIgnoreCase(row.data)) {
+                resolved = new ContentValues(placementValues);
+                ensureFileColumns(access, collection, uri, resolved, true, row.data);
+            }
+            placementValues = resolved;
             for (String column : new String[] {"_data", "relative_path", "_display_name",
                     "mime_type", "is_pending", "is_trashed", "date_expires", "volume_name",
                     "bucket_id", "bucket_display_name"}) {
@@ -1362,13 +1401,12 @@ final class MediaStoreIndex {
             if (type != null) values.put("media_type", resolveMediaType(type));
             File after = new File(values.getAsString("_data"));
             if (before != null && !before.getPath().equals(after.getPath()) && before.exists()) {
-                if (after.exists()) {
+                // A case-only rename names the same file on a case-insensitive volume.
+                if (!before.getPath().equalsIgnoreCase(after.getPath()) && after.exists()) {
                     throw new IllegalStateException("Failed to rename " + before + " to " + after
                             + ": target exists");
                 }
-                if (!before.renameTo(after)) {
-                    throw new IllegalStateException("Failed to rename " + before + " to " + after);
-                }
+                ops.move(row.id, before, after);
             }
             values.put("is_download", isInDownloads(values.getAsString("relative_path")) ? 1 : 0);
         }
@@ -1429,18 +1467,28 @@ final class MediaStoreIndex {
             SQLiteQueryBuilder qb = builder(access, true, uri, match, args.matchPending,
                     args.matchTrashed, args.matchFavorite);
             List<Row> rows = rows(qb, args.selection, args.selectionArgs);
-            for (Row row : rows) {
-                // deleteRecursive: the file goes with its row.
-                if (row.data != null) {
-                    File file = new File(row.data);
-                    if (file.isFile() && !file.delete()) {
-                        SystemServer.log("media: failed to delete " + file);
-                        continue;
+            FileOperations ops = new FileOperations();
+            try {
+                for (Row row : rows) {
+                    // deleteRecursive: the file goes with its row.
+                    if (row.data != null) {
+                        File file = new File(row.data);
+                        if (file.isFile() && !ops.delete(row.id, file)) {
+                            SystemServer.log("media: failed to delete " + file);
+                            continue;
+                        }
                     }
+                    mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {row.id});
+                    types.add(row.mediaType);
                 }
-                mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {row.id});
-                types.add(row.mediaType);
+            } catch (RuntimeException | Error e) {
+                // A deleted file cannot come back; the journal makes the next start
+                // forget its row (recoverFileOperations).
+                ops.abort();
+                if (!types.isEmpty()) notifyCollections(volume, types);
+                throw e;
             }
+            ops.finish();
         }
         if (!types.isEmpty()) notifyCollections(volume, types);
         return types.size();
@@ -1767,26 +1815,220 @@ final class MediaStoreIndex {
                     paths.add(c.getString(2));
                 }
             }
-            for (int i = 0; i < items.size(); i++) {
-                long[] item = items.get(i);
-                File file = paths.get(i) == null ? null : new File(paths.get(i));
-                if (item[1] > expiredOneWeek) {
-                    if (file != null && file.exists() && !file.delete()) continue;
-                    mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {item[0]});
-                    types.add((int) item[2]);
-                } else if (file != null) {
-                    Matcher m = PATTERN_EXPIRES_FILE.matcher(file.getName());
-                    if (!m.matches()) continue;
-                    File renamed = new File(file.getParentFile(), "." + m.group(1) + "-"
-                            + (extended + i) + "-" + m.group(3));
-                    if (file.exists() && !file.renameTo(renamed)) continue;
-                    mDb.execSQL("UPDATE files SET _data=?, date_expires=? WHERE _id=?",
-                            new Object[] {renamed.getPath(), extended + i, item[0]});
+            FileOperations ops = new FileOperations();
+            try {
+                mDb.beginTransaction();
+                try {
+                    for (int i = 0; i < items.size(); i++) {
+                        long[] item = items.get(i);
+                        File file = paths.get(i) == null ? null : new File(paths.get(i));
+                        if (item[1] > expiredOneWeek) {
+                            if (file != null && file.exists() && !ops.delete(item[0], file)) continue;
+                            mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {item[0]});
+                            types.add((int) item[2]);
+                        } else if (file != null) {
+                            Matcher m = PATTERN_EXPIRES_FILE.matcher(file.getName());
+                            if (!m.matches()) continue;
+                            File renamed = new File(file.getParentFile(), "." + m.group(1) + "-"
+                                    + (extended + i) + "-" + m.group(3));
+                            if (file.exists() && !ops.tryMove(item[0], file, renamed)) continue;
+                            mDb.execSQL("UPDATE files SET _data=?, date_expires=? WHERE _id=?",
+                                    new Object[] {renamed.getPath(), extended + i, item[0]});
+                        }
+                    }
+                    mDb.setTransactionSuccessful();
+                } finally {
+                    mDb.endTransaction();
                 }
+            } catch (RuntimeException | Error e) {
+                ops.abort();
+                throw e;
             }
+            ops.finish();
         }
         if (!types.isEmpty()) notifyCollections(VOLUME_EXTERNAL_PRIMARY, types);
         return types.size();
+    }
+
+    // ---- file operations and their journal ---------------------------------------------
+
+    private static final int OP_MOVE = 1, OP_DELETE = 2;
+    private static final String JOURNAL_SUFFIX = ".journal";
+
+    /**
+     * The file moves and deletes one index operation makes before its database change
+     * commits. AOSP's MediaProvider renames or deletes the file and then writes the row;
+     * when the row write fails or the process dies in between, Android's media scanner
+     * later reconciles the volume (ModernMediaScanner.reconcileAndClean deletes rows
+     * whose file it did not find, and the moved file is scanned as a new item). Gesher
+     * has no full volume scan, so it keeps the row and the file together itself:
+     * <ul>
+     * <li>every completed move is reversed when the transaction does not commit, so a
+     *     rolled-back row still names its file;</li>
+     * <li>each move or delete is first appended to a journal file and forced to disk;
+     *     the journal is removed once the database change committed (or the moves were
+     *     reversed). A journal found at startup ({@link #recoverFileOperations}) means
+     *     the system server stopped in between, and is resolved against the rows.</li>
+     * </ul>
+     */
+    private final class FileOperations {
+        private final List<File[]> mMoves = new ArrayList<>();
+        private File mJournal;
+        private FileOutputStream mStream;
+        private DataOutputStream mOut;
+        private boolean mDeleted;
+
+        /** Renames {@code before} to {@code after} or throws IllegalStateException. */
+        void move(long id, File before, File after) {
+            if (!tryMove(id, before, after)) {
+                throw new IllegalStateException("Failed to rename " + before + " to " + after);
+            }
+        }
+
+        boolean tryMove(long id, File before, File after) {
+            record(OP_MOVE, id, before, after);
+            if (!before.renameTo(after)) return false;
+            mMoves.add(new File[] {before, after});
+            return true;
+        }
+
+        boolean delete(long id, File file) {
+            record(OP_DELETE, id, file, file);
+            if (!file.delete()) return false;
+            mDeleted = true;
+            return true;
+        }
+
+        /** The database change committed: the journal is no longer needed. */
+        void finish() {
+            close(true);
+        }
+
+        /**
+         * The database change did not commit: moves are reversed, newest first. Deleted
+         * files cannot be restored, so their journal stays for the next start.
+         */
+        void abort() {
+            boolean restored = true;
+            for (int i = mMoves.size() - 1; i >= 0; i--) {
+                File before = mMoves.get(i)[0];
+                File after = mMoves.get(i)[1];
+                if (!after.renameTo(before)) {
+                    restored = false;
+                    SystemServer.log("media: failed to move " + after + " back to " + before);
+                }
+            }
+            mMoves.clear();
+            close(restored && !mDeleted);
+        }
+
+        private void record(int op, long id, File first, File second) {
+            File directory = mHost.journalDirectory();
+            if (directory == null) return;
+            try {
+                if (mOut == null) {
+                    if (!directory.isDirectory() && !directory.mkdirs()) {
+                        throw new IOException("cannot create " + directory);
+                    }
+                    mJournal = File.createTempFile("ops-", JOURNAL_SUFFIX, directory);
+                    mStream = new FileOutputStream(mJournal);
+                    mOut = new DataOutputStream(mStream);
+                }
+                mOut.writeInt(op);
+                mOut.writeLong(id);
+                mOut.writeUTF(first.getPath());
+                mOut.writeUTF(second.getPath());
+                mOut.flush();
+                mStream.getFD().sync();
+            } catch (IOException e) {
+                // Nothing on the volume changed yet; the caller's transaction rolls back.
+                throw new IllegalStateException("Failed to journal a media file operation", e);
+            }
+        }
+
+        private void close(boolean discard) {
+            if (mOut == null) return;
+            try {
+                mOut.close();
+            } catch (IOException e) {
+                SystemServer.log("media: closing " + mJournal + " failed: " + e);
+            }
+            mOut = null;
+            if (discard && !mJournal.delete()) {
+                SystemServer.log("media: failed to remove " + mJournal);
+            }
+        }
+    }
+
+    /**
+     * Resolves the journals of operations that did not finish: the system server stopped
+     * (or the database failed) after a file move or delete and before the row change was
+     * committed. The database is authoritative for what committed:
+     * <ul>
+     * <li>a move whose row still names the old path is undone, so the row and its owner,
+     *     id and state stay as the app last saw them;</li>
+     * <li>a delete whose row still names a file that is gone completes by deleting the
+     *     row, as ModernMediaScanner's reconcile would.</li>
+     * </ul>
+     */
+    private void recoverFileOperations() {
+        File directory = mHost.journalDirectory();
+        File[] journals = directory == null ? null
+                : directory.listFiles((dir, name) -> name.endsWith(JOURNAL_SUFFIX));
+        if (journals == null || journals.length == 0) return;
+        Arrays.sort(journals, (x, y) -> Long.compare(x.lastModified(), y.lastModified()));
+        for (int j = journals.length - 1; j >= 0; j--) {
+            List<Object[]> entries = new ArrayList<>();
+            try (DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(
+                    new FileInputStream(journals[j])))) {
+                while (true) {
+                    int op;
+                    try {
+                        op = in.readInt();
+                    } catch (EOFException end) {
+                        break;
+                    }
+                    entries.add(new Object[] {op, in.readLong(), in.readUTF(), in.readUTF()});
+                }
+            } catch (EOFException | java.io.UTFDataFormatException torn) {
+                // A record cut short by the stop: its file operation never started.
+            } catch (IOException e) {
+                SystemServer.log("media: cannot read " + journals[j] + ": " + e);
+                continue;
+            }
+            boolean resolved = true;
+            mDb.beginTransaction();
+            try {
+                for (int i = entries.size() - 1; i >= 0; i--) {
+                    Object[] entry = entries.get(i);
+                    long id = (Long) entry[1];
+                    File first = new File((String) entry[2]);
+                    File second = new File((String) entry[3]);
+                    String data = null;
+                    boolean exists;
+                    try (Cursor c = mDb.rawQuery("SELECT _data FROM files WHERE _id=?",
+                            new String[] {Long.toString(id)})) {
+                        exists = c.moveToFirst();
+                        if (exists) data = c.getString(0);
+                    }
+                    if (!exists || !first.getPath().equals(data) || first.exists()) continue;
+                    if ((Integer) entry[0] == OP_MOVE) {
+                        if (second.exists() && !second.renameTo(first)) {
+                            resolved = false;
+                            SystemServer.log("media: failed to move " + second + " back to " + first);
+                        }
+                    } else {
+                        mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {id});
+                    }
+                }
+                mDb.setTransactionSuccessful();
+            } finally {
+                mDb.endTransaction();
+            }
+            if (resolved && !journals[j].delete()) {
+                SystemServer.log("media: failed to remove " + journals[j]);
+            }
+        }
     }
 
     // ---- version and generation ---------------------------------------------------------

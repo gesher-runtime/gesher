@@ -58,6 +58,8 @@ final class MediaStoreProvider extends ContentProvider {
     private final ProviderInfo mInfo;
     final ContentProviders.RegisteredProvider registration;
     private final MediaStoreIndex mIndex;
+    /** The journal of file moves and deletes awaiting a commit; null without state. */
+    private final File mJournal;
     private final java.util.concurrent.ThreadPoolExecutor mMaintenance =
             new java.util.concurrent.ThreadPoolExecutor(1, 1, 30, java.util.concurrent.TimeUnit.SECONDS,
                     new java.util.concurrent.LinkedBlockingQueue<>(), task -> {
@@ -85,7 +87,8 @@ final class MediaStoreProvider extends ContentProvider {
         } else {
             db = SQLiteDatabase.create(null);
         }
-        MediaStoreProvider provider = new MediaStoreProvider(am, pm, db);
+        MediaStoreProvider provider = new MediaStoreProvider(am, pm, db,
+                stateDir == null ? null : new File(stateDir, "external-file-ops"));
         am.providers().setMedia(provider);
         am.addSystemReceiver(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, provider::onScanFileBroadcast);
         provider.start();
@@ -93,7 +96,8 @@ final class MediaStoreProvider extends ContentProvider {
     }
 
     private MediaStoreProvider(ActivityManagerService am, PackageManagerService pm,
-            SQLiteDatabase db) {
+            SQLiteDatabase db, File journal) {
+        mJournal = journal;
         mPm = pm;
         mGrants = am.uriGrants();
         mCallers = am.callers();
@@ -470,5 +474,6 @@ final class MediaStoreProvider extends ContentProvider {
             }
         }
         @Override public long currentTimeMillis() { return System.currentTimeMillis(); }
+        @Override public File journalDirectory() { return mJournal; }
     }
 }
