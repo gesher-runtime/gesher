@@ -748,6 +748,17 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ResolveInfo resolveService(Intent intent, String resolvedType, long flags,
             int userId) {
         List<ResolveInfo> all = services(intent, resolvedType, flags);
+        // microG's Chimera resolver asks PM for the first-party Games action,
+        // then binds the returned component with the original Games request.
+        if (all.isEmpty() && userId == 0 && intent != null && intent.getComponent() == null
+                && intent.getSelector() == null && "com.google.android.gms".equals(intent.getPackage())
+                && "com.google.android.play.games.service.START_1P".equals(intent.getAction())) {
+            ApkPackage addon = get(intent.getPackage());
+            if (addon != null && addon.isSystemAddon() && addon.uid() == Binder.getCallingUid()) {
+                Intent alias = new Intent(intent).setAction("com.google.android.gms.games.service.START");
+                all = services(alias, resolvedType, flags);
+            }
+        }
         return all.isEmpty() ? null : all.get(0);
     }
 

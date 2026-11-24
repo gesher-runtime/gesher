@@ -232,6 +232,9 @@ final class ContentProviders {
                         | PackageManager.GET_SHARED_LIBRARY_FILES);
                 if (info == null) continue;
                 if (found != null) {
+                    android.util.Log.w("GesherProviders", "Conflicting authority " + authority
+                            + " declared by " + found.packageName + "/" + found.name
+                            + " and " + info.packageName + "/" + info.name);
                     throw new SecurityException("Conflicting content provider authority");
                 }
                 found = info;
@@ -594,7 +597,14 @@ final class ContentProviders {
                         || registeredProvider(authority) != null
                         || ContactsProviderSupport.isSystemAuthority(authority)
                         || !batch.add(authority)) throw new SecurityException("Invalid published authority");
-                ProviderInfo canonical = declaredProvider(mPm, authority);
+                ProviderInfo canonical;
+                try {
+                    canonical = declaredProvider(mPm, authority);
+                } catch (SecurityException conflict) {
+                    SystemServer.log("publishContentProviders: skipping conflicting authority "
+                            + authority + " for " + pkg.packageName + "/" + declared.name);
+                    continue publication;
+                }
                 if (canonical == null || !pkg.packageName.equals(canonical.packageName)
                         || !declared.name.equals(canonical.name)) {
                     if (!current(admission)) continue publication;

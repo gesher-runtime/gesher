@@ -946,7 +946,10 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     @Override
     public synchronized String getPreviousName(Account account) {
-        Entry e = mAccounts.get(account); requireOwner(caller(null), e);
+        if (account == null) return null;
+        Caller c = caller(null);
+        Entry e = mAccounts.get(account);
+        if (e == null || visibility(c, e) == AccountManager.VISIBILITY_NOT_VISIBLE) return null;
         return e.data.get("gesher.previousAccountName");
     }
 
