@@ -170,6 +170,12 @@ public final class DownloadManagerHost {
         volatile int[] power = {1, 128, 255, 0};
         /** When the session display went off (test clock); -1 while it is on. */
         volatile long displayOffSince = -1;
+        /**
+         * While the display is off, a fixed JobIdleMillis reading instead of the clock's:
+         * Windows can deliver the OFF event before any display-off time has accumulated, so
+         * the reading taken for that event is exactly 0. -1 to use the clock.
+         */
+        volatile long displayOffReading = -1;
         volatile Runnable conditionsListener;
         SQLiteDatabase db;
         DownloadRequests requests;
@@ -229,7 +235,9 @@ public final class DownloadManagerHost {
                 /** WindowsHost.jobIdleMillis: display-off time without input, 0 while on. */
                 public long idleMillis() {
                     long since = displayOffSince;
-                    return since < 0 ? 0 : Math.max(0, clock.now() - since);
+                    if (since < 0) return 0;
+                    long reading = displayOffReading;
+                    return reading >= 0 ? reading : Math.max(0, clock.now() - since);
                 }
                 public void listen(Runnable listener) { conditionsListener = listener; }
             });
@@ -294,6 +302,22 @@ public final class DownloadManagerHost {
             List<Broadcast> result = new ArrayList<>();
             synchronized (broadcasts) { for (Broadcast b : broadcasts) if (b.id == id) result.add(b); }
             return result;
+        }
+    }
+
+    /** Milliseconds until the queue's pending inactivity check runs; -1 when none is armed. */
+    static long idleCheckDelay(DownloadQueue queue) {
+        try {
+            java.lang.reflect.Field field = DownloadQueue.class.getDeclaredField("mIdleCheck");
+            field.setAccessible(true);
+            synchronized (queue) {
+                java.util.concurrent.ScheduledFuture<?> check =
+                        (java.util.concurrent.ScheduledFuture<?>) field.get(queue);
+                return check == null || check.isDone()
+                        ? -1 : check.getDelay(java.util.concurrent.TimeUnit.MILLISECONDS);
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
         }
     }
 
@@ -711,6 +735,20 @@ public final class DownloadManagerHost {
             check(f.status(needsIdle) == Downloads.Impl.STATUS_PENDING
                     && server.requests("/file.bin").size() == idleBefore,
                     "setRequiresDeviceIdle(true) while the user is active: the row stays pending");
+            check(idleCheckDelay(f.queue) < 0, "no inactivity check is armed while the display is on");
+            // Windows reports the display OFF while its display-off time is still 0. The
+            // queue must arm the inactivity check for the whole threshold, as
+            // DeviceIdlenessTracker does on ACTION_SCREEN_OFF; nothing else will wake it.
+            f.displayOffReading = 0;
+            f.displayOffSince = clock.now();
+            f.conditionsChanged();
+            Thread.sleep(300);
+            long armed = idleCheckDelay(f.queue);
+            check(f.status(needsIdle) == Downloads.Impl.STATUS_PENDING && armed > 31 * 60_000 - 60_000
+                    && armed <= 31 * 60_000,
+                    "a display-off event at zero elapsed time arms the idle check for the full threshold (armed: "
+                            + armed + " ms)");
+            f.displayOffReading = -1;
             f.displayOffSince = clock.now() - 60_000;  // display off for a minute
             f.conditionsChanged();
             Thread.sleep(300);
