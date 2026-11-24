@@ -87,9 +87,12 @@ Design: [0085](decisions/0085-bluetooth-host-radio.md). Tests:
 - **RFCOMM**: `createRfcommSocketToServiceRecord` / `createInsecure...` connect AF_BTH
   sockets by service UUID (Windows looks it up in SDP); the hidden `createRfcommSocket(int)`
   that SPP apps call by reflection connects to a channel. Streams, `available()`, and
-  end-of-stream handling: a peer's clean close reads as -1 for apps targeting Android 17
-  (API 37) and up and throws IOException for older targets, as on Android; a socket closed
-  locally and native errors always throw IOException. `connect()` is a non-blocking
+  end-of-stream handling: local close, orderly peer close and a dropped connection
+  read as -1 for apps targeting Android 17 (API 37) and up and throw IOException
+  for older targets. Other native failures still throw IOException. Writes keep
+  throwing on failure; a write-detected disconnect also marks later reads as EOF.
+  Reconnection retires the prior native handle and starts a fresh stream.
+  `connect()` is a non-blocking
   connect and a wait, so `close()` from another thread cancels it. Secure sockets require
   authentication and encryption (SO_BTH_AUTHENTICATE, SO_BTH_ENCRYPT); the hidden
   `isEncrypted()` is true only while such a socket of the process is connected to the
