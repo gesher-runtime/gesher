@@ -92,7 +92,7 @@ class ScriptedOperation final : public winrt::IAsyncOperation<int>, public winrt
   }
   HRESULT STDMETHODCALLTYPE Close() override {
     closes++;
-    return status == kStarted ? E_ILLEGAL_STATE_CHANGE : S_OK;
+    return status == kStarted ? kIllegalStateChange : S_OK;
   }
 
  private:
