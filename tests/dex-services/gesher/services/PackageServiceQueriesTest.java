@@ -81,10 +81,20 @@ public final class PackageServiceQueriesTest {
         require(service.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN, 0),
                 "Device did not advertise touchscreen feature");
         boolean listedTouchscreen = false;
+        int unnamed = 0, glEs = -1;
         for (FeatureInfo feature : service.getSystemAvailableFeatures().getList()) {
             if (PackageManager.FEATURE_TOUCHSCREEN.equals(feature.name)) listedTouchscreen = true;
+            if (feature.name == null) {
+                unnamed++;
+                glEs = feature.reqGlEsVersion;
+            }
         }
         require(listedTouchscreen, "Available features list omitted touchscreen");
+        // As AOSP's list: one unnamed entry, carrying ro.opengles.version.
+        require(unnamed == 1 && glEs == android.os.SystemProperties.getInt(
+                        "ro.opengles.version", FeatureInfo.GL_ES_VERSION_UNDEFINED),
+                "Available features list lacks the OpenGL ES version entry: " + unnamed
+                        + " unnamed, version 0x" + Integer.toHexString(glEs));
         // The network location provider is always registered; GNSS is not claimed.
         require(service.hasSystemFeature(PackageManager.FEATURE_LOCATION, 0)
                         && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_NETWORK, 0)
