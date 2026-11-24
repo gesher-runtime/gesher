@@ -442,6 +442,7 @@ static void SharedDirectory(const std::wstring& root) {
   CHECK(exclusive != INVALID_HANDLE_VALUE);
   r = internal::SyncUserCaDirectory(user, {new_root});
   CHECK(!r.ok && r.removed == 0 && r.written == 1);
+  CHECK(r.error == ERROR_SHARING_VIOLATION);  // the failing open's, not a later call's
   CHECK(Contents(new_path) == AsString(new_root));
   // Unreadable now, it stays in the manifest (a volume without named streams
   // would have no other record).
@@ -451,6 +452,20 @@ static void SharedDirectory(const std::wstring& root) {
   r = internal::SyncUserCaDirectory(user, {new_root});
   CHECK(r.ok && r.removed == 1 && r.written == 0);
   CHECK(Contents(old_path) == "<missing>");
+
+  // Gesher's entry for a root still wanted, held open without sharing: it is
+  // still present, so the root is not written again at the next index (a
+  // second alias that both records would then keep).
+  HANDLE held = CreateFileW(new_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(held != INVALID_HANDLE_VALUE);
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(!r.ok && r.written == 0 && r.removed == 0 && r.error == ERROR_SHARING_VIOLATION);
+  CHECK(Contents(added + L"\\" + HashName(new_root, 1)) == "<missing>");
+  CloseHandle(held);
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(r.ok && r.written == 0 && r.removed == 0 && r.error == 0);
+  CHECK(List(added).size() == 1 && Contents(new_path) == AsString(new_root));
 
   // A copy of Gesher's entry, which carries its stream (as Explorer and copy
   // do), at another name is not Gesher's: it stays when the root goes.

@@ -61,6 +61,7 @@ struct UserSyncResult {
   bool ok = false;
   size_t written = 0;  // certificates added
   size_t removed = 0;  // Gesher's entries no longer wanted (deleted or tombstoned)
+  unsigned long error = 0;  // when !ok: the Win32 error of the first call that failed
 };
 
 // Brings <user_dir>\cacerts-added (user_dir: a Win32 path, Android's

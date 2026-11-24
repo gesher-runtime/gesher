@@ -255,10 +255,12 @@ carry the stream, but it names the original). It does not include a file
 with Gesher's certificate put at the very name Gesher's records give: that
 one cannot be told from Gesher's own and goes with its root. A new entry
 never replaces a file: if one appears at its name after the scan, the entry
-takes the next index. Removing an entry opens it shared, so a reader does
-not keep it from going; one that still cannot be removed stays recorded,
-goes at a later sync, and does not hold up new entries. The manifest is read
-leniently (CRLF, case, malformed lines skip only themselves). As in Conscrypt's
+takes the next index. Removing an entry opens it shared, so a reader that
+shares writing and deletion (as Gesher's own file layer does) does not keep
+it from going; one that still cannot be removed (a reader that shares only
+reading, such as .NET's `File.OpenRead`) stays recorded, goes at a later
+sync, and does not hold up new entries; while it cannot be read, it still
+counts as present. The manifest is read leniently (CRLF, case, malformed lines skip only themselves). As in Conscrypt's
 `findCert`, the indexes of a hash end at the first one that is not a file: a
 directory there leaves the certificate out (the sync reports a failure)
 rather than writing it past the directory, where it would be unreachable.

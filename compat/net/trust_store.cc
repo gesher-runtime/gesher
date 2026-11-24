@@ -472,7 +472,7 @@ void Sync() {
     user_dir = std::string(android_data) + sub;
     user = trust_store_internal::SyncUserCaDirectory(WinPath(user_dir), local);
   }
-  DWORD user_error = user.ok ? 0 : GetLastError();
+  DWORD user_error = user.ok ? 0 : user.error;
   ReleaseMutex(mutex);
   CloseHandle(mutex);
   if (!ok) {
@@ -704,6 +704,13 @@ void (*g_before_user_entry_write)(const std::wstring& path) = nullptr;
 UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
                                    const std::vector<Der>& certificates) {
   UserSyncResult result;
+  // Records a failure with the error of the call that failed, taken there:
+  // later calls (cleanup, the next entry) overwrite GetLastError.
+  bool ok = true;
+  auto fail = [&](DWORD error) {
+    if (result.error == 0) result.error = error;
+    ok = false;
+  };
   const std::wstring dir = user_dir + L"\\cacerts-added";
   const std::wstring manifest_path = user_dir + L"\\.gesher-user-cacerts";
   // Temporary files of a writer that died before its rename.
@@ -751,6 +758,7 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
     DWORD attributes = GetFileAttributesW((dir + L"\\" + name).c_str());
     if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
         !ReadWholeFile(dir + L"\\" + name, &ignored)) {
+      fail(GetLastError());
       unreadable[name] = TrimLower(line.substr(space + 1));
     }
   }
@@ -780,7 +788,6 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
     FindClose(find);
   }
 
-  bool ok = unreadable.empty();
   // Gesher's entries that are no longer wanted: the root left Windows' store.
   for (auto it = owned.begin(); it != owned.end();) {
     if (wanted.count(it->second) != 0) {
@@ -791,7 +798,7 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
       result.removed++;
       it = owned.erase(it);
     } else {
-      ok = false;
+      fail(GetLastError());
       ++it;
     }
   }
@@ -801,13 +808,19 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   // index. Like its findCert, the run ends at the first index that is not a
   // file: an entry there would be unreachable, so a directory in the way is
   // a failure, not a reason to go past it. An entry that could not be
-  // removed stays where it is and does not hold up the others.
+  // removed stays where it is and does not hold up the others. Gesher's own
+  // entry for the certificate that cannot be read now (its manifest line
+  // gives the digest) is present: writing it again would make a second alias.
   enum class Slot { kFree, kPresent, kBlocked };
   std::set<std::wstring> planned;
-  auto find_slot = [&](unsigned long hash, const std::string& der, std::wstring* name) {
+  auto find_slot = [&](unsigned long hash, const Digest& digest, const std::string& der,
+                       std::wstring* name) {
+    const std::string hex = Hex(digest);
     for (int index = 0;; index++) {
       *name = UserCertName(hash, index);
       if (planned.count(*name) != 0) continue;
+      auto recorded = unreadable.find(*name);
+      if (recorded != unreadable.end() && recorded->second == hex) return Slot::kPresent;
       std::wstring path = dir + L"\\" + *name;
       DWORD attributes = GetFileAttributesW(path.c_str());
       if (attributes == INVALID_FILE_ATTRIBUTES) return Slot::kFree;
@@ -826,10 +839,10 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   for (const auto& [digest, entry] : wanted) {
     std::string der(entry.der->begin(), entry.der->end());
     std::wstring name;
-    Slot slot = find_slot(entry.hash, der, &name);
+    Slot slot = find_slot(entry.hash, digest, der, &name);
     if (slot == Slot::kPresent) continue;
     if (slot == Slot::kBlocked) {
-      ok = false;
+      fail(ERROR_CANNOT_MAKE);  // a directory where the entry would go
       continue;
     }
     planned.insert(name);
@@ -844,11 +857,17 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
     for (const auto& [name, hex] : unreadable) {
       if (entries.count(name) == 0) listed += std::string(name.begin(), name.end()) + " " + hex + "\n";
     }
-    if (listed.empty()) return !had_manifest || DeleteFileW(manifest_path.c_str()) ||
-                               GetLastError() == ERROR_FILE_NOT_FOUND;
+    if (listed.empty()) {
+      if (!had_manifest || DeleteFileW(manifest_path.c_str())) return true;
+      DWORD error = GetLastError();
+      if (error == ERROR_FILE_NOT_FOUND) return true;
+      fail(error);
+      return false;
+    }
     if (had_manifest && listed == manifest) return true;
     if (!MakeDirectories(user_dir) ||
         !WriteFileAtomically(user_dir, L".gesher-user-cacerts", listed, user_dir)) {
+      fail(GetLastError());
       return false;
     }
     had_manifest = true;
@@ -860,13 +879,12 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   if (!write_manifest(intended)) {
     // Without the manifest nothing is written: the owner mark alone would
     // be lost on a volume without named streams.
-    result.ok = false;
+    result.ok = false;  // fail() recorded the error
     return result;
   }
   // A new entry never replaces a file: one that appeared at its name since
   // the scan is someone else's. The entry then takes the next free index,
   // named in the manifest first like any other.
-  bool wrote_all = true;
   for (const Pending& p : pending) {
     std::string der(p.der->begin(), p.der->end());
     std::wstring name = p.name;
@@ -882,23 +900,28 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
         break;
       }
       DWORD error = GetLastError();
-      if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) break;
+      if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) {
+        fail(error);
+        break;
+      }
       intended.erase(name);
       planned.erase(name);
-      Slot slot = find_slot(p.hash, der, &name);
+      Slot slot = find_slot(p.hash, p.digest, der, &name);
       if (slot == Slot::kPresent) {
         done = true;  // Someone else's copy: not Gesher's, nothing to write.
         break;
       }
-      if (slot == Slot::kBlocked) break;
+      if (slot == Slot::kBlocked) {
+        fail(ERROR_CANNOT_MAKE);
+        break;
+      }
       planned.insert(name);
       intended[name] = p.digest;
       if (!write_manifest(intended)) break;
     }
-    if (!done) wrote_all = false;
+    if (!done) fail(ERROR_ALREADY_EXISTS);  // only if nothing above recorded one
   }
-  if (!wrote_all) ok = false;
-  if (!write_manifest(owned)) ok = false;
+  write_manifest(owned);
   result.ok = ok;
   return result;
 }
