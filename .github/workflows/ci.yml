@@ -168,6 +168,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: MediaStore provider over real SQLite and NTFS paths, file-move rollback and crash recovery
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell

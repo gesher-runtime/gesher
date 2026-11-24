@@ -231,7 +231,9 @@ path, so `..` segments and links cannot place a row outside the volume.
 ## Validation
 
 `python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"` (CI: Linux
-`artifact-preflight` job, next to the HttpEngine and DNS Java host contracts) compiles
+`artifact-preflight` job, next to the HttpEngine and DNS Java host contracts; Windows:
+`windows-host-contracts` on windows-2022 and windows-2025 with Temurin 21, so the same
+checks run over NTFS paths with `\` separators and Windows rename/delete semantics) compiles
 `MediaStoreIndex` unchanged with AOSP's `SQLiteQueryBuilder`/`SQLiteTokenizer`
 (`android-16.0.0_r4`, SHA-256 pinned) and sqlite-jdbc 3.46.1.3 (SHA-256 pinned), and runs
 `tests/mediastore/MediaStoreHost.java` over a real database file and real files:

@@ -63,9 +63,9 @@ def fetch(cache: Path, name: str) -> Path:
 def production_source(ref: str | None, name: str) -> str | None:
     relative = f'app/java/com/gesher/server/{name}.java'
     if not ref:
-        return (ROOT / relative).read_text()
+        return (ROOT / relative).read_text(encoding='utf-8')
     shown = subprocess.run(['git', 'show', f'{ref}:{relative}'], cwd=ROOT,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding='utf-8')
     return shown.stdout if shown.returncode == 0 else None
 
 
@@ -73,9 +73,9 @@ def client_scan_file(ref: str | None) -> str:
     relative = 'app/java/android/provider/MediaStore.java'
     if ref:
         text = subprocess.run(['git', 'show', f'{ref}:{relative}'], cwd=ROOT,
-                              capture_output=True, text=True, check=True).stdout
+                              capture_output=True, text=True, encoding='utf-8', check=True).stdout
     else:
-        text = (ROOT / relative).read_text()
+        text = (ROOT / relative).read_text(encoding='utf-8')
     start = text.index('public static Uri scanFile(ContentResolver resolver, File file)')
     return text[start:text.index('}', start) + 1]
 
@@ -123,7 +123,7 @@ def main() -> None:
         server.mkdir(parents=True)
         sqlite.mkdir(parents=True)
         for name, source in sources.items():
-            (server / f'{name}.java').write_text(source)
+            (server / f'{name}.java').write_text(source, encoding='utf-8')
         for path in aosp:
             shutil.copy2(path, sqlite / path.name)
         files = [str(p) for p in (work / 'src').rglob('*.java')]
