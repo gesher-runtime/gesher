@@ -49,7 +49,12 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   `uc_mcontext` the kernel's `struct sigcontext` with an FPSIMD record, filled
   with the guest registers where the thread took the signal
   (`gesher_arm64_guest_context`): at a block boundary, or at the guest call of
-  the host function it is in. Changes a handler makes to it are not applied.
+  the host function it is in. Changes a handler makes to it are not applied;
+  the FPCR/FPSR the handler leaves are (`gesher_arm64_guest_fp`), as
+  sigreturn restores them. dynarmic checks for the stop when blocks link
+  directly; its return-stack-buffer and fast-dispatch terminals do not, so a
+  loop made only of indirect branches or returns, with no direct branch or
+  host call in it, is not stopped until it leaves that loop.
 
 - **The ELF loader** (`compat/elf`) maps `EM_AARCH64` objects with executable
   segments non-executable, applies the AArch64 relocations and TLS, and

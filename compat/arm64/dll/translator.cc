@@ -1300,6 +1300,24 @@ class Env final : public A64::UserCallbacks {
     if (jit != nullptr) jit->HaltExecution(kSignalHalt);
   }
 
+  // Saves (restore = false) or restores the FPCR/FPSR of the guest code
+  // GuestContext describes, around a signal handler: Enter() hands a nested
+  // call's FP mode back to its caller, which sigreturn does not.
+  bool GuestFp(bool restore, uint32_t* state) {
+    A64::Jit* jit = CurrentJit();
+    if (jit == nullptr || t_guest_running) return false;
+    if (restore) {
+      jit->SetFpcr(state[0]);
+      jit->SetFpsr(state[1]);
+      fpcr_ = state[0];
+      fpsr_ = state[1];
+    } else {
+      state[0] = jit->GetFpcr();
+      state[1] = jit->GetFpsr();
+    }
+    return true;
+  }
+
   // The guest registers of the code running on this thread, or that called
   // the host function it is in: false if there is none.
   bool GuestContext(A64Sigcontext* sc) {
@@ -2355,6 +2373,13 @@ extern "C" __declspec(dllexport) void gesher_arm64_print_guest_state() { PrintGu
 extern "C" __declspec(dllexport) int gesher_arm64_guest_context(void* sc) {
   Env* env = t_env_raw;
   return env != nullptr && env->GuestContext(static_cast<A64Sigcontext*>(sc)) ? 1 : 0;
+}
+
+// For signal_bionic.cc, around a guest signal handler: saves (restore = 0)
+// or restores the FPCR/FPSR of the calling thread's interrupted guest code.
+extern "C" __declspec(dllexport) int gesher_arm64_guest_fp(int restore, uint32_t* state) {
+  Env* env = t_env_raw;
+  return env != nullptr && env->GuestFp(restore != 0, state) ? 1 : 0;
 }
 
 // For signal_bionic.cc: a signal was queued for thread `tid`; if it runs

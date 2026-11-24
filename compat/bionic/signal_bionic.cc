@@ -17,9 +17,14 @@
 //    sigsuspend) or enters a sleep or poll through the shim (nanosleep,
 //    usleep, sleep, poll, select, epoll_wait, pause). A target running
 //    translated ARM64 code is also stopped at the translator's next block
-//    boundary to take it, as the kernel interrupts user code. It cannot
-//    interrupt x86-64 code, nor a thread blocked elsewhere (a futex or
-//    condition-variable wait) until that wait returns to such a point.
+//    boundary to take it, as the kernel interrupts user code. A thread-
+//    directed signal also interrupts the target's futex wait (syscall(2)
+//    FUTEX_WAIT*: the handler runs, then the wait restarts with SA_RESTART or
+//    fails with EINTR) and the shim's pthread waits (mutex, condition
+//    variable, join, once: a spurious wake after the handler). It cannot
+//    interrupt x86-64 code or other blocking calls, which take it at their
+//    next delivery point. A handler of translated code leaves the
+//    interrupted code's FPCR/FPSR as they were, as sigreturn does.
 //  - sigwait/sigwaitinfo/sigtimedwait take pending signals.
 //  - Ordinary kill() of another process uses gesher-base's existing mailbox.
 //    Remote RT kill and queued-value sends return ENOSYS before that bitmap
@@ -49,6 +54,7 @@
 #include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/futex_interrupt.h>
 #include <gesher/pending_signals.h>
 #include <unistd.h>
 #include <gesher/clocks.h>
@@ -86,6 +92,7 @@ constexpr int kSigrtMin = 32 + 10;
 constexpr uintptr_t kSigDfl = 0, kSigIgn = 1;
 constexpr int kSaSiginfo = 4, kSaOnstack = 0x08000000, kSaNodefer = 0x40000000;
 constexpr uint32_t kSaResethand = 0x80000000u;
+constexpr int kSaRestart = 0x10000000;
 constexpr int kSigBlock = 0, kSigUnblock = 1, kSigSetmask = 2;
 constexpr int kSigkill = 9, kSigstop = 19, kSigabrt = 6;
 constexpr int kSiUser = 0, kSiQueue = -1, kSiTkill = -6;
@@ -226,6 +233,9 @@ struct ThreadState {
   uint64_t waiting_for = 0;
   // The shim's own signal thread, not one of the program's.
   bool internal = false;
+  // Interrupts this thread's futex and address waits (futex_interrupt.h) when
+  // another thread directs a signal at it.
+  gesher_futex_interrupt futex_cell = GESHER_FUTEX_INTERRUPT_INIT;
 };
 
 struct State {
@@ -245,6 +255,9 @@ State& S() {
 }
 
 thread_local ThreadState* t_state = nullptr;
+// Whether a handler ran since DeliverAfterInterrupt began, and whether one of
+// them lacks SA_RESTART (the interrupted call then fails with EINTR).
+thread_local bool t_handler_no_restart = false;
 
 // Actual kernel-thread exit retires this exact identity without requiring a
 // later unrelated signal operation. The one-shot callback owns final deletion;
@@ -350,20 +363,34 @@ void PrintGuestState() {
 // `gesher_arm64_interrupt_thread(tid)` makes thread `tid`'s running guest code
 // stop at its next block boundary and take its pending signals there, as the
 // kernel interrupts a thread running user code; 0 if it runs none.
+// `gesher_arm64_guest_fp(restore, state)` saves (0) or restores (1) the FPCR
+// and FPSR of that guest code, which Linux restores at sigreturn.
 using GuestContextFn = int (*)(void* sigcontext);
 using GuestInterruptFn = int (*)(uint32_t tid);
+using GuestFpFn = int (*)(int restore, uint32_t* state);
+// An export of the loaded translator, looked up once (a missing one too: an
+// older DLL); nullptr while no translator is loaded.
 template <typename Fn>
-Fn TranslatorExport(std::atomic<Fn>* cache, const char* name) {
-  Fn fn = cache->load(std::memory_order_acquire);
-  if (fn != nullptr) return fn;
+struct TranslatorExportCache {
+  std::atomic<bool> resolved{false};
+  std::atomic<Fn> fn{nullptr};
+};
+template <typename Fn>
+Fn TranslatorExport(TranslatorExportCache<Fn>* cache, const char* name) {
+  if (cache->resolved.load(std::memory_order_acquire)) {
+    return cache->fn.load(std::memory_order_relaxed);
+  }
+  if (!gesher::arm64::Available()) return nullptr;
   HMODULE dll = GetModuleHandleA("gesher_arm64.dll");
-  if (dll == nullptr) return nullptr;
-  fn = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(dll, name)));
-  if (fn != nullptr) cache->store(fn, std::memory_order_release);
+  Fn fn = dll != nullptr ? reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(dll, name)))
+                         : nullptr;
+  cache->fn.store(fn, std::memory_order_relaxed);
+  cache->resolved.store(true, std::memory_order_release);
   return fn;
 }
-std::atomic<GuestContextFn> g_guest_context{nullptr};
-std::atomic<GuestInterruptFn> g_guest_interrupt{nullptr};
+TranslatorExportCache<GuestContextFn> g_guest_context;
+TranslatorExportCache<GuestInterruptFn> g_guest_interrupt;
+TranslatorExportCache<GuestFpFn> g_guest_fp;
 
 bool IsGuestHandler(const BionicSigaction& act) {
   return act.handler != kSigDfl && act.handler != kSigIgn &&
@@ -372,6 +399,10 @@ bool IsGuestHandler(const BionicSigaction& act) {
 bool GuestContextAvailable() {
   GuestContextFn fn = TranslatorExport(&g_guest_context, "gesher_arm64_guest_context");
   return fn != nullptr && fn(nullptr) != 0;
+}
+bool GuestFp(int restore, uint32_t* state) {
+  GuestFpFn fn = TranslatorExport(&g_guest_fp, "gesher_arm64_guest_fp");
+  return fn != nullptr && fn(restore, state) != 0;
 }
 void InterruptGuestThread(uint32_t tid) {
   GuestInterruptFn fn = TranslatorExport(&g_guest_interrupt, "gesher_arm64_interrupt_thread");
@@ -433,9 +464,15 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
     Terminate(sig);
   }
   gesher::elf::SetupThreadTls();  // the handler is loaded code
+  if ((act.sa_flags & kSaRestart) == 0) t_handler_no_restart = true;
   uint64_t saved = self->mask;
 #if defined(__x86_64__)
-  if ((act.sa_flags & kSaSiginfo) != 0 && IsGuestHandler(act)) {
+  // The interrupted guest code gets its FPCR/FPSR back, whatever the handler
+  // set (fesetround...), as sigreturn restores them on Linux.
+  uint32_t guest_fp[2];
+  const bool guest = IsGuestHandler(act);
+  const bool guest_fp_saved = guest && GuestFp(0, guest_fp);
+  if ((act.sa_flags & kSaSiginfo) != 0 && guest) {
     // The claim checked that this thread has guest registers to report.
     A64Ucontext frame{};
     {
@@ -450,6 +487,7 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
     reinterpret_cast<void(BIONIC_SYSV*)(int, BionicSiginfo*, void*)>(act.handler)(sig, &copy,
                                                                                     &frame);
     self->mask = saved;
+    if (guest_fp_saved) GuestFp(1, guest_fp);
     return;
   }
 #endif
@@ -472,6 +510,9 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
     reinterpret_cast<void(BIONIC_SYSV*)(int)>(act.handler)(sig);
   }
   self->mask = saved;
+#if defined(__x86_64__)
+  if (guest_fp_saved) GuestFp(1, guest_fp);
+#endif
 }
 
 int Run(ThreadState* self, int sig, const BionicSiginfo& info) {
@@ -486,24 +527,28 @@ int Run(ThreadState* self, int sig, const BionicSiginfo& info) {
 
 // Takes one pending signal this thread does not block (its own first, then
 // the process's). Returns 0 if there is none.
+// A pending signal whose action this thread cannot run now stays pending (and
+// makes the result -ENOSYS once nothing else is deliverable); it does not hold
+// back the higher-numbered signals behind it.
 int TakeDeliverable(ThreadState* self, BionicSiginfo* info, BionicSigaction* act) {
   std::lock_guard<std::mutex> lock(S().mutex);
+  bool unsupported = false;
   for (int sig = 1; sig < kNsig; ++sig) {
     if ((self->mask & Bit(sig)) != 0) continue;
     if ((self->pending.Mask() & Bit(sig)) != 0) {
-      if (!ClaimActionLocked(self, sig, act)) return -kENOSYS;
+      if (!ClaimActionLocked(self, sig, act)) { unsupported = true; continue; }
       Pop(self->pending, sig, info);
       self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
       return sig;
     }
     if ((S().process_pending.Mask() & Bit(sig)) != 0) {
-      if (!ClaimActionLocked(self, sig, act)) return -kENOSYS;
+      if (!ClaimActionLocked(self, sig, act)) { unsupported = true; continue; }
       Pop(S().process_pending, sig, info);
       return sig;
     }
   }
   self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
-  return 0;
+  return unsupported ? -kENOSYS : 0;
 }
 
 std::atomic<bool> g_process_pending{false};
@@ -736,8 +781,11 @@ int SendToOtherThread(uint32_t tid, HANDLE lifetime, int sig) {
         (action.handler == kSigIgn || (action.handler == kSigDfl && DefaultIgnores(sig)))) return 0;
     if (!slot->pending.Push(sig, kSiTkill, MakeInfo(sig, kSiTkill, 0))) return kEAGAIN;
     slot->any_pending.store(true, std::memory_order_release);
-    g_directed_pending.store(true, std::memory_order_release);
+    g_directed_pending.store(true, std::memory_order_seq_cst);
     S().sent.notify_all();
+    // A futex or address wait of the target ends to take it, as on Linux.
+    // The state (and its cell) is not freed while this lock is held.
+    gesher_futex_interrupt_request(&slot->futex_cell);
   }
   InterruptGuestThread(tid);
   return 0;
@@ -1065,6 +1113,65 @@ extern "C" int GesherBaseHook(int sig, int sender) {
 }
 
 }  // namespace
+
+// --- waits a directed signal interrupts (shim_internal.h) -----------------------
+
+gesher_futex_interrupt* AttachSignalInterrupt() {
+  ThreadState* self = Self();
+  if (self == nullptr) return nullptr;
+  gesher_futex_interrupt_attach(&self->futex_cell);
+  return &self->futex_cell;
+}
+
+void DetachSignalInterrupt() { gesher_futex_interrupt_attach(nullptr); }
+
+bool DeliverAfterInterrupt() {
+  t_handler_no_restart = false;
+  DeliverPendingSignals();
+  return !t_handler_no_restart;
+}
+
+bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
+                              DWORD ms) {
+  ThreadState* self = Self();
+  if (self == nullptr) return WaitOnAddress(address, const_cast<void*>(compare), size, ms) ||
+                              GetLastError() != ERROR_TIMEOUT;
+  gesher_futex_interrupt* cell = &self->futex_cell;
+  AcquireSRWLockExclusive(&cell->lock);
+  cell->address = address;
+  ReleaseSRWLockExclusive(&cell->lock);
+  const ULONGLONG start = GetTickCount64();
+  bool woke = false;
+  for (;;) {
+    if (cell->requested != 0) { woke = true; break; }
+    DWORD left = ms;
+    if (ms != INFINITE) {
+      const ULONGLONG elapsed = GetTickCount64() - start;
+      left = elapsed >= ms ? 0 : static_cast<DWORD>(ms - elapsed);
+    }
+    // A request between the check above and the wait below wakes no one:
+    // once a process directs signals at threads, a blocked wait rechecks
+    // every second instead of sleeping on such a lost wake indefinitely.
+    const bool sliced = left > 1000 && g_directed_pending.load(std::memory_order_seq_cst);
+    const DWORD slice = sliced ? 1000 : left;
+    if (WaitOnAddress(address, const_cast<void*>(compare), size, slice) ||
+        GetLastError() != ERROR_TIMEOUT) {
+      woke = true;
+      break;
+    }
+    if (!sliced) break;  // the caller's timeout
+    if (std::memcmp(const_cast<const void*>(address), compare, size) != 0) { woke = true; break; }
+  }
+  AcquireSRWLockExclusive(&cell->lock);
+  cell->address = nullptr;
+  ReleaseSRWLockExclusive(&cell->lock);
+  if (InterlockedExchange(&cell->requested, 0) != 0) {
+    // As a futex wait a handler interrupted: the caller rechecks its word.
+    DeliverAfterInterrupt();
+    woke = true;
+  }
+  return woke;
+}
 
 bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool owned) {
   if (!Valid(sig)) return false;

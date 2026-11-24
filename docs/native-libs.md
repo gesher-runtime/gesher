@@ -701,9 +701,13 @@ see "After that" for what is left._
   translated ARM64 code is stopped at the translator's next block boundary to
   take a signal queued for it, and an ARM64 `SA_SIGINFO` handler gets Bionic's
   arm64 `ucontext_t` with the guest registers there (as Chromium's SIGURG
-  stack sampler reads them). x86-64 code cannot be interrupted, and a thread
-  blocked elsewhere (a futex or condition-variable wait) takes the signal only
-  when it reaches a delivery point. Not done: **synchronous signals from faults** (`SIGSEGV`,
+  stack sampler reads them; its FPCR/FPSR changes do not reach the interrupted
+  code). A thread-directed signal also interrupts the target's futex wait
+  (`syscall(SYS_futex, FUTEX_WAIT*)`: the handler runs, then the wait restarts
+  under `SA_RESTART` or returns `EINTR`) and the shim's pthread waits (a
+  spurious wake after the handler), through `gesher/futex_interrupt.h`. x86-64
+  code cannot be interrupted, and other blocking calls take the signal only at
+  a delivery point. Not done: **synchronous signals from faults** (`SIGSEGV`,
   `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGTRAP`) do not reach the `.so`'s handlers
   (a crash reporter's): Windows exceptions in loaded code go to ART's fault
   handling and the loader's diagnostics; the handler gets no machine context

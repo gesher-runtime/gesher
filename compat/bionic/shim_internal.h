@@ -14,6 +14,8 @@
 #include <string>
 #include <unordered_map>
 
+struct gesher_futex_interrupt;  // <gesher/futex_interrupt.h>
+
 namespace gesher::bionic {
 
 // bionic's semaphore bound, shared by enforcement and _SC_SEM_VALUE_MAX.
@@ -180,6 +182,19 @@ int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*),
 // and sleeps, and wherever the signal mask is lowered. Cheap when none are
 // pending.
 void DeliverPendingSignals();
+// Waits a signal directed at the calling thread (pthread_kill, tgkill,
+// tkill from another thread) interrupts, as Linux interrupts a blocked futex:
+// AttachSignalInterrupt makes the thread's futex waits through ::syscall end
+// with EINTR then (nullptr if the thread has no signal state; Detach undoes
+// it); DeliverAfterInterrupt runs the signals and says whether the call
+// restarts (false if a handler without SA_RESTART ran: EINTR).
+// InterruptibleAddressWait is WaitOnAddress (true: woken, false: timed out)
+// that also wakes, after running the signals, for such a signal.
+::gesher_futex_interrupt* AttachSignalInterrupt();
+void DetachSignalInterrupt();
+bool DeliverAfterInterrupt();
+bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
+                              unsigned long ms);
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();

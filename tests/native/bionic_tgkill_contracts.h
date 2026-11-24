@@ -8,6 +8,8 @@
 #ifndef GESHER_BIONIC_TGKILL_CONTRACTS_H
 #define GESHER_BIONIC_TGKILL_CONTRACTS_H
 #include <errno.h>
+#include <fenv.h>
+#include <linux/futex.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -79,7 +81,46 @@ static void* TkSleeper(void* arg) {
   return NULL;
 }
 
+// Blocks in an untimed futex wait, as Chromium's StackCopierSignal and
+// WaitableEvent do, retrying on EINTR/EAGAIN until the word is set; counts
+// the EINTR returns a handler without SA_RESTART causes.
+static int g_tk_futex_word, g_tk_futex_eintr;
+static void* TkFutexWaiter(void* arg) {
+  (void)arg;
+  volatile int marker = 0;
+  __atomic_store_n(&g_tk_frame, (uintptr_t)&marker, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_tk_worker_tid, gettid(), __ATOMIC_RELEASE);
+  while (__atomic_load_n(&g_tk_futex_word, __ATOMIC_ACQUIRE) == 0) {
+    long r = syscall(SYS_futex, &g_tk_futex_word, FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0);
+    if (r == -1 && errno == EINTR) __atomic_fetch_add(&g_tk_futex_eintr, 1, __ATOMIC_RELEASE);
+  }
+  return NULL;
+}
+
+// Blocks in pthread_cond_wait until told to go on.
+static pthread_mutex_t g_tk_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_tk_cond = PTHREAD_COND_INITIALIZER;
+static int g_tk_go;
+static void* TkCondWaiter(void* arg) {
+  (void)arg;
+  volatile int marker = 0;
+  __atomic_store_n(&g_tk_frame, (uintptr_t)&marker, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_tk_worker_tid, gettid(), __ATOMIC_RELEASE);
+  pthread_mutex_lock(&g_tk_mutex);
+  while (!g_tk_go) pthread_cond_wait(&g_tk_cond, &g_tk_mutex);
+  pthread_mutex_unlock(&g_tk_mutex);
+  return NULL;
+}
+
 #if defined(__aarch64__)
+// A handler that changes the rounding mode, which sigreturn restores.
+static void TkRoundingHandler(int sig) {
+  fesetround(FE_UPWARD);
+  __atomic_store_n(&g_tk_info, 0, __ATOMIC_RELAXED);
+  TkRecord(sig);
+}
+static int g_tk_spin_round = -1;
+
 // Computes without any call into libc: only the translator can stop it, as
 // the kernel interrupts user code (clock_gettime is no delivery point). Gives
 // up after 10 seconds.
@@ -96,6 +137,7 @@ static void* TkSpinner(void* arg) {
     if ((round & 0xfffff) != 0) continue;
     if (__atomic_load_n(&g_tk_runs, __ATOMIC_ACQUIRE) != 0) {
       __atomic_store_n(&g_tk_spin_seen, 1, __ATOMIC_RELAXED);
+      __atomic_store_n(&g_tk_spin_round, fegetround(), __ATOMIC_RELAXED);
       break;
     }
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -212,23 +254,98 @@ static int BionicTgkillContracts(void) {
   __atomic_store_n(&g_tk_stop, 1, __ATOMIC_RELEASE);
   pthread_join(sleeper, NULL);
 
+  // A thread blocked in an untimed futex wait takes the signal there; with
+  // SA_RESTART the wait goes on, without it the wait returns EINTR.
+  pthread_t waiter;
+  g_tk_worker_tid = 0;
+  g_tk_futex_word = 0;
+  g_tk_futex_eintr = 0;
+  if (pthread_create(&waiter, NULL, TkFutexWaiter, NULL) == 0) {
+    while (__atomic_load_n(&g_tk_worker_tid, __ATOMIC_ACQUIRE) == 0) usleep(1000);
+    const pid_t blocked = g_tk_worker_tid;
+    usleep(50000);  // into the wait
+    g_tk_runs = 0;
+    TkCheck("futex wait: tgkill succeeds", tgkill(pid, blocked, SIGURG) == 0);
+    TkCheck("futex wait: the SA_RESTART handler runs on the waiting thread",
+            TkWaitRuns(1) && g_tk_tid == blocked && g_tk_info == 1 && g_tk_context_ok == 1);
+    usleep(50000);
+    TkCheck("futex wait: SA_RESTART restarts the wait (no EINTR)",
+            __atomic_load_n(&g_tk_futex_eintr, __ATOMIC_ACQUIRE) == 0);
+    struct sigaction no_restart = info;
+    no_restart.sa_flags = SA_SIGINFO;
+    sigaction(SIGURG, &no_restart, NULL);
+    g_tk_runs = 0;
+    TkCheck("futex wait: tgkill without SA_RESTART succeeds", tgkill(pid, blocked, SIGURG) == 0);
+    int eintr = 0;
+    for (int i = 0; i < 5000 && !(eintr = __atomic_load_n(&g_tk_futex_eintr, __ATOMIC_ACQUIRE)); ++i)
+      usleep(1000);
+    TkCheck("futex wait: without SA_RESTART the handler runs and the wait returns EINTR",
+            g_tk_runs == 1 && g_tk_tid == blocked && eintr == 1);
+    sigaction(SIGURG, &info, NULL);
+    __atomic_store_n(&g_tk_futex_word, 1, __ATOMIC_RELEASE);
+    syscall(SYS_futex, &g_tk_futex_word, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+    pthread_join(waiter, NULL);
+  } else {
+    TkCheck("pthread_create(futex waiter)", 0);
+  }
+
+  // A thread blocked in pthread_cond_wait takes it there too.
+  g_tk_worker_tid = 0;
+  g_tk_go = 0;
+  if (pthread_create(&waiter, NULL, TkCondWaiter, NULL) == 0) {
+    while (__atomic_load_n(&g_tk_worker_tid, __ATOMIC_ACQUIRE) == 0) usleep(1000);
+    const pid_t blocked = g_tk_worker_tid;
+    usleep(50000);
+    g_tk_runs = 0;
+    TkCheck("condition wait: tgkill succeeds", tgkill(pid, blocked, SIGURG) == 0);
+    TkCheck("condition wait: the handler runs on the waiting thread",
+            TkWaitRuns(1) && g_tk_tid == blocked && g_tk_info == 1 && g_tk_context_ok == 1);
+    pthread_mutex_lock(&g_tk_mutex);
+    g_tk_go = 1;
+    pthread_cond_broadcast(&g_tk_cond);
+    pthread_mutex_unlock(&g_tk_mutex);
+    TkCheck("condition wait: the waiter then still waits for its predicate",
+            pthread_join(waiter, NULL) == 0);
+  } else {
+    TkCheck("pthread_create(condition waiter)", 0);
+  }
+
 #if defined(__aarch64__)
   // A thread running guest code with no delivery point: the translator stops
   // it at a block boundary, as the kernel interrupts user code.
-  pthread_t spinner;
+  // The rounding mode a handler sets does not leak into the code it
+  // interrupted, as sigreturn restores FPCR on Linux.
+  struct sigaction rounding;
+  memset(&rounding, 0, sizeof(rounding));
+  rounding.sa_handler = TkRoundingHandler;
+  sigaction(SIGURG, &rounding, NULL);
+  fesetround(FE_TONEAREST);
   g_tk_runs = 0;
-  g_tk_spin_seen = 0;
-  g_tk_worker_tid = 0;
-  if (pthread_create(&spinner, NULL, TkSpinner, NULL) == 0) {
+  TkCheck("a handler's rounding mode does not leak into the calling thread",
+          tgkill(pid, gettid(), SIGURG) == 0 && g_tk_runs == 1 && fegetround() == FE_TONEAREST);
+  // Pass 0: an SA_SIGINFO handler, whose frame reports the stopped code;
+  // pass 1: the rounding handler, whose mode the stopped code must not see.
+  for (int pass = 0; pass < 2; ++pass) {
+    sigaction(SIGURG, pass == 0 ? &info : &rounding, NULL);
+    pthread_t spinner;
+    g_tk_runs = 0;
+    g_tk_spin_seen = 0;
+    g_tk_spin_round = -1;
+    g_tk_worker_tid = 0;
+    if (pthread_create(&spinner, NULL, TkSpinner, NULL) != 0) {
+      TkCheck("pthread_create(spinner)", 0);
+      continue;
+    }
     while (__atomic_load_n(&g_tk_worker_tid, __ATOMIC_ACQUIRE) == 0) usleep(1000);
     const pid_t busy = g_tk_worker_tid;
     TkCheck("tgkill to a thread running guest code succeeds", tgkill(pid, busy, SIGURG) == 0);
     TkCheck("the handler interrupts that thread's computation",
-            TkWaitRuns(1) && g_tk_tid == busy && g_tk_info == 1 && g_tk_context_ok == 1);
+            TkWaitRuns(1) && g_tk_tid == busy &&
+            (pass == 1 || (g_tk_info == 1 && g_tk_context_ok == 1)));
     pthread_join(spinner, NULL);
     TkCheck("the interrupted computation then carries on", g_tk_spin_seen == 1);
-  } else {
-    TkCheck("pthread_create(spinner)", 0);
+    if (pass == 1)
+      TkCheck("with its own rounding mode, not the handler's", g_tk_spin_round == FE_TONEAREST);
   }
 #endif
 

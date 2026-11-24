@@ -1200,9 +1200,36 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
     converted.tv_nsec = static_cast<long>(guest->tv_nsec);
     host_timeout = &converted;
   }
-  return ::syscall(SYS_futex, reinterpret_cast<volatile int*>(a1), op,
-                   static_cast<int>(a3), host_timeout,
-                   reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
+  if (command != FUTEX_WAIT && command != FUTEX_WAIT_BITSET) {
+    return ::syscall(SYS_futex, reinterpret_cast<volatile int*>(a1), op,
+                     static_cast<int>(a3), host_timeout,
+                     reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
+  }
+  // A signal another thread directs at this one interrupts the wait, as on
+  // Linux: its handler runs here, then the wait restarts (SA_RESTART; a
+  // relative timeout counts on from the original start) or fails with EINTR.
+  const bool relative = command == FUTEX_WAIT && host_timeout != nullptr;
+  const __int128 deadline = relative ? MonotonicNanos() +
+      static_cast<__int128>(converted.tv_sec) * 1000000000 + converted.tv_nsec : 0;
+  for (;;) {
+    ::gesher_futex_interrupt* cell = AttachSignalInterrupt();
+    long r = ::syscall(SYS_futex, reinterpret_cast<volatile int*>(a1), op,
+                       static_cast<int>(a3), host_timeout,
+                       reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
+    const int error = errno;
+    if (cell != nullptr) DetachSignalInterrupt();
+    if (r != -1 || error != EINTR || cell == nullptr) {
+      errno = error;
+      return r;
+    }
+    if (!DeliverAfterInterrupt()) return errno = kEINTR, -1;
+    if (relative) {
+      const __int128 left = deadline - MonotonicNanos();
+      if (left <= 0) return errno = kETIMEDOUT, -1;
+      converted.tv_sec = static_cast<time_t>(left / 1000000000);
+      converted.tv_nsec = static_cast<long>(left % 1000000000);
+    }
+  }
 }
 
 void ReportUnresolved(const char* name) {
