@@ -90,15 +90,19 @@ void Allocation() {
   del(cases[2].p);
   del_nothrow(cases[3].p, &nothrow_tag);
   del_array_nothrow(cases[4].p, &nothrow_tag);
-  Check("operator delete and delete[] release the storage", true);
 
-  // Storage from operator new is malloc's: free accepts it, as bionic's.
+  // Storage from operator new is malloc's and the reverse, as bionic's: an
+  // allocator mismatch would crash here (the CRT heap validates the block).
   void* shared = new_one(32);
+  Check("operator new(32) for free", shared != nullptr);
   free(shared);
-  Check("free releases operator new's storage", shared != nullptr);
+  auto malloc = Lookup<New>("malloc");
+  void* from_malloc = malloc ? malloc(32) : nullptr;
+  Check("malloc(32) for operator delete", from_malloc != nullptr);
+  del(from_malloc);
+  // delete of null is a no-op (a crash here fails the test).
   del(nullptr);
   del_array(nullptr);
-  Check("operator delete(nullptr) is a no-op", true);
 }
 
 void PlatformLibrary() {
@@ -115,6 +119,9 @@ void PlatformLibrary() {
   Check("dlsym(libstdc++.so, \"__cxa_guard_acquire\") is the shim's guard",
         dlsym(handle, "__cxa_guard_acquire") ==
             gesher::bionic::LookupBionicSymbol("__cxa_guard_acquire"));
+  Check("dlsym(libstdc++.so, \"_ZSt7nothrow\") is the shim's std::nothrow",
+        dlsym(handle, "_ZSt7nothrow") != nullptr &&
+            dlsym(handle, "_ZSt7nothrow") == gesher::bionic::LookupBionicSymbol("_ZSt7nothrow"));
 }
 
 bool Complete(const uint64_t* guard) {
@@ -145,6 +152,27 @@ void Guards() {
   Check("abort leaves the guard incomplete", !Complete(&retried));
   Check("acquire after abort runs the initialiser again", acquire(&retried) == 1);
   release(&retried);
+
+  // A thread waiting while the initialiser aborts takes over the
+  // initialisation (acquire returns 1 to it, and only after the abort).
+  alignas(8) uint64_t handed = 0;
+  Check("acquire before handing over", acquire(&handed) == 1);
+  std::atomic<int> waiter_result{-1};
+  std::atomic<bool> aborted{false}, waiter_saw_abort{false};
+  std::thread waiter([&] {
+    int r = acquire(&handed);
+    waiter_saw_abort.store(aborted.load());
+    waiter_result.store(r);
+    if (r == 1) release(&handed);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Check("the waiter blocks while the initialiser runs", waiter_result.load() == -1);
+  aborted.store(true);
+  abort(&handed);
+  waiter.join();
+  Check("after abort the waiter runs the initialiser",
+        waiter_result.load() == 1 && waiter_saw_abort.load());
+  Check("the waiter's release completes the guard", Complete(&handed));
 
   // Racing threads: exactly one initialises; the others wait for its release
   // and then see the guard complete.

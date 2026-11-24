@@ -1046,9 +1046,16 @@ int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
 // against it (DT_NEEDED libstdc++.so, issue #480: Dreame's libemgmo.so) gets
 // these; before, operator new was an unresolved stub that returned null.
 
+// bionic's async_safe_fatal ends in abort(): the exported one, which raises
+// SIGABRT so a handler the app installed (a crash reporter) runs.
+[[noreturn]] void FatalAbort() {
+  using AbortFn = void(BIONIC_SYSV*)();
+  if (auto abort_fn = reinterpret_cast<AbortFn>(LookupBionicSymbol("abort"))) abort_fn();
+  Abort();
+}
 [[noreturn]] void OperatorNewFailed(const char* form, size_t n) {
   std::fprintf(stderr, "gesher bionic: %s failed to allocate %zu bytes\n", form, n);
-  Abort();
+  FatalAbort();
 }
 void* BIONIC_SYSV OperatorNew(size_t n) {
   void* p = Malloc(n);
@@ -1071,39 +1078,50 @@ void BIONIC_SYSV OperatorDeleteNothrow(void* p, const void*) { Free(p); }
 // only while it is 0. One thread runs the initialiser; the others wait for
 // its release (first byte 1) or abort (the next one runs it). Bionic does not
 // detect a recursive initialisation either: it waits, as here.
-std::mutex g_guard_mutex;
-std::condition_variable g_guard_done;
-std::unordered_set<const void*> g_guard_pending;
+// Never destroyed: exit() runs host static destructors while other guest
+// threads may still reach a guard's slow path.
+struct GuardState {
+  std::mutex mutex;
+  std::condition_variable done;
+  std::unordered_set<const void*> pending;
+};
+GuardState& Guards() {
+  static GuardState* state = new GuardState();
+  return *state;
+}
 
 int BIONIC_SYSV CxaGuardAcquire(uint64_t* guard) {
   auto* complete = reinterpret_cast<uint8_t*>(guard);
   if (__atomic_load_n(complete, __ATOMIC_ACQUIRE) != 0) return 0;
-  std::unique_lock<std::mutex> lock(g_guard_mutex);
-  g_guard_done.wait(lock, [&] { return g_guard_pending.count(guard) == 0; });
+  GuardState& g = Guards();
+  std::unique_lock<std::mutex> lock(g.mutex);
+  g.done.wait(lock, [&] { return g.pending.count(guard) == 0; });
   if (__atomic_load_n(complete, __ATOMIC_ACQUIRE) != 0) return 0;
-  g_guard_pending.insert(guard);
+  g.pending.insert(guard);
   return 1;
 }
 void BIONIC_SYSV CxaGuardRelease(uint64_t* guard) {
+  GuardState& g = Guards();
   {
-    std::lock_guard<std::mutex> lock(g_guard_mutex);
+    std::lock_guard<std::mutex> lock(g.mutex);
     __atomic_store_n(reinterpret_cast<uint8_t*>(guard), 1, __ATOMIC_RELEASE);
-    g_guard_pending.erase(guard);
+    g.pending.erase(guard);
   }
-  g_guard_done.notify_all();
+  g.done.notify_all();
 }
 void BIONIC_SYSV CxaGuardAbort(uint64_t* guard) {
+  GuardState& g = Guards();
   {
-    std::lock_guard<std::mutex> lock(g_guard_mutex);
-    g_guard_pending.erase(guard);
+    std::lock_guard<std::mutex> lock(g.mutex);
+    g.pending.erase(guard);
   }
-  g_guard_done.notify_all();
+  g.done.notify_all();
 }
 
 [[noreturn]] void BIONIC_SYSV CxaPureVirtual() {
   std::fprintf(stderr, "gesher bionic: Pure virtual function called. "
                        "Are you calling virtual methods from a destructor?\n");
-  Abort();
+  FatalAbort();
 }
 
 // --- libdl (through the ELF loader) ----------------------------------------
