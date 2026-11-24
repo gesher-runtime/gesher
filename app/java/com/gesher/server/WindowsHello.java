@@ -135,7 +135,7 @@ final class WindowsHello implements WindowsHelloBackend {
      * Cancels {@code verification} when its owner leaves the foreground or is gone
      * (SystemUI's cancelIfOwnerIsNotInForeground); ends when the verification does.
      */
-    private static void watchOwner(long owner, int pid, Verification verification,
+    static void watchOwner(long owner, int pid, Verification verification,
             java.util.concurrent.atomic.AtomicBoolean done) {
         OwnerWatch watch = new OwnerWatch();
         long start = System.nanoTime();
@@ -194,7 +194,7 @@ final class WindowsHello implements WindowsHelloBackend {
     private static native int nativeWindowsBuild();
 
     /** The foreground window of {@code pid} (its root owner) as a handle value, or 0. */
-    private static native long nativeOwnerWindow(int pid);
+    static native long nativeOwnerWindow(int pid);
 
     /** Where Windows' foreground window is relative to {@code owner}: an OwnerWatch value. */
     private static native int nativeOwnerRelation(long owner, int pid);
