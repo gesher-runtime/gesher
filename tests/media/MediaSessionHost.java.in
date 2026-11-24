@@ -847,9 +847,11 @@ public final class MediaSessionHost {
         final List<KeyEvent> mediaButtons = new ArrayList<>();
         final List<Integer> volumeDirections = new ArrayList<>();
         boolean deadRemote;
+        RemoteException transientFailure;
 
         private void ensureAlive() throws RemoteException {
             if (deadRemote || binder.isDead()) throw new DeadObjectException("remote session owner died");
+            if (transientFailure != null) throw transientFailure;
         }
 
         @Override public IBinder asBinder() { return binder; }
@@ -1137,6 +1139,56 @@ public final class MediaSessionHost {
                 "dead targeted volume dispatch fell back to STREAM_MUSIC with flags=0");
     }
 
+    private static void testLiveSessionSurvivesTransactionFailure() throws Exception {
+        AudioService audio = new AudioService();
+        MediaSessionService service = new MediaSessionService(audio);
+        SessionCallbackStub bystanderCb = new SessionCallbackStub();
+        ISession bystander = service.createSession("com.example.bystander", bystanderCb,
+                "bystander", null, 0);
+        bystander.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_RELATIVE, 20, "bystander");
+        bystander.setActive(true);
+        SessionCallbackStub liveCb = new SessionCallbackStub();
+        ISession live = service.createSession("com.example.live", liveCb, "live", null, 0);
+        live.setPlaybackToRemote(VolumeProvider.VOLUME_CONTROL_RELATIVE, 20, "live");
+        live.setActive(true);
+        MediaSession.Token token = service.getMediaKeyEventSession("caller");
+        ControllerObserver observer = new ControllerObserver();
+        live.getController().registerCallback("caller", observer);
+        // RemoteException also represents a failed transaction to a still-live owner.
+        // It must not destroy the session or deliver an uncertain operation elsewhere.
+        RemoteException failure = new RemoteException("temporary transaction failure");
+        liveCb.transientFailure = failure;
+        KeyEvent media = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+        KeyEvent volume = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_VOLUME_UP);
+        for (int route = 0; route < 5; route++) {
+            boolean propagated = false;
+            try {
+                switch (route) {
+                    case 0: service.dispatchMediaKeyEvent("caller", false, media, false); break;
+                    case 1: service.dispatchMediaKeyEventToSessionAsSystemService("caller", media, token); break;
+                    case 2: service.dispatchVolumeKeyEvent("caller", "caller", false, volume,
+                            AudioSystem.STREAM_MUSIC, false); break;
+                    case 3: service.dispatchVolumeKeyEventToSessionAsSystemService("caller", "caller",
+                            volume, token); break;
+                    default: service.dispatchAdjustVolume("caller", "caller", AudioSystem.STREAM_MUSIC,
+                            AudioManager.ADJUST_RAISE, 0); break;
+                }
+            } catch (RemoteException expected) {
+                propagated = expected == failure;
+            }
+            check(propagated, "non-death transaction failure is preserved for route " + route);
+            check(service.getSessions(null, UserHandle.USER_ALL).size() == 2
+                    && token.equals(service.getMediaKeyEventSession("caller"))
+                    && observer.destroyedCount == 0,
+                    "still-live session survives transaction failure for route " + route);
+            check(bystanderCb.mediaButtons.isEmpty() && bystanderCb.volumeDirections.isEmpty()
+                    && audio.calls.isEmpty(), "failed transaction is not redirected for route " + route);
+        }
+        liveCb.transientFailure = null;
+        service.dispatchMediaKeyEvent("caller", false, media, false);
+        check(liveCb.mediaButtons.size() == 1, "same session resumes after transaction recovers");
+    }
+
     @SuppressWarnings("unchecked")
     private static void testBroadcastFinallyBalance() throws Exception {
         AudioService audio = new AudioService();
@@ -1221,6 +1273,7 @@ public final class MediaSessionHost {
         testNullGuards();
         testDeadMediaKeyDispatchAndFailover();
         testDeadRemoteVolumeFailoverAndAudioFallback();
+        testLiveSessionSurvivesTransactionFailure();
         testBroadcastFinallyBalance();
         measureZeroListenerSteadyState(true);
         System.out.println("MediaSessionHost all passed: " + checks + " checks");
