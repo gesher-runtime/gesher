@@ -104,6 +104,13 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   the stand-in, `patches/art/0802` and `0803`). `GESHER_ART_SHIM=0` turns it
   off.
 
+- **360 Jiagu shells pick their library by the device's ABI**
+  ([0095](decisions/0095-jiagu-shell-abi-selection.md)). The stub copies
+  `libjgcge_x86.so`/`libjgcge_x64.so` from the APK's assets when
+  `Build.CPU_ABI` (and its other probes) say x86, as on Gesher and any x86-64
+  device with ARM translation. An app protected without Jiagu's x86 support
+  has no such assets and fails there, as it would on such a device.
+
 - **The bionic shim** (`compat/bionic/`, CMake target `gesher_bionic`,
   `gesher/bionic_shim.h`): the libc/libm/libdl/liblog/pthread symbols an app
   `.so` imports, as System V entry points over gesher-base and the CRT, with

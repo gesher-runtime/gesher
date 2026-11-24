@@ -65,6 +65,21 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
     A missing command is 127. Commands come from -c, a script or incremental
     stdin. The status section distinguishes CI-verified cases from pending
     conformance fixes; this is not a claim of complete mksh compatibility.
+    As Android's mksh (`lex.c`, `syn.c`): `[n]&>file` is `[n]>file 2>&n`
+    (likewise `&>>`, `&>|` and `&>&fd`), a foreground redirection, not `&`
+    followed by `>file`; `>&word` needs a descriptor (`sh: >&word: illegal
+    file descriptor name`, status 1). An asynchronous list's stdin is
+    `/dev/null` before its own redirections (mksh `jobs.c`, no job control),
+    so a background command never consumes a script fed on the shell's
+    stdin, as root-check libraries (RootShell, libsuperuser, libsu) do.
+- **The exec log**: `gesher: exec <program> (<kind>) started as pid <pid>`
+  and `gesher: exec <program> failed: error=<errno>, <text>` end with
+  `, <n> args` when there are arguments. Arguments can carry tokens or
+  personal data and these logs are attached to bug reports, so the arguments
+  themselves are logged only with `GESHER_TRACE_EXEC=1`: `, args: <argv[1..]>`,
+  shell words, control bytes escaped, at most 200 bytes of argument text,
+  `... [truncated]` beyond. The child's stdin is never logged. `gesher: exec pid <pid> exited with status
+  <n>` is unchanged; match it to the start line by pid.
 - **Loader additions** (`gesher/elf_loader.h`, additive): `GetExecutableInfo`
   (entry point, program headers, `PT_INTERP`), `SetInitArguments` (what init
   functions are called with; dalvikvm never sets it, so `.so` files there get
@@ -119,8 +134,18 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   program with none is terminated with 143); **`destroyForcibly()`** kills
   (137), through a new `UNIXProcess` native.
 - **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `id`, `ps`,
-  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, as a bare name or a
-  `/system/bin` path; `sh` is the launcher's shell. `su` stays absent (no root),
+  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, `which`, `mount`, as a bare name or a
+  `/system/bin` path; `sh` is the launcher's shell. `which [-a] NAME...` is
+  toybox's: a name exec runs as one of these programs (or `sh`) is
+  `/system/bin/<name>`, otherwise `$PATH` is searched as exec searches it;
+  no match prints nothing and exits 1 (`which su`); like a device without
+  root tools there is no `/system/xbin/which` or `/system/xbin/mount`. `mount` is toybox's as an
+  app's uid: with no device or directory it lists `/proc/mounts` (the same
+  table Gesher's `/proc/mounts` and `getmntent` serve, currently empty) as
+  `DEVICE on DIR type TYPE (OPTIONS)`; mounting goes through `/etc/fstab`
+  first, as toybox does for a non-root uid, and fails with its message and
+  status 1 (`mount: bad /etc/fstab: ...`, `'DIR' not in fstab`, `'DEV' not
+  user mountable in fstab`, or EPERM from mount(2) for a `user` entry). `su` stays absent (no root),
   getprop/setprop use the shared backend in ADR 0060. Structured logcat and
   the pm/am Binder client are prepared; the new property ABI, log capture and
   command/device assertions still need CI proof.

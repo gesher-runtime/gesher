@@ -319,6 +319,18 @@ add_executable(clock_domains_windows_test tests/native/clock_domains_windows_tes
 target_compile_options(clock_domains_windows_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(clock_domains_windows_test PRIVATE gesher_posix)
 
+# dlopen()'s dlerror() text: Android's linker wording for app paths.
+add_executable(dlopen_errors_test tests/native/dlopen_errors_test.cc)
+target_compile_options(dlopen_errors_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(dlopen_errors_test PRIVATE gesher_posix)
+
+# The window-thread watch's clock (compat/input/thread_watch.cc): awake time.
+add_executable(thread_watch_clock_test tests/native/thread_watch_clock_test.cc
+  compat/input/thread_watch.cc)
+target_include_directories(thread_watch_clock_test PRIVATE compat/input)
+target_compile_options(thread_watch_clock_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(thread_watch_clock_test PRIVATE user32)
+
 add_executable(native3_cpu_clock_test tests/native/native3_cpu_clock_test.cc)
 target_compile_options(native3_cpu_clock_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_cpu_clock_test PRIVATE artbase gesher_posix)
