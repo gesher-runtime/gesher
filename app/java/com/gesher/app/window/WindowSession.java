@@ -2762,6 +2762,7 @@ public final class WindowSession extends IWindowSession.Stub {
             int seqId) {
         AppWindow w = window(window);
         if (w == null || w.nativeWindow == null) return;
+        boolean first = !w.drawn;
         if (!w.drawn) {
             w.drawn = true;
             log("window \"" + w.title() + "\" " + w.nativeWindow.getWidth() + "x"
@@ -2797,6 +2798,20 @@ public final class WindowSession extends IWindowSession.Stub {
             // a window that is not shown.
             showWindow(w);
         }
+        if (first && isActivityWindow(w.attrs)) {
+            // ActivityRecord.onWindowsDrawn: the Activity's launch is complete for whoever
+            // waits for it (startActivityAndWait), shown on the desktop or hidden.
+            ActivityClientHook.reportWindowsDrawn(w.attrs.token);
+        }
+    }
+
+    /**
+     * An Activity's main window (its token, TYPE_BASE_APPLICATION, also for a dialog-themed
+     * or translucent Activity): not a dialog it shows, its starting window or a system one.
+     */
+    private static boolean isActivityWindow(WindowManager.LayoutParams attrs) {
+        return attrs != null && attrs.token != null
+                && attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION;
     }
 
     /** {@code [w, h, ARGB...]} as a few ARGB values down the window's first quarter. */

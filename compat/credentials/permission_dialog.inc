@@ -31,6 +31,38 @@ static HWND PermissionControl(HWND dialog, DWORD extra, const WCHAR* klass,
   return control;
 }
 
+static BOOL PermissionCreateControls(HWND dialog, PermissionDialogState* state) {
+  GesherHostThemeInit(&state->theme, dialog);
+  BOOL rtl = GesherUiRtl(state->language);
+  DWORD reading = rtl ? WS_EX_RTLREADING : 0;
+  DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
+  HWND brand = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "brand"),
+      alignment, PERMISSION_BRAND, 16, 10, 218, 14);
+  HWND heading = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_heading"),
+      alignment, PERMISSION_HEADING, 16, 28, 218, 24);
+  HWND app = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_app"),
+      alignment, -1, 16, 58, 218, 14);
+  // The authenticated package ID has its own LTR control, without bidi isolates.
+  HWND package = PermissionControl(dialog, WS_EX_LTRREADING, L"EDIT", state->package_name,
+      ES_READONLY | ES_AUTOHSCROLL | ES_LEFT | WS_BORDER | WS_TABSTOP, PERMISSION_PACKAGE, 16, 74, 218, 18);
+  HWND requested = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_requested"),
+      alignment, -1, 16, 100, 218, 16);
+  // Long requests stay readable and selectable instead of overflowing the screen.
+  HWND details = PermissionControl(dialog, reading, L"EDIT", state->permissions,
+      ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | WS_TABSTOP
+      | (rtl ? ES_RIGHT : ES_LEFT), PERMISSION_DETAILS, 16, 118, 218, 36);
+  HWND deny = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_deny"),
+      BS_OWNERDRAW | WS_TABSTOP, IDNO, 76, 166, 76, 22);
+  HWND allow = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_allow"),
+      BS_OWNERDRAW | WS_TABSTOP, IDYES, 160, 166, 74, 22);
+  if (!brand || !heading || !app || !package || !requested || !details || !deny || !allow) {
+    return FALSE;
+  }
+  GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
+  GesherHostSetFont(brand, &state->brand_font, 110, FW_BOLD);
+  return TRUE;
+}
+
 static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
   PermissionDialogState* state = (PermissionDialogState*)GetWindowLongPtrW(dialog, DWLP_USER);
   if (message == WM_INITDIALOG) {
@@ -38,35 +70,11 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
     SetLastError(0);
     LONG_PTR previous = SetWindowLongPtrW(dialog, DWLP_USER, (LONG_PTR)state);
     if (previous == 0 && GetLastError() != 0) { EndDialog(dialog, IDCANCEL); return FALSE; }
-    GesherHostThemeInit(&state->theme, dialog);
-    BOOL rtl = GesherUiRtl(state->language);
-    DWORD reading = rtl ? WS_EX_RTLREADING : 0;
-    DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
-    HWND brand = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "brand"),
-        alignment, PERMISSION_BRAND, 16, 10, 218, 14);
-    HWND heading = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_heading"),
-        alignment, PERMISSION_HEADING, 16, 28, 218, 24);
-    HWND app = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_app"),
-        alignment, -1, 16, 58, 218, 14);
-    // The authenticated package ID has its own LTR control, without bidi isolates.
-    HWND package = PermissionControl(dialog, WS_EX_LTRREADING, L"EDIT", state->package_name,
-        ES_READONLY | ES_AUTOHSCROLL | ES_LEFT | WS_BORDER | WS_TABSTOP, PERMISSION_PACKAGE, 16, 74, 218, 18);
-    HWND requested = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_requested"),
-        alignment, -1, 16, 100, 218, 16);
-    // Long requests stay readable and selectable instead of overflowing the screen.
-    HWND details = PermissionControl(dialog, reading, L"EDIT", state->permissions,
-        ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | WS_TABSTOP
-        | (rtl ? ES_RIGHT : ES_LEFT), PERMISSION_DETAILS, 16, 118, 218, 36);
-    HWND deny = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_deny"),
-        BS_OWNERDRAW | WS_TABSTOP, IDNO, 76, 166, 76, 22);
-    HWND allow = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_allow"),
-        BS_OWNERDRAW | WS_TABSTOP, IDYES, 160, 166, 74, 22);
-    if (!brand || !heading || !app || !package || !requested || !details || !deny || !allow) {
+    if (!PermissionCreateControls(dialog, state)) {
       EndDialog(dialog, IDCANCEL);
       return FALSE;
     }
-    GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
-    GesherHostSetFont(brand, &state->brand_font, 110, FW_BOLD);
+    HWND deny = GetDlgItem(dialog, IDNO);
     SendMessageW(dialog, DM_SETDEFID, IDNO, 0);
     GesherHostSetIcons(dialog, &state->icons);
     // Request foreground once; never keep the consent window permanently topmost.

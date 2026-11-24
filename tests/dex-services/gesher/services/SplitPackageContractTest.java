@@ -20,6 +20,7 @@ import android.util.DisplayMetrics;
 import com.android.internal.os.ApplicationSharedMemory;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.PackageManagerService;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -29,6 +30,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -123,10 +125,10 @@ public final class SplitPackageContractTest {
                 && Arrays.equals(info.splitNames, ai.splitNames),
                 "Split names came from filenames or did not survive PackageInfo generation");
         require(ai.splitSourceDirs.length == 2
-                && ai.splitSourceDirs[0].endsWith("/split_z_core.apk")
-                && ai.splitSourceDirs[1].endsWith("/split_a_entry.apk")
+                && ai.splitSourceDirs[0].endsWith("/split_feature.core.apk")
+                && ai.splitSourceDirs[1].endsWith("/split_feature.entry.apk")
                 && Arrays.equals(ai.splitSourceDirs, ai.splitPublicSourceDirs),
-                "Split paths were not aligned with sorted manifest names");
+                "Split paths were not the manifest-named files aligned with sorted split names");
         require(Arrays.equals(ai.splitClassLoaderNames, new String[]{"dalvik.system.PathClassLoader",
                 "dalvik.system.DelegateLastClassLoader"}) && ai.requestsIsolatedSplitLoading(),
                 "Isolated split class-loader policy was discarded");
@@ -218,7 +220,8 @@ public final class SplitPackageContractTest {
             for (String name : new String[]{"base", "core", "entry", "entry-revised", "core-major", "foreign",
                     "base-required", "core-typed", "base-required-signed", "base-signed", "core-signed",
                     "entry-signed", "entry-revised-signed", "core-typed-signed", "core-major-signed",
-                    "foreign-signed", "core-foreign-signer-signed", "core-foreign-abi-signed"}) {
+                    "foreign-signed", "core-foreign-signer-signed", "core-foreign-abi-signed",
+                    "foreign-incompatible-signed"}) {
                 try (java.io.InputStream in = zip.getInputStream(zip.getEntry(name + ".apk"))) {
                     inputs.put(name, in.readAllBytes());
                 }
@@ -298,18 +301,27 @@ public final class SplitPackageContractTest {
             result = (String[]) install.invoke(installer, equivalent.getPath());
             require("unchanged".equals(result[1]), extension + " changed identical installed APKs");
         }
+        // The content, not the suffix, decides: a lone base APK saved as .xapk is that APK.
+        File plainNamedBundle = new File(data, "base-only.xapk");
+        Files.write(plainNamedBundle.toPath(), inputs.get("base"));
+        result = (String[]) install.invoke(installer, plainNamedBundle.getPath());
+        require("unchanged".equals(result[1]), "A base APK saved as .xapk was not installed as that APK");
+        metadata(pm.get(PACKAGE));
         Map<String, byte[]> arbitraryNames = new LinkedHashMap<>();
         arbitraryNames.put("apks/display.apk", inputs.get("entry"));
         arbitraryNames.put("apks/assets.apk", inputs.get("core"));
         arbitraryNames.put("apks/application.apk", inputs.get("base"));
         File renamed = cluster(data, "renamed", ".apk+", arbitraryNames);
         result = (String[]) install.invoke(installer, renamed.getPath());
-        require("updated".equals(result[1]), "APK+ did not install the manifest-identified cluster");
+        // Files are named by their manifests, so other archive names are the same install.
+        require("unchanged".equals(result[1]), "APK+ entry names changed the manifest-identified cluster");
         ApplicationInfo renamedInfo = pm.get(PACKAGE).applicationInfo(0);
         require(Arrays.equals(renamedInfo.splitNames, new String[]{"feature.core", "feature.entry"}),
                 "Arbitrary archive names dropped required feature splits");
         loadFeature(renamedInfo);
+        bundletoolApkSet(data, inputs, pm, installer, install);
         cachedSourceUpdates(data, inputs);
+        looseCompanionFiltering(data, inputs);
         codeRootBoundary(data, installerType);
         inheritedSplitSessions(data, inputs);
         System.out.println("SplitPackageContractTest all passed: " + checks + " checks");
@@ -338,11 +350,238 @@ public final class SplitPackageContractTest {
         }
     }
 
+    /**
+     * A bundletool APK set: toc.pb (BuildApksResult, bundletool's commands.proto) lists a
+     * standalone variant below SDK 21 and a split variant from SDK 21, whose APKs are the
+     * installed cluster. Its standalone APK is another base, so all of its APKs together are
+     * not one install; the installer must take the split variant the device gets.
+     */
+    private static void bundletoolApkSet(File data, Map<String, byte[]> inputs, PackageManagerService pm,
+            Object installer, Method install) throws Exception {
+        byte[] base = pb(1, "base", 6, 1);  // ModuleMetadata: name, delivery_type INSTALL_TIME
+        byte[] standalone = pb(1, pb(1, sdkTargeting(15, 21)),
+                2, pb(1, base, 2, pb(2, "standalones/standalone.apk", 4, pb())));
+        byte[] split = pb(1, pb(1, sdkTargeting(21, 15)), 2, pb(1, base,
+                2, pb(2, "splits/base-master.apk", 3, pb(2, 1)),
+                2, pb(2, "splits/base-core.apk", 3, pb(1, "core")),
+                2, pb(2, "splits/base-entry.apk", 3, pb(1, "entry"))));
+        Map<String, byte[]> files = new LinkedHashMap<>();
+        files.put("toc.pb", pb(1, standalone, 1, split));
+        files.put("standalones/standalone.apk", inputs.get("base-required"));
+        files.put("splits/base-master.apk", inputs.get("base"));
+        files.put("splits/base-core.apk", inputs.get("core"));
+        files.put("splits/base-entry.apk", inputs.get("entry"));
+        ApkPackage before = pm.get(PACKAGE);
+        String[] result = (String[]) install.invoke(installer, cluster(data, "bundletool", files).getPath());
+        require("unchanged".equals(result[1]) && pm.get(PACKAGE) == before,
+                "The APK set's split variant was not the installed cluster");
+        metadata(pm.get(PACKAGE));
+    }
+
+    /** SdkVersionTargeting: value {min {value}}, alternatives {min {value}}. */
+    private static byte[] sdkTargeting(int min, int alternative) {
+        return pb(1, pb(1, pb(1, min)), 2, pb(1, pb(1, alternative)));
+    }
+
+    /** A protobuf message from field, value pairs: an Integer is a varint, a String or byte[] length-delimited. */
+    private static byte[] pb(Object... pairs) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (int i = 0; i < pairs.length; i += 2) {
+            int field = (Integer) pairs[i];
+            Object value = pairs[i + 1];
+            if (value instanceof Integer) {
+                varint(out, field << 3);
+                varint(out, (Integer) value);
+            } else {
+                byte[] bytes = value instanceof String
+                        ? ((String) value).getBytes(StandardCharsets.UTF_8) : (byte[]) value;
+                varint(out, (field << 3) | 2);
+                varint(out, bytes.length);
+                out.write(bytes, 0, bytes.length);
+            }
+        }
+        return out.toByteArray();
+    }
+
+    private static void varint(ByteArrayOutputStream out, long value) {
+        while ((value & ~0x7fL) != 0) {
+            out.write((int) ((value & 0x7f) | 0x80));
+            value >>>= 7;
+        }
+        out.write((int) value);
+    }
+
     private static String[] codeGenerations(File data) {
         String[] names = new File(data, "app").list();
         if (names == null) return new String[0];
         Arrays.sort(names);
         return names;
+    }
+
+    /** Real signed loose APKs, including unclassifiable input at an unchanged base path. */
+    private static void looseCompanionFiltering(File parent, Map<String, byte[]> inputs) throws Exception {
+        int firstCheck = checks;
+        String originalData = System.getenv("ANDROID_DATA");
+        File data = new File(parent, "loose-signed-device");
+        File source = new File(data, "source");
+        require(source.mkdirs(), "Could not create loose signed-split fixture");
+        try {
+            android.system.Os.setenv("ANDROID_DATA", data.getPath(), true);
+            File base = new File(source, "base.apk");
+            File core = new File(source, "split_z_core.apk");
+            File entry = new File(source, "config.entry.apk");
+            File foreign = new File(source, "split_foreign.apk");
+            File foreignConfig = new File(source, "config.foreign.apk");
+            Files.write(base.toPath(), inputs.get("base-signed"));
+            Files.write(foreign.toPath(), inputs.get("foreign-incompatible-signed"));
+            Files.write(foreignConfig.toPath(), inputs.get("foreign-incompatible-signed"));
+            long baseLength = base.length(), baseTimestamp = base.lastModified();
+            android.content.pm.Signature[] baseSigners = ApkPackage.verifySignatures(base.getPath());
+            android.content.pm.Signature[] foreignSigners = ApkPackage.verifySignatures(foreign.getPath());
+            require(baseSigners != null && foreignSigners != null
+                            && !Arrays.equals(baseSigners, foreignSigners),
+                    "Foreign loose fixture did not have a different verified signer");
+            require("com.gesher.foreignsplit".equals(ApkPackage.packageName(foreign))
+                            && "feature.core".equals(ApkPackage.splitName(foreign)),
+                    "Foreign loose fixture was not a genuine other-package split");
+            try (ZipFile zip = new ZipFile(foreign)) {
+                require(zip.getEntry("lib/x86/libsplitprobe.so") != null,
+                        "Foreign loose fixture lacked its unsupported native ABI");
+            }
+
+            PackageManagerService pm = new PackageManagerService(Collections.emptyList());
+            field(PackageManagerService.class, "mPackageEventSender").set(pm,
+                    (Consumer<android.content.Intent>) event -> {});
+            Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
+            Object atm = construct(atmType, new Class<?>[]{PackageManagerService.class}, pm);
+            Class<?> installerType = Class.forName("com.gesher.server.Installer");
+            Object installer = construct(installerType,
+                    new Class<?>[]{PackageManagerService.class, atmType, Map.class},
+                    pm, atm, new LinkedHashMap<>());
+            Method install = method(installerType, "install", String.class);
+
+            // A readable ZIP without an APK manifest and a truncated genuine split
+            // are both unknown owners. Neither may be silently treated as foreign.
+            ByteArrayOutputStream malformedBytes = new ByteArrayOutputStream();
+            try (ZipOutputStream zip = new ZipOutputStream(malformedBytes)) {
+                zip.putNextEntry(new ZipEntry("assets/incomplete.txt"));
+                zip.write(new byte[]{1, 2, 3}); zip.closeEntry();
+            }
+            Map<String, byte[]> malformed = new LinkedHashMap<>();
+            malformed.put("missing manifest", malformedBytes.toByteArray());
+            byte[] signedCore = inputs.get("core-signed");
+            malformed.put("truncated split", Arrays.copyOf(signedCore, signedCore.length / 2));
+            for (Map.Entry<String, byte[]> bad : malformed.entrySet()) {
+                Files.write(core.toPath(), bad.getValue());
+                rejectLooseInstall(data, base, null, pm, installer, install, IOException.class,
+                        "Cannot parse installed APK", "first install with " + bad.getKey());
+            }
+            Files.delete(core.toPath());
+            String[] result = (String[]) install.invoke(installer, base.getPath());
+            require("installed".equals(result[1]) && pm.get(PACKAGE).hasVerifiedSigningIdentity()
+                            && pm.get(PACKAGE).applicationInfo(0).splitNames == null
+                            && pm.get("com.gesher.foreignsplit") == null,
+                    "Foreign split signer/ABI affected a signed base-only installation");
+            File marker = new File(pm.get(PACKAGE).dataDir(), "kept-loose-install-data.txt");
+            byte[] keptData = "existing package data".getBytes(StandardCharsets.UTF_8);
+            Files.write(marker.toPath(), keptData);
+            int uid = pm.get(PACKAGE).uid();
+
+            // Reach the real base-only source cache, then prove a new malformed
+            // companion cannot turn the next request into a false 'unchanged'.
+            Files.delete(foreign.toPath());
+            Files.delete(foreignConfig.toPath());
+            require(method(installerType, "recordedSource", File.class).invoke(installer, base) != null,
+                    "Signed base-only fixture did not populate the unchanged-source cache");
+            for (Map.Entry<String, byte[]> bad : malformed.entrySet()) {
+                Files.write(core.toPath(), bad.getValue());
+                rejectLooseInstall(data, base, marker, pm, installer, install, IOException.class,
+                        "Cannot parse installed APK", "cached base with " + bad.getKey());
+            }
+
+            Files.write(core.toPath(), signedCore);
+            Files.write(entry.toPath(), inputs.get("entry-signed"));
+            Files.write(foreign.toPath(), inputs.get("foreign-incompatible-signed"));
+            Files.write(foreignConfig.toPath(), inputs.get("foreign-incompatible-signed"));
+            result = (String[]) install.invoke(installer, base.getPath());
+            require("updated".equals(result[1]) && pm.get(PACKAGE).uid() == uid
+                            && Arrays.equals(keptData, Files.readAllBytes(marker.toPath())),
+                    "Adding genuine same-package splits lost package identity or data");
+            loadFeature(metadata(pm.get(PACKAGE)));
+            ApkPackage installed = pm.get(PACKAGE);
+            result = (String[]) install.invoke(installer, base.getPath());
+            require("unchanged".equals(result[1]) && pm.get(PACKAGE) == installed,
+                    "Foreign neighboring splits changed an identical signed installation");
+
+            for (Map.Entry<String, byte[]> bad : malformed.entrySet()) {
+                Files.write(core.toPath(), bad.getValue());
+                rejectLooseInstall(data, base, marker, pm, installer, install, IOException.class,
+                        "Cannot parse installed APK", "installed split replaced by " + bad.getKey());
+            }
+            Files.write(core.toPath(), inputs.get("core-foreign-signer-signed"));
+            rejectLooseInstall(data, base, marker, pm, installer, install, SecurityException.class,
+                    "INSTALL_FAILED_BAD_SPLIT_SIGNATURE", "same package, different signer");
+            Files.write(core.toPath(), inputs.get("core"));
+            rejectLooseInstall(data, base, marker, pm, installer, install, SecurityException.class,
+                    "INSTALL_FAILED_BAD_SPLIT_SIGNATURE", "same package, unsigned split");
+            Files.write(core.toPath(), inputs.get("core-major-signed"));
+            rejectLooseInstall(data, base, marker, pm, installer, install, IOException.class,
+                    "Inconsistent installed split APK", "same package, different long version");
+            Files.write(core.toPath(), inputs.get("core-foreign-abi-signed"));
+            rejectLooseInstall(data, base, marker, pm, installer, install, IllegalArgumentException.class,
+                    "INSTALL_FAILED_NO_MATCHING_ABIS", "same package, unsupported native ABI");
+            Files.write(core.toPath(), inputs.get("base-signed"));
+            rejectLooseInstall(data, base, marker, pm, installer, install, IOException.class,
+                    "Not a split APK", "same-package base disguised as a split");
+            Files.write(core.toPath(), signedCore);
+            File duplicate = new File(source, "config.duplicate.apk");
+            Files.write(duplicate.toPath(), signedCore);
+            rejectLooseInstall(data, base, marker, pm, installer, install, IOException.class,
+                    "Conflicting split filenames", "duplicate manifest split name");
+            Files.delete(duplicate.toPath());
+            result = (String[]) install.invoke(installer, base.getPath());
+            require("unchanged".equals(result[1]) && pm.get(PACKAGE) == installed
+                            && pm.get(PACKAGE).uid() == uid
+                            && Arrays.equals(keptData, Files.readAllBytes(marker.toPath())),
+                    "Restoring the genuine split did not recover the unchanged installation");
+            require(base.length() == baseLength && base.lastModified() == baseTimestamp,
+                    "Loose companion regressions accidentally changed the cached base source");
+            System.out.println("SplitPackageContractTest loose companions passed: "
+                    + (checks - firstCheck) + " checks");
+        } finally {
+            android.system.Os.setenv("ANDROID_DATA", originalData, true);
+        }
+    }
+
+    private static byte[] optionalFile(File file) throws IOException {
+        return file.isFile() ? Files.readAllBytes(file.toPath()) : null;
+    }
+
+    private static void rejectLooseInstall(File data, File base, File marker,
+            PackageManagerService pm, Object installer, Method install, Class<?> error,
+            String message, String reason) throws Exception {
+        ApkPackage before = pm.get(PACKAGE);
+        File registry = new File(data, "system/packages.list");
+        File sources = new File(data, "system/install-sources.list");
+        byte[] oldRegistry = optionalFile(registry), oldSources = optionalFile(sources);
+        byte[] oldData = marker == null ? null : Files.readAllBytes(marker.toPath());
+        String[] generations = codeGenerations(data);
+        try {
+            install.invoke(installer, base.getPath());
+            throw new AssertionError("Loose installation accepted " + reason);
+        } catch (InvocationTargetException rejected) {
+            Throwable cause = rejected.getCause();
+            require(error.isInstance(cause) && cause.getMessage() != null
+                            && cause.getMessage().contains(message),
+                    "Loose installation failed for the wrong reason (" + reason + "): " + cause);
+        }
+        require(pm.get(PACKAGE) == before && Arrays.equals(oldRegistry, optionalFile(registry))
+                        && Arrays.equals(oldSources, optionalFile(sources)),
+                "Rejected loose installation changed published identity/registry/source cache: " + reason);
+        require(Arrays.equals(generations, codeGenerations(data)),
+                "Rejected loose installation left a partial code generation: " + reason);
+        require(marker == null || Arrays.equals(oldData, Files.readAllBytes(marker.toPath())),
+                "Rejected loose installation changed existing package data: " + reason);
     }
 
     /** Real filesystem additions/replacements at the exact cached base APK path. */
@@ -414,6 +653,13 @@ public final class SplitPackageContractTest {
         metadata(pm.get(PACKAGE));
         require(base.length() == baseLength && base.lastModified() == baseTimestamp,
                 "Cache regression accidentally modified the base source");
+        // Another app's split beside the base (a shared Downloads folder) is not a companion.
+        File unrelated = new File(source, "config.unrelated.apk");
+        Files.write(unrelated.toPath(), inputs.get("foreign"));
+        result = (String[]) install.invoke(installer, base.getPath());
+        require("unchanged".equals(result[1]), "Another package's split beside the base joined its install");
+        metadata(pm.get(PACKAGE));
+        Files.delete(unrelated.toPath());
 
         Files.delete(core.toPath());
         Files.delete(entry.toPath());

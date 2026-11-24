@@ -3,6 +3,65 @@
 # version invalidates the cache once per upgrade, including equal-size files
 # with identical timestamps. Ordinary launches do not read large ICU/font files.
 
+function Get-GesherPortableRoot {
+    param(
+        [Parameter(Mandatory = $false)][string] $InstallDirectory = ''
+    )
+    if ($InstallDirectory) {
+        $installPath = [IO.Path]::GetFullPath($InstallDirectory)
+        if ($installPath.Length -gt [IO.Path]::GetPathRoot($installPath).Length) {
+            $installPath = $installPath.TrimEnd([char[]] '\/')
+        }
+        if (Test-Path -LiteralPath (Join-Path $installPath 'portable.marker') -PathType Leaf) {
+            return $installPath
+        }
+        # ZIP releases keep their runtime in App. An unrelated parent's Data
+        # directory (or another portable installation) must not capture this one.
+        if ((Split-Path -Leaf $installPath) -ieq 'App') {
+            $parent = Split-Path -Parent $installPath
+            if (Test-Path -LiteralPath (Join-Path $parent 'portable.marker') -PathType Leaf) {
+                return $parent
+            }
+        }
+    }
+    return $null
+}
+
+function Get-GesherProfileRoot {
+    param(
+        [Parameter(Mandatory = $false)][string] $InstallDirectory = ''
+    )
+    # A caller may deliberately select a new profile which has no files yet.
+    if ($env:GESHER_PROFILE) { return [IO.Path]::GetFullPath($env:GESHER_PROFILE) }
+    $portableRoot = Get-GesherPortableRoot $InstallDirectory
+    if ($portableRoot) { return Join-Path $portableRoot 'Data' }
+    $appData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData\Local' }
+    return [IO.Path]::GetFullPath((Join-Path $appData 'Gesher'))
+}
+
+function Set-GesherProfileEnvironment {
+    param([string] $InstallDirectory)
+    $profileRoot = Get-GesherProfileRoot $InstallDirectory
+    $env:GESHER_PROFILE = $profileRoot
+    # Integration mode follows the runtime layout, independently of an explicit
+    # data location. Never let a normal installation inherit a stale portable flag.
+    $env:GESHER_PORTABLE = if (Get-GesherPortableRoot $InstallDirectory) { '1' } else { '0' }
+    return $profileRoot
+}
+
+function Get-GesherControlPanelName {
+    param([Parameter(Mandatory = $true)][string] $ProfileDirectory)
+    $canonical = [IO.Path]::GetFullPath($ProfileDirectory).TrimEnd([char[]] '\/').ToUpperInvariant()
+    $appData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData\Local' }
+    $defaultProfile = [IO.Path]::GetFullPath((Join-Path $appData 'Gesher')).TrimEnd([char[]] '\/').ToUpperInvariant()
+    # Preserve the installed panel's name across an ordinary runtime upgrade.
+    if ($canonical -ceq $defaultProfile) { return 'Local\Gesher.ControlPanel' }
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { $digest = $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical)) }
+    finally { $hash.Dispose() }
+    return 'Local\Gesher.ControlPanel.' + ([BitConverter]::ToString($digest) -replace '-', '')
+}
+
 function New-GesherRuntimeSync {
     param(
         [Parameter(Mandatory = $true)][string] $InstallDirectory,
