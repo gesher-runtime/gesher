@@ -197,35 +197,120 @@ bool I420FrameFits(const VideoFrame& f, int w, int h) {
   return y + 2 * uv <= f.data.size();
 }
 
+struct OutputSampleCache {
+  IMFSample* sample = nullptr;
+  IMFMediaBuffer* buffer = nullptr;
+  DWORD capacity = 0;
+
+  OutputSampleCache() = default;
+  ~OutputSampleCache() { Reset(); }
+  OutputSampleCache(const OutputSampleCache&) = delete;
+  OutputSampleCache& operator=(const OutputSampleCache&) = delete;
+
+  void Reset() {
+    if (sample != nullptr) {
+      sample->Release();
+      sample = nullptr;
+    }
+    if (buffer != nullptr) {
+      buffer->Release();
+      buffer = nullptr;
+    }
+    capacity = 0;
+  }
+
+  IMFSample* Acquire(const MfApi& mf, DWORD min_size) {
+    if (!mf.ok) return nullptr;
+    const DWORD wanted = std::max<DWORD>(min_size, 1);
+    if (sample != nullptr && buffer != nullptr && capacity >= wanted) {
+      DWORD count = 0;
+      bool ok = sample->GetBufferCount(&count) == S_OK && count == 1;
+      if (ok) {
+        IMFMediaBuffer* b0 = nullptr;
+        ok = sample->GetBufferByIndex(0, &b0) == S_OK && b0 == buffer;
+        if (b0 != nullptr) b0->Release();
+      }
+      if (ok) {
+        ok = SUCCEEDED(buffer->SetCurrentLength(0)) &&
+             SUCCEEDED(sample->DeleteAllItems()) &&
+             SUCCEEDED(sample->SetSampleTime(0)) &&
+             SUCCEEDED(sample->SetSampleDuration(0));
+      }
+      if (ok) return sample;
+    }
+    Reset();
+    IMFMediaBuffer* b = nullptr;
+    if (FAILED(mf.CreateMemoryBuffer(wanted, &b)) || b == nullptr) {
+      if (b != nullptr) b->Release();
+      return nullptr;
+    }
+    IMFSample* s = nullptr;
+    if (FAILED(mf.CreateSample(&s)) || s == nullptr) {
+      if (s != nullptr) s->Release();
+      b->Release();
+      return nullptr;
+    }
+    if (FAILED(s->AddBuffer(b))) {
+      s->Release();
+      b->Release();
+      return nullptr;
+    }
+    sample = s;
+    buffer = b;
+    capacity = wanted;
+    return sample;
+  }
+};
+
 // Pulls every output the MFT has now; `emit` takes each sample's bytes, time and clean point.
 template <typename Emit>
-bool PullAll(IMFTransform* t, DWORD out_size, const char* name, Emit emit) {
+bool PullAll(IMFTransform* t, DWORD out_size, OutputSampleCache* cache, const char* name, Emit emit) {
   const MfApi& mf = Mf();
+  if (!mf.ok) return false;
   MFT_OUTPUT_STREAM_INFO si = {};
-  t->GetOutputStreamInfo(0, &si);
-  const bool provides = (si.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
-  const DWORD size = std::max<DWORD>(si.cbSize, out_size);
+  HRESULT info_hr = t->GetOutputStreamInfo(0, &si);
+  if (FAILED(info_hr)) {
+    MEDIA_LOGE("%s: GetOutputStreamInfo %s", name, Hex(info_hr).c_str());
+    return false;
+  }
+  bool provides = (si.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
+  DWORD size = std::max<DWORD>(si.cbSize, out_size);
+  if (provides) cache->Reset();
   for (;;) {
     MFT_OUTPUT_DATA_BUFFER db = {};
-    IMFSample* s = nullptr;
+    IMFSample* provided = nullptr;
     if (!provides) {
-      IMFMediaBuffer* b = nullptr;
-      mf.CreateMemoryBuffer(size, &b);
-      mf.CreateSample(&s);
-      s->AddBuffer(b);
-      b->Release();
-      db.pSample = s;
+      provided = cache->Acquire(mf, size);
+      if (provided == nullptr) {
+        MEDIA_LOGE("%s: output sample allocation failed", name);
+        return false;
+      }
+      db.pSample = provided;
     }
     DWORD status = 0;
     HRESULT hr = t->ProcessOutput(0, 1, &db, &status);
     if (db.pEvents != nullptr) db.pEvents->Release();
     if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
-      if (s != nullptr) s->Release();
+      if (db.pSample != nullptr && db.pSample != provided) db.pSample->Release();
       return true;
     }
+    if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
+      if (db.pSample != nullptr && db.pSample != provided) db.pSample->Release();
+      si = {};
+      info_hr = t->GetOutputStreamInfo(0, &si);
+      if (FAILED(info_hr)) {
+        cache->Reset();
+        MEDIA_LOGE("%s: GetOutputStreamInfo %s", name, Hex(info_hr).c_str());
+        return false;
+      }
+      provides = (si.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
+      size = std::max<DWORD>(si.cbSize, out_size);
+      if (provides) cache->Reset();
+      continue;
+    }
     if (FAILED(hr)) {
-      if (s != nullptr) s->Release();
-      if (hr == MF_E_TRANSFORM_STREAM_CHANGE) continue;
+      if (db.pSample != nullptr && db.pSample != provided) db.pSample->Release();
+      cache->Reset();
       MEDIA_LOGE("%s: ProcessOutput %s", name, Hex(hr).c_str());
       return false;
     }
@@ -235,16 +320,20 @@ bool PullAll(IMFTransform* t, DWORD out_size, const char* name, Emit emit) {
       UINT32 clean = 0;
       db.pSample->GetUINT32(kSampleCleanPoint, &clean);
       IMFMediaBuffer* b = nullptr;
-      if (SUCCEEDED(db.pSample->ConvertToContiguousBuffer(&b))) {
+      if (SUCCEEDED(db.pSample->ConvertToContiguousBuffer(&b)) && b != nullptr) {
         BYTE* p = nullptr;
         DWORD len = 0;
         if (SUCCEEDED(b->Lock(&p, nullptr, &len))) {
-          emit(p, static_cast<size_t>(len), static_cast<int64_t>(time / 10), clean != 0);
+          if (p != nullptr || len == 0) {
+            emit(p, static_cast<size_t>(len), static_cast<int64_t>(time / 10), clean != 0);
+          }
           b->Unlock();
         }
         b->Release();
+      } else if (b != nullptr) {
+        b->Release();
       }
-      db.pSample->Release();
+      if (db.pSample != provided) db.pSample->Release();
     }
   }
 }
@@ -278,6 +367,7 @@ bool SetCodecApi(IMFTransform* t, const GUID& api, uint32_t value, bool require_
 class MfH264Encoder : public VideoEncoder {
  public:
   ~MfH264Encoder() override {
+    out_cache_.Reset();
     if (t_ != nullptr) t_->Release();
   }
 
@@ -299,7 +389,12 @@ class MfH264Encoder : public VideoEncoder {
     const UINT64 size = (static_cast<UINT64>(p.width) << 32) | static_cast<UINT32>(p.height);
     const UINT64 rate = (static_cast<UINT64>(std::max(p.frame_rate, 1)) << 32) | 1;
     IMFMediaType* out = nullptr;
-    mf.CreateMediaType(&out);
+    HRESULT hr = mf.CreateMediaType(&out);
+    if (FAILED(hr) || out == nullptr) {
+      if (out != nullptr) out->Release();
+      *error = "H.264 encoder: CreateMediaType " + Hex(FAILED(hr) ? hr : E_FAIL);
+      return false;
+    }
     out->SetGUID(kMtMajorType, kMediaTypeVideo);
     out->SetGUID(kMtSubtype, kH264);
     out->SetUINT32(kMtAvgBitrate, static_cast<UINT32>(std::max(p.bitrate, 64000)));
@@ -308,14 +403,19 @@ class MfH264Encoder : public VideoEncoder {
     out->SetUINT64(kMtPixelAspect, (static_cast<UINT64>(1) << 32) | 1);
     out->SetUINT32(kMtInterlaceMode, 2 /* progressive */);
     out->SetUINT32(kMtMpeg2Profile, p.profile == 8 ? 100 : p.profile == 2 ? 77 : 66);
-    HRESULT hr = t_->SetOutputType(0, out, 0);
+    hr = t_->SetOutputType(0, out, 0);
     out->Release();
     if (FAILED(hr)) {
       *error = "H.264 encoder: SetOutputType " + Hex(hr);
       return false;
     }
     IMFMediaType* in = nullptr;
-    mf.CreateMediaType(&in);
+    hr = mf.CreateMediaType(&in);
+    if (FAILED(hr) || in == nullptr) {
+      if (in != nullptr) in->Release();
+      *error = "H.264 encoder: CreateMediaType " + Hex(FAILED(hr) ? hr : E_FAIL);
+      return false;
+    }
     in->SetGUID(kMtMajorType, kMediaTypeVideo);
     in->SetGUID(kMtSubtype, kI420);
     in->SetUINT64(kMtFrameSize, size);
@@ -393,7 +493,7 @@ class MfH264Encoder : public VideoEncoder {
  private:
   bool Pull(std::vector<EncodedPacket>* out) {
     const DWORD size = static_cast<DWORD>(static_cast<uint64_t>(p_.width) * p_.height * 2 + 4096);
-    return PullAll(t_, size, "mf avc encoder", [&](const uint8_t* p, size_t n, int64_t time_us, bool clean) {
+    return PullAll(t_, size, &out_cache_, "mf avc encoder", [&](const uint8_t* p, size_t n, int64_t time_us, bool clean) {
       // The parameter sets go first, as the codec-config buffer; the frames without them.
       std::vector<uint8_t> config, frame;
       bool idr = false;
@@ -427,6 +527,7 @@ class MfH264Encoder : public VideoEncoder {
 
   VideoEncoderParams p_;
   IMFTransform* t_ = nullptr;
+  OutputSampleCache out_cache_;
   bool config_sent_ = false;
 };
 
@@ -435,6 +536,7 @@ class MfH264Encoder : public VideoEncoder {
 class MfAacEncoder : public AudioEncoder {
  public:
   ~MfAacEncoder() override {
+    out_cache_.Reset();
     if (t_ != nullptr) t_->Release();
   }
 
@@ -451,6 +553,11 @@ class MfAacEncoder : public AudioEncoder {
       *error = "Media Foundation's AAC encoder takes 44100 or 48000 Hz, not " + std::to_string(p.sample_rate);
       return false;
     }
+    if (p.channels == 0 ||
+        static_cast<uint64_t>(p.channels) * 2 * p.sample_rate > std::numeric_limits<UINT32>::max()) {
+      *error = "Media Foundation AAC encoder: invalid channel count";
+      return false;
+    }
     t_ = FindEncoder(kCategoryAudioEncoder, kMediaTypeAudio, kAac);
     if (t_ == nullptr) {
       *error = "Media Foundation has no AAC encoder";
@@ -458,7 +565,12 @@ class MfAacEncoder : public AudioEncoder {
     }
     const MfApi& mf = Mf();
     IMFMediaType* in = nullptr;
-    mf.CreateMediaType(&in);
+    HRESULT hr = mf.CreateMediaType(&in);
+    if (FAILED(hr) || in == nullptr) {
+      if (in != nullptr) in->Release();
+      *error = "AAC encoder: CreateMediaType " + Hex(FAILED(hr) ? hr : E_FAIL);
+      return false;
+    }
     in->SetGUID(kMtMajorType, kMediaTypeAudio);
     in->SetGUID(kMtSubtype, kPcm);
     in->SetUINT32(kMtAudioBits, 16);
@@ -466,7 +578,7 @@ class MfAacEncoder : public AudioEncoder {
     in->SetUINT32(kMtAudioChannels, p.channels);
     in->SetUINT32(kMtAudioBlockAlign, 2 * p.channels);
     in->SetUINT32(kMtAudioBytesPerSecond, 2 * p.channels * p.sample_rate);
-    HRESULT hr = t_->SetInputType(0, in, 0);
+    hr = t_->SetInputType(0, in, 0);
     in->Release();
     if (FAILED(hr)) {
       *error = "AAC encoder: SetInputType " + Hex(hr);
@@ -479,7 +591,12 @@ class MfAacEncoder : public AudioEncoder {
       if (static_cast<int>(b * 8) <= std::max(p.bitrate, 96000)) bytes = b;
     }
     IMFMediaType* out = nullptr;
-    mf.CreateMediaType(&out);
+    hr = mf.CreateMediaType(&out);
+    if (FAILED(hr) || out == nullptr) {
+      if (out != nullptr) out->Release();
+      *error = "AAC encoder: CreateMediaType " + Hex(FAILED(hr) ? hr : E_FAIL);
+      return false;
+    }
     out->SetGUID(kMtMajorType, kMediaTypeAudio);
     out->SetGUID(kMtSubtype, kAac);
     out->SetUINT32(kMtAudioBits, 16);
@@ -500,6 +617,17 @@ class MfAacEncoder : public AudioEncoder {
   }
 
   bool Encode(const int16_t* pcm, size_t frames, int64_t time_us, std::vector<EncodedPacket>* out) override {
+    if (p_.channels == 0 || p_.channels > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        p_.sample_rate == 0 || p_.sample_rate > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+      return false;
+    }
+    const uint64_t bytes_per_frame = static_cast<uint64_t>(p_.channels) * 2;
+    if (frames > 0 &&
+        (pcm == nullptr ||
+         frames > std::numeric_limits<DWORD>::max() / bytes_per_frame ||
+         frames > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) / 1000000ULL)) {
+      return false;
+    }
     if (!config_sent_) {
       EncodedPacket c;
       c.data = AacAudioSpecificConfig(2, p_.sample_rate, p_.channels);
@@ -509,8 +637,9 @@ class MfAacEncoder : public AudioEncoder {
       config_sent_ = true;
     }
     if (frames == 0) return true;
-    const int64_t duration = static_cast<int64_t>(frames) * 1000000 / p_.sample_rate;
-    IMFSample* s = NewSample(reinterpret_cast<const uint8_t*>(pcm), frames * 2 * p_.channels, time_us, duration);
+    const size_t byte_size = static_cast<size_t>(frames) * static_cast<size_t>(bytes_per_frame);
+    const int64_t duration = static_cast<int64_t>((static_cast<uint64_t>(frames) * 1000000ULL) / p_.sample_rate);
+    IMFSample* s = NewSample(reinterpret_cast<const uint8_t*>(pcm), byte_size, time_us, duration);
     if (s == nullptr) return false;
     HRESULT hr = t_->ProcessInput(0, s, 0);
     if (hr == MF_E_NOTACCEPTING) {
@@ -538,7 +667,7 @@ class MfAacEncoder : public AudioEncoder {
 
  private:
   bool Pull(std::vector<EncodedPacket>* out) {
-    return PullAll(t_, 8192, "mf aac encoder", [&](const uint8_t* p, size_t n, int64_t time_us, bool) {
+    return PullAll(t_, 8192, &out_cache_, "mf aac encoder", [&](const uint8_t* p, size_t n, int64_t time_us, bool) {
       EncodedPacket pkt;
       pkt.data.assign(p, p + n);
       pkt.time_us = time_us;
@@ -549,6 +678,7 @@ class MfAacEncoder : public AudioEncoder {
 
   AudioEncoderParams p_;
   IMFTransform* t_ = nullptr;
+  OutputSampleCache out_cache_;
   bool config_sent_ = false;
 };
 

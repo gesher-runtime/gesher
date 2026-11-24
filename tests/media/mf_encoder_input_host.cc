@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <limits>
 #include <memory>
 #include <new>
@@ -46,7 +47,7 @@ int WindowsSnprintf(char* out, size_t size, const char* format, unsigned long va
 }
 }
 
-void* operator new(size_t size) {
+[[gnu::noinline]] void* operator new(size_t size) {
   using namespace fixture;
   auto* header = static_cast<Allocation*>(std::malloc(sizeof(Allocation) + std::max<size_t>(size, 1)));
   if (header == nullptr) std::abort();
@@ -61,7 +62,7 @@ void* operator new(size_t size) {
   return header + 1;
 }
 void* operator new[](size_t n) { return ::operator new(n); }
-void operator delete(void* p) noexcept {
+[[gnu::noinline]] void operator delete(void* p) noexcept {
   if (p == nullptr) return;
   auto* header = static_cast<fixture::Allocation*>(p) - 1;
   if (header->counted) fixture::counts.live -= header->size;
@@ -80,14 +81,19 @@ void operator delete[](void* p, size_t) noexcept { ::operator delete(p); }
 #undef memcpy
 
 namespace fixture {
-enum class Fault { None, CreateBuffer, Lock, ShortBuffer, NullBuffer, Length, Unlock,
-                   CreateSample, NullSample, AddBuffer, Time, Duration };
+enum class Fault { None, CreateBuffer, NullCreatedBuffer, Lock, ShortBuffer, NullBuffer, Length,
+                   Unlock, CreateSample, NullSample, AddBuffer, Time, Duration };
 struct State {
   Fault fault = Fault::None;
+  Fault pending_output_fault = Fault::None;
   size_t buffers = 0, samples = 0, transforms = 0, types = 0, activates = 0;
-  size_t create_buffers = 0, locks = 0, unlocks = 0, successful_locks = 0;
+  size_t create_buffers = 0, create_samples = 0, create_buffer_bytes = 0, stream_infos = 0;
+  DWORD last_buffer_capacity = 0, out_cb_size = 512, stream_change_cb_size = 512;
+  size_t locks = 0, unlocks = 0, successful_locks = 0;
   size_t inputs = 0, accepted = 0, outputs = 0, forced_keys = 0, events_released = 0;
-  int reject_inputs = 0;
+  int reject_inputs = 0, fail_create_type = 0;
+  bool null_create_type = false, stream_info_error = false;
+  bool stream_change_once = false, stream_change_provides = false, replace_output_sample = false;
   bool output_error = false, emit = false, provides = true, hold = false, clean = false;
   bool next_idr = true;
   int64_t seen_time = 0, seen_duration = 0;
@@ -151,6 +157,23 @@ struct Sample final : IMFSample {
     buffer->AddRef();
     return S_OK;
   }
+  HRESULT GetBufferCount(DWORD* count) override {
+    if (!count) return E_FAIL;
+    *count = buffer ? 1 : 0;
+    return S_OK;
+  }
+  HRESULT GetBufferByIndex(DWORD index, IMFMediaBuffer** value) override {
+    if (!value || index != 0 || !buffer) return E_FAIL;
+    *value = buffer;
+    buffer->AddRef();
+    return S_OK;
+  }
+  HRESULT DeleteAllItems() override {
+    clean = false;
+    time = 0;
+    duration = 0;
+    return S_OK;
+  }
   HRESULT SetSampleTime(LONGLONG value) override {
     if (state.fault == Fault::Time) return E_FAIL;
     time = value;
@@ -206,6 +229,9 @@ struct Codec final : gesher::media::CodecApi {
 HRESULT CreateBuffer(DWORD size, IMFMediaBuffer** result) {
   ++state.create_buffers;
   if (state.fault == Fault::CreateBuffer) return E_FAIL;
+  if (state.fault == Fault::NullCreatedBuffer) { *result = nullptr; return S_OK; }
+  state.create_buffer_bytes += size;
+  state.last_buffer_capacity = size;
   Buffer* buffer;
   { Uncounted ignored; buffer = new Buffer; }
   // Include exactly the requested MF payload allocation in the reported input
@@ -217,6 +243,7 @@ HRESULT CreateBuffer(DWORD size, IMFMediaBuffer** result) {
   return S_OK;
 }
 HRESULT CreateSample(IMFSample** result) {
+  ++state.create_samples;
   if (state.fault == Fault::CreateSample) return E_FAIL;
   if (state.fault == Fault::NullSample) return S_OK;
   Uncounted ignored;
@@ -256,8 +283,10 @@ struct Transform final : IMFTransform {
     ++state.messages[static_cast<size_t>(message)]; return S_OK;
   }
   HRESULT GetOutputStreamInfo(DWORD, MFT_OUTPUT_STREAM_INFO* info) override {
+    ++state.stream_infos;
+    if (state.stream_info_error) return E_FAIL;
     info->dwFlags = state.provides ? MFT_OUTPUT_STREAM_PROVIDES_SAMPLES : 0;
-    info->cbSize = 512;
+    info->cbSize = state.out_cb_size;
     return S_OK;
   }
   HRESULT ProcessInput(DWORD id, IMFSample* raw, DWORD flags) override {
@@ -282,15 +311,53 @@ struct Transform final : IMFTransform {
       sample->AddRef();
       retained[retained_count++] = sample;
     }
+    if (state.pending_output_fault != Fault::None) {
+      state.fault = state.pending_output_fault;
+      state.pending_output_fault = Fault::None;
+    }
     return S_OK;
+  }
+  static IMFSample* MakeReplacementSample() {
+    IMFSample* rep = nullptr;
+    IMFMediaBuffer* b = nullptr;
+    Check(SUCCEEDED(CreateSample(&rep)) && SUCCEEDED(CreateBuffer(64, &b)) &&
+          SUCCEEDED(rep->AddBuffer(b)), "fixture replacement output sample created");
+    b->Release();
+    return rep;
   }
   HRESULT ProcessOutput(DWORD, DWORD count, MFT_OUTPUT_DATA_BUFFER* output, DWORD*) override {
     ++state.outputs;
     Check(count == 1, "one output buffer requested");
-    if (state.output_error) return E_FAIL;
-    if (!state.emit) return MF_E_TRANSFORM_NEED_MORE_INPUT;
+    if (state.stream_change_once) {
+      state.stream_change_once = false;
+      state.out_cb_size = state.stream_change_cb_size;
+      if (state.stream_change_provides) state.provides = true;
+      if (state.replace_output_sample) {
+        state.replace_output_sample = false;
+        output->pSample = MakeReplacementSample();
+      }
+      return MF_E_TRANSFORM_STREAM_CHANGE;
+    }
+    if (state.output_error) {
+      if (state.replace_output_sample) {
+        state.replace_output_sample = false;
+        output->pSample = MakeReplacementSample();
+      }
+      return E_FAIL;
+    }
+    if (!state.emit) {
+      if (state.replace_output_sample) {
+        state.replace_output_sample = false;
+        output->pSample = MakeReplacementSample();
+      }
+      return MF_E_TRANSFORM_NEED_MORE_INPUT;
+    }
     state.emit = false;
     IMFSample* raw = output->pSample;
+    if (state.replace_output_sample) {
+      state.replace_output_sample = false;
+      raw = nullptr;
+    }
     if (!raw) {
       Check(SUCCEEDED(CreateSample(&raw)), "fixture output sample created");
       IMFMediaBuffer* buffer = nullptr;
@@ -301,13 +368,15 @@ struct Transform final : IMFTransform {
     auto* sample = static_cast<Sample*>(raw);
     const uint8_t data[] = {0,0,0,1,0x67,0x42,0x80, 0,0,1,0x68,0x11,
                            0,0,0,1,0x09,0xf0, 0,0,0,1,0x65,0x33,0x44};
+    Check(sample->buffer != nullptr && sample->buffer->capacity >= sizeof(data),
+          "output buffer has sufficient capacity for encoded access unit");
     std::memcpy(sample->buffer->bytes, data, sizeof(data));
     if (!state.next_idr) sample->buffer->bytes[22] = 0x61;
     sample->buffer->length = sizeof(data);
     sample->time = 123450;
-    sample->clean = state.clean;
+    if (state.clean) sample->clean = true;
     output->pSample = sample;
-    output->pEvents = new Event;
+    { Uncounted ignored; output->pEvents = new Event; }
     return S_OK;
   }
 };
@@ -328,7 +397,17 @@ struct Activate final : IMFActivate {
   }
 };
 HRESULT Startup(ULONG, DWORD) { return S_OK; }
-HRESULT CreateType(IMFMediaType** result) { Uncounted ignored; *result = new MediaType; return S_OK; }
+HRESULT CreateType(IMFMediaType** result) {
+  if (state.fail_create_type > 0) {
+    if (--state.fail_create_type == 0) {
+      if (state.null_create_type) { *result = nullptr; return S_OK; }
+      return E_FAIL;
+    }
+  }
+  Uncounted ignored;
+  *result = new MediaType;
+  return S_OK;
+}
 HRESULT Enum(GUID, UINT32, const MFT_REGISTER_TYPE_INFO*, const MFT_REGISTER_TYPE_INFO*,
              IMFActivate*** result, UINT32* count) {
   Uncounted ignored;
@@ -591,6 +670,90 @@ void AudioCases() {
   Empty();
 }
 
+void OutputReuseAndHardening() {
+  // (a) !provides steady-state reuse across 120 frames + stale clean-point reset.
+  Reset();
+  auto encoder = Encoder(8, 6);
+  auto frame = Frame(8, 6, 1, 1, 17);
+  state.provides = false;
+  std::vector<EncodedPacket> out;
+  for (int i = 0; i < 120; ++i) {
+    out.clear();
+    state.emit = true;
+    state.next_idr = false;
+    state.clean = (i == 0);
+    Check(encoder->Encode(frame, false, &out), "!provides frame encodes");
+    Check(out.back().key == (i == 0), "DeleteAllItems prevents stale clean-point leak");
+  }
+  Check(state.create_buffers == 121 && state.create_samples == 121,
+        "120 !provides frames allocate 1 output IMFMediaBuffer and 1 IMFSample total");
+  // (b) MF_E_TRANSFORM_STREAM_CHANGE grows cached buffer when si.cbSize increases.
+  const size_t infos_before = state.stream_infos;
+  state.stream_change_once = true;
+  state.stream_change_cb_size = 16384;
+  state.emit = true;
+  Check(encoder->Encode(frame, false, &out) && state.stream_infos >= infos_before + 2,
+        "STREAM_CHANGE re-queries GetOutputStreamInfo");
+  Check(state.last_buffer_capacity == 16384 && state.buffers == 1 && state.samples == 1,
+        "cached output buffer grew to 16384 and retired prior buffer");
+  state.stream_change_once = true;
+  state.stream_change_provides = true;
+  state.emit = true;
+  Check(encoder->Encode(frame, false, &out) && state.buffers == 0 && state.samples == 0,
+        "switching to provides=true resets cached output sample+buffer");
+  state.stream_info_error = true;
+  Check(!encoder->Encode(frame, false, &out), "GetOutputStreamInfo failure returns false");
+  encoder.reset(); Empty();
+
+  // (c) MFT returning a replaced db.pSample != provided releases replacement cleanly.
+  for (int mode = 0; mode < 4; ++mode) {
+    Reset(); encoder = Encoder(8, 6);
+    state.provides = false; state.replace_output_sample = true; out.clear();
+    state.emit = (mode == 0 || mode == 2);
+    state.stream_change_once = (mode == 2);
+    state.output_error = (mode == 3);
+    const bool ok = encoder->Encode(frame, true, &out);
+    Check(ok == (mode != 3), "replaced pSample handled across S_OK/NEED_MORE_INPUT/STREAM_CHANGE/error");
+    Check(state.buffers == (mode == 3 ? 0u : 1u) && state.samples == (mode == 3 ? 0u : 1u),
+          "replacement sample released without leaking");
+    encoder.reset(); Empty();
+  }
+
+  // (d) Output CreateMemoryBuffer / CreateSample / AddBuffer & Init/AAC hardening.
+  for (Fault fault : {Fault::CreateBuffer, Fault::NullCreatedBuffer,
+                      Fault::CreateSample, Fault::NullSample, Fault::AddBuffer}) {
+    Reset(); encoder = Encoder(8, 6);
+    state.provides = false; state.emit = true; state.pending_output_fault = fault; out.clear();
+    Check(!encoder->Encode(frame, true, &out) && out.empty() && state.buffers == 0 && state.samples == 0,
+          "output allocation failure returns false with zero COM leaks");
+    encoder.reset(); Empty();
+  }
+  for (int call = 1; call <= 2; ++call) {
+    Reset(); state.fail_create_type = call;
+    VideoEncoderParams vp; vp.width = 16; vp.height = 12; std::string error;
+    Check(!gesher::media::CreateMfH264Encoder(vp, &error) && !error.empty(), "H.264 CreateMediaType check");
+    Empty();
+    Reset(); state.fail_create_type = call; state.null_create_type = true;
+    gesher::media::AudioEncoderParams ap; ap.channels = 2; ap.sample_rate = 48000; error.clear();
+    Check(!gesher::media::CreateMfAacEncoder(ap, &error) && !error.empty(), "AAC CreateMediaType check");
+    Empty();
+  }
+  Reset();
+  gesher::media::AudioEncoderParams ap; ap.channels = 0; ap.sample_rate = 48000; std::string error;
+  Check(!gesher::media::CreateMfAacEncoder(ap, &error), "AAC zero channels rejected");
+  ap.channels = 2;
+  auto aac = gesher::media::CreateMfAacEncoder(ap, &error);
+  const int16_t pcm[4] = {1, -1, 2, -2};
+  out.clear();
+  Check(!aac->Encode(nullptr, 2, 0, &out), "AAC null PCM rejected");
+  if constexpr (sizeof(size_t) > 4) {
+    Check(!aac->Encode(pcm, size_t{1} << 31, 0, &out) &&
+          !aac->Encode(pcm, static_cast<size_t>(INT64_MAX / 1000000) + 1, 0, &out),
+          "AAC frame byte/duration overflows rejected");
+  }
+  aac.reset(); Empty();
+}
+
 void Measure(bool enforce) {
   Reset();
   constexpr int w = 1920, h = 1080, frames = 120;
@@ -616,6 +779,64 @@ void Measure(bool enforce) {
   }
   encoder.reset(); Empty();
 }
+
+double MonotonicMs() {
+  std::timespec ts{};
+  std::timespec_get(&ts, TIME_UTC);
+  return static_cast<double>(ts.tv_sec) * 1000.0 + static_cast<double>(ts.tv_nsec) * 1e-6;
+}
+
+void MeasureOutput(bool enforce) {
+  Reset();
+  constexpr int w = 1920, h = 1080, frames = 120;
+  constexpr size_t input_payload = size_t{w} * h * 3 / 2;
+  auto encoder = Encoder(w, h);
+  auto frame = Frame(w, h, 2, 2, 88);
+  state.provides = false;
+  std::vector<EncodedPacket> out;
+  out.reserve(4);
+  counts = {};
+  counts.active = true;
+  const double t0 = MonotonicMs();
+  size_t buffers_after_first = 0, samples_after_first = 0;
+  for (int i = 0; i < frames; ++i) {
+    state.emit = true;
+    state.next_idr = (i % 30 == 0);
+    state.clean = state.next_idr;
+    Check(encoder->Encode(frame, false, &out), "measured !provides frame encodes");
+    {
+      Uncounted ignored;
+      out.clear();
+    }
+    if (i == 0) {
+      buffers_after_first = state.create_buffers;
+      samples_after_first = state.create_samples;
+    }
+  }
+  const double wall_ms = MonotonicMs() - t0;
+  counts.active = false;
+  const size_t output_buffers = state.create_buffers - static_cast<size_t>(frames);
+  const size_t output_samples = state.create_samples - static_cast<size_t>(frames);
+  const size_t steady_output_buffers =
+      (state.create_buffers - buffers_after_first) - static_cast<size_t>(frames - 1);
+  const size_t steady_output_samples =
+      (state.create_samples - samples_after_first) - static_cast<size_t>(frames - 1);
+  const size_t output_buffer_bytes = state.create_buffer_bytes - static_cast<size_t>(frames) * input_payload;
+  std::printf("OUTPUT_METRICS frames=%d width=%d height=%d output_buffers=%zu steady_output_buffers=%zu "
+              "output_samples=%zu output_buffer_bytes=%zu allocations=%zu allocated_bytes=%zu wall_ms=%.3f\n",
+              frames, w, h, output_buffers, steady_output_buffers, output_samples, output_buffer_bytes,
+              counts.allocations, counts.bytes, wall_ms);
+  out = {};
+  encoder.reset();
+  Check(counts.live == 0, "measured output allocations fully released");
+  if (enforce) {
+    Check(output_buffers == 1 && steady_output_buffers == 0,
+          "one cached output IMFMediaBuffer across 120 !provides frames");
+    Check(output_samples == 1 && steady_output_samples == 0,
+          "one cached output IMFSample across 120 !provides frames");
+  }
+  Empty();
+}
 }
 
 int main(int argc, char** argv) {
@@ -626,8 +847,12 @@ int main(int argc, char** argv) {
   OwnershipAndRetry();
   OutputCases();
   AudioCases();
-  if (!valid_only) FailuresAndBounds();
+  if (!valid_only) {
+    FailuresAndBounds();
+    OutputReuseAndHardening();
+  }
   Measure(!measure);
+  MeasureOutput(!valid_only);
   std::printf("MF encoder input: %zu checks, %zu failures\n", checks, failures);
   return failures ? 1 : 0;
 }

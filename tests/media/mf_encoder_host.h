@@ -58,6 +58,9 @@ struct IMFMediaBuffer : IUnknown {
 };
 struct IMFSample : IUnknown {
   virtual HRESULT AddBuffer(IMFMediaBuffer*) = 0;
+  virtual HRESULT GetBufferCount(DWORD*) = 0;
+  virtual HRESULT GetBufferByIndex(DWORD, IMFMediaBuffer**) = 0;
+  virtual HRESULT DeleteAllItems() = 0;
   virtual HRESULT SetSampleTime(LONGLONG) = 0;
   virtual HRESULT SetSampleDuration(LONGLONG) = 0;
   virtual HRESULT GetSampleTime(LONGLONG*) = 0;
