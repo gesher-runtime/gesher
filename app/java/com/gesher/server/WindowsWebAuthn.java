@@ -49,16 +49,93 @@ final class WindowsWebAuthn implements PasskeyBackend {
     }
 
     /** A WebAuthNGetCancellationId GUID. */
-    private static final class Id implements Cancellation {
+    static final class Id implements Cancellation {
+        private static final long CANCEL_RETRY_MS = 100;
         final byte[] mGuid;
+        private final Runnable mNativeCancel;
+        private boolean mStarted;
+        private boolean mCanceled;
+        private boolean mComplete;
+        private Thread mCancelWorker;
 
         Id(byte[] guid) {
+            this(guid, () -> nativeCancel(guid));
+        }
+
+        /** Native cancellation boundary, supplied by the host tests without a dialog. */
+        Id(byte[] guid, Runnable nativeCancel) {
             mGuid = guid;
+            mNativeCancel = nativeCancel;
+        }
+
+        synchronized boolean begin() {
+            if (mCanceled || mStarted || mComplete) return false;
+            mStarted = true;
+            return true;
         }
 
         @Override
-        public void cancel() {
-            nativeCancel(mGuid);
+        public synchronized void cancel() {
+            if (mCanceled || mComplete) return;
+            mCanceled = true;
+            if (!mStarted) return;
+            // WebAuthNCancelCurrentOperation does nothing before the synchronous operation
+            // starts. Reissue across the JNI/native-start handoff until that call returns.
+            mCancelWorker = new Thread(this::cancelUntilComplete, "webauthn-cancel");
+            mCancelWorker.setDaemon(true);
+            mCancelWorker.start();
+        }
+
+        private synchronized void cancelUntilComplete() {
+            while (!mComplete) {
+                mNativeCancel.run();
+                if (mComplete) return;
+                try {
+                    wait(CANCEL_RETRY_MS);
+                } catch (InterruptedException interrupted) {
+                    // Completion owns this worker's lifetime; an interrupt must not reopen
+                    // the handoff gap or turn a canceled request back into a live one.
+                }
+            }
+        }
+
+        void finish() {
+            Thread worker;
+            synchronized (this) {
+                mComplete = true;
+                notifyAll();
+                worker = mCancelWorker;
+            }
+            if (worker != null) {
+                // No native cancel can be in progress once the lock above was acquired,
+                // and mComplete forbids another. The worker only has to leave its loop.
+                boolean interrupted = false;
+                while (worker.isAlive()) {
+                    try {
+                        worker.join();
+                    } catch (InterruptedException again) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+                synchronized (this) {
+                    mCancelWorker = null;
+                }
+            }
+        }
+    }
+
+    /** Synchronous native-call boundary, shared by both ceremonies and the host contracts. */
+    static int call(Cancellation cancellation, java.util.function.IntSupplier nativeCall) {
+        Id id = cancellation instanceof Id ? (Id) cancellation : null;
+        // A failed WebAuthNGetCancellationId must not open UI that app cancellation
+        // or Binder death cannot close. This backend always requires its native GUID.
+        if (id == null) return 0x80004005;  // E_FAIL, no cancellable native operation
+        if (!id.begin()) return 0x800704C7;  // ERROR_CANCELLED, no native call
+        try {
+            return nativeCall.getAsInt();
+        } finally {
+            id.finish();
         }
     }
 
@@ -77,11 +154,12 @@ final class WindowsWebAuthn implements PasskeyBackend {
         Object[] out = new Object[4];
         int[] info = {0, 0, -1, -1};
         Attestation attestation = new Attestation();
-        attestation.hresult = nativeMakeCredential(request.pid, request.rpId, request.rpName,
+        attestation.hresult = call(cancellation, () -> nativeMakeCredential(
+                request.pid, request.rpId, request.rpName,
                 request.userId, request.userName, request.userDisplayName, request.algorithms,
                 request.clientDataJson, request.timeoutMs, excludeIds, excludeTransports,
                 request.attachment, request.residentKey, request.userVerification,
-                request.attestation, guid(cancellation), out, info);
+                request.attestation, guid(cancellation), out, info));
         attestation.notForeground = info[0] != 0;
         attestation.errorName = (String) out[3];
         if (attestation.hresult != S_OK) return attestation;
@@ -109,9 +187,10 @@ final class WindowsWebAuthn implements PasskeyBackend {
         Object[] out = new Object[5];
         int[] info = {0, 0};
         Assertion assertion = new Assertion();
-        assertion.hresult = nativeGetAssertion(request.pid, request.rpId, request.clientDataJson,
+        assertion.hresult = call(cancellation, () -> nativeGetAssertion(
+                request.pid, request.rpId, request.clientDataJson,
                 request.timeoutMs, allowIds, allowTransports, request.userVerification,
-                guid(cancellation), out, info);
+                guid(cancellation), out, info));
         assertion.notForeground = info[0] != 0;
         assertion.errorName = (String) out[4];
         if (assertion.hresult != S_OK) return assertion;
