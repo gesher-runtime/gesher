@@ -7,7 +7,7 @@ com.gesher.server.WindowsSpeech are compiled unchanged apart from their package,
 imports and public class visibility, against android-16.0.0_r4 boundary stand-ins
 (tests/tts/TtsEngineContracts.java.in). Covered: languages and voices from the
 Windows voice list, callback order and PCM hand-over, word ranges, rate/pitch
-mapping, stop mid-utterance, errors, synthesizeToFile's WAV, CHECK_TTS_DATA and the
+mapping, stop mid-utterance and during Windows startup, errors, synthesizeToFile's WAV, CHECK_TTS_DATA and the
 natives' voice records. Windows itself is covered by tests/tts/tts_windows_test.cc.
 Use --source-ref to run the contracts against another revision of the sources.
 """

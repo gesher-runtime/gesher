@@ -45,6 +45,8 @@ public final class TtsEngineContracts {
         double lastRate, lastPitch;
         String lastVoiceId, lastText;
         boolean lastWords;
+        /** Runs inside start(), before the handle is returned (a stop racing startup). */
+        volatile Runnable duringStart;
 
         public List<BackendVoice> voices() { return voices; }
 
@@ -54,6 +56,9 @@ public final class TtsEngineContracts {
             starts.add(voiceId);
             lastText = text; lastVoiceId = voiceId; lastRate = rate; lastPitch = pitch; lastWords = words;
             Scripted s = scripts.isEmpty() ? new Scripted() : scripts.poll();
+            Runnable hook = duringStart;
+            duringStart = null;
+            if (hook != null) hook.run();
             return new Synthesis() {
                 volatile boolean canceled;
                 public int await(long timeoutMs) {
@@ -525,6 +530,72 @@ public final class TtsEngineContracts {
                 "a failed rendering: error(ERROR_SYNTHESIS) then done(), no audio");
     }
 
+    /**
+     * TextToSpeechService.SynthesisSpeechItem: playImpl creates the callback, then calls
+     * onSynthesizeText; stopImpl, once the callback exists, calls callback.stop() and then
+     * onStop() from another thread. So onStop can arrive while the engine is still inside
+     * Windows' start(), before any handle exists.
+     */
+    static void stopDuringStartup() throws Exception {
+        FakeBackend b = new FakeBackend();
+        b.voices = windowsVoices();
+        WindowsTtsService s = service(b);
+
+        // onStop while start() runs: the returned handle is canceled at once.
+        Scripted held = new Scripted();
+        held.wav = wav(1, 1, 22050, 16, pcm(4000), false, false);
+        held.hold = new CountDownLatch(1);  // a rendering that would outlast the check
+        b.scripts.add(held);
+        PlaybackCallback cb = new PlaybackCallback();
+        Thread stopper = new Thread(() -> { cb.stop(); s.onStop(); });
+        b.duringStart = () -> {
+            stopper.start();
+            try { stopper.join(5000); } catch (InterruptedException e) { throw new AssertionError(e); }
+        };
+        synchronized (events) { events.clear(); }
+        Thread synth = new Thread(() -> s.onSynthesizeText(request("long", "eng", "USA", null, 100, 100), cb));
+        long t0 = System.nanoTime();
+        synth.start();
+        synth.join(3000);
+        boolean returned = !synth.isAlive();
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+        held.hold.countDown();  // let a stuck synthesis thread go before the next checks
+        synth.join(15000);
+        List<String> ev;
+        synchronized (events) { ev = new ArrayList<>(events); }
+        check(returned && b.cancels.get() == 1,
+                "onStop during Windows' start(): the returned synthesis is canceled at once ("
+                + ms + " ms, " + b.cancels.get() + " cancel)");
+        check(ev.equals(List.of("onStop")) && cb.calls.isEmpty() && b.releases.get() == 1,
+                "stopped during startup: onStop only, no audio, the synthesis is released " + ev);
+
+        // The stop belongs to that utterance: the next one is not canceled.
+        PlaybackCallback next = new PlaybackCallback();
+        Scripted ok = new Scripted();
+        ok.wav = wav(1, 1, 22050, 16, pcm(4000), false, false);
+        b.scripts.add(ok);
+        ev = run(s, request("next", "eng", "USA", null, 100, 100), next);
+        check(ev.get(ev.size() - 1).equals("onSuccess") && b.cancels.get() == 1 && next.audio.size() == 4000,
+                "the utterance after one stopped during startup plays in full " + ev);
+
+        // onStop between two utterances (nothing in flight) does not cancel the next one.
+        int cancels = b.cancels.get();
+        Scripted first = new Scripted();
+        first.wav = wav(1, 1, 22050, 16, pcm(4000), false, false);
+        b.scripts.add(first);
+        ev = run(s, request("one", "eng", "USA", null, 100, 100), new PlaybackCallback());
+        boolean firstDone = ev.get(ev.size() - 1).equals("onSuccess");
+        s.onStop();
+        Scripted second = new Scripted();
+        second.wav = wav(1, 1, 22050, 16, pcm(4000), false, false);
+        b.scripts.add(second);
+        PlaybackCallback cb2 = new PlaybackCallback();
+        ev = run(s, request("two", "eng", "USA", null, 100, 100), cb2);
+        check(firstDone && ev.get(ev.size() - 1).equals("onSuccess") && cb2.audio.size() == 4000
+                && b.cancels.get() == cancels,
+                "onStop between two utterances does not cancel the next one " + ev);
+    }
+
     static void synthesizeToFile() {
         FakeBackend b = new FakeBackend();
         b.voices = windowsVoices();
@@ -610,6 +681,7 @@ public final class TtsEngineContracts {
         playback();
         words();
         stopAndErrors();
+        stopDuringStartup();
         synthesizeToFile();
         checkData();
         windowsBridge();
