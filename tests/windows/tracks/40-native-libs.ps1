@@ -23,6 +23,15 @@ Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
 
+# dlopen()'s dlerror() (what System.load's UnsatisfiedLinkError carries): a
+# missing or non-library path in Android's linker words, Windows DLLs in Windows'.
+Check 'dlopen: Android linker errors for app paths, Windows errors for Windows DLLs' {
+  & "$Dir/dlopen_errors_test.exe"
+} @('dlopen-errors: PASS a missing path is "library ... not found"',
+  'dlopen-errors: PASS another file has bad ELF magic',
+  'dlopen-errors: PASS a PE image that fails keeps the Windows error',
+  ' assertions, 0 failures')
+
 # Public loading/lookup/iteration on real ELF dependency graphs. The second
 # executable changes only the test copy's protection primitive for one failure.
 foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transaction_failure_test.exe') {

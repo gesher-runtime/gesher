@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The android.test.runner shared library (frameworks/base/test-runner, with
+     JUnit 3's junit.runner and junit.textui), declared as Android's platform.xml
+     declares it, with its dependencies. gesher-app.ps1 installs this file as
+     $ANDROID_ROOT/etc/permissions and the jar as $ANDROID_ROOT/framework. -->
+<permissions>
+    <library name="android.test.runner"
+            file="/system/framework/android.test.runner.jar"
+            dependency="android.test.base:android.test.mock" />
+</permissions>
