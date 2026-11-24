@@ -3,8 +3,11 @@
 // AuthService and WindowsHelloBackend are inserted unchanged apart from their
 // package, imports and public class visibility; everything else here is a
 // boundary stand-in with android-16.0.0_r4's constant values. FakeBackend is an
-// isolated test double: production registers no backend.
+// isolated test double: production's only backend is WindowsHello. DeviceCredential (the
+// availability decision), ConfirmCredential (ACTION_CONFIRM_DEVICE_CREDENTIAL) and
+// OwnerWatch (the prompt's owner leaving the foreground) are production classes too.
 import java.util.*;
+import java.util.function.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class AuthServiceContracts {
@@ -30,13 +33,14 @@ public final class AuthServiceContracts {
     static final class TestHost implements AuthService.Host {
         final Set<String> granted = new HashSet<>(Set.of(Manifest.permission.USE_BIOMETRIC));
         boolean appOpAllowed = true, foreground = true, deviceSecure;
+        DeviceCredential trust;  // when set, isDeviceSecure is trust's answer: production's wiring
         final ArrayDeque<Runnable> queue = new ArrayDeque<>();
         public boolean hasPermission(String permission, int pid, int uid) {
             return pid == Binder.callingPid && uid == Binder.callingUid && granted.contains(permission);
         }
         public boolean noteUseBiometric(int uid, String packageName) { return packageName != null && appOpAllowed; }
         public boolean isForeground(int uid, int pid) { return foreground; }
-        public boolean isDeviceSecure(int userId) { return deviceSecure; }
+        public boolean isDeviceSecure(int userId) { return trust != null ? trust.available() : deviceSecure; }
         public CharSequence string(String name) { return "res:" + name; }
         public synchronized void post(Runnable work) { queue.add(work); }
         void drain() {
@@ -114,12 +118,28 @@ public final class AuthServiceContracts {
     static TestHost host;
     static FakeBackend backend;
     static AuthService service;
+    static DeviceCredential credential;
+    static final int WINDOWS_10 = 19045, WINDOWS_11 = 22000;
+
+    /** Production's wiring: trust and auth read one DeviceCredential. */
+    static void wired(int availabilityAtStart, int windowsBuild) {
+        host = new TestHost();
+        backend = new FakeBackend();
+        backend.availability = availabilityAtStart;
+        credential = new DeviceCredential(backend, windowsBuild);
+        host.trust = credential;
+        service = new AuthService(host, credential);
+        Binder.callingUid = 10123;
+        Binder.callingPid = 4321;
+        events.clear();
+    }
 
     static void fresh(boolean secure, boolean withBackend) {
         host = new TestHost();
         host.deviceSecure = secure;
         backend = withBackend ? new FakeBackend() : null;
-        service = new AuthService(host, backend);
+        credential = new DeviceCredential(backend, WINDOWS_11);
+        service = new AuthService(host, credential);
         Binder.callingUid = 10123;
         Binder.callingPid = 4321;
         events.clear();
@@ -407,9 +427,291 @@ public final class AuthServiceContracts {
         check(!events.toString().contains("succeeded(2)"), "AUTHENTICATION_RESULT_TYPE_BIOMETRIC is never reported");
     }
 
+    // --- phase 2b: one availability decision ---------------------------------------------
+
+    static int can(int authenticators) { return service.canAuthenticate("com.example.bank", 0, authenticators); }
+
+    static void availability() {
+        DeviceCredential none = new DeviceCredential(null, WINDOWS_11);
+        check(!none.supported() && !none.available() && none.backend() == null
+                && none.state() == WindowsHelloBackend.FAILED,
+                "no Windows Hello natives: no secure lock screen, no credential");
+
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_10);
+        check(!credential.supported() && !credential.available() && credential.backend() == null,
+                "Windows below build 22000: no secure lock screen, no credential, Hello set up or not");
+        check(can(CRED) == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
+                && can(CRED | WEAK) == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
+                && can(STRONG) == BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
+                "below build 22000 canAuthenticate answers as an unsecured device");
+        Receiver r = new Receiver("old");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        check(r.calls.equals(List.of("error(1,14,0)")) && backend.requests.isEmpty(),
+                "below build 22000 a credential prompt is NO_DEVICE_CREDENTIAL and reaches no Windows prompt");
+        check(new DeviceCredential(new FakeBackend(), 21999).backend() == null
+                && new DeviceCredential(new FakeBackend(), 22000).available(),
+                "the floor is exactly build 22000");
+
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        check(credential.supported() && credential.available() && credential.backend() == backend,
+                "Windows 11 with Hello available: secure lock screen supported, device secure");
+        check(can(CRED) == BiometricManager.BIOMETRIC_SUCCESS
+                && can(CRED | WEAK) == BiometricManager.BIOMETRIC_SUCCESS
+                && can(CRED | STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+                && can(WEAK) == BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE
+                && can(STRONG) == BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE
+                && can(0) == BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
+                "PreAuthInfo's answers on a secure device without sensors");
+        backend.availability = WindowsHelloBackend.NOT_CONFIGURED_FOR_USER;
+        check(credential.supported() && !credential.available()
+                && can(CRED) == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
+                "the user removed Hello: still supported, no longer secure");
+        backend.availability = WindowsHelloBackend.AVAILABLE;
+        check(credential.available() && can(CRED) == BiometricManager.BIOMETRIC_SUCCESS,
+                "the user set Hello up again: secure again");
+
+        wired(WindowsHelloBackend.NOT_CONFIGURED_FOR_USER, WINDOWS_11);
+        check(credential.supported() && !credential.available(),
+                "Hello not set up at start: supported, not secure");
+        backend.availability = WindowsHelloBackend.AVAILABLE;
+        check(credential.available(), "and secure once the user sets it up");
+
+        for (int state : new int[] {WindowsHelloBackend.DEVICE_NOT_PRESENT,
+                WindowsHelloBackend.DISABLED_BY_POLICY, WindowsHelloBackend.DEVICE_BUSY,
+                WindowsHelloBackend.FAILED}) {
+            wired(state, WINDOWS_11);
+            boolean absent = !credential.supported() && !credential.available()
+                    && credential.backend() == null && credential.state() == state;
+            backend.availability = WindowsHelloBackend.AVAILABLE;
+            check(absent && !credential.available() && credential.state() == state
+                    && can(CRED) == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
+                    "Windows answered " + state + " at start: no secure lock screen for this run,"
+                    + " whatever it answers later");
+        }
+
+        // A biometric-only request stays on the sensor-less path on a secure device.
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        r = new Receiver("bio");
+        start(r, new Token(), prompt(STRONG));
+        host.drain();
+        check(r.calls.equals(List.of("error(0,12,0)")) && backend.requests.isEmpty(),
+                "a biometric-only prompt on a secure device: HW_NOT_PRESENT, no Windows prompt");
+        r = new Receiver("crypto");
+        service.authenticate(new Token(), 77L, 0, r, "com.example.bank", prompt(CRED | STRONG));
+        host.drain();
+        check(r.calls.equals(List.of("error(1,1,0)")) && backend.requests.isEmpty(),
+                "a CryptoObject request on a secure device: HW_UNAVAILABLE, no Windows prompt");
+        r = new Receiver("both");
+        start(r, new Token(), prompt(CRED | STRONG));
+        host.drain();
+        check(backend.requests.size() == 1 && r.calls.isEmpty(),
+                "biometric | credential falls to the credential: one Windows prompt");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(r.calls.equals(List.of("succeeded(1)")), "confirmed as a device credential");
+    }
+
+    // --- phase 2b: ACTION_CONFIRM_DEVICE_CREDENTIAL --------------------------------------
+
+    static Intent confirmIntent() {
+        Intent intent = new Intent(ConfirmCredential.ACTION);
+        intent.pkg = "com.android.settings";
+        intent.extras.put(ConfirmCredential.EXTRA_TITLE, "Unlock vault");
+        intent.extras.put(ConfirmCredential.EXTRA_DESCRIPTION, "Confirm it is you");
+        return intent;
+    }
+
+    static AuthService.Confirmation confirm(Intent intent, List<Integer> results) {
+        return ConfirmCredential.request(service, intent, 10123, 4321, "com.example.bank", results::add);
+    }
+
+    static void confirmCredential() {
+        check(ConfirmCredential.handles(confirmIntent(), null), "the KeyguardManager intent is handled");
+        Intent intent = confirmIntent();
+        intent.pkg = null;
+        intent.categories = Set.of(Intent.CATEGORY_DEFAULT);
+        check(ConfirmCredential.handles(intent, null), "also without a package, with CATEGORY_DEFAULT");
+        intent = confirmIntent();
+        intent.pkg = "com.example.other";
+        check(!ConfirmCredential.handles(intent, null), "not for another package");
+        intent = confirmIntent();
+        intent.component = new Object();
+        check(!ConfirmCredential.handles(intent, null), "not for an explicit component");
+        intent = confirmIntent();
+        intent.data = new Object();
+        check(!ConfirmCredential.handles(intent, null) && !ConfirmCredential.handles(confirmIntent(), "text/plain"),
+                "not with data or a type");
+        intent = confirmIntent();
+        intent.categories = Set.of("android.intent.category.LAUNCHER");
+        check(!ConfirmCredential.handles(intent, null), "not with another category");
+        boolean others = false;
+        for (String action : new String[] {"android.app.action.CONFIRM_FRP_CREDENTIAL",
+                "android.app.action.CONFIRM_DEVICE_CREDENTIAL_WITH_USER",
+                "android.app.action.CONFIRM_REMOTE_DEVICE_CREDENTIAL",
+                "android.app.action.CONFIRM_REPAIR_MODE_DEVICE_CREDENTIAL",
+                "android.app.action.PREPARE_REPAIR_MODE_DEVICE_CREDENTIAL", null}) {
+            Intent other = confirmIntent();
+            other.action = action;
+            others |= ConfirmCredential.handles(other, null);
+        }
+        check(!others && !ConfirmCredential.handles(null, null),
+                "the factory-reset, per-user, remote and repair-mode actions stay unresolved");
+
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        List<Integer> results = new ArrayList<>();
+        confirm(confirmIntent(), results);
+        check(results.isEmpty() && backend.requests.isEmpty(), "the request returns before any work");
+        host.drain();
+        WindowsHelloBackend.Request request = backend.requests.get(0);
+        check(request.pid == 4321 && request.uid == 10123 && request.packageName.equals("com.example.bank")
+                && request.message.equals("Unlock vault\nConfirm it is you"),
+                "Windows' prompt: the caller's process as owner, the intent's title and description");
+        check(results.isEmpty(), "no result while Windows' prompt shows");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(results.equals(List.of(Activity.RESULT_OK)), "Verified: RESULT_OK, once");
+
+        for (int outcome : new int[] {WindowsHelloBackend.CANCELED, WindowsHelloBackend.RETRIES_EXHAUSTED,
+                WindowsHelloBackend.NOT_CONFIGURED_FOR_USER, WindowsHelloBackend.DEVICE_BUSY,
+                WindowsHelloBackend.FAILED}) {
+            wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+            results = new ArrayList<>();
+            confirm(confirmIntent(), results);
+            host.drain();
+            backend.complete(0, outcome);
+            host.drain();
+            check(results.equals(List.of(Activity.RESULT_CANCELED)),
+                    "Windows' result " + outcome + ": RESULT_CANCELED, once");
+        }
+
+        wired(WindowsHelloBackend.NOT_CONFIGURED_FOR_USER, WINDOWS_11);
+        results = new ArrayList<>();
+        confirm(confirmIntent(), results);
+        host.drain();
+        check(results.equals(List.of(Activity.RESULT_CANCELED)) && backend.requests.isEmpty(),
+                "no credential to confirm: RESULT_CANCELED without a Windows prompt, never RESULT_OK");
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_10);
+        results = new ArrayList<>();
+        confirm(confirmIntent(), results);
+        host.drain();
+        check(results.equals(List.of(Activity.RESULT_CANCELED)) && backend.requests.isEmpty(),
+                "below build 22000: RESULT_CANCELED without a Windows prompt");
+
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        results = new ArrayList<>();
+        intent = confirmIntent();
+        intent.extras.put(ConfirmCredential.EXTRA_AUTHENTICATORS, STRONG);
+        AuthService.Confirmation none = confirm(intent, results);
+        host.drain();
+        check(none == null && results.equals(List.of(Activity.RESULT_CANCELED)) && backend.requests.isEmpty(),
+                "authenticators without DEVICE_CREDENTIAL: RESULT_CANCELED, no Windows prompt");
+        results = new ArrayList<>();
+        intent = confirmIntent();
+        intent.unreadable = true;
+        check(confirm(intent, results) == null && results.equals(List.of(Activity.RESULT_CANCELED)),
+                "unreadable extras: RESULT_CANCELED");
+        results = new ArrayList<>();
+        intent = confirmIntent();
+        intent.extras.put(ConfirmCredential.EXTRA_TITLE, new StringBuilder("not a String"));
+        intent.extras.remove(ConfirmCredential.EXTRA_DESCRIPTION);
+        confirm(intent, results);
+        host.drain();
+        check(backend.requests.get(0).message.isEmpty(),
+                "a title that is not a String is not shown, as Settings reads it");
+        backend.complete(0, WindowsHelloBackend.CANCELED);
+        host.drain();
+
+        // The activity going away cancels Windows' prompt; a late result is dropped.
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        results = new ArrayList<>();
+        AuthService.Confirmation confirmation = confirm(confirmIntent(), results);
+        host.drain();
+        confirmation.cancel();
+        host.drain();
+        check(backend.cancels.get() == 1 && results.equals(List.of(Activity.RESULT_CANCELED)),
+                "cancel: Windows' prompt is closed and the result is RESULT_CANCELED");
+        backend.complete(0, WindowsHelloBackend.VERIFIED);
+        confirmation.cancel();
+        host.drain();
+        check(results.equals(List.of(Activity.RESULT_CANCELED)) && backend.cancels.get() == 1,
+                "a Verified after the cancel is dropped: never RESULT_OK, nothing twice");
+
+        // One session at a time, as BiometricService: the activity's prompt and an app's replace each other.
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        Receiver app = new Receiver("app");
+        start(app, new Token(), prompt(CRED));
+        host.drain();
+        results = new ArrayList<>();
+        confirm(confirmIntent(), results);
+        host.drain();
+        check(app.calls.equals(List.of("error(1,5,0)")) && backend.cancels.get() == 1 && backend.requests.size() == 2,
+                "the activity's confirmation replaces a running prompt (its client: CANCELED)");
+        Receiver next = new Receiver("next");
+        start(next, new Token(), prompt(CRED));
+        host.drain();
+        check(results.equals(List.of(Activity.RESULT_CANCELED)) && backend.cancels.get() == 2,
+                "a new prompt replaces the activity's confirmation: RESULT_CANCELED");
+        backend.complete(1, WindowsHelloBackend.VERIFIED);
+        backend.complete(2, WindowsHelloBackend.VERIFIED);
+        host.drain();
+        check(results.equals(List.of(Activity.RESULT_CANCELED)) && next.calls.equals(List.of("succeeded(1)")),
+                "the replaced confirmation's late Verified is dropped; the new prompt completes");
+        check(ConfirmCredential.request(null, confirmIntent(), 1, 2, "p", results::add) == null
+                && results.equals(List.of(Activity.RESULT_CANCELED, Activity.RESULT_CANCELED)),
+                "without an auth service: RESULT_CANCELED");
+    }
+
+    // --- phase 2b: the prompt's owner leaving the foreground -----------------------------
+
+    static boolean[] samples(int... relations) {
+        OwnerWatch watch = new OwnerWatch();
+        boolean[] cancel = new boolean[relations.length];
+        for (int i = 0; i < relations.length; i++) cancel[i] = watch.sample(relations[i]);
+        return cancel;
+    }
+
+    static void ownerWatch() {
+        final int owner = OwnerWatch.OWNER, owned = OwnerWatch.OWNED, other = OwnerWatch.OTHER,
+                gone = OwnerWatch.GONE, none = OwnerWatch.NONE;
+        check(Arrays.equals(samples(owner, owned, owned, owner, owned),
+                new boolean[] {false, false, false, false, false}),
+                "the app and Windows' prompt in the foreground: no cancel");
+        check(Arrays.equals(samples(owner, owned, other, other), new boolean[] {false, false, false, true}),
+                "another window in the foreground for two samples after the prompt was seen: cancel");
+        check(Arrays.equals(samples(owned, other, owned, other, none, owner, other),
+                new boolean[] {false, false, false, false, false, false, false}),
+                "a passing activation does not cancel: the count restarts");
+        check(Arrays.equals(samples(owned, other, none, other), new boolean[] {false, false, false, true}),
+                "no foreground window between two samples of another window does not restart it");
+        check(Arrays.equals(samples(owner, other, other, other, other), new boolean[5]),
+                "before the prompt was seen as an owned window, another window does not cancel");
+        check(Arrays.equals(samples(gone), new boolean[] {true})
+                && Arrays.equals(samples(owner, owned, gone), new boolean[] {false, false, true}),
+                "the owner's window gone (its process exited): cancel at once");
+        OwnerWatch watch = new OwnerWatch();
+        watch.sample(other);
+        boolean before = watch.promptSeen();
+        watch.sample(owned);
+        check(!before && watch.promptSeen(), "the prompt counts as seen only as an owned window");
+
+        // What the cancel becomes: Windows' Canceled, which the service reports as the user's.
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        Receiver r = new Receiver("left");
+        start(r, new Token(), prompt(CRED));
+        host.drain();
+        backend.complete(0, WindowsHelloBackend.CANCELED);
+        host.drain();
+        check(r.calls.equals(List.of("error(1,10,0)")),
+                "a verification canceled for its owner ends BIOMETRIC_ERROR_USER_CANCELED, as SystemUI's");
+    }
+
     public static void main(String[] args) throws Exception {
         unavailable();
         available();
+        availability();
+        confirmCredential();
+        ownerWatch();
         System.out.println(checks + " checks, " + failures + " failures");
         if (failures != 0) System.exit(1);
     }
@@ -543,6 +845,50 @@ interface IAuthService {
     }
 }
 
+final class Activity {
+    static final int RESULT_CANCELED = 0;
+    static final int RESULT_OK = -1;
+}
+
+final class Intent {
+    static final String CATEGORY_DEFAULT = "android.intent.category.DEFAULT";
+    String action, pkg;
+    Object component, selector, data;
+    String type;
+    Set<String> categories;
+    boolean unreadable;
+    final Map<String, Object> extras = new HashMap<>();
+    Intent(String action) { this.action = action; }
+    String getAction() { return action; }
+    String getPackage() { return pkg; }
+    Object getComponent() { return component; }
+    Object getSelector() { return selector; }
+    Object getData() { return data; }
+    String getType() { return type; }
+    Set<String> getCategories() { return categories; }
+    private Object extra(String name) {
+        if (unreadable) throw new RuntimeException("BadParcelableException");
+        return extras.get(name);
+    }
+    String getStringExtra(String name) { return extra(name) instanceof String s ? s : null; }
+    CharSequence getCharSequenceExtra(String name) { return extra(name) instanceof CharSequence c ? c : null; }
+    int getIntExtra(String name, int fallback) { return extra(name) instanceof Integer i ? i : fallback; }
+}
+
+/** Never reached here: DeviceCredential.system() is the system server's own wiring. */
+final class WindowsHello implements WindowsHelloBackend {
+    static WindowsHello create() { return null; }
+    static int windowsBuild() { return 0; }
+    public int availability() { return FAILED; }
+    public Verification verify(Request request, Completion completion) { throw new IllegalStateException(); }
+}
+
 // PRODUCTION_BACKEND
+
+// PRODUCTION_CREDENTIAL
+
+// PRODUCTION_WATCH
+
+// PRODUCTION_CONFIRM
 
 // PRODUCTION_SERVICE

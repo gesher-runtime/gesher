@@ -2,11 +2,15 @@
 """Run the production auth (IAuthService) contracts of ADR 0091 on a host JVM.
 
 The Android and system-server boundaries are stand-ins with android-16.0.0_r4's
-constant values; AuthService and WindowsHelloBackend are compiled unchanged apart
-from their package, imports and public class visibility. Tests cover the
-sensor-less AOSP answers with no Windows Hello backend (production today), and,
-with an isolated test double only, the device-credential confirmation outcomes,
-cancellation, replacement, client death and callback ordering.
+constant values; AuthService, WindowsHelloBackend, DeviceCredential,
+ConfirmCredential and OwnerWatch are compiled unchanged apart from their package,
+imports and public class visibility. Tests cover the sensor-less AOSP answers with
+no Windows Hello backend, and, with an isolated test double only, the
+device-credential confirmation outcomes, cancellation, replacement, client death
+and callback ordering; the one availability decision (natives, Windows build
+22000, Windows Hello's answer at start and now) behind canAuthenticate, prompts
+and the confirm-credential intent; that intent's results; and when a prompt's
+owner counts as having left the foreground.
 Use --source-ref to run the contracts against another revision of the sources.
 """
 from __future__ import annotations
@@ -25,6 +29,12 @@ SOURCES = {
                               "public interface WindowsHelloBackend", "interface WindowsHelloBackend"),
     "// PRODUCTION_SERVICE": ("app/java/com/gesher/server/AuthService.java",
                               "public final class AuthService", "final class AuthService"),
+    "// PRODUCTION_CREDENTIAL": ("app/java/com/gesher/server/DeviceCredential.java",
+                                 "final class DeviceCredential", "final class DeviceCredential"),
+    "// PRODUCTION_WATCH": ("app/java/com/gesher/server/OwnerWatch.java",
+                            "final class OwnerWatch", "final class OwnerWatch"),
+    "// PRODUCTION_CONFIRM": ("app/java/com/gesher/server/ConfirmCredential.java",
+                              "final class ConfirmCredential", "final class ConfirmCredential"),
 }
 
 
