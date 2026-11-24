@@ -7,10 +7,10 @@ resolved to Windows' registered protocol handlers).
 Compiles app/java/com/gesher/server/WindowsUriHandlers.java unchanged with
 `javac -Xlint:all,-classfile -Werror` against AOSP's own android-16 classes
 (Robolectric android-all, tools/android_all.py) and runs
-tests/uri-handlers/UriHandlerContracts.java.in on JDK 21; android.os.SystemClock,
-native in android-all, is the one host stand-in (tests/uri-handlers/standins), placed
-before the jar. The Windows answer
-(which schemes have a handler) is the only test double, defined in the test.
+tests/uri-handlers/UriHandlerContracts.java.in on JDK 21. Also exercises unchanged
+production DialRequests sequencing against an injected Windows UI/shell boundary.
+Host-only stand-ins cover native SystemClock, WindowsHost and server logging; real
+Intent, IntentFilter and Uri classes come from the verified android-all jar.
 
 --source-ref REF compiles the class from REF instead: on upstream/main, which
 has no Windows URI handlers, it must fail (negative control).
@@ -30,7 +30,9 @@ sys.path.insert(0, str(ROOT / 'tools'))
 import android_all  # noqa: E402
 
 PRODUCTION = 'app/java/com/gesher/server/WindowsUriHandlers.java'
+DIAL_PRODUCTION = 'app/java/com/gesher/server/DialRequests.java'
 CONTRACTS = ROOT / 'tests/uri-handlers/UriHandlerContracts.java.in'
+DIAL_CONTRACTS = ROOT / 'tests/uri-handlers/DialRequestContracts.java.in'
 # Host stand-ins of android-all classes whose methods are native (boundary only).
 STANDINS = ROOT / 'tests/uri-handlers/standins'
 
@@ -62,6 +64,11 @@ def main() -> int:
         print(f'{PRODUCTION} SHA256 {hashlib.sha256(production).hexdigest()}', flush=True)
         (src / 'WindowsUriHandlers.java').write_bytes(production)
         (src / 'UriHandlerContracts.java').write_bytes(CONTRACTS.read_bytes())
+        dial_source = (subprocess.check_output(['git', 'show', f'{args.source_ref}:{DIAL_PRODUCTION}'], cwd=ROOT)
+                       if args.source_ref else (ROOT / DIAL_PRODUCTION).read_bytes())
+        print(f'{DIAL_PRODUCTION} SHA256 {hashlib.sha256(dial_source).hexdigest()}', flush=True)
+        (src / 'DialRequests.java').write_bytes(dial_source)
+        (src / 'DialRequestContracts.java').write_bytes(DIAL_CONTRACTS.read_bytes())
         standins = []
         for stand_in in sorted(STANDINS.rglob('*.java.in')):
             target = work / 'src' / stand_in.relative_to(STANDINS).with_suffix('')
@@ -72,7 +79,9 @@ def main() -> int:
         compiled = subprocess.run([javac, '-Xlint:all,-classfile', '-Werror', '-encoding', 'UTF-8',
                                    '-cp', str(jar), '-d', str(classes),
                                    str(src / 'WindowsUriHandlers.java'),
-                                   str(src / 'UriHandlerContracts.java'), *standins])
+                                   str(src / 'UriHandlerContracts.java'),
+                                   str(src / 'DialRequests.java'),
+                                   str(src / 'DialRequestContracts.java'), *standins])
         if compiled.returncode != 0:
             print('FAIL: compilation', flush=True)
             return 1
@@ -80,6 +89,11 @@ def main() -> int:
                               'com.gesher.server.UriHandlerContracts'])
         if ran.returncode != 0:
             print('FAIL: contracts', flush=True)
+            return 1
+        dial = subprocess.run([java, '-Xmx256m', '-cp', os.pathsep.join([str(classes), str(jar)]),
+                               'com.gesher.server.DialRequestContracts'])
+        if dial.returncode != 0:
+            print('FAIL: dial request contracts', flush=True)
             return 1
     return 0
 
