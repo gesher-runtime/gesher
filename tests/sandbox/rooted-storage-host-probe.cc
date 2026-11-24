@@ -34,11 +34,20 @@ bool Lowbox() {
   return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer, &value, sizeof(value), &bytes) && value != 0;
 }
 
-OwnedHandle Connect(const wchar_t* name) {
-  HANDLE pipe = CreateFileW(name, FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES,
-                           0, nullptr, OPEN_EXISTING,
-                           SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+OwnedHandle Connect(const wchar_t* name, bool* opened = nullptr) {
+  HANDLE pipe = INVALID_HANDLE_VALUE;
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  do {
+    pipe = CreateFileW(name, FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES,
+                       0, nullptr, OPEN_EXISTING,
+                       SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+    if (pipe != INVALID_HANDLE_VALUE) break;
+    const DWORD error = GetLastError();
+    if (error != ERROR_PIPE_BUSY && error != ERROR_FILE_NOT_FOUND) return {};
+    Sleep(2);
+  } while (GetTickCount64() < deadline);
   if (pipe == INVALID_HANDLE_VALUE) return {};
+  if (opened != nullptr) *opened = true;
   OwnedHandle connection(pipe);
   DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
   if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr)) return {};
@@ -85,19 +94,20 @@ bool CheckCapacity(const wchar_t* name, uint64_t expected_total) {
   if (!Check(okay, "Android /data status preserves the actual host backing capacity without a handle")) return false;
   connection.reset();
   connection = Connect(name);
-  return Check(!connection || !Request(connection.get(), request, L"host-path", &reply),
+  return Check(connection && !Request(connection.get(), request, L"host-path", &reply),
                "Android /data status has no guest-specified path");
 }
 
 int Guest(const wchar_t* name, const wchar_t* host_path, const wchar_t* volume_total, bool denied) {
   if (!Check(Lowbox(), "fixture uses an actual Windows AppContainer")) return 1;
-  OwnedHandle connection = Connect(name);
+  bool opened = false;
+  OwnedHandle connection = Connect(name, &opened);
   wire::Request request;
   request.operation = wire::Op::kOpen;
   request.flags = wire::kReadWrite | wire::kCreate | wire::kExclusive;
   wire::Reply reply;
   if (denied) {
-    return Check(!connection || !Request(connection.get(), request, L"unauthorized", &reply),
+    return Check(opened && (!connection || !Request(connection.get(), request, L"unauthorized", &reply)),
                  "same AppContainer SID outside the retained job is denied") ? 0 : 1;
   }
   HANDLE direct = CreateFileW(host_path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
