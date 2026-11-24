@@ -154,15 +154,28 @@ Verification* Start(DWORD pid, const wchar_t* message, size_t length, StartFailu
                                                  reinterpret_cast<void**>(&operation));
   winrt::DeleteString(text);
   winrt::Release(interop);
-  IAsyncInfo* info = nullptr;
-  if (SUCCEEDED(r)) {
-    r = operation->QueryInterface(winrt::IID_IAsyncInfo, reinterpret_cast<void**>(&info));
-  }
   if (FAILED(r)) {
     Log("RequestVerificationForWindowAsync", r);
-    winrt::Release(operation);
     *failure = StartFailure::kWindows;
     *hr = r;
+    return nullptr;
+  }
+  Verification* v = internal::Wrap(operation, &r);
+  if (v == nullptr) {
+    Log("IAsyncOperation::QueryInterface(IAsyncInfo)", r);
+    *failure = StartFailure::kWindows;
+    *hr = r;
+  }
+  return v;
+}
+
+namespace internal {
+
+Verification* Wrap(IAsyncOperation<int>* operation, HRESULT* hr) {
+  IAsyncInfo* info = nullptr;
+  *hr = operation->QueryInterface(winrt::IID_IAsyncInfo, reinterpret_cast<void**>(&info));
+  if (FAILED(*hr)) {
+    winrt::Release(operation);
     return nullptr;
   }
   Verification* v = new Verification;
@@ -171,7 +184,9 @@ Verification* Start(DWORD pid, const wchar_t* message, size_t length, StartFailu
   return v;
 }
 
-int Await(Verification* v) {
+}  // namespace internal
+
+int Await(Verification* v, DWORD /*cancel_grace_ms*/) {
   // A user may take minutes: no time-out, 1 -> 20 ms back-off.
   int status = kStarted;
   DWORD delay = 1;
