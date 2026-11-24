@@ -27,6 +27,7 @@ public final class PrintSpoolerHost {
         final List<String> calls = Collections.synchronizedList(new ArrayList<>());
         volatile PrintSpooler.Session session;
         volatile int pageCount = 10;
+        volatile int[] pageCounts;              // per layout call, overriding pageCount
         volatile String layoutFailure;          // onLayoutFailed with this message
         volatile boolean layoutHangs;           // never answers until canceled
         volatile int hangOnLayout = -1;         // index of the layout call that hangs
@@ -60,7 +61,11 @@ public final class PrintSpoolerHost {
                 if (staleFirst) session.layoutFinished(sequence - 1, "stale", 99, true);
                 if (hang) return;
                 if (layoutFailure != null) session.failed(true, sequence, layoutFailure);
-                else session.layoutFinished(sequence, "info" + pageCount, pageCount, true);
+                else {
+                    int count = pageCounts != null && index < pageCounts.length
+                            ? pageCounts[index] : pageCount;
+                    session.layoutFinished(sequence, "info" + count, count, true);
+                }
             });
         }
 
@@ -191,6 +196,8 @@ public final class PrintSpoolerHost {
         writeFailure();
         writtenPagesValidation();
         unknownPageCount();
+        selectionOutsideFinalLayout();
+        selectionPartlyOutsideFinalLayout();
         staleCallbacks();
         noPrinters();
         destroyedDuringDialog();
@@ -222,8 +229,16 @@ public final class PrintSpoolerHost {
                 "every page explicitly is ALL_PAGES");
         check(Arrays.equals(PrintSpooler.selectedPages(new int[] {2, 4, 8, 20}, 10), new int[] {2, 4, 8, 9}),
                 "a range past the end is cut at the last page");
-        check(Arrays.equals(PrintSpooler.selectedPages(new int[] {12, 14}, 10), PrintSpooler.ALL_PAGES),
-                "ranges wholly past the end fall back to all pages");
+        check(PrintSpooler.selectedPages(new int[] {12, 14}, 10) == null,
+                "ranges wholly past the end select no page, never all pages");
+        check(PrintSpooler.selectedPages(new int[] {2, 2}, 2) == null,
+                "page 3 of a two-page document selects no page");
+        check(Arrays.equals(PrintSpooler.selectedPages(new int[] {1, 2}, 2), new int[] {1, 1}),
+                "a partly overlapping range keeps only the overlap");
+        check(Arrays.equals(PrintSpooler.selectedPages(new int[] {0, 0, 2, 4}, 2), new int[] {0, 0}),
+                "a range wholly past the end is dropped, earlier ranges are kept");
+        check(Arrays.equals(PrintSpooler.selectedPages(null, 2), PrintSpooler.ALL_PAGES),
+                "no explicit selection is all pages");
         check(PrintSpooler.contains(new int[] {0, 5}, new int[] {1, 2, 4, 5}, 10), "contains nested ranges");
         check(!PrintSpooler.contains(new int[] {0, 3}, new int[] {1, 2, 4, 5}, 10), "contains rejects a gap");
         check(Arrays.equals(PrintSpooler.filePages(new int[] {2, 4}, new int[] {2, 4}, 10), PrintSpooler.ALL_PAGES),
@@ -333,6 +348,38 @@ public final class PrintSpoolerHost {
         bad.start("bad-pages").join();
         check(bad.job().state == PrintSpooler.STATE_CANCELED, "written pages missing a chosen page cancel the job");
         check(bad.host.calls.stream().noneMatch(c -> c.startsWith("print")), "and nothing is printed");
+    }
+
+    static void selectionOutsideFinalLayout() throws Exception {
+        // Three pages in the preview, two after the final layout, the user chose page 3.
+        Run run = new Run();
+        run.adapter.pageCounts = new int[] {3, 2};
+        run.host.choice = new PrintSpooler.Choice("Printer B", "chosen", new int[] {2, 2}, 1, "dm");
+        run.start("shrunk").join();
+        check(run.host.dialogPageCount == 3, "the dialog offered the preview's three pages");
+        check(run.adapter.calls.stream().noneMatch(c -> c.startsWith("write")),
+                "no page is written when the selection is outside the final layout: " + run.adapter.calls);
+        check(run.host.calls.stream().noneMatch(c -> c.startsWith("print")),
+                "nothing is printed: " + run.host.calls);
+        PrintSpooler.Snapshot job = run.job();
+        check(job.state == PrintSpooler.STATE_CANCELED && job.status != null,
+                "the job is canceled with a reason: state " + job.state + " status " + job.status);
+        check(run.adapter.calls.get(run.adapter.calls.size() - 1).equals("finish"), "the adapter is finished");
+        check(run.states.states.equals(List.of(PrintSpooler.STATE_CANCELED)),
+                "only CANCELED is reported: " + run.states.states);
+    }
+
+    static void selectionPartlyOutsideFinalLayout() throws Exception {
+        Run run = new Run();
+        run.adapter.pageCounts = new int[] {3, 2};
+        run.host.choice = new PrintSpooler.Choice("Printer B", "chosen", new int[] {1, 2}, 1, "dm");
+        run.start("shrunk-partly").join();
+        check(run.adapter.calls.contains("write [1, 1]"),
+                "only the selected page still in the document is written: " + run.adapter.calls);
+        check(Arrays.equals(run.job().pages, new int[] {1, 1}), "the job reports only that page");
+        check(Arrays.equals(run.host.printedPages, PrintSpooler.ALL_PAGES),
+                "the file holding exactly that page is printed whole");
+        check(run.job().state == PrintSpooler.STATE_COMPLETED, "and the job completes");
     }
 
     static void unknownPageCount() throws Exception {
