@@ -9,6 +9,14 @@
 // trusts, so a root an administrator, a company or a content filter installed
 // in Windows is trusted by Android apps too.
 //
+// A root installed on a phone by its user or a device admin is a user-added CA
+// instead: KeyChain writes it to /data/misc/user/<id>/cacerts-added, and
+// TrustedCertificateStore (the AndroidCAStore KeyStore) lists it as "user:".
+// Apps that trust only their own roots plus the user's (Chrome, apps whose
+// network security config has <certificates src="user"/>, and those targeting
+// API 23 or lower) look there. The roots that were installed on this PC rather
+// than distributed by Microsoft are also written there (LocallyInstalledRoots).
+//
 // Win32 side: Windows' headers and BoringSSL's, no file descriptors.
 
 #include "trust_store.h"
@@ -44,8 +52,13 @@
 namespace gesher::net {
 namespace {
 
-using Der = std::vector<uint8_t>;
+using trust_store_internal::Der;
+using trust_store_internal::Sha1;
 using Digest = std::array<uint8_t, SHA256_DIGEST_LENGTH>;
+
+// Gesher's device has one user, user 0: UserHandle.myUserId() of every app
+// process, whose Environment.getUserConfigDirectory is $ANDROID_DATA/misc/user/0.
+constexpr int kUserId = 0;
 
 bool Trace() {
   const char* v = getenv("GESHER_TRACE_CACERTS");
@@ -98,6 +111,12 @@ bool ServerAuthAllowed(PCCERT_CONTEXT cert) {
   return false;
 }
 
+Sha1 Sha1Of(const Der& der) {
+  Sha1 d;
+  SHA1(der.data(), der.size(), d.data());
+  return d;
+}
+
 enum class Take { kAll, kSelfSigned, kForDisallowed };
 
 // The certificates of system store `name` at `location` (CERT_SYSTEM_STORE_*).
@@ -117,6 +136,33 @@ void ReadStore(DWORD location, const wchar_t* name, Take take, std::vector<Der>*
     }
     if (take != Take::kForDisallowed && !ServerAuthAllowed(cert)) continue;
     out->emplace_back(cert->pbCertEncoded, cert->pbCertEncoded + cert->cbCertEncoded);
+  }
+  CertCloseStore(store, 0);
+}
+
+#ifndef CERT_AUTH_ROOT_SHA256_HASH_PROP_ID
+#define CERT_AUTH_ROOT_SHA256_HASH_PROP_ID 98
+#endif
+
+// The roots of the ROOT store at `location` that Windows' automatic root update
+// put there from Microsoft's list: it gives them the list entry's SHA-256 as a
+// property, which a root installed otherwise does not have.
+void ReadRootProgramMarks(DWORD location, std::set<Sha1>* out) {
+  HCERTSTORE store = CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0,
+                                   location | CERT_STORE_OPEN_EXISTING_FLAG |
+                                       CERT_STORE_READONLY_FLAG,
+                                   L"ROOT");
+  if (store == nullptr) return;
+  PCCERT_CONTEXT cert = nullptr;
+  while ((cert = CertEnumCertificatesInStore(store, cert)) != nullptr) {
+    DWORD size = 0;
+    if (!CertGetCertificateContextProperty(cert, CERT_AUTH_ROOT_SHA256_HASH_PROP_ID, nullptr,
+                                           &size)) {
+      continue;
+    }
+    Sha1 thumbprint;
+    SHA1(cert->pbCertEncoded, cert->cbCertEncoded, thumbprint.data());
+    out->insert(thumbprint);
   }
   CertCloseStore(store, 0);
 }
@@ -216,7 +262,8 @@ bool IsStagedTrustFile(const std::wstring& name) {
   if (name.empty() || name.front() != L'.' || marker == std::wstring::npos || marker <= 1)
     return false;
   const std::wstring target = name.substr(1, marker - 1);
-  if (target != L".gesher-cacerts" && !IsCertFileName(target)) return false;
+  if (target != L".gesher-cacerts" && target != L".gesher-user-cacerts" && !IsCertFileName(target))
+    return false;
   const size_t pid = marker + 5;
   const size_t separator = name.find(L'-', pid);
   if (separator == std::wstring::npos || separator == pid || separator + 1 >= name.size()) return false;
@@ -252,19 +299,22 @@ void Sync() {
   std::wstring dir = security + L"\\cacerts";
   std::wstring manifest_path = security + L"\\.gesher-cacerts";
 
-  std::vector<Der> bundled, windows, disallowed;
+  std::vector<Der> bundled, roots, windows, disallowed;
   ReadBundled(&bundled);
   const char* use_windows = getenv("GESHER_WINDOWS_CERTS");
   bool from_windows = use_windows == nullptr || strcmp(use_windows, "0") != 0;
   for (DWORD location : {CERT_SYSTEM_STORE_CURRENT_USER, CERT_SYSTEM_STORE_LOCAL_MACHINE}) {
     if (from_windows) {
-      ReadStore(location, L"ROOT", Take::kAll, &windows);
+      // The ROOT stores: where a root the user, an administrator, group policy
+      // or an enterprise installs is, besides Microsoft's own.
+      ReadStore(location, L"ROOT", Take::kAll, &roots);
       ReadStore(location, L"AuthRoot", Take::kAll, &windows);
       // Roots installed among the intermediate CAs.
       ReadStore(location, L"CA", Take::kSelfSigned, &windows);
     }
     ReadStore(location, L"Disallowed", Take::kForDisallowed, &disallowed);
   }
+  windows.insert(windows.begin(), roots.begin(), roots.end());
   std::set<Digest> distrusted;
   for (const Der& der : disallowed) distrusted.insert(Sha256(der));
 
@@ -317,7 +367,24 @@ void Sync() {
     manifest += '\n';
   }
 
-  // One process at a time rewrites the directory.
+  // The user-added CAs: the ROOT stores' roots installed on this PC. Without
+  // Microsoft's list no root can be told apart, and none is added.
+  const char* android_data = getenv("ANDROID_DATA");
+  bool user_store = android_data != nullptr && *android_data != '\0';
+  std::set<Sha1> microsoft;
+  bool classified = user_store && !roots.empty() &&
+                    trust_store_internal::ReadMicrosoftRootProgram(&microsoft);
+  std::vector<Der> local;
+  if (classified) {
+    // Also what automatic root update added from a list that is not either of
+    // these any more.
+    for (DWORD location : {CERT_SYSTEM_STORE_CURRENT_USER, CERT_SYSTEM_STORE_LOCAL_MACHINE}) {
+      ReadRootProgramMarks(location, &microsoft);
+    }
+    local = trust_store_internal::LocallyInstalledRoots(roots, microsoft, bundled, disallowed);
+  }
+
+  // One process at a time rewrites the directories.
   HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\gesher-system-cacerts");
   DWORD waited = mutex != nullptr ? WaitForSingleObject(mutex, 30000) : WAIT_FAILED;
   if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) {
@@ -371,11 +438,21 @@ void Sync() {
     }
     if (ok) ok = WriteFileAtomically(security, L".gesher-cacerts", manifest, security);
   }
+  DWORD error = ok ? 0 : GetLastError();
+  trust_store_internal::UserSyncResult user;
+  std::string user_dir;
+  if (user_store) {
+    char sub[32];
+    snprintf(sub, sizeof(sub), "/misc/user/%d", kUserId);
+    user_dir = std::string(android_data) + sub;
+    user = trust_store_internal::SyncUserCaDirectory(WinPath(user_dir), local);
+  }
+  DWORD user_error = user.ok ? 0 : GetLastError();
   ReleaseMutex(mutex);
   CloseHandle(mutex);
   if (!ok) {
     fprintf(stderr, "gesher: could not write the system CA certificates to %s/etc/security/cacerts "
-            "(error %lu)\n", android_root, GetLastError());
+            "(error %lu)\n", android_root, error);
   } else if (Trace()) {
     fprintf(stderr,
             "gesher: system CA certificates: %zu (%zu Android's, %zu more from Windows' stores, "
@@ -383,10 +460,284 @@ void Sync() {
             anchors.size(), from_android, from_store, skipped,
             changed ? "updated" : "unchanged", written, removed);
   }
+  if (user_store && !user.ok) {
+    fprintf(stderr, "gesher: could not write the user CA certificates to %s/cacerts-added "
+            "(error %lu)\n", user_dir.c_str(), user_error);
+  } else if (user_store && Trace()) {
+    fprintf(stderr,
+            "gesher: user CA certificates (roots installed on this PC): %zu%s (%zu written, "
+            "%zu removed)\n",
+            local.size(),
+            classified || roots.empty() ? "" : ", none: Microsoft's root program list is unreadable",
+            user.written, user.removed);
+    for (const Der& der : local) {
+      const uint8_t* p = der.data();
+      X509* x = d2i_X509(nullptr, &p, static_cast<long>(der.size()));
+      if (x == nullptr) continue;
+      char subject[512];
+      X509_NAME_oneline(X509_get_subject_name(x), subject, sizeof(subject));
+      std::string hex;
+      for (uint8_t b : Sha1Of(der)) {
+        char two[3];
+        snprintf(two, sizeof(two), "%02X", b);
+        hex += two;
+      }
+      fprintf(stderr, "gesher:   user CA %s %s\n", hex.c_str(), subject);
+      X509_free(x);
+    }
+  }
 }
 
 }  // namespace
 
 void SyncSystemCaCerts() { Sync(); }
+
+namespace trust_store_internal {
+namespace {
+
+// One AuthRoot certificate trust list: signed by Microsoft for its root
+// program (subject usage szOID_ROOT_LIST_SIGNER), its subjects named by the
+// SHA-1 of their DER encoding.
+bool AddRootProgramList(const BYTE* data, DWORD size, std::set<Sha1>* out) {
+  if (data == nullptr || size == 0) return false;
+  PCCTL_CONTEXT ctl = CertCreateCTLContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, data, size);
+  if (ctl == nullptr) return false;
+  const CTL_INFO* info = ctl->pCtlInfo;
+  bool root_list = false;
+  for (DWORD i = 0; i < info->SubjectUsage.cUsageIdentifier; i++) {
+    if (strcmp(info->SubjectUsage.rgpszUsageIdentifier[i], szOID_ROOT_LIST_SIGNER) == 0) {
+      root_list = true;
+    }
+  }
+  bool by_sha1 = info->SubjectAlgorithm.pszObjId != nullptr &&
+                 strcmp(info->SubjectAlgorithm.pszObjId, szOID_OIWSEC_sha1) == 0;
+  size_t added = 0;
+  if (root_list && by_sha1) {
+    for (DWORD i = 0; i < info->cCTLEntry; i++) {
+      const CRYPT_DATA_BLOB& id = info->rgCTLEntry[i].SubjectIdentifier;
+      if (id.cbData != 20) continue;
+      Sha1 thumbprint;
+      memcpy(thumbprint.data(), id.pbData, 20);
+      out->insert(thumbprint);
+      added++;
+    }
+  }
+  CertFreeCTLContext(ctl);
+  return added > 0;
+}
+
+BOOL CALLBACK AddResourceList(HMODULE module, LPCWSTR type, LPWSTR name, LONG_PTR param) {
+  auto* found = reinterpret_cast<std::pair<std::set<Sha1>*, bool>*>(param);
+  HRSRC resource = FindResourceW(module, name, type);
+  HGLOBAL loaded = resource != nullptr ? LoadResource(module, resource) : nullptr;
+  const void* data = loaded != nullptr ? LockResource(loaded) : nullptr;
+  if (data != nullptr &&
+      AddRootProgramList(static_cast<const BYTE*>(data), SizeofResource(module, resource),
+                         found->first)) {
+    found->second = true;
+  }
+  return TRUE;
+}
+
+}  // namespace
+
+bool ReadMicrosoftRootProgram(std::set<Sha1>* thumbprints) {
+  bool found = false;
+  // The list Windows' automatic root update last fetched (absent when it is
+  // turned off). Only administrators can change it.
+  DWORD size = 0;
+  const wchar_t* key = L"SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\AutoUpdate";
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, key, L"EncodedCtl", RRF_RT_REG_BINARY, nullptr, nullptr,
+                   &size) == ERROR_SUCCESS && size > 0) {
+    std::vector<BYTE> data(size);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, key, L"EncodedCtl", RRF_RT_REG_BINARY, nullptr,
+                     data.data(), &size) == ERROR_SUCCESS) {
+      found |= AddRootProgramList(data.data(), size, thumbprints);
+    }
+  }
+  // The list crypt32.dll was built with (its AUTHROOTSTL resource), which
+  // Windows uses when it has fetched none.
+  HMODULE crypt32 = GetModuleHandleW(L"crypt32.dll");
+  if (crypt32 != nullptr) {
+    std::pair<std::set<Sha1>*, bool> state{thumbprints, false};
+    EnumResourceNamesW(crypt32, L"AUTHROOTSTL", AddResourceList,
+                       reinterpret_cast<LONG_PTR>(&state));
+    found |= state.second;
+  }
+  return found;
+}
+
+std::vector<Der> LocallyInstalledRoots(const std::vector<Der>& roots,
+                                       const std::set<Sha1>& microsoft,
+                                       const std::vector<Der>& android,
+                                       const std::vector<Der>& disallowed) {
+  std::set<Digest> excluded;
+  for (const Der& der : android) excluded.insert(Sha256(der));
+  for (const Der& der : disallowed) excluded.insert(Sha256(der));
+  std::map<Digest, const Der*> local;
+  for (const Der& der : roots) {
+    Digest digest = Sha256(der);
+    if (excluded.count(digest) != 0 || microsoft.count(Sha1Of(der)) != 0) continue;
+    const uint8_t* p = der.data();
+    X509* x = d2i_X509(nullptr, &p, static_cast<long>(der.size()));
+    if (x == nullptr) continue;
+    X509_free(x);
+    local.emplace(digest, &der);
+  }
+  std::vector<Der> out;
+  for (const auto& [digest, der] : local) out.push_back(*der);
+  return out;
+}
+
+namespace {
+
+std::wstring UserCertName(unsigned long hash, int index) {
+  wchar_t name[32];
+  swprintf(name, 32, L"%08lx.%d", hash, index);
+  return name;
+}
+
+std::string Hex(const Digest& digest) {
+  std::string hex;
+  for (uint8_t b : digest) {
+    char two[3];
+    snprintf(two, sizeof(two), "%02x", b);
+    hex += two;
+  }
+  return hex;
+}
+
+bool Exists(const std::wstring& path) {
+  return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+bool IsTombstone(const std::wstring& path) {
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  return GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data) &&
+         (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 && data.nFileSizeHigh == 0 &&
+         data.nFileSizeLow == 0;
+}
+
+// TrustedCertificateStore.deleteCertificateEntry for a user alias: the file is
+// truncated to a tombstone, so later indexes stay reachable, and then the
+// tombstones that end the hash's run are deleted (removeUnnecessaryTombstones).
+bool RemoveUserEntry(const std::wstring& dir, const std::wstring& name) {
+  std::wstring path = dir + L"\\" + name;
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
+  CloseHandle(h);
+  unsigned long hash = wcstoul(name.substr(0, 8).c_str(), nullptr, 16);
+  int index = static_cast<int>(wcstol(name.c_str() + 9, nullptr, 10));
+  if (Exists(dir + L"\\" + UserCertName(hash, index + 1))) return true;
+  for (; index >= 0; index--) {
+    std::wstring tombstone = dir + L"\\" + UserCertName(hash, index);
+    if (!IsTombstone(tombstone)) break;
+    if (!DeleteFileW(tombstone.c_str())) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
+                                   const std::vector<Der>& certificates) {
+  UserSyncResult result;
+  const std::wstring dir = user_dir + L"\\cacerts-added";
+  const std::wstring manifest_path = user_dir + L"\\.gesher-user-cacerts";
+  // Temporary files of a writer that died before its rename.
+  RemoveStaleTemporaryFiles(user_dir);
+
+  struct Wanted {
+    unsigned long hash;
+    const Der* der;
+  };
+  std::map<Digest, Wanted> wanted;
+  for (const Der& der : certificates) {
+    const uint8_t* p = der.data();
+    X509* x = d2i_X509(nullptr, &p, static_cast<long>(der.size()));
+    if (x == nullptr) continue;
+    wanted.emplace(Sha256(der), Wanted{X509_NAME_hash_old(X509_get_subject_name(x)), &der});
+    X509_free(x);
+  }
+
+  // Gesher's entries: those the manifest names that still hold what was
+  // written. Anything else in the directory is not Gesher's.
+  std::map<std::wstring, Digest> owned;
+  std::string manifest;
+  bool had_manifest = ReadWholeFile(manifest_path, &manifest);
+  for (size_t at = 0; had_manifest && at < manifest.size();) {
+    size_t end = manifest.find('\n', at);
+    if (end == std::string::npos) end = manifest.size();
+    std::string line = manifest.substr(at, end - at);
+    at = end + 1;
+    size_t space = line.find(' ');
+    if (space == std::string::npos) continue;
+    std::wstring name(line.begin(), line.begin() + space);
+    if (!IsCertFileName(name)) continue;
+    std::string contents;
+    if (!ReadWholeFile(dir + L"\\" + name, &contents) || contents.empty()) continue;
+    Digest digest = Sha256(Der(contents.begin(), contents.end()));
+    if (Hex(digest) != line.substr(space + 1)) continue;
+    owned[name] = digest;
+  }
+
+  bool ok = true;
+  // Gesher's entries that are no longer wanted: the root left Windows' store.
+  for (auto it = owned.begin(); it != owned.end();) {
+    if (wanted.count(it->second) != 0) {
+      ++it;
+      continue;
+    }
+    if (RemoveUserEntry(dir, it->first)) {
+      result.removed++;
+      it = owned.erase(it);
+    } else {
+      ok = false;
+      ++it;
+    }
+  }
+
+  // Wanted ones not in the directory: after the last index of their hash, as
+  // TrustedCertificateStore.installCertificate adds one. A tombstone keeps its
+  // index.
+  for (const auto& [digest, entry] : wanted) {
+    if (!ok) break;
+    std::string der(entry.der->begin(), entry.der->end());
+    int index = 0;
+    bool present = false;
+    for (;; index++) {
+      std::wstring path = dir + L"\\" + UserCertName(entry.hash, index);
+      if (!Exists(path)) break;
+      std::string contents;
+      if (ReadWholeFile(path, &contents) && contents == der) {
+        present = true;
+        break;
+      }
+    }
+    if (present) continue;
+    std::wstring name = UserCertName(entry.hash, index);
+    if (MakeDirectories(dir) && WriteFileAtomically(dir, name, der, user_dir)) {
+      owned[name] = digest;
+      result.written++;
+    } else {
+      ok = false;
+    }
+  }
+
+  std::string listed;
+  for (const auto& [name, digest] : owned) {
+    listed += std::string(name.begin(), name.end()) + " " + Hex(digest) + "\n";
+  }
+  if (listed.empty()) {
+    if (had_manifest && !DeleteFileW(manifest_path.c_str())) ok = false;
+  } else if (!had_manifest || listed != manifest) {
+    if (!WriteFileAtomically(user_dir, L".gesher-user-cacerts", listed, user_dir)) ok = false;
+  }
+  result.ok = ok;
+  return result;
+}
+
+}  // namespace trust_store_internal
 
 }  // namespace gesher::net
