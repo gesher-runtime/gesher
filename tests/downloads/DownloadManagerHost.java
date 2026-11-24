@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -379,6 +381,79 @@ public final class DownloadManagerHost {
             return null;
         }
         return null;
+    }
+
+    /** A change of cost/roaming on an already-connected network also governs active jobs. */
+    static void networkPolicyChanges() throws Exception {
+        for (boolean roaming : new boolean[] {false, true}) {
+            File root = Files.createTempDirectory("gesher-download-network-").toFile();
+            Clock clock = new Clock();
+            DownloadRequests.Caller app = caller(APP_UID, APP, "android.permission.INTERNET");
+            byte[] body = payload(300_000, 17);
+            CountDownLatch firstChunk = new CountDownLatch(1), allowRest = new CountDownLatch(1);
+            try (Server server = new Server(); Fixture f = new Fixture(root, clock)) {
+                server.handlers.put("/payload", (r, out) -> {
+                    String range = r.header("Range");
+                    int from = range == null ? 0
+                            : Integer.parseInt(range.replace("bytes=", "").replace("-", ""));
+                    out.write(((range == null ? "HTTP/1.1 200 OK"
+                            : "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes " + from + "-"
+                                    + (body.length - 1) + "/" + body.length)
+                            + "\r\nContent-Type: application/octet-stream\r\nContent-Length: "
+                            + (body.length - from) + "\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n")
+                            .getBytes(StandardCharsets.US_ASCII));
+                    if (range == null) {
+                        out.write(body, 0, 65_536);
+                        out.flush();
+                        firstChunk.countDown();
+                        try {
+                            if (!allowRest.await(10, TimeUnit.SECONDS)) return;
+                        } catch (InterruptedException e) { return; }
+                        from = 65_536;
+                    }
+                    for (int at = from; at < body.length; at += 4096) {
+                        out.write(body, at, Math.min(4096, body.length - at));
+                        out.flush();
+                        try { Thread.sleep(5); } catch (InterruptedException e) { return; }
+                    }
+                });
+                f.queue.start();
+                String fileUri = appFile(f, "restricted.bin");
+                ContentValues values = request(server.url("/payload"), fileUri);
+                values.put(roaming ? Downloads.Impl.COLUMN_ALLOW_ROAMING
+                        : Downloads.Impl.COLUMN_ALLOW_METERED, false);
+                long id = enqueue(f, app, values);
+                if (!firstChunk.await(5, TimeUnit.SECONDS)) throw new AssertionError("Download did not start");
+                File file = new File(Uri.parse(fileUri).getPath());
+                long deadline = System.currentTimeMillis() + 5000;
+                while (file.length() < 65_536 && System.currentTimeMillis() < deadline) Thread.sleep(5);
+                if (file.length() < 65_536) throw new AssertionError("No initial body bytes received");
+                f.network = new DownloadQueue.NetworkState(!roaming, roaming);
+                f.queue.networkChanged();
+                allowRest.countDown();
+                int waiting = roaming ? Downloads.Impl.STATUS_WAITING_FOR_NETWORK
+                        : Downloads.Impl.STATUS_QUEUED_FOR_WIFI;
+                f.await(id, waiting, Downloads.Impl.STATUS_SUCCESS);
+                DownloadRequests.Info stopped = f.requests.info(id);
+                String change = roaming ? "roaming" : "metered";
+                check(stopped.status == waiting && stopped.currentBytes > 0
+                        && stopped.currentBytes < body.length,
+                        "becoming " + change + " stops a running download that forbids it");
+                check(f.broadcastsFor(id).isEmpty(), "waiting after " + change + " sends no completion");
+                f.network = new DownloadQueue.NetworkState(false, false);
+                f.queue.networkChanged();
+                f.await(id, Downloads.Impl.STATUS_SUCCESS);
+                List<Request> requests = server.requests("/payload");
+                check(f.status(id) == Downloads.Impl.STATUS_SUCCESS && requests.size() == 2
+                        && ("bytes=" + stopped.currentBytes + "-").equals(requests.get(1).header("Range"))
+                        && Arrays.equals(body, Files.readAllBytes(file.toPath()))
+                        && f.broadcastsFor(id).size() == 1,
+                        "after " + change + " clears it resumes exactly and completes once");
+            } finally {
+                allowRest.countDown();
+                deleteTree(root);
+            }
+        }
     }
 
     public static void main(String[] args) throws Exception {
@@ -798,6 +873,7 @@ public final class DownloadManagerHost {
         } finally {
             deleteTree(root);
         }
+        networkPolicyChanges();
         if (failures != 0) {
             System.out.println(failures + " download contract(s) failed");
             System.exit(1);
