@@ -189,6 +189,20 @@ final class MediaStoreIndex {
         }
     }
 
+    /**
+     * Trusted provider-to-provider ownership check for an existing canonical path.
+     * This is deliberately separate from app queries: pending/trashed state and package
+     * visibility must not hide an owner from another provider's authorization check.
+     */
+    String ownerOf(File canonicalFile) {
+        synchronized (mLock) {
+            try (Cursor cursor = mDb.rawQuery("SELECT owner_package_name FROM files WHERE _data=?",
+                    new String[] {canonicalFile.getPath()})) {
+                return cursor.moveToFirst() ? cursor.getString(0) : null;
+            }
+        }
+    }
+
     /** DatabaseHelper.createLatestSchema: the files table as AOSP declares it. */
     private static void createSchema(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE local_metadata (generation INTEGER DEFAULT 0)");
@@ -1478,7 +1492,7 @@ final class MediaStoreIndex {
                             continue;
                         }
                     }
-                    mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {row.id});
+                    deleteRow(row.id);
                     types.add(row.mediaType);
                 }
             } catch (RuntimeException | Error e) {
@@ -1662,7 +1676,7 @@ final class MediaStoreIndex {
             if (!file.exists()) {
                 // A scan of a deleted file removes its stale row.
                 if (existing != null) {
-                    mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {existing});
+                    deleteRow(existing);
                 }
             }
         }
@@ -1769,13 +1783,20 @@ final class MediaStoreIndex {
                         new String[] {"Android/media/" + escapeForLike(packageName) + "/%", packageName})) {
                     while (c.moveToNext()) {
                         if (c.isNull(1) || !new File(c.getString(1)).exists()) {
-                            mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {c.getLong(0)});
+                            deleteRow(c.getLong(0));
                             types.add(c.isNull(2) ? MEDIA_TYPE_NONE : c.getInt(2));
                         }
                     }
                 }
-                mDb.execSQL("UPDATE files SET owner_package_name=NULL WHERE owner_package_name=?",
+                try (Cursor c = mDb.rawQuery("SELECT DISTINCT media_type FROM files WHERE owner_package_name=?",
+                        new String[] {packageName})) {
+                    while (c.moveToNext()) types.add(c.isNull(0) ? MEDIA_TYPE_NONE : c.getInt(0));
+                }
+                int orphaned = android.database.DatabaseUtils.executeUpdateDelete(mDb,
+                        "UPDATE files SET owner_package_name=NULL, generation_modified="
+                                + "(SELECT generation+1 FROM local_metadata) WHERE owner_package_name=?",
                         new Object[] {packageName});
+                if (orphaned != 0) mDb.execSQL("UPDATE local_metadata SET generation=generation+1");
                 mDb.setTransactionSuccessful();
             } finally {
                 mDb.endTransaction();
@@ -1804,6 +1825,7 @@ final class MediaStoreIndex {
         long expiredOneWeek = (mHost.currentTimeMillis() - 7 * 24 * 3600 * 1000L) / 1000;
         long extended = now + DEFAULT_DURATION_EXTENDED / 1000;
         List<Integer> types = new ArrayList<>();
+        int deleted = 0;
         synchronized (mLock) {
             List<long[]> items = new ArrayList<>();
             List<String> paths = new ArrayList<>();
@@ -1824,7 +1846,8 @@ final class MediaStoreIndex {
                         File file = paths.get(i) == null ? null : new File(paths.get(i));
                         if (item[1] > expiredOneWeek) {
                             if (file != null && file.exists() && !ops.delete(item[0], file)) continue;
-                            mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {item[0]});
+                            deleteRow(item[0]);
+                            deleted++;
                             types.add((int) item[2]);
                         } else if (file != null) {
                             Matcher m = PATTERN_EXPIRES_FILE.matcher(file.getName());
@@ -1832,8 +1855,9 @@ final class MediaStoreIndex {
                             File renamed = new File(file.getParentFile(), "." + m.group(1) + "-"
                                     + (extended + i) + "-" + m.group(3));
                             if (file.exists() && !ops.tryMove(item[0], file, renamed)) continue;
-                            mDb.execSQL("UPDATE files SET _data=?, date_expires=? WHERE _id=?",
-                                    new Object[] {renamed.getPath(), extended + i, item[0]});
+                            mDb.execSQL("UPDATE files SET _data=?, date_expires=?, generation_modified=? WHERE _id=?",
+                                    new Object[] {renamed.getPath(), extended + i, nextGeneration(), item[0]});
+                            types.add((int) item[2]);
                         }
                     }
                     mDb.setTransactionSuccessful();
@@ -1847,7 +1871,7 @@ final class MediaStoreIndex {
             ops.finish();
         }
         if (!types.isEmpty()) notifyCollections(VOLUME_EXTERNAL_PRIMARY, types);
-        return types.size();
+        return deleted;
     }
 
     // ---- file operations and their journal ---------------------------------------------
@@ -2018,7 +2042,7 @@ final class MediaStoreIndex {
                             SystemServer.log("media: failed to move " + second + " back to " + first);
                         }
                     } else {
-                        mDb.execSQL("DELETE FROM files WHERE _id=?", new Object[] {id});
+                        deleteRow(id);
                     }
                 }
                 mDb.setTransactionSuccessful();
@@ -2032,6 +2056,23 @@ final class MediaStoreIndex {
     }
 
     // ---- version and generation ---------------------------------------------------------
+
+    /**
+     * Every deletion changes getGeneration, including scanner cleanup and crash recovery.
+     * Keep the row and generation in the same transaction, as DatabaseHelper does on Android.
+     * Callers hold mLock; a nested transaction joins an existing package/expiry/recovery batch.
+     */
+    private void deleteRow(long id) {
+        mDb.beginTransaction();
+        try {
+            int count = android.database.DatabaseUtils.executeUpdateDelete(mDb,
+                    "DELETE FROM files WHERE _id=?", new Object[] {id});
+            if (count != 0) mDb.execSQL("UPDATE local_metadata SET generation=generation+1");
+            mDb.setTransactionSuccessful();
+        } finally {
+            mDb.endTransaction();
+        }
+    }
 
     /** DatabaseHelper.getGeneration. */
     long generation(String volumeName) {
