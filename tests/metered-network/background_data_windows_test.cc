@@ -39,7 +39,12 @@ int InternetPerNlm() {
     return -1;
   }
   VARIANT_BOOL connected = VARIANT_FALSE;
+#ifdef __MINGW32__
+  // mingw-w64's netlistmgr.h names the property getter without the get_ prefix.
+  HRESULT hr = nlm->IsConnectedToInternet(&connected);
+#else
   HRESULT hr = nlm->get_IsConnectedToInternet(&connected);
+#endif
   nlm->Release();
   return FAILED(hr) ? -1 : connected != VARIANT_FALSE ? 1 : 0;
 }
