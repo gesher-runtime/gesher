@@ -2,8 +2,8 @@
 //
 // Every recorder an app opens (AudioRecord, AAudio and OpenSL ES input,
 // MediaRecorder's audio) is a CaptureStream of this process's capture engine.
-// The engine's thread takes what the input source gives, every 10 ms, and
-// hands it to each started stream, converted to the stream's rate (linear
+// The engine's thread waits for the input source's data signal (or a bounded
+// timed fallback), then hands it to each started stream, converted to its rate (linear
 // interpolation), channels and PCM format. Normal builds use the actual
 // default WASAPI capture endpoint. Initialization/start failure is reported;
 // device loss becomes a terminal error, without substituting another input.

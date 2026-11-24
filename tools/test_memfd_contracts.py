@@ -75,6 +75,15 @@ def main():
         template = template.replace(marker, value)
     with tempfile.TemporaryDirectory(prefix="gesher-memfd-") as temporary:
         directory = Path(temporary)
+        # The guest's mapping-lease assertions run unchanged against the Linux
+        # kernel as well as in the Windows ELF jobs. The model below cannot
+        # establish native byte-lock or mapping behavior by itself.
+        reference = directory / "memfd-seals-reference"
+        subprocess.run(shlex.split(os.environ.get("CC", "cc")) + [
+            "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
+            str(ROOT / "tests/native/memfd_seals_reference.c"), "-o", str(reference), "-ldl"
+        ], check=True, timeout=120)
+        subprocess.run([str(reference)], check=True, timeout=30)
         cpp, executable = directory / "memfd.cc", directory / "memfd"
         cpp.write_text(template)
         flags = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",

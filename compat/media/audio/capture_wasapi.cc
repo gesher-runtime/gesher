@@ -242,7 +242,7 @@ class WasapiCapture : public CaptureSource {
     stop_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);     // manual-reset: sticky until consumed
     if (sample_event_ != nullptr && stop_event_ != nullptr) {
       HRESULT hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, loopback | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                                       kBufferDuration, 0, format_, nullptr);
+                                       0, 0, format_, nullptr);
       if (SUCCEEDED(hr)) hr = client_->SetEventHandle(sample_event_);
       if (SUCCEEDED(hr)) {
         events_ = true;

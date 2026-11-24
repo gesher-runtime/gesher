@@ -828,6 +828,27 @@ void SetSpeedKeepsPosition() {
   Check(f.playback->PositionUs() == 8000000, "resuming runs at the speed set while paused");
 }
 
+// Large PTS values must be bounded before converting a speed-scaled wait to an
+// integer. INT64_MAX / 10 is representable by Media Foundation's 100 ns clock.
+void VideoLargeTimestamp() {
+  auto plan = std::make_shared<Plan>();
+  plan->audio = false;
+  plan->video = true;
+  plan->video_pts = {0, INT64_MAX / 10};
+  ANativeWindow window(plan);
+  player_fixture::FrozenClock clock(1000000000000);
+  Fixture f(plan, &window);
+  f.playback->SetSpeed(0.1f);
+  f.playback->Start();
+  if (!Wait([&] { return window.Frames() == 1; }, "large-PTS video presents its first frame")) return;
+  const auto id = f.playback->video_thread_.get_id();
+  Wait([&] { return f.playback->cv_.LastTimeoutUs(id) == 50000; },
+       "distant slow-speed frame uses the bounded 50 ms clock recheck");
+  Check(window.PositiveFrames() == 0, "distant frame is not presented before its clock deadline");
+  f.playback->Shutdown();
+  Check(window.references == 0, "shutdown interrupts the distant-frame wait and releases its Surface");
+}
+
 // The EOF drain sleeps for the queued audio's play time at the playback speed:
 // queued / rate / speed, slower and fractional speeds included. (An integer speed
 // clamped to at least 1 woke a 0.5x drain at half its play time and slept a 1.5x
@@ -1157,6 +1178,7 @@ int main(int argc, char** argv) {
   player_test::PausedVideoTail();
   player_test::VideoOnly();
   player_test::SetSpeedKeepsPosition();
+  player_test::VideoLargeTimestamp();
   player_test::EofDrainAtSpeed(0.5f);
   player_test::EofDrainAtSpeed(1.5f);
   player_test::VideoIdleWakeups();

@@ -59,6 +59,20 @@ public final class GesherAppProcess {
     private GesherAppProcess() {
     }
 
+    /**
+     * ActivityThread.main's "Make sure TrustedCertificateStore looks in the right place for
+     * CA certificates": the user's CA directories, {@code
+     * $ANDROID_DATA/misc/user/<user>/cacerts-added} and {@code cacerts-removed}, which
+     * KeyChain writes on a device and the network security config's
+     * UserCertificateSource reads. Without it Conscrypt's AndroidCAStore looks in
+     * {@code $ANDROID_DATA/misc/keychain} and lists no user-added CA. Gesher writes the
+     * roots installed on this PC there (compat/net/trust_store.cc, docs/network.md).
+     */
+    static void useUserCaCertificates() {
+        com.android.org.conscrypt.TrustedCertificateStore.setDefaultUserDirectory(
+                android.os.Environment.getUserConfigDirectory(android.os.UserHandle.myUserId()));
+    }
+
     private static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();
@@ -210,6 +224,8 @@ public final class GesherAppProcess {
             android.view.ThreadedRenderer.sRendererEnabled = false;
         }
 
+        useUserCaCertificates();
+
         // ActivityThread.main: the main Looper is prepared (Main.bootstrap), then
         // new ActivityThread().attach(false, startSeq).
         ActivityThread thread = new ActivityThread();
@@ -348,13 +364,19 @@ public final class GesherAppProcess {
                 + "): an empty sans-serif typeface stands in");
     }
 
-    /** Notes EXIT_APPLICATION on its way to ActivityThread's H. */
+    /**
+     * Notes EXIT_APPLICATION on its way to ActivityThread's H, and starts following the
+     * process's Activities (for the camera's orientation) once the Application exists,
+     * before the first activity transaction creates one.
+     */
     private static void watchForExit(Handler h) throws ReflectiveOperationException {
         Field callback = Handler.class.getDeclaredField("mCallback");
         callback.setAccessible(true);
         callback.set(h, (Handler.Callback) (Message msg) -> {
             if (msg.what == ActivityThread.H.EXIT_APPLICATION) {
                 sExitRequested = true;
+            } else if (msg.what == ActivityThread.H.EXECUTE_TRANSACTION) {
+                GesherActivityWindow.trackActivities();
             }
             return false;  // ActivityThread handles it
         });
