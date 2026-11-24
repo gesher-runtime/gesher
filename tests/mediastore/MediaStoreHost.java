@@ -52,9 +52,13 @@ public final class MediaStoreHost {
     static final class TestHost implements MediaStoreIndex.Host {
         final File root;
         final Clock clock;
+        final File journal;
         final List<String> notified = new ArrayList<>();
-        TestHost(File root, Clock clock) { this.root = root; this.clock = clock; }
+        TestHost(File root, Clock clock) { this(root, clock, null); }
+        TestHost(File root, Clock clock, File journal) { this.root = root; this.clock = clock; this.journal = journal; }
         @Override public File volumeRoot() { return root; }
+        /** Where the index keeps its file-operation journal (the provider's state directory). */
+        public File journalDirectory() { return journal; }
         @Override public void notifyChange(Uri uri) { notified.add(uri.toString()); }
         @Override public long currentTimeMillis() { return clock.now; }
     }
@@ -146,6 +150,52 @@ public final class MediaStoreHost {
 
     static MediaStoreIndex.QueryArgs args() { return new MediaStoreIndex.QueryArgs(); }
 
+    static MediaStoreIndex.QueryArgs pendingArgs() {
+        MediaStoreIndex.QueryArgs a = new MediaStoreIndex.QueryArgs();
+        a.matchPending = MediaStoreIndex.MATCH_INCLUDE;
+        return a;
+    }
+
+    /** ContentResolver.insert of a published PNG, then its bytes written to the item's file. */
+    static Uri ownedPng(MediaStoreIndex index, App owner, String relativePath, String name) {
+        ContentValues v = new ContentValues();
+        v.put("_display_name", name);
+        v.put("mime_type", "image/png");
+        v.put("relative_path", relativePath);
+        Uri uri = index.insert(owner, IMAGES, v);
+        File file = new File(rows(index.query(owner, uri, null, args())).get(0).get("_data"));
+        write(file, png(2, 2));
+        if (!file.getName().equals(name)) throw new AssertionError("FAIL fixture name " + file);
+        return uri;
+    }
+
+    static String dataOf(MediaStoreIndex index, App reader, Uri uri) {
+        List<Map<String, String>> found = rows(index.query(reader, uri, null, pendingArgs()));
+        if (found.isEmpty()) throw new AssertionError("FAIL no row for " + uri);
+        return found.get(0).get("_data");
+    }
+
+    static int journalEntries(File journal) {
+        String[] names = journal.list();
+        return names == null ? 0 : names.length;
+    }
+
+    /** Runs MediaStoreCrashChild in a separate JVM and returns its exit status. */
+    static int crash(String mode, File dbFile, File volume, File journal, long now, Uri item)
+            throws IOException, InterruptedException {
+        List<String> command = new ArrayList<>(List.of(
+                new File(new File(System.getProperty("java.home"), "bin"), "java").getPath(),
+                "-cp", System.getProperty("java.class.path"), "com.gesher.server.MediaStoreCrashChild",
+                mode, dbFile.getPath(), volume.getPath(), journal.getPath(), Long.toString(now)));
+        if (item != null) command.add(item.toString());
+        Process process = new ProcessBuilder(command).inheritIO().start();
+        if (!process.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            throw new AssertionError("FAIL crash child " + mode + " did not finish");
+        }
+        return process.exitValue();
+    }
+
     static MediaStoreIndex.QueryArgs args(String selection, String[] selectionArgs, String sort) {
         MediaStoreIndex.QueryArgs a = new MediaStoreIndex.QueryArgs();
         a.selection = selection; a.selectionArgs = selectionArgs; a.sortOrder = sort;
@@ -179,7 +229,8 @@ public final class MediaStoreHost {
         File dbFile = new File(work, "data/system/media/external.db");
         dbFile.getParentFile().mkdirs();
         Clock clock = new Clock();
-        TestHost host = new TestHost(volume, clock);
+        File journal = new File(work, "data/system/media/journal");
+        TestHost host = new TestHost(volume, clock, journal);
         SQLiteDatabase db = SQLiteDatabase.openOrCreateDatabase(dbFile, null);
         MediaStoreIndex index = new MediaStoreIndex(db, host);
 
@@ -549,7 +600,109 @@ public final class MediaStoreHost {
         pass("media: package removal orphans published media and drops missing Android/media rows; "
                 + "expired pending items (and their files) are deleted");
 
+        // ---- 13. moves and deletes stay consistent with the database --------------------
+        File review = new File(volume, "Pictures/Review");
+        Uri a = ownedPng(restarted, camera, "Pictures/Review", "a.png");
+        Uri b = ownedPng(restarted, camera, "Pictures/Review", "b.png");
+        File aFile = new File(review, "a.png");
+        File bFile = new File(review, "b.png");
+        String[] both = {Long.toString(ContentUris.parseId(a)), Long.toString(ContentUris.parseId(b))};
+        ContentValues same = new ContentValues();
+        same.put("_display_name", "same.png");
+        IllegalArgumentException movement = expect(IllegalArgumentException.class,
+                () -> restarted.update(camera, IMAGES, same, args("_id IN (?,?)", both, null)),
+                "a collection update that renames two items");
+        check(movement.getMessage().contains("isn't part of well-defined collection not allowed"),
+                movement.getMessage());
+        check(aFile.isFile() && bFile.isFile() && !new File(review, "same.png").exists()
+                && dataOf(restarted, system, a).equals(aFile.getPath())
+                && dataOf(restarted, system, b).equals(bFile.getPath()),
+                "the rejected collection rename moves no file and changes no row");
+
+        // A row whose file was removed outside MediaStore still holds its path (UNIQUE _data).
+        File staleFile = new File(review, "same (1).png");
+        write(staleFile, png(1, 1));
+        check(restarted.scanFile(staleFile) != null && staleFile.delete(), "a stale row for same (1).png");
+        expect(RuntimeException.class,
+                () -> restarted.update(system, IMAGES, same, args("_id IN (?,?)", both, null)),
+                "the second row's UPDATE conflicts with the stale row after both renames");
+        check(aFile.isFile() && bFile.isFile() && !new File(review, "same.png").exists()
+                && !staleFile.exists()
+                && dataOf(restarted, system, a).equals(aFile.getPath())
+                && dataOf(restarted, system, b).equals(bFile.getPath()),
+                "a failed two-row update puts every moved file back where its rolled-back row points");
+        ContentValues ontoStale = new ContentValues();
+        ontoStale.put("_display_name", "same (1).png");
+        expect(RuntimeException.class, () -> restarted.update(camera, a, ontoStale, args()),
+                "an item rename whose UPDATE conflicts with a stale row");
+        check(aFile.isFile() && !staleFile.exists() && dataOf(restarted, system, a).equals(aFile.getPath()),
+                "a failed single-item rename moves the file back");
+        ContentValues ontoA = new ContentValues();
+        ontoA.put("_display_name", "a.png");
+        check(restarted.update(camera, b, ontoA, args()) == 1, "renaming an item onto an existing name succeeds");
+        File bUnique = new File(review, "a (1).png");
+        check(dataOf(restarted, system, b).equals(bUnique.getPath()) && bUnique.isFile() && !bFile.exists()
+                && aFile.isFile() && "a (1).png".equals(rows(restarted.query(camera, b, null, args()))
+                        .get(0).get("_display_name")),
+                "MediaProvider.ensureUniqueFileColumns: the moved item gets the next free name, a (1).png");
+        check(journalEntries(journal) == 0, "no file-operation journal is left after completed or reversed operations");
+        pass("media: update moves files only for single items (collection movement -> IllegalArgumentException), "
+                + "picks a unique destination, and reverses every completed move when the transaction fails");
+
+        // ---- 14. a system server that dies between the file change and the commit -------
+        Uri crashRename = ownedPng(restarted, camera, "Pictures/Crash", "rename.png");
+        ContentValues draftValues = new ContentValues();
+        draftValues.put("_display_name", "publish.png");
+        draftValues.put("relative_path", "Pictures/Crash");
+        draftValues.put("is_pending", 1);
+        Uri crashPublish = restarted.insert(camera, IMAGES, draftValues);
+        File crashPending = new File(dataOf(restarted, system, crashPublish));
+        write(crashPending, png(3, 3));
+        Uri crashDelete = ownedPng(restarted, camera, "Pictures/Crash", "delete.png");
+        ContentValues expiringValues = new ContentValues();
+        expiringValues.put("_display_name", "expiring.png");
+        expiringValues.put("relative_path", "Pictures/Crash");
+        expiringValues.put("is_pending", 1);
+        expiringValues.put("date_expires", clock.now / 1000 + 3600); // expires before the other pending item
+        Uri crashExpire = restarted.insert(camera, IMAGES, expiringValues);
+        File crashExpiring = new File(dataOf(restarted, system, crashExpire));
+        write(crashExpiring, png(4, 4));
+        File crashDir = new File(volume, "Pictures/Crash");
         reopened.close();
+
+        check(crash("rename", dbFile, volume, journal, clock.now, crashRename) == MediaStoreCrashChild.HALTED
+                && new File(crashDir, "crashed.png").isFile() && !new File(crashDir, "rename.png").exists(),
+                "the system server died after moving rename.png and before committing its row");
+        check(crash("publish", dbFile, volume, journal, clock.now, crashPublish) == MediaStoreCrashChild.HALTED
+                && new File(crashDir, "publish.png").isFile() && !crashPending.exists(),
+                "the system server died after publishing the pending file and before committing its row");
+        check(crash("delete", dbFile, volume, journal, clock.now, crashDelete) == MediaStoreCrashChild.HALTED
+                && !new File(crashDir, "delete.png").exists(),
+                "the system server died after deleting delete.png and before deleting its row");
+        check(crash("expire", dbFile, volume, journal, clock.now + 2L * 3600 * 1000, null)
+                        == MediaStoreCrashChild.HALTED && !crashExpiring.exists(),
+                "the system server died after deleting an expired pending file and before deleting its row");
+
+        SQLiteDatabase recoveredDb = SQLiteDatabase.openOrCreateDatabase(dbFile, null);
+        MediaStoreIndex recovered = new MediaStoreIndex(recoveredDb, host);
+        check(dataOf(recovered, system, crashRename).equals(new File(crashDir, "rename.png").getPath())
+                && new File(crashDir, "rename.png").isFile() && !new File(crashDir, "crashed.png").exists()
+                && recovered.openFileTarget(camera, crashRename, false).file.isFile(),
+                "after the restart the renamed file is back at the path its uncommitted row still names");
+        Map<String, String> stillPending = rows(recovered.query(camera, crashPublish, null, pendingArgs())).get(0);
+        check("1".equals(stillPending.get("is_pending")) && crashPending.isFile()
+                && stillPending.get("_data").equals(crashPending.getPath())
+                && !new File(crashDir, "publish.png").exists(),
+                "after the restart the unpublished item is pending again with its .pending file");
+        check(rows(recovered.query(system, crashDelete, null, args())).isEmpty(),
+                "after the restart the row whose file was already deleted is gone, as the scanner's reconcile does");
+        check(rows(recovered.query(system, crashExpire, null, pendingArgs())).isEmpty(),
+                "after the restart the expired item whose file was already deleted is gone");
+        check(journalEntries(journal) == 0, "recovery consumes the journal");
+        pass("media: a system server killed between a file move/delete and the SQLite commit (rename, "
+                + "pending -> published, delete, expiry) restarts with every row and file consistent");
+
+        recoveredDb.close();
         System.out.println("media: " + sChecks + " checks passed");
     }
 }

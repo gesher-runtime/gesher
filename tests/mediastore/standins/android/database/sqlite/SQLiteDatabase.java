@@ -89,6 +89,21 @@ public final class SQLiteDatabase {
         } catch (SQLException e) { throw new SQLiteException("end", e); }
     }
 
+    /**
+     * Test harness only (not an android.* API): registers a SQL function that runs
+     * {@code action}, so the crash harness can stop the JVM inside a statement.
+     */
+    public synchronized void createTestFunction(String name, Runnable action) {
+        try {
+            org.sqlite.Function.create(mConnection, name, new org.sqlite.Function() {
+                @Override protected void xFunc() throws SQLException {
+                    action.run();
+                    result(0);
+                }
+            });
+        } catch (SQLException e) { throw new SQLiteException("function " + name, e); }
+    }
+
     public synchronized void execSQL(String sql) { execSQL(sql, new Object[0]); }
 
     public synchronized void execSQL(String sql, Object[] args) { executeForChanges(sql, args); }

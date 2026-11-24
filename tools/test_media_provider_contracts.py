@@ -129,6 +129,7 @@ def main() -> None:
         files = [str(p) for p in (work / 'src').rglob('*.java')]
         files += [str(p) for p in (ROOT / 'tests/mediastore/standins').rglob('*.java')]
         files.append(str(ROOT / 'tests/mediastore/MediaStoreHost.java'))
+        files.append(str(ROOT / 'tests/mediastore/MediaStoreCrashChild.java'))
         classes = work / 'classes'
         subprocess.run([executable('javac'), '-nowarn', '-encoding', 'UTF-8', '-proc:none',
                         '-d', str(classes), '-cp', str(jar), *files], check=True, timeout=180)
