@@ -207,9 +207,10 @@ jobs:
       - name: Build actual URI scheme handler lookup (AssocQueryStringW, ASSOCF_IS_PROTOCOL)
         if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\url_handlers_win.cc tests\uri-handlers\url_handlers_windows_test.cc /Fe:url-handlers-test.exe shlwapi.lib shell32.lib advapi32.lib
-      - name: Per-user protocol registration, removal and invalid schemes against real Windows associations
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\url_handlers_win.cc tests\uri-handlers\url_handlers_windows_test.cc /Fe:url-handlers-test.exe shlwapi.lib shell32.lib advapi32.lib user32.lib
+      - name: Real Windows associations and cancellable dialing confirmation
         if: ${{ !cancelled() }}
+        timeout-minutes: 3
         shell: pwsh
         run: |
           & .\url-handlers-test.exe
