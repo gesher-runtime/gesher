@@ -90,6 +90,8 @@ mkdir -p "$work/foreign-abi/lib/x86"
 printf 'unsupported ABI fixture\n' > "$work/foreign-abi/lib/x86/libsplitprobe.so"
 cp "$work/fixtures/core.apk" "$work/fixtures/core-foreign-abi.apk"
 (cd "$work/foreign-abi" && jar -u -M -f "$(native "$work/fixtures/core-foreign-abi.apk")" lib)
+cp "$work/fixtures/foreign.apk" "$work/fixtures/foreign-abi.apk"
+(cd "$work/foreign-abi" && jar -u -M -f "$(native "$work/fixtures/foreign-abi.apk")" lib)
 # jar -u may move a stored resources.arsc off its required four-byte boundary.
 # Keep every fixture valid for the same resource-table checks as installed APKs.
 for apk in "$work/fixtures/"*.apk; do
@@ -113,5 +115,8 @@ for apk in base base-required core core-typed entry entry-revised core-major cor
   sign key "$apk" "$apk-signed"
 done
 sign other core core-foreign-signer-signed
+# A real unrelated split must be excluded before signer and ABI validation of
+# the requested package, even when both are incompatible with that package.
+sign other foreign-abi foreign-incompatible-signed
 (cd "$work/fixtures" && jar -c -M -f "$(native "$out/split-package-fixtures.zip")" .)
 echo "split-package-fixtures.zip written to $out"

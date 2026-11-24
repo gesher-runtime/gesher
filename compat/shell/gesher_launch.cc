@@ -51,6 +51,7 @@
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
 #include "../windows/host_dialog_theme.h"
+#include "launch_failure_text.h"
 
 #include <algorithm>
 #include <cstring>
@@ -131,6 +132,30 @@ bool IsFile(const std::wstring& path) {
   return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+std::wstring GetDataDirectory(const std::wstring& here) {
+  // Keep the splash on the runtime scripts' profile. They derive ANDROID_DATA
+  // from this profile, so an inherited Android path is not authoritative here.
+  std::wstring env_profile = Env(L"GESHER_PROFILE");
+  if (!env_profile.empty()) {
+    DWORD required = GetFullPathNameW(env_profile.c_str(), 0, nullptr, nullptr);
+    if (required == 0) return std::wstring();
+    std::vector<wchar_t> full(required);
+    DWORD count = GetFullPathNameW(env_profile.c_str(), required, full.data(), nullptr);
+    return count > 0 && count < required ? std::wstring(full.data(), count) + L"\\data"
+                                        : std::wstring();
+  }
+  if (IsFile(here + L"\\portable.marker")) {
+    return here + L"\\Data\\data";
+  }
+  size_t slash = here.find_last_of(L"\\/");
+  std::wstring leaf = slash == std::wstring::npos ? here : here.substr(slash + 1);
+  std::wstring parent = Directory(here.c_str());
+  if (Lower(leaf) == L"app" && IsFile(parent + L"\\portable.marker")) {
+    return parent + L"\\Data\\data";
+  }
+  return Env(L"LOCALAPPDATA") + L"\\Gesher\\data";
+}
+
 // A new empty file in the user's temp directory for the launcher's failure
 // (kErrorFileEnv), or empty.
 std::wstring NewErrorFile() {
@@ -168,10 +193,11 @@ std::wstring TakeErrorText(const std::wstring& path) {
 void ShowLaunchFailure(const std::wstring& reason) {
   if (reason.empty()) return;
   const auto language = GesherUiCurrentLanguage();
+  const std::wstring formatted = GesherFormatLaunchFailureReason(reason, GesherUiRtl(language));
   std::wstring text = GesherUiText(language, "launch_failed");
   const size_t at = text.find(L"{0}");
-  if (at != std::wstring::npos) text.replace(at, 3, reason);
-  else text = reason;
+  if (at != std::wstring::npos) text.replace(at, 3, formatted);
+  else text = formatted;
   GesherHostPrompt(GesherUiText(language, "brand"), text.c_str(),
                    GesherUiText(language, "cp_dialog_ok"), nullptr,
                    GesherUiRtl(language), nullptr);
@@ -403,7 +429,7 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
   }
   if (!shown) return false;
 
-  const std::wstring data = Env(L"LOCALAPPDATA") + L"\\Gesher\\data";
+  const std::wstring data = GetDataDirectory(here);
   std::wstring package, apk_icon;
   if (IsFile(target)) {
     wchar_t full[MAX_PATH * 4];
@@ -429,7 +455,15 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     if (IsFile(shell + L"\\icon.ico")) splash->icon = shell + L"\\icon.ico";
   }
   if (splash->icon.empty() && !apk_icon.empty() && IsFile(apk_icon)) splash->icon = apk_icon;
-  if (splash->icon.empty()) splash->icon = here + L"\\gesher.ico";
+  if (splash->icon.empty()) {
+    if (IsFile(here + L"\\gesher.ico")) {
+      splash->icon = here + L"\\gesher.ico";
+    } else if (IsFile(Directory(here.c_str()) + L"\\gesher.ico")) {
+      splash->icon = Directory(here.c_str()) + L"\\gesher.ico";
+    } else if (IsFile(here + L"\\App\\gesher.ico")) {
+      splash->icon = here + L"\\App\\gesher.ico";
+    }
+  }
   if (splash->label.empty()) splash->label = GesherUiText(GesherUiCurrentLanguage(), "brand");
   return true;
 }
@@ -770,11 +804,14 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid, bo
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+  bool default_to_control_panel = false;
   {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv != nullptr) {
-      if (argc > 1 && wcscmp(argv[1], L"--app-crash") == 0) {
+      if (argc <= 1) {
+        default_to_control_panel = true;
+      } else if (argc > 1 && wcscmp(argv[1], L"--app-crash") == 0) {
         int result = ShowAppCrash(argc, argv);
         LocalFree(argv);
         return result;
@@ -787,13 +824,22 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   if (n == 0 || n >= sizeof(self) / sizeof(self[0])) return 1;
   const std::wstring here = Directory(self);
 
+  std::wstring script = here + L"\\gesher-app.ps1";
+  if (!IsFile(script)) {
+    std::wstring app_script = here + L"\\App\\gesher-app.ps1";
+    if (IsFile(app_script)) {
+      script = app_script;
+    }
+  }
+
   wchar_t system[MAX_PATH];
   UINT s = GetSystemDirectoryW(system, MAX_PATH);
   std::wstring powershell = (s > 0 && s < MAX_PATH ? std::wstring(system) : L"C:\\Windows\\System32") +
                             L"\\WindowsPowerShell\\v1.0\\powershell.exe";
+  std::wstring command_args = default_to_control_panel ? L"control-panel" : Arguments(GetCommandLineW());
   std::wstring command = L"\"" + powershell +
                          L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
-                         here + L"\\gesher-app.ps1\" " + Arguments(GetCommandLineW());
+                         script + L"\" " + command_args;
 
   AllowSetForegroundWindow(ASFW_ANY);
 
@@ -817,7 +863,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   // The splash's view of it: gesher-app's own --detach / --wait (the launcher's
   // last one wins) over the environment.
   bool detached = Env(kDetachEnv) == L"1";
-  bool control_panel = false;
+  bool control_panel = default_to_control_panel;
   {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -865,7 +911,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   CloseHandle(pi.hThread);
   // The splash comes up while powershell starts (the launch is never delayed by it).
   bool started = false;
-  bool cancelled = SplashWhileStarting(here, pi.hProcess, pi.dwProcessId, detached, &started);
+  bool cancelled = SplashWhileStarting(Directory(script.c_str()), pi.hProcess,
+                                       pi.dwProcessId, detached, &started);
   if (cancelled) {
     // The job also holds a device this launch started (its processes cannot break
     // away): once the activity has started, the device and the app stay; the

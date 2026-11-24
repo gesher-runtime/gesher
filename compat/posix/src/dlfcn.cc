@@ -142,7 +142,17 @@ void* dlopen(const char* filename, int flags) {
       ? GetModuleHandleW(path.c_str())
       : LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
                                                   LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
-  if (module == nullptr) SetError("dlopen", filename);
+  if (module == nullptr) {
+    if (GetLastError() == ERROR_INVALID_PARAMETER && BaseName(filename) == filename) {
+      // A bare name that is no builtin library: LoadLibraryExW refuses it
+      // (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR needs a full path), which only means
+      // there is no library by that name here.
+      last_error = std::string("dlopen ") + filename + ": library not found";
+      has_error = true;
+    } else {
+      SetError("dlopen", filename);
+    }
+  }
   return module;
 }
 

@@ -14,7 +14,8 @@ try {
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
 . (Join-Path $here 'gesher-panel-view.ps1')
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
 $script:UpdateDirectory = Join-Path $root 'updates'
 
 # One Control Center. A second start (the Start menu again, or an app's "App info", which
@@ -32,8 +33,9 @@ $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
 $script:PanelInstanceCreated = $false
-$script:PanelInstance = [System.Threading.Mutex]::new($false, 'Local\Gesher.ControlPanel', [ref] $script:PanelInstanceCreated)
-$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, 'Local\Gesher.ControlPanel.Show')
+$panelName = Get-GesherControlPanelName $root
+$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
+$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
 if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
     $null = $script:PanelShowEvent.Set()
     exit 0
@@ -1456,7 +1458,7 @@ $btnOpenStore.Add_Click({
 $btnInstallApk.Add_Click({
     if ($script:IsBusy) { return }
     $ofd = [Microsoft.Win32.OpenFileDialog]::new()
-    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk)|*.apk;*.apks;*.xapk|All Files (*.*)|*.*"
+    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk;*.apkm;*.apk+)|*.apk;*.apks;*.xapk;*.apkm;*.apk+|All Files (*.*)|*.*"
     if ($ofd.ShowDialog() -eq $true) {
         $file = $ofd.FileName
         $fileName = [System.IO.Path]::GetFileName($file)
@@ -1470,7 +1472,7 @@ $window.Add_Drop({
     if ($script:IsBusy) { return }
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
-        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk' })
+        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk', '.apkm', '.apk+' })
         if ($packages.Count) {
             [void](Start-PanelAction 'Install' @{ Files = $packages } (Get-GesherText 'cp_installing' @([IO.Path]::GetFileName($packages[0]))))
         }

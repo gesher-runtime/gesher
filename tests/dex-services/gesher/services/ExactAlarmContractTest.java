@@ -408,6 +408,8 @@ public final class ExactAlarmContractTest {
                 for (String name : List.of(UNPRIV_PKG, EXACT_PKG, USE_EXACT_PKG, LEGACY_PKG,
                         BOTH_PKG, S_PKG, PRE_USE_PKG)) alarmService.removeAll(name);
                 appOps.resetAllModes(0, null);
+                // Drain the last policy write before the fixture deletes its data directory.
+                appOps.reloadNonHistoricalState();
                 List<Object> sources = (List<Object>) field(type("DeviceWork"), "sSources").get(null);
                 sources.clear(); sources.addAll(previousWorkSources);
                 field(type("NotificationManagerService"), "sLast").set(null, previousNotifications);

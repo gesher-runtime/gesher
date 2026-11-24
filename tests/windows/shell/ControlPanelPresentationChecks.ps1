@@ -21,9 +21,30 @@ foreach ($language in 'en','he') {
         }
         if ($name -eq 'dashboard') {
             if ($view.Title -cne (Get-GesherText 'cp_title')) { throw 'Title resource missing' }
+            $proxyAll = $view.FindName('BtnProxyAll')
+            if (-not $proxyAll -or $proxyAll.Content -cne (Get-GesherText 'cp_btn_proxy_all')) {
+                throw 'Global proxy button missing or not localized'
+            }
             $list = $view.FindName('AppsList')
             $row = $list.ItemTemplate.LoadContent()
             if (-not $row) { throw 'Item template failed' }
+            # The detached template needs the same resources it inherits in the dashboard.
+            $row.Resources = $view.Resources
+            $rowGrid = $row.Child
+            $proxyButton = @($rowGrid.Children[2].Children | Where-Object {
+                $_ -is [System.Windows.Controls.Button] -and $_.Content -ceq (Get-GesherText 'cp_btn_proxy')
+            })
+            if ($proxyButton.Count -ne 1 -or
+                $proxyButton[0].GetBindingExpression([System.Windows.FrameworkElement]::TagProperty).ParentBinding.Path.Path -ne 'Package') {
+                throw 'Per-app proxy button missing its package binding'
+            }
+            $proxyText = @($rowGrid.Children[1].Children | Where-Object {
+                $_.GetBindingExpression([System.Windows.Controls.TextBlock]::TextProperty).ParentBinding.Path.Path -eq 'ProxyText'
+            })
+            if ($proxyText.Count -ne 1 -or
+                $proxyText[0].GetBindingExpression([System.Windows.UIElement]::VisibilityProperty).ParentBinding.Path.Path -ne 'ProxyVisibility') {
+                throw 'Per-app proxy status bindings missing'
+            }
             $literal = "{literal} & <text>`t`nHebrew"
             $view.Resources['Text_cp_title'] = $literal
             if ($view.Title -cne $literal) { throw 'Resource was interpreted as markup' }
