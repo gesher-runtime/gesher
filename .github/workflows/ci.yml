@@ -166,6 +166,16 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/clipboard/Publication.ps1
+      - name: Build actual Windows WebAuthn contracts (ADR 0092)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\credentials\webauthn_windows_test.cc compat\devices\webauthn_win.cc /Fe:webauthn-windows.exe user32.lib
+      - name: WebAuthn API version, cancellation ids, error names and owner refusal without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\webauthn-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows WebAuthn contracts failed' }
       - name: Exact native reader ownership and handle reuse controls
         if: ${{ !cancelled() }}
         shell: pwsh
