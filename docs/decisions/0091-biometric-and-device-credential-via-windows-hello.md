@@ -175,8 +175,11 @@ authoring environment):
   prompts the user; the key type is fixed.
 - Not verified here (stated for maintainers to check): the NCrypt "Microsoft Passport
   Key Storage Provider" key properties, whether WinBio can attribute a Hello
-  verification to a biometric, `RequestVerificationForWindowAsync` on Windows 10, from an
-  MTA thread, and with a window of another process as owner.
+  verification to a biometric, and `RequestVerificationForWindowAsync` on Windows 10.
+- Measured since, on Windows 11 Pro build 26300 with `tests/biometrics/hello_probe.cc`
+  (the production `hello_win.cc` functions): the call works from an MTA thread with the
+  process's own window as owner (`verify` → Verified, `cancel` → Canceled), and with
+  another process's foreground window as owner (decision 11).
 
 ## Decision
 
@@ -377,8 +380,12 @@ Phase 2b turns it on. Sources as above (`android-16.0.0_r4` GitHub mirrors;
     keystore enforces authentication (phase 3).
 11. **The prompt is started in the system server with the app process's window as
     owner** (`RequestVerificationForWindowAsync(appWindow = the root owner of the
-    foreground window, when it is the app's)`). Verified by hand with
-    `hello_probe foreign-verify` before this phase. *Fallback, not implemented*: should a
+    foreground window, when it is the app's)`). Windows accepts it: measured on
+    Windows 11 Pro build 26300 with `hello_probe host` as the "app" and a second
+    process asking, `foreign-verify` ended `Verified` (the user entered the PIN, 19.5 s)
+    and `foreign-cancel` ended `Canceled` 3.1 s after the start (the "app's" cancel at
+    3 s). That is one machine and one build, and the probe, not the system server
+    across Binder. *Fallback, kept as a note only and not implemented*: should a
     Windows build refuse a window of another process (`E_INVALIDARG`/`E_ACCESSDENIED`,
     reported today as `BIOMETRIC_ERROR_HW_UNAVAILABLE`), the call moves into the app
     process: a Gesher-internal `StandIn.Extension` transaction on the app's

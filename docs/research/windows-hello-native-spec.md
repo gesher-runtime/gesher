@@ -92,11 +92,12 @@ same lock unless released. No JNI callbacks into Java, no attached native thread
   Java reports `CANCELED` → `BIOMETRIC_ERROR_USER_CANCELED`, matching SystemUI's
   `cancelIfOwnerIsNotInForeground` (AuthService already fast-fails non-foreground callers;
   this covers the race).
-- **Verify on Windows**: that a window of another process is accepted as `appWindow`
-  (the Hello UI is hosted by Windows' credential broker, so a cross-process owner is
-  expected to work; if `E_INVALIDARG`/`E_ACCESSDENIED`, the fallback is to run the call
-  in the app's process through a Gesher-internal binder call, keeping the session in the
-  system server).
+- A window of another process is accepted as `appWindow`. Measured on Windows 11 Pro
+  build 26300 with `hello_probe host` / `foreign-verify <pid>` / `foreign-cancel <pid>`:
+  Verified (PIN, 19.5 s) and Canceled (3.1 s, the cancel at 3 s). The fallback for a
+  build that refuses it (`E_INVALIDARG`/`E_ACCESSDENIED`: run the call in the app's
+  process through a Gesher-internal binder call, keeping the session in the system
+  server) stays a design note in ADR 0091, decision 11.
 - While the prompt is up, if the owner process exits, cancel (the Java side also
   cancels on binder death). Losing foreground during the prompt: Windows keeps its
   dialog modal to the owner; phase 2 may add a 250 ms foreground check in the await
