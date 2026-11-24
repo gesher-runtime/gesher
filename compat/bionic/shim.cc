@@ -15,8 +15,8 @@
 #include "extra_bionic.h"
 #include "memmem_search.h"
 
-#include <gesher/art_shim.h>
 #include <gesher/bionic_shim.h>
+#include <gesher/art_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/clocks.h>
 #include <gesher/environment.h>
