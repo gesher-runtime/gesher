@@ -3,17 +3,23 @@
 // Windows has no signals. The shim keeps bionic's model for the .so's own
 // use of them, entirely in user space and separate from gesher-base's and
 // ART's signal handling (libsigchain): sigaction installs a System V handler
-// in the shim's table; masks are per thread; raise, kill and pthread_kill
-// generate signals, and handlers run on a thread that does not block them.
+// in the shim's table; masks are per thread; raise, kill, pthread_kill,
+// tgkill and tkill generate signals, and handlers run on a thread that does
+// not block them.
 //
-//  - raise(sig), kill(getpid(), sig) and pthread_kill(pthread_self(), sig) run
-//    the handler on the calling thread before returning, as on Linux.
-//  - A signal sent to another thread (pthread_kill), or to the process while
-//    the caller blocks it, is pending: the target runs it at its next
-//    delivery point, i.e. when it lowers its mask (sigprocmask,
-//    pthread_sigmask, sigsuspend) or enters a sleep or poll through the shim
-//    (nanosleep, usleep, sleep, poll, select, epoll_wait, pause). It cannot
-//    interrupt a thread running or blocked elsewhere.
+//  - raise(sig), kill(getpid(), sig), pthread_kill(pthread_self(), sig) and
+//    tgkill(getpid(), gettid(), sig) run the handler on the calling thread
+//    before returning, as on Linux.
+//  - A signal sent to another thread (pthread_kill, or tgkill/tkill with that
+//    thread's gettid() ID, also as raw syscalls), or to the process while the
+//    caller blocks it, is pending: the target runs it at its next delivery
+//    point, i.e. when it lowers its mask (sigprocmask, pthread_sigmask,
+//    sigsuspend) or enters a sleep or poll through the shim (nanosleep,
+//    usleep, sleep, poll, select, epoll_wait, pause). A target running
+//    translated ARM64 code is also stopped at the translator's next block
+//    boundary to take it, as the kernel interrupts user code. It cannot
+//    interrupt x86-64 code, nor a thread blocked elsewhere (a futex or
+//    condition-variable wait) until that wait returns to such a point.
 //  - sigwait/sigwaitinfo/sigtimedwait take pending signals.
 //  - Ordinary kill() of another process uses gesher-base's existing mailbox.
 //    Remote RT kill and queued-value sends return ENOSYS before that bitmap
@@ -31,9 +37,11 @@
 //    ENOSYS without consuming a pending record; synchronous sigwait remains
 //    available regardless of that unused flag. SA_SIGINFO handlers get the
 //    record's siginfo and a ucontext with the thread's actual registers at the
-//    delivery point (BionicUcontext below); for an ARM64 handler run by the
-//    x86-64 translator, whose guest registers the shim cannot report, the
-//    delivery returns ENOSYS like SA_ONSTACK.
+//    delivery point (BionicUcontext below); an ARM64 handler run by the
+//    x86-64 translator gets Bionic's arm64 ucontext with the guest registers
+//    there (A64Ucontext, from gesher_arm64.dll). On a thread with no guest
+//    code under way, such a delivery returns ENOSYS like SA_ONSTACK and the
+//    signal stays pending.
 //  - SIGRTMIN is bionic's: 32 + __SIGRT_RESERVED (10) = 42; SIGRTMAX is 64.
 
 #include "shim_internal.h"
@@ -153,8 +161,13 @@ void FillMachineContext(const CONTEXT& c, BionicUcontext* uc) {
   memcpy(uc->fpregs_mem, &c.FltSave, sizeof(uc->fpregs_mem));
   uc->fpregs = uc->fpregs_mem;
 }
-#elif defined(__aarch64__)
-struct alignas(16) BionicUcontext {
+#endif
+
+// Bionic's arm64 ucontext_t (the kernel's struct ucontext with its
+// struct sigcontext): the native ARM64 build's own frame, and on x86-64 the
+// frame of an ARM64 handler run by the translator (gesher_arm64.dll), whose
+// machine context is the guest's registers where the thread takes the signal.
+struct alignas(16) A64Ucontext {
   uint64_t uc_flags;
   void* uc_link;
   BionicStack uc_stack;
@@ -167,10 +180,13 @@ struct alignas(16) BionicUcontext {
   uint64_t pstate;
   alignas(16) uint8_t reserved[4096];
 };
-static_assert(offsetof(BionicUcontext, uc_sigmask) == 40);
-static_assert(offsetof(BionicUcontext, fault_address) == 176);
-static_assert(offsetof(BionicUcontext, reserved) == 464);
-static_assert(sizeof(BionicUcontext) == 4560);
+static_assert(offsetof(A64Ucontext, uc_sigmask) == 40);
+static_assert(offsetof(A64Ucontext, fault_address) == 176);
+static_assert(offsetof(A64Ucontext, reserved) == 464);
+static_assert(sizeof(A64Ucontext) == 4560);
+
+#if defined(__aarch64__)
+using BionicUcontext = A64Ucontext;
 
 void FillMachineContext(const CONTEXT& c, BionicUcontext* uc) {
   for (int i = 0; i < 29; ++i) uc->regs[i] = c.X[i];
@@ -201,7 +217,7 @@ struct ThreadState {
   gesher::signals::Pending<BionicSiginfo> pending;
   HANDLE lifetime = nullptr;
   HANDLE retirement_wait = nullptr;
-  uint64_t id = 0;
+  uint32_t tid = 0;  // gettid(): the Windows thread ID, unique while the thread lives
   ~ThreadState() { if (lifetime != nullptr) CloseHandle(lifetime); }
   std::atomic<bool> any_pending{false};
   BionicStack alt_stack{nullptr, 2 /* SS_DISABLE */, 0};
@@ -217,7 +233,10 @@ struct State {
   std::condition_variable sent;
   BionicSigaction actions[kNsig] = {};
   gesher::signals::Pending<BionicSiginfo> process_pending;
-  std::unordered_map<uint64_t, ThreadState*> threads;
+  // By thread ID (gettid, pthread_gettid_np). An entry whose thread has
+  // exited may linger until its retirement callback runs; LiveThreadLocked
+  // never returns one, so a reused ID gets a fresh state.
+  std::unordered_map<uint32_t, ThreadState*> threads;
 };
 
 State& S() {
@@ -234,7 +253,7 @@ void CALLBACK RetireThread(void* context, BOOLEAN) {
   auto* thread = static_cast<ThreadState*>(context);
   {
     std::lock_guard<std::mutex> lock(S().mutex);
-    auto found = S().threads.find(thread->id);
+    auto found = S().threads.find(thread->tid);
     if (found != S().threads.end() && found->second == thread) S().threads.erase(found);
   }
   // Nonblocking unregister is required inside this wait's own callback.
@@ -245,32 +264,42 @@ void CALLBACK RetireThread(void* context, BOOLEAN) {
 
 // Called under S().mutex. That same mutex prevents an already-signaled
 // lifetime from retiring its context before publication is complete.
-ThreadState* CreateThreadState(uint64_t id, HANDLE lifetime) {
+ThreadState* CreateThreadState(uint32_t tid, HANDLE lifetime) {
   auto* thread = new (std::nothrow) ThreadState();
   if (thread == nullptr) { CloseHandle(lifetime); return nullptr; }
-  thread->id = id;
+  thread->tid = tid;
   thread->lifetime = lifetime;
   if (!RegisterWaitForSingleObject(&thread->retirement_wait, lifetime, RetireThread,
                                    thread, INFINITE, WT_EXECUTEONLYONCE)) {
     delete thread;
     return nullptr;
   }
-  S().threads.emplace(id, thread);
+  S().threads.insert_or_assign(tid, thread);
   return thread;
+}
+
+// Under S().mutex: the state of the live thread `tid`, or nullptr. A state
+// left by an exited thread whose ID Windows has since reused is unlinked
+// here; its retirement callback still deletes it.
+ThreadState* LiveThreadLocked(uint32_t tid) {
+  auto found = S().threads.find(tid);
+  if (found == S().threads.end()) return nullptr;
+  if (WaitForSingleObject(found->second->lifetime, 0) == WAIT_TIMEOUT) return found->second;
+  S().threads.erase(found);
+  return nullptr;
 }
 
 ThreadState* Self() {
   if (t_state == nullptr) {
-    uint64_t id = PthreadSelfId();
+    const uint32_t tid = GetCurrentThreadId();
     std::lock_guard<std::mutex> lock(S().mutex);
-    auto found = S().threads.find(id);
-    if (found != S().threads.end()) {
-      t_state = found->second;
+    if (ThreadState* found = LiveThreadLocked(tid)) {
+      t_state = found;
     } else {
       HANDLE lifetime = nullptr;
       if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &lifetime,
                            THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) return nullptr;
-      t_state = CreateThreadState(id, lifetime);
+      t_state = CreateThreadState(tid, lifetime);
     }
   }
   return t_state;
@@ -311,6 +340,47 @@ void PrintGuestState() {
   if (print != nullptr) print();
 }
 
+#if defined(__x86_64__)
+// gesher_arm64.dll's view of the calling thread's guest (ARM64) registers.
+// `gesher_arm64_guest_context(sc)` fills the kernel's arm64 struct sigcontext
+// at `sc` (fault_address .. __reserved, with an FPSIMD record) with the
+// registers of the guest code that is running on this thread or called the
+// host function it is in, and returns nonzero; it returns 0 on a thread with
+// no guest code under way (nothing written; `sc` may be nullptr to ask).
+// `gesher_arm64_interrupt_thread(tid)` makes thread `tid`'s running guest code
+// stop at its next block boundary and take its pending signals there, as the
+// kernel interrupts a thread running user code; 0 if it runs none.
+using GuestContextFn = int (*)(void* sigcontext);
+using GuestInterruptFn = int (*)(uint32_t tid);
+template <typename Fn>
+Fn TranslatorExport(std::atomic<Fn>* cache, const char* name) {
+  Fn fn = cache->load(std::memory_order_acquire);
+  if (fn != nullptr) return fn;
+  HMODULE dll = GetModuleHandleA("gesher_arm64.dll");
+  if (dll == nullptr) return nullptr;
+  fn = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(dll, name)));
+  if (fn != nullptr) cache->store(fn, std::memory_order_release);
+  return fn;
+}
+std::atomic<GuestContextFn> g_guest_context{nullptr};
+std::atomic<GuestInterruptFn> g_guest_interrupt{nullptr};
+
+bool IsGuestHandler(const BionicSigaction& act) {
+  return act.handler != kSigDfl && act.handler != kSigIgn &&
+         gesher::arm64::IsGuestCode(reinterpret_cast<const void*>(act.handler));
+}
+bool GuestContextAvailable() {
+  GuestContextFn fn = TranslatorExport(&g_guest_context, "gesher_arm64_guest_context");
+  return fn != nullptr && fn(nullptr) != 0;
+}
+void InterruptGuestThread(uint32_t tid) {
+  GuestInterruptFn fn = TranslatorExport(&g_guest_interrupt, "gesher_arm64_interrupt_thread");
+  if (fn != nullptr) fn(tid);
+}
+#else
+void InterruptGuestThread(uint32_t) {}
+#endif
+
 [[noreturn]] void Terminate(int sig) {
   std::fprintf(stderr, "gesher bionic: signal %d (SIG%s) with its default action: terminating\n",
                sig, sig < 32 && kNames[sig] ? kNames[sig] : "RT");
@@ -328,10 +398,12 @@ bool ActionSupported(ThreadState* self, int sig, const BionicSigaction& act) {
   if (act.handler == kSigIgn) return true;
   if (act.handler == kSigDfl) return !DefaultStops(sig);
 #if defined(__x86_64__)
-  // A translated ARM64 handler needs the guest's own registers in an ARM64
-  // frame; the host CONTEXT is not that machine state.
-  if ((act.sa_flags & kSaSiginfo) != 0 &&
-      gesher::arm64::IsGuestCode(reinterpret_cast<const void*>(act.handler))) {
+  // A translated ARM64 SA_SIGINFO handler gets an ARM64 frame with the
+  // guest's registers (the host CONTEXT is not that machine state). Only the
+  // receiving thread knows whether it has guest code under way: a sender
+  // queues the signal, and a thread with none leaves it pending.
+  if ((act.sa_flags & kSaSiginfo) != 0 && self == t_state && IsGuestHandler(act) &&
+      !GuestContextAvailable()) {
     return false;
   }
 #endif
@@ -362,6 +434,25 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const Bioni
   }
   gesher::elf::SetupThreadTls();  // the handler is loaded code
   uint64_t saved = self->mask;
+#if defined(__x86_64__)
+  if ((act.sa_flags & kSaSiginfo) != 0 && IsGuestHandler(act)) {
+    // The claim checked that this thread has guest registers to report.
+    A64Ucontext frame{};
+    {
+      std::lock_guard<std::mutex> lock(S().mutex);
+      frame.uc_stack = self->alt_stack;
+    }
+    frame.uc_sigmask = return_mask != nullptr ? *return_mask : saved;
+    GuestContextFn fill = TranslatorExport(&g_guest_context, "gesher_arm64_guest_context");
+    if (fill != nullptr) fill(&frame.fault_address);
+    BionicSiginfo copy = info;
+    self->mask |= act.sa_mask | ((act.sa_flags & kSaNodefer) != 0 ? 0 : Bit(sig));
+    reinterpret_cast<void(BIONIC_SYSV*)(int, BionicSiginfo*, void*)>(act.handler)(sig, &copy,
+                                                                                    &frame);
+    self->mask = saved;
+    return;
+  }
+#endif
   if ((act.sa_flags & kSaSiginfo) != 0) {
     CONTEXT context;
     RtlCaptureContext(&context);
@@ -416,6 +507,9 @@ int TakeDeliverable(ThreadState* self, BionicSiginfo* info, BionicSigaction* act
 }
 
 std::atomic<bool> g_process_pending{false};
+// Set once any signal was queued for another thread: a thread that has no
+// state of its own yet then looks for one at its delivery points.
+std::atomic<bool> g_directed_pending{false};
 
 int DeliverAll(ThreadState* self) {
   BionicSiginfo info;
@@ -616,6 +710,39 @@ int BIONIC_SYSV Sigqueue(int pid, int sig, uint64_t value) {
   return SendFromSelf(sig, kSiQueue, value, true);
 }
 
+// Makes valid signal `sig` pending for another live thread `tid` of this
+// process (pthread_kill, tgkill, tkill), as the kernel does for a
+// thread-directed signal. Takes ownership of `lifetime`, a handle of that
+// thread. The thread runs the handler at its next delivery point; if it is
+// running translated guest code, that code is stopped at its next block
+// boundary to take it. Returns 0 or the error number.
+int SendToOtherThread(uint32_t tid, HANDLE lifetime, int sig) {
+  {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    if (WaitForSingleObject(lifetime, 0) != WAIT_TIMEOUT) {
+      CloseHandle(lifetime);
+      return kESRCH;
+    }
+    ThreadState* slot = LiveThreadLocked(tid);
+    if (slot == nullptr) {
+      slot = CreateThreadState(tid, lifetime);
+      if (slot == nullptr) return kEAGAIN;
+    } else {
+      CloseHandle(lifetime);
+    }
+    const auto& action = S().actions[sig];
+    if ((slot->mask & Bit(sig)) == 0 && !ActionSupported(slot, sig, action)) return kENOSYS;
+    if ((slot->mask & Bit(sig)) == 0 &&
+        (action.handler == kSigIgn || (action.handler == kSigDfl && DefaultIgnores(sig)))) return 0;
+    if (!slot->pending.Push(sig, kSiTkill, MakeInfo(sig, kSiTkill, 0))) return kEAGAIN;
+    slot->any_pending.store(true, std::memory_order_release);
+    g_directed_pending.store(true, std::memory_order_release);
+    S().sent.notify_all();
+  }
+  InterruptGuestThread(tid);
+  return 0;
+}
+
 int BIONIC_SYSV PthreadKill(uint64_t thread, int sig) {
   if (sig != 0 && !Valid(sig)) return kEINVAL;
   if (thread == PthreadSelfId()) return SendFromSelf(sig, kSiTkill, 0, false) == 0 ? 0 : errno;
@@ -623,29 +750,68 @@ int BIONIC_SYSV PthreadKill(uint64_t thread, int sig) {
   int result = PthreadSignalTarget(thread, &lifetime);
   if (result != 0) return result;
   if (sig == 0) { CloseHandle(lifetime); return 0; }
-  std::lock_guard<std::mutex> lock(S().mutex);
-  if (WaitForSingleObject(lifetime, 0) != WAIT_TIMEOUT) {
-    CloseHandle(lifetime);
-    return kESRCH;
-  }
-  ThreadState* slot;
-  auto found = S().threads.find(thread);
-  if (found == S().threads.end()) {
-    slot = CreateThreadState(thread, lifetime);
-    if (slot == nullptr) return kEAGAIN;
-  } else {
-    CloseHandle(lifetime);
-    slot = found->second;
-  }
-  const auto& action = S().actions[sig];
-  if ((slot->mask & Bit(sig)) == 0 && !ActionSupported(slot, sig, action)) return kENOSYS;
-  if ((slot->mask & Bit(sig)) == 0 &&
-      (action.handler == kSigIgn || (action.handler == kSigDfl && DefaultIgnores(sig)))) return 0;
-  if (!slot->pending.Push(sig, kSiTkill, MakeInfo(sig, kSiTkill, 0))) return kEAGAIN;
-  slot->any_pending.store(true, std::memory_order_release);
-  S().sent.notify_all();
-  return 0;
+  return SendToOtherThread(GetThreadId(lifetime), lifetime, sig);
 }
+
+// tgkill(2)/tkill(2): a thread-directed signal by thread ID (gettid). `tgid`
+// is the thread group (process) the thread must belong to, or 0 for tkill.
+// As Linux: an exited or unknown thread, or one of another thread group, is
+// ESRCH; an invalid signal EINVAL; 0 only checks that the thread exists.
+// A thread of another process is checked through the same mailbox kill()
+// uses; a signal for one of its threads cannot be directed there (that
+// transport is process-directed) and is ENOSYS, as remote RT kill is.
+int SendToThread(int tgid, int tid, int sig) {
+  const DWORD self_pid = GetCurrentProcessId();
+  if (static_cast<DWORD>(tid) == GetCurrentThreadId()) {
+    if (tgid != 0 && static_cast<DWORD>(tgid) != self_pid) return errno = kESRCH, -1;
+    if (sig != 0 && !Valid(sig)) return errno = kEINVAL, -1;
+    return SendFromSelf(sig, kSiTkill, 0, false);
+  }
+  HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
+                             static_cast<DWORD>(tid));
+  if (thread == nullptr) {
+    // A thread this process may not open belongs to another process.
+    if (GetLastError() != ERROR_ACCESS_DENIED) return errno = kESRCH, -1;
+    thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(tid));
+    if (thread == nullptr) return errno = kEPERM, -1;
+  }
+  DWORD exit_code = 0;
+  const DWORD owner = GetProcessIdOfThread(thread);
+  if (owner == 0 || !GetExitCodeThread(thread, &exit_code) || exit_code != STILL_ACTIVE ||
+      (tgid != 0 && static_cast<DWORD>(tgid) != owner)) {
+    CloseHandle(thread);
+    return errno = kESRCH, -1;
+  }
+  if (sig != 0 && !Valid(sig)) {
+    CloseHandle(thread);
+    return errno = kEINVAL, -1;
+  }
+  if (owner != self_pid) {
+    CloseHandle(thread);
+    int checked = KillOtherProcess(static_cast<int>(owner), 0);
+    if (checked != 0 || sig == 0) return checked;
+    return errno = kENOSYS, -1;
+  }
+  if (sig == 0) {
+    CloseHandle(thread);
+    return 0;
+  }
+  int error = SendToOtherThread(static_cast<uint32_t>(tid), thread, sig);
+  return error == 0 ? 0 : (errno = error, -1);
+}
+
+int BIONIC_SYSV Tgkill(int tgid, int tid, int sig) {
+  if (tgid <= 0 || tid <= 0) return errno = kEINVAL, -1;
+  return SendToThread(tgid, tid, sig);
+}
+int BIONIC_SYSV Tkill(int tid, int sig) {
+  if (tid <= 0) return errno = kEINVAL, -1;
+  return SendToThread(0, tid, sig);
+}
+
+// gesher_arm64.dll calls this (resolved as "__gesher_deliver_signals") when it
+// stopped guest code for a signal queued by SendToOtherThread.
+void BIONIC_SYSV DeliverSignalsToGuestThread() { DeliverPendingSignals(); }
 
 int BIONIC_SYSV Sigpending(uint64_t* set) {
   ThreadState* self = Self();
@@ -1075,7 +1241,10 @@ int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*),
 void DeliverPendingSignals() {
   ThreadState* self = t_state;
   if (self == nullptr) {
-    if (!g_process_pending.load(std::memory_order_relaxed)) return;
+    // A sender may have made this thread's state (and queued for it) before
+    // the thread itself ever used one: bind it then.
+    if (!g_process_pending.load(std::memory_order_relaxed) &&
+        !g_directed_pending.load(std::memory_order_acquire)) return;
     self = Self();
     if (self == nullptr) return;
   } else if (!self->any_pending.load(std::memory_order_acquire) &&
@@ -1113,6 +1282,9 @@ void RegisterSignal(SymbolTable& t) {
   E("killpg", Killpg);
   E("sigqueue", Sigqueue);
   E("pthread_kill", PthreadKill);
+  E("tgkill", Tgkill);
+  E("tkill", Tkill);
+  E("__gesher_deliver_signals", DeliverSignalsToGuestThread);
   E("sigpending", Sigpending);
   E("sigpending64", Sigpending);
   E("sigwait", Sigwait);

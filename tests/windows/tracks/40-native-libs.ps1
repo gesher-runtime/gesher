@@ -59,7 +59,7 @@ $env:GESHER_TEST_SYSTEM_CACERTS = if (Test-Path "$Dir/cacerts/*.0") { '1' } else
 Check 'bionic shim: a libc/pthread .so runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libc_test.so")
 } @('libc_test: all passed', 'sleep contracts: complete', 'elf_load_test all passed',
-    'Bionic realtime range contracts: all passed')
+    'Bionic realtime range contracts: all passed', 'Bionic tgkill contracts: all passed')
 Remove-Item Env:GESHER_TEST_SYSTEM_CACERTS -ErrorAction SilentlyContinue
 
 # Key and thread_local destructors of the bionic shim on threads it did not
