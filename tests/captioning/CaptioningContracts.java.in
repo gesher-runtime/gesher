@@ -123,10 +123,42 @@ public final class CaptioningContracts {
 
         // Colors: names, opacities, and Default name with an opacity (Windows' computed RGB).
         equal(0x40FF0000, CaptioningSettings.color(3, 3, 0xFFFFFFFF), "red at 25%");
-        equal(0x00FFFFFF, CaptioningSettings.color(1, 4, 0xFFFFFFFF), "white at 0%");
+        equal(0x00000000, CaptioningSettings.color(1, 4, 0xFFFFFFFF), "white at 0% is explicitly transparent");
         equal(0xBF123456, CaptioningSettings.color(0, 2, 0xFF123456), "Default color, 75%: computed RGB");
         equal(0xFF00FFFF, CaptioningSettings.color(8, 0, 0xFFFFFFFF), "cyan, opacity from computed");
         equal(CaptionStyle.COLOR_UNSPECIFIED, CaptioningSettings.color(0, 0, 0xFF000000), "Default and Default");
+
+        // Zero opacity must not collide with COLOR_UNSPECIFIED (0x00FFFFFF): CaptionStyle.hasColor
+        // is false for a zero-alpha color whose red or green is set, and the player would then
+        // use its own opaque default. Every color name, and a zero alpha from Windows' computed
+        // color, must stay a color Android treats as set; none may equal COLOR_UNSPECIFIED.
+        for (int name = 0; name <= 8; name++) {
+            for (int computed : new int[] {0x00FFFFFF, 0x00FF00FF, 0x00123456}) {
+                int argb = CaptioningSettings.color(name, 4, computed);  // ZeroPercent
+                check(CaptionStyle.hasColor(argb), "zero opacity, color " + name + " is a set color");
+                check(argb != CaptionStyle.COLOR_UNSPECIFIED, "zero opacity, color " + name + " is not unspecified");
+                check((argb >>> 24) == 0, "zero opacity stays fully transparent, color " + name);
+            }
+        }
+        check(CaptionStyle.hasColor(CaptioningSettings.color(0, 4, 0xFF00FF00)), "Default color at 0%");
+        check(CaptionStyle.hasColor(CaptioningSettings.color(1, 0, 0x00FFFFFF)),
+                "named color, opacity Default with a transparent computed color");
+        // Through secureValues, as a player reads it back (white at 0% in every color field).
+        for (int field : new int[] {CaptioningSettings.FONT_COLOR, CaptioningSettings.BACKGROUND_COLOR,
+                CaptioningSettings.REGION_COLOR}) {
+            int[] w = windowsDefaults();
+            w[field] = 1;      // White
+            w[field + 2] = 4;  // ZeroPercent (the opacity follows the color name and the computed color)
+            Map<String, String> m = CaptioningSettings.secureValues(w);
+            equal(Integer.toString(CaptionStyle.PRESET_CUSTOM), m.get(Secure.ACCESSIBILITY_CAPTIONING_PRESET),
+                    "white at 0%: the custom preset is written (field " + field + ")");
+            String key = field == CaptioningSettings.FONT_COLOR ? Secure.ACCESSIBILITY_CAPTIONING_FOREGROUND_COLOR
+                    : field == CaptioningSettings.BACKGROUND_COLOR ? Secure.ACCESSIBILITY_CAPTIONING_BACKGROUND_COLOR
+                    : Secure.ACCESSIBILITY_CAPTIONING_WINDOW_COLOR;
+            int stored = Integer.parseInt(m.get(key));
+            check(CaptionStyle.hasColor(stored), "white at 0% reads back as a set color: " + key);
+            check(stored != CaptionStyle.COLOR_UNSPECIFIED, "white at 0% is not COLOR_UNSPECIFIED: " + key);
+        }
 
         // Unknown values (a newer Windows): nothing is decided.
         int[] unknown = windowsDefaults();
