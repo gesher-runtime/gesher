@@ -96,6 +96,7 @@ final class DownloadTransfer {
     private final Network mNetwork;
     private final Row mRow;
     private volatile boolean mShutdown;
+    private volatile boolean mPolicyDirty;
     private boolean mMadeProgress;
     private long mLastUpdateBytes, mLastUpdateTime;
 
@@ -107,6 +108,9 @@ final class DownloadTransfer {
 
     /** DownloadThread.requestShutdown: the running request stops with a retryable error. */
     void requestShutdown() { mShutdown = true; }
+
+    /** As DownloadThread's policy-dirty flag: recheck before receiving more data. */
+    void networkChanged() { mPolicyDirty = true; }
 
     /**
      * DownloadThread.run without the JobService: returns with {@code mState.status} set to
@@ -345,6 +349,11 @@ final class DownloadTransfer {
                 }
                 byte[] buffer = new byte[BUFFER_SIZE];
                 while (true) {
+                    if (mPolicyDirty) {
+                        // Clear before querying: a later notification must remain pending.
+                        mPolicyDirty = false;
+                        checkConnectivity();
+                    }
                     if (mShutdown) {
                         throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR, "Local halt requested");
                     }
