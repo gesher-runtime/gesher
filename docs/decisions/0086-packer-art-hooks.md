@@ -291,9 +291,17 @@ package that declares it (AOSP's `ComponentResolver`); and bionic's
   without a translator: ELF header and machine, segments, sonames, the
   exports through `DT_GNU_HASH` and `DT_HASH` (and that neither object
   exports the other's), the `R_AARCH64_GLOB_DAT` GOT relocations and the code
-  that reads those slots, and the entry's call. The translated execution of
-  the stand-ins and the ART patches are exercised only by an app with this
-  shell; no such app is in the repository. It also checks which machine each
-  shell's stand-in is for, and the pruning of stale stand-in directories.
+  that reads those slots, and the entry's call. It also checks which machine
+  each shell's stand-in is for, and the pruning of stale stand-in directories.
+  `tests/native/art_shim_arm64_test.cc` (tracks/47-arm64.ps1) runs them
+  under the translator as `LoadArtShimArm64` loads them, their imports bound
+  to host fakes that record their System V arguments: the `OpenCommon` entry
+  called as ART calls it, `OpenCommon` called by guest code as a device calls
+  it (X8, stack arguments), the three Runtime functions and `LoadClass`, each
+  with a distinct value in every argument, which the fake must receive in its
+  place; `Runtime::instance_` and `kOatVersion`; a load that fails after
+  `libdexfile.so` loaded, and its retry (each object loaded once); and that
+  the imports are visible to nothing else afterwards. The ART patches are
+  exercised only by an app with this shell; no such app is in the repository.
 - **Not covered:** an x86-64 or 32-bit NetEase shell, and any ART symbol the
   shell looks up on a path Dreame's startup did not take.

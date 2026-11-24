@@ -118,6 +118,23 @@ try {
   Remove-Item Env:GESHER_ARM64_ABI_CRASH -ErrorAction SilentlyContinue
 }
 
+# ADR 0086: the arm64 stand-in libart.so and libdexfile.so for NetEase Yidun's
+# libnesec.so, loaded by LoadArtShimArm64 (their imports bound to recording
+# host fakes, Runtime::instance_ set) and run by the translator: the OpenCommon
+# entry as ART calls it and OpenCommon as a device calls it (X8, stack
+# arguments), the Runtime functions and LoadClass, each argument where the
+# fake reads it; a load that failed after libdexfile.so retries without
+# loading it twice; the imports are visible to nothing else.
+Check 'arm64: the stand-in libart.so/libdexfile.so run translated with each argument in place' {
+  $artScratch = Join-Path $env:RUNNER_TEMP "gesher-art-shim-arm64-$([guid]::NewGuid())"
+  try {
+    A64Run "$a64/art_shim_arm64_test.exe" @((NoDrive $artScratch)) 120
+  } finally {
+    Remove-Item -LiteralPath $artScratch -Recurse -Force -ErrorAction SilentlyContinue
+  }
+} @('PASS  ... with X8 first and each argument in its place',
+    'PASS  the retry loaded each object exactly once', 'art_shim_arm64_test all passed')
+
 # Step 3/4 (guest JNI): dalvikvm runs gesher.Arm64Jni, whose System.load of an
 # arm64-v8a .so goes through ART's host libnativeloader path to the ELF loader,
 # the translator and the JNI bridge's guest proxy tables: JNI_OnLoad,

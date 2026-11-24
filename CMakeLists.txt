@@ -246,6 +246,11 @@ target_link_libraries(pthread_attributes_target_test PRIVATE gesher_bionic geshe
 add_executable(art_shim_test tests/native/art_shim_test.cc)
 target_compile_options(art_shim_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(art_shim_test PRIVATE gesher_bionic gesher_elf)
+# ADR 0086: the arm64 stand-ins loaded by LoadArtShimArm64 and run by the arm64
+# translator (gesher_arm64.dll), their imports bound to recording host fakes.
+add_executable(art_shim_arm64_test tests/native/art_shim_arm64_test.cc)
+target_compile_options(art_shim_arm64_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(art_shim_arm64_test PRIVATE gesher_bionic gesher_elf)
 
 # Actual Bionic truncate exports, access rights and shared cursor contracts.
 add_executable(bionic_ftruncate_test tests/native/bionic_ftruncate_test.cc)
