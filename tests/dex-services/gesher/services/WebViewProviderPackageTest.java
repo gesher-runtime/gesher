@@ -35,6 +35,11 @@ public final class WebViewProviderPackageTest {
                 root + "/framework/framework-res.apk");
         com.gesher.server.Services.installInProcess(
                 com.gesher.server.Services.createInProcess(List.of()));
+        // bindApplication hands an app process the device's features; do the same here.
+        android.content.pm.IPackageManager packages = android.content.pm.IPackageManager.Stub
+                .asInterface(android.os.ServiceManager.getService("package"));
+        android.content.pm.SystemFeaturesCache.setInstance(new android.content.pm.SystemFeaturesCache(
+                packages.getSystemAvailableFeatures().getList()));
         // WebViewFactory.isWebViewSupported() asks the initial Application's PackageManager,
         // as in an app process: give the fixture an ActivityThread with one.
         Class<?> threadType = Class.forName("android.app.ActivityThread");
