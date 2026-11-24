@@ -53,8 +53,8 @@ import java.net.URL;
  *
  * <p>Not implemented yet, and therefore not reported: download notifications
  * (setNotificationVisibility is stored and validated, but no notification is posted, so
- * ACTION_NOTIFICATION_CLICKED is never sent) and MediaStore insertion (Gesher has no
- * MediaStore provider; mediaprovider_uri stays null).
+ * ACTION_NOTIFICATION_CLICKED is never sent) and MediaStore insertion
+ * (mediaprovider_uri stays null).
  */
 public final class DownloadProvider extends ContentProvider {
     public static final String AUTHORITY = Downloads.Impl.AUTHORITY;
