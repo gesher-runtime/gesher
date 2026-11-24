@@ -775,8 +775,11 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   };
   std::vector<Pending> pending;
   std::set<std::wstring> planned;
+  // A failed removal stops additions (as before); a blocked certificate
+  // fails only itself.
+  const bool removed_all = ok;
   for (const auto& [digest, entry] : wanted) {
-    if (!ok) break;
+    if (!removed_all) break;
     std::string der(entry.der->begin(), entry.der->end());
     int index = 0;
     bool present = false;
