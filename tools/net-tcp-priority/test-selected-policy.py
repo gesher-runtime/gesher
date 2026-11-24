@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01'
+OFD_QUALIFICATION_SHA256 = 'e9a3a82d50c901b6e6ea520c5a7dff9eab505755d226e8fdb539470dd51e0d2d'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -357,6 +357,22 @@ MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
 MEMFD_LEASE_QUALIFICATION_SHA256 = '7d835c9d5e23d42540a106ac8c123d2921fd3fc87082291d5402585bc0ee5328'
 MEMFD_LEASE_BASELINE='5aa6b39027e9c38de2781ff9cda066418d25b1ba'
 MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
+# Main #458 adds one loader query to mman.cc after the lease checkpoint. Derive
+# only that complete insertion from its immutable landed source, prove every
+# other byte equals the original lease baseline, and compose the two deltas.
+# Neither the lease receipt nor main's later OFD receipt is repinned here.
+MMAN_SOURCE='compat/posix/src/mman.cc'
+MMAN_RESERVED_CHECKPOINT='0864f5f3a4e1a06f2021aafad84e4312bcef8b9d'
+MMAN_ENTRY=b'void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {'
+def reserved_address_mman_transition():
+ before=subprocess.check_output(['git','-C',str(ROOT),'show',MEMFD_LEASE_BASELINE+':'+MMAN_SOURCE])
+ landed=subprocess.check_output(['git','-C',str(ROOT),'show',MMAN_RESERVED_CHECKPOINT+':'+MMAN_SOURCE])
+ assert before.count(MMAN_ENTRY)==landed.count(MMAN_ENTRY)==1,'reserved-address mmap boundary changed'
+ at=before.index(MMAN_ENTRY);size=len(landed)-len(before)
+ assert size>0 and landed[:at]==before[:at] and landed[at+size:]==before[at:],'reserved-address mmap transition is not one insertion'
+ addition=landed[at:at+size]
+ assert addition.count(b'int gesher_mmap_fixed_replaces(')==1,'reserved-address mmap query missing'
+ return addition,landed
 def preceding_memfd_lease_sources():
  raw=(ROOT/MEMFD_LEASE_QUALIFICATION).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==MEMFD_LEASE_QUALIFICATION_SHA256,'memfd lease source qualification changed'
@@ -367,7 +383,12 @@ def preceding_memfd_lease_sources():
  patch=(ROOT/MEMFD_LEASE_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'memfd lease transition patch changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==MEMFD_LEASE_PATHS
- current={path:(ROOT/path).read_bytes() for path in MEMFD_LEASE_PATHS}
+ actual={path:(ROOT/path).read_bytes() for path in MEMFD_LEASE_PATHS}
+ current=dict(actual)
+ addition,landed=reserved_address_mman_transition()
+ inserted=addition+MMAN_ENTRY
+ assert current[MMAN_SOURCE].count(inserted)==1,'reserved-address mmap insertion changed'
+ current[MMAN_SOURCE]=current[MMAN_SOURCE].replace(inserted,MMAN_ENTRY,1)
  for path in MEMFD_LEASE_PATHS:
   assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
  with tempfile.TemporaryDirectory(prefix='gesher-memfd-lease-qualification-') as temporary:
@@ -385,7 +406,15 @@ def preceding_memfd_lease_sources():
    assert previous[path]==subprocess.check_output(['git','-C',str(ROOT),'show',MEMFD_LEASE_BASELINE+':'+path]),'memfd lease reverse transition is not the baseline: '+path
   subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
   subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
-  for path in MEMFD_LEASE_PATHS:assert (work/path).read_bytes()==current[path],'memfd lease transition does not reproduce: '+path
+  for path in MEMFD_LEASE_PATHS:
+   rebuilt=(work/path).read_bytes()
+   assert rebuilt==current[path],'memfd lease transition does not reproduce: '+path
+   if path==MMAN_SOURCE:rebuilt=rebuilt.replace(MMAN_ENTRY,inserted,1)
+   assert rebuilt==actual[path],'composed memfd lease transition does not reproduce: '+path
+ # Return main's exact pre-lease endpoint, including its loader query, for the
+ # unchanged OFD receipt's whole-file check. No arbitrary source is exempted.
+ previous[MMAN_SOURCE]=previous[MMAN_SOURCE].replace(MMAN_ENTRY,inserted,1)
+ assert previous[MMAN_SOURCE]==landed,'composed memfd lease reverse endpoint is not landed main'
  return previous
 # Bionic's independently reviewed memmem search changes only this include and
 # complete wrapper. Restore those exact bytes before applying the UNCHANGED
@@ -491,7 +520,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='5fe00fbb94e27fe5d5b5fe29e035b28f4ab3c3a2ac7fe0318ba3918e325d2433'
+REVIEWED_PATCH_SHA256='986c2c28f6e9517fdeae6a95ebe3908cf30ed4b7fe94cdbe31e1300fb9bb0c4c'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
@@ -629,6 +658,7 @@ def check():
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
+ reserved_addition,_=reserved_address_mman_transition()
  cases=[
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
@@ -666,6 +696,12 @@ def transition_negative_controls():
   ('compat/posix/src/memfd_seals.cc',b'constexpr int kLockAttempts = 5000;',b'constexpr int kLockAttempts = 50;'),
   ('compat/posix/src/mman.cc',b'r.write_lease = view.write_lease;',b'r.write_lease.reset();'),
   ('compat/posix/src/mman.cc',b'if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;',b'if (it->second.kind == Kind::kView) {}'),
+  # Composition admits the landed loader query exactly once, at its original
+  # boundary; it still rejects unrelated mmap behavior even after repinning.
+  (MMAN_SOURCE,reserved_addition,b''),
+  (MMAN_SOURCE,reserved_addition,reserved_addition+reserved_addition),
+  (MMAN_SOURCE,b'end <= it->first + it->second.size ? 1 : 0;',b'end < it->first + it->second.size ? 1 : 0;'),
+  (MMAN_SOURCE,b'  g_mmap_replaced_private_pages = false;\n  State& s = state();',b'  g_mmap_replaced_private_pages = true;\n  State& s = state();'),
   (MEMFD_LEASE_PATCH,b'@@',b'@x'),
   (MEMFD_LEASE_PATCH,b'+constexpr int kLockAttempts = 5000;',b'+constexpr int kLockAttempts = 50;'),
  ]
@@ -674,7 +710,11 @@ def transition_negative_controls():
   # own pin); the reverse transition stays the reviewed one.
   qualification=json.loads(original(ROOT/MEMFD_LEASE_QUALIFICATION))
   if name==MEMFD_LEASE_PATCH:qualification['patch_sha256']=hashlib.sha256(data).hexdigest()
-  else:qualification['source_sha256'][name]=hashlib.sha256(data).hexdigest()
+  else:
+   # The original lease digest describes the source before main's insertion.
+   # Refreshing this digest must not bypass either transition's exact proof.
+   if name==MMAN_SOURCE:data=data.replace(reserved_addition,b'',1)
+   qualification['source_sha256'][name]=hashlib.sha256(data).hexdigest()
   return (json.dumps(qualification,indent=2)+'\n').encode()
  repinned_memfd_lease=0
  for name,before,after in cases:

@@ -237,6 +237,15 @@ public final class SystemServer {
                             : ", no job (processes may outlive it)"));
         }
 
+        // The system's shared-library declarations, read at boot as SystemConfig reads
+        // them, before any binder call needs them. An invalid declaration fails only the
+        // packages that use libraries, when they are resolved.
+        try {
+            SharedLibraryRegistry.readSystem();
+        } catch (IOException e) {
+            log("shared libraries: " + e.getMessage());
+        }
+
         // The packages, as PackageManagerService scans them at boot: the installed ones
         // (a persistent device's), then the APKs given here.
         List<ApkPackage> committed = persistent ? Installer.loadInstalled() : List.of();
@@ -568,6 +577,7 @@ public final class SystemServer {
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
                 mServices.atm.flushUsageStats();
+                mServices.am.flushShortcutQuota();
                 java.util.Properties state = Device.read(Device.stateFile());
                 if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
                     Device.stateFile().delete();

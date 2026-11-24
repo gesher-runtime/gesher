@@ -7,6 +7,16 @@ The build was done on branch `wip/angle`, hwui's GL pipeline on it on
 `wip/hwui-gl`; the decision records are [0018](decisions/0018-angle-build.md)
 and [0030](decisions/0030-angle-hwui-skiagl.md).
 
+The device advertises ES 3.0 (`ro.opengles.version=196608` in `app/build.prop`,
+`ConfigurationInfo.reqGlEsVersion`): what ANGLE gives on Direct3D 11 feature
+level 10_1 and up, WARP included. A feature level 10_0 adapter gets ES 2 alone
+from ANGLE, so the default display takes the hardware adapter only when it
+offers ES 3 configs, and WARP otherwise (`compat/bionic/egl_gles.cc`): on such
+a machine every GL app, ES 2 ones included, runs on WARP, and HWUI's `auto`
+renderer, which does not take WARP, stays on SkiaCpu. Google Play hides apps whose `<uses-feature android:glEsVersion>`
+is above it (Chrome asks for 3.0). 3.1 depends on the adapter and is not claimed.
+`GlBindingsTest` checks the property against an ES 3 context's `GL_VERSION`.
+
 ## What is built, and how
 
 - **Source**: upstream ANGLE (`chromium.googlesource.com/angle/angle`) at

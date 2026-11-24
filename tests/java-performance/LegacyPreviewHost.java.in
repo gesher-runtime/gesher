@@ -12,6 +12,8 @@ import java.util.Map;
 
 public final class LegacyPreviewHost {
     private static final int MSG_ERROR = 1, MSG_PREVIEW_FRAME = 16;
+    // Autofocus is outside this fixture: its fixed-focus device never runs the AF machine.
+    private static final int AF_TRIGGER_IDLE = 0;
     private static int checks, delivered, conversions, surfaces, nextSurfaceResult;
     private static boolean collect = true, recycle, autoAck = true, throwOnPost;
     private static Runnable onDeliver;
@@ -59,7 +61,10 @@ public final class LegacyPreviewHost {
         return s;
     }
     private static final class WindowsCamera {
-        static final class Device {}
+        static final class Device {
+            final String name = "host";
+            final boolean autofocus = false;
+        }
         static final class Capture {
             final int width, height, frames;
             final Session session;
@@ -80,6 +85,15 @@ public final class LegacyPreviewHost {
                 return 0;
             }
         }
+    }
+    private static final class CameraAutoFocus {
+        interface Lens {}
+        CameraAutoFocus(Lens lens) { throw new AssertionError("no autofocus in this fixture"); }
+        static Lens lensOf(WindowsCamera.Capture capture, String what) { return null; }
+    }
+    private static void focusFrame(Session s, CameraAutoFocus af, WindowsCamera.Capture capture,
+            byte[] nv12) {
+        throw new AssertionError("no autofocus in this fixture");
     }
     private static final class CameraFrames {
         static final int OK = 0;
