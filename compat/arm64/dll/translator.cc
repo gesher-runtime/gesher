@@ -1427,9 +1427,12 @@ class Env final : public A64::UserCallbacks {
     for (;;) {
       // A host call can abort a nested load while this outer Jit is paused.
       // Nested Jit creation may grow the vector: keep no reference across Run.
-      // A halt the ptrace guard asked for (kExternalWritesHalt) is cleared
-      // before the refresh, so that one asked after the refresh still ends
-      // this Run. A signal's halt (kSignalHalt) is handled after Run.
+      // The ptrace guard halts the Jit published here (kExternalWritesHalt)
+      // after a tracer wrote memory. Publish it first (a full barrier), then
+      // clear old halts (not a signal's, kSignalHalt, handled after Run), then
+      // refresh: a write published before the refresh is seen by it, and one
+      // published after it halts this Run.
+      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_seq_cst);
       jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2 |
                      kExternalWritesHalt);
       RefreshCodeCache(code_[depth_ - 1].get(), &code_generations_[depth_ - 1],
@@ -1440,7 +1443,6 @@ class Env final : public A64::UserCallbacks {
       int saved_running = t_guest_running;
       t_guest_running = 1;
       counters_.runs.Bump();
-      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_seq_cst);
       // A signal queued while this thread was not running guest code: stop
       // at once. (Interrupt() sets the flag, then halts the running Jit.)
       if (signal_interrupt_.load(std::memory_order_seq_cst)) {

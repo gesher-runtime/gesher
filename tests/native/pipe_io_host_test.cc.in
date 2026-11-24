@@ -256,6 +256,16 @@ static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
 }
 }
 
+// The production pipe I/O marks its blocking waits for gesher-base's ptrace
+// guard (compat/posix/src/ptrace_state.cc, ADR 0093). No tracer stops this
+// host process: no wait is ever interrupted for a stop.
+namespace gesher::ptrace {
+struct ParkedScope {
+  bool Interrupted() const { return false; }
+};
+inline void WaitWhileStopping() {}
+}  // namespace gesher::ptrace
+
 @PIPE_IMPLEMENTATION@
 
 namespace shell_test {

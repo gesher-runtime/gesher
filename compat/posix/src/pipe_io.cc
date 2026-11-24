@@ -97,6 +97,9 @@ int CompletePipeIo(BOOL done, DWORD transferred, DWORD error, bool writing) {
   if (error == ERROR_NOACCESS || error == ERROR_INVALID_USER_BUFFER) return errno = EFAULT, -1;
   return errno = ErrnoFromWin32(error), -1;
 }
+// NativePipeTransfer's result when a ptrace stop interrupted the blocked
+// transfer before it moved a byte: the caller restarts it (ADR 0093).
+constexpr int kPipeTransferRestart = -2;
 int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
                        bool immediate, HANDLE canceled, HANDLE interrupted) {
   DWORD transferred = 0;
@@ -128,11 +131,13 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
   // unspecified ReadFile(NULL) behavior for that handle type.
   BOOL done;
   DWORD error;
+  bool restart = false;
   {
     // Blocked for data or room (in ReadFile/WriteFile itself for a
-    // synchronous handle, else in GetOverlappedResult): a safe point for a
-    // ptrace stop although this thread owns the description's gate (ADR
-    // 0093), as Linux stops a thread blocked in read() or write() on a pipe.
+    // synchronous handle, else in GetOverlappedResult) while owning the
+    // description's gate: a ptrace stop interrupts this wait (ADR 0093), as
+    // a Linux stop interrupts a blocked read() or write(), so that the gate
+    // and the handle are free while the process is stopped.
     gesher::ptrace::ParkedScope parked;
     done = writing ? WriteFile(file, bytes, count, &transferred, &operation.overlapped)
                    : ReadFile(file, bytes, count, &transferred, &operation.overlapped);
@@ -141,8 +146,13 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
       done = GetOverlappedResult(file, &operation.overlapped, &transferred, TRUE);
       error = done ? ERROR_SUCCESS : GetLastError();
     }
+    restart = !done && error == ERROR_OPERATION_ABORTED && transferred == 0 &&
+              parked.Interrupted() &&
+              !(canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) &&
+              !(interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0);
   }
   operation.active.store(false, std::memory_order_release);
+  if (restart) return kPipeTransferRestart;
   return CompletePipeIo(done, transferred, error, writing);
 }
 }
@@ -215,25 +225,36 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
 namespace {
 int TransferPipeBody(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count,
                      bool writing, HANDLE canceled, HANDLE interrupted) {
-  if (canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
-  if (interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
-  auto& description = *snapshot->description;
-  PipeAdmission admission;
-  bool immediate = false;
-  if (description.OwnedPipe()) {
-    const bool nonblocking = description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
-    if (admission.Acquire(snapshot, !nonblocking, canceled, nonblocking, false, interrupted) < 0) return -1;
-    immediate = description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
-    if (writing && immediate && count > 4096) {
-      FILE_PIPE_LOCAL_INFORMATION info{};
-      if (QueryPipe(snapshot->handle, &info, sizeof(info), FilePipeLocalInformation) < 0) return -1;
-      // Quota is a native admission hint, not a byte count: pending reads
-      // reserve quota too. Let the actual write decide EAGAIN/peer failure.
-      const unsigned amount = info.WriteQuotaAvailable ? info.WriteQuotaAvailable : 4096;
-      count = std::min(count, amount);
+  for (;;) {
+    if (canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
+    if (interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
+    int result;
+    {
+      auto& description = *snapshot->description;
+      PipeAdmission admission;
+      bool immediate = false;
+      unsigned amount = count;
+      if (description.OwnedPipe()) {
+        const bool nonblocking = description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
+        if (admission.Acquire(snapshot, !nonblocking, canceled, nonblocking, false, interrupted) < 0) return -1;
+        immediate = description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
+        if (writing && immediate && amount > 4096) {
+          FILE_PIPE_LOCAL_INFORMATION info{};
+          if (QueryPipe(snapshot->handle, &info, sizeof(info), FilePipeLocalInformation) < 0) return -1;
+          // Quota is a native admission hint, not a byte count: pending reads
+          // reserve quota too. Let the actual write decide EAGAIN/peer failure.
+          const unsigned quota = info.WriteQuotaAvailable ? static_cast<unsigned>(info.WriteQuotaAvailable) : 4096u;
+          amount = std::min(amount, quota);
+        }
+      }
+      result = NativePipeTransfer(snapshot->handle, bytes, amount, writing, immediate, canceled, interrupted);
     }
+    if (result != kPipeTransferRestart) return result;
+    // A ptrace stop interrupted the blocked transfer: wait for the stop to
+    // end without the gate, then restart the transfer, as Linux restarts the
+    // call (ADR 0093).
+    gesher::ptrace::WaitWhileStopping();
   }
-  return NativePipeTransfer(snapshot->handle, bytes, count, writing, immediate, canceled, interrupted);
 }
 }
 

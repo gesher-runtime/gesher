@@ -31,6 +31,13 @@ struct CodeWrite {
   volatile LONG64 size;
 };
 constexpr int kCodeWrites = 64;  // a ring; older writes than that clear everything
+
+// A thread parked in one of Gesher's blocking waits while it owns one of its
+// cross-process mutexes (a pipe description's gate): ParkedScope.
+struct ParkedSlot {
+  volatile LONG tid;
+  volatile LONG restart;  // the guard interrupted its wait for a stop
+};
 constexpr int kParkedSlots = 256;
 
 // The section's layout. Fields change only with Interlocked operations.
@@ -51,12 +58,13 @@ struct SharedState {
   volatile LONG64 stop_epoch;  // incremented at every stop the guard completes
   volatile LONG64 code_epoch;  // the last CodeWrite's epoch
   CodeWrite code_writes[kCodeWrites];
-  // Threads of the process parked in one of Gesher's blocking waits while
-  // owning one of its cross-process mutexes (a pipe's: ParkedScope): a stop
-  // may leave them there, as Linux stops a thread blocked in read().
-  volatile LONG parked[kParkedSlots];
+  // Threads parked in one of Gesher's blocking waits while owning one of its
+  // cross-process mutexes. A stop interrupts such a wait, as a Linux stop
+  // interrupts a blocked read(): the thread gives the mutex back, waits for
+  // the stop to end outside it, and restarts its call.
+  ParkedSlot parked[kParkedSlots];
 };
-constexpr LONG kStateVersion = 3;
+constexpr LONG kStateVersion = 4;
 constexpr LONG kOptExitkill = 0x100000;  // PTRACE_O_EXITKILL
 
 // A tracer's identity: its pid in the low half, the low 32 bits of its
@@ -129,17 +137,25 @@ using HaltHook = void (*)();
 void SetHaltHook(HaltHook hook);
 
 // Marks the calling thread as parked in a Gesher blocking wait while it owns
-// one of Gesher's cross-process mutexes, for the scope's lifetime.
+// one of Gesher's cross-process mutexes, for the scope's lifetime. A stop
+// interrupts the wait (CancelSynchronousIo): the caller then sees
+// Interrupted(), releases the mutex, calls WaitWhileStopping() and restarts
+// its call, as Linux restarts a system call a stop interrupted.
 class ParkedScope {
  public:
   ParkedScope();
   ~ParkedScope();
   ParkedScope(const ParkedScope&) = delete;
   ParkedScope& operator=(const ParkedScope&) = delete;
+  // Whether a stop interrupted the wait.
+  bool Interrupted() const { return slot_ != nullptr && slot_->restart != 0; }
 
  private:
-  volatile LONG* slot_ = nullptr;
+  ParkedSlot* slot_ = nullptr;
 };
+// Waits, holding no Gesher mutex, while this process's tracer asks for a stop
+// (the guard suspends the caller there meanwhile).
+void WaitWhileStopping();
 
 // Another process's state, for a tracer.
 struct Remote {

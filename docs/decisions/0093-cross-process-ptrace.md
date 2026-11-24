@@ -58,7 +58,8 @@ Each Gesher process publishes a named section, `Local\gesher-ptrace-<pid>`
   tracee's answer, also signalled on `Local\gesher-ptrace-done-<pid>`),
   `guard_tid`;
 - `code_epoch` and a ring of the last 64 ranges a tracer wrote (below);
-- the threads parked in a Gesher blocking wait (below).
+- the threads parked in a Gesher blocking wait while owning a Gesher mutex,
+  and whether a stop interrupted that wait (below).
 
 gesher-base's copy in the executable creates it when the process starts, with
 the guard thread, and publishes it (its version) only once the guard's id is
@@ -151,30 +152,36 @@ stop, it:
    a pass finds no thread left running. A thread it cannot suspend (other
    than one that is exiting), or a list it cannot read to its end, means no
    stop yet: it resumes them and retries 20 ms later;
-2. lists its process's handles (`ProcessHandleInformation`) and asks each
-   mutex for its owner (`NtQueryMutant`). Only Gesher's own mutexes count
-   (their name's last component starts with "gesher", in any case); a
-   private mutex of a Windows DLL or of the app does not, as no other
-   process waits for it. A thread parked in one of Gesher's blocking waits
-   (`ParkedScope`, around the pipe transfer's blocking wait) is at a safe
-   point although it owns its pipe's gate, as Linux's blocked reader is.
-   For any other owner the guard resumes them all, takes that mutex itself
-   (so its owner finishes its critical section and releases it, and no
-   thread of the process can take it again), suspends them all again while
-   holding it, releases it, and checks again. A mutex whose owner died
-   (`WAIT_ABANDONED`) is released and left abandoned again for its next
-   owner (a short thread takes it and exits holding it). A handle list it
-   cannot read or a mutex it cannot examine means no stop yet, as in 1;
+2. lists its process's handles (`ProcessHandleInformation`) and, for each
+   mutex, reads its name first (`NtQueryObject`): only Gesher's own
+   mutexes count (their name's last component starts with "gesher", in any
+   case); a private mutex of a Windows DLL or of the app is neither
+   duplicated nor queried, as no other process waits for it. For a Gesher
+   mutex it asks for the owner (`NtQueryMutant`). If a suspended thread owns
+   one, the guard resumes them all. If that owner is parked in one of
+   Gesher's blocking waits (`ParkedScope`, around the pipe transfer's
+   blocking `ReadFile`/`WriteFile`: a pipe description's gate is held for
+   the whole transfer), the guard interrupts the wait (`CancelSynchronousIo`)
+   and marks it as interrupted for a stop, as a Linux stop interrupts a
+   blocked `read()`: the transfer then gives the gate back, waits holding no
+   Gesher mutex until the stop ends, and restarts. The guard then waits up
+   to 20 ms for the mutex; with it, it suspends them all again while holding
+   it (no thread of the process can take it again), releases it and checks
+   again; without it (a thread that took it again, or entered its wait only
+   after the interruption), it redoes the pass. A mutex whose owner died
+   (`WAIT_ABANDONED`) is taken and released the same way, so its next owner
+   sees an ordinary acquisition; every Gesher use of these mutexes treats
+   the two results alike. A handle list it cannot read or a Gesher mutex it
+   cannot examine means no stop yet, as in 1;
 3. publishes `stopped` once every other thread is suspended and none owns a
-   Gesher mutex outside a parked wait.
+   Gesher mutex.
 
-None of this spins. The guard waits on the mutex, the tracer's request and
-the tracer's process; it goes on only when the owner has released the mutex
-(its critical section ended), the stop was withdrawn or the tracer exited.
-Each round is progress: a mutex released. A stop is therefore delayed while a
-thread of the tracee holds a Gesher mutex outside a blocking wait, for as long
-as that thread holds it, as Linux delays a stop while a task is in an
-uninterruptible kernel section; it is never published with such a mutex held.
+None of this spins: every wait is on the mutex, the tracer's request and the
+tracer's process, bounded at 20 ms before the next pass. A stop is delayed
+while a thread of the tracee holds a Gesher mutex outside a blocking wait,
+for as long as that thread's critical section lasts, as Linux delays a stop
+while a task is in an uninterruptible kernel section; it is never published
+with a Gesher mutex held.
 
 While stopped it rescans every 20 ms. A thread the system started meanwhile
 (a thread pool worker) is suspended and checked as in 2; if it is not at a
@@ -184,11 +191,17 @@ suspended the guard makes only system calls (no heap, loader lock or thread
 pool: a suspended thread may hold them); its buffers are static or
 `VirtualAlloc`ed.
 
-A stopped tracee's parked reader still holds its pipe description's gate, so
-another process reading or polling the same description (one sharing it after
-fork or inheritance) waits for it, as it waits for that reader while it runs.
-The pipe's other end has its own description and gate: a writer is not held
-up, and what it writes is there for the reader when it runs again.
+A stopped tracee therefore holds no pipe description's gate and has no
+pending transfer on it: the tracer or any other process sharing the
+description (after fork or inheritance) can poll, read, write and change its
+flags while the tracee is stopped, and data written meanwhile stays in the
+pipe for whoever reads it, as on Linux; the tracee's interrupted read starts
+again when it is resumed. (While the tracee runs and blocks in a read, it
+holds the gate, and another process's `poll()` of that description fails
+with `EOPNOTSUPP` and its blocking read waits: that is Gesher's pipe model,
+with or without ptrace.) A stopped tracee holds no Gesher mutex, so it never
+makes another process wait for one; what other processes wait for is what
+they would wait for on Linux (a record lock it holds, data it would write).
 
 `CONT` or `DETACH` resumes the process; so does the tracer's exit, which
 releases the tracee as Linux does, after killing it under
@@ -250,9 +263,10 @@ dispatcher, which drops what it translated from each written range
 (`InvalidateCacheRange`; everything, if more writes were made than the ring
 holds) and runs on; a thread in host code does the same at its next dispatch.
 A thread spinning in translated code with no host call therefore runs the new
-code too. The one narrow window left: a thread suspended between its
-dispatcher's refresh and the start of its next `Run` executes the first block
-it enters before it halts.
+code too. The dispatcher publishes the `Jit` it is about to run (a full
+barrier) before it clears old halt requests and refreshes, so a thread
+suspended anywhere in its dispatcher either sees the ranges in its refresh
+or is halted before running a block.
 
 ### What is not provided
 
@@ -313,4 +327,9 @@ the clone's guard updates it.
   at 35-190 µs and about 28 KiB of private memory per process.
 - A stopped tracee is really stopped: its timers and watchdogs do not run
   until it is resumed, as under Linux. Stopping it waits until its threads
-  have left Gesher's cross-process critical sections.
+  have left Gesher's cross-process critical sections, and interrupts (then
+  restarts) its blocking pipe transfers.
+- Gesher's media audio state uses a named mutex
+  (`Local\gesher-<device>-audio-lock`) instead of a spin lock in its shared
+  mapping, so that a stopped tracee never holds it either; the spin lock
+  remains only if that mutex cannot be created.

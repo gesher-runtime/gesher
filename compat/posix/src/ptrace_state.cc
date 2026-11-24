@@ -19,15 +19,16 @@
 //  1. suspends every other thread of its process (GetThreadContext waits
 //     until each really is), repeating until a pass finds none running;
 //  2. looks for a Gesher mutex (its name starts with "gesher", any case) that
-//     one of them owns. A thread parked in one of Gesher's blocking waits
-//     (ParkedScope: a read of an empty pipe holds that pipe description's
-//     gate) is at a safe point, as Linux's reader is. For any other owner it
-//     resumes them all, takes that mutex itself (so the owner finishes and
-//     releases it, and no thread can take it again before all are
-//     suspended), suspends them all again holding it, releases it and
-//     checks again;
+//     one of them owns. It resumes them all; if the owner is parked in one of
+//     Gesher's blocking waits (ParkedScope: a read of an empty pipe holds
+//     that pipe description's gate), it interrupts that wait, as a Linux stop
+//     interrupts a blocked read(): the owner releases the mutex and waits for
+//     the stop to end outside it, then restarts its call. It waits (20 ms at
+//     a time, redoing the pass) for the mutex, and once it has it suspends
+//     them all again holding it (no thread can take it again before all are
+//     suspended), releases it and checks again;
 //  3. publishes `stopped` only when every other thread is suspended and none
-//     owns a Gesher mutex outside a parked wait. A step that cannot be
+//     owns a Gesher mutex. A step that cannot be
 //     completed (a thread it cannot suspend, a handle list it cannot read)
 //     never publishes a stop: it retries.
 // While stopped it rescans every 20 ms; a thread the system started meanwhile
@@ -182,11 +183,11 @@ void* g_snapshot = nullptr;      // VirtualAlloc'd, not the heap
 SIZE_T g_snapshot_size = 0;
 alignas(8) unsigned char g_name_buffer[4096];
 
-bool Parked(SharedState* state, DWORD tid) {
+ParkedSlot* FindParked(SharedState* state, DWORD tid) {
   for (int i = 0; i < kParkedSlots; ++i) {
-    if (static_cast<DWORD>(state->parked[i]) == tid) return true;
+    if (static_cast<DWORD>(state->parked[i].tid) == tid) return &state->parked[i];
   }
-  return false;
+  return nullptr;
 }
 
 // Whether a mutex is one of Gesher's: the last component of its name starts
@@ -214,10 +215,12 @@ bool GesherMutex(HANDLE handle) {
 
 enum class Owned { kNone, kFound, kUnknown };
 
-// A duplicate of a Gesher mutex a suspended thread owns outside a parked
-// wait. kUnknown when the handles cannot be listed or examined.
-Owned OwnedMutex(SharedState* state, HANDLE* out) {
+// A duplicate of a Gesher mutex a suspended thread owns, and its owner.
+// kUnknown when the handles cannot be listed or a Gesher mutex cannot be
+// examined; other mutexes (a Windows DLL's, the app's) are not looked at.
+Owned OwnedMutex(HANDLE* out, DWORD* owner_tid) {
   *out = nullptr;
+  *owner_tid = 0;
   if (g_query_process == nullptr || g_query_mutant == nullptr || g_query_object == nullptr ||
       g_probe_mutex == nullptr) {
     return Owned::kUnknown;
@@ -245,6 +248,9 @@ Owned OwnedMutex(SharedState* state, HANDLE* out) {
   for (ULONG_PTR i = 0; i < snapshot->count; ++i) {
     const HandleEntry& entry = snapshot->entries[i];
     if (entry.type != mutex_type || entry.handle == g_probe_mutex) continue;
+    // The name first: only Gesher's own mutexes matter, and nothing else is
+    // duplicated or queried.
+    if (!GesherMutex(entry.handle)) continue;
     HANDLE query = entry.handle;
     HANDLE copy = nullptr;
     // MUTANT_QUERY_STATE (1) is what CreateMutex's MUTEX_MODIFY_STATE grants.
@@ -260,7 +266,7 @@ Owned OwnedMutex(SharedState* state, HANDLE* out) {
         g_query_mutant(query, kMutantOwnerInformation, &owner, sizeof(owner), nullptr);
     const DWORD thread = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(owner.thread));
     const bool ours = status >= 0 && thread != 0 && AlreadySuspended(thread);
-    if (status < 0 || !ours || Parked(state, thread) || !GesherMutex(query)) {
+    if (status < 0 || !ours) {
       if (copy != nullptr) CloseHandle(copy);
       if (status < 0) return Owned::kUnknown;
       continue;
@@ -271,16 +277,10 @@ Owned OwnedMutex(SharedState* state, HANDLE* out) {
       return Owned::kUnknown;
     }
     *out = copy;
+    *owner_tid = thread;
     return Owned::kFound;
   }
   return Owned::kNone;
-}
-
-// A mutex the guard found abandoned (its owner died) is left abandoned for
-// its next owner, as it was: a short thread takes it and exits holding it.
-DWORD WINAPI Abandon(void* mutex) {
-  WaitForSingleObject(mutex, INFINITE);
-  return 0;  // exits owning it
 }
 
 // --- the guard -----------------------------------------------------------------
@@ -342,7 +342,7 @@ bool StillWanted(SharedState* state, int64_t tracer) {
 }
 
 // Brings the suspended set to a safe point: returns true with every other
-// thread suspended and no Gesher mutex owned outside a parked wait, false if
+// thread suspended and no Gesher mutex owned by any of them, false if
 // the stop was withdrawn meanwhile (the others then run).
 bool ReachSafePoint(SharedState* state, int64_t tracer) {
   for (;;) {
@@ -357,32 +357,37 @@ bool ReachSafePoint(SharedState* state, int64_t tracer) {
       continue;
     }
     HANDLE mutex = nullptr;
-    const Owned owned = OwnedMutex(state, &mutex);
+    DWORD owner = 0;
+    const Owned owned = OwnedMutex(&mutex, &owner);
     if (owned == Owned::kNone) return true;
     ResumeOthers();
     if (owned == Owned::kUnknown) {
       if (WaitGuard(20) == 1) TracerGone(state, tracer);
       continue;
     }
-    // A suspended thread owns a Gesher mutex outside a parked wait: let it
-    // run until it has released it, then take it, so that no thread takes it
-    // again before they are all suspended. The wait ends with the owner's
-    // critical section; a withdrawn stop or the tracer's exit ends it too.
+    // A suspended thread owns a Gesher mutex. Parked in a blocking wait, it
+    // is interrupted: it gives the mutex back and waits for the stop outside
+    // it. Either way, let it run until it has released the mutex, then take
+    // it, so that no thread takes it again before they are all suspended.
+    // 20 ms at a time: a thread that took it again meanwhile (or entered its
+    // blocking wait only after the interruption) is found by the next pass.
+    if (ParkedSlot* slot = FindParked(state, owner)) {
+      InterlockedExchange(&slot->restart, 1);
+      HANDLE thread = OpenThread(THREAD_TERMINATE, FALSE, owner);
+      if (thread != nullptr) {
+        CancelSynchronousIo(thread);
+        CloseHandle(thread);
+      }
+    }
     HANDLE handles[3] = {mutex, g_request, g_watched_process};
     const DWORD n = g_watched_process != nullptr ? 3 : 2;
-    const DWORD w = WaitForMultipleObjects(n, handles, FALSE, INFINITE);
-    if (w == WAIT_OBJECT_0) {
+    const DWORD w = WaitForMultipleObjects(n, handles, FALSE, 20);
+    if (w == WAIT_OBJECT_0 || w == WAIT_ABANDONED_0) {
+      // An abandoned mutex (its owner died) is taken and released here: its
+      // next owner sees an ordinary acquisition. Gesher's code treats both
+      // the same, and only Gesher's mutexes are taken.
       SuspendOthers();
       ReleaseMutex(mutex);
-    } else if (w == WAIT_ABANDONED_0) {
-      // Its owner died holding it: leave it abandoned again before going on.
-      ReleaseMutex(mutex);
-      HANDLE abandon = CreateThread(nullptr, 64 * 1024, Abandon, mutex,
-                                    STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
-      if (abandon != nullptr) {
-        WaitForSingleObject(abandon, INFINITE);
-        CloseHandle(abandon);
-      }
     } else if (w == WAIT_OBJECT_0 + 2) {
       CloseHandle(mutex);
       TracerGone(state, tracer);
@@ -450,8 +455,9 @@ DWORD WINAPI GuardMain(void* parameter) {
       const Walk walk = SuspendOthers(&added);
       if (added == 0 && walk == Walk::kComplete) continue;
       HANDLE mutex = nullptr;
+      DWORD owner = 0;
       const Owned owned =
-          walk == Walk::kComplete ? OwnedMutex(state, &mutex) : Owned::kUnknown;
+          walk == Walk::kComplete ? OwnedMutex(&mutex, &owner) : Owned::kUnknown;
       if (owned == Owned::kNone) continue;
       if (mutex != nullptr) CloseHandle(mutex);
       // Not at a safe point any more: withdraw the stop until it is again.
@@ -513,7 +519,10 @@ void CreateLocked(DWORD pid) {
     InterlockedExchange64(&state->tracer, 0);
     InterlockedExchange64(&state->stop_epoch, 0);
     InterlockedExchange64(&state->code_epoch, g_code_writes.epoch);
-    for (int i = 0; i < kParkedSlots; ++i) InterlockedExchange(&state->parked[i], 0);
+    for (int i = 0; i < kParkedSlots; ++i) {
+      InterlockedExchange(&state->parked[i].tid, 0);
+      InterlockedExchange(&state->parked[i].restart, 0);
+    }
     InterlockedExchange(&state->pid, static_cast<LONG>(pid));
   }
   // The section and events stay open for the life of the process.
@@ -679,16 +688,26 @@ ParkedScope::ParkedScope() {
   if (state == nullptr) return;
   const LONG tid = static_cast<LONG>(GetCurrentThreadId());
   for (int i = 0; i < kParkedSlots; ++i) {
-    if (InterlockedCompareExchange(&state->parked[i], tid, 0) == 0) {
+    if (InterlockedCompareExchange(&state->parked[i].tid, tid, 0) == 0) {
+      InterlockedExchange(&state->parked[i].restart, 0);
       slot_ = &state->parked[i];
       return;
     }
   }
-  // All slots taken: the thread is not marked, and a stop waits for it.
+  // All slots taken: the thread is not marked, and a stop waits until its
+  // wait ends.
 }
 
 ParkedScope::~ParkedScope() {
-  if (slot_ != nullptr) InterlockedExchange(slot_, 0);
+  if (slot_ == nullptr) return;
+  InterlockedExchange(&slot_->restart, 0);
+  InterlockedExchange(&slot_->tid, 0);
+}
+
+void WaitWhileStopping() {
+  SharedState* state = Self();
+  if (state == nullptr) return;
+  while (state->want_stop != 0 && state->tracer != 0) Sleep(1);
 }
 
 bool OpenRemote(DWORD pid, Remote* out) {

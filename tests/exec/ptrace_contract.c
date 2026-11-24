@@ -27,12 +27,14 @@
  *   ptrace-contract <self> pipetracer <fd>     attaches to its parent, blocked reading a
  *       pipe, and writes into that pipe while the parent is stopped
  *   ptrace-contract <self> sleeper             sleeps 3 s
+ *   ptrace-contract <self> sharedreader <fd> <pipe>  reads a pipe its parent shares
  *   ptrace-contract <self> [no]exitkill <fd>   seizes a child (PTRACE_O_EXITKILL
  *       or not) and exits
  * Lock files go next to the program.
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <inttypes.h>
 #include <signal.h>
@@ -329,6 +331,16 @@ static int child_pipetracer(int write_fd) {
   if (write(write_fd, "p", 1) != 1) return 4;
   if (now_ms() - w0 > 2000) return 5;
   return ptrace(PTRACE_DETACH, parent, 0, 0) == 0 ? 0 : 6;
+}
+
+/* Reads its pipe (shared with its parent) byte by byte, until killed. */
+static int child_sharedreader(int fd, int report) {
+  if (write(report, "ready\n", 6) != 6) return 2;
+  close(report);
+  for (;;) {
+    char c;
+    if (read(fd, &c, 1) <= 0) sleep_ms(1);
+  }
 }
 
 static int child_sleeper(void) {
@@ -672,6 +684,75 @@ static void parent_pipe(void) {
   close(pipe_fds[1]);
 }
 
+/* A pipe description shared by the tracer and a stopped tracee blocked
+ * reading it (fork and inheritance share descriptions): the stop interrupts
+ * that read, as on Linux, so the tracer's poll, read and fcntl on the same
+ * description work, and the tracer reads the byte it wrote (qa5 "shared"). */
+static void parent_shared_pipe(void) {
+  int p[2];
+  if (pipe(p) != 0) {
+    check(0, "shared pipe: pipe()");
+    return;
+  }
+  char line[32];
+  char fd_text[16];
+  snprintf(fd_text, sizeof fd_text, "%d", p[0]);
+  char* args[] = {"ptrace-contract", (char*)self_path, "sharedreader", NULL, fd_text, NULL};
+  pid_t reader = spawn_reporting(args, line, sizeof line);
+  check(reader > 0 && strncmp(line, "ready", 5) == 0, "shared pipe: the reader runs");
+  if (reader <= 0) return;
+  sleep_ms(200); /* blocked in read() by now */
+  check(ptrace(PTRACE_ATTACH, reader, 0, 0) == 0, "shared pipe: ATTACH");
+  int status = 0;
+  int64_t t0 = now_ms();
+  int stopped = 0;
+  while (!stopped && now_ms() - t0 < 5000) {
+    if (waitpid(reader, &status, WNOHANG | __WALL) == reader) stopped = status == 0x137f;
+    else sleep_ms(2);
+  }
+  check(stopped, "shared pipe: the reader blocked in read() stops");
+  check(write(p[1], "y", 1) == 1, "shared pipe: the tracer writes a byte");
+  struct pollfd pf = {.fd = p[0], .events = POLLIN};
+  t0 = now_ms();
+  int ready = poll(&pf, 1, 2000);
+  printf("INFO  ptrace: shared pipe: poll -> %d (errno %d) revents %#x in %d ms\n", ready,
+         ready < 0 ? errno : 0, pf.revents, (int)(now_ms() - t0));
+  check(ready == 1 && (pf.revents & POLLIN) != 0,
+        "shared pipe: the tracer's poll sees the byte (the stopped reader did not take it)");
+  int flags = fcntl(p[0], F_GETFL);
+  check(flags >= 0 && fcntl(p[0], F_SETFL, flags | O_NONBLOCK) == 0,
+        "shared pipe: F_SETFL O_NONBLOCK on the shared description");
+  char c = 0;
+  t0 = now_ms();
+  ssize_t n = read(p[0], &c, 1);
+  check(n == 1 && c == 'y' && now_ms() - t0 < 2000, "shared pipe: the tracer reads its byte back");
+  fcntl(p[0], F_SETFL, flags);
+  check(ptrace(PTRACE_DETACH, reader, 0, 0) == 0, "shared pipe: DETACH");
+  /* The reader restarted its read: it takes the next byte. While it is
+   * blocked there it holds the description's gate (poll on that description
+   * then fails with EOPNOTSUPP, stopped or not), so look while it is
+   * stopped again. */
+  check(write(p[1], "z", 1) == 1, "shared pipe: another byte for the resumed reader");
+  sleep_ms(300);
+  int left = -1;
+  if (ptrace(PTRACE_ATTACH, reader, 0, 0) == 0) {
+    stopped = 0;
+    t0 = now_ms();
+    while (!stopped && now_ms() - t0 < 5000) {
+      if (waitpid(reader, &status, WNOHANG | __WALL) == reader) stopped = status == 0x137f;
+      else sleep_ms(2);
+    }
+    pf.revents = 0;
+    left = stopped ? poll(&pf, 1, 0) : -1;
+    ptrace(PTRACE_DETACH, reader, 0, 0);
+  }
+  check(left == 0, "shared pipe: the resumed reader's restarted read takes it");
+  kill(reader, SIGKILL);
+  wait_exit(reader);
+  close(p[0]);
+  close(p[1]);
+}
+
 /* A process that has just been started can be attached to at once (its
  * state and guard come up during its start-up). */
 static void parent_attach_at_spawn(void) {
@@ -737,6 +818,7 @@ int main(int argc, char** argv) {
   if (argc >= 4 && strcmp(argv[2], "spinvictim") == 0) return child_codevictim(atoi(argv[3]), 1);
   if (argc >= 4 && strcmp(argv[2], "pipetracer") == 0) return child_pipetracer(atoi(argv[3]));
   if (argc >= 3 && strcmp(argv[2], "sleeper") == 0) return child_sleeper();
+  if (argc >= 5 && strcmp(argv[2], "sharedreader") == 0) return child_sharedreader(atoi(argv[4]), atoi(argv[3]));
   if (argc >= 5 && strcmp(argv[2], "lockvictim") == 0) return child_lockvictim(atoi(argv[3]), argv[4]);
   if (argc >= 4 && strcmp(argv[2], "lockone") == 0) return child_lockone(argv[3]);
   if (argc >= 4 && strcmp(argv[2], "exitkill") == 0) return child_exitkill_tracer(atoi(argv[3]), 1);
@@ -851,6 +933,7 @@ int main(int argc, char** argv) {
   parent_poke_code("codevictim", PTRACE_POKEDATA);
   parent_poke_code("spinvictim", PTRACE_POKETEXT);
   parent_pipe();
+  parent_shared_pipe();
   parent_attach_at_spawn();
   parent_exitkill();
   parent_locks(20);
