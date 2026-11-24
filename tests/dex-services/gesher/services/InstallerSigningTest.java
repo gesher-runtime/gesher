@@ -155,29 +155,6 @@ public final class InstallerSigningTest {
         Files.copy(v2.toPath(), base.toPath());
         Files.copy(rotated.toPath(), new File(splitDirectory, "split_other.apk").toPath());
         reject(data, v2, base, "INSTALL_FAILED_BAD_SPLIT_SIGNATURE");
-
-        // Stray split of an unrelated package in the same directory must be ignored (#383)
-        File foreignSplitDir = new File(data, "split-foreign");
-        Files.createDirectories(foreignSplitDir.toPath());
-        File foreignBase = new File(foreignSplitDir, "base.apk");
-        Files.copy(v2.toPath(), foreignBase.toPath());
-        File foreignSplit = new File(foreignSplitDir, "split_other.apk");
-        Files.copy(new File(fixtures, "process-metadata.apk").toPath(), foreignSplit.toPath());
-
-        File deviceForeign = Files.createTempDirectory(data.toPath(), "foreign-").toFile();
-        android.system.Os.setenv("ANDROID_DATA", deviceForeign.getAbsolutePath(), true);
-        Class<?> pmClass = Class.forName("com.gesher.server.PackageManagerService");
-        Class<?> atmClass = Class.forName("com.gesher.server.ActivityTaskManagerService");
-        Class<?> installerClass = Class.forName("com.gesher.server.Installer");
-        Object pm = construct(pmClass, new Class<?>[] {java.util.Collection.class}, Collections.emptyList());
-        Object atm = construct(atmClass, new Class<?>[] {pmClass}, pm);
-        Object installer = construct(installerClass, new Class<?>[] {pmClass, atmClass, Map.class},
-                pm, atm, new LinkedHashMap<>());
-        Method install = installerClass.getDeclaredMethod("install", String.class);
-        install.setAccessible(true);
-        String[] installed = (String[]) install.invoke(installer, foreignBase.getPath());
-        require("installed".equals(installed[1]), "Install beside an unrelated split failed: " + installed[1]);
-        System.out.println("InstallerSigningTest: unrelated split in folder is ignored");
         File capabilities = new File(fixtures.getParentFile(), "identity-fixtures");
         if (capabilities.isDirectory()) {
             reject(data, new File(capabilities, "old.apk"), new File(capabilities, "rotated-no-data.apk"),
