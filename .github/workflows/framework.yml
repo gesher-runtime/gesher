@@ -132,7 +132,9 @@ jobs:
           for tool in clang clang++ bison flex ccache; do command -v "$tool"; done
       - name: Install build tools
         if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
-        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
 
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
@@ -561,6 +563,12 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Camera runtime permission and attribution admission
+        run: |
+          python3 tools/test_camera_permission.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Permission policy work counts and publication contracts
         run: |
           python3 tools/test_permission_performance.py --java-home "$JAVA_HOME" \
@@ -633,6 +641,12 @@ jobs:
       - name: Floating activity roots and task window placement
         run: |
           python3 tools/test_window_parent_placement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
+      - name: Activity window activation and single-process finish
+        run: |
+          python3 tools/test_activity_window_activation.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 

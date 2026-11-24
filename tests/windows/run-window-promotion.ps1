@@ -110,9 +110,15 @@ if ($Worker) {
             if ([DateTime]::UtcNow -ge $deadline) { throw 'Private-desktop window controller timed out' }
             Start-Sleep -Milliseconds 25
         }
-        $text = LogText $targetLog
-        if ([regex]::Matches($text,"promotion: heartbeat pid=$originalPid\b").Count -lt 2) { throw 'Original service heartbeat not retained' }
-        if ($text.Contains('promotion: service-destroyed')) { throw 'Original service died before window proof' }
+        # The controller can observe the window before the service's next heartbeat.
+        do {
+            $text = LogText $targetLog
+            if ($text.Contains('promotion: service-destroyed')) { throw 'Original service died before window proof' }
+            if ([regex]::Matches($text,'promotion: service-created pid=').Count -ne 1) { throw 'Target process/service restarted' }
+            if ([regex]::Matches($text,"promotion: heartbeat pid=$originalPid\b").Count -ge 2) { break }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Original service heartbeat not retained' }
+            Start-Sleep -Milliseconds 25
+        } while ($true)
         if ($Mode -eq 'positive') {
             $null = Vm 'begin-background-phase' @('-cp',$app,'com.gesher.server.RuntimeCommands','am','broadcast','-n',
                 'com.gesher.windowpromotion.target/com.gesher.windowpromotion.target.ControlReceiver')

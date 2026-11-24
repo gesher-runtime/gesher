@@ -127,6 +127,7 @@ set_target_properties(media_muxer_verify PROPERTIES CXX_STANDARD 23)
 add_library(gesher_media_player OBJECT
   ${_media}/jni/java_data_source.cc
   ${_media}/jni/media_codec_jni.cc
+  ${_media}/jni/persistent_input_surface.cc
   ${_media}/jni/media_jni.cc
   ${_media}/jni/media_player_jni.cc
   ${_media}/jni/media_jni_others.cc
@@ -249,6 +250,10 @@ add_executable(media_yuv_rgba_test "${CMAKE_SOURCE_DIR}/tests/media/yuv_rgba_tes
 target_include_directories(media_yuv_rgba_test PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_options(media_yuv_rgba_test PRIVATE -Wall -Wextra -Werror)
 
+add_executable(wasapi_refill_test "${CMAKE_SOURCE_DIR}/tests/media/wasapi_refill_test.cc")
+target_include_directories(wasapi_refill_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(wasapi_refill_test PRIVATE -Wall -Wextra -Werror)
+
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 # QueueSurface itself uses only hostgraphics and is shared by hwui and the renderer.
@@ -273,6 +278,7 @@ target_include_directories(media_input_surface_callback_test PRIVATE
 # Only the fixture throws a callback exception to check capture cleanup.
 target_compile_options(media_input_surface_callback_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter -fexceptions)
+target_compile_definitions(media_input_surface_callback_test PRIVATE GESHER_PERSISTENT_INPUT_TEST)
 target_link_libraries(media_input_surface_callback_test PRIVATE hostgraphics pthread)
 gesher_graphics_cxx(media_input_surface_callback_test)
 
