@@ -48,10 +48,17 @@ Operation* StartSign(DWORD pid, const wchar_t* name, size_t length, const uint8_
 constexpr DWORD kCancelGraceMs = 5000;
 
 // Blocks until Windows' prompt ends. A status as above; with kSuccess, *bytes.
+//
+// After Cancel the wait is bounded: when Windows has not ended the request
+// within `cancel_grace_ms` (its Cancel failed, or it ignores the request), the
+// request is abandoned and Await returns UserCanceled (3) with no bytes. The
+// caller then calls Release as usual, which drops Gesher's references; a
+// signature or key the abandoned request produces later is never read.
 int Await(Operation* operation, std::vector<uint8_t>* bytes,
           DWORD cancel_grace_ms = kCancelGraceMs);
 
-// Thread-safe and idempotent: asks Windows to close the prompt.
+// Thread-safe and idempotent: asks Windows to close the prompt and starts
+// Await's grace period, also when Windows refuses the request.
 void Cancel(Operation* operation);
 
 // Releases the operation once Await has returned.

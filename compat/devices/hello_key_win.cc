@@ -217,7 +217,11 @@ struct Operation {
   IAsyncOperation<IInspectable*>* operation = nullptr;
   IAsyncInfo* info = nullptr;
   std::mutex lock;
-  std::atomic<bool> cancel{false};
+  // GetTickCount64 at the first Cancel (never 0 once requested): the start of
+  // Await's grace period.
+  std::atomic<ULONGLONG> cancel_tick{0};
+  // Await gave up on a request Windows did not end after Cancel.
+  std::atomic<bool> abandoned{false};
   bool released = false;
 };
 
@@ -385,14 +389,31 @@ Operation* StartSign(DWORD pid, const wchar_t* name, size_t length, const uint8_
   return Started(true, operation, r, "KeyCredential.RequestSignAsync");
 }
 
-int Await(Operation* o, std::vector<uint8_t>* bytes, DWORD /*cancel_grace_ms*/) {
+int Await(Operation* o, std::vector<uint8_t>* bytes, DWORD cancel_grace_ms) {
   bytes->clear();
   if (o->info == nullptr) return o->immediate;
-  // A user may take minutes: no time-out, 1 -> 20 ms back-off.
+  // The awaiting thread may be one that made no WinRT call yet (WindowsHelloKey's
+  // own daemon thread for a signature), so it joins the apartment itself.
+  HRESULT r = winrt::EnsureApartment();
+  if (FAILED(r)) Log("RoInitialize (await)", r);
+  // A user may take minutes: no time-out while nobody canceled, 1 -> 20 ms
+  // back-off.
   int status = kStarted;
   DWORD delay = 1;
-  HRESULT r;
   while (SUCCEEDED(r = o->info->get_Status(&status)) && status == kStarted) {
+    ULONGLONG requested = o->cancel_tick.load();
+    if (requested != 0 && GetTickCount64() - requested >= cancel_grace_ms) {
+      // Windows refused the cancel or ignores it. The request is over for the
+      // caller, so it is abandoned: Release drops the references without
+      // reading a result, and a signature or key the user's later answer to
+      // Windows' prompt produces reaches nobody.
+      fprintf(stderr,
+              "gesher hello key: Windows did not end a canceled request within %lu ms; "
+              "abandoning it\n",
+              static_cast<unsigned long>(cancel_grace_ms));
+      o->abandoned.store(true);
+      return kUserCanceled;
+    }
     Sleep(delay);
     if (delay < 20) delay *= 2;
   }
@@ -444,9 +465,16 @@ int Await(Operation* o, std::vector<uint8_t>* bytes, DWORD /*cancel_grace_ms*/) 
 }
 
 void Cancel(Operation* o) {
+  // Called from a thread other than the awaiting one.
+  HRESULT r = winrt::EnsureApartment();
+  if (FAILED(r)) Log("RoInitialize (cancel)", r);
   std::lock_guard<std::mutex> guard(o->lock);
-  if (o->released || o->info == nullptr || o->cancel.exchange(true)) return;
-  HRESULT r = o->info->Cancel();
+  if (o->released || o->info == nullptr || o->cancel_tick.load() != 0) return;
+  // The grace period runs from the request, also when the call below fails or
+  // takes long.
+  ULONGLONG now = GetTickCount64();
+  o->cancel_tick.store(now != 0 ? now : 1);
+  r = o->info->Cancel();
   if (FAILED(r)) Log("IAsyncInfo::Cancel", r);
 }
 
@@ -454,7 +482,9 @@ void Release(Operation* o) {
   {
     std::lock_guard<std::mutex> guard(o->lock);
     o->released = true;
-    if (o->info != nullptr) o->info->Close();
+    // IAsyncInfo::Close is only legal on a finished operation; an abandoned one
+    // still runs inside Windows and ends there.
+    if (o->info != nullptr && !o->abandoned.load()) o->info->Close();
     winrt::Release(o->info);
     winrt::Release(o->operation);
   }

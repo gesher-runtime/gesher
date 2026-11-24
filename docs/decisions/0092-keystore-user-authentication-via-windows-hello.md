@@ -303,6 +303,13 @@ invalidated), SecurityDeviceLocked, UserPrefersPassword, UnknownError and any HR
 `BIOMETRIC_ERROR_HW_UNAVAILABLE`. Nothing but Success with a signature that opens the
 binding is a success.
 
+A cancel (`cancelAuthentication`, or the client's death) asks Windows to close the prompt.
+As for ADR 0091's verifier, the wait for Windows is then bounded: when Windows has not
+ended the request 5 s after the cancel (its `IAsyncInfo::Cancel` failed, or it ignores
+the request), the request is abandoned and reported as UserCanceled. An abandoned
+request's result is never read, so a signature the user's later answer to the leftover
+prompt produces opens nothing and authorizes no operation.
+
 For keys with a timeout an ordinary confirmation (no operation) has to release them too.
 `AuthService` is not changed for that: `KeyBoundHello` wraps the `WindowsHelloBackend`
 given to it, and while the binding has keys with a timeout it performs the confirmation
@@ -345,7 +352,9 @@ an older Gesher.
   that requires user authentication can be made, and this design must be revisited);
   whether `RequestCreateAsync` and each `RequestSignAsync` prompt; that a Hello reset
   gives NotFound; the key's namespace for an unpackaged process; TPM backing; the
-  owner-window variants and the assumption that a `WindowId`'s value is the HWND.
+  owner-window variants and the assumption that a `WindowId`'s value is the HWND;
+  whether Windows closes its prompt on `IAsyncInfo::Cancel` (the bounded wait was run
+  against scripted operations only).
 - ART/Conscrypt end to end: provider selection was exercised on a host JDK only.
 - RFC 8017 could not be fetched in the authoring environment; the uniqueness argument
   above does not depend on its text.
