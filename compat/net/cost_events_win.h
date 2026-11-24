@@ -9,6 +9,7 @@
 #pragma once
 
 #include <windows.h>
+#include <unknwn.h>
 
 namespace gesher::net {
 
@@ -28,9 +29,9 @@ ConnectionCostEvents* NewConnectionCostSink(HANDLE event);
 
 struct CostWatch;
 
-// Subscribes such a sink to the Network List Manager (the cost manager's connection point, as
-// Microsoft's NetworkCost sample does) on a thread of its own, which stays in the multithreaded
-// apartment while subscribed. Returns null and the reason in `hr` when Windows refuses (no
+// Subscribes such a sink to the Network List Manager's connection point on a thread
+// of its own, which stays in the multithreaded apartment while subscribed.
+// Returns null and the reason in `hr` when Windows refuses (no
 // Network List Manager, no such connection point); the caller keeps polling then.
 // Owns a duplicate event handle so a timed-out initialization can finish safely after return.
 CostWatch* StartCostWatch(HANDLE event, HRESULT* hr);
