@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The android.test.mock shared library (frameworks/base/test-mock), declared as
+     Android's platform.xml declares it. gesher-app.ps1 installs this file as
+     $ANDROID_ROOT/etc/permissions and the jar as $ANDROID_ROOT/framework. -->
+<permissions>
+    <library name="android.test.mock"
+            file="/system/framework/android.test.mock.jar" />
+</permissions>
