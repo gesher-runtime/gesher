@@ -126,6 +126,11 @@ static void test_memory(void) {
   check("mallopt(M_PURGE) succeeds", mallopt(M_PURGE, 0) == 1);
   check("mallopt(M_PURGE_ALL) succeeds", mallopt(M_PURGE_ALL, 0) == 1);
   check("mallopt(unknown option) fails", mallopt(12345, 0) == 0);
+  // No memory tags: the NONE level holds already; a tagging level fails.
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, NONE) succeeds",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE) == 1);
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, TBI) fails",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_TBI) == 0);
 }
 
 static void test_strings(void) {
