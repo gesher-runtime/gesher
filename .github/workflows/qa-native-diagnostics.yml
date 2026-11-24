@@ -1,0 +1,66 @@
+name: Independent Windows QA
+
+on:
+  push:
+    branches: [palmoni5/qa-native-diagnostics-20261124]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-diagnostics:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out the reviewed caption diagnostic
+        uses: actions/checkout@v4
+        with:
+          ref: d1861c8322a690fc4aaae06bd0fc38bf613128d5
+          path: captions
+          persist-credentials: false
+      - name: Check out the reviewed network fixes
+        uses: actions/checkout@v4
+        with:
+          ref: 36241d883928571c896824e2b65e60e89450f5e2
+          path: network
+          persist-credentials: false
+      - name: Verify the exact source revisions
+        shell: pwsh
+        run: |
+          $captionRevision = git -C captions rev-parse HEAD
+          $networkRevision = git -C network rev-parse HEAD
+          Write-Host "Captions source: $captionRevision"
+          Write-Host "Network source: $networkRevision"
+          if ($captionRevision -ne 'd1861c8322a690fc4aaae06bd0fc38bf613128d5') { throw 'Unexpected caption source' }
+          if ($networkRevision -ne '36241d883928571c896824e2b65e60e89450f5e2') { throw 'Unexpected network source' }
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile the caption reader and SDK diagnostics
+        id: caption_build
+        working-directory: captions
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc compat\devices\winrt.cc tests\captioning\caption_windows_test.cc /Fe:caption-test.exe ole32.lib uuid.lib
+      - name: Read every Windows SDK caption getter and enforce the bridge contracts
+        if: ${{ !cancelled() && steps.caption_build.outcome == 'success' }}
+        working-directory: captions
+        shell: pwsh
+        run: |
+          & .\caption-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Caption contracts failed; inspect SDK getter results above' }
+      - name: Compile the network cost subscription with production Windows defines
+        id: cost_build
+        if: ${{ !cancelled() }}
+        working-directory: network
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib uuid.lib
+      - name: Subscribe and unsubscribe through the actual Network List Manager
+        if: ${{ !cancelled() && steps.cost_build.outcome == 'success' }}
+        working-directory: network
+        shell: pwsh
+        run: |
+          & .\cost-events-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Network cost event contracts failed' }
