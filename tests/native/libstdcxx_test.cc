@@ -6,8 +6,8 @@
 // (NetEase Yidun's libnesec.so). Built for x86_64 (elf_load_test.exe) and
 // arm64-v8a (arm64_elf_test.exe); gesher_selftest() returns the failure count.
 //
-// Not exercised: the fatal paths (operator new failing, __cxa_pure_virtual),
-// which end the process.
+// The fatal paths (operator new failing, __cxa_pure_virtual), which end the
+// process, are tests/native2/libstdcxx_fatal_test.cpp's (native2 track).
 
 #include <dlfcn.h>
 #include <pthread.h>
