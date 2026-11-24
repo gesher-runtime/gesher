@@ -27,8 +27,8 @@ import java.util.function.Predicate;
  * answers ({@link #resultCode}): Install unknown apps (ExternalSourcesDetails) sets a result
  * only when the user turns its switch during the visit, RESULT_OK if the last turn was on and
  * RESULT_CANCELED if off ({@link #toggled}); a visit without a turn, and the other details
- * screens, which set no result, answer RESULT_CANCELED. A request that a later one for
- * another app replaced before it was shown is answered at once ({@link ControlCenter}).
+ * screens, which set no result, answer RESULT_CANCELED. Each queued request keeps
+ * its own token until the host claims and closes that visit ({@link ControlCenter}).
  *
  * <p>Unshown requests expire. Once the host acknowledges a visible dialog, the request
  * waits for an explicit close or the end of that exact host process. The bounded table
@@ -228,7 +228,7 @@ final class SettingsResults {
         return answered;
     }
 
-    /** A later request replaced this one before the host displayed it. */
+    /** Cancels an admitted request before the host displayed it. */
     void cancel(String token) {
         Pending pending;
         synchronized (mPending) {

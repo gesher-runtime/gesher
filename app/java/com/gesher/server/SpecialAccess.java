@@ -17,11 +17,10 @@ import java.util.List;
  * screens there; there is no Settings APK).
  *
  * <p>Each switch is an app-op the user decides, as AOSP Settings writes it
- * (packages/apps/Settings, Android 16 r4): All files access
- * (ManageExternalStorageDetails: UID mode), Display over other apps (DrawOverlayDetails:
+ * (packages/apps/Settings, Android 16 r4): Display over other apps (DrawOverlayDetails:
  * package mode), Install unknown apps (ExternalSourcesDetails: package mode), Modify system
  * settings (WriteSettingsDetails: package mode), Usage access (UsageAccessDetails: package
- * mode, denial MODE_IGNORED) and Media management (MediaManagementAppsDetails: UID mode). On is
+ * mode, denial MODE_IGNORED). On is
  * MODE_ALLOWED; off is the denial mode Settings writes. The modes go through
  * {@link AppOpsService} like any other mode change: persisted with the package's signing
  * identity and reported to app-op watchers ({@code OnOpChangedListener}).
@@ -33,7 +32,11 @@ import java.util.List;
  * stays ungranted (these are appop permissions: the framework's checks read the mode, and
  * fall back to the permission only for MODE_DEFAULT).
  *
- * <p>Left out: exact alarms (AlarmManagerService allows every app exact alarms, so the
+ * <p>Left out: All files access and Media management. Gesher has neither shared-storage
+ * authorization on raw filesystem operations nor a MediaProvider enforcing media consent.
+ * Writing their app-ops would report a grant without changing the requested operation.
+ * These operations are therefore absent from both the query and the writable allowlist.
+ * Also left out: exact alarms (AlarmManagerService allows every app exact alarms, so the
  * switch would change nothing an app observes), full-screen intents
  * (NotificationManagerService does not implement {@code canUseFullScreenIntent}), and
  * the screens with no app-op (battery optimization, locale, open by default, picture in
@@ -48,25 +51,20 @@ final class SpecialAccess {
     }
 
     /** One switch: the app-op (by its public name), its permission and how Settings writes it. */
-    record Kind(String opName, int op, String permission, boolean uidMode, int deniedMode) {
+    record Kind(String opName, int op, String permission, int deniedMode) {
     }
 
     /** The switches, in Settings' order. */
     static final List<Kind> KINDS = List.of(
-            new Kind(AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE,
-                    AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE,
-                    Manifest.permission.MANAGE_EXTERNAL_STORAGE, true, AppOpsManager.MODE_ERRORED),
             new Kind(AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, AppOpsManager.OP_SYSTEM_ALERT_WINDOW,
-                    Manifest.permission.SYSTEM_ALERT_WINDOW, false, AppOpsManager.MODE_ERRORED),
+                    Manifest.permission.SYSTEM_ALERT_WINDOW, AppOpsManager.MODE_ERRORED),
             new Kind(AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES,
                     AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
-                    Manifest.permission.REQUEST_INSTALL_PACKAGES, false, AppOpsManager.MODE_ERRORED),
+                    Manifest.permission.REQUEST_INSTALL_PACKAGES, AppOpsManager.MODE_ERRORED),
             new Kind(AppOpsManager.OPSTR_WRITE_SETTINGS, AppOpsManager.OP_WRITE_SETTINGS,
-                    Manifest.permission.WRITE_SETTINGS, false, AppOpsManager.MODE_ERRORED),
+                    Manifest.permission.WRITE_SETTINGS, AppOpsManager.MODE_ERRORED),
             new Kind(AppOpsManager.OPSTR_GET_USAGE_STATS, AppOpsManager.OP_GET_USAGE_STATS,
-                    Manifest.permission.PACKAGE_USAGE_STATS, false, AppOpsManager.MODE_IGNORED),
-            new Kind(AppOpsManager.OPSTR_MANAGE_MEDIA, AppOpsManager.OP_MANAGE_MEDIA,
-                    Manifest.permission.MANAGE_MEDIA, true, AppOpsManager.MODE_ERRORED));
+                    Manifest.permission.PACKAGE_USAGE_STATS, AppOpsManager.MODE_IGNORED));
 
     /**
      * A switch's state for one app: whether the app's own check reads "allowed", and whether
@@ -171,10 +169,9 @@ final class SpecialAccess {
         }
         int mode = allow ? AppOpsManager.MODE_ALLOWED : kind.deniedMode;
         AppOpsService ops = pm.appOps();
-        // Both setters commit only for this package generation: a replaced or removed
+        // Commit only for this package generation: a replaced or removed
         // package is refused before anything is written.
-        boolean written = kind.uidMode ? ops.setUidModeIfCurrent(kind.op, pkg, mode)
-                : ops.setModeIfCurrent(kind.op, pkg, mode);
+        boolean written = ops.setModeIfCurrent(kind.op, pkg, mode);
         if (!written) throw new IllegalStateException(packageName + " changed; try again");
         return new Entry(kind, allowed(pm, pkg, kind), false);
     }

@@ -428,7 +428,7 @@ intents nothing resolves (`SettingsIntents`):
 - **One installed app's screen** (App info, all-files access, unknown sources, battery
   optimization, overlay, write settings, exact alarms, app locale, open by default...;
   the app as `package:` data or the APP_PACKAGE extra): Gesher's Control Center on that
-  app's details (`ControlCenter`: `data/system/control-panel-request`, opened through
+  app's details (`ControlCenter`: immutable records in `data/system/control-panel-requests`, opened through
   `data/system/gesher-control-panel.lnk`). A Control Center already open shows it.
 - **List screens** (apps, sync, accounts, Settings itself): the Control Center.
 - **Device screens**: a fixed Windows Settings page (Wi-Fi `ms-settings:network-wifi`,
@@ -438,18 +438,15 @@ intents nothing resolves (`SettingsIntents`):
   (`ActivityNotFoundException`). A `startActivityForResult` gets RESULT_CANCELED at once,
   except on an app's details (below).
 
-**Special app access.** The app's details in the Control Center show Android Settings'
-special access switches for the ones the app's manifest requests (`SpecialAccess`): All
-files access (`OP_MANAGE_EXTERNAL_STORAGE`), Display over other apps
+**Special app access.** The app's details in the Control Center show the implemented
+Android Settings special accesses that the app's manifest requests (`SpecialAccess`): Display over other apps
 (`OP_SYSTEM_ALERT_WINDOW`), Install unknown apps (`OP_REQUEST_INSTALL_PACKAGES`), Modify
-system settings (`OP_WRITE_SETTINGS`), Usage access (`OP_GET_USAGE_STATS`) and Media
-management (`OP_MANAGE_MEDIA`). A switch writes the app-op as AOSP Settings does (on:
-MODE_ALLOWED; off: MODE_ERRORED, or MODE_IGNORED for usage access; UID mode for all files
-and media, package mode for the others) through `AppOpsService`: persisted with the
+system settings (`OP_WRITE_SETTINGS`) and Usage access (`OP_GET_USAGE_STATS`). A switch
+writes the package app-op as AOSP Settings does (on: MODE_ALLOWED; off: MODE_ERRORED,
+or MODE_IGNORED for usage access) through `AppOpsService`: persisted with the
 package's signing identity, app-op watchers notified, and read by the app's own check
-(`Environment.isExternalStorageManager`, `Settings.canDrawOverlays`,
-`Settings.System.canWrite`, `PackageManager.canRequestPackageInstalls`, usage stats,
-`MediaStore.canManageMedia`). Every switch starts off (each op's default; the appop
+(`Settings.canDrawOverlays`, `Settings.System.canWrite`,
+`PackageManager.canRequestPackageInstalls` and usage stats). Every switch starts off (each op's default; the appop
 permissions themselves are never granted). The Control Center reads and writes them with
 `gesher-app special-access PACKAGE [OP allow|deny]`, a `gesher` service transaction that
 only the host shell may call (an attached app is refused). The device checks the package,
@@ -458,27 +455,40 @@ the op and eligibility, and the dialog reads and changes switches in the backgro
 A per-app Settings visit pauses the originating activity while the Control Center covers it.
 A `startActivityForResult` answers on close. Install unknown apps returns `RESULT_OK` when the
 last change in that visit turned the switch on. Other outcomes return `RESULT_CANCELED`.
-A request that has not been displayed expires after 15 minutes or when a newer request
-replaces it. A visible visit waits for the same Control Center process to report its close
-and cancels if that process exits unexpectedly.
+A request that has not been displayed expires after 15 minutes. Each queued record carries
+its package and result token together, and an atomic rename assigns it to one consumer.
+Newer requests never replace another package's queued visit. The queue and work per UI
+tick are each bounded to 32. A visible visit waits for the same Control Center process
+to report its close and cancels if that process exits unexpectedly. The updated panel
+can import older single-file requests; a new server requires the updated panel from the
+same installation.
 
-`canRequestPackageInstalls` answers only for the calling package. A `PackageInstaller`
+`canRequestPackageInstalls` authenticates the current attached installation, including
+ordinary standalone app callers; an admitted shared-identity peer can query its UID's
+package, while an unrelated or retired caller cannot reuse a numeric UID. A `PackageInstaller`
 session from an eligible app source returns `STATUS_PENDING_USER_ACTION` once the APK is
 validated. The installer app launches the returned confirmation intent. If its source
 requires a decision, the intent opens Install unknown apps and the server checks the
 source on close. The user confirms the specific APK on Windows, then the server checks
 authorization again before publishing package code. Trusted install sources keep their
 existing Windows confirmation. Exact alarms and full-screen intents have no switch.
-StorageStatsService honours the Usage access op as usage stats do.
-The All files access switch writes Android's app-op. Enforcement of shared storage access
-through raw filesystem operations requires the shared-storage backend.
-
+StorageStatsService honours the Usage access op as usage stats do, including when an
+ordinary standalone application hosts the service in its own process.
+All files access (`OP_MANAGE_EXTERNAL_STORAGE`) and Media management (`OP_MANAGE_MEDIA`)
+are neither offered nor accepted by the special-access command. Gesher's raw filesystem
+operations do not enforce Android shared-storage authorization, and no MediaProvider
+implements the media consent decision. Writing these app-ops would change a capability
+query without changing the requested operation. Those backends and their grant/revoke
+tests must exist before the corresponding switches can be added. The existing MediaStore
+SDK facade tests exercise controlled provider and app-op boundaries; they do not establish
+that a production media provider exists. Apps needing All files access (including the
+File Manager X example in #310) remain unsupported by this change.
 Alert window admission uses the caller's installed process identity and Android's
 target-SDK and AppOps rules. A window admitted in a hidden mode stays hidden, including
 its attached children. Changing the alert-window mode updates the existing surfaces
 and their input routes. Offscreen Windows tests run this path with real HWNDs. Windows
-desktop stacking still uses Gesher's existing popup ownership. All files access applies
-to Android's shared volume. Windows documents elsewhere use the system document picker.
+desktop stacking still uses Gesher's existing popup ownership. Windows documents use
+the system document picker when the application requests document selection.
 
 `storagestats` (StorageStatsService) measures apps' code, data and cache directories and
 the shared view's media on the host files. Component enabled states, memory info, the SIM
@@ -555,6 +565,18 @@ telemetry.
   `/system` path under `$ANDROID_ROOT` and adds it for apps targeting API 27
   or lower. Gmail's account setup died on NoClassDefFoundError for
   `BasicHttpParams` (`HttpLegacyTest`, track 94).
+- **android.test.base, android.test.mock, android.test.runner**
+  ([framework-build.md](framework-build.md#shared-libraries)): built from
+  frameworks/base/test-*, declared as platform.xml declares them, with
+  PackageBackwardCompatibility's implicit additions. GloryFit and system APKs
+  naming `android.test.runner` failed with INSTALL_FAILED_MISSING_SHARED_LIBRARY
+  (issue #426; `AndroidTestLibrariesTest`, track 94).
+- **Shared-library declarations read once** (`SharedLibraryRegistry`): kept as a
+  snapshot, with the graphs resolved from it, while the XML files and declared
+  jars keep their size and modification time, as SystemConfig reads them once at
+  boot. A bindService resolving a service's ApplicationInfo parsed every XML file
+  and hashed every jar, and the app's StrictMode reported the unbuffered reads
+  (`SharedLibrarySnapshotTest`, track 94).
 - **Real apps** ([e2e.md](e2e.md), ADR 0034; ci run 40077182991): stand-ins
   for `power`, `thermalservice`, `alarm`, `clipboard`, `appops`, `appwidget`
   and `search` (`DeviceServices.java`), a primary shared storage volume in

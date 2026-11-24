@@ -115,8 +115,10 @@ final class StorageStatsService extends IStorageStatsManager.Default {
     private boolean callerHasUsageAccess(String callingPackage, boolean note) {
         int uid = android.os.Binder.getCallingUid();
         // The shell holds PACKAGE_USAGE_STATS on Android (host commands run as it here).
+        // A standalone app hosts these services in its own process. Sharing the
+        // service's UID never grants that application access to other apps' data.
         if (uid == android.os.Process.SYSTEM_UID || uid == android.os.Process.ROOT_UID
-                || uid == android.os.Process.SHELL_UID || uid == android.os.Process.myUid()) {
+                || uid == android.os.Process.SHELL_UID) {
             return true;
         }
         ApkPackage caller = callingPackage == null ? null : mPm.get(callingPackage);

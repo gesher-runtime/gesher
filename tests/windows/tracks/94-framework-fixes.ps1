@@ -720,6 +720,48 @@ Check 'services: BasicCookieStore (Gmail''s contacts client) loads and works fro
 } @('HttpLegacyTest: BasicCookieStore loads from the shared jar and stores and clears a synthetic cookie',
   'HttpLegacyTest all passed')
 
+# android.test.base, android.test.mock and android.test.runner (frameworks/base/test-*),
+# shared libraries apps name in <uses-library> (GloryFit's android.test.runner), laid
+# out as gesher-app.ps1 installs them, in a system root of their own.
+$testLibRoot = Join-Path $root 'android-test-system'
+New-Item -ItemType Directory -Force (Join-Path $testLibRoot 'framework'), (Join-Path $testLibRoot 'etc/permissions') | Out-Null
+foreach ($library in 'android.test.base', 'android.test.mock', 'android.test.runner') {
+  Copy-Item "$Dir/$library.jar" (Join-Path $testLibRoot 'framework') -Force
+  Copy-Item (Join-Path $PSScriptRoot "../../../tools/package/etc/permissions/$library.xml") (Join-Path $testLibRoot 'etc/permissions') -Force
+}
+$testLibOut = FixesRun ($dvmFixes + 'gesher.services.AndroidTestLibrariesTest' + (NoDrive $testLibRoot)) 90
+$testLibCode = $LASTEXITCODE
+Check 'services: android.test.runner resolves with android.test.base and android.test.mock to the system root''s jars' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: android.test.runner resolves to $ANDROID_ROOT/framework jars with android.test.base and android.test.mock',
+  'AndroidTestLibrariesTest all passed')
+Check 'services: apps targeting API 29 or lower get android.test.base, as AndroidTestBaseUpdater adds it' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: apps targeting API 29 or lower get android.test.base, android.test.runner brings mock and base',
+  'AndroidTestLibrariesTest all passed')
+Check 'services: JUnit 3, MockContext and InstrumentationTestRunner load from the android.test jars' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: junit.framework, android.test.mock and android.test.InstrumentationTestRunner load from the jars, not the boot class path',
+  'AndroidTestLibrariesTest all passed')
+
+# The system root's shared-library declarations, read once while unchanged (no XML
+# parsing or jar hashing in a bindService), and read again after a change.
+$snapshotOut = FixesRun ($dvmFixes + 'gesher.services.SharedLibrarySnapshotTest' + (NoDrive $root)) 90
+$snapshotCode = $LASTEXITCODE
+Check 'services: shared-library declarations are read once and reused while their files are unchanged' {
+  $global:LASTEXITCODE = $snapshotCode
+  $snapshotOut
+} @('SharedLibrarySnapshotTest: unchanged declarations are read once and their graph reused, with no StrictMode violation for the caller',
+  'SharedLibrarySnapshotTest all passed')
+Check 'services: changed shared-library jars and declarations are seen at the next resolution' {
+  $global:LASTEXITCODE = $snapshotCode
+  $snapshotOut
+} @('SharedLibrarySnapshotTest: replaced, added and removed jars and declarations are seen at the next resolution',
+  'SharedLibrarySnapshotTest all passed')
+
 # An installed APK's signers (ApkPackage), which apps read for their own: WhatsApp's
 # registration token is built from GET_SIGNATURES. Its fixtures (tests/dex-services/
 # fixtures, generate.sh) are signed as WhatsApp is: a key rotated for SDK 33 and up.

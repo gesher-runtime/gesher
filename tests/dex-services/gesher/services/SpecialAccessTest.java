@@ -40,7 +40,7 @@ public final class SpecialAccessTest {
     private static final int APP_UID = 12901, PLAIN_UID = 12902, APP_PID = 889010;
     private static final String INSTALLER = "fixture.access.installer";
     private static final int INSTALLER_UID = 12903;
-    private static final String FILES = AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE;
+    private static final String OVERLAY = AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW;
 
     private static void check(boolean value, String message) {
         if (!value) throw new AssertionError(message);
@@ -91,7 +91,7 @@ public final class SpecialAccessTest {
         @Override public void opChanged(int op, int uid, String pkg, String device) {
             if (uid == APP_UID && APP.equals(pkg)) {
                 lastOp = op;
-                if (op == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE) calls.incrementAndGet();
+                if (op == AppOpsManager.OP_SYSTEM_ALERT_WINDOW) calls.incrementAndGet();
             }
         }
     }
@@ -101,7 +101,7 @@ public final class SpecialAccessTest {
         check(count.get() == expected, "Expected " + expected + " app-op callbacks, got " + count.get());
     }
 
-    /** What the framework's check answers in the app (Environment, Settings, MediaStore...). */
+    /** What the framework's permission/app-op check answers in the app. */
     private static boolean appSees(PackageManagerService pm, AppOpsService ops, int op, String permission) throws Exception {
         boolean[] result = new boolean[1];
         as(APP_UID, APP_PID, () -> {
@@ -157,6 +157,10 @@ public final class SpecialAccessTest {
                 new Class<?>[]{Collection.class, boolean.class}, List.of(app, plain, platform, installer), false);
         set(pm, "mPackageEventSender", (java.util.function.Consumer<Intent>)event -> { });
         Object atm = make(type("ActivityTaskManagerService"), new Class<?>[]{PackageManagerService.class}, pm);
+        Method attachInstallSourceCallers = PackageManagerService.class.getDeclaredMethod(
+                "attachInstallSourceCallers", atm.getClass());
+        attachInstallSourceCallers.setAccessible(true);
+        attachInstallSourceCallers.invoke(pm, atm);
         Object am = make(type("ActivityManagerService"), new Class<?>[]{atm.getClass(), PackageManagerService.class,
                 type("NotificationManagerService")}, atm, pm, null);
         if (!nativeFramework) {
@@ -213,59 +217,67 @@ public final class SpecialAccessTest {
         AppOpsService reopened = null;
         Object previousServices = field(type("Services"), "sLast").get(null);
         try {
-            // Settings shows a switch only for what the manifest requests; all start off.
+            // Only enforced manifest requests have a switch; unsupported requests stay absent.
             List<String> initial = rows(pm, APP);
             check(initial.equals(List.of(
-                    "android:manage_external_storage\tdenied", "android:system_alert_window\tdenied",
+                    "android:system_alert_window\tdenied",
                     "android:request_install_packages\tdenied", "android:write_settings\tdenied",
-                    "android:get_usage_stats\tdenied", "android:manage_media\tdenied")),
+                    "android:get_usage_stats\tdenied")),
                     "Requested special accesses are listed, denied, in Settings' order: " + initial);
             check(rows(pm, PLAIN).isEmpty(), "An app requesting no special access has no switch");
-            check(!appSees(pm, ops, AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, Manifest.permission.MANAGE_EXTERNAL_STORAGE),
-                    "isExternalStorageManager is false before the user allows it");
+            // A declared permission is not a working backend. Neither supported UI nor
+            // a direct host-shell write may manufacture these two unsupported grants.
+            for (int op : new int[]{AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, AppOpsManager.OP_MANAGE_MEDIA}) {
+                String name = AppOpsManager.opToPublicName(op);
+                String permission = AppOpsManager.opToPermission(op);
+                check(!appSees(pm, ops, op, permission), name + " starts unavailable");
+                rejects(IllegalArgumentException.class, () -> setAccess(pm, APP, name, true));
+                rejects(IllegalArgumentException.class, () -> setAccess(pm, APP, name, false));
+                check(ops.checkRawMode(op, APP_UID, APP) == AppOpsManager.opToDefaultMode(op),
+                        name + " refused writes leave its mode untouched");
+                check(!appSees(pm, ops, op, permission), name + " remains unavailable");
+            }
+            check(!appSees(pm, ops, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, Manifest.permission.SYSTEM_ALERT_WINDOW),
+                    "canDrawOverlays is false before the user allows it");
             check(!pm.canRequestPackageInstalls(APP, 0),
                     "Declaring REQUEST_INSTALL_PACKAGES alone does not allow install requests");
-            check(ops.checkRawMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, APP_UID, APP)
-                    == AppOpsManager.opToDefaultMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE), "Default mode is AOSP's");
+            check(ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP)
+                    == AppOpsManager.opToDefaultMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW), "Default mode is AOSP's");
 
             // The app watches its op, as an OnOpChangedListener does.
             Watcher watcher = new Watcher();
-            as(APP_UID, APP_PID, () -> ops.startWatchingMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, APP, watcher));
+            as(APP_UID, APP_PID, () -> ops.startWatchingMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP, watcher));
 
             // Grant: the app's own check reads it, without a fabricated permission grant.
-            check(setAccess(pm, APP, FILES, true).equals(FILES + "\tallowed"), "Allowing answers the new state");
-            check(ops.checkRawMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, APP_UID, APP) == AppOpsManager.MODE_ALLOWED,
-                    "All files access is a MODE_ALLOWED UID mode");
-            check(appSees(pm, ops, AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, Manifest.permission.MANAGE_EXTERNAL_STORAGE),
-                    "isExternalStorageManager reads the user's grant");
-            check(pm.permissions().checkPermission(APP, Manifest.permission.MANAGE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_DENIED,
+            check(setAccess(pm, APP, OVERLAY, true).equals(OVERLAY + "\tallowed"), "Allowing answers the new state");
+            check(ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP) == AppOpsManager.MODE_ALLOWED,
+                    "Display over other apps is a MODE_ALLOWED package mode");
+            check(appSees(pm, ops, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, Manifest.permission.SYSTEM_ALERT_WINDOW),
+                    "canDrawOverlays reads the user's grant");
+            check(pm.permissions().checkPermission(APP, Manifest.permission.SYSTEM_ALERT_WINDOW) == PackageManager.PERMISSION_DENIED,
                     "The switch does not grant the signature permission itself");
             awaitCount(watcher.calls, 1);
-            check(watcher.lastOp == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, "The listener hears its op");
-            check(rows(pm, APP).get(0).equals(FILES + "\tallowed"), "The Control Center reads the grant back");
+            check(watcher.lastOp == AppOpsManager.OP_SYSTEM_ALERT_WINDOW, "The listener hears its op");
+            check(rows(pm, APP).get(0).equals(OVERLAY + "\tallowed"), "The Control Center reads the grant back");
             check(rows(pm, APP).get(1).endsWith("\tdenied"), "One switch leaves the others off");
 
             // Revoke.
-            check(setAccess(pm, APP, FILES, false).equals(FILES + "\tdenied"), "Denying answers the new state");
-            check(ops.checkRawMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, APP_UID, APP) == AppOpsManager.MODE_ERRORED,
+            check(setAccess(pm, APP, OVERLAY, false).equals(OVERLAY + "\tdenied"), "Denying answers the new state");
+            check(ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP) == AppOpsManager.MODE_ERRORED,
                     "Off is Settings' MODE_ERRORED");
-            check(!appSees(pm, ops, AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, Manifest.permission.MANAGE_EXTERNAL_STORAGE),
-                    "isExternalStorageManager reads the revocation");
+            check(!appSees(pm, ops, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, Manifest.permission.SYSTEM_ALERT_WINDOW),
+                    "canDrawOverlays reads the revocation");
             awaitCount(watcher.calls, 2);
-            check(setAccess(pm, APP, FILES, false).equals(FILES + "\tdenied"), "Denying again is idempotent");
+            check(setAccess(pm, APP, OVERLAY, false).equals(OVERLAY + "\tdenied"), "Denying again is idempotent");
             Thread.sleep(50);
             check(watcher.calls.get() == 2, "An unchanged mode notifies nobody");
 
             // Every other switch, with the mode Settings writes and the check the app makes.
             Object[][] others = {
-                    {AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, AppOpsManager.OP_SYSTEM_ALERT_WINDOW,
-                            Manifest.permission.SYSTEM_ALERT_WINDOW, AppOpsManager.MODE_ERRORED},
                     {AppOpsManager.OPSTR_WRITE_SETTINGS, AppOpsManager.OP_WRITE_SETTINGS,
                             Manifest.permission.WRITE_SETTINGS, AppOpsManager.MODE_ERRORED},
                     {AppOpsManager.OPSTR_GET_USAGE_STATS, AppOpsManager.OP_GET_USAGE_STATS,
                             Manifest.permission.PACKAGE_USAGE_STATS, AppOpsManager.MODE_IGNORED},
-                    {AppOpsManager.OPSTR_MANAGE_MEDIA, AppOpsManager.OP_MANAGE_MEDIA,
-                            Manifest.permission.MANAGE_MEDIA, AppOpsManager.MODE_ERRORED},
                     {AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
                             Manifest.permission.REQUEST_INSTALL_PACKAGES, AppOpsManager.MODE_ERRORED},
             };
@@ -293,29 +305,29 @@ public final class SpecialAccessTest {
             check(!pm.canRequestPackageInstalls(APP, 0), "Turning Install unknown apps off is read back");
 
             // Strict validation: undeclared, unknown and malformed input change nothing.
-            rejects(IllegalArgumentException.class, () -> setAccess(pm, PLAIN, FILES, true));
-            check(ops.checkRawMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, PLAIN_UID, PLAIN)
-                    == AppOpsManager.opToDefaultMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE),
+            rejects(IllegalArgumentException.class, () -> setAccess(pm, PLAIN, OVERLAY, true));
+            check(ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, PLAIN_UID, PLAIN)
+                    == AppOpsManager.opToDefaultMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW),
                     "An app that does not request a special access cannot be given it");
-            for (String op : new String[]{"android:camera", "android:schedule_exact_alarm", FILES + " ",
-                    "ANDROID:MANAGE_EXTERNAL_STORAGE", "", null}) {
+            for (String op : new String[]{"android:camera", "android:schedule_exact_alarm", OVERLAY + " ",
+                    "ANDROID:SYSTEM_ALERT_WINDOW", "", null}) {
                 rejects(IllegalArgumentException.class, () -> setAccess(pm, APP, op, true));
             }
             for (String name : new String[]{"fixture.absent", "../fixture.access.app", "fixture access", "fixture",
                     "", null, "fixture.access.app\tx"}) {
-                rejects(IllegalArgumentException.class, () -> setAccess(pm, name, FILES, true));
+                rejects(IllegalArgumentException.class, () -> setAccess(pm, name, OVERLAY, true));
                 rejects(IllegalArgumentException.class, () -> rows(pm, name));
             }
-            check(ops.checkRawMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, APP_UID, APP) == AppOpsManager.MODE_ERRORED,
+            check(ops.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP) == AppOpsManager.MODE_ERRORED,
                     "Rejected requests left the app's decision alone");
 
             // An attached app cannot reach the write: not through AppOps, not through the
             // special access path, not through the gesher service.
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class,
-                    () -> ops.setUidMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, APP_UID, AppOpsManager.MODE_ALLOWED)));
+                    () -> ops.setUidMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, AppOpsManager.MODE_ALLOWED)));
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class,
                     () -> ops.setMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP, AppOpsManager.MODE_ALLOWED)));
-            as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> setAccess(pm, APP, FILES, true)));
+            as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> setAccess(pm, APP, OVERLAY, true)));
             Object created = make(type("Services$Created"), new Class<?>[]{PackageManagerService.class, atm.getClass(),
                     am.getClass(), type("ClipboardService"), Map.class}, pm, atm, am, null, new java.util.HashMap<>());
             field(type("Services"), "sLast").set(null, created);
@@ -336,7 +348,7 @@ public final class SpecialAccessTest {
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> {
                 Parcel data = Parcel.obtain(), reply = Parcel.obtain();
                 try {
-                    data.writeInterfaceToken(descriptor); data.writeString(APP); data.writeString(FILES); data.writeBoolean(true);
+                    data.writeInterfaceToken(descriptor); data.writeString(APP); data.writeString(OVERLAY); data.writeBoolean(true);
                     gesher.transact(setCode, data, reply, 0);
                     reply.readException();
                 } finally { data.recycle(); reply.recycle(); }
@@ -349,16 +361,16 @@ public final class SpecialAccessTest {
                     reply.readException();
                 } finally { data.recycle(); reply.recycle(); }
             }));
-            check(!appSees(pm, ops, AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, Manifest.permission.MANAGE_EXTERNAL_STORAGE),
-                    "The app could not grant itself all files access");
+            check(!appSees(pm, ops, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, Manifest.permission.SYSTEM_ALERT_WINDOW),
+                    "The app could not grant itself overlay access");
 
             // The host shell's transaction (this process is the system here) is the Control Center's path.
             Parcel data = Parcel.obtain(), reply = Parcel.obtain();
             try {
-                data.writeInterfaceToken(descriptor); data.writeString(APP); data.writeString(FILES); data.writeBoolean(true);
+                data.writeInterfaceToken(descriptor); data.writeString(APP); data.writeString(OVERLAY); data.writeBoolean(true);
                 check(gesher.transact(setCode, data, reply, 0), "The gesher service handles the switch");
                 reply.readException();
-                check((FILES + "\tallowed").equals(reply.readString()), "The transaction answers the new state");
+                check((OVERLAY + "\tallowed").equals(reply.readString()), "The transaction answers the new state");
             } finally { data.recycle(); reply.recycle(); }
             data = Parcel.obtain(); reply = Parcel.obtain();
             try {
@@ -372,9 +384,9 @@ public final class SpecialAccessTest {
                 gesher.transact(queryCode, data, reply, 0);
                 reply.readException();
                 String[] answered = reply.createStringArray();
-                check(answered.length == 6 && answered[0].equals(FILES + "\tallowed"), "The query transaction lists the switches");
+                check(answered.length == 4 && answered[0].equals(OVERLAY + "\tallowed"), "The query transaction lists the switches");
             } finally { data.recycle(); reply.recycle(); }
-            check(appSees(pm, ops, AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, Manifest.permission.MANAGE_EXTERNAL_STORAGE),
+            check(appSees(pm, ops, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, Manifest.permission.SYSTEM_ALERT_WINDOW),
                     "The host's grant is what the app reads");
             awaitCount(watcher.calls, 3);
 
@@ -383,16 +395,23 @@ public final class SpecialAccessTest {
             clientConstructor.setAccessible(true);
             Object client = clientConstructor.newInstance(gesher);
             String[] clientRows = (String[])clientCall(client, "specialAccess", APP);
-            check(clientRows.length == 6 && clientRows[0].equals(FILES + "\tallowed"), "Client reads the switches");
-            check((FILES + "\tdenied").equals(clientCall(client, "setSpecialAccess", APP, FILES, false)), "Client changes a switch");
-            check((FILES + "\tallowed").equals(clientCall(client, "setSpecialAccess", APP, FILES, true)), "Client changes it back");
+            check(clientRows.length == 4 && clientRows[0].equals(OVERLAY + "\tallowed"), "Client reads the switches");
+            check((OVERLAY + "\tdenied").equals(clientCall(client, "setSpecialAccess", APP, OVERLAY, false)), "Client changes a switch");
+            check((OVERLAY + "\tallowed").equals(clientCall(client, "setSpecialAccess", APP, OVERLAY, true)), "Client changes it back");
             rejects(IllegalArgumentException.class, () -> clientCall(client, "setSpecialAccess", APP, "android:camera", true));
+            for (String unsupported : new String[]{AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE,
+                    AppOpsManager.OPSTR_MANAGE_MEDIA}) {
+                rejects(IllegalArgumentException.class,
+                        () -> clientCall(client, "setSpecialAccess", APP, unsupported, true));
+                rejects(IllegalArgumentException.class,
+                        () -> clientCall(client, "setSpecialAccess", APP, unsupported, false));
+            }
             check((Integer)clientCall(client, "settingsScreensClosed", (Object)new String[]{"0123456789abcdef0123456789abcdef"}) == 1,
                     "Client reports closed Settings requests");
             rejects(IllegalArgumentException.class, () -> clientCall(client, "settingsScreensClosed", (Object)new String[]{"../x"}));
             Object older = clientConstructor.newInstance(new Binder());
             rejects(UnsupportedOperationException.class, () -> clientCall(older, "specialAccess", APP));
-            rejects(UnsupportedOperationException.class, () -> clientCall(older, "setSpecialAccess", APP, FILES, true));
+            rejects(UnsupportedOperationException.class, () -> clientCall(older, "setSpecialAccess", APP, OVERLAY, true));
             rejects(UnsupportedOperationException.class, () -> clientCall(older, "settingsScreensClosed", (Object)new String[0]));
             // Launcher special-access: exit codes and the protocol rows on standard output.
             Method launcher = Class.forName("com.gesher.app.Launcher").getDeclaredMethod("specialAccess",
@@ -402,7 +421,7 @@ public final class SpecialAccessTest {
             java.io.PrintStream out = new java.io.PrintStream(printed, true, "UTF-8");
             check((Integer)launcher.invoke(null, client, List.of(APP), out) == 0, "special-access exits 0");
             String text = printed.toString("UTF-8");
-            check(text.startsWith("special-access\t" + FILES + "\tallowed") && text.split("\n").length == 6,
+            check(text.startsWith("special-access\t" + OVERLAY + "\tallowed") && text.split("\n").length == 4,
                     "special-access prints one row per switch: " + text);
             printed.reset();
             check((Integer)launcher.invoke(null, client, List.of(APP, "android:write_settings", "allow"), out) == 0
@@ -412,6 +431,12 @@ public final class SpecialAccessTest {
             printed.reset();
             check((Integer)launcher.invoke(null, client, List.of(APP, "android:camera", "allow"), out) == 1
                     && printed.size() == 0, "A refused change exits 1 with no row");
+            for (String unsupported : new String[]{AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE,
+                    AppOpsManager.OPSTR_MANAGE_MEDIA}) {
+                printed.reset();
+                check((Integer)launcher.invoke(null, client, List.of(APP, unsupported, "allow"), out) == 1
+                        && printed.size() == 0, "Unsupported access cannot be granted by the launcher: " + unsupported);
+            }
             check((Integer)launcher.invoke(null, client, List.of("fixture.absent"), out) == 1, "An unknown package exits 1");
             check((Integer)launcher.invoke(null, older, List.of(APP), out) == 4 && printed.size() == 0,
                     "An older device exits 4 with no row");
@@ -655,69 +680,53 @@ public final class SpecialAccessTest {
                 ((List<Object>)get(atm, "mActivities")).remove(caller);
             }
 
-            // The request files: one token file per waiting request; a request for another
-            // app replaces the unshown ones (told), one for the same app keeps them.
-            File requestFile = new File(directory, "system/control-panel-request");
-            File resultsDir = new File(directory, "system/control-panel-results");
-            Method publish = type("ControlCenter").getDeclaredMethod("publishRequest", File.class, File.class,
-                    String.class, String.class, java.util.function.Consumer.class);
+            // Immutable queue records carry their package and token together. No other
+            // publication, including tokenless launches, can replace a waiting visit.
+            File requestsDir = new File(directory, "system/control-panel-requests");
+            Method publish = type("ControlCenter").getDeclaredMethod("publishRequest", File.class,
+                    String.class, String.class);
             publish.setAccessible(true);
-            List<String> told = new java.util.ArrayList<>();
-            java.util.function.Consumer<String> tell = told::add;
             String ta = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", tb = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tc = "cccccccccccccccccccccccccccccccc";
-            publish.invoke(null, requestFile, resultsDir, "com.example.first", ta, tell);
-            check(new String(java.nio.file.Files.readAllBytes(requestFile.toPath()), "UTF-8").equals("com.example.first\n")
-                    && new File(resultsDir, ta).isFile() && told.isEmpty(), "The request file names the package; its token has a file");
-            publish.invoke(null, requestFile, resultsDir, "com.example.first", tb, tell);
-            check(new File(resultsDir, ta).isFile() && new File(resultsDir, tb).isFile() && told.isEmpty(),
-                    "A second request for the same app keeps the first token");
-            publish.invoke(null, requestFile, resultsDir, "com.example.second", tc, tell);
-            check(!new File(resultsDir, ta).exists() && !new File(resultsDir, tb).exists() && new File(resultsDir, tc).isFile()
-                    && told.size() == 2 && told.containsAll(List.of(ta, tb)), "Another app's request replaces and tells the unshown ones: " + told);
-            publish.invoke(null, requestFile, resultsDir, "com.example.third", null, tell);
-            check(!new File(resultsDir, tc).exists() && told.size() == 3 && told.get(2).equals(tc)
-                    && new String(java.nio.file.Files.readAllBytes(requestFile.toPath()), "UTF-8").equals("com.example.third\n"),
-                    "A request with no token replaces waiting ones too");
-            rejects(java.io.IOException.class, () -> publish.invoke(null, requestFile, resultsDir, "com.example.x", "../evil", tell));
-            // The package whose details the Control Center shows keeps its tokens.
-            File showingFile = new File(directory, "system/control-panel-showing");
-            String td = "dddddddddddddddddddddddddddddddd", te = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-            publish.invoke(null, requestFile, resultsDir, "com.example.shown", td, tell);
-            java.nio.file.Files.write(showingFile.toPath(), "com.example.shown".getBytes("UTF-8"));
-            int toldBefore = told.size();
-            publish.invoke(null, requestFile, resultsDir, "com.example.next", te, tell);
-            check(new File(resultsDir, td).isFile() && told.size() == toldBefore,
-                    "A new request never replaces the shown package's tokens");
-            // A request that cannot be published leaves no token file.
+            File firstRequest = (File)publish.invoke(null, requestsDir, "com.example.first", ta);
+            File secondRequest = (File)publish.invoke(null, requestsDir, "com.example.first", tb);
+            File otherRequest = (File)publish.invoke(null, requestsDir, "com.example.second", tc);
+            File plainRequest = (File)publish.invoke(null, requestsDir, "com.example.third", null);
+            check(firstRequest.isFile() && secondRequest.isFile() && otherRequest.isFile() && plainRequest.isFile(),
+                    "All queued requests survive later publications");
+            check(java.nio.file.Files.readString(firstRequest.toPath()).equals("com.example.first\n" + ta + "\n")
+                    && java.nio.file.Files.readString(otherRequest.toPath()).equals("com.example.second\n" + tc + "\n"),
+                    "Each atomically published record contains its own package and token");
+            check(firstRequest.getName().compareTo(secondRequest.getName()) < 0
+                    && secondRequest.getName().compareTo(otherRequest.getName()) < 0,
+                    "The queue retains publication order");
+            rejects(java.io.IOException.class, () -> publish.invoke(null, requestsDir, "com.example.x", "../evil"));
+            rejects(java.io.IOException.class, () -> publish.invoke(null, requestsDir, null, ta));
             File blocked = new File(directory, "system/blocked-request");
-            check(blocked.mkdirs(), "Cannot create the blocking directory");
-            java.nio.file.Files.write(new File(blocked, "child").toPath(), new byte[1]);  // not replaceable
-            String tf = "ffffffffffffffffffffffffffffffff";
-            rejects(Exception.class, () -> publish.invoke(null, blocked, resultsDir, "com.example.next", tf, tell));
-            check(!new File(resultsDir, tf).exists(), "A failed publication removes its token file");
-            // A device start clears waiting results, temporary files and the showing marker.
-            java.nio.file.Files.write(new File(resultsDir, "aaaa.tmp").toPath(), new byte[1]);
+            java.nio.file.Files.write(blocked.toPath(), new byte[1]);
+            rejects(Exception.class, () -> publish.invoke(null, blocked, "com.example.next", ta));
+            check(requestsDir.list().length == 4, "A failed publication leaves other requests intact");
+            java.nio.file.Files.write(new File(requestsDir, "aaaa.tmp").toPath(), new byte[1]);
+            File legacy = new File(directory, "system/control-panel-request");
+            java.nio.file.Files.writeString(legacy.toPath(), "com.example.legacy");
             Method clear = type("ControlCenter").getDeclaredMethod("clearResults", String.class);
             clear.setAccessible(true);
             clear.invoke(null, directory.getPath());
-            String[] left = resultsDir.list();
-            check(left != null && left.length == 0 && !showingFile.exists(), "A device start clears the results: " + java.util.Arrays.toString(left));
+            check(requestsDir.list().length == 0 && !legacy.exists(),
+                    "A device start clears old queue records, temporary files and legacy requests");
 
             // Persistence: a restarted ledger over the same file has the user's decisions.
             setAccess(pm, APP, AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, true);
             ops.reloadNonHistoricalState();
             reopened = (AppOpsService)make(AppOpsService.class, new Class<?>[]{PackageManagerService.class, File.class}, pm, file);
             attach.invoke(reopened, get(am, "mCallers"), states);
-            check(reopened.checkRawMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, APP_UID, APP) == AppOpsManager.MODE_ALLOWED,
-                    "All files access survives a restart");
             check(reopened.checkRawMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP) == AppOpsManager.MODE_ALLOWED,
                     "Display over other apps survives a restart");
             check(reopened.checkRawMode(AppOpsManager.OP_WRITE_SETTINGS, APP_UID, APP) == AppOpsManager.MODE_ERRORED,
                     "A denial survives a restart");
             set(pm, "mAppOps", reopened);
             List<String> afterRestart = rows(pm, APP);
-            check(afterRestart.get(0).equals(FILES + "\tallowed") && afterRestart.get(1).endsWith("\tallowed")
-                    && afterRestart.get(3).endsWith("\tdenied"), "The Control Center reads the restored state: " + afterRestart);
+            check(afterRestart.size() == 4 && afterRestart.get(0).equals(OVERLAY + "\tallowed")
+                    && afterRestart.get(2).equals("android:write_settings\tdenied"), "The Control Center reads the restored state: " + afterRestart);
             as(APP_UID, APP_PID, () -> ops.stopWatchingMode(watcher));
         } finally {
             field(type("Services"), "sLast").set(null, previousServices);

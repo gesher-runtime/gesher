@@ -1,4 +1,4 @@
-# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+﻿# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # Real WPF layout and routed production buttons, with process launch/uninstall adapted.
 param([string] $SourceRef, [switch] $Measure)
 $ErrorActionPreference = 'Stop'
@@ -12,7 +12,8 @@ if ($errors.Count) { throw ($errors | Out-String) }
 $assignment = @($ast.FindAll({ param($node)
     $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '[xml]$xaml'
 }, $false))
-if ($assignment.Count -ne 1) { throw 'Expected one production window XAML' }
+if ($SourceRef -and $assignment.Count -ne 1) { throw 'Expected legacy production window XAML' }
+if (-not $SourceRef) { . (Join-Path $repo 'tools/package/gesher-panel-view.ps1') }
 $uiAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'tools/package/gesher-ui.ps1'), [ref]$tokens, [ref]$errors)
 $textFunction = $uiAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-GesherText' }, $false)
 . ([scriptblock]::Create($textFunction.Extent.Text))
@@ -53,8 +54,12 @@ foreach ($language in 'en', 'he') {
     foreach ($height in 600, 820) {
         $script:GesherUiLanguage = $language
         $flowDirection = if ($language -eq 'he') { 'RightToLeft' } else { 'LeftToRight' }
-        . ([scriptblock]::Create($assignment[0].Extent.Text))
-        $window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
+        if ($SourceRef) {
+            . ([scriptblock]::Create($assignment[0].Extent.Text))
+            $window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
+        } else {
+            $window = New-PanelView 'dashboard' @{ PanelFlowDirection = [Windows.FlowDirection]$flowDirection }
+        }
         try {
             $window.ShowInTaskbar = $false; $window.WindowStartupLocation = 'Manual'; $window.Left = -12000
             $window.Width = 800; $window.Height = $height

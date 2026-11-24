@@ -42,8 +42,8 @@ foreach ($variable in '$script:SpecialAccessLabels', '$script:SpecialAccessTimeo
 }
 
 # The switches the device can answer (SpecialAccess.KINDS), each with both translations.
-$expected = 'android:manage_external_storage', 'android:system_alert_window', 'android:request_install_packages',
-    'android:write_settings', 'android:get_usage_stats', 'android:manage_media'
+$expected = 'android:system_alert_window', 'android:request_install_packages',
+    'android:write_settings', 'android:get_usage_stats'
 Assert-Access ((@($script:SpecialAccessLabels.Keys) -join ',') -eq ($expected -join ',')) 'The panel knows exactly the device''s switches, in Settings'' order'
 $catalog = Get-Content -LiteralPath $UiMessagesPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $source = [IO.File]::ReadAllText([IO.Path]::GetFullPath(
@@ -63,9 +63,11 @@ foreach ($key in 'cp_access_title', 'cp_access_unavailable', 'cp_access_failed',
 $tab = "`t"
 $parsed = @(ConvertFrom-SpecialAccessOutput @(
     'gesher-app: starting the device',
-    "special-access${tab}android:manage_external_storage${tab}allowed",
+    "special-access${tab}android:get_usage_stats${tab}allowed",
     "special-access${tab}android:system_alert_window${tab}denied`r",
     "special-access${tab}android:camera${tab}allowed",
+    "special-access${tab}android:manage_external_storage${tab}allowed",
+    "special-access${tab}android:manage_media${tab}allowed",
     "special-access${tab}android:write_settings${tab}granted",
     "Special-Access${tab}android:get_usage_stats${tab}allowed",
     "special-access${tab}android:manage_media${tab}allowed${tab}extra",
@@ -74,7 +76,7 @@ $parsed = @(ConvertFrom-SpecialAccessOutput @(
     ''))
 Assert-Access ($parsed.Count -eq 3) "Only well-formed rows of known switches are read ($($parsed.Count))"
 Assert-Access (-not $parsed[0].Fixed -and $parsed[2].Op -eq 'android:request_install_packages' -and $parsed[2].Allowed -and $parsed[2].Fixed) 'A fixed switch is read as fixed'
-Assert-Access ($parsed[0].Op -eq 'android:manage_external_storage' -and $parsed[0].Allowed -eq $true) 'An allowed row reads allowed'
+Assert-Access ($parsed[0].Op -eq 'android:get_usage_stats' -and $parsed[0].Allowed -eq $true) 'An allowed row reads allowed'
 Assert-Access ($parsed[1].Op -eq 'android:system_alert_window' -and $parsed[1].Allowed -eq $false) 'A denied row (CRLF) reads denied'
 
 # The launcher boundary: answers scripted per call, every call recorded.
@@ -89,14 +91,16 @@ function Invoke-PanelSpecialAccess([string[]] $arguments) {
 foreach ($bad in '', 'a', 'com', 'bad name.app', 'com.example.app;calc', 'com.example.app -Command x', '1com.example',
         'com..example', 'com.example.', "com.example`tapp", ('a.' + ('b' * 260))) {
     Assert-Access ($null -eq (Get-AppSpecialAccess $bad)) "An invalid package is refused: $bad"
-    Assert-Access ($null -eq (Set-AppSpecialAccess $bad 'android:manage_external_storage' $true)) "An invalid package is not changed: $bad"
+    Assert-Access ($null -eq (Set-AppSpecialAccess $bad 'android:get_usage_stats' $true)) "An invalid package is not changed: $bad"
 }
-foreach ($op in 'android:camera', 'android:manage_external_storage ', 'ANDROID:MANAGE_EXTERNAL_STORAGE', '', 'allow') {
+foreach ($op in 'android:camera', 'android:get_usage_stats ', 'ANDROID:GET_USAGE_STATS', '', 'allow',
+        'android:manage_external_storage', 'android:manage_media') {
     Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' $op $true)) "An unknown switch is refused: '$op'"
+    Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' $op $false)) "An unknown switch cannot be revoked through this interface: '$op'"
 }
 Assert-Access ($script:Calls.Count -eq 0) 'Refused input never reaches the launcher'
 
-$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:manage_external_storage${tab}denied",
+$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:get_usage_stats${tab}denied",
     "special-access${tab}android:request_install_packages${tab}allowed") }
 $switches = Get-AppSpecialAccess 'com.example.app'
 Assert-Access ($script:Calls[-1] -eq 'com.example.app') 'Reading asks the device about the package only'
@@ -104,24 +108,24 @@ Assert-Access ($null -ne $switches -and @($switches).Count -eq 2 -and -not $swit
 $script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @('gesher-app: nothing') }
 $none = Get-AppSpecialAccess 'com.example.app'
 Assert-Access ($null -ne $none -and @($none).Count -eq 0) 'An app requesting none has an empty list, not a failure'
-$script:Answer = [PSCustomObject]@{ ExitCode = 1; Lines = @("special-access${tab}android:manage_external_storage${tab}allowed") }
+$script:Answer = [PSCustomObject]@{ ExitCode = 1; Lines = @("special-access${tab}android:get_usage_stats${tab}allowed") }
 Assert-Access ($null -eq (Get-AppSpecialAccess 'com.example.app')) 'A failed launcher is not read as switches'
 
-$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:manage_external_storage${tab}allowed") }
-$state = Set-AppSpecialAccess 'com.example.app' 'android:manage_external_storage' $true
-Assert-Access ($script:Calls[-1] -eq 'com.example.app android:manage_external_storage allow') 'Turning on asks the device to allow'
+$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:get_usage_stats${tab}allowed") }
+$state = Set-AppSpecialAccess 'com.example.app' 'android:get_usage_stats' $true
+Assert-Access ($script:Calls[-1] -eq 'com.example.app android:get_usage_stats allow') 'Turning on asks the device to allow'
 Assert-Access ($state -is [bool] -and $state) 'The device''s new state is returned'
-$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:manage_external_storage${tab}denied") }
-$state = Set-AppSpecialAccess 'com.example.app' 'android:manage_external_storage' $false
-Assert-Access ($script:Calls[-1] -eq 'com.example.app android:manage_external_storage deny') 'Turning off asks the device to deny'
+$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:get_usage_stats${tab}denied") }
+$state = Set-AppSpecialAccess 'com.example.app' 'android:get_usage_stats' $false
+Assert-Access ($script:Calls[-1] -eq 'com.example.app android:get_usage_stats deny') 'Turning off asks the device to deny'
 Assert-Access ($state -is [bool] -and -not $state) 'Denied is returned as false'
-$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:manage_external_storage${tab}denied") }
-$state = Set-AppSpecialAccess 'com.example.app' 'android:manage_external_storage' $true
+$script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:get_usage_stats${tab}denied") }
+$state = Set-AppSpecialAccess 'com.example.app' 'android:get_usage_stats' $true
 Assert-Access ($state -is [bool] -and -not $state) 'The switch shows what the device answers, not what was asked'
 $script:Answer = [PSCustomObject]@{ ExitCode = 0; Lines = @("special-access${tab}android:write_settings${tab}allowed") }
-Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' 'android:manage_external_storage' $true)) 'An answer about another switch is a failure'
+Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' 'android:get_usage_stats' $true)) 'An answer about another switch is a failure'
 $script:Answer = [PSCustomObject]@{ ExitCode = 1; Lines = @() }
-Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' 'android:manage_external_storage' $true)) 'A refused change is a failure'
+Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' 'android:get_usage_stats' $true)) 'A refused change is a failure'
 
 # The production process boundary, with a stand-in gesher-app.ps1 that echoes its
 # arguments among other output, as the launcher does.
@@ -136,16 +140,16 @@ Write-Output 'gesher-app: the device is running'
 Write-Output ("args:" + ($Arguments -join '|'))
 [Console]::Error.WriteLine('a diagnostic on stderr')
 # A well-formed row, but a failed command: the row must not be believed.
-Write-Output "special-access`tandroid:manage_external_storage`tallowed"
+Write-Output "special-access`tandroid:get_usage_stats`tallowed"
 exit 4
 '@)
     $result = Invoke-PanelSpecialAccess @('com.example.app')
     Assert-Access ($result.ExitCode -eq 4) "The launcher's exit code is kept ($($result.ExitCode))"
     Assert-Access (@($result.Lines) -contains 'args:special-access|com.example.app') 'The command and package reach the launcher as separate arguments'
-    $result = Invoke-PanelSpecialAccess @('com.example.app', 'android:manage_external_storage', 'allow')
+    $result = Invoke-PanelSpecialAccess @('com.example.app', 'android:get_usage_stats', 'allow')
     Assert-Access ($result.ExitCode -eq 4) 'Exit codes pass through'
-    Assert-Access (@($result.Lines) -contains 'args:special-access|com.example.app|android:manage_external_storage|allow') 'The switch and choice reach the launcher'
-    $state = Set-AppSpecialAccess 'com.example.app' 'android:manage_external_storage' $true
+    Assert-Access (@($result.Lines) -contains 'args:special-access|com.example.app|android:get_usage_stats|allow') 'The switch and choice reach the launcher'
+    $state = Set-AppSpecialAccess 'com.example.app' 'android:get_usage_stats' $true
     Assert-Access ($null -eq $state) 'A nonzero launcher exit is a failure through the real process boundary'
     [IO.File]::WriteAllText((Join-Path $here 'gesher-app.ps1'), @'
 param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @())
@@ -267,6 +271,7 @@ if ($env:OS -eq 'Windows_NT' -and [Threading.Thread]::CurrentThread.ApartmentSta
         }, $false)
         . ([scriptblock]::Create($definition.Extent.Text))
     }
+    . (Join-Path (Split-Path -Parent $PanelPath) 'gesher-panel-view.ps1')
     $script:GesherUiCatalog = $catalog
     $script:GesherUiLanguage = 'en'
     $flowDirection = 'LeftToRight'
@@ -313,7 +318,7 @@ if ($env:OS -eq 'Windows_NT' -and [Threading.Thread]::CurrentThread.ApartmentSta
     $script:OnClick = [System.Windows.Controls.Primitives.ToggleButton].GetMethod('OnClick', [Reflection.BindingFlags]'Instance, NonPublic')
 
     $script:QueryAnswer = [PSCustomObject]@{ ExitCode = 0; Lines = @(
-        "special-access`tandroid:manage_external_storage`tdenied",
+        "special-access`tandroid:get_usage_stats`tdenied",
         "special-access`tandroid:system_alert_window`tdenied",
         "special-access`tandroid:request_install_packages`tallowed`tfixed",
         "special-access`tandroid:write_settings`tallowed") }
@@ -369,13 +374,13 @@ if ($env:OS -eq 'Windows_NT' -and [Threading.Thread]::CurrentThread.ApartmentSta
     Assert-Access (@($answer).Count -eq 1 -and $answer -eq $false) 'Closing App info uninstalls nothing'
     Assert-Access ($script:Seen.Loading -eq 'Visible' -and $script:Seen.LoadingText -eq (Get-GesherText 'cp_access_loading') -and $script:Seen.BoxesWhileLoading -eq 0) 'The dialog opens at once, loading'
     Assert-Access ($script:Seen.StatusAfter -eq 'Collapsed' -and $script:Seen.Title -eq (Get-GesherText 'cp_access_title')) 'The loading line gives way to the switches'
-    $expectedLabels = (Get-GesherText 'cp_access_all_files'), (Get-GesherText 'cp_access_overlay'),
+    $expectedLabels = (Get-GesherText 'cp_access_usage'), (Get-GesherText 'cp_access_overlay'),
         (Get-GesherText 'cp_access_fixed' @((Get-GesherText 'cp_access_install'))), (Get-GesherText 'cp_access_write_settings')
     Assert-Access (($script:Seen.Labels -join '|') -eq ($expectedLabels -join '|')) "One labeled switch each: $($script:Seen.Labels -join '|')"
     Assert-Access (($script:Seen.Before -join ',') -eq 'False,False,True,True') 'The switches start as the device answered'
     Assert-Access (($script:Seen.Enabled -join ',') -eq 'True,True,False,True') 'A fixed switch cannot be changed'
     Assert-Access ($script:Seen.PendingDisabled) 'A switch is disabled while its change runs'
-    Assert-Access (($script:Started -join ',') -eq 'com.example.app,com.example.app android:manage_external_storage allow,com.example.app android:system_alert_window allow,com.example.app android:write_settings deny') "Each click asks once for its switch: $($script:Started -join ',')"
+    Assert-Access (($script:Started -join ',') -eq 'com.example.app,com.example.app android:get_usage_stats allow,com.example.app android:system_alert_window allow,com.example.app android:write_settings deny') "Each click asks once for its switch: $($script:Started -join ',')"
     Assert-Access ($script:Seen.ErrorVisible -eq 'Visible' -and $script:Seen.Error -eq (Get-GesherText 'cp_access_failed' @((Get-GesherText 'cp_access_overlay')))) 'A failed change says which switch'
     Assert-Access (($script:Seen.After -join ',') -eq 'True,False,True,True') "Each switch shows the device's answer, a failure reverted: $($script:Seen.After -join ',')"
     Assert-Access ($script:Seen.ErrorAfter -eq 'Collapsed') 'The next change clears the message'

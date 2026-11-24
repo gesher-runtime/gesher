@@ -3091,8 +3091,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                             : null;
                     String token = pending == null ? null : settingsResults().register(pending);
                     if (pending != null && token == null) return ActivityManager.START_CANCELED;
-                    // Waiting requests of other apps this one replaces before they were
-                    // shown are answered now: their details will not open.
+                    // The opener can cancel admission before the host shows the visit.
+                    // Normal queue publication never replaces another package's request.
                     java.util.function.Consumer<String> replaced = old -> {
                         SettingsResults results = mSettingsResults;
                         if (results != null) results.cancel(old);

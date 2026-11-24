@@ -34,7 +34,8 @@ answered by `IFoo.Default` (null, 0, false, nothing done) and one missing servic
    access, unknown sources, battery optimization, overlay, write settings, exact alarms,
    app locale, open by default...) whose `package:` data or APP_PACKAGE extra names an
    installed package to `ControlCenter.open(package)`. The system server writes the
-   package to `data/system/control-panel-request` and opens the Control Center through a
+   package and optional visit token to one immutable record in
+   `data/system/control-panel-requests` and opens the Control Center through a
    shortcut it keeps (`data/system/gesher-control-panel.lnk` to `gesher-launch.exe
    control-panel`): `WindowsHost.openUrl` (ShellExecute) takes no arguments, and a
    shortcut needs no new native code. The Control Center shows the app's details dialog
@@ -85,11 +86,10 @@ answered by `IFoo.Default` (null, 0, false, nothing done) and one missing servic
 ## Addendum: special app access switches (issues #310, #312)
 
 The per-app permission screens reached the app's details, but the details had no switch,
-so an app asking for All files access (File Manager X) or another special access re-checked
-on resume, found it denied and asked again, forever. The details now show Android
-Settings' switches for the special accesses the app's manifest requests: All files access,
-Display over other apps, Install unknown apps, Modify system settings, Usage access and
-Media management (`SpecialAccess`; docs/services.md "Special app access"). They write the
+so apps rechecked on resume, found their requested access denied and asked again.
+The details now show the implemented Android Settings special accesses the app's manifest
+requests: Display over other apps, Install unknown apps, Modify system settings and Usage
+access (`SpecialAccess`; docs/services.md "Special app access"). They write the
 app-op modes AOSP Settings writes, through `AppOpsService`, only on the user's click, over
 a `gesher` service transaction restricted to the host shell. Every switch starts off.
 `canRequestPackageInstalls` now follows `OP_REQUEST_INSTALL_PACKAGES` as AOSP does (it
@@ -98,6 +98,15 @@ returns a pending Android user action. Launching it takes the installer through 
 Install unknown apps choice if required and asks for consent to the selected APK on
 Windows. The server rechecks the source at package publication. An INSTALL_PACKAGES
 holder is allowed to request installation, and its switch is shown fixed on.
+
+All files access and Media management remain unavailable. The initial implementation
+offered those switches, but the raw shared-storage and media consent operation paths did
+not enforce their decisions. The review therefore removed both from the displayed and
+writable allowlists: a grant must change the operation it advertises. A production
+shared-storage authorization backend and MediaProvider are prerequisites, including
+ordinary-app tests for grant and revocation. The MediaStore facade's SDK-call tests use a
+controlled provider; they do not supply that backend. This change does not resolve the
+File Manager X all-files request in #310 or establish which permission blocks #312.
 
 Item 4 changes for per-app details. The system creates an opaque visit token for a
 request from an activity and pauses the covered activity when the Control Center launch
@@ -113,16 +122,27 @@ RESULT_OK only after the user turned its switch on during that visit. A later tu
 closing without a turn, or another screen answers RESULT_CANCELED. The result is independent
 of whether the same package has another visit waiting to be displayed. If the Control
 Center exits, the device cancels that exact host's pending visits. Unshown visits time out
-after 15 minutes or cancel when replaced. At capacity, new requests are refused so a
+after 15 minutes. New requests do not replace or cancel earlier visits. At capacity,
+new requests are refused so a
 visible visit can continue until the user closes it. The Windows settings pages and
 Control Center's main view still answer RESULT_CANCELED at once.
 
-The request file remains a package name. Each token is stored separately while it is
-pending discovery by the host. The shown-package marker protects the current dialog's
-tokens as the panel takes new requests. The device removes unreconciled marker and token
-files at device start.
+Each request atomically publishes its package and optional token in the same immutable
+file. Ordered, unique filenames preserve queued requests for other packages. The panel
+claims a record by renaming that exact file, so a concurrent publication cannot change
+the selected request or transfer another caller's result to the current dialog. Requests
+for the displayed package can join that visit; other packages wait until it closes.
+The queue holds at most 32 waiting records and the panel claims at most 32 per dispatcher
+tick, including when a producer continually refills it. Failed host launches remove only
+their own record. Timeout and device-start cleanup retire unclaimed requests.
+
+The updated panel also imports the older server's single request file and separate
+result files. A new server requires the updated panel from the same installation;
+after an update, use the normal panel reopening and device restart. The old shown-package
+marker serves only the legacy reader and is not an ownership decision for new requests.
 
 Item 5 changes too: StorageStatsService decides usage access as AOSP's checkStatsPermission
 does, from `OP_GET_USAGE_STATS` (MODE_ALLOWED allows, MODE_DEFAULT falls back to holding
 PACKAGE_USAGE_STATS, other modes deny), so the Usage access switch governs storage stats as
-it governs usage stats; a declared permission alone no longer gives access.
+it governs usage stats; a declared permission alone no longer gives access. Hosting the
+service in an ordinary standalone app's process does not bypass this decision.

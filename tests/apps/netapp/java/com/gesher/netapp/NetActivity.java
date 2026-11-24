@@ -32,7 +32,9 @@ import javax.net.ssl.HttpsURLConnection;
  * ConnectivityManager's active network (capabilities, link properties, NetworkInfo),
  * a default network callback and a request callback, an HTTPS GET through
  * HttpsURLConnection (the network security config's trust manager, the system CAs),
- * cleartext refused (target SDK 36). With the extra {@code watch}, it waits for the test to
+ * cleartext refused (target SDK 36), and the user-added CAs as AndroidCAStore lists them
+ * ({@code user:} aliases, what Chrome trusts besides its own roots; $GESHER_NETAPP_USER_CA
+ * names one by its SHA-1). With the extra {@code watch}, it waits for the test to
  * add an address to the default network's adapter (2001:db8::77, IPv6 so the runner's
  * DHCPv4 setup is left alone) and to remove it, and reports the callbacks Windows' change
  * brought.
@@ -177,6 +179,7 @@ public class NetActivity extends Activity {
         io.join(120_000);
         log("https: " + https.get());
         log("cleartext http: " + cleartext.get());
+        log("user CA: " + userCa(System.getenv("GESHER_NETAPP_USER_CA")));
 
         if (watch) {
             log("watching: add " + WATCHED + " now");
@@ -186,6 +189,30 @@ public class NetActivity extends Activity {
         cm.unregisterNetworkCallback(defaultCallback);
         thread.quitSafely();
         log("done");
+    }
+
+    /** Whether AndroidCAStore lists the certificate with SHA-1 {@code sha1} as a user CA. */
+    static String userCa(String sha1) {
+        try {
+            java.security.KeyStore ks = java.security.KeyStore.getInstance("AndroidCAStore");
+            ks.load(null, null);
+            int users = 0;
+            boolean found = false;
+            for (String alias : java.util.Collections.list(ks.aliases())) {
+                if (!alias.startsWith("user:")) continue;
+                java.security.cert.Certificate cert = ks.getCertificate(alias);
+                if (cert == null) continue;
+                users++;
+                byte[] digest = java.security.MessageDigest.getInstance("SHA-1")
+                        .digest(cert.getEncoded());
+                StringBuilder hex = new StringBuilder();
+                for (byte b : digest) hex.append(String.format("%02x", b & 0xff));
+                found |= hex.toString().equalsIgnoreCase(sha1);
+            }
+            return sha1 + " user " + found + " (" + users + " user aliases)";
+        } catch (Throwable t) {
+            return "failed: " + t;
+        }
     }
 
     static String transport(NetworkCapabilities nc) {

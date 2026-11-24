@@ -24,7 +24,8 @@ STUBS = {
     }''',
     'android/os/Process.java': '''package android.os; public class Process {
       public static final int SYSTEM_UID=1000,ROOT_UID=0,SHELL_UID=2000;
-      public static int myUid(){return SYSTEM_UID;} }''',
+      public static int uid=SYSTEM_UID;
+      public static int myUid(){return uid;} }''',
     'android/os/Environment.java': 'package android.os; public class Environment { public static java.io.File getDataDirectory(){return new java.io.File(".");} }',
     'android/os/ParcelableException.java': 'package android.os; public class ParcelableException extends RuntimeException { public ParcelableException(Throwable cause){super(cause);} }',
     'android/os/storage/StorageManager.java': '''package android.os.storage; public class StorageManager {
@@ -35,7 +36,7 @@ STUBS = {
       public static class NameNotFoundException extends Exception { public NameNotFoundException(String n){super(n);} } }''',
     'android/content/pm/ParceledListSlice.java': 'package android.content.pm; public class ParceledListSlice { public static ParceledListSlice emptyList(){return new ParceledListSlice();} }',
     'android/app/AppOpsManager.java': '''package android.app; public class AppOpsManager {
-      public static final int OP_GET_USAGE_STATS=43, MODE_ALLOWED=0, MODE_DEFAULT=3; }''',
+      public static final int OP_GET_USAGE_STATS=43, MODE_ALLOWED=0, MODE_IGNORED=1, MODE_DEFAULT=3; }''',
     'android/app/usage/StorageStats.java': 'package android.app.usage; public class StorageStats { public long codeBytes,apkBytes,dataBytes,cacheBytes,externalCacheBytes; }',
     'android/app/usage/ExternalStorageStats.java': 'package android.app.usage; public class ExternalStorageStats { public long totalBytes,audioBytes,videoBytes,imageBytes,appBytes,obbBytes; }',
     'com/gesher/server/ApkPackage.java': '''package com.gesher.server; final class ApkPackage {
@@ -55,7 +56,8 @@ STUBS = {
       AppOps appOps(){return ops;}
       Permissions permissions(){return permissions;}
       static final class AppOps {
-        int checkRawMode(int op,int uid,String pkg){return android.app.AppOpsManager.MODE_DEFAULT;}
+        volatile int mode=android.app.AppOpsManager.MODE_DEFAULT;
+        int checkRawMode(int op,int uid,String pkg){return mode;}
         NotedOperation noteOperation(int op,int uid,String pkg,String tag,boolean async,String message,boolean collect){
           return new NotedOperation(checkRawMode(op,uid,pkg));
         }

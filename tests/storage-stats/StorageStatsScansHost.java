@@ -163,6 +163,59 @@ public final class StorageStatsScansHost {
         fails(SecurityException.class, revoked::get, "authorization revoked while waiting");
     }
 
+    private static void standaloneUsageAccess(Path root) throws Exception {
+        PackageManagerService pm = new PackageManagerService();
+        ApkPackage app = install(pm, root, "app.standalone", 10101);
+        ApkPackage other = install(pm, root, "app.other", 10102);
+        write(root.resolve("media/0/Pictures/shared.jpg"), 59);
+        StorageStatsService service = new StorageStatsService(pm, root.toFile());
+        android.os.Process.uid = app.uid();
+        Binder.setCallingUid(app.uid());
+        try {
+            CountingFiles.reset();
+            // Standalone mode has no distinct service UID. It must still evaluate
+            // the app's actual usage access before traversing shared or other data.
+            fails(SecurityException.class,
+                    () -> service.queryExternalStatsForUser(null, 0, app.packageName),
+                    "standalone self UID has no implicit usage access");
+            fails(SecurityException.class,
+                    () -> service.queryStatsForPackage(null, other.packageName, 0, app.packageName),
+                    "standalone self UID cannot inspect another package");
+            fails(SecurityException.class,
+                    () -> service.getCacheBytes(null, app.packageName),
+                    "standalone self UID cannot inspect all caches");
+            require(CountingFiles.walks.get() == 0, "standalone denied queries performed disk I/O");
+            require(service.queryStatsForPackage(null, app.packageName, 0, app.packageName).codeBytes == 17,
+                    "standalone own-package stats remain available without usage access");
+
+            pm.appOps().mode = android.app.AppOpsManager.MODE_ALLOWED;
+            require(service.queryExternalStatsForUser(null, 0, app.packageName).totalBytes == 59,
+                    "standalone app receives real shared totals after usage grant");
+            fails(SecurityException.class,
+                    () -> service.queryExternalStatsForUser(null, 0, other.packageName),
+                    "standalone app cannot substitute another calling package");
+            pm.appOps().mode = android.app.AppOpsManager.MODE_IGNORED;
+            fails(SecurityException.class,
+                    () -> service.queryExternalStatsForUser(null, 0, app.packageName),
+                    "standalone usage revocation is enforced");
+
+            pm.appOps().mode = android.app.AppOpsManager.MODE_ALLOWED;
+            CountingFiles.gate = new CountDownLatch(1);
+            Task<ExternalStorageStats> revoked = new Task<>(() -> {
+                Binder.setCallingUid(app.uid());
+                return service.queryExternalStatsForUser(null, 0, app.packageName);
+            });
+            blocked(List.of(revoked));
+            pm.appOps().mode = android.app.AppOpsManager.MODE_IGNORED;
+            CountingFiles.release();
+            fails(SecurityException.class, revoked::get, "standalone grant revoked during traversal");
+        } finally {
+            CountingFiles.release();
+            android.os.Process.uid = android.os.Process.SYSTEM_UID;
+            Binder.setCallingUid(android.os.Process.SYSTEM_UID);
+        }
+    }
+
     private static void walker(Path root) throws Exception {
         write(root.resolve("a"), 11);
         write(root.resolve("b"), 13);
@@ -322,6 +375,7 @@ public final class StorageStatsScansHost {
             boolean onlyBenchmark = Arrays.asList(args).contains("--benchmark");
             if (!onlyBenchmark) {
                 basic(root.resolve("basic"));
+                standaloneUsageAccess(root.resolve("standalone"));
                 walker(root.resolve("walker"));
                 coordinator();
             }

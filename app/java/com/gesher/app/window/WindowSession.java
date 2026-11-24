@@ -278,6 +278,8 @@ public final class WindowSession extends IWindowSession.Stub {
         boolean drawn;
         boolean shown;
         boolean viewVisible;
+        /** Removed from the session, including when an alert ancestor was removed. */
+        volatile boolean removed;
         Handler alertHandler;
         AlertWindowOperation alertOperation;
 
@@ -1910,8 +1912,9 @@ public final class WindowSession extends IWindowSession.Stub {
     }
 
     /**
-     * A popup's Win32 window: owned by its parent's (Windows keeps it above it, hides and
-     * minimizes it with it; no taskbar button), translucent when its format has alpha (a
+     * A popup's Win32 window: owned by its parent's (Windows keeps it above it and
+     * minimizes it with it; hiding the owner does not hide its popups), with no taskbar
+     * button, translucent when its format has alpha (a
      * layered window: a dialog's rounded corners and shadow show what is behind; with
      * SkiaGL its frames are read back into it), never activated when it is not focusable, clicked
      * through when it is not touchable.
@@ -2570,6 +2573,7 @@ public final class WindowSession extends IWindowSession.Stub {
     /** A sub-window cannot present or route input through a revoked alert parent. */
     private static boolean alertVisible(AppWindow window) {
         for (AppWindow w = window; w != null; w = w.parent) {
+            if (w.removed) return false;
             if (w.alertOperation != null && !w.alertOperation.visible()) return false;
         }
         return true;
@@ -2578,6 +2582,13 @@ public final class WindowSession extends IWindowSession.Stub {
     private static boolean belongsToAlert(AppWindow window, AppWindow owner) {
         for (AppWindow w = window; w != null; w = w.parent) {
             if (w == owner) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasAlertOwner(AppWindow window) {
+        for (AppWindow w = window; w != null; w = w.parent) {
+            if (w.alertOperation != null) return true;
         }
         return false;
     }
@@ -2687,6 +2698,9 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             w.seq = mNextSeq++;
             w.parent = findParent(w, overActivity);
+            if (isSubWindow(attrs.type) && w.parent == null) {
+                return WindowManagerGlobal.ADD_BAD_SUBWINDOW_TOKEN;
+            }
             w.popup = w.parent != null || attrs.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW;
             if (activityConfig != null) {
                 Rect b = activityConfig.windowConfiguration.getBounds();
@@ -2739,23 +2753,59 @@ public final class WindowSession extends IWindowSession.Stub {
 
     @Override
     public void remove(IBinder clientToken) {
-        AppWindow w;
+        List<AppWindow> removed = new ArrayList<>();
         synchronized (mWindows) {
-            w = mWindows.remove(clientToken);
+            AppWindow owner = mWindows.remove(clientToken);
+            if (owner == null) return;
+            removed.add(owner);
+            if (hasAlertOwner(owner)) {
+                // Children cannot outlive the alert admission that made them visible.
+                // Remove them atomically so late events and new child adds cannot use it.
+                for (int i = mWindows.size() - 1; i >= 0; i--) {
+                    AppWindow child = mWindows.valueAt(i);
+                    if (belongsToAlert(child, owner)) {
+                        removed.add(child);
+                        mWindows.removeAt(i);
+                    }
+                }
+            }
+            for (AppWindow w : removed) w.removed = true;
         }
-        if (w != null) {
+        // Native owned popups stay visible when their owner is merely hidden. Retained
+        // Surface references can defer HWND destruction, so hide every retired window now.
+        // Newer descendants release before their parents when they share a Looper.
+        removed.sort((first, second) -> Long.compare(second.seq, first.seq));
+        for (AppWindow w : removed) {
             if (w.alertOperation != null) w.alertOperation.close();
             w.identity.retire(w.handler);
-            boolean wasShown = w.shown;
-            if (!w.popup && w.nativeWindow != null && w.shown) rememberTaskScreen(w);
-            closeNativeWindow(w);
-            log("window \"" + w.title() + "\" removed");
-            if (w.popup && wasShown) updateGroup(root(w));
-            AppWindow below = w.parent;
-            if (below != null && below.appHidden && below.nativeWindow != null
-                    && !hasActivityPopup(below) && !root(below).minimized) {
-                hideWindow(below);  // its Activity stayed stopped
+            NativeWindow nativeWindow = w.nativeWindow;
+            if (nativeWindow != null) {
+                nativeWindow.hide();
+                nativeWindow.setInputRoute(null, null, null);
             }
+            NativeWindow dimLayer = w.dimLayer;
+            if (dimLayer != null) dimLayer.hide();
+            Runnable release = () -> finishRemove(w);
+            Handler handler = w.handler;
+            if (handler == null || handler.getLooper() == Looper.myLooper() || !handler.post(release)) {
+                release.run();
+            }
+        }
+    }
+
+    /** Release the removed window's resources on its Looper when it is still running. */
+    private void finishRemove(AppWindow w) {
+        boolean wasShown = w.shown;
+        if (!w.popup && w.nativeWindow != null && w.shown) rememberTaskScreen(w);
+        closeNativeWindow(w);
+        w.focused = false;
+        w.highSurrogate = 0;
+        log("window \"" + w.title() + "\" removed");
+        if (w.popup && wasShown && !root(w).removed) updateGroup(root(w));
+        AppWindow below = w.parent;
+        if (below != null && !below.removed && below.appHidden && below.nativeWindow != null
+                && !hasActivityPopup(below) && !root(below).minimized) {
+            hideWindow(below);  // its Activity stayed stopped
         }
     }
 

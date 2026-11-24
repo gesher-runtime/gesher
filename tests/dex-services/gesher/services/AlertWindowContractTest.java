@@ -13,6 +13,7 @@ import android.os.Looper;
 import android.os.Process;
 import android.os.ServiceManager;
 import android.view.IWindow;
+import android.view.Surface;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager.LayoutParams;
@@ -129,9 +130,12 @@ public final class AlertWindowContractTest {
         // Windowed tests draw real surfaces off the desktop to avoid affecting the host session.
         WindowSession session = WindowSession.install(false);
         HandlerThread thread = new HandlerThread("alert-window-fixture");
+        HandlerThread otherThread = new HandlerThread("alert-child-fixture");
         thread.start();
+        otherThread.start();
         Handler handler = new Handler(thread.getLooper());
-        IWindow parent = client(), child = client();
+        Handler otherHandler = new Handler(otherThread.getLooper());
+        IWindow parent = client(), child = client(), otherChild = client();
         LayoutParams overlay = attrs(LayoutParams.TYPE_APPLICATION_OVERLAY, null);
         try {
             ops.setMode(OP, uid, APP, AppOpsManager.MODE_DEFAULT);
@@ -211,13 +215,61 @@ public final class AlertWindowContractTest {
             });
             ops.setMode(OP, uid, APP, AppOpsManager.MODE_ALLOWED);
             awaitVisibility(handler, session, parent, child, true);
+            Object otherChildState = on(otherHandler, () -> {
+                check(add(session, otherChild, attrs(LayoutParams.TYPE_APPLICATION_PANEL, parent.asBinder())) >= 0,
+                        "A child can belong to an alert on another window Looper");
+                draw(session, otherChild);
+                return nativeState(session, otherChild);
+            });
+            // Keep the owner's HWND alive until both Loopers release their children.
+            // Hiding an owner does not hide its owned popups.
+            Surface retained = on(handler, () ->
+                    ((NativeWindow)get(nativeState(session, parent), "nativeWindow")).getSurface());
+            try {
+                Object retiredChild = on(handler, () -> {
+                    Object parentState = nativeState(session, parent);
+                    Object childState = nativeState(session, child);
+                    Object operation = get(parentState, "alertOperation");
+                    NativeWindow parentWindow = (NativeWindow)get(parentState, "nativeWindow");
+                    long parentHwnd = parentWindow.getHwnd();
+                    Class<?>[] nativeEvent = {IBinder.class, int.class, int.class, int.class};
+                    call(session, "onWindowEvent", nativeEvent, child.asBinder(), WindowInput.EVENT_FOCUS, 1, 0);
+                    call(session, "onWindowEvent", nativeEvent, child.asBinder(), WindowInput.EVENT_CHAR, 0xd800, 0);
+                    session.remove(parent.asBinder());
+                    check(nativeState(session, parent) == null && nativeState(session, child) == null
+                                    && nativeState(session, otherChild) == null,
+                            "Parent-first removal also retires its attached alert children");
+                    check(WindowInput.postMessage(parentHwnd, 0 /* WM_NULL */, 0, 0),
+                            "Retained Surface keeps the owner HWND alive during child retirement");
+                    check(!(boolean)get(childState, "shown") && get(childState, "nativeWindow") == null
+                                    && get(childState, "surfaceControl") == null && get(childState, "queue") == null,
+                            "Parent-first removal hides and releases the child's window resources");
+                    check(add(session, client(), attrs(LayoutParams.TYPE_APPLICATION_PANEL, parent.asBinder()))
+                                    == WindowManagerGlobal.ADD_BAD_SUBWINDOW_TOKEN,
+                            "A new subwindow cannot attach to a removed alert parent");
+                    draw(session, child);
+                    session.remove(child.asBinder());
+                    session.remove(parent.asBinder());
+                    check(!ops.isOperationActive(OP, uid, APP), "Removing the window retires its active AppOp");
+                    call(operation, "refresh", new Class<?>[0]);
+                    check(!ops.isOperationActive(OP, uid, APP), "Late refresh cannot restart the removed operation");
+                    return childState;
+                });
+                on(handler, () -> {
+                    check(!(boolean)get(retiredChild, "focused") && (char)get(retiredChild, "highSurrogate") == 0,
+                            "Queued native focus and character input cannot reach a removed child");
+                    return null;
+                });
+                on(otherHandler, () -> {
+                    check(!(boolean)get(otherChildState, "shown") && get(otherChildState, "nativeWindow") == null
+                                    && get(otherChildState, "surfaceControl") == null && get(otherChildState, "queue") == null,
+                            "An attached child's resources retire on its own window Looper");
+                    return null;
+                });
+            } finally {
+                on(handler, () -> { retained.release(); return null; });
+            }
             on(handler, () -> {
-                Object operation = get(nativeState(session, parent), "alertOperation");
-                session.remove(child.asBinder());
-                session.remove(parent.asBinder());
-                check(!ops.isOperationActive(OP, uid, APP), "Removing the window retires its active AppOp");
-                call(operation, "refresh", new Class<?>[0]);
-                check(!ops.isOperationActive(OP, uid, APP), "Late refresh cannot restart the removed operation");
                 ((PackageImpl)pkg.parsed).setTargetSdkVersion(22);
                 return null;
             });
@@ -230,15 +282,18 @@ public final class AlertWindowContractTest {
                 return null;
             });
         } finally {
+            on(otherHandler, () -> { session.remove(otherChild.asBinder()); return null; });
             on(handler, () -> {
                 session.remove(child.asBinder());
                 session.remove(parent.asBinder());
                 return null;
             });
             thread.quitSafely();
+            otherThread.quitSafely();
             thread.join(5000);
+            otherThread.join(5000);
         }
-        check(!thread.isAlive(), "The fixture's window Looper retired");
+        check(!thread.isAlive() && !otherThread.isAlive(), "The fixture's window Loopers retired");
         System.out.println("AlertWindowContractTest all passed: " + checks + " checks");
     }
 }
