@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 The Gesher Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Build separately distributed, unmodified upstream Android filesystem tools."""
+"""Build separate upstream Android filesystem tools with an audited exFAT port."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import types
 import urllib.request
 import zipfile
 
@@ -33,6 +34,8 @@ TOOLS = {
     "mke2fs": ("e2fsprogs", "misc/mke2fs"),
     "e2fsck": ("e2fsprogs", "e2fsck/e2fsck"),
 }
+PORT_FILES = ("exfat_capabilities.h", "port_exfat.py", "test_exfat_port.py")
+RECIPE_FILES = ("build.py", "sources.json", "README.md", *PORT_FILES)
 
 
 def digest(path: Path) -> str:
@@ -199,23 +202,71 @@ def file_inventory(root: Path) -> dict:
     return inventory
 
 
+def load_exfat_port(manifest: dict):
+    """Authenticate the local transformation and tests before executing them."""
+    ports = manifest.get("ports", [])
+    require(len(ports) == 1, "Expected exactly one reviewed filesystem tool port")
+    spec = ports[0]
+    require(spec["id"] == "exfat-opened-target-capabilities-v1" and
+            spec["package"] == "exfatprogs" and spec["path"] == "lib/libexfat.c",
+            "Unreviewed filesystem tool port")
+    require(set(spec["files"]) == set(PORT_FILES), "Unexpected exFAT port source inventory")
+    inputs = {}
+    for name in PORT_FILES:
+        path = HERE / name
+        require(path.is_file() and not path.is_symlink(), f"Missing ordinary port source: {name}")
+        inputs[name] = path.read_bytes()
+        require(hashlib.sha256(inputs[name]).hexdigest() == spec["files"][name],
+                f"Port source SHA256 mismatch: {name}")
+    # Execute precisely the checked bytes, without trusting cached bytecode or
+    # writing __pycache__ into an otherwise immutable packaged source inventory.
+    module = types.ModuleType("gesher_exfat_port")
+    module.__file__ = str(HERE / "port_exfat.py")
+    exec(compile(inputs["port_exfat.py"], module.__file__, "exec"), module.__dict__)
+    module.check_port_files(HERE, spec)
+    return module, spec
+
+
 def verify_bundle(bundle: Path, readelf: Path, symbols: set[str]) -> None:
+    manifest = json.loads(MANIFEST.read_text())
+    port, port_spec = load_exfat_port(manifest)
     receipt = json.loads((bundle / "receipts/build.json").read_text())
-    require(receipt["schema"] == 1, "Unknown filesystem tool receipt schema")
+    require(receipt["schema"] == 2, "Unknown filesystem tool receipt schema")
     require(receipt["recipe_sha256"] == digest(HERE / "build.py") and
             receipt["manifest_sha256"] == digest(MANIFEST), "Bundle is from another recipe/manifest")
     inventory = file_inventory(bundle)
     inventory.pop("receipts/build.json")
     require(inventory == receipt["files"], "Packaged filesystem tool file integrity mismatch")
+    for name in RECIPE_FILES:
+        require(digest(bundle / "sources" / name) == digest(HERE / name),
+                f"Packaged recipe source differs from the verifying recipe: {name}")
+    port.check_port_files(bundle / "sources", port_spec)
+    packages = {package["name"]: package for package in manifest["packages"]}
+    for package in packages.values():
+        authenticate(bundle / "sources" / package["filename"], package)
+        authenticate(bundle / "sources" / package["provenance"]["filename"], package["provenance"])
+    exfat = packages[port_spec["package"]]
+    original = port.original_from_archive(bundle / "sources" / exfat["filename"], exfat, port_spec)
+    _, expected_port = port.transform(original, port_spec)
+    require(receipt["source_patches"] == [expected_port], "Packaged exFAT transformation receipt mismatch")
+    require(digest(bundle / "licenses/gesher-port/LICENSE") == port_spec["license_sha256"],
+            "Packaged Gesher port license SHA256 mismatch")
+    require(receipt["target"] == manifest["target"] and
+            receipt["source_date_epoch"] == manifest["source_date_epoch"],
+            "Packaged filesystem tool configuration differs from its manifest")
+    require(set(receipt["programs"]) == set(TOOLS), "Unexpected filesystem tool program inventory")
     for name in TOOLS:
-        inspect_elf(bundle / "bin" / name, readelf, symbols)
+        require(inspect_elf(bundle / "bin" / name, readelf, symbols) == receipt["programs"][name],
+                f"Packaged ELF audit differs from its receipt: {name}")
     print("FILESYSTEM_TOOLS_VERIFIED six Android x86_64 PIE programs; Windows execution not implied")
 
 
 def build(args: argparse.Namespace) -> None:
     manifest = json.loads(MANIFEST.read_text())
+    port, port_spec = load_exfat_port(manifest)
     repo = args.gesher_source.resolve(strict=True)
     require((repo / "compat/bionic/shim.cc").is_file(), "--gesher-source must name a Gesher checkout")
+    require(digest(repo / "LICENSE") == port_spec["license_sha256"], "Gesher port license SHA256 mismatch")
     work = args.work.resolve()
     output = args.output.resolve()
     for directory in (work, output):
@@ -252,6 +303,17 @@ def build(args: argparse.Namespace) -> None:
     builds.mkdir()
     logs = run_root / "logs"
     logs.mkdir()
+    # This suite opens only temporary regular files and isolated metadata
+    # fixtures. Run it before configuring any upstream package, including in CI.
+    test_environment = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                        "PYTHONDONTWRITEBYTECODE": "1"}
+    for name in ("ASAN_OPTIONS", "UBSAN_OPTIONS"):
+        if name in os.environ:
+            test_environment[name] = os.environ[name]
+    print("[filesystem-tools] validating exFAT port and capability failure controls", flush=True)
+    run([sys.executable, str(HERE / "test_exfat_port.py"), "--archive", str(archives["exfatprogs"]),
+         "--work", str(run_root / "port-tests"), "--cc", "/usr/bin/cc", "--sanitize"],
+        run_root, test_environment, logs / "exfatprogs.log")
     source_dirs = {}
     for package in manifest["packages"]:
         with tarfile.open(archives[package["name"]]) as source:
@@ -259,6 +321,7 @@ def build(args: argparse.Namespace) -> None:
         directory = sources / package["directory"]
         require(directory.is_dir(), "Unexpected source archive layout")
         source_dirs[package["name"]] = directory
+    source_patches = [port.apply(source_dirs[port_spec["package"]], port_spec, HERE)]
     stage = run_root / "stage"
     iconv_stage = run_root / "iconv-stage"
     environment = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
@@ -339,18 +402,20 @@ def build(args: argparse.Namespace) -> None:
                 destination = temporary / "licenses" / package["directory"] / notice
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_dirs[name] / notice, destination)
-        for name in ("build.py", "sources.json", "README.md"):
+        for name in RECIPE_FILES:
             shutil.copy2(HERE / name, temporary / "sources" / name)
+        (temporary / "licenses/gesher-port").mkdir()
+        shutil.copy2(repo / "LICENSE", temporary / "licenses/gesher-port/LICENSE")
         for name in ("NOTICE", "NOTICE.toolchain"):
             destination = temporary / "licenses" / manifest["ndk"]["directory"] / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ndk / name, destination)
         shutil.copytree(logs, temporary / "receipts/logs")
-        receipt = {"schema": 1, "manifest_sha256": digest(MANIFEST),
+        receipt = {"schema": 2, "manifest_sha256": digest(MANIFEST),
                    "recipe_sha256": digest(HERE / "build.py"), "ndk": ndk_receipt,
                    "compiler": subprocess.check_output([str(compiler), "--version"], text=True),
                    "target": manifest["target"], "source_date_epoch": manifest["source_date_epoch"],
-                   "source_patches": [], "configurations": configurations, "programs": elf_info,
+                   "source_patches": source_patches, "configurations": configurations, "programs": elf_info,
                    "runtime_registration_sources": symbol_sources, "runtime_executed": False,
                    "files": file_inventory(temporary)}
         write_json(temporary / "receipts/build.json", receipt)

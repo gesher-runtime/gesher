@@ -4,6 +4,8 @@
 #endif
 #include <array>
 #include <atomic>
+#include <charconv>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -57,10 +59,12 @@ static bool DrivePath(const char*, std::wstring*) { return false; }
 namespace reserved_names { static void Encode(std::wstring*) {} }
 static void Lengthen(std::wstring*) {}
 
-// The fixture exercises the default namespace without an attached block broker.
+// Only attachment state is an explicit fixture boundary; the number conversion
+// and canonical-name checks below come unchanged from the production header.
 namespace usb_block {
-[[maybe_unused]] constexpr const char* kBlockName = "sdb";
-[[maybe_unused]] static bool Attached() { return false; }
+@USB_BLOCK_HELPERS@
+static thread_local bool attached = false;
+[[maybe_unused]] static bool Attached() { return attached; }
 }
 
 @PRODUCTION@
@@ -197,10 +201,66 @@ static void FontPaths() {
     }
   }
 }
+
+static void BlockAliases() {
+  // Exact device-number contract at each range edge; no disk or media is
+  // created by the fixture. Actual node existence is checked when it is opened.
+  for (const auto& [number, node] : std::array<std::pair<const char*, const char*>, 7>{{
+      {"8:16", "sdb"}, {"8:17", "sdb1"}, {"8:30", "sdb14"}, {"8:31", "sdb15"},
+      {"259:0", "sdb16"}, {"259:1", "sdb17"}, {"259:112", "sdb128"}}}) {
+    Check(usb_block::NodeFromDeviceNumber(number) == node, "real device-number helper accepts canonical range edge");
+    Check(usb_block::DeviceNumberName(node) == number, "real node-number helper returns canonical range edge");
+  }
+  for (const char* invalid : {"", ":", "8", "8:", ":16", "8:0", "8:15", "8:32", "259:113", "260:0",
+      "08:16", "8:016", "259:00", "+8:16", "8:+16", "8:-16", "-8:16", "8:16:0", "8:16/size",
+      " 8:16", "8:16 ", "4294967296:16", "8:4294967296", "259:999999999999999999999"}) {
+    Check(usb_block::NodeFromDeviceNumber(invalid).empty(), "real device-number helper rejects malformed or foreign media identity");
+  }
+  for (const char* invalid : {"", "sda", "sdc", "sdb0", "sdb01", "sdb129", "sdb-1", "sdb+1", "sdb1/size",
+      "sdb4294967296", "sdb999999999999999999999"}) {
+    Check(usb_block::DeviceNumberName(invalid).empty(), "real node-number helper rejects noncanonical or unsupported nodes");
+  }
+  Check(usb_block::NodeFromDeviceNumber(std::string_view("8:16\0suffix", 11)).empty(), "device-number helper rejects embedded NUL suffix");
+
+  struct Case { const char* path; const wchar_t* name; };
+  const Case paths[] = {
+      {"/dev/block", L"dev/block"}, {"/dev/block/sdb", L"dev/block/sdb"},
+      {"/dev/block/sdb128", L"dev/block/sdb128"}, {"/sys/dev/block", L"sys/dev/block"},
+      {"/sys/dev/block/8:16", L"sys/dev/block/8:16"}, {"/sys/dev/block/8:17", L"sys/dev/block/8:17"},
+      {"/sys/dev/block/259:0", L"sys/dev/block/259:0"}, {"/sys/dev/block/259:112", L"sys/dev/block/259:112"},
+      {"/sys/dev/block/8:16//./size", L"sys/block/sdb/size"},
+      {"/sys/dev/block/8:17/../size", L"sys/block/sdb/size"},
+      {"/sys/dev/block/259:0/../size", L"sys/block/sdb/size"},
+      {"/sys/dev/block/259:112/size", L"sys/block/sdb/sdb128/size"},
+      {"/sys/block/sdb/sdb1/../size", L"sys/block/sdb/size"},
+      {"/sys/devices/gesher/usb/sdb", L"sys/devices/gesher/usb/sdb"},
+  };
+  usb_block::attached = true;
+  for (const auto& entry : paths) {
+    std::wstring output = L"untouched";
+    Check(production::VirtualKind(entry.path, &output) == PathKind::kVirtual && output == entry.name,
+          "attached namespace resolves actual helper aliases and relative sysfs traversal");
+  }
+  for (const char* invalid : {"/sys/dev/block/8:15", "/sys/dev/block/8:32", "/sys/dev/block/259:113",
+      "/sys/dev/block/08:16", "/sys/dev/block/8:016", "/sys/dev/block/8:16:0",
+      "/dev/block/sda", "/dev/block/sdb0", "/dev/block/sdb01", "/dev/block/sdb1/extra"}) {
+    std::wstring output = L"untouched";
+    Check(production::VirtualKind(invalid, &output) == PathKind::kMissing && output == L"untouched",
+          "attached namespace rejects malformed aliases without publishing a path");
+  }
+  usb_block::attached = false;
+  for (const auto& entry : paths) {
+    std::wstring output = L"untouched";
+    Check(production::VirtualKind(entry.path, &output) == PathKind::kMissing && output == L"untouched",
+          "detached namespace does not expose previous block aliases");
+  }
+}
+
 static void Measurements(bool enforce) {
   constexpr size_t count = 100000;
   const char* paths[] = {"/data/app/com.example.sample/lib/x86_64/libexample.so", "/dev/null",
-                        "/sys/devices/system/cpu/unknown", "/etc/not-timezone", "/proc/self/status"};
+                        "/sys/devices/system/cpu/unknown", "/etc/not-timezone", "/proc/self/status",
+                        "/sys/dev/block/8:17/size", "/dev/block/sdb1"};
   for (const char* path : paths) {
     std::wstring output;
     allocations = allocated_bytes = 0;
@@ -252,6 +312,7 @@ int main(int argc, char** argv) {
   for (auto& worker : workers) worker.join();
   Check(parallel_ok, "concurrent callers retain independent path/output/Binder state");
   FontPaths();
+  BlockAliases();
   Measurements(enforce);
   std::printf("PASS virtual-path classification: %zu checks plus 60000 concurrent samples\n", checks);
 }

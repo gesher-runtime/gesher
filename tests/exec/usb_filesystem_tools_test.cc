@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Runs the ORIGINAL upstream Android PIE programs through the production ELF
+// Runs the upstream Android PIE programs through the production ELF
 // loader and POSIX block/sysfs paths. Only this dedicated test executable has a
 // test bootstrap, backed by an isolated byte buffer; no physical device opens.
 #define main GesherFilesystemGuestMain
@@ -224,7 +224,7 @@ Result Run(Media& media, const std::vector<std::string>& arguments, DWORD timeou
   child.server.join();
   result.protocol = served.load();
   result.output = Output(output.get());
-  std::printf("original tool %s: exit=%d timeout=%s\n%s\n", arguments.size() > 2 ? arguments[2].c_str() : "fixture",
+  std::printf("upstream tool %s: exit=%d timeout=%s\n%s\n", arguments.size() > 2 ? arguments[2].c_str() : "fixture",
       result.code, result.timeout ? "yes" : "no", result.output.c_str());
   return result;
 }
@@ -298,55 +298,63 @@ void CheckFilesystems(const std::wstring& tools) {
     Require(result.protocol && !result.timeout && result.code > 0 && denied.writes == 0,
         "formatter must fail without write consent and leave fixture bytes untouched");
   }
+  unsigned failures = 0;
   for (const int filesystem : {0, 1, 2}) {
-    Media media(filesystem == 0 ? 0x0c : filesystem == 1 ? 0x07 : 0x83);
-    const auto format = filesystem == 0 ? Command(tools, "mkfs.fat", "mkfs.vfat", {"-F", "32", "-n", "CW_TEST"})
-        : filesystem == 1 ? Command(tools, "mkfs.exfat", "mkfs.exfat", {"-n", "CW_TEST"})
-        : Command(tools, "mke2fs", "mkfs.ext4", {"-F", "-L", "CW_TEST"});
-    const auto repair = filesystem == 0 ? Command(tools, "fsck.fat", "fsck.vfat", {"-a", "-w"})
-        : filesystem == 1 ? Command(tools, "fsck.exfat", "fsck.exfat", {"-y"})
-        : Command(tools, "e2fsck", "e2fsck", {"-p", "-f"});
-    Clean(Run(media, format), "original formatter failed");
-    Require(media.writes > 0, "formatter reported success without writes");
-    uint8_t* volume = media.bytes.data() + kPartition;
-    Require(filesystem == 0 ? std::memcmp(volume + 82, "FAT32   ", 8) == 0
-        : filesystem == 1 ? std::memcmp(volume + 3, "EXFAT   ", 8) == 0
-        : U16(volume + 1024 + 56) == 0xef53, "formatter did not write the requested filesystem");
-    Require(U32(media.bytes.data() + 446 + 8) == kPartition / 512 && media.bytes[510] == 0x55 && media.bytes[511] == 0xaa,
-        "partition-relative format changed the original MBR");
-    Clean(Run(media, repair), "original checker did not accept newly formatted media");
+    try {
+      Media media(filesystem == 0 ? 0x0c : filesystem == 1 ? 0x07 : 0x83);
+      const auto format = filesystem == 0 ? Command(tools, "mkfs.fat", "mkfs.vfat", {"-F", "32", "-n", "CW_TEST"})
+          : filesystem == 1 ? Command(tools, "mkfs.exfat", "mkfs.exfat", {"-n", "CW_TEST"})
+          : Command(tools, "mke2fs", "mkfs.ext4", {"-F", "-L", "CW_TEST"});
+      const auto repair = filesystem == 0 ? Command(tools, "fsck.fat", "fsck.vfat", {"-a", "-w"})
+          : filesystem == 1 ? Command(tools, "fsck.exfat", "fsck.exfat", {"-y"})
+          : Command(tools, "e2fsck", "e2fsck", {"-p", "-f"});
+      Clean(Run(media, format), "upstream formatter failed");
+      Require(media.writes > 0, "formatter reported success without writes");
+      uint8_t* volume = media.bytes.data() + kPartition;
+      Require(filesystem == 0 ? std::memcmp(volume + 82, "FAT32   ", 8) == 0
+          : filesystem == 1 ? std::memcmp(volume + 3, "EXFAT   ", 8) == 0
+          : U16(volume + 1024 + 56) == 0xef53, "formatter did not write the requested filesystem");
+      Require(U32(media.bytes.data() + 446 + 8) == kPartition / 512 && media.bytes[510] == 0x55 && media.bytes[511] == 0xaa,
+          "partition-relative format changed the original MBR");
+      Clean(Run(media, repair), "upstream checker did not accept newly formatted media");
 
-    uint32_t before = 0;
-    size_t changed = 0;
-    if (filesystem == 0) {
-      changed = static_cast<size_t>(U16(volume + 48)) * 512 + 488;
-      Require(changed + 4 < media.bytes.size() - kPartition, "invalid FAT32 FSInfo location");
-      before = U32(volume + changed);
-      Require(before != 0, "FAT32 free cluster count unexpectedly zero");
-      Put32(volume + changed, 0);  // corrupt only the isolated free-cluster summary
-    } else if (filesystem == 1) {
-      Put16(volume + 106, U16(volume + 106) | 2);  // dirty flag is excluded from boot checksum
-      Put16(volume + 12 * 512 + 106, U16(volume + 12 * 512 + 106) | 2);
-    } else {
-      uint8_t* super = volume + 1024;
-      before = U32(super + 12);
-      Require(before > 1, "ext4 free block count unexpectedly small");
-      Put32(super + 12, before - 1);  // validly checksummed but wrong accounting
-      if (U32(super + 100) & 0x400) Put32(super + 1020, SuperblockCrc(super));
+      uint32_t before = 0;
+      size_t changed = 0;
+      if (filesystem == 0) {
+        changed = static_cast<size_t>(U16(volume + 48)) * 512 + 488;
+        Require(changed + 4 < media.bytes.size() - kPartition, "invalid FAT32 FSInfo location");
+        before = U32(volume + changed);
+        Require(before != 0, "FAT32 free cluster count unexpectedly zero");
+        Put32(volume + changed, 0);  // corrupt only the isolated free-cluster summary
+      } else if (filesystem == 1) {
+        Put16(volume + 106, U16(volume + 106) | 2);  // dirty flag is excluded from boot checksum
+        Put16(volume + 12 * 512 + 106, U16(volume + 12 * 512 + 106) | 2);
+      } else {
+        uint8_t* super = volume + 1024;
+        before = U32(super + 12);
+        Require(before > 1, "ext4 free block count unexpectedly small");
+        Put32(super + 12, before - 1);  // validly checksummed but wrong accounting
+        if (U32(super + 100) & 0x400) Put32(super + 1020, SuperblockCrc(super));
+      }
+      const uint64_t writes_before = media.writes.load();
+      const Result fixed = Run(media, repair);
+      Require(fixed.protocol && !fixed.timeout && (fixed.code == 0 || fixed.code == 1), "upstream repair failed");
+      Require(media.writes > writes_before, "repair reported success without correcting any bytes");
+      Require(filesystem == 0 ? U32(volume + changed) == before
+          : filesystem == 1 ? !(U16(volume + 106) & 2)
+          : U32(volume + 1024 + 12) == before, "repair did not correct the introduced corruption");
+      Clean(Run(media, repair), "repaired filesystem is not clean according to the upstream checker");
+    } catch (const std::exception& failure) {
+      static constexpr const char* names[] = {"FAT32", "exFAT", "ext4"};
+      std::fprintf(stderr, "%s fixture failed: %s\n", names[filesystem], failure.what());
+      ++failures;
     }
-    const uint64_t writes_before = media.writes.load();
-    const Result fixed = Run(media, repair);
-    Require(fixed.protocol && !fixed.timeout && (fixed.code == 0 || fixed.code == 1), "original repair failed");
-    Require(media.writes > writes_before, "repair reported success without correcting any bytes");
-    Require(filesystem == 0 ? U32(volume + changed) == before
-        : filesystem == 1 ? !(U16(volume + 106) & 2)
-        : U32(volume + 1024 + 12) == before, "repair did not correct the introduced corruption");
-    Clean(Run(media, repair), "repaired filesystem is not clean according to the original checker");
   }
   Media hanging(0x0c);
   const Result timeout = Run(hanging, {"--usb-fixture-hang"}, 100);
   Require(timeout.timeout && timeout.code == 137 && hanging.writes == 0,
       "timeout must terminate child and report failure without media writes");
+  Require(failures == 0, "one or more upstream filesystem scenarios failed");
 }
 
 int Guest(bool hang) {
@@ -378,10 +386,10 @@ int main() {
   try {
     fs_fixture::CheckMediaControls();
     fs_fixture::CheckFilesystems(tools);
-    std::puts("Original FAT32/exFAT/ext4 format, check, repair and consent fixture passed");
+    std::puts("Upstream FAT32/exFAT/ext4 format, check, repair and consent fixture passed");
     return 0;
   } catch (const std::exception& failure) {
-    std::fprintf(stderr, "Original filesystem fixture failed: %s\n", failure.what());
+    std::fprintf(stderr, "Upstream filesystem fixture failed: %s\n", failure.what());
     return 1;
   }
 }

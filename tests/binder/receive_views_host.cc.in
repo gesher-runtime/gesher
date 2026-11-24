@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -71,6 +72,7 @@ using SIZE_T = size_t;
 const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(~uintptr_t{0});
 constexpr BOOL FALSE = 0;
 constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
+constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_CHAR = 2, FILE_TYPE_PIPE = 3;
 constexpr int _O_RDWR = 2, _O_BINARY = 0x8000;
 constexpr DWORD MEM_COMMIT = 0x1000, PAGE_GUARD = 0x100, PAGE_READWRITE = 4,
                 PAGE_WRITECOPY = 8, PAGE_EXECUTE_READWRITE = 0x40,
@@ -86,6 +88,7 @@ struct MEMORY_BASIC_INFORMATION {
 #define FIXTURE_SHARED_DESCRIPTIONS @SHARED_DESCRIPTIONS@
 #define FIXTURE_SOCKET_DESCRIPTIONS @SOCKET_DESCRIPTIONS@
 #define FIXTURE_NATIVE_FENCES @NATIVE_FENCES@
+#define FIXTURE_APPLICATION_SHARED_MEMORY @APPLICATION_SHARED_MEMORY@
 #if FIXTURE_SHARED_DESCRIPTIONS
 #include "binder_file_descriptions.h"
 #endif
@@ -115,6 +118,14 @@ struct Peer {
   std::array<Adopted, 32> adopted{};
   unsigned duplicates = 0, opens = 0, closes = 0, closed_fds = 0, fail_duplicate = 0, fail_open = 0;
   std::array<uint32_t, 32> adopted_kinds{};
+  std::array<int, 32> adopted_io_flags{};
+  // These are explicit OS/endpoint observations, not broker authorization.
+  // Real process admission and handle rights have separate native Windows gates.
+  bool protected_endpoint = false, fail_capture = false, fail_capture_descriptor = false;
+  DWORD file_type = FILE_TYPE_DISK;
+  int file_io_flags = O_RDONLY;
+  uint32_t sending_kind = 0;
+  unsigned captures = 0, shares = 0;
   void (*on_claim)() = nullptr;
   // A sender fd that production identifies as a completed native fence.
   int sending_fence_fd = -1;
@@ -222,6 +233,12 @@ BOOL CloseHandle(HANDLE handle) {
   }
   std::abort();
 }
+DWORD GetFileType(HANDLE handle) {
+  for (const auto& value : fixture::peer->adopted) {
+    if (value.handle == handle && value.open) return fixture::peer->file_type;
+  }
+  return 0;
+}
 int FixtureClose(int fd) {
   auto& p = *fixture::peer;
   unsigned handles = 0;
@@ -229,9 +246,14 @@ int FixtureClose(int fd) {
     fixture::Check(a.open, "adopted fd handles closed once"); a.open = false; ++p.closes; ++handles;
   }
   if (!handles) std::abort();
-  // Sockets (4) and completed native fences (5) own one typed handle, no OFD.
-  fixture::Check(handles == (FIXTURE_SHARED_DESCRIPTIONS && p.adopted_kinds[fd - 101] != 4 &&
-                             p.adopted_kinds[fd - 101] != 5 ? 2 : 1),
+  // Sockets, completed fences and protected ApplicationSharedMemory own one
+  // typed file/event handle; no producer-owned OFD section accompanies them.
+  const auto kind = p.adopted_kinds[fd - 101];
+  bool single_handle = kind == 4 || kind == 5;
+#if FIXTURE_APPLICATION_SHARED_MEMORY
+  single_handle = single_handle || kind == gesher::binder_wire::kApplicationSharedMemoryDescription;
+#endif
+  fixture::Check(handles == (FIXTURE_SHARED_DESCRIPTIONS && !single_handle ? 2 : 1),
                  "fd owns all transported handles");
   ++p.closed_fds;
   return 0;
@@ -242,17 +264,61 @@ namespace gesher {
 // These adapters implement only the documented ownership boundary: adoption
 // consumes both handles on every outcome and returns one close-on-exec fd.
 enum class DescriptorKind : uint32_t { kFile = 0, kZero = 1, kRandom = 2, kUnshareable = 3 };
-struct DescriptorSnapshot { HANDLE handle = nullptr; DescriptorKind kind = DescriptorKind::kFile; };
+struct DescriptorSnapshot {
+  HANDLE handle = nullptr;
+  DescriptorKind kind = DescriptorKind::kFile;
+  bool owned = false;
+  int io_flags = -1;
+  ~DescriptorSnapshot() { if (owned) CloseHandle(handle); }
+};
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
 DescriptorSnapshotPtr CaptureDescriptor(int fd) {
-  if (fd < 0) return {};
+  if (fd < 0 || fixture::peer->fail_capture_descriptor) return {};
   auto snapshot = std::make_shared<DescriptorSnapshot>();
   snapshot->handle = reinterpret_cast<HANDLE>(0x100 + fd);
+  snapshot->kind = static_cast<DescriptorKind>(fixture::peer->sending_kind);
   return snapshot;
 }
 HANDLE ShareFileDescription(const DescriptorSnapshotPtr& snapshot) {
+  ++fixture::peer->shares;
   return reinterpret_cast<HANDLE>(reinterpret_cast<uintptr_t>(snapshot->handle) + 0x10000);
 }
+const fixture::Peer* ProtectedBinderEndpoint() {
+  return fixture::peer->protected_endpoint ? fixture::peer : nullptr;
+}
+#if FIXTURE_APPLICATION_SHARED_MEMORY
+// Model the declared OFD-owner boundary: capture pins a distinct file handle,
+// native rights supply the access mode, and attach duplicates that pin into
+// a new local descriptor. No imported shared-description mapping is accepted.
+DescriptorSnapshotPtr CaptureFileHandle(HANDLE file) {
+  auto& p = *fixture::peer;
+  ++p.captures;
+  if (p.fail_capture) return {};
+  auto snapshot = std::make_shared<DescriptorSnapshot>();
+  if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &snapshot->handle,
+                       0, FALSE, DUPLICATE_SAME_ACCESS)) return {};
+  snapshot->owned = true;
+  snapshot->io_flags = p.file_io_flags;
+  return snapshot;
+}
+int FileDescriptionIoFlags(const DescriptorSnapshotPtr& snapshot) {
+  return snapshot ? snapshot->io_flags : -1;
+}
+int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_exec) {
+  fixture::Check(close_on_exec, "protected descriptor is close-on-exec");
+  if (!snapshot || !snapshot->owned) return -1;
+  HANDLE owned = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), snapshot->handle, GetCurrentProcess(), &owned,
+                       0, FALSE, DUPLICATE_SAME_ACCESS)) return -1;
+  const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_BINARY);
+  if (fd < 0) CloseHandle(owned);
+  else {
+    fixture::peer->adopted_kinds[fd - 101] = binder_wire::kApplicationSharedMemoryDescription;
+    fixture::peer->adopted_io_flags[fd - 101] = snapshot->io_flags;
+  }
+  return fd;
+}
+#endif
 int AdoptFileDescription(HANDLE file, HANDLE shared, DescriptorKind kind, bool close_on_exec) {
   auto& p = *fixture::peer;
   fixture::Check(close_on_exec, "received descriptor is close-on-exec");
@@ -676,6 +742,109 @@ void SocketDescriptionMetadata() {
 #endif
 #endif
 
+#if FIXTURE_APPLICATION_SHARED_MEMORY
+void ApplicationSharedMemoryMetadata() {
+  Payload valid(64); valid.Fd(0, 0x301); valid.Fd(32, 0x302);
+  for (auto& description : valid.descriptions) {
+    description.kind = gesher::binder_wire::kApplicationSharedMemoryDescription;
+    description.shared_handle = 0;
+  }
+  for (unsigned failure = 0; failure != 17; ++failure) {
+    Mapping mapping; Peer p; p.protected_endpoint = true;
+    BeginReply(p); valid.AppendTo(p, 321); Output output;
+    if (failure == 1) p.protected_endpoint = false;
+    if (failure == 2) p.file_io_flags = O_RDWR;
+    if (failure == 3) p.file_io_flags = O_WRONLY;
+    if (failure == 4) p.file_io_flags = O_RDONLY | O_PATH;
+    if (failure == 5) p.file_type = FILE_TYPE_PIPE;
+    if (failure == 6) p.file_type = FILE_TYPE_CHAR;
+    if (failure == 7) p.fail_capture = true;
+    if (failure == 8) p.file_io_flags = -1;
+    if (failure == 9) p.fail_duplicate = 1;
+    if (failure == 10) p.fail_duplicate = 2;
+    if (failure == 11) p.fail_duplicate = 3;
+    if (failure == 12) p.fail_open = 1;
+    if (failure == 13) p.fail_publish = 1;
+    if (failure == 14) p.output_readonly = true;
+    if (failure == 15) p.claim_status = -EBADF;
+    if (failure == 16) p.fail_open = 2;
+    const auto before = output.bytes;
+    errno = 0;
+    const int result = output.Run(mapping, p), error = errno;
+    Check(p.shares == 0, "protected memory never imports or exports a shared OFD");
+    if (failure == 0) {
+      Check(result == 0 && p.duplicates == 6 && p.opens == 2 && p.closes == 4,
+            "readonly memory owns one local descriptor after retiring staging and capture pins");
+      const auto tr = output.Transaction();
+      CheckPayload(valid, tr); CheckAccepted(p, 321);
+      for (size_t i = 0; i != 2; ++i) {
+        Check(p.adopted_kinds[i] == gesher::binder_wire::kApplicationSharedMemoryDescription &&
+              p.adopted_io_flags[i] == O_RDONLY, "delivered memory retains readonly native access");
+      }
+      SelectPeer selected(p);
+      gesher::CloseReceivedFds(reinterpret_cast<uint8_t*>(tr.data.ptr.buffer), tr.data_size,
+                              reinterpret_cast<const void*>(tr.data.ptr.offsets), tr.offsets_size);
+      Check(mapping.file->Free(tr.data.ptr.buffer) == 321, "protected memory caller frees exact buffer");
+      Check(p.closed_fds == 2 && p.closes == 6, "caller closes both readonly descriptors once");
+    } else {
+      const int expected = failure == 13 || failure == 14 ? EFAULT : failure == 15 ? EBADF : EMFILE;
+      Check(result == -1 && error == expected, "invalid protected memory or failed ownership transfer is rejected");
+      Check(output.bytes == before && output.request.read_consumed == 0,
+            "failed protected memory delivery publishes no descriptor");
+      Check(p.event_count != 0 && p.events[p.event_count - 1].operation == gesher::binder_wire::kFinishBuffer &&
+            !p.events[p.event_count - 1].accepted, "failed protected memory is abandoned");
+      if (failure == 1 || failure == 5 || failure == 6 || failure == 15)
+        Check(p.captures == 0, "ordinary discovery, non-disk handles and failed claims cannot capture memory");
+    }
+    Check(EmptyMapping(mapping) && std::none_of(p.adopted.begin(), p.adopted.end(),
+          [](const auto& handle) { return handle.open; }), "protected memory closes every temporary capability");
+  }
+  for (unsigned failure = 0; failure != 4; ++failure) {
+    Payload invalid = valid;
+    if (failure == 0) invalid.descriptions[0].shared_handle = 0x10000;
+    if (failure == 1) {
+      auto object = Load<binder_fd_object>(invalid.data.data());
+      object.pad_flags = 1;
+      std::memcpy(invalid.data.data(), &object, sizeof(object));
+    }
+    if (failure == 2) invalid.descriptions[0].reserved = 1;
+    if (failure == 3) invalid.descriptions[0].kind = UINT32_MAX;
+    Peer p; p.protected_endpoint = true; BeginReply(p); invalid.AppendTo(p); Reject(p, EBADF);
+  }
+}
+
+void SenderApplicationSharedMemory() {
+  // This tests the sender's offer, not broker admission. Exact producer and
+  // file-object authentication remain exercised by native broker tests.
+  for (unsigned kind = 0; kind != 5; ++kind) {
+    Peer p; p.protected_endpoint = true; p.sending_kind = kind;
+    p.fail_capture_descriptor = kind == 4;
+    SelectPeer selected(p);
+    binder_fd_object object{}; object.hdr.type = BINDER_TYPE_FD;
+    object.fd = 71; object.cookie = 0xaabbccdd00000001ULL;
+    const uint64_t offset = 0;
+    std::vector<gesher::binder_wire::FileDescription> descriptions;
+    std::vector<gesher::DescriptorSnapshotPtr> pins;
+    const bool result = gesher::SendFds(reinterpret_cast<uint8_t*>(&object), sizeof(object),
+        &offset, sizeof(offset), &descriptions, &pins);
+    Check(result == (kind == 0), "protected sender offers only a captured ordinary file kind");
+    Check(p.shares == 0, "protected offer never exposes writable OFD metadata");
+    Check(object.cookie == 0xaabbccdd00000001ULL, "protected offer preserves Android ownership cookie");
+    if (kind == 0) {
+      Check(pins.size() == 1 && descriptions.size() == 1 &&
+            object.pad_binder == reinterpret_cast<uintptr_t>(pins[0]->handle) && object.pad_flags == 0,
+            "protected offer pins exactly the offered file handle");
+      Check(descriptions[0].object_offset == 0 && descriptions[0].shared_handle == 0 &&
+            descriptions[0].kind == gesher::binder_wire::kApplicationSharedMemoryDescription &&
+            descriptions[0].reserved == 0, "protected offer carries only its typed metadata");
+    } else {
+      Check(descriptions.empty() && pins.empty() && object.pad_binder == 0,
+            "unsupported protected offer has no transferable capability");
+    }
+  }
+}
+#endif
+
 #if FIXTURE_NATIVE_FENCES
 // Receive: a completed native fence is one typed handle without a shared OFD,
 // and malformed type/handle combinations never reach adoption.
@@ -947,6 +1116,10 @@ int main(int argc, char** argv) {
 #if FIXTURE_NATIVE_FENCES
   fixture::NativeFenceDescriptionMetadata();
   fixture::SenderNativeFence();
+#endif
+#if FIXTURE_APPLICATION_SHARED_MEMORY
+  fixture::ApplicationSharedMemoryMetadata();
+  fixture::SenderApplicationSharedMemory();
 #endif
   fixture::FdAndOwnershipFailures();
   fixture::MixedCommands();

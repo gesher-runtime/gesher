@@ -78,7 +78,7 @@ include(compat/elf/elf.cmake)
 # gesher: the bionic shim the loaded .so files link against (Phase 6).
 include(compat/bionic/bionic.cmake)
 
-# Isolated fixture only: run the unmodified optional Android filesystem tools
+# Isolated fixture only: run the upstream optional Android filesystem tools
 # through the production ELF/Bionic/POSIX route on broker-backed test media.
 add_executable(usb_filesystem_tools_test
   tests/exec/usb_filesystem_tools_test.cc

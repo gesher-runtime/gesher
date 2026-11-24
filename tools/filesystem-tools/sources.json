@@ -12,6 +12,21 @@
     "publisher_sha1": "090e8083a715fdb1a3e402d0763c388abb03fb4e",
     "publisher_reference": "https://github.com/android/ndk/wiki/Home/24fe2d7ee3591346e0e8ae615977a15c0a4fba40"
   },
+  "ports": [
+    {
+      "id": "exfat-opened-target-capabilities-v1",
+      "package": "exfatprogs",
+      "path": "lib/libexfat.c",
+      "input_sha256": "a3061c620778b0ccd33edbbb78ad26dba38531fd7a243144489ff002420ed829",
+      "output_sha256": "247d44667ae388d0f3bb0ed2ce2b14e617cf05b668f5e72ef6a86401b81ac834",
+      "files": {
+        "exfat_capabilities.h": "0b9a7ceeee3cc10f8e8989670b1ded4effb863f7f913d7a0b95ff562ac4f96ac",
+        "port_exfat.py": "7bd3d3b7a44ca2ed951316dfa131432b9a5395a4ec074647590e530c52815f99",
+        "test_exfat_port.py": "76b181b47e487fe1a70d52716e958aa4c91099ee216b09b34391bfbe1bc847c6"
+      },
+      "license_sha256": "c95bae1d1ce0235ecccd3560b772ec1efb97f348a79f0fbe0a634f0c2ccefe2c"
+    }
+  ],
   "packages": [
     {
       "name": "libiconv",

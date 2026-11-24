@@ -19,7 +19,7 @@ gesher::usb::StorageObservation observation{
     {18, 1, 0, 2, 0, 0, 0, 64, 0x34, 0x12, 0x78, 0x56, 0, 1, 1, 2, 3, 1,
      9, 2, 18, 0, 1, 1, 0, 0x80, 50,
      9, 4, 0, 0, 0, 8, 6, 0x50, 0},
-    {{1, L"Reader"}, {2, L"Card"}, {3, L"serial"}}};
+    {{uint8_t{1}, L"Reader"}, {uint8_t{2}, L"Card"}, {uint8_t{3}, L"serial"}}};
 unsigned checks = 0;
 void Check(bool value, const char* expression, int line) {
   ++checks;

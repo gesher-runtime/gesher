@@ -1263,6 +1263,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build installer
+        id: build_installer
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -1297,6 +1298,7 @@ jobs:
             installer/SHA256SUMS.txt
 
       - name: Ensure the protected account has the machine WebView2 runtime
+        id: machine_webview2
         shell: pwsh
         run: |
           $client = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
@@ -1324,7 +1326,9 @@ jobs:
           }
           'Machine WebView2 runtime verified for the protected service account' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
-      - name: Build and test the optional USB authority installer
+      - name: Build the optional USB authority installer
+        id: build_usb_authority
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -1342,6 +1346,13 @@ jobs:
           $setup = Get-Item -LiteralPath "usb-authority-installer\gesher-usb-broker-setup-$version.exe"
           $checksum = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$checksum  $($setup.Name)" | Set-Content -LiteralPath 'usb-authority-installer\SHA256SUMS.txt' -Encoding ascii
+
+      # Each runtime gate remains a hard failure. Independent gates continue
+      # after a failure so an ELF issue cannot hide installer or APK evidence.
+      - name: Protected Binder, USB ownership and Android locale execution
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
           & .\dist\binder_protected_admission_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           foreach ($owner in 'exe', 'dll') {
@@ -1350,8 +1361,20 @@ jobs:
           }
           & .\dist\gesher-exec.exe --elf "$PWD\exec-input\locale-info-x86_64" locale-info
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upstream filesystem programs on isolated broker-backed media
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
           & .\dist\usb_filesystem_tools_test.exe --tools "$PWD\fs-tools-input\filesystem-tools\bin"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Optional authority installation and original CardWake APK
+        if: ${{ !cancelled() && steps.build_usb_authority.outcome == 'success' && steps.machine_webview2.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $version = $env:GESHER_PACKAGE_VERSION
+          $setup = Get-Item -LiteralPath "usb-authority-installer\gesher-usb-broker-setup-$version.exe"
           $apk = Join-Path $env:RUNNER_TEMP 'cardwake-otg-root-v1.1.1-release.apk'
           Invoke-WebRequest -Uri 'https://github.com/jcool-j/cardwake-otg-root/releases/download/v1.1.1/cardwake-otg-root-v1.1.1-release.apk' -OutFile $apk
           if ((Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'd0afc9864ab0dd1305537cc0f7e2e8e127c11a31cecb012a1e18e210eaf2b313') {
@@ -1360,6 +1383,7 @@ jobs:
           tests/windows/shell/UsbAuthorityInstaller.ps1 -Setup $setup.FullName -BrokerImage 'dist\gesher-usb-authority.exe' -CardWakeApk $apk
 
       - name: Upload optional USB authority installer preview
+        if: ${{ !cancelled() && steps.build_usb_authority.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: gesher-usb-authority-preview
@@ -1367,6 +1391,7 @@ jobs:
           if-no-files-found: error
 
       - name: Install, run Hello, uninstall
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
         shell: pwsh
         run: |
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName

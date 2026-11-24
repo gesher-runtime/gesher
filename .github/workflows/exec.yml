@@ -81,7 +81,7 @@ jobs:
           "$bin/llvm-readelf" -h -l -d dist-exec/libexectest.so | grep -E 'Type:|Entry|INTERP|interpreter|NEEDED|FLAGS'
           "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexectest.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
 
-      - name: Build the separately distributed original filesystem programs
+      - name: Build the separately distributed upstream filesystem programs
         run: |
           python3 tools/filesystem-tools/build.py --ndk "$PWD/$NDK_DIR" \
             --ndk-archive "$PWD/ndk.zip" --work "$RUNNER_TEMP/filesystem-tools-work" \

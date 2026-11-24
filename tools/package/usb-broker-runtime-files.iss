@@ -1,7 +1,7 @@
 // This allowlist is expanded for both [Files] and the installed SHA-256 checks.
 // Each entry names one production source file and its directory beneath runtime.
 
-// Separately built original Android filesystem programs. Corresponding sources,
+// Separately built upstream Android filesystem programs. Corresponding sources,
 // licenses and build receipts are distributed alongside every binary. This
 // explicit inventory is included in the same installed ACL/SHA256 verification
 // as the trusted runtime; no executable is selected from PATH or app data.
@@ -17,6 +17,7 @@
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\e2fsprogs-1.47.4\NOTICE", "\filesystem-tools\licenses\e2fsprogs-1.47.4")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\e2fsprogs-1.47.4\lib\uuid\COPYING", "\filesystem-tools\licenses\e2fsprogs-1.47.4\lib\uuid")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\exfatprogs-1.4.5\COPYING", "\filesystem-tools\licenses\exfatprogs-1.4.5")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\gesher-port\LICENSE", "\filesystem-tools\licenses\gesher-port")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\libiconv-1.19.1\COPYING", "\filesystem-tools\licenses\libiconv-1.19.1")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\libiconv-1.19.1\COPYING.LIB", "\filesystem-tools\licenses\libiconv-1.19.1")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\libiconv-1.19.1\libcharset\COPYING.LIB", "\filesystem-tools\licenses\libiconv-1.19.1\libcharset")
@@ -27,6 +28,9 @@
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "receipts\logs\libiconv.log", "\filesystem-tools\receipts\logs")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\README.md", "\filesystem-tools\sources")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\build.py", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\exfat_capabilities.h", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\port_exfat.py", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\test_exfat_port.py", "\filesystem-tools\sources")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\sources.json", "\filesystem-tools\sources")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\dosfstools-4.2.tar.gz", "\filesystem-tools\sources")
 #emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\dosfstools-4.2.tar.gz.sig", "\filesystem-tools\sources")

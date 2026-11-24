@@ -32,7 +32,7 @@ directory as the Windows working directory for the protected runtime. Under it,
 The ART image entry point is `framework/boot.art`. The authority is responsible
 for separate Android data, logs and staging. The install has no user APKs or
 ordinary per-user launch scripts. Its optional `filesystem-tools` subtree contains
-the original Android builds of dosfstools, exfatprogs and e2fsprogs, together with
+Android builds of dosfstools, exfatprogs and e2fsprogs, together with
 their corresponding sources, notices and build receipts. These are separate
 programs loaded through the existing ELF/Bionic runtime.
 
@@ -135,7 +135,10 @@ provenance separate from the ordinary per-user installer.
 Build the optional filesystem supplier with
 [`tools/filesystem-tools/build.py`](../filesystem-tools/README.md). Its exact
 source and NDK pins, source archives and full notices travel with the resulting
-programs. The installer enumerates all 31 files explicitly and includes each in
+programs. The exfatprogs startup port checks the opened target's actual block and
+sysfs interfaces instead of requiring a Linux kernel version. The adaptation,
+reproducible transformation and its source notices are also included. The
+installer enumerates all 35 files explicitly and includes each in
 its installed ownership, ACL and SHA256 checks. CI obtains this supplier from
 the successful producer in the same run, source revision and attempt.
 
@@ -149,7 +152,7 @@ CardWake release and requires both a presented application frame and its origina
 WebView asset page. A runner without an interactive desktop reports that missing
 coverage explicitly.
 
-The isolated filesystem fixture runs the original format/check tools through the
+The isolated filesystem fixture runs the upstream format/check tools through the
 production ELF/Bionic/POSIX code and broker protocol on private test media. It
 does not validate a physical USB device. Physical validation requires a real
 reader and an expressly allocated test card: reader selection, read-only denial,
