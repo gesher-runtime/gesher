@@ -43,6 +43,8 @@ public final class CountryDetectorContracts {
         volatile String region;
         RuntimeException failure;
         Runnable onChange;
+        /** Runs inside watch() before the subscription takes effect (a change in the gap). */
+        Runnable beforeSubscribed;
         int watches;
         int unwatches;
 
@@ -55,6 +57,7 @@ public final class CountryDetectorContracts {
 
         @Override public Runnable watch(Runnable change) {
             watches++;
+            if (beforeSubscribed != null) beforeSubscribed.run();
             onChange = change;
             return () -> { unwatches++; onChange = null; };
         }
@@ -67,7 +70,7 @@ public final class CountryDetectorContracts {
     }
 
     /** A listener in an app process: its binder can die; delivery can fail. */
-    static final class TestListener implements ICountryListener, IBinder {
+    static class TestListener implements ICountryListener, IBinder {
         final List<Country> received = new ArrayList<>();
         final List<DeathRecipient> recipients = new ArrayList<>();
         boolean dead;
@@ -202,9 +205,61 @@ public final class CountryDetectorContracts {
         }
     }
 
+    /** The first listener must not miss a change made while Windows is being subscribed to. */
+    static void firstListenerRegistrationGap() throws Exception {
+        TestWindows windows = new TestWindows("IL");
+        // The country changes during the watch call, before its signal can reach the service.
+        windows.beforeSubscribed = () -> windows.region = "DE";
+        CountryDetectorService service = new CountryDetectorService(windows, () -> Locale.US);
+        TestListener a = new TestListener();
+        service.addCountryListener(a);
+        check(!a.received.isEmpty(), "the first listener is told a country");
+        equal("DE", a.received.get(a.received.size() - 1).getCountryCode(),
+                "a change during the watch call is not lost (last country the listener holds)");
+        equal(1, windows.watches, "one watch");
+        int before = a.received.size();
+        windows.change("DE");
+        equal(before, a.received.size(), "the same country is not delivered twice");
+        windows.change("FR");
+        equal("FR", a.received.get(a.received.size() - 1).getCountryCode(), "later changes still arrive");
+    }
+
+    /** A change signalled while the first listener's initial country is being delivered. */
+    static void initialCallbackIsSerializedWithChanges() throws Exception {
+        TestWindows windows = new TestWindows("IL");
+        CountryDetectorService service = new CountryDetectorService(windows, () -> Locale.US);
+        final Thread[] changer = new Thread[1];
+        TestListener a = new TestListener() {
+            @Override public void onCountryDetected(Country country) throws RemoteException {
+                if (received.isEmpty()) {
+                    // The user changes the country right now, from Windows' notification thread.
+                    changer[0] = new Thread(() -> windows.change("DE"));
+                    changer[0].start();
+                    long end = System.nanoTime() + 2_000_000_000L;
+                    while (changer[0].getState() != Thread.State.BLOCKED
+                            && changer[0].isAlive() && System.nanoTime() < end) {
+                        Thread.yield();
+                    }
+                }
+                super.onCountryDetected(country);
+            }
+        };
+        service.addCountryListener(a);
+        if (changer[0] != null) changer[0].join(5000);
+        check(!a.received.isEmpty(), "told a country");
+        equal("DE", a.received.get(a.received.size() - 1).getCountryCode(),
+                "the listener ends with the latest country");
+        for (int i = 1; i < a.received.size(); i++) {
+            check(!a.received.get(i).equals(a.received.get(i - 1)), "no repeated delivery");
+        }
+        check(a.received.size() <= 2, "at most the initial and the changed country");
+    }
+
     public static void main(String[] args) throws Exception {
         sourceIsLocale();
         listeners();
+        firstListenerRegistrationGap();
+        initialCallbackIsSerializedWithChanges();
         System.out.println("country-detector contracts: " + sChecks + " checks passed");
     }
 }
