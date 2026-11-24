@@ -43,6 +43,14 @@ in apps), following AOSP's MediaProvider module at `android-16.0.0_r4`.
   dependency). Registering the authority makes `PackageManager.resolveContentProvider("media")`
   answer it and makes an APK's attempt to publish `media` fail, through the existing
   registered-provider checks.
+- `SharedStorageOwnership` supplies a trusted internal lookup for providers accepting
+  existing shared-volume files. It includes pending and trashed rows and does not
+  filter owners for package visibility. DownloadManager uses it to require that a
+  recorded owner belongs to the caller's UID; lookup errors reject the request.
+  Provider startup installs an unavailable lookup before opening the database and
+  replaces it only after successful registration and startup, so an index failure
+  cannot be mistaken for a runtime without MediaStore.
+  The hook has no dependency on DownloadManager, so either provider can be built alone.
 - `Services.create` builds it with its database at `$ANDROID_DATA/system/media/external.db`
   (in memory when the device keeps no persistent state, as the accounts and downloads
   stores do).
@@ -219,6 +227,10 @@ with an explanation. It never hands out unredacted location.
 `return db.getVersion() + ":" + dbUuid;`; for API 36 targets
 `LOCKDOWN_MEDIASTORE_VERSION` makes it an opaque per-UID hash, here a SHA-256 prefix
 instead of farmhash, which the API leaves opaque).
+Generation advances for row deletion too, including scanner cleanup, expired items,
+package removal and journal recovery. A row deletion and its generation update commit
+together. Retained items whose owner or expiry changes also receive a new
+`generation_modified`, so a client synchronizing by generation sees those changes.
 
 ## Windows mapping
 
