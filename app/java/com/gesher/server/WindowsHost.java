@@ -408,6 +408,17 @@ public final class WindowsHost {
         }
     }
 
+    /** Gesher's ACTION_DIAL review, with Cancel selected and a cancellable caller lifetime. */
+    static boolean confirmDial(String packageName, String number, int ownerPid,
+            java.util.function.BooleanSupplier active) {
+        if (!available() || active == null || !active.getAsBoolean()) return false;
+        try {
+            return nativeConfirmDial(packageName, number, ownerPid, active);
+        } catch (UnsatisfiedLinkError unavailable) {
+            return false;
+        }
+    }
+
     /** Shows the native Windows folder picker dialog. Returns the selected folder path, or null. */
     public static String pickFolder(String title) {
         if (!available()) return null;
@@ -507,6 +518,8 @@ public final class WindowsHost {
     private static native String nativeFullPath(String path);
     private static native boolean nativeOpenUrl(String url);
     private static native boolean nativeHasUrlHandler(String scheme);
+    private static native boolean nativeConfirmDial(String packageName, String number,
+            int ownerPid, java.util.function.BooleanSupplier active);
     private static native String nativePickFolder(String title);
     private static native String nativePickFile(String title);
     /** The IANA id of a Windows time zone key name (Windows' icu.dll), or null. */
