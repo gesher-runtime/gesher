@@ -13,12 +13,24 @@
 namespace gesher {
 namespace {
 
-std::mutex mutex;
-bool sealed = false;
-bool protected_mode = false;
-wchar_t locator[std::size(binder::data_pipe::kLocatorPrefix) +
-                binder::data_pipe::kLocatorHexDigits]{};
-binder::ProtectedDataEndpoint endpoint{};
+constexpr size_t kLocatorCapacity = std::size(binder::data_pipe::kLocatorPrefix) +
+    binder::data_pipe::kLocatorHexDigits;
+struct RoutingState {
+  std::mutex mutex;
+  bool sealed = false;
+  bool protected_mode = false;
+  wchar_t locator[kLocatorCapacity]{};
+  binder::ProtectedDataEndpoint endpoint{};
+};
+
+// gesher_posix is linked into the executable and into Android DLLs. Native
+// startup and the framework's Binder calls must share one sealed route.
+RoutingState* Owner() {
+  using Factory = RoutingState* (*)();
+  static const auto factory = reinterpret_cast<Factory>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(nullptr), "gesher_binder_transport_owner_v1")));
+  return factory ? factory() : nullptr;
+}
 
 bool ParseId(std::string_view text, DWORD* value) {
   if (text.empty()) return false;
@@ -28,9 +40,15 @@ bool ParseId(std::string_view text, DWORD* value) {
 
 }  // namespace
 
+extern "C" void gesher_binder_transport_anchor_v1() {}
+extern "C" __declspec(dllexport) RoutingState* gesher_binder_transport_owner_v1() {
+  static RoutingState state;
+  return &state;
+}
+
 bool ConfigureProtectedBinderStartup(std::string_view name, std::string_view authority_pid,
                                      std::string_view desktop_session) {
-  constexpr size_t name_length = std::size(locator) - 1;
+  constexpr size_t name_length = kLocatorCapacity - 1;
   DWORD authority = 0, desktop = 0;
   if (name.size() != name_length || !ParseId(authority_pid, &authority) ||
       !ParseId(desktop_session, &desktop)) return false;
@@ -41,21 +59,30 @@ bool ConfigureProtectedBinderStartup(std::string_view name, std::string_view aut
 }
 
 DWORD ConfigureProtectedBinder(const binder::ProtectedDataEndpoint& routing) {
-  std::lock_guard lock(mutex);
-  if (sealed) return ERROR_ALREADY_INITIALIZED;
-  sealed = protected_mode = true;
+  auto* state = Owner();
+  if (!state) return ERROR_PROC_NOT_FOUND;
+  std::lock_guard lock(state->mutex);
+  if (state->sealed) return ERROR_ALREADY_INITIALIZED;
+  state->sealed = state->protected_mode = true;
   if (!binder::data_pipe::ValidLocator(routing.locator) ||
       routing.authority_pid == 0 || routing.authority_session != 0) return ERROR_INVALID_PARAMETER;
-  std::copy(routing.locator.begin(), routing.locator.end(), locator);
-  endpoint = routing;
-  endpoint.locator = std::wstring_view(locator, routing.locator.size());
+  std::copy(routing.locator.begin(), routing.locator.end(), state->locator);
+  state->endpoint = routing;
+  state->endpoint.locator = std::wstring_view(state->locator, routing.locator.size());
   return ERROR_SUCCESS;
 }
 
 const binder::ProtectedDataEndpoint* ProtectedBinderEndpoint() {
-  std::lock_guard lock(mutex);
-  sealed = true;
-  return protected_mode ? &endpoint : nullptr;
+  auto* state = Owner();
+  if (!state) {
+    // A missing executable owner is a broken runtime, never permission to
+    // fall back to the ordinary user-controlled discovery route.
+    static const binder::ProtectedDataEndpoint unavailable{};
+    return &unavailable;
+  }
+  std::lock_guard lock(state->mutex);
+  state->sealed = true;
+  return state->protected_mode ? &state->endpoint : nullptr;
 }
 
 HANDLE OpenProtectedBinder(const binder::ProtectedDataEndpoint& routing) {

@@ -132,6 +132,20 @@ void RegisteredClient(const wchar_t* name, HANDLE ticket_pipe, HANDLE resume) {
     Require(WriteMessage(pipe.get(), message), "request ordinary rights from protected pipe");
     Require(!ReadStatus(pipe.get(), &result), "protected pipe refuses SCM_RIGHTS");
   }
+  {
+    const auto pipe = Connect(name);
+    const FixtureHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    Require(event != nullptr, "create publication impersonation fixture");
+    WireReply message;
+    message.Put<uint32_t>(wire::kPublishApplicationSharedMemory);
+    message.Put<uint32_t>(wire::kMagic);
+    message.Put<uint32_t>(wire::kVersion);
+    message.Put<uint64_t>(reinterpret_cast<uintptr_t>(event.get()));
+    message.Put<uint64_t>(4096);
+    Require(WriteMessage(pipe.get(), message), "request producer-only memory publication");
+    Require(ReadStatus(pipe.get(), &result) && result == ERROR_ACCESS_DENIED,
+            "system UID without producer role cannot publish a resource");
+  }
 
   const auto process = Connect(name);
   const Ticket ticket = OpenProcessTicket(process.get());
@@ -273,12 +287,12 @@ void Test() {
   ProtectedIdentity selected, sibling, manager;
   const std::wstring name = L"\\\\.\\pipe\\gesher-protected-admission-fixture-" +
       std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
-  // Six initial opens from the selected process, plus outsider, sibling,
+  // Seven initial opens from the selected process, plus outsider, sibling,
   // manager process/thread, and the selected process after revocation.
   unsigned accepted = 0, rejected = 0;
   std::thread server([&] {
     std::vector<std::thread> workers;
-    for (unsigned i = 0; i < 11; ++i) {
+    for (unsigned i = 0; i < 12; ++i) {
       HANDLE listener = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX,
           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
           PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, nullptr);
@@ -325,7 +339,7 @@ void Test() {
   Require(SetEvent(proceed.get()), "let selected child verify revocation");
   Finished(child.get(), "selected connection accepted then revoked");
   server.join();
-  Require(accepted == 9 && rejected == 2, "only the registered live identities reached decoding");
+  Require(accepted == 10 && rejected == 2, "only the registered live identities reached decoding");
   std::puts("Protected Binder admission: exact peer, UID, role, rights and revoke checks passed");
 }
 

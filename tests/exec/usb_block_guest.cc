@@ -62,6 +62,12 @@ bool Serve(const BlockChannel& channel) {
   std::memcpy(model.data(), "USB", model.size());
   if (!Send(channel, bytes.data(), bytes.size())) return false;
 
+  // BLKROGET observes the authoritative current medium state, not only the
+  // attachment snapshot (a software read-only flag can change in a helper).
+  if (!Transfer(channel, &request, sizeof(request), false) ||
+      request.operation != BlockOperation::kDescribe ||
+      !Send(channel, bytes.data(), bytes.size())) return false;
+
   char payload[] = {'r', 'a', 'w'};
   if (!Transfer(channel, &request, sizeof(request), false) ||
       request.operation != BlockOperation::kRead || request.offset != 513 || request.length != 3 ||

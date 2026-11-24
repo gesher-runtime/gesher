@@ -282,6 +282,16 @@ void Test() {
           std::to_wstring(broker.info.dwProcessId), &app, container.sid.value);
       app.Finish("real AppContainer open/deny-create-instance/identity");
       std::puts("AppContainer: client open and exchange passed, CREATE_PIPE_INSTANCE denied");
+    } else if (i == 2) {
+      Require(factory->AllowAppContainer(owner.sid()) == ERROR_INVALID_SID,
+              "do not add a desktop account as an app capability");
+      Require(factory->AllowAppContainer(unrelated.sid.value) == ERROR_SUCCESS &&
+              factory->AllowAppContainer(unrelated.sid.value) == ERROR_SUCCESS,
+              "enroll a new exact package once after broker startup");
+      Process app;
+      Spawn(copy.path, L"--app " + path + L" " + std::to_wstring(GetCurrentProcessId()) + L" " +
+          std::to_wstring(broker.info.dwProcessId), &app, unrelated.sid.value);
+      app.Finish("new enrolled package uses an existing listener with protected policy");
     } else {
       const DWORD status = Client(path, GetCurrentProcessId(), broker.info.dwProcessId, false);
       Require(status == ERROR_SUCCESS, "host peer sees creator PID", status);
@@ -295,6 +305,8 @@ void Test() {
   broker.Finish("retire exact worker with listeners", ERROR_OPERATION_ABORTED);
   retained = nullptr;
   Require(factory->Take(&retained) == ERROR_OPERATION_ABORTED && !retained, "deny reissue after revocation");
+  Require(factory->AllowAppContainer(container.sid.value) == ERROR_OPERATION_ABORTED,
+          "deny further package admission after revocation");
   const Handle closed(CreateFileW(path.c_str(), client_access, 0, nullptr, OPEN_EXISTING, 0, nullptr));
   Require(closed.get() == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_NOT_FOUND,
           "closing the guard and broker retires private endpoint");

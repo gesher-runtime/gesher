@@ -9,6 +9,7 @@
 #include "internal.h"
 #include "usb_block_internal.h"
 #include "revocable_internal.h"
+#include "ofd_internal.h"
 
 extern "C" int gesher_is_socket(int fd);
 
@@ -109,7 +110,8 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
     case gesher::PathKind::kVirtual: {
       unsigned type = gesher::procfs::Type(windows);
       if (type == 0) break;
-      if (type == S_IFBLK) return gesher::usb_block::Stat(buf);
+      if (type == S_IFBLK) return gesher::usb_block::StatNode(
+          gesher::Narrow(windows.substr(windows.find_last_of(L'/') + 1).c_str()), buf);
       if (type == S_IFDIR && !follow && windows == L"proc/self") {
         type = S_IFLNK;
       }
@@ -158,6 +160,13 @@ int fstat(int fd, struct stat* buf) {
   }
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return -1;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    if (gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR) return errno = ENOENT, -1;
+    Clear(buf);
+    buf->st_mode = S_IFDIR | 0555;
+    buf->st_dev = 0x16;
+    return 0;
+  }
   int block_result;
   if (gesher::usb_block::StatFd(snapshot, buf, &block_result)) return block_result;
   gesher::FileOperationLease operation(snapshot);

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cwchar>
+#include <iterator>
 
 namespace gesher::usb_storage {
 namespace {
@@ -115,11 +116,9 @@ DWORD Geometry(HANDLE disk, DiskInfo* info) {
   return ERROR_SUCCESS;
 }
 
-DWORD VerifyOfflineWritable(HANDLE disk) {
+DWORD DiskAttributes(HANDLE disk, uint64_t* bits) {
   // The documented Win32 layout and control code are missing in mingw-w64.
   constexpr DWORD control = CTL_CODE(IOCTL_DISK_BASE, 0x003c, METHOD_BUFFERED, FILE_ANY_ACCESS);
-  constexpr uint64_t offline = 1;
-  constexpr uint64_t read_only = 2;
   struct Attributes {
     DWORD version;
     DWORD reserved;
@@ -134,10 +133,143 @@ DWORD VerifyOfflineWritable(HANDLE disk) {
   if (received < sizeof(attributes) || attributes.version != sizeof(attributes)) {
     return ERROR_INVALID_DATA;
   }
-  if ((attributes.bits & offline) == 0) return ERROR_SHARING_VIOLATION;
-  if ((attributes.bits & read_only) != 0) return ERROR_WRITE_PROTECT;
+  *bits = attributes.bits;
+  return ERROR_SUCCESS;
+}
+
+DWORD VerifyOffline(HANDLE disk) {
+  uint64_t attributes = 0;
+  const DWORD error = DiskAttributes(disk, &attributes);
+  if (error) return error;
+  return (attributes & 1) ? ERROR_SUCCESS : ERROR_SHARING_VIOLATION;
+}
+
+DWORD PhysicallyWritable(HANDLE disk) {
+  DWORD received = 0;
   return DeviceIoControl(disk, IOCTL_DISK_IS_WRITABLE, nullptr, 0,
                          nullptr, 0, &received, nullptr) ? ERROR_SUCCESS : GetLastError();
+}
+
+DWORD DiskNumber(HANDLE disk, DWORD* number) {
+  STORAGE_DEVICE_NUMBER value{};
+  DWORD received = 0;
+  if (!DeviceIoControl(disk, IOCTL_STORAGE_GET_DEVICE_NUMBER, nullptr, 0,
+      &value, sizeof(value), &received, nullptr)) return GetLastError();
+  if (received != sizeof(value) || value.DeviceType != FILE_DEVICE_DISK ||
+      (value.PartitionNumber != 0 && value.PartitionNumber != MAXDWORD)) return ERROR_ACCESS_DENIED;
+  *number = value.DeviceNumber;
+  return ERROR_SUCCESS;
+}
+
+DWORD VolumeExtents(HANDLE volume, std::vector<DISK_EXTENT>* extents) {
+  constexpr size_t kMaximumExtents = 128;
+  alignas(VOLUME_DISK_EXTENTS) std::byte buffer[offsetof(VOLUME_DISK_EXTENTS, Extents) +
+      sizeof(DISK_EXTENT) * kMaximumExtents]{};
+  DWORD received = 0;
+  if (!DeviceIoControl(volume, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, nullptr, 0,
+      buffer, sizeof(buffer), &received, nullptr)) return GetLastError();
+  DWORD count = 0;
+  std::memcpy(&count, buffer, sizeof(count));
+  if (!count || count > kMaximumExtents || received != offsetof(VOLUME_DISK_EXTENTS, Extents) +
+      sizeof(DISK_EXTENT) * count) return ERROR_INVALID_DATA;
+  extents->resize(count);
+  std::memcpy(extents->data(), buffer + offsetof(VOLUME_DISK_EXTENTS, Extents), sizeof(DISK_EXTENT) * count);
+  return ERROR_SUCCESS;
+}
+
+DiskHandle OpenVolume(std::wstring name, DWORD access) {
+  if (!name.empty() && name.back() == L'\\') name.pop_back();
+  const HANDLE handle = CreateFileW(name.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING, 0, nullptr);
+  return DiskHandle(handle == INVALID_HANDLE_VALUE ? nullptr : handle);
+}
+
+DWORD RejectSystemDisk(DWORD number) {
+  wchar_t windows[32768], root[32768], name[32768];
+  const UINT size = GetWindowsDirectoryW(windows, static_cast<UINT>(std::size(windows)));
+  if (!size || size >= std::size(windows)) return ERROR_INVALID_DATA;
+  if (!GetVolumePathNameW(windows, root, static_cast<DWORD>(std::size(root))) ||
+      !GetVolumeNameForVolumeMountPointW(root, name, static_cast<DWORD>(std::size(name)))) {
+    return GetLastError();
+  }
+  auto volume = OpenVolume(name, 0);
+  if (!volume) return GetLastError();
+  std::vector<DISK_EXTENT> extents;
+  const DWORD error = VolumeExtents(volume.get(), &extents);
+  if (error) return error;
+  return std::any_of(extents.begin(), extents.end(), [number](const auto& item) {
+    return item.DiskNumber == number;
+  }) ? ERROR_ACCESS_DENIED : ERROR_SUCCESS;
+}
+
+DWORD VolumeIdentity(HANDLE volume, DWORD disk_number, std::wstring* identity) {
+  if (GetFileType(volume) != FILE_TYPE_DISK) return ERROR_INVALID_HANDLE;
+  std::vector<DISK_EXTENT> extents;
+  DWORD error = VolumeExtents(volume, &extents);
+  if (error) return error;
+  // A spanned volume could contain data from another disk. Never lock or
+  // dismount it on the strength of consent for this USB reader alone.
+  if (extents.size() != 1 || extents.front().DiskNumber != disk_number ||
+      extents.front().StartingOffset.QuadPart < 0 || extents.front().ExtentLength.QuadPart <= 0) {
+    return ERROR_NOT_SUPPORTED;
+  }
+  // Mount manager's stable volume identity, plus its exact extent. A new
+  // volume appearing on the disk invalidates the current exclusive session.
+  constexpr DWORD query = CTL_CODE('M', 0, METHOD_BUFFERED, FILE_ANY_ACCESS);
+  alignas(USHORT) BYTE bytes[4096]{};
+  DWORD received = 0;
+  if (!DeviceIoControl(volume, query, nullptr, 0, bytes, sizeof(bytes), &received, nullptr)) {
+    return GetLastError();
+  }
+  USHORT length = 0;
+  std::memcpy(&length, bytes, sizeof(length));
+  if (!length || received < sizeof(length) || length > received - sizeof(length)) return ERROR_INVALID_DATA;
+  static constexpr wchar_t hex[] = L"0123456789abcdef";
+  identity->clear();
+  for (size_t i = 0; i < length; ++i) {
+    const BYTE value = bytes[sizeof(length) + i];
+    identity->push_back(hex[value >> 4]);
+    identity->push_back(hex[value & 15]);
+  }
+  *identity += L":" + std::to_wstring(extents.front().StartingOffset.QuadPart) +
+               L":" + std::to_wstring(extents.front().ExtentLength.QuadPart);
+  return ERROR_SUCCESS;
+}
+
+struct DiskVolume { std::wstring name; std::wstring identity; };
+
+DWORD DiskVolumes(DWORD disk_number, std::vector<DiskVolume>* volumes) {
+  volumes->clear();
+  wchar_t name[32768];
+  HANDLE search = FindFirstVolumeW(name, static_cast<DWORD>(std::size(name)));
+  if (search == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    return error == ERROR_NO_MORE_FILES ? ERROR_SUCCESS : error;
+  }
+  const auto close_search = [](void* value) { FindVolumeClose(value); };
+  const std::unique_ptr<void, decltype(close_search)> cleanup(search, close_search);
+  for (;;) {
+    auto volume = OpenVolume(name, 0);
+    if (!volume) return GetLastError();
+    std::vector<DISK_EXTENT> extents;
+    DWORD error = VolumeExtents(volume.get(), &extents);
+    // Non-disk providers (optical/network) do not supply disk extents.
+    if (error != ERROR_SUCCESS && error != ERROR_INVALID_FUNCTION && error != ERROR_NOT_SUPPORTED &&
+        error != ERROR_NOT_READY) return error;
+    if (error == ERROR_SUCCESS && std::any_of(extents.begin(), extents.end(), [disk_number](const auto& extent) {
+          return extent.DiskNumber == disk_number;
+        })) {
+      std::wstring identity;
+      error = VolumeIdentity(volume.get(), disk_number, &identity);
+      if (error) return error;
+      if (volumes->size() >= 128) return ERROR_NOT_ENOUGH_QUOTA;
+      volumes->push_back({name, std::move(identity)});
+    }
+    if (!FindNextVolumeW(search, name, static_cast<DWORD>(std::size(name)))) {
+      const DWORD last = GetLastError();
+      return last == ERROR_NO_MORE_FILES ? ERROR_SUCCESS : last;
+    }
+  }
 }
 
 DWORD GetMediaGeneration(HANDLE disk, ULONG* generation) {
@@ -208,6 +340,7 @@ DWORD ListDisks(std::vector<std::wstring>* paths) {
 
 DWORD HostDisk::Open(const std::wstring& path, Access access,
                      std::unique_ptr<HostDisk>* disk) {
+  if (!disk || (access != Access::kReadOnly && access != Access::kOfflineReadWrite)) return ERROR_INVALID_PARAMETER;
   disk->reset();
   if (path.empty() || path.find(L'\0') != std::wstring::npos) return ERROR_INVALID_NAME;
   std::vector<wchar_t> interfaces;
@@ -237,27 +370,146 @@ DWORD HostDisk::Open(const std::wstring& path, Access access,
   handle.release();
   DWORD status = DescribeUsb(selected->handle_, &selected->info_);
   if (status != ERROR_SUCCESS) return status;
+  status = DiskNumber(selected->handle_, &selected->disk_number_);
+  if (status == ERROR_SUCCESS) status = RejectSystemDisk(selected->disk_number_);
+  if (status != ERROR_SUCCESS) return status;
   if (writable) {
     if (!selected->info_.removable) return ERROR_NOT_SUPPORTED;
-    status = VerifyOfflineWritable(selected->handle_);
+    status = VerifyOffline(selected->handle_);
+    if (status != ERROR_SUCCESS) status = selected->LockVolumes();
     if (status != ERROR_SUCCESS) return status;
     status = SetMediaLock(selected->handle_, true);
-    if (status != ERROR_SUCCESS) return status;
-    selected->prevent_removal_ = true;
+    if (status != ERROR_SUCCESS && status != ERROR_INVALID_FUNCTION && status != ERROR_NOT_SUPPORTED) return status;
+    selected->prevent_removal_ = status == ERROR_SUCCESS;
   }
   status = GetMediaGeneration(selected->handle_, &selected->media_generation_);
   if (selected->info_.removable && status != ERROR_SUCCESS) return status;
   selected->track_media_ = status == ERROR_SUCCESS;
   status = Geometry(selected->handle_, &selected->info_);
   if (status != ERROR_SUCCESS) return status;
-  selected->info_.writable = writable;
+  selected->info_.write_consented = writable;
+  const DWORD media_write = PhysicallyWritable(selected->handle_);
+  if (media_write != ERROR_SUCCESS && media_write != ERROR_WRITE_PROTECT) return media_write;
+  selected->info_.writable = writable && media_write == ERROR_SUCCESS;
   status = selected->Validate();
   if (status != ERROR_SUCCESS) return status;
   *disk = std::move(selected);
   return ERROR_SUCCESS;
 }
 
+DWORD HostDisk::DuplicateForAuthority(HANDLE* result, HostDiskIdentity* identity,
+                                     std::vector<HANDLE>* volume_handles) {
+  if (!result || *result || !identity || (volume_handles && !volume_handles->empty())) return ERROR_INVALID_PARAMETER;
+  std::lock_guard lock(mutex_);
+  DWORD error = CheckMedia();
+  if (error == ERROR_SUCCESS && info_.write_consented) error = VerifyExclusion();
+  if (error != ERROR_SUCCESS) return error;
+  if (!volume_handles && !volume_handles_.empty()) return ERROR_INSUFFICIENT_BUFFER;
+  std::vector<HANDLE> duplicates;
+  duplicates.reserve(volume_handles_.size());
+  for (HANDLE volume : volume_handles_) {
+    HANDLE copy = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), volume, GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      error = GetLastError();
+      for (HANDLE previous : duplicates) CloseHandle(previous);
+      return error;
+    }
+    duplicates.push_back(copy);
+  }
+  HANDLE duplicate = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(), &duplicate,
+                       0, FALSE, DUPLICATE_SAME_ACCESS)) {
+    error = GetLastError();
+    for (HANDLE previous : duplicates) CloseHandle(previous);
+    return error;
+  }
+  *identity = {info_.bytes, info_.sector_bytes, media_generation_,
+      (info_.removable ? 1u : 0u) | (info_.write_consented ? 2u : 0u) | (track_media_ ? 4u : 0u) |
+      (prevent_removal_ ? 8u : 0u) | (volume_lock_mode_ ? 16u : 0u), static_cast<uint32_t>(duplicates.size())};
+  if (volume_handles) *volume_handles = std::move(duplicates);
+  *result = duplicate;
+  return ERROR_SUCCESS;
+}
+
+DWORD HostDisk::Adopt(HANDLE owned_handle, Access access, const HostDiskIdentity& expected,
+                      std::unique_ptr<HostDisk>* disk, std::vector<HANDLE> volume_handles) {
+  DiskHandle handle(owned_handle == INVALID_HANDLE_VALUE ? nullptr : owned_handle);
+  struct CloseVolumes {
+    std::vector<HANDLE>& handles;
+    ~CloseVolumes() { for (HANDLE volume : handles) if (volume && volume != INVALID_HANDLE_VALUE) CloseHandle(volume); }
+  } cleanup{volume_handles};
+  if (!disk || *disk || !handle || expected.volume_count != volume_handles.size() ||
+      expected.volume_count > 128 || (expected.flags & ~31u) ||
+      (access != Access::kReadOnly && access != Access::kOfflineReadWrite) ||
+      ((expected.flags & 2u) != 0) != (access == Access::kOfflineReadWrite) ||
+      (access == Access::kReadOnly && (expected.volume_count || (expected.flags & 24u)))) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  if (GetFileType(handle.get()) != FILE_TYPE_DISK) return ERROR_INVALID_HANDLE;
+  STORAGE_DEVICE_NUMBER number{};
+  DWORD received = 0;
+  if (!DeviceIoControl(handle.get(), IOCTL_STORAGE_GET_DEVICE_NUMBER, nullptr, 0,
+                       &number, sizeof(number), &received, nullptr)) return GetLastError();
+  if (received != sizeof(number) || number.DeviceType != FILE_DEVICE_DISK ||
+      (number.PartitionNumber != 0 && number.PartitionNumber != DWORD(-1))) return ERROR_ACCESS_DENIED;
+  auto selected = std::unique_ptr<HostDisk>(new HostDisk(handle.release()));
+  DWORD error = DescribeUsb(selected->handle_, &selected->info_);
+  if (error == ERROR_SUCCESS) error = Geometry(selected->handle_, &selected->info_);
+  if (error == ERROR_SUCCESS) error = DiskNumber(selected->handle_, &selected->disk_number_);
+  if (error == ERROR_SUCCESS) error = RejectSystemDisk(selected->disk_number_);
+  if (error != ERROR_SUCCESS) return error;
+  if (selected->info_.bytes != expected.bytes || selected->info_.sector_bytes != expected.sector_bytes ||
+      selected->info_.removable != ((expected.flags & 1u) != 0)) return ERROR_MEDIA_CHANGED;
+  ULONG generation = 0;
+  error = GetMediaGeneration(selected->handle_, &generation);
+  if ((expected.flags & 4u) != 0) {
+    if (error != ERROR_SUCCESS) return error;
+    if (generation != expected.media_generation) return ERROR_MEDIA_CHANGED;
+    selected->media_generation_ = generation;
+    selected->track_media_ = true;
+  } else if (selected->info_.removable || error == ERROR_SUCCESS) {
+    return ERROR_INVALID_DATA;
+  }
+  selected->info_.write_consented = access == Access::kOfflineReadWrite;
+  const DWORD media_write = PhysicallyWritable(selected->handle_);
+  if (media_write != ERROR_SUCCESS && media_write != ERROR_WRITE_PROTECT) return media_write;
+  selected->info_.writable = selected->info_.write_consented && media_write == ERROR_SUCCESS;
+  if (selected->info_.write_consented) {
+    if (!selected->info_.removable) return ERROR_NOT_SUPPORTED;
+    selected->volume_lock_mode_ = (expected.flags & 16u) != 0;
+    if (!selected->volume_lock_mode_ && expected.volume_count) return ERROR_INVALID_DATA;
+    for (HANDLE volume : volume_handles) {
+      std::wstring identity;
+      error = VolumeIdentity(volume, selected->disk_number_, &identity);
+      if (error) return error;
+      selected->volume_names_.push_back(std::move(identity));
+    }
+    std::sort(selected->volume_names_.begin(), selected->volume_names_.end());
+    if (std::adjacent_find(selected->volume_names_.begin(), selected->volume_names_.end()) !=
+        selected->volume_names_.end()) return ERROR_INVALID_DATA;
+    selected->volume_handles_ = std::move(volume_handles);
+    volume_handles.clear();
+    error = selected->VerifyExclusion();
+    if (error) return error;
+    // Ownership of the existing lock transfers only on successful adoption.
+    // The trusted chooser disarms its unlock after the service acknowledges.
+    selected->prevent_removal_ = (expected.flags & 8u) != 0;
+  }
+  error = selected->Validate();
+  if (error != ERROR_SUCCESS) return error;
+  *disk = std::move(selected);
+  return ERROR_SUCCESS;
+}
+
+void HostDisk::ReleaseAfterAuthorityHandoff() {
+  std::lock_guard lock(mutex_);
+  prevent_removal_ = false;
+}
+
 HostDisk::~HostDisk() {
+  // FSCTL_LOCK_VOLUME belongs to the open FILE_OBJECT. Closing these exact
+  // handles releases it only after the chooser/service handoff's last copy.
+  for (HANDLE volume : volume_handles_) CloseHandle(volume);
   if (prevent_removal_) SetMediaLock(handle_, false);
   CloseHandle(handle_);
 }
@@ -268,13 +520,151 @@ DWORD HostDisk::Validate() {
   if (media != ERROR_SUCCESS) return media;
   // The effective write grant must still match the pinned host session when its
   // description is published. A lost offline or writable state is an error.
-  if (info_.writable) return VerifyOfflineWritable(handle_);
+  if (info_.write_consented) return VerifyExclusion();
   if (track_media_) return ERROR_SUCCESS;
   // A fixed USB disk may not supply a change sequence. It cannot swap media,
   // but a failed live status query still retires this handle permanently.
   const DWORD status = DescribeUsb(handle_, nullptr);
   if (status != ERROR_SUCCESS) disconnected_ = true;
   return status;
+}
+
+DWORD HostDisk::LockVolumes() {
+  DWORD received = 0;
+  std::vector<DiskVolume> volumes;
+  DWORD error = DiskVolumes(disk_number_, &volumes);
+  if (error) return error;
+  volume_handles_.reserve(volumes.size());
+  volume_names_.reserve(volumes.size());
+  for (const auto& item : volumes) {
+    auto volume = OpenVolume(item.name, GENERIC_READ | GENERIC_WRITE);
+    if (!volume && (GetLastError() == ERROR_WRITE_PROTECT || GetLastError() == ERROR_ACCESS_DENIED)) {
+      volume = OpenVolume(item.name, GENERIC_READ);
+    }
+    if (!volume) return GetLastError();
+    std::wstring identity;
+    error = VolumeIdentity(volume.get(), disk_number_, &identity);
+    if (error) return error;
+    if (identity != item.identity) return ERROR_MEDIA_CHANGED;
+    // LOCK fails if a program still has files open. Do not forcibly dismount
+    // a busy volume: preserve that application's data and return its real
+    // sharing error to the chooser. A successful lock excludes future opens.
+    if (!DeviceIoControl(volume.get(), FSCTL_LOCK_VOLUME, nullptr, 0, nullptr, 0, &received, nullptr)) {
+      return GetLastError();
+    }
+    // FSCTL_LOCK_VOLUME flushes the filesystem's cache before granting the
+    // exclusive lock, including a read-only volume opened to clear its flag.
+    if (!DeviceIoControl(volume.get(), FSCTL_DISMOUNT_VOLUME, nullptr, 0, nullptr, 0, &received, nullptr)) {
+      return GetLastError();
+    }
+    volume_names_.push_back(std::move(identity));
+    volume_handles_.push_back(volume.release());
+  }
+  std::sort(volume_names_.begin(), volume_names_.end());
+  if (std::adjacent_find(volume_names_.begin(), volume_names_.end()) != volume_names_.end()) {
+    return ERROR_INVALID_DATA;
+  }
+  volume_lock_mode_ = true;
+  return VerifyExclusion();
+}
+
+DWORD HostDisk::VerifyExclusion() {
+  if (!volume_lock_mode_) return VerifyOffline(handle_);
+  if (volume_names_.size() != volume_handles_.size()) return ERROR_INVALID_DATA;
+  // The trusted chooser imported these exact still-open volume objects. They
+  // are never exposed to an application and no code issues UNLOCK_VOLUME.
+  // Check the retained object identities and the full live volume set before
+  // every write, including RMW, so repartition/rescan cannot add an unheld FS.
+  std::vector<std::wstring> retained;
+  retained.reserve(volume_handles_.size());
+  for (HANDLE volume : volume_handles_) {
+    std::wstring identity;
+    const DWORD error = VolumeIdentity(volume, disk_number_, &identity);
+    if (error) return error;
+    retained.push_back(std::move(identity));
+  }
+  std::sort(retained.begin(), retained.end());
+  if (retained != volume_names_) return ERROR_MEDIA_CHANGED;
+  std::vector<DiskVolume> volumes;
+  const DWORD error = DiskVolumes(disk_number_, &volumes);
+  if (error) return error;
+  std::vector<std::wstring> live;
+  live.reserve(volumes.size());
+  for (auto& volume : volumes) live.push_back(std::move(volume.identity));
+  std::sort(live.begin(), live.end());
+  return live == volume_names_ ? ERROR_SUCCESS : ERROR_SHARING_VIOLATION;
+}
+
+DWORD HostDisk::VerifyWriteAccess() {
+  if (!info_.write_consented) return ERROR_ACCESS_DENIED;
+  const DWORD exclusive = VerifyExclusion();
+  return exclusive ? exclusive : PhysicallyWritable(handle_);
+}
+
+DWORD HostDisk::Describe(DiskInfo* info) {
+  if (!info) return ERROR_INVALID_PARAMETER;
+  std::lock_guard lock(mutex_);
+  DWORD error = CheckMedia();
+  if (!error && info_.write_consented) error = VerifyExclusion();
+  if (error) return error;
+  *info = info_;
+  if (info_.write_consented) {
+    error = PhysicallyWritable(handle_);
+    if (error != ERROR_SUCCESS && error != ERROR_WRITE_PROTECT) return error;
+    info->writable = error == ERROR_SUCCESS;
+  }
+  return ERROR_SUCCESS;
+}
+
+DWORD HostDisk::SetReadOnly(bool readonly) {
+  std::lock_guard lock(mutex_);
+  if (!info_.write_consented) return ERROR_ACCESS_DENIED;
+  DWORD error = CheckMedia();
+  if (!error) error = VerifyExclusion();
+  if (error) return error;
+  uint64_t attributes = 0;
+  error = DiskAttributes(handle_, &attributes);
+  if (error) {
+    // A reader without software attributes can still confirm the requested
+    // writable state when it already exists. A hardware write lock remains an
+    // actual write-protect error; it is never cleared or hidden in metadata.
+    if (!readonly && (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED)) {
+      return PhysicallyWritable(handle_);
+    }
+    return error;
+  }
+  if (((attributes & 2) != 0) != readonly) {
+    struct SetAttributes {
+      DWORD version;
+      BOOLEAN persist;
+      BYTE reserved1[3];
+      uint64_t bits;
+      uint64_t mask;
+      DWORD reserved2[4];
+    } request{sizeof(SetAttributes), FALSE, {}, readonly ? uint64_t{2} : 0, 2, {}};
+    static_assert(sizeof(SetAttributes) == 40);
+    constexpr DWORD control = CTL_CODE(IOCTL_DISK_BASE, 0x003d, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS);
+    DWORD received = 0;
+    if (!DeviceIoControl(handle_, control, &request, sizeof(request), nullptr, 0, &received, nullptr)) {
+      return GetLastError();
+    }
+    error = DiskAttributes(handle_, &attributes);
+    if (error) return error;
+    if (((attributes & 2) != 0) != readonly) return ERROR_WRITE_PROTECT;
+  }
+  error = CheckMedia();
+  if (error) return error;
+  return readonly ? ERROR_SUCCESS : PhysicallyWritable(handle_);
+}
+
+DWORD HostDisk::Flush() {
+  std::lock_guard lock(mutex_);
+  DWORD error = CheckMedia();
+  if (error) return error;
+  if (!info_.write_consented) return ERROR_SUCCESS;  // This session cannot dirty the medium.
+  error = VerifyExclusion();
+  if (error) return error;
+  return FlushFileBuffers(handle_) ? ERROR_SUCCESS : GetLastError();
 }
 
 DWORD HostDisk::CheckMedia() {
@@ -311,10 +701,10 @@ DWORD HostDisk::Read(uint64_t offset, std::span<std::byte> output) {
 }
 
 DWORD HostDisk::Write(uint64_t offset, std::span<const std::byte> input) {
-  if (!info_.writable) return ERROR_ACCESS_DENIED;
+  if (!info_.write_consented) return ERROR_ACCESS_DENIED;
   if (!ValidRange(offset, input.size())) return ERROR_INVALID_PARAMETER;
   std::lock_guard lock(mutex_);
-  DWORD status = VerifyOfflineWritable(handle_);
+  DWORD status = VerifyWriteAccess();
   if (status != ERROR_SUCCESS) return status;
   status = CheckMedia();
   if (status != ERROR_SUCCESS) return status;
@@ -326,7 +716,7 @@ DWORD HostDisk::Write(uint64_t offset, std::span<const std::byte> input) {
     if (status != ERROR_SUCCESS) return status;
   }
   std::memcpy(static_cast<std::byte*>(buffer.get()) + range.prefix, input.data(), input.size());
-  status = VerifyOfflineWritable(handle_);
+  status = VerifyWriteAccess();
   if (status != ERROR_SUCCESS) return status;
   status = CheckMedia();
   if (status != ERROR_SUCCESS) return status;

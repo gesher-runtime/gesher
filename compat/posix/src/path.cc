@@ -36,6 +36,7 @@
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
 #include "usb_block_internal.h"
+#include "ofd_internal.h"
 
 namespace gesher {
 namespace {
@@ -56,6 +57,16 @@ std::string_view NextPart(std::string_view* path) {
     if (!part.empty() && part != ".") return part;
   }
   return {};
+}
+
+std::wstring VirtualDirectoryPath(std::string base, std::string_view suffix) {
+  for (auto part = NextPart(&suffix); !part.empty(); part = NextPart(&suffix)) {
+    if (part == "..") {
+      const size_t slash = base.find_last_of('/');
+      if (slash != std::string::npos) base.resize(slash);
+    } else { base.push_back('/'); base.append(part); }
+  }
+  return Widen(base.c_str());
 }
 
 // /dev, /proc and /sys are Linux's virtual file systems: their names never
@@ -88,12 +99,23 @@ PathKind VirtualKind(std::string_view path, std::wstring* name) {
   if (root == "sys") {
     const auto branch = NextPart(&path);
     if (branch == "block" && usb_block::Attached()) {
-      std::string joined("sys/block");
-      for (auto part = NextPart(&path); !part.empty(); part = NextPart(&path)) {
-        joined += '/';
-        joined += part;
+      *name = VirtualDirectoryPath("sys/block", path);
+      return PathKind::kVirtual;
+    }
+    if (branch == "dev" && NextPart(&path) == "block" && usb_block::Attached()) {
+      const auto number = NextPart(&path);
+      if (number.empty()) { *name = L"sys/dev/block"; return PathKind::kVirtual; }
+      const std::string node = usb_block::NodeFromDeviceNumber(number);
+      if (node.empty()) return PathKind::kMissing;
+      if (path.empty()) *name = Widen(("sys/dev/block/" + std::string(number)).c_str());
+      else {
+        const std::string base = "sys/block/sdb" + (node == "sdb" ? std::string{} : "/" + node);
+        *name = VirtualDirectoryPath(base, path);
       }
-      *name = Widen(joined.c_str());
+      return PathKind::kVirtual;
+    }
+    if (branch == "devices" && path.starts_with("gesher/usb/") && usb_block::Attached()) {
+      *name = VirtualDirectoryPath("sys/devices", path);
       return PathKind::kVirtual;
     }
     if (branch == "devices" && NextPart(&path) == "system" &&
@@ -116,8 +138,10 @@ PathKind VirtualKind(std::string_view path, std::wstring* name) {
       *name = L"dev/block";
       return PathKind::kVirtual;
     }
-    if (device == usb_block::kBlockName && NextPart(&path).empty()) {
-      *name = L"dev/block/sdb";
+    const bool partition = device.size() > 3 && device.substr(0, 3) == "sdb" &&
+        device[3] != '0' && device.find_first_not_of("0123456789", 3) == std::string_view::npos;
+    if ((device == usb_block::kBlockName || partition) && NextPart(&path).empty()) {
+      *name = Widen(("dev/block/" + std::string(device)).c_str());
       return PathKind::kVirtual;
     }
     return PathKind::kMissing;
@@ -305,6 +329,14 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
   if (path == nullptr) return errno = EFAULT, false;
   if (dirfd == AT_FDCWD || IsAbsolute(path)) {
     *out = path;
+    return true;
+  }
+  auto snapshot = CaptureDescriptor(dirfd);
+  if (!snapshot) return false;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    const auto& directory = snapshot->description->virtual_directory;
+    if (procfs::Type(directory) != S_IFDIR) return errno = ENOENT, false;
+    *out = "/" + Narrow(directory.c_str()) + "/" + path;
     return true;
   }
   HANDLE h = HandleFromFd(dirfd);

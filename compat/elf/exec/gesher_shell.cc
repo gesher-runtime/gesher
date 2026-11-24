@@ -27,6 +27,7 @@
 // drive, "/mnt/d/x" on drive D:, /dev/null is NUL.
 
 #include "gesher_shell.h"
+#include "../../usb_storage/protected_runtime_client.h"
 
 #include <gesher/reserved_names.h>
 

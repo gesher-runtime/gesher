@@ -1,6 +1,42 @@
 // This allowlist is expanded for both [Files] and the installed SHA-256 checks.
 // Each entry names one production source file and its directory beneath runtime.
 
+// Separately built original Android filesystem programs. Corresponding sources,
+// licenses and build receipts are distributed alongside every binary. This
+// explicit inventory is included in the same installed ACL/SHA256 verification
+// as the trusted runtime; no executable is selected from PATH or app data.
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "bin\e2fsck", "\filesystem-tools\bin")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "bin\fsck.exfat", "\filesystem-tools\bin")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "bin\fsck.fat", "\filesystem-tools\bin")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "bin\mke2fs", "\filesystem-tools\bin")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "bin\mkfs.exfat", "\filesystem-tools\bin")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "bin\mkfs.fat", "\filesystem-tools\bin")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\android-ndk-r27c\NOTICE", "\filesystem-tools\licenses\android-ndk-r27c")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\android-ndk-r27c\NOTICE.toolchain", "\filesystem-tools\licenses\android-ndk-r27c")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\dosfstools-4.2\COPYING", "\filesystem-tools\licenses\dosfstools-4.2")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\e2fsprogs-1.47.4\NOTICE", "\filesystem-tools\licenses\e2fsprogs-1.47.4")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\e2fsprogs-1.47.4\lib\uuid\COPYING", "\filesystem-tools\licenses\e2fsprogs-1.47.4\lib\uuid")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\exfatprogs-1.4.5\COPYING", "\filesystem-tools\licenses\exfatprogs-1.4.5")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\libiconv-1.19.1\COPYING", "\filesystem-tools\licenses\libiconv-1.19.1")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\libiconv-1.19.1\COPYING.LIB", "\filesystem-tools\licenses\libiconv-1.19.1")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "licenses\libiconv-1.19.1\libcharset\COPYING.LIB", "\filesystem-tools\licenses\libiconv-1.19.1\libcharset")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "receipts\build.json", "\filesystem-tools\receipts")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "receipts\logs\dosfstools.log", "\filesystem-tools\receipts\logs")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "receipts\logs\e2fsprogs.log", "\filesystem-tools\receipts\logs")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "receipts\logs\exfatprogs.log", "\filesystem-tools\receipts\logs")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "receipts\logs\libiconv.log", "\filesystem-tools\receipts\logs")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\README.md", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\build.py", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\sources.json", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\dosfstools-4.2.tar.gz", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\dosfstools-4.2.tar.gz.sig", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\e2fsprogs-1.47.4.tar.xz", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\e2fsprogs-1.47.4-sha256sums.asc", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\exfatprogs-1.4.5.tar.xz", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\exfatprogs-1.4.5.tar.xz.sha256", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\libiconv-1.19.1.tar.gz", "\filesystem-tools\sources")
+#emit EmitRuntimeFile(AddBackslash(FilesystemToolsDir) + "sources\libiconv-1.19.1.tar.gz.sig", "\filesystem-tools\sources")
+
 // Device processes, guest subprocesses and packaged runtime helpers.
 #emit EmitRuntimeFile(AddBackslash(BuildDir) + "dalvikvm.exe", "")
 #emit EmitRuntimeFile(AddBackslash(BuildDir) + "binderd.exe", "")

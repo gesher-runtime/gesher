@@ -644,6 +644,12 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 
+      - name: Activity window activation and single-process finish
+        run: |
+          python3 tools/test_activity_window_activation.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Speech recognition dispatch and client lifecycle contracts
         run: |
           python3 tools/test_speech_recognition.py --java-home "$JAVA_HOME" \

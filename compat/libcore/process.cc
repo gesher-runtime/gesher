@@ -43,6 +43,8 @@
 
 // gesher-base: kill() of another process through its signal mailbox
 // (compat/posix/src/process.cc).
+#include "../usb_storage/protected_runtime_client.h"
+
 extern "C" int gesher_kill_other(int pid, int sig);
 
 namespace ex = gesher::exec;
@@ -260,19 +262,38 @@ jint JNICALL WaitForProcessExit(JNIEnv*, jobject, jint pid) {
 // without a mailbox (a plain Windows program) is terminated with 143 by
 // gesher-base's default action, as before.
 void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
+  uint64_t creation = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_children.find(pid) == g_children.end()) return;
+    const auto child = g_children.find(pid);
+    if (child == g_children.end()) return;
+    if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+      FILETIME created{}, exited{}, kernel{}, user{};
+      if (!GetProcessTimes(child->second, &created, &exited, &kernel, &user)) return;
+      creation = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    }
   }
-  gesher_kill_other(pid, kSigterm);
+  if (creation) gesher::usb_storage::ProtectedSignal(static_cast<uint32_t>(pid), creation, kSigterm);
+  else gesher_kill_other(pid, kSigterm);
 }
 
 // Process.destroyForcibly(): SIGKILL (TerminateProcess), the reaper sees
 // 0x80 + 9 = 137.
 void JNICALL DestroyProcessForcibly(JNIEnv*, jclass, jint pid) {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  auto it = g_children.find(pid);
-  if (it != g_children.end()) TerminateProcess(it->second, 0x80 + kSigkill);
+  uint64_t creation = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = g_children.find(pid);
+    if (it == g_children.end()) return;
+    if (!gesher::usb_storage::ProtectedRuntimeEnabled()) {
+      TerminateProcess(it->second, 0x80 + kSigkill);
+      return;
+    }
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(it->second, &created, &exited, &kernel, &user)) return;
+    creation = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  }
+  if (creation) gesher::usb_storage::ProtectedSignal(static_cast<uint32_t>(pid), creation, kSigkill);
 }
 
 void JNICALL InitIDs(JNIEnv*, jclass) {}

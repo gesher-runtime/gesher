@@ -3,6 +3,7 @@
 add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc
   ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/block_broker_client.cc
+  ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/binder.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/binder_transport.cc
@@ -42,6 +43,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_registry.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_wait.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/procfs.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/protected_startup.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/resume.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/pthread.cc
@@ -95,6 +97,11 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_ofd_owner_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_descriptor_transaction_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_stdio_output_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
+# Native bootstrap routes belong to the executable even when Binder and JNI
+# callers are linked into separate AOSP DLLs.
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_transport_anchor_v1)
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_usb_block_owner_anchor_v1)
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_protected_runtime_anchor)
 # GNU scanf's parser uses public getc/ungetc; retain one stream lock around
 # its complete conversion sequence, including ANSI-mode assembly aliases.
 target_link_options(gesher_posix INTERFACE -Wl,--wrap=__mingw_vfscanf -Wl,--wrap=__mingw_vfwscanf)
@@ -118,6 +125,10 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/native_fence.cc PROPER
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
   COMPILE_OPTIONS "-idirafter;${AOSP_DIR}/bionic/libc/kernel/uapi")
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/protected_startup.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")
 
 # Only detached alias bookkeeping may throw; same pinned STL/CRT/allocator ABI.

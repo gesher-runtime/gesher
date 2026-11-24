@@ -39,6 +39,8 @@ jobs:
           sparse-checkout: |
             tests/exec
             tests/native
+            compat/bionic
+            compat/elf/exec
             compat/posix/include
             app/java/com/gesher/app
             tools
@@ -78,6 +80,22 @@ jobs:
           echo "--- libexectest.so ---"
           "$bin/llvm-readelf" -h -l -d dist-exec/libexectest.so | grep -E 'Type:|Entry|INTERP|interpreter|NEEDED|FLAGS'
           "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexectest.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
+
+      - name: Build the separately distributed original filesystem programs
+        run: |
+          python3 tools/filesystem-tools/build.py --ndk "$PWD/$NDK_DIR" \
+            --ndk-archive "$PWD/ndk.zip" --work "$RUNNER_TEMP/filesystem-tools-work" \
+            --output "$RUNNER_TEMP/filesystem-tools-output" --jobs 4
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android28-clang" \
+            -std=c11 -D_GNU_SOURCE -O2 -Wall -Wextra -Werror \
+            tests/exec/locale_info.c -o dist-exec/locale-info-x86_64
+
+      - name: Upload filesystem programs with corresponding sources and receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: filesystem-tools
+          path: ${{ runner.temp }}/filesystem-tools-output/
+          if-no-files-found: error
 
       - name: Build the exec2 test programs (native processes from native code)
         run: |

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <windows.h>
 
 namespace gesher {
@@ -42,6 +43,9 @@ struct OpenFileDescription {
   std::mutex mutex;
   std::shared_ptr<RevocableFileGroup> revocation;
   std::shared_ptr<usb_block::Description> usb_block;
+  // Immutable after publication. A virtual directory is a local capability,
+  // marked kUnshareable so no raw NUL backing handle can escape as a directory.
+  std::wstring virtual_directory;
   ~OpenFileDescription();
   int Flags() const;
   void SetFlags(int flags);

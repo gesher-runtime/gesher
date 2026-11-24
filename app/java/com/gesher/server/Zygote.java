@@ -26,6 +26,11 @@ public final class Zygote {
 
     static native int nativeSpawn(String commandLine, String[] setEnv, String[] unsetEnv,
             String logPath, boolean breakaway);
+    static native boolean nativeProtectedRuntimeEnabled();
+    static native int nativeStartProtectedRuntime(String apkPath);
+    static native int nativeSpawnProtected(String packageName, String processName, String apkPath,
+            String apkSha256, String signerSetSha256, int uid, int targetSdk, long startSeq,
+            String[] environment);
     static native int nativeSpawnInAppContainer(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,
             String[] capabilities);

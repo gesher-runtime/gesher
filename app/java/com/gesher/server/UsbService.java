@@ -205,7 +205,9 @@ final class UsbService extends IUsbManager.Default {
 
     @Override
     public boolean isUvcGadgetSupportEnabled() {
-        return android.os.SystemProperties.getBoolean("ro.usb.uvc.enabled", false);
+        // The Windows host adapter has no USB gadget/device-mode function.
+        // A writable Android property cannot create that hardware capability.
+        return false;
     }
 
     @Override
@@ -299,6 +301,7 @@ final class UsbService extends IUsbManager.Default {
         Objects.requireNonNull(device);
         Objects.requireNonNull(user);
         requireManageUsb();
+        mHost.setPersistent(device, uid, user.getIdentifier(), shouldBeGranted);
     }
 
     @Override

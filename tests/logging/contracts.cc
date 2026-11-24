@@ -326,8 +326,22 @@ int main(int argc, char** argv) {
   std::wstring session = L"native13-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
   std::wstring directory = std::wstring(temporary, length) + session;
   std::filesystem::create_directories(directory);
-  SetEnvironmentVariableW(L"ANDROID_DATA", directory.c_str());
-  SetEnvironmentVariableW(L"ANDROID_ROOT", nullptr);
+  // Exercise the actual Java-visible drive form at both native property
+  // boundaries; using native paths here would hide a protected boot failure.
+  if (directory.size() < 3 || directory[1] != L':') return 1;
+  std::wstring guest_directory = L"/mnt/" + directory.substr(0, 1) + directory.substr(2);
+  std::replace(guest_directory.begin(), guest_directory.end(), L'\\', L'/');
+  SetEnvironmentVariableW(L"ANDROID_DATA", guest_directory.c_str());
+  SetEnvironmentVariableW(L"ANDROID_ROOT", guest_directory.c_str());
+  HANDLE build_prop = CreateFileW((directory + L"\\build.prop").c_str(), GENERIC_WRITE,
+      FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (build_prop == INVALID_HANDLE_VALUE) return 1;
+  static constexpr char contents[] = "ro.gesher.path.probe=canonical-drive-root\n";
+  DWORD written = 0;
+  bool property_written = WriteFile(build_prop, contents, sizeof(contents) - 1, &written, nullptr) &&
+      written == sizeof(contents) - 1;
+  CloseHandle(build_prop);
+  if (!property_written) return 1;
   SetEnvironmentVariableW(L"GESHER_BINDER", session.c_str());
   SetEnvironmentVariableW(L"GESHER_PROPERTY_ROOT", nullptr);
   SetEnvironmentVariableW(L"GESHER_PROPERTY_ROOT_SESSION", nullptr);
@@ -340,6 +354,13 @@ int main(int argc, char** argv) {
   measure_only = argc == 2 && std::strcmp(argv[1], "--measure-only") == 0;
   Check(SetEnvironmentVariableW(L"GESHER_LOG_FILE", path.c_str()), "configure destination");
   Check(gesher::properties::Initialize(), "initialize property area");
+#ifdef _WIN32
+  std::string path_probe;
+  Check(gesher::properties::Get("ro.gesher.path.probe", &path_probe) &&
+        path_probe == "canonical-drive-root", "build.prop uses the canonical Android drive root");
+  Check(std::filesystem::is_directory(directory + L"\\system\\gesher-properties"),
+        "property area is created inside the actual Android data root");
+#endif
 #if LOGGING_HAS_ENVIRONMENT_OWNER
   PropertyEnvironmentOwner();
 #endif

@@ -22,6 +22,8 @@
 #include "authority_launch.h"
 #include "binder_authority_control.h"
 #include "binder_listener_factory.h"
+#include "protected_identity.h"
+#include "protected_runtime_session.h"
 
 namespace {
 
@@ -527,6 +529,19 @@ struct ServiceContext {
   HANDLE stop = nullptr;
 };
 
+bool Decimal(std::wstring_view text, uint64_t maximum, uint64_t* value) {
+  if (text.empty() || text.size() > 20) return false;
+  uint64_t result = 0;
+  for (wchar_t character : text) {
+    if (character < L'0' || character > L'9') return false;
+    const uint64_t digit = static_cast<uint64_t>(character - L'0');
+    if (result > (maximum - digit) / 10 || digit > maximum) return false;
+    result = result * 10 + digit;
+  }
+  *value = result;
+  return true;
+}
+
 void Report(ServiceContext& service, DWORD state, DWORD error = ERROR_SUCCESS) {
   SERVICE_STATUS status{};
   status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
@@ -558,6 +573,8 @@ void WINAPI ServiceMain(DWORD argc, wchar_t** argv) {
   if (!service.status) return;
   Report(service, SERVICE_START_PENDING);
   DWORD desktop_session = 0;
+  gesher::usb_storage::ProtectedSessionOptions protected_options;
+  bool protected_android = false;
   if (argc == 3 && std::wstring_view(argv[1]) == L"binder-session") {
     const std::wstring_view requested(argv[2]);
     if (!requested.empty() && requested.size() <= 9 &&
@@ -565,7 +582,39 @@ void WINAPI ServiceMain(DWORD argc, wchar_t** argv) {
       desktop_session = std::wcstoul(argv[2], nullptr, 10);
     }
   }
-  const bool valid_arguments = argc == 1 || desktop_session != 0;
+  if (argc >= 15 && argc <= 143 && std::wstring_view(argv[1]) == L"android-session") {
+    uint64_t session = 0, pid = 0, created = 0, handle = 0, bytes = 0, sector = 0, generation = 0, flags = 0, volumes = 0;
+    protected_android = Decimal(argv[2], MAXDWORD, &session) && session &&
+        Decimal(argv[6], MAXDWORD, &pid) && pid && Decimal(argv[7], UINT64_MAX, &created) && created &&
+        Decimal(argv[8], UINTPTR_MAX, &handle) && Decimal(argv[9], UINT64_MAX, &bytes) &&
+        Decimal(argv[10], MAXDWORD, &sector) && Decimal(argv[11], MAXDWORD, &generation) &&
+        Decimal(argv[12], 31, &flags) && Decimal(argv[14], 128, &volumes) && argc == 15 + volumes &&
+        ((handle && bytes && sector && (flags & 4)) ||
+            (!handle && !bytes && !sector && !generation && !flags && !volumes && !*argv[5]));
+    for (DWORD index = 0; protected_android && index < volumes; ++index) {
+      uint64_t volume = 0;
+      protected_android = Decimal(argv[15 + index], UINTPTR_MAX, &volume) && volume;
+      if (protected_android) protected_options.selected_volume_handles.push_back(volume);
+    }
+    if (protected_android) {
+      protected_options.desktop_session = static_cast<DWORD>(session);
+      protected_options.source_apk = argv[3];
+      protected_options.apk_sha256 = argv[4];
+      protected_options.selected_interface = argv[5];
+      protected_options.chooser_pid = static_cast<DWORD>(pid);
+      protected_options.chooser_start_time = created;
+      protected_options.selected_handle = handle;
+      protected_options.selected_identity = {bytes, static_cast<uint32_t>(sector),
+          static_cast<uint32_t>(generation), static_cast<uint32_t>(flags), static_cast<uint32_t>(volumes)};
+      protected_options.allow_write = (flags & 2) != 0;
+      protected_options.ready_event = argv[13];
+      constexpr std::wstring_view prefix = L"Global\\GesherProtectedReady.";
+      protected_android = protected_options.ready_event.starts_with(prefix) &&
+          protected_options.ready_event.size() == prefix.size() + 32 &&
+          protected_options.ready_event.find_first_not_of(L"0123456789abcdef", prefix.size()) == std::wstring::npos;
+    }
+  }
+  const bool valid_arguments = argc == 1 || desktop_session != 0 || protected_android;
   std::wstring image, directory;
   DWORD status = event_error != ERROR_SUCCESS ? event_error :
       (valid_arguments && IsLocalSystem() ? TrustedImage(&image, &directory) : ERROR_ACCESS_DENIED);
@@ -575,10 +624,11 @@ void WINAPI ServiceMain(DWORD argc, wchar_t** argv) {
     Report(service, SERVICE_STOPPED, status);
     return;
   }
-  // No clients are enrolled until the protected application launch path can
-  // bind the installed package and running process to a selected disk grant.
   Report(service, SERVICE_RUNNING);
-  if (desktop_session != 0) {
+  if (protected_android) {
+    status = gesher::usb_storage::RunProtectedAndroid(directory, directory + L"\\" + kImage,
+                                                     protected_options, stop.get());
+  } else if (desktop_session != 0) {
     status = StartProtectedBinder(directory, desktop_session, stop.get());
     if (status == ERROR_OPERATION_ABORTED && WaitForSingleObject(stop.get(), 0) == WAIT_OBJECT_0) {
       status = ERROR_SUCCESS;
@@ -593,21 +643,53 @@ void WINAPI ServiceMain(DWORD argc, wchar_t** argv) {
 
 int wmain(int argc, wchar_t** argv) {
   if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)) return 1;
-  if (argc != 2) return 2;
+  if (argc < 2) return 2;
   const std::wstring_view verb(argv[1]);
-  if (verb == L"service") {
+  if (verb == L"service" && argc == 2) {
     wchar_t name[] = L"GesherUsbAuthority";
     SERVICE_TABLE_ENTRYW dispatch[] = {{name, ServiceMain}, {nullptr, nullptr}};
     return StartServiceCtrlDispatcherW(dispatch) ? 0 : 1;
   }
+  if (verb == L"runtime-identity" && argc == 2) {
+    std::wstring image;
+    if (TrustedImage(&image) != ERROR_SUCCESS) return ERROR_ACCESS_DENIED;
+    return gesher::usb_storage::RunRuntimeIdentityService();
+  }
+  if (verb == L"prepare-desktop" && argc == 4) {
+    std::wstring image;
+    const DWORD error = TrustedImage(&image);
+    return static_cast<int>(error == ERROR_SUCCESS ?
+        gesher::usb_storage::PrepareRuntimeDesktop(argv[2], argv[3]) : error);
+  }
+  if ((verb == L"launch-apk" || verb == L"launch-apk-no-media") && argc == 3) {
+    if (!Elevated()) return ERROR_ELEVATION_REQUIRED;
+    std::wstring image, directory;
+    DWORD status = TrustedImage(&image, &directory);
+    if (status == ERROR_SUCCESS) status = ValidateRuntime(directory);
+    if (status == ERROR_SUCCESS) status = gesher::usb_storage::LaunchProtectedApk(directory + L"\\" + kImage, argv[2], verb == L"launch-apk");
+    if (status != ERROR_SUCCESS && status != ERROR_CANCELLED && verb == L"launch-apk") {
+      const std::wstring message = status == ERROR_BUSY ?
+          L"A protected Android session is already running. Finish that session before starting another application." :
+          L"The protected Android application could not start (Windows error " + std::to_wstring(status) + L").";
+      MessageBoxW(nullptr, message.c_str(), L"Gesher USB card access", MB_OK | MB_ICONERROR);
+    }
+    return static_cast<int>(status);
+  }
+  if (argc != 2) return 2;
   if (verb != L"install-service" && verb != L"uninstall-service") return 2;
   if (!Elevated()) {
     std::fputs("The Gesher USB authority installer requires administrator elevation.\n", stderr);
     return 1;
   }
-  std::wstring image;
-  DWORD error = TrustedImage(&image);
-  if (error == ERROR_SUCCESS) error = verb == L"install-service" ? Install(image) : Uninstall(image);
+  std::wstring image, directory;
+  DWORD error = TrustedImage(&image, &directory);
+  if (error == ERROR_SUCCESS && verb == L"install-service") {
+    error = gesher::usb_storage::InstallRuntimeIdentityService(directory + L"\\" + kImage);
+    if (error == ERROR_SUCCESS) error = Install(image);
+  } else if (error == ERROR_SUCCESS) {
+    error = Uninstall(image);
+    if (error == ERROR_SUCCESS) error = gesher::usb_storage::UninstallRuntimeIdentityService(directory + L"\\" + kImage);
+  }
   if (error != ERROR_SUCCESS) {
     std::fprintf(stderr, "Gesher USB authority installer failed (Windows error %lu).\n",
                  static_cast<unsigned long>(error));

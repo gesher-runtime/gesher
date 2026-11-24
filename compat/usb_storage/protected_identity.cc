@@ -1,0 +1,308 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
+#include "protected_identity.h"
+#include "../framework/app_container.h"
+#include <aclapi.h>
+#include <sddl.h>
+#include <userenv.h>
+#include <wtsapi32.h>
+
+#include <cstring>
+#include <new>
+#include <string_view>
+#include <type_traits>
+
+namespace gesher::usb_storage {
+namespace {
+struct Close { void operator()(void* value) const { if (value) CloseHandle(value); } };
+struct Local { void operator()(void* value) const { if (value) LocalFree(value); } };
+struct ServiceClose { void operator()(SC_HANDLE value) const { if (value) CloseServiceHandle(value); } };
+using Handle = std::unique_ptr<void, Close>;
+using LocalMemory = std::unique_ptr<void, Local>;
+using Service = std::unique_ptr<std::remove_pointer_t<SC_HANDLE>, ServiceClose>;
+
+bool Same(std::wstring_view a, std::wstring_view b) {
+  return a.size() == b.size() && CompareStringOrdinal(a.data(), static_cast<int>(a.size()),
+      b.data(), static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+}
+DWORD Sid(std::vector<BYTE>* sid) {
+  DWORD bytes = 0, domain_bytes = 0;
+  SID_NAME_USE use{};
+  LookupAccountNameW(nullptr, kRuntimeIdentityAccount, nullptr, &bytes, nullptr, &domain_bytes, &use);
+  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes > SECURITY_MAX_SID_SIZE || !bytes ||
+      domain_bytes > 256) return ERROR_INVALID_SID;
+  sid->resize(bytes);
+  std::vector<wchar_t> domain(domain_bytes);
+  if (!LookupAccountNameW(nullptr, kRuntimeIdentityAccount, sid->data(), &bytes,
+      domain.data(), &domain_bytes, &use)) return GetLastError();
+  return IsValidSid(sid->data()) ? ERROR_SUCCESS : ERROR_INVALID_SID;
+}
+DWORD Validate(SC_HANDLE service, const std::wstring& executable) {
+  DWORD bytes = 0;
+  QueryServiceConfigW(service, nullptr, 0, &bytes);
+  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes > 16384 || !bytes) return ERROR_INVALID_DATA;
+  std::vector<BYTE> buffer(bytes);
+  auto* config = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+  if (!QueryServiceConfigW(service, config, bytes, &bytes)) return GetLastError();
+  const std::wstring expected = L"\"" + executable + L"\" runtime-identity";
+  if (!config->lpBinaryPathName || !Same(config->lpBinaryPathName, expected) ||
+      !config->lpServiceStartName || !Same(config->lpServiceStartName, kRuntimeIdentityAccount) ||
+      config->dwServiceType != SERVICE_WIN32_OWN_PROCESS || config->dwStartType != SERVICE_DEMAND_START) {
+    return ERROR_ACCESS_DENIED;
+  }
+  QueryServiceObjectSecurity(service, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                            nullptr, 0, &bytes);
+  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes > 16384 || !bytes) return ERROR_INVALID_ACL;
+  buffer.resize(bytes);
+  if (!QueryServiceObjectSecurity(service, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+      buffer.data(), bytes, &bytes)) return GetLastError();
+  PSID owner = nullptr;
+  PACL acl = nullptr;
+  BOOL defaulted = FALSE, present = FALSE;
+  if (!GetSecurityDescriptorOwner(buffer.data(), &owner, &defaulted) ||
+      !GetSecurityDescriptorDacl(buffer.data(), &present, &acl, &defaulted) || !present || !acl ||
+      (!IsWellKnownSid(owner, WinLocalSystemSid) && !IsWellKnownSid(owner, WinBuiltinAdministratorsSid))) {
+    return ERROR_ACCESS_DENIED;
+  }
+  for (DWORD i = 0; i < acl->AceCount; ++i) {
+    void* raw = nullptr;
+    if (!GetAce(acl, i, &raw)) return GetLastError();
+    const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw);
+    if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE || ace->Header.AceFlags != 0) {
+      return ERROR_ACCESS_DENIED;
+    }
+    PSID principal = const_cast<DWORD*>(&ace->SidStart);
+    if (!IsWellKnownSid(principal, WinLocalSystemSid) &&
+        !IsWellKnownSid(principal, WinBuiltinAdministratorsSid)) return ERROR_ACCESS_DENIED;
+  }
+  return ERROR_SUCCESS;
+}
+
+DWORD QueryService(SC_HANDLE service, SERVICE_STATUS_PROCESS* status) {
+  DWORD size = 0;
+  return QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, reinterpret_cast<BYTE*>(status),
+      sizeof(*status), &size) ? ERROR_SUCCESS : GetLastError();
+}
+
+DWORD GrantUserObject(HANDLE object, PSID sid, ACCESS_MASK access) {
+  SECURITY_INFORMATION information = DACL_SECURITY_INFORMATION;
+  DWORD size = 0;
+  GetUserObjectSecurity(object, &information, nullptr, 0, &size);
+  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !size || size > 65536) return ERROR_INVALID_ACL;
+  std::vector<BYTE> bytes(size);
+  if (!GetUserObjectSecurity(object, &information, bytes.data(), size, &size)) return GetLastError();
+  PACL acl = nullptr;
+  BOOL present = FALSE, defaulted = FALSE;
+  if (!GetSecurityDescriptorDacl(bytes.data(), &present, &acl, &defaulted) || !present || !acl) {
+    return ERROR_INVALID_ACL;
+  }
+  EXPLICIT_ACCESSW entry{};
+  entry.grfAccessMode = GRANT_ACCESS;
+  entry.grfAccessPermissions = access;
+  entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+  entry.Trustee.ptstrName = static_cast<wchar_t*>(sid);
+  PACL updated = nullptr;
+  const DWORD status = SetEntriesInAclW(1, &entry, acl, &updated);
+  if (status != ERROR_SUCCESS) return status;
+  const LocalMemory release(updated);
+  SECURITY_DESCRIPTOR descriptor{};
+  if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+      !SetSecurityDescriptorDacl(&descriptor, TRUE, updated, FALSE) ||
+      !SetUserObjectSecurity(object, &information, &descriptor)) return GetLastError();
+  return ERROR_SUCCESS;
+}
+
+struct IdentityServiceState { SERVICE_STATUS_HANDLE handle = nullptr; HANDLE stop = nullptr; };
+void Report(IdentityServiceState& context, DWORD state, DWORD error = ERROR_SUCCESS) {
+  SERVICE_STATUS status{};
+  status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+  status.dwCurrentState = state;
+  status.dwControlsAccepted = state == SERVICE_RUNNING ? SERVICE_ACCEPT_STOP : 0;
+  status.dwWin32ExitCode = error;
+  SetServiceStatus(context.handle, &status);
+}
+DWORD WINAPI Control(DWORD operation, DWORD, void*, void* value) {
+  auto& context = *static_cast<IdentityServiceState*>(value);
+  if (operation == SERVICE_CONTROL_STOP) { SetEvent(context.stop); return ERROR_SUCCESS; }
+  return operation == SERVICE_CONTROL_INTERROGATE ? ERROR_SUCCESS : ERROR_CALL_NOT_IMPLEMENTED;
+}
+void WINAPI Main(DWORD, wchar_t**) {
+  const Handle stop(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  IdentityServiceState context{nullptr, stop.get()};
+  context.handle = RegisterServiceCtrlHandlerExW(kRuntimeIdentityService, Control, &context);
+  if (!context.handle) return;
+  HANDLE raw = nullptr;
+  DWORD result = ERROR_ACCESS_DENIED;
+  if (stop && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw)) {
+    const Handle token(raw);
+    std::vector<BYTE> expected;
+    alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
+    DWORD count = 0;
+    result = Sid(&expected);
+    if (result == ERROR_SUCCESS && (!GetTokenInformation(raw, TokenUser, user, sizeof(user), &count) ||
+        !EqualSid(reinterpret_cast<TOKEN_USER*>(user)->User.Sid, expected.data()))) result = ERROR_ACCESS_DENIED;
+  }
+  if (result == ERROR_SUCCESS) {
+    Report(context, SERVICE_RUNNING);
+    if (WaitForSingleObject(stop.get(), INFINITE) != WAIT_OBJECT_0) result = GetLastError();
+  }
+  Report(context, SERVICE_STOPPED, result);
+}
+}  // namespace
+
+DWORD InstallRuntimeIdentityService(const std::wstring& executable) {
+  const Service manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE));
+  if (!manager) return GetLastError();
+  const std::wstring command = L"\"" + executable + L"\" runtime-identity";
+  Service service(CreateServiceW(manager.get(), kRuntimeIdentityService, L"Gesher protected runtime identity",
+      SERVICE_CHANGE_CONFIG | READ_CONTROL | WRITE_DAC | WRITE_OWNER | DELETE,
+      SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL, command.c_str(),
+      nullptr, nullptr, nullptr, kRuntimeIdentityAccount, nullptr));
+  if (!service) {
+    if (GetLastError() != ERROR_SERVICE_EXISTS) return GetLastError();
+    service.reset(OpenServiceW(manager.get(), kRuntimeIdentityService, SERVICE_QUERY_CONFIG | READ_CONTROL));
+    return service ? Validate(service.get(), executable) : GetLastError();
+  }
+  PSECURITY_DESCRIPTOR raw = nullptr;
+  DWORD status = ERROR_SUCCESS;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"O:BAG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &raw, nullptr)) status = GetLastError();
+  const LocalMemory security(raw);
+  if (status == ERROR_SUCCESS && !SetServiceObjectSecurity(service.get(),
+      OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, raw)) status = GetLastError();
+  wchar_t privileges[] = L"SeChangeNotifyPrivilege\0";
+  SERVICE_REQUIRED_PRIVILEGES_INFOW restricted{privileges};
+  if (status == ERROR_SUCCESS && !ChangeServiceConfig2W(service.get(),
+      SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO, &restricted)) status = GetLastError();
+  if (status != ERROR_SUCCESS) DeleteService(service.get());
+  return status;
+}
+
+DWORD UninstallRuntimeIdentityService(const std::wstring& executable) {
+  const Service manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+  if (!manager) return GetLastError();
+  const Service service(OpenServiceW(manager.get(), kRuntimeIdentityService,
+      SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_STOP | READ_CONTROL | DELETE));
+  if (!service) return GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST ? ERROR_SUCCESS : GetLastError();
+  DWORD status = Validate(service.get(), executable);
+  if (status != ERROR_SUCCESS) return status;
+  SERVICE_STATUS_PROCESS state{};
+  status = QueryService(service.get(), &state);
+  if (status != ERROR_SUCCESS) return status;
+  if (state.dwCurrentState != SERVICE_STOPPED) {
+    SERVICE_STATUS stopping{};
+    if (!ControlService(service.get(), SERVICE_CONTROL_STOP, &stopping) &&
+        GetLastError() != ERROR_SERVICE_NOT_ACTIVE) return GetLastError();
+    const ULONGLONG deadline = GetTickCount64() + 15000;
+    do {
+      if (GetTickCount64() >= deadline) return ERROR_TIMEOUT;
+      Sleep(25);
+      status = QueryService(service.get(), &state);
+      if (status != ERROR_SUCCESS) return status;
+    } while (state.dwCurrentState != SERVICE_STOPPED);
+  }
+  return DeleteService(service.get()) ? ERROR_SUCCESS : GetLastError();
+}
+
+int RunRuntimeIdentityService() {
+  wchar_t name[] = L"GesherProtectedRuntime";
+  SERVICE_TABLE_ENTRYW dispatch[] = {{name, Main}, {nullptr, nullptr}};
+  return StartServiceCtrlDispatcherW(dispatch) ? 0 : 1;
+}
+
+DWORD PrepareRuntimeDesktop(const wchar_t* runtime_sid, const wchar_t* capability_sid) {
+  PSID user = nullptr, capability = nullptr;
+  if (!runtime_sid || !capability_sid || !ConvertStringSidToSidW(runtime_sid, &user)) return ERROR_INVALID_SID;
+  const LocalMemory own_user(user);
+  if (!ConvertStringSidToSidW(capability_sid, &capability)) return ERROR_INVALID_SID;
+  const LocalMemory own_capability(capability);
+  constexpr ACCESS_MASK station = WINSTA_ACCESSCLIPBOARD | WINSTA_ACCESSGLOBALATOMS |
+      WINSTA_ENUMDESKTOPS | WINSTA_ENUMERATE | WINSTA_READATTRIBUTES | WINSTA_READSCREEN;
+  constexpr ACCESS_MASK desktop = DESKTOP_CREATEMENU | DESKTOP_CREATEWINDOW |
+      DESKTOP_ENUMERATE | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS;
+  for (PSID sid : {user, capability}) {
+    DWORD result = GrantUserObject(GetProcessWindowStation(), sid, station);
+    if (result == ERROR_SUCCESS) result = GrantUserObject(GetThreadDesktop(GetCurrentThreadId()), sid, desktop);
+    if (result != ERROR_SUCCESS) return result;
+  }
+  return ERROR_SUCCESS;
+}
+
+ProtectedIdentity::~ProtectedIdentity() {
+  if (profile_ && token_) UnloadUserProfile(token_, profile_);
+  if (token_) CloseHandle(token_);
+}
+
+DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_session,
+    std::unique_ptr<ProtectedIdentity>* result) try {
+  if (!desktop_session || !result || *result) return ERROR_INVALID_PARAMETER;
+  HANDLE raw_self = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_self)) return GetLastError();
+  const Handle self(raw_self);
+  alignas(TOKEN_USER) BYTE system[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
+  DWORD bytes = 0;
+  if (!GetTokenInformation(raw_self, TokenUser, system, sizeof(system), &bytes) ||
+      !IsWellKnownSid(reinterpret_cast<TOKEN_USER*>(system)->User.Sid, WinLocalSystemSid)) return ERROR_ACCESS_DENIED;
+  const Service manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+  if (!manager) return GetLastError();
+  const Service service(OpenServiceW(manager.get(), kRuntimeIdentityService,
+      SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_START | READ_CONTROL));
+  if (!service) return GetLastError();
+  DWORD status = Validate(service.get(), executable);
+  if (status != ERROR_SUCCESS) return status;
+  if (!StartServiceW(service.get(), 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) return GetLastError();
+  SERVICE_STATUS_PROCESS state{};
+  const ULONGLONG deadline = GetTickCount64() + 15000;
+  do {
+    status = QueryService(service.get(), &state);
+    if (status != ERROR_SUCCESS) return status;
+    if (state.dwCurrentState == SERVICE_RUNNING) break;
+    if (state.dwCurrentState == SERVICE_STOPPED) return state.dwWin32ExitCode ? state.dwWin32ExitCode : ERROR_SERVICE_NOT_ACTIVE;
+    if (GetTickCount64() >= deadline) return ERROR_TIMEOUT;
+    Sleep(25);
+  } while (true);
+  if (!state.dwProcessId || state.dwServiceType != SERVICE_WIN32_OWN_PROCESS) return ERROR_ACCESS_DENIED;
+  const Handle holder(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, state.dwProcessId));
+  if (!holder) return GetLastError();
+  std::wstring image(32768, L'\0');
+  DWORD length = static_cast<DWORD>(image.size());
+  if (!QueryFullProcessImageNameW(holder.get(), 0, image.data(), &length)) return GetLastError();
+  image.resize(length);
+  if (!Same(image, executable) || WaitForSingleObject(holder.get(), 0) != WAIT_TIMEOUT) return ERROR_ACCESS_DENIED;
+  HANDLE raw_token = nullptr;
+  if (!OpenProcessToken(holder.get(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw_token)) return GetLastError();
+  const Handle token(raw_token);
+  auto identity = std::unique_ptr<ProtectedIdentity>(new ProtectedIdentity);
+  status = Sid(&identity->sid_);
+  if (status != ERROR_SUCCESS) return status;
+  alignas(TOKEN_USER) BYTE actual[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
+  if (!GetTokenInformation(raw_token, TokenUser, actual, sizeof(actual), &bytes) ||
+      !EqualSid(reinterpret_cast<TOKEN_USER*>(actual)->User.Sid, identity->sid())) return ERROR_ACCESS_DENIED;
+  SERVICE_STATUS_PROCESS second{};
+  status = QueryService(service.get(), &second);
+  if (status != ERROR_SUCCESS) return status;
+  if (second.dwCurrentState != SERVICE_RUNNING || second.dwProcessId != state.dwProcessId) return ERROR_PROCESS_ABORTED;
+  if (!DuplicateTokenEx(raw_token, TOKEN_ALL_ACCESS, nullptr, SecurityImpersonation, TokenPrimary,
+                         &identity->token_)) return GetLastError();
+  identity->session_ = desktop_session;
+  if (!SetTokenInformation(identity->token_, TokenSessionId, &desktop_session, sizeof(desktop_session))) return GetLastError();
+  PSID medium = nullptr;
+  if (!ConvertStringSidToSidW(L"S-1-16-8192", &medium)) return GetLastError();
+  const LocalMemory medium_owner(medium);
+  TOKEN_MANDATORY_LABEL integrity{{medium, SE_GROUP_INTEGRITY}};
+  if (!SetTokenInformation(identity->token_, TokenIntegrityLevel, &integrity,
+      sizeof(integrity) + GetLengthSid(medium))) return GetLastError();
+  PROFILEINFOW profile{};
+  profile.dwSize = sizeof(profile);
+  profile.dwFlags = PI_NOUI;
+  wchar_t account[] = L"GesherProtectedRuntime";
+  profile.lpUserName = account;
+  if (!LoadUserProfileW(identity->token_, &profile)) return GetLastError();
+  identity->profile_ = profile.hProfile;
+  *result = std::move(identity);
+  return ERROR_SUCCESS;
+} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
+}  // namespace gesher::usb_storage

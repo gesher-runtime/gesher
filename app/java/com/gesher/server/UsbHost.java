@@ -37,6 +37,8 @@ final class UsbHost {
     private final PackageManagerService packages;
     private final ActivityManagerService activityManager;
     private final UsbAttachActivities attachActivities;
+    private final UsbPermissionDecisions persistent = new UsbPermissionDecisions(
+            new java.io.File(Device.dataDir(), "system/usb-permissions"));
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "usb-host");
         thread.setDaemon(true);
@@ -49,6 +51,7 @@ final class UsbHost {
     });
     private final Map<String, Attachment> byPath = new HashMap<>();
     private final Map<String, Attachment> byName = new HashMap<>();
+    private final Map<String, String> serialStrings = new HashMap<>();
     private final Set<PermissionRequest> pending = new HashSet<>();
     private int queuedAttachChoices;
     private volatile boolean choosingAttachment;
@@ -81,15 +84,17 @@ final class UsbHost {
         final long version;
         final UsbDevice device;
         final Backend backend;
+        final String permissionKey;
         final Set<ApkPackage> grants = new HashSet<>();
         final Map<ApkPackage, ComponentName> launching = new HashMap<>();
         volatile boolean present = true;
 
-        Attachment(String path, long version, UsbDevice device, Backend backend) {
+        Attachment(String path, long version, UsbDevice device, Backend backend, String serial) {
             this.path = path;
             this.version = version;
             this.device = device;
             this.backend = backend;
+            permissionKey = UsbPermissionDecisions.deviceKey(device, serial);
         }
 
         boolean supportsTransfers() {
@@ -162,6 +167,7 @@ final class UsbHost {
             device.present = false;
             iterator.remove();
             byName.remove(device.device.getDeviceName());
+            serialStrings.remove(device.device.getDeviceName());
             activityManager.sendBroadcastFor("android", new Intent(UsbManager.ACTION_USB_DEVICE_DETACHED)
                     .addFlags(Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND)
                     .putExtra(UsbManager.EXTRA_DEVICE, device.device), null);
@@ -185,7 +191,7 @@ final class UsbHost {
             }
             if (device == null || nativeVersion(path) != version) continue;
             ++nextAddress;
-            Attachment attachment = new Attachment(path, version, device, backend);
+            Attachment attachment = new Attachment(path, version, device, backend, serialStrings.get(name));
             byName.put(name, attachment);
             byPath.put(path, attachment);
             activityManager.sendBroadcastFor("android", new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -316,6 +322,7 @@ final class UsbHost {
     }
 
     private IUsbSerialReader serialReader(String name, String serial) {
+        serialStrings.put(name, serial);
         return new IUsbSerialReader.Stub() {
             @Override public String getSerial(String packageName) {
                 if (!attachActivities.readingSerialForMatch(name) && !has(name, packageName)) {
@@ -336,13 +343,33 @@ final class UsbHost {
                 && !packages.isRemovalPending(installation.packageName);
     }
 
+    private boolean hasGrant(Attachment device, ApkPackage installation) {
+        Boolean decision = persistent.get(device.permissionKey, installation);
+        return decision != null ? decision : device.hasGrant(installation);
+    }
+
+    synchronized void setPersistent(UsbDevice requested, int uid, int userId, boolean allowed) {
+        if (userId != 0 || android.os.UserHandle.getUserId(uid) != userId) {
+            throw new IllegalArgumentException("Only the matching Android user 0 is available");
+        }
+        Attachment attachment = valid(requested.getDeviceName());
+        if (attachment == null) throw new IllegalArgumentException("USB device is not attached");
+        if (!attachment.supportsTransfers()) {
+            throw new UnsupportedOperationException("Windows owns this USB storage transport");
+        }
+        List<ApkPackage> installations = packages.packages().stream()
+                .filter(code -> code.uid() == uid && installed(code)).toList();
+        if (installations.isEmpty()) throw new IllegalArgumentException("UID has no installed package");
+        persistent.set(attachment.permissionKey, installations, allowed);
+    }
+
     synchronized boolean has(String name, String packageName) {
         Attachment device = valid(name);
         if (device != null && !device.supportsTransfers()) return false;
         if (callers.isSystem()) return true;
         if (device == null) return false;
         ApkPackage installation = callers.requireCurrentPackage(packageName);
-        return installed(installation) && device.hasGrant(installation);
+        return installed(installation) && hasGrant(device, installation);
     }
 
     synchronized boolean hasWithIdentity(String name, String packageName, int uid) {
@@ -351,7 +378,7 @@ final class UsbHost {
         if (uid == Process.SYSTEM_UID) return true;
         if (device == null || packageName == null) return false;
         ApkPackage installation = packages.get(packageName);
-        return installed(installation) && installation.uid() == uid && device.hasGrant(installation);
+        return installed(installation) && installation.uid() == uid && hasGrant(device, installation);
     }
 
     synchronized void grant(String name, int uid) {
@@ -393,7 +420,12 @@ final class UsbHost {
             UsbService.sendDevicePermission(reply, requested, false);
             return;
         }
-        if (device.hasGrant(installation)) {
+        Boolean remembered = persistent.get(device.permissionKey, installation);
+        if (Boolean.FALSE.equals(remembered)) {
+            UsbService.sendDevicePermission(reply, device.device, false);
+            return;
+        }
+        if (hasGrant(device, installation)) {
             // A successful explicit permission reply must survive cleanup of a
             // simultaneous chooser launch that fails to publish an activity.
             device.grants.add(installation);

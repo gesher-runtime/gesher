@@ -11,6 +11,8 @@
 #include <gesher/unc_paths.h>
 #include <gesher/environment.h>
 #include "../binder/protected_client_startup.h"
+#include "../usb_storage/protected_runtime_client.h"
+#include <gesher/protected_startup.h>
 #include "exec_spawn.h"
 
 // Only upstream dalvikvm.cc is compiled with this main rename.
@@ -143,15 +145,38 @@ extern "C" int wmain(int argc, wchar_t** wide_argv) {
     }
     values.push_back(std::move(utf8));
   }
-  if (argc > 1 && values[1] == gesher::kProtectedBinderStartupOption) {
+  bool binder_configured = false;
+  bool runtime_configured = false;
+  while (argc > 1 && (values[1] == gesher::kProtectedBinderStartupOption ||
+                     values[1] == "--gesher-protected-runtime")) {
     constexpr int kNativeArguments = 4;
-    if (argc <= kNativeArguments + 1 ||
-        !gesher::ConfigureProtectedBinderStartup(values[2], values[3], values[4])) {
-      std::fprintf(stderr, "dalvikvm: invalid protected Binder bootstrap\n");
+    const bool binder = values[1] == gesher::kProtectedBinderStartupOption;
+    if (argc <= kNativeArguments + 1 || (binder ? binder_configured : runtime_configured)) {
+      std::fprintf(stderr, "dalvikvm: malformed or repeated protected startup option\n");
       return EXIT_FAILURE;
     }
+    const bool configured = binder
+        ? gesher::ConfigureProtectedBinderStartup(values[2], values[3], values[4])
+        : gesher::usb_storage::ConfigureProtectedRuntimeStartup(values[2], values[3], values[4]);
+    if (!configured) {
+      std::fprintf(stderr, "dalvikvm: invalid protected startup endpoint\n");
+      return EXIT_FAILURE;
+    }
+    if (binder) binder_configured = true;
+    else runtime_configured = true;
     values.erase(values.begin() + 1, values.begin() + 1 + kNativeArguments);
     argc -= kNativeArguments;
+  }
+  if (runtime_configured && !binder_configured) {
+    std::fprintf(stderr, "dalvikvm: protected runtime requires the protected Binder route\n");
+    return EXIT_FAILURE;
+  }
+  if (runtime_configured) {
+    const uint32_t error = gesher::InitializeProtectedProcessResources();
+    if (error != 0) {
+      std::fprintf(stderr, "dalvikvm: protected resource initialization failed: %u\n", error);
+      return EXIT_FAILURE;
+    }
   }
   if (!InitializeTemporaryDirectory(values)) return EXIT_FAILURE;
   std::vector<char*> argv;

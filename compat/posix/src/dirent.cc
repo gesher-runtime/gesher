@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "internal.h"
+#include "ofd_internal.h"
 #include <gesher/reserved_names.h>
 
 struct gesher_DIR {
@@ -101,6 +102,12 @@ DIR* opendir(const char* name) { return Open(name, -1); }
 
 // The directory open as fd, which the DIR then owns (closedir closes it).
 DIR* fdopendir(int fd) {
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return nullptr;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    const std::string name = "/" + gesher::Narrow(snapshot->description->virtual_directory.c_str());
+    return Open(name.c_str(), fd);
+  }
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) {
     errno = EBADF;
@@ -193,8 +200,7 @@ void seekdir(DIR* dir, long position) {
 // An fd open on the directory, for the *at calls; closedir closes it.
 int dirfd(DIR* dir) {
   if (dir->fd >= 0) return dir->fd;
-  if (dir->is_virtual) return errno = ENOTSUP, -1;
-  std::string path = gesher::Narrow(dir->path.c_str());
+  std::string path = (dir->is_virtual ? "/" : "") + gesher::Narrow(dir->path.c_str());
   dir->fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   return dir->fd;
 }

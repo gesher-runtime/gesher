@@ -59,7 +59,7 @@ bool DecodeDescription(std::span<const std::byte> frame, BlockDescription* info)
   return info->model_bytes <= kMaxBlockDescriptionString &&
       info->serial_bytes <= kMaxBlockDescriptionString &&
       info->model_bytes + info->serial_bytes == frame.size() - sizeof(*info) &&
-      (info->flags & ~(kBlockWritable | kBlockRemovable)) == 0 &&
+      (info->flags & ~(kBlockWritable | kBlockRemovable | kBlockWriteConsent)) == 0 &&
       info->sector_bytes >= 512 && info->sector_bytes <= 65536 &&
       (info->sector_bytes & (info->sector_bytes - 1)) == 0 &&
       info->bytes != 0 && info->bytes % info->sector_bytes == 0;
@@ -151,6 +151,15 @@ DWORD BlockClient::Write(uint64_t offset, std::span<const std::byte> input) {
   if (input.empty() || input.size() > kBlockTransferLimit) return ERROR_INVALID_PARAMETER;
   return Exchange({kBlockProtocolVersion, BlockOperation::kWrite,
                    static_cast<DWORD>(input.size()), 0, offset}, input, {}, nullptr);
+}
+
+DWORD BlockClient::Flush() {
+  return Exchange({kBlockProtocolVersion, BlockOperation::kFlush, 0, 0, 0}, {}, {}, nullptr);
+}
+
+DWORD BlockClient::SetReadOnly(bool readonly) {
+  return Exchange({kBlockProtocolVersion, BlockOperation::kSetReadOnly, 0, 0,
+      readonly ? uint64_t{1} : 0}, {}, {}, nullptr);
 }
 
 }  // namespace gesher::usb_storage

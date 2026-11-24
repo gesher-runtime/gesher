@@ -50,6 +50,19 @@ add_executable(gesher_usb_block_guest_test
 target_compile_options(gesher_usb_block_guest_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher_usb_block_guest_test PRIVATE gesher_posix)
 
+# The executable and independently linked DLL must share the exact same
+# authorized media session, including its stream serialization and revocation.
+add_library(gesher_usb_block_owner_module_test SHARED
+  tests/exec/usb_block_owner_module_test.cc)
+set_target_properties(gesher_usb_block_owner_module_test PROPERTIES PREFIX "")
+target_compile_options(gesher_usb_block_owner_module_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(gesher_usb_block_owner_module_test PRIVATE gesher_posix)
+add_executable(gesher_usb_block_owner_test
+  tests/exec/usb_block_owner_test.cc
+  compat/usb_storage/block_channel.cc)
+target_compile_options(gesher_usb_block_owner_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(gesher_usb_block_owner_test PRIVATE gesher_posix)
+
 # Manual read-only QA of an explicitly selected physical USB disk interface.
 add_executable(gesher_usb_block_physical_test EXCLUDE_FROM_ALL
   tests/exec/usb_block_physical.cc
@@ -64,6 +77,17 @@ target_link_libraries(gesher_usb_block_physical_test PRIVATE gesher_posix cfgmgr
 include(compat/elf/elf.cmake)
 # gesher: the bionic shim the loaded .so files link against (Phase 6).
 include(compat/bionic/bionic.cmake)
+
+# Isolated fixture only: run the unmodified optional Android filesystem tools
+# through the production ELF/Bionic/POSIX route on broker-backed test media.
+add_executable(usb_filesystem_tools_test
+  tests/exec/usb_filesystem_tools_test.cc
+  compat/elf/exec/spawn_actions.cc
+  compat/elf/exec/gesher_shell.cc
+  compat/usb_storage/block_channel.cc)
+target_compile_options(usb_filesystem_tools_test PRIVATE -Wall -Wextra -Werror -fexceptions)
+target_link_libraries(usb_filesystem_tools_test PRIVATE
+  gesher_exec_spawn gesher_bionic gesher_elf bcrypt shell32)
 
 include(cmake/aosp/third_party.cmake)
 include(cmake/aosp/system.cmake)

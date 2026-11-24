@@ -69,9 +69,10 @@ DWORD PipeTransfer(HANDLE pipe, HANDLE event, HANDLE shutdown, PipeDirection dir
 
 bool ValidRequest(const BlockRequest& request) {
   if (request.version != kBlockProtocolVersion || request.reserved != 0) return false;
-  if (request.operation == BlockOperation::kDescribe) {
+  if (request.operation == BlockOperation::kDescribe || request.operation == BlockOperation::kFlush) {
     return request.length == 0 && request.offset == 0;
   }
+  if (request.operation == BlockOperation::kSetReadOnly) return request.length == 0 && request.offset <= 1;
   return (request.operation == BlockOperation::kRead || request.operation == BlockOperation::kWrite)
       && request.length != 0 && request.length <= kBlockTransferLimit
       && request.offset <= UINT64_MAX - request.length;
@@ -79,7 +80,8 @@ bool ValidRequest(const BlockRequest& request) {
 
 }  // namespace
 
-DWORD ServeBlockRequests(BlockChannel& channel, HostDisk& disk) {
+DWORD ServeBlockRequests(BlockChannel& channel, HostDisk& disk,
+                         const std::function<DWORD()>& authorize) {
   const StopSession stop{channel};
   const HANDLE pipe = channel.server();
   const HANDLE shutdown = channel.revocation();
@@ -96,10 +98,6 @@ DWORD ServeBlockRequests(BlockChannel& channel, HostDisk& disk) {
   if (info.model.size() > kMaxBlockDescriptionString || info.serial.size() > kMaxBlockDescriptionString) {
     return ERROR_INVALID_DATA;
   }
-  const BlockDescription description{
-      info.bytes, info.sector_bytes,
-      (info.writable ? kBlockWritable : 0) | (info.removable ? kBlockRemovable : 0),
-      static_cast<uint32_t>(info.model.size()), static_cast<uint32_t>(info.serial.size())};
   std::unique_ptr<std::byte[]> buffer(new (std::nothrow) std::byte[kBlockTransferLimit]);
   if (!buffer) return ERROR_NOT_ENOUGH_MEMORY;
   for (;;) {
@@ -108,15 +106,21 @@ DWORD ServeBlockRequests(BlockChannel& channel, HostDisk& disk) {
     if (error != ERROR_SUCCESS) return error;
     if (!ValidRequest(request)) return ERROR_INVALID_DATA;
     if (request.operation == BlockOperation::kDescribe) {
-      const DWORD active = disk.Validate();
+      DWORD active = authorize ? authorize() : ERROR_SUCCESS;
+      DiskInfo current;
+      if (active == ERROR_SUCCESS) active = disk.Describe(&current);
+      const BlockDescription description{current.bytes, current.sector_bytes,
+          (current.writable ? kBlockWritable : 0) | (current.removable ? kBlockRemovable : 0) |
+          (current.write_consented ? kBlockWriteConsent : 0),
+          static_cast<uint32_t>(current.model.size()), static_cast<uint32_t>(current.serial.size())};
       const BlockReply reply{active, active == ERROR_SUCCESS
           ? static_cast<uint32_t>(sizeof(description)) + description.model_bytes + description.serial_bytes
           : 0};
       error = send(&reply, sizeof(reply));
       if (active != ERROR_SUCCESS) return error == ERROR_SUCCESS ? active : error;
       if (error == ERROR_SUCCESS) error = send(&description, sizeof(description));
-      if (error == ERROR_SUCCESS) error = send(info.model.data(), description.model_bytes);
-      if (error == ERROR_SUCCESS) error = send(info.serial.data(), description.serial_bytes);
+      if (error == ERROR_SUCCESS) error = send(current.model.data(), description.model_bytes);
+      if (error == ERROR_SUCCESS) error = send(current.serial.data(), description.serial_bytes);
       if (error != ERROR_SUCCESS) return error;
       continue;
     }
@@ -130,9 +134,17 @@ DWORD ServeBlockRequests(BlockChannel& channel, HostDisk& disk) {
     if (revoked != WAIT_TIMEOUT) {
       return revoked == WAIT_OBJECT_0 ? ERROR_OPERATION_ABORTED : GetLastError();
     }
-    const DWORD io_error = request.operation == BlockOperation::kRead
-        ? disk.Read(request.offset, bytes)
-        : disk.Write(request.offset, bytes);
+    if (authorize) {
+      const DWORD allowed = authorize();
+      if (allowed != ERROR_SUCCESS) {
+        const BlockReply denied{allowed, 0};
+        send(&denied, sizeof(denied));
+        return allowed;
+      }
+    }
+    const DWORD io_error = request.operation == BlockOperation::kRead ? disk.Read(request.offset, bytes)
+        : request.operation == BlockOperation::kWrite ? disk.Write(request.offset, bytes)
+        : request.operation == BlockOperation::kFlush ? disk.Flush() : disk.SetReadOnly(request.offset != 0);
     if (io_error == ERROR_MEDIA_CHANGED || io_error == ERROR_DEVICE_NOT_CONNECTED ||
         io_error == ERROR_NO_MEDIA_IN_DRIVE || io_error == ERROR_OPERATION_ABORTED) {
       return io_error;

@@ -167,6 +167,32 @@ const BionicLconv kLconv = {".", "", "", "", "", "", "", "", "", "",
 
 const BionicLconv* BIONIC_SYSV Localeconv() { return &kLconv; }
 
+// Android's nl_item values are consecutive (NDK <langinfo.h>), unlike glibc's
+// category-encoded ABI. The supported locales share the C date, numeric and
+// message conventions; CODESET follows the selected thread/global locale.
+char* BIONIC_SYSV NlLanginfoL(int item, BionicLocale* locale) {
+  static const char* const values[] = {
+      "", "", "%a %b %e %H:%M:%S %Y", "%m/%d/%y", "%H:%M:%S", "%I:%M:%S %p", "AM", "PM",
+      "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+      "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat",
+      "January", "February", "March", "April", "May", "June", "July", "August",
+      "September", "October", "November", "December",
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+      "", "", "", "", "", ".", "", "^[yY]", "^[nN]", ""};
+  static_assert(sizeof(values) / sizeof(values[0]) == 56);
+  if (item == 1) {
+    if (locale == kGlobalLocale) locale = g_global.load();
+    return const_cast<char*>(locale->mb_cur_max == 4 ? "UTF-8" : "US-ASCII");
+  }
+  if (item < 0 || static_cast<size_t>(item) >= sizeof(values) / sizeof(values[0]))
+    return const_cast<char*>("");
+  return const_cast<char*>(values[item]);
+}
+
+char* BIONIC_SYSV NlLanginfo(int item) {
+  return NlLanginfoL(item, t_locale != nullptr ? t_locale : g_global.load());
+}
+
 // --- UTF-8 ---------------------------------------------------------------------
 
 struct BionicMbstate {
@@ -735,6 +761,8 @@ void RegisterLocale(SymbolTable& t) {
   L("_ctype_", g_ctype);
   L("setlocale", Setlocale);
   L("localeconv", Localeconv);
+  L("nl_langinfo", NlLanginfo);
+  L("nl_langinfo_l", NlLanginfoL);
   L("mbrtowc", MbrtowcSysv);
   L("mbrtoc16", Mbrtoc16);
   L("mbrtoc32", Mbrtoc32);

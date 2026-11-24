@@ -23,6 +23,16 @@
 namespace gesher::properties {
 namespace {
 
+bool ProtectedSystemServer() {
+  // The executable publishes this role only after the authority authenticates
+  // its exact suspended creation handle and native resource bootstrap finishes.
+  // The property directory also admits only that server's lowbox SID for writes.
+  using Query = bool (*)();
+  auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(nullptr),
+      "gesher_protected_runtime_system_server"));
+  return query && query();
+}
+
 constexpr DWORD kCapacity = 4 * 1024 * 1024;
 // Match the previous format's maximum payload. Each area now has two banks.
 constexpr DWORD kPayloadCapacity = kCapacity - 4 * sizeof(uint32_t);
@@ -107,6 +117,15 @@ bool EnvironmentEquals(const wchar_t* name, std::wstring_view expected) {
   return count == expected.size() && (!count || std::wmemcmp(buffer, expected.data(), count) == 0);
 }
 std::wstring FullPath(std::wstring path) {
+  // Android/Java uses the canonical /mnt/<drive> form (ADR 0045). Passing
+  // that form directly to GetFullPathNameW would resolve it as a directory
+  // named "mnt" on the current drive, outside the intended Android root.
+  if (path.size() >= 6 && path.compare(0, 5, L"/mnt/") == 0 &&
+      ((path[5] >= L'a' && path[5] <= L'z') || (path[5] >= L'A' && path[5] <= L'Z')) &&
+      (path.size() == 6 || path[6] == L'/')) {
+    path = std::wstring(1, path[5]) + L":" +
+        (path.size() == 6 ? L"/" : path.substr(6));
+  }
   std::replace(path.begin(), path.end(), L'/', L'\\');
   DWORD size = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
   if (!size) return {};
@@ -391,7 +410,7 @@ Area* Current() { // LocalMutex is held by every caller.
   std::wstring path = dir + L"\\" + Key(session + L"/3") + L".area";
   auto area = std::make_unique<Area>();
   area->root = data;
-  area->read_only = InAppContainer();
+  area->read_only = InAppContainer() && !ProtectedSystemServer();
   area->persistent = data + L"\\property\\persistent_properties";
   if (!area->read_only) {
     if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;

@@ -60,6 +60,7 @@
 
 #ifdef GESHER_PROTECTED_BINDER
 #include "protected_bootstrap.h"
+#include "protected_shared_memory.h"
 #else
 namespace gesher::binder { class ProtectedPeer; }
 #endif
@@ -68,6 +69,10 @@ namespace {
 
 namespace wire = gesher::binder_wire;
 using ProtectedIdentity = std::shared_ptr<const gesher::binder::ProtectedPeer>;
+
+#ifdef GESHER_PROTECTED_BINDER
+gesher::binder::ProtectedSharedMemory g_application_memory;
+#endif
 
 bool g_trace = false;
 
@@ -509,9 +514,19 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
   return ok ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(dup)) : 0;
 }
 
-void CloseRemoteHandle(int pid, uint64_t handle) {
+void CloseRemoteHandle(Proc* proc, uint64_t handle) {
   if (handle == 0) return;
-  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(pid));
+#ifdef GESHER_PROTECTED_BINDER
+  if (proc->protected_peer) {
+    // A revoked peer still retains the original process object for cleanup;
+    // never reopen a possibly recycled PID when retiring staging handles.
+    DuplicateHandle(proc->protected_peer->process(),
+        reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), nullptr, nullptr,
+        0, FALSE, DUPLICATE_CLOSE_SOURCE);
+    return;
+  }
+#endif
+  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(proc->pid));
   if (p == nullptr) return;
   DuplicateHandle(p, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), nullptr, nullptr,
                   0, FALSE, DUPLICATE_CLOSE_SOURCE);
@@ -527,7 +542,7 @@ wire::FileDescription* DescriptionAt(Buffer* buffer, uint64_t offset) {
 
 void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
   if (auto* description = DescriptionAt(buffer, offset)) {
-    CloseRemoteHandle(buffer->proc->pid, description->shared_handle);
+    CloseRemoteHandle(buffer->proc, description->shared_handle);
     description->shared_handle = 0;
   }
 }
@@ -556,7 +571,7 @@ void ReleaseBufferObjects(Buffer* buffer) {
       case BINDER_TYPE_FD:
         // Staging handles always belong to the broker. Successful delivery
         // already closes/zeros them; abort/release closes any still present.
-        CloseRemoteHandle(proc->pid, fp.binder);
+        CloseRemoteHandle(proc, fp.binder);
         CloseStagingDescription(buffer, off);
         break;
       default:
@@ -718,9 +733,28 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
     flat_binder_object fp;
     memcpy(&fp, buffer->data.data() + off, sizeof(fp));
     if (type == BINDER_TYPE_FD) {
-      // No native-handle transfer is enabled on the protected endpoint until
-      // descriptor kind and host-control handle exclusions are enforced.
-      if (proc->protected_peer || target_proc->protected_peer) return BR_FAILED_REPLY;
+      auto* description = DescriptionAt(buffer, off);
+      if (proc->protected_peer || target_proc->protected_peer) {
+#ifdef GESHER_PROTECTED_BINDER
+        if (!description || description->kind != wire::kApplicationSharedMemoryDescription ||
+            description->shared_handle != 0 || description->reserved != 0 || fp.flags != 0) {
+          return BR_FAILED_REPLY;
+        }
+        uint64_t duplicate = 0;
+        const DWORD status = g_application_memory.Duplicate(proc->protected_peer,
+            target_proc->protected_peer, fp.binder, &duplicate);
+        if (status != ERROR_SUCCESS) return BR_FAILED_REPLY;
+        fp.binder = duplicate;
+        memcpy(buffer->data.data() + off, &fp, sizeof(fp));
+        ++*translated;
+        continue;
+#else
+        return BR_FAILED_REPLY;
+#endif
+      }
+      if (description && description->kind == wire::kApplicationSharedMemoryDescription) {
+        return BR_FAILED_REPLY;
+      }
       // binder_translate_fd: fp.binder is binder_fd_object's pad_binder,
       // where the sender's /dev/binder put the fd's handle.
       if (fp.binder == 0) {
@@ -729,14 +763,13 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
       }
       uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
       if (dup == 0) return BR_FAILED_REPLY;
-      auto* description = DescriptionAt(buffer, off);
       uint64_t shared = description
           ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
       // Sockets and completed native fences are typed handles without an OFD.
       const bool typed = description && (description->kind == wire::kSocketFileDescription ||
                                          description->kind == wire::kNativeFenceFileDescription);
       if (!description || (!typed && shared == 0)) {
-        CloseRemoteHandle(target_proc->pid, dup);
+        CloseRemoteHandle(target_proc, dup);
         return BR_FAILED_REPLY;
       }
       description->shared_handle = shared;
@@ -987,7 +1020,7 @@ void CloseStagingFds(Buffer* buffer) {
     const uint64_t staging = object.pad_binder;
     object.pad_binder = 0;
     memcpy(buffer->data.data() + offset, &object, sizeof(object));
-    CloseRemoteHandle(buffer->proc->pid, staging);
+    CloseRemoteHandle(buffer->proc, staging);
     CloseStagingDescription(buffer, offset);
   }
 }
@@ -2082,6 +2115,19 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
         ServeThread(pipe, in, protected_peer);
       } else if (op == wire::kHelloRights && !protected_peer) {
         ServeRights(pipe, in);
+#ifdef GESHER_PROTECTED_BINDER
+      } else if (op == wire::kPublishApplicationSharedMemory && protected_peer) {
+        uint32_t version = 0;
+        uint64_t handle = 0, size = 0;
+        DWORD status = ERROR_INVALID_DATA;
+        if (in.Get(&version) && version == wire::kVersion && in.Get(&handle) &&
+            in.Get(&size) && in.p == in.end) {
+          status = g_application_memory.Register(protected_peer, handle, size);
+        }
+        WireReply reply;
+        reply.Put<uint32_t>(status);
+        if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
+#endif
       }
     }
   }

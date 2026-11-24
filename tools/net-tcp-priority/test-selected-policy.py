@@ -399,15 +399,30 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # is checked against historical main bytes; the socket ownership and poll
 # checks still compare live code.
 USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
-USB_BLOCK_TRANSITION_SHA256 = 'f79545565b89c3931d1551fa28dc8904c915ba33ee913c117db302d9635bbd8b'
+# These additional runtime files already contained reviewed changes after the
+# original USB baseline. Reverse only this PR's new edits in those files, then
+# require the existing OFD receipt's exact bytes as before.
+USB_BLOCK_PATH_BASES = dict.fromkeys((
+ 'compat/bionic/process_bionic.cc',
+ 'compat/elf/exec/gesher_exec.cc',
+ 'compat/libcore/process.cc',
+ 'compat/posix/src/binder_file_descriptions.h',
+ 'compat/posix/src/binder_wire.h',
+), 'af2a394d0f5399f954aa00aeaf37011d42b96623')
+USB_BLOCK_TRANSITION_SHA256 = 'eeeb5ed8d9a7612a32f9946255f5258969e7411dc7cb80ffdaea72769aaf8a51'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
+ 'compat/bionic/process_bionic.cc',
  'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/gesher_exec.cc',
  'compat/elf/exec/gesher_shell.cc',
  'compat/elf/exec/shell_execute.inc',
+ 'compat/libcore/process.cc',
  'compat/posix/posix.cmake',
  'compat/posix/src/binder.cc',
+ 'compat/posix/src/binder_file_descriptions.h',
+ 'compat/posix/src/binder_wire.h',
  'compat/posix/src/fd.cc',
  'compat/posix/src/fsops.cc',
  'compat/posix/src/internal.h',
@@ -428,8 +443,9 @@ def preceding_usb_block_sources(folder):
  assert hashlib.sha256(raw).hexdigest() == USB_BLOCK_TRANSITION_SHA256, 'USB block source transition changed'
  transition = json.loads(raw)
  paths = list(USB_BLOCK_TRANSITION_PATHS)
- assert set(transition) == {'base', 'patch_sha256', 'after_sha256', 'dependencies_sha256'}
+ assert set(transition) == {'base', 'path_bases', 'patch_sha256', 'after_sha256', 'dependencies_sha256'}
  assert transition['base'] == USB_BLOCK_BASE
+ assert transition['path_bases'] == USB_BLOCK_PATH_BASES
  assert sorted(transition['after_sha256']) == paths
  delta = (folder/'usb-block-source.patch').read_bytes()
  assert hashlib.sha256(delta).hexdigest() == transition['patch_sha256']
@@ -452,7 +468,8 @@ def preceding_usb_block_sources(folder):
                  input=delta,cwd=work,check=True,capture_output=True)
   for path in paths:
    preceding[path] = (work/path).read_bytes()
-   historical = subprocess.check_output(['git','-C',str(ROOT),'show',USB_BLOCK_BASE+':'+path])
+   historical = subprocess.check_output(['git','-C',str(ROOT),'show',
+                                        USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)+':'+path])
    assert preceding[path] == historical, path
  return preceding
 

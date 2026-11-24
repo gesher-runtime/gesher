@@ -160,6 +160,10 @@ static inline int ErrnoFromWin32(DWORD error) {
 // This fixture tests procfs contents and actual native access reduction. The
 // canonical OFD table is exercised by its separate production transfer suite.
 static inline int RegisterOfd(int, int) { return 0; }
+static inline int ReserveFd() { return _open("NUL", _O_RDONLY | _O_BINARY | _O_NOINHERIT); }
+enum class DescriptorKind { kUnshareable };
+static inline int SetDescriptorKind(int, DescriptorKind) { return 0; }
+struct OpenFileDescription { std::wstring virtual_directory; };
 // Declared procfs boundaries, not a substitute for the production revocable
 // suite. Reopening must delegate the retained snapshot and requested flags.
 struct RevocableBoundary {
@@ -175,6 +179,7 @@ static unsigned active_snapshots = 0;
 struct DescriptorSnapshot {
   HANDLE handle = INVALID_HANDLE_VALUE;
   bool revocable = false;
+  std::unique_ptr<OpenFileDescription> description = std::make_unique<OpenFileDescription>();
   DescriptorSnapshot() { ++active_snapshots; }
   ~DescriptorSnapshot() {
     if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
@@ -246,6 +251,12 @@ namespace gesher::usb_block {
 [[maybe_unused]] static bool Attached() { return false; }
 [[maybe_unused]] static bool SysContent(const std::string&, std::string*) { return false; }
 [[maybe_unused]] static int Open(int) { errno = ENOENT; return -1; }
+[[maybe_unused]] static std::vector<std::string> Devices() { return {}; }
+[[maybe_unused]] static bool DeviceExists(std::string_view) { return false; }
+[[maybe_unused]] static bool NodeSysContent(std::string_view, const std::string&, std::string*) { return false; }
+[[maybe_unused]] static int OpenNode(std::string_view, int) { errno = ENOENT; return -1; }
+[[maybe_unused]] static std::string DeviceNumberName(std::string_view) { return {}; }
+[[maybe_unused]] static std::string NodeFromDeviceNumber(std::string_view) { return {}; }
 }
 
 @PROCFS_SOURCE@

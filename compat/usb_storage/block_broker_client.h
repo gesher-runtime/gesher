@@ -31,6 +31,8 @@ class BlockClient {
   DWORD Describe(ClientDiskInfo* info);
   DWORD Read(uint64_t offset, std::span<std::byte> output);
   DWORD Write(uint64_t offset, std::span<const std::byte> input);
+  DWORD Flush();
+  DWORD SetReadOnly(bool readonly);
   bool Live() const;
 
  private:

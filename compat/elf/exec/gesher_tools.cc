@@ -218,8 +218,9 @@ int Dd(const std::vector<std::string>& args) {
 }
 
 int Blockdev(const std::vector<std::string>& args) {
-  if (args.size() < 2 || args[0] != "--getro") {
-    std::fprintf(stderr, "usage: blockdev --getro [--] DEVICE...\n");
+  if (args.size() < 2 || (args[0] != "--getro" && args[0] != "--setrw" && args[0] != "--setro" &&
+      args[0] != "--getsize64" && args[0] != "--getsz" && args[0] != "--getss" && args[0] != "--flushbufs")) {
+    std::fprintf(stderr, "usage: blockdev {--getro|--setrw|--setro|--getsize64|--getsz|--getss|--flushbufs} [--] DEVICE...\n");
     return 1;
   }
   const bool end_options = args[1] == "--";
@@ -237,19 +238,31 @@ int Blockdev(const std::vector<std::string>& args) {
   for (size_t i = first_device; i < args.size(); ++i) {
     const char* path = args[i].c_str();
     const int fd = open(path, O_RDONLY | O_CLOEXEC);
-    int readonly = 0;
+    int number = args[0] == "--setro" ? 1 : 0;
+    uint64_t bytes = 0;
     if (fd < 0) {
       std::fprintf(stderr, "blockdev: %s: %s\n", path, std::strerror(errno));
       return 1;
     }
-    const int result = ioctl(fd, BLKROGET, &readonly);
+    unsigned long operation = BLKROGET;
+    void* value = &number;
+    bool print_number = true;
+    if (args[0] == "--setrw" || args[0] == "--setro") { operation = BLKROSET; print_number = false; }
+    else if (args[0] == "--getsize64" || args[0] == "--getsz") { operation = BLKGETSIZE64; value = &bytes; }
+    else if (args[0] == "--getss") operation = BLKSSZGET;
+    else if (args[0] == "--flushbufs") { operation = BLKFLSBUF; value = nullptr; print_number = false; }
+    const int result = ioctl(fd, operation, value);
     const int saved = errno;
     close(fd);
     if (result < 0) {
       std::fprintf(stderr, "blockdev: %s: %s\n", path, std::strerror(saved));
       return 1;
     }
-    if (std::printf("%d\n", readonly) < 0) return 1;
+    if (print_number) {
+      if (operation == BLKGETSIZE64) {
+        if (std::printf("%llu\n", static_cast<unsigned long long>(args[0] == "--getsz" ? bytes / 512 : bytes)) < 0) return 1;
+      } else if (std::printf("%d\n", number) < 0) return 1;
+    }
   }
   return std::fflush(stdout) != 0;
 }
@@ -428,10 +441,17 @@ int Id(const std::vector<std::string>& args) {
     return std::fprintf(stdout, "%u\n", static_cast<unsigned>(geteuid())) < 0 ||
         std::fflush(stdout) != 0;
   }
-  int uid = static_cast<int>(geteuid());
-  std::fprintf(stdout, "uid=%d(u0_a%d) gid=%d(u0_a%d) groups=%d(u0_a%d)\n", uid,
-               uid >= 10000 ? uid - 10000 : uid, uid, uid >= 10000 ? uid - 10000 : uid, uid,
-               uid >= 10000 ? uid - 10000 : uid);
+  if (!args.empty()) { std::fprintf(stderr, "id: unsupported arguments\n"); return 1; }
+  const unsigned uid = static_cast<unsigned>(geteuid());
+  const unsigned gid = static_cast<unsigned>(getegid());
+  auto name = [](unsigned id) {
+    if (id == 0) return std::string("root");
+    if (id == 1000) return std::string("system");
+    if (id % 100000 >= 10000) return "u" + std::to_string(id / 100000) + "_a" + std::to_string(id % 100000 - 10000);
+    return std::to_string(id);
+  };
+  std::fprintf(stdout, "uid=%u(%s) gid=%u(%s) groups=%u(%s)\n", uid, name(uid).c_str(),
+               gid, name(gid).c_str(), gid, name(gid).c_str());
   std::fflush(stdout);
   return 0;
 }

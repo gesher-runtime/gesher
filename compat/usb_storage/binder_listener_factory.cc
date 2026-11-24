@@ -211,6 +211,16 @@ DWORD BinderListenerFactory::CreateOwned(HANDLE broker, PSID owner, std::wstring
   if (WaitForSingleObject(factory->broker_, 0) != WAIT_TIMEOUT) return ERROR_PROCESS_ABORTED;
 
   factory->name_ = locator;
+  factory->owner_sid_.resize(GetLengthSid(owner));
+  if (!CopySid(static_cast<DWORD>(factory->owner_sid_.size()), factory->owner_sid_.data(), owner)) {
+    return GetLastError();
+  }
+  for (PSID package : app_containers) {
+    if (!ExactPackageSid(package)) return ERROR_INVALID_SID;
+    std::vector<BYTE> copy(GetLengthSid(package));
+    if (!CopySid(static_cast<DWORD>(copy.size()), copy.data(), package)) return GetLastError();
+    factory->package_sids_.push_back(std::move(copy));
+  }
   LocalMemory private_guard, admitted;
   DWORD status = BuildPolicies(factory->broker_, owner, app_containers, &private_guard, &admitted);
   if (status != ERROR_SUCCESS) return status;
@@ -236,6 +246,34 @@ DWORD BinderListenerFactory::CreateOwned(HANDLE broker, PSID owner, std::wstring
   factory->published_ = true;
   *result = std::move(factory);
   return ERROR_SUCCESS;
+} catch (const std::bad_alloc&) {
+  return ERROR_NOT_ENOUGH_MEMORY;
+}
+
+DWORD BinderListenerFactory::AllowAppContainer(PSID package) try {
+  if (!ExactPackageSid(package)) return ERROR_INVALID_SID;
+  std::lock_guard lock(mutex_);
+  if (revoked_) return ERROR_OPERATION_ABORTED;
+  if (!published_ || WaitForSingleObject(broker_, 0) != WAIT_TIMEOUT) return ERROR_PROCESS_ABORTED;
+  for (const auto& known : package_sids_) {
+    if (EqualSid(const_cast<BYTE*>(known.data()), package)) return ERROR_SUCCESS;
+  }
+  // Prepare all allocations before changing the pipe policy. Failed publication
+  // retains the old enrollment, and successful publication cannot be followed
+  // by an allocation failure that loses track of the newly allowed identity.
+  auto next = package_sids_;
+  std::vector<BYTE> copy(GetLengthSid(package));
+  if (!CopySid(static_cast<DWORD>(copy.size()), copy.data(), package)) return GetLastError();
+  next.push_back(std::move(copy));
+  std::vector<PSID> identities;
+  identities.reserve(next.size());
+  for (auto& identity : next) identities.push_back(identity.data());
+  LocalMemory private_guard, admitted;
+  DWORD status = BuildPolicies(broker_, owner_sid_.data(), identities, &private_guard, &admitted);
+  if (status != ERROR_SUCCESS) return status;
+  status = PublishDacl(guard_, admitted.get());
+  if (status == ERROR_SUCCESS) package_sids_.swap(next);
+  return status;
 } catch (const std::bad_alloc&) {
   return ERROR_NOT_ENOUGH_MEMORY;
 }

@@ -141,6 +141,8 @@ void Transport(bool malformed) {
     reject_registration(12345, PeerRole::kClient, ERROR_ACCESS_DENIED);
     reject_registration(1000, PeerRole::kContextManager, ERROR_ACCESS_DENIED);
     reject_registration(12345, PeerRole::kContextManager, ERROR_INVALID_PARAMETER);
+    reject_registration(1000, PeerRole::kSystemServer, ERROR_ACCESS_DENIED);
+    reject_registration(12345, PeerRole::kSystemServer, ERROR_INVALID_PARAMETER);
     reject_registration(1000, static_cast<PeerRole>(42), ERROR_INVALID_PARAMETER);
     Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kRevoke,
                                     0, 17, 0, PeerRole::kClient, 0});

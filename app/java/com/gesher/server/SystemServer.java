@@ -185,6 +185,7 @@ public final class SystemServer {
         String buildProp = null;
         String frameworkRes = null;
         boolean persistent = false;
+        boolean launchInitialApk = false;
         String adopt = null;
         long idleTimeoutS = 600;
         List<String> apks = new ArrayList<>();
@@ -195,6 +196,7 @@ public final class SystemServer {
                 case "--framework-res": frameworkRes = args[++i]; break;
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--persistent": persistent = true; break;
+                case "--launch-initial-apk": launchInitialApk = true; break;
                 case "--adopt": adopt = args[++i]; break;
                 case "--idle-timeout": idleTimeoutS = Long.parseLong(args[++i]); break;
                 default:
@@ -221,6 +223,9 @@ public final class SystemServer {
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
 
         Main.bootstrap(TAG, buildProp, frameworkRes);
+        if (launchInitialApk && (!ProtectedRuntime.enabled() || apks.size() != 1)) {
+            throw new SecurityException("Initial protected launch needs one authority-staged APK");
+        }
 
         if (persistent) {
             // The device goes as a whole: binderd, servicemanager and the app processes
@@ -280,6 +285,7 @@ public final class SystemServer {
         }
         for (String apk : apks) {
             ApkPackage p = ApkPackage.parse(apk);
+            if (ProtectedRuntime.enabled()) ProtectedRuntime.verify(p);
             selectCommandLinePackage(packages, p);
         }
         try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
@@ -317,6 +323,21 @@ public final class SystemServer {
         startBinderThreads(TAG, 31);
         if (device != null) device.start();
         created.usb.startHost();
+        if (launchInitialApk) {
+            ApkPackage initial = packages.stream().filter(p -> p.apkPath.equals(apks.get(0)))
+                    .findFirst().orElseThrow(() -> new IllegalStateException("Initial APK was not admitted"));
+            android.content.pm.ActivityInfo activity = initial.launcherActivity(null);
+            android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_MAIN)
+                    .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+                    .setComponent(new android.content.ComponentName(initial.packageName, activity.name))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            GesherService.LaunchResult launched = created.atm.startActivityForHost(intent);
+            if (launched.result.result < 0 || launched.result.timeout) {
+                throw new IllegalStateException("Protected initial activity did not become ready: result="
+                        + launched.result.result + ", timeout=" + launched.result.timeout);
+            }
+            log("protected initial activity ready: " + initial.packageName);
+        }
         if (persistent && GmsSignatureSpoofing.isEnabled()) {
             ApkPackage gms = created.pm.get(GmsPackageSupport.PACKAGE_GMS);
             if (gms != null && gms.hasVerifiedMicrogSigner()) {
@@ -394,6 +415,9 @@ public final class SystemServer {
             // There is no DisplayEventReceiver vsync source. Publish the
             // device-wide setting before the app initializes Choreographer.
             android.os.SystemProperties.set("debug.choreographer.vsync", "false");
+            if (ProtectedRuntime.enabled()) {
+                return ProtectedRuntime.spawn(pkg, processName, startSeq, targetSdk, env);
+            }
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pkg, packageName,

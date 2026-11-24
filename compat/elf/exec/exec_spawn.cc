@@ -7,7 +7,12 @@
 #include <gesher/environment.h>
 #include <gesher/environment_utf16.h>
 
+#include "../../usb_storage/protected_runtime_client.h"
+
+#include <shellapi.h>
+
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -87,6 +92,11 @@ bool IsShName(const std::string& name) {
          name == "/vendor/bin/sh";
 }
 
+bool IsSuName(const std::string& name) {
+  return name == "su" || name == "/system/bin/su" || name == "/system/xbin/su" ||
+         name == "/bin/su";
+}
+
 // The tool name of a bare name or a /system/bin path, or "".
 std::string ToolName(const std::string& name) {
   static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
@@ -104,6 +114,28 @@ std::string ToolName(const std::string& name) {
     if (base == t) return base;
   }
   return "";
+}
+
+std::wstring FilesystemTool(const std::string& name) {
+  if (!gesher::usb_storage::ProtectedRuntimeEnabled()) return {};
+  std::string base = name;
+  for (const char* prefix : {"/system/bin/", "/system/xbin/", "/bin/", "/sbin/"}) {
+    if (name.starts_with(prefix)) { base = name.substr(std::strlen(prefix)); break; }
+  }
+  if (base.find_first_of("/\\") != std::string::npos) return {};
+  const wchar_t* file = nullptr;
+  if (base == "mkfs.vfat" || base == "mkfs.fat") file = L"mkfs.fat";
+  else if (base == "fsck.vfat" || base == "fsck.fat" || base == "dosfsck") file = L"fsck.fat";
+  else if (base == "mkfs.exfat") file = L"mkfs.exfat";
+  else if (base == "fsck.exfat") file = L"fsck.exfat";
+  else if (base == "mkfs.ext4" || base == "mke2fs") file = L"mke2fs";
+  else if (base == "fsck.ext4" || base == "e2fsck") file = L"e2fsck";
+  if (!file) return {};
+  std::wstring directory = LauncherPath();
+  const size_t slash = directory.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) return {};
+  directory.resize(slash + 1);
+  return directory + L"filesystem-tools\\bin\\" + file;
 }
 
 // The directories of PATH: ';'-separated on Windows; a Linux-style ':' list
@@ -364,7 +396,10 @@ std::wstring WindowsPath(const std::string& path, const std::string& dir) {
 }
 
 std::wstring LauncherPath() {
-  const char* env = gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
+  // The protected authority starts its own installed executable. A guest
+  // setting cannot redirect that route to a different native image.
+  const char* env = gesher::usb_storage::ProtectedRuntimeEnabled()
+                        ? nullptr : gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
   if (env != nullptr && *env != 0) return EnvironmentValue(env);
   std::wstring self(MAX_PATH, L'\0');
   for (;;) {
@@ -384,6 +419,15 @@ namespace {
 int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv, const std::string& dir,
                    int depth, bool search, Launch* launch, const std::string* path_override) {
   if (argv.empty() || prog.empty()) return kENOENT;
+  if (IsSuName(prog) && gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    launch->kind = "su";
+    launch->application = LauncherPath();
+    launch->command_line.clear();
+    AppendQuoted(&launch->command_line, launch->application);
+    launch->command_line += L" --su";
+    AppendArgs(&launch->command_line, argv, 1);
+    return Finish(launch);
+  }
   if (IsShName(prog)) {
     launch->kind = "sh";
     launch->application = LauncherPath();
@@ -392,6 +436,16 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
     launch->command_line += L" --sh";
     AppendArgs(&launch->command_line, argv, 1);
     return Finish(launch);
+  }
+  if (const std::wstring file = FilesystemTool(prog); !file.empty()) {
+    std::string head;
+    const int error = Probe(file, &head);
+    if (error) return error;
+    // These are separate original upstream Android PIE programs. The fixed
+    // installed image is loaded normally, keeps its argv/options and receives
+    // the same scoped block channel as any other admitted Android command.
+    // Missing tools remain ENOENT; no format/check success is synthesized.
+    return LaunchFile(file, head, argv, dir, depth, launch);
   }
   std::string tool = ToolName(prog);
   if (!tool.empty() && (search || prog.find('/') != std::string::npos)) {
@@ -459,6 +513,10 @@ int PrepareLaunchInPath(const std::vector<std::string>& argv, const std::string&
 
 std::wstring FindInPath(const std::string& name, const std::string& path) {
   if (name.empty() || IsShName(name) || !ToolName(name).empty()) return L"";
+  if (const std::wstring file = FilesystemTool(name); !file.empty()) {
+    std::string head;
+    return Probe(file, &head) == 0 ? file : std::wstring{};
+  }
   bool has_ext = !Extension(Widen(name)).empty();
   static const wchar_t* const kExtensions[] = {L"", L".exe", L".com", L".cmd", L".bat"};
   for (const std::wstring& d : PathDirectories(Widen(path))) {
@@ -488,6 +546,102 @@ int PrepareLaunchProgramInPath(const std::string& program, const std::vector<std
 
 bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 
+namespace {
+
+DWORD DescriptorError() {
+  switch (errno) {
+    case ENOMEM: return ERROR_NOT_ENOUGH_MEMORY;
+    case EBADF: return ERROR_INVALID_HANDLE;
+    case EINVAL: return ERROR_INVALID_PARAMETER;
+    case EACCES: return ERROR_ACCESS_DENIED;
+    case EOPNOTSUPP: case ENOSYS: return ERROR_NOT_SUPPORTED;
+    default: return ERROR_GEN_FAILURE;
+  }
+}
+
+// These names describe the authority's sealed runtime, not mutable command
+// variables. The service independently derives and enforces them. Filtering
+// here also permits an ordinary inherited environment to use the narrow RPC.
+bool CommandEnvironment(std::wstring_view entry) {
+  const size_t equal = entry.find(L'=');
+  if (!equal || equal == std::wstring_view::npos) return false;
+  std::wstring key(entry.substr(0, equal));
+  for (wchar_t& c : key) if (c >= L'a' && c <= L'z') c -= L'a' - L'A';
+  for (const wchar_t* allowed : {L"LANG", L"LC_ALL", L"LC_CTYPE", L"TZ", L"HOME", L"PWD", L"TMPDIR",
+      L"GESHER_DISPLAY", L"GESHER_APP_WINDOW", L"GESHER_SEPARATE_WINDOWS", L"GESHER_INET",
+      L"GESHER_PROXY", L"HTTP_PROXY", L"HTTPS_PROXY", L"NO_PROXY", L"GESHER_APP_USER_MODEL_ID"}) {
+    if (key == allowed) return true;
+  }
+  return false;
+}
+
+DWORD SpawnProtectedCommand(const Launch& launch, const wchar_t* environment,
+                            const std::wstring& cwd, const std::vector<ChildFd>& fds,
+                            PROCESS_INFORMATION* info, DWORD extra_flags) {
+  if (!info || extra_flags) return ERROR_INVALID_PARAMETER;
+  *info = {};
+  // No PE/batch image supplied by a guest is run by the authority. Its fixed
+  // installed launcher implements shell/tools and the ordinary Android ELF
+  // loader inside this package's restricted Windows security context.
+  if (launch.application != LauncherPath() ||
+      (launch.kind != "sh" && launch.kind != "su" && launch.kind != "tool" &&
+       launch.kind != "elf" && launch.kind != "script" && launch.kind != "spawn")) {
+    return ERROR_NOT_SUPPORTED;
+  }
+  gesher::usb_storage::ProtectedCommandSpec request;
+  int count = 0;
+  wchar_t** raw = CommandLineToArgvW(launch.command_line.c_str(), &count);
+  std::unique_ptr<wchar_t*, decltype(&LocalFree)> arguments(raw, &LocalFree);
+  if (!raw || count < 2 || launch.application != raw[0]) return ERROR_INVALID_PARAMETER;
+  for (int i = 1; i < count; ++i) {
+    const std::wstring_view value(raw[i]);
+    request.arguments.emplace_back(value.begin(), value.end());
+  }
+  request.privileged_root = request.arguments.front() == u"--su";
+  for (const wchar_t* entry = environment; entry && *entry; entry += std::wcslen(entry) + 1) {
+    const std::wstring_view value(entry);
+    if (CommandEnvironment(value)) request.environment.emplace_back(value.begin(), value.end());
+  }
+  std::wstring directory = cwd;
+  if (directory.empty()) {
+    const DWORD needed = GetCurrentDirectoryW(0, nullptr);
+    if (!needed) return GetLastError();
+    directory.resize(needed);
+    const DWORD length = GetCurrentDirectoryW(needed, directory.data());
+    if (!length || length >= needed) return ERROR_INVALID_DATA;
+    directory.resize(length);
+  }
+  request.working_directory.assign(directory.begin(), directory.end());
+
+  std::array<gesher::DescriptorSnapshotPtr, 3> snapshots;
+  std::vector<std::unique_ptr<gesher::NativeFileDescriptionExport>> exports;
+  for (const ChildFd& file : fds) {
+    if (file.fd < 0 || file.fd > 2) return ERROR_NOT_SUPPORTED;
+    if (snapshots[file.fd]) return ERROR_INVALID_PARAMETER;
+    auto snapshot = file.snapshot ? file.snapshot : gesher::CaptureFileHandle(file.handle);
+    if (!snapshot) return DescriptorError();
+    if (snapshot->kind != gesher::DescriptorKind::kFile) return ERROR_NOT_SUPPORTED;
+    if (file.snapshot && file.handle != snapshot->handle) return ERROR_INVALID_PARAMETER;
+    auto reservation = std::make_unique<gesher::NativeFileDescriptionExport>();
+    if (reservation->Prepare(snapshot) < 0) return DescriptorError();
+    request.standard_handles[file.fd] = reinterpret_cast<uintptr_t>(snapshot->handle);
+    snapshots[file.fd] = std::move(snapshot);
+    exports.push_back(std::move(reservation));
+  }
+  gesher::usb_storage::ProtectedCommandChild child;
+  const DWORD result = gesher::usb_storage::ProtectedSpawnCommand(request, &child);
+  if (result != ERROR_SUCCESS) return result;
+  if (!child.pid || !child.start_time || !child.wait_handle) return ERROR_INVALID_DATA;
+  info->hProcess = reinterpret_cast<HANDLE>(child.wait_handle);
+  info->dwProcessId = child.pid;
+  // The launch thread stays authority-owned. The returned process handle is
+  // wait/query only; signal requests are authenticated by that same authority.
+  for (auto& reservation : exports) reservation->Commit();
+  return ERROR_SUCCESS;
+}
+
+}  // namespace
+
 DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
                    const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info, DWORD extra_flags) try {
   // Default native/Java launches inherit the same live POSIX bytes as ELF
@@ -510,6 +664,9 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     inherited_environment = EnvironmentBlock(entries, native.get());
     if (inherited_environment.empty()) return ERROR_NO_UNICODE_TRANSLATION;
     environment = inherited_environment.c_str();
+  }
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    return SpawnProtectedCommand(launch, environment, cwd, fds, info, extra_flags);
   }
   struct ImagePin {
     HANDLE value = nullptr;

@@ -812,34 +812,93 @@ void Add(std::vector<procfs::Entry>* entries, const std::string& name, unsigned 
 Node Lookup(const std::wstring& name, bool list) {
   std::vector<std::string> p = Split(name);
   Node n;
+  if (p.size() >= 3 && p[0] == "sys" && p[1] == "dev" && p[2] == "block") {
+    if (!usb_block::Attached()) return n;
+    if (p.size() == 3) {
+      n.type = kDir;
+      if (list) for (const auto& node : usb_block::Devices()) {
+        Add(&n.entries, usb_block::DeviceNumberName(node), DT_LNK);
+      }
+    } else if (p.size() == 4) {
+      const std::string node = usb_block::NodeFromDeviceNumber(p[3]);
+      if (!node.empty() && usb_block::DeviceExists(node)) {
+        n.type = kLink;
+        n.link = "usb-alias";
+        n.usb_content = "/sys/block/sdb" + (node == "sdb" ? std::string{} : "/" + node);
+      }
+    }
+    return n;
+  }
+  if (p.size() >= 5 && p[0] == "sys" && p[1] == "devices" && p[2] == "gesher" &&
+      p[3] == "usb" && p[4] == "sdb") {
+    if (!usb_block::Attached()) return n;
+    if (p.size() == 5) {
+      n.type = kDir;
+      if (list) for (const char* field : {"model", "serial"}) {
+        std::string value;
+        if (usb_block::SysContent(field, &value)) Add(&n.entries, field, DT_REG);
+      }
+    } else if (p.size() == 6 && (p[5] == "model" || p[5] == "serial") &&
+        usb_block::SysContent(p[5], &n.usb_content)) n.type = kFile;
+    return n;
+  }
   if (p.size() >= 2 && (p[0] == "dev" || p[0] == "sys") && p[1] == "block") {
     if (!usb_block::Attached()) return n;
     if (p.size() == 2) {
       n.type = kDir;
-      if (list) Add(&n.entries, usb_block::kBlockName, p[0] == "dev" ? DT_BLK : DT_DIR);
+      if (list) {
+        if (p[0] == "dev") {
+          for (const auto& node : usb_block::Devices()) Add(&n.entries, node, DT_BLK);
+        } else Add(&n.entries, usb_block::kBlockName, DT_DIR);
+      }
+      return n;
+    }
+    if (p[0] == "dev") {
+      if (p.size() == 3 && usb_block::DeviceExists(p[2])) n.type = S_IFBLK;
       return n;
     }
     if (p[2] != usb_block::kBlockName) return n;
-    if (p[0] == "dev") {
-      if (p.size() == 3) n.type = S_IFBLK;
-      return n;
-    }
     if (p.size() == 3) {
       n.type = kDir;
       if (list) {
         for (const char* field : {"size", "removable", "ro"}) Add(&n.entries, field, DT_REG);
-        Add(&n.entries, "device", DT_DIR);
+        Add(&n.entries, "device", DT_LNK);
+        Add(&n.entries, "holders", DT_DIR);
+        Add(&n.entries, "slaves", DT_DIR);
+        for (const auto& node : usb_block::Devices()) {
+          if (node != usb_block::kBlockName) Add(&n.entries, node, DT_DIR);
+        }
+      }
+      return n;
+    }
+    if (p.size() >= 4 && p[3] != usb_block::kBlockName && usb_block::DeviceExists(p[3])) {
+      if (p.size() == 4) {
+        n.type = kDir;
+        if (list) {
+          for (const char* field : {"size", "start", "partition", "ro", "removable"}) Add(&n.entries, field, DT_REG);
+          Add(&n.entries, "holders", DT_DIR);
+          Add(&n.entries, "slaves", DT_DIR);
+        }
+      } else if (p.size() == 5 && (p[4] == "size" || p[4] == "start" ||
+                                  p[4] == "partition" || p[4] == "ro" || p[4] == "removable")) {
+        std::string content;
+        if (usb_block::NodeSysContent(p[3], p[4], &content)) {
+          n.type = kFile;
+          n.usb_content = std::move(content);
+        }
+      } else if (p.size() == 5 && (p[4] == "holders" || p[4] == "slaves")) {
+        n.type = kDir;
       }
       return n;
     }
     if (p.size() == 4 && p[3] == "device") {
+      n.type = kLink;
+      n.link = "usb-alias";
+      n.usb_content = "/sys/devices/gesher/usb/sdb";
+      return n;
+    }
+    if (p.size() == 4 && (p[3] == "holders" || p[3] == "slaves")) {
       n.type = kDir;
-      if (list) {
-        for (const char* field : {"model", "serial"}) {
-          std::string content;
-          if (usb_block::SysContent(field, &content)) Add(&n.entries, field, DT_REG);
-        }
-      }
       return n;
     }
     if ((p.size() == 4 && (p[3] == "size" || p[3] == "removable" || p[3] == "ro")) ||
@@ -1043,6 +1102,7 @@ bool ReadLink(const std::wstring& name, std::string* target) {
     }
     return errno = EINVAL, false;
   }
+  if (n.link == "usb-alias") { *target = n.usb_content; return true; }
   if (n.link == "fd") {
     auto snapshot = CaptureDescriptor(n.fd);
     if (!snapshot) return false;
@@ -1078,7 +1138,8 @@ int Open(const std::wstring& name, int flags) {
   if ((flags & O_PATH) != 0) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW;
   Node n = Lookup(name, false);
   if (n.type == kNone) return errno = (flags & O_CREAT) != 0 ? EACCES : ENOENT, -1;
-  if (n.type == S_IFBLK) return usb_block::Open(flags);
+  if (n.type == S_IFBLK) return usb_block::OpenNode(
+      Narrow(name.substr(name.find_last_of(L'/') + 1).c_str()), flags);
   if (n.type == kLink) {
     if ((flags & O_NOFOLLOW) != 0 && (flags & O_PATH) == 0) return errno = ELOOP, -1;
     // A proc-fd open requests a new open description, with the requested
@@ -1097,7 +1158,21 @@ int Open(const std::wstring& name, int flags) {
     if (!ReadLink(name, &target)) return -1;
     return open(target.c_str(), flags & ~(O_CREAT | O_EXCL), 0);
   }
-  if (n.type == kDir) return errno = (flags & O_ACCMODE) != O_RDONLY ? EISDIR : EOPNOTSUPP, -1;
+  if (n.type == kDir) {
+    if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) return errno = EISDIR, -1;
+    if (flags & (O_DIRECT | O_APPEND)) return errno = EOPNOTSUPP, -1;
+    const int fd = ReserveFd();
+    if (fd < 0) return -1;
+    if (RegisterOfd(fd, flags | O_DIRECTORY) < 0 || SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
+      const int error = errno;
+      close(fd);
+      return errno = error, -1;
+    }
+    auto snapshot = CaptureDescriptor(fd);
+    if (!snapshot) { const int error = errno; close(fd); return errno = error, -1; }
+    snapshot->description->virtual_directory = name;
+    return fd;
+  }
   if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
   if ((flags & O_DIRECT) != 0) return errno = EINVAL, -1;
   if ((flags & O_NOATIME) != 0) return errno = EOPNOTSUPP, -1;

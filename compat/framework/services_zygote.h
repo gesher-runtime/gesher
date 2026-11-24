@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace gesher::usb_storage { struct ProtectedSpawnSpec; }
+
 namespace gesher {
 namespace zygote {
 
@@ -20,6 +22,10 @@ namespace zygote {
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway, uint32_t compiler_memory_mib = 0, uint32_t compiler_cpu_rate = 0);
+
+// The optional authority owns these children's process handles. Their exact
+// creation identities are retained here for the ordinary Android lifecycle API.
+int SpawnProtected(const usb_storage::ProtectedSpawnSpec& spec);
 
 // Compiler-only wait. Pins the retained creation identity, waits without g_lock,
 // and reaps before returning. -2 deadline, -3 cancellation/low memory, -1 failure.

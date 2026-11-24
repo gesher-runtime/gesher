@@ -10,11 +10,13 @@ set(_uapi "${AOSP_DIR}/bionic/libc/kernel/uapi")
 add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_bootstrap.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_peers.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/protected_shared_memory.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
 target_compile_definitions(binderd PRIVATE GESHER_PROTECTED_BINDER)
 set_source_files_properties(
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_bootstrap.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_peers.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/protected_shared_memory.cc
   PROPERTIES COMPILE_OPTIONS "-fexceptions")
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 # The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom; the
@@ -25,6 +27,7 @@ add_executable(binder_protected_admission_test EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/tests/native/binder_protected_admission_test.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_bootstrap.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_peers.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/protected_shared_memory.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
 target_compile_definitions(binder_protected_admission_test PRIVATE
   GESHER_PROTECTED_BINDER GESHER_BINDER_PEER_FIXTURE)

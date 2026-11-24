@@ -19,6 +19,7 @@
 // gesher-exec, a PE as itself, sh/scripts/tools in the launcher).
 
 #include "shim_internal.h"
+#include "program_break.h"
 
 #include <gesher/bionic_shim.h>
 #include <gesher/environment.h>
@@ -174,6 +175,12 @@ bool InheritedFds(std::vector<ex::ChildFd>* out, bool include_close_on_exec = fa
 }
 
 int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
+
+int BIONIC_SYSV DaemonUnsupported(int, int) { return errno = ENOSYS, -1; }
+
+ProgramBreak& ProcessBreak() { static ProgramBreak value; return value; }
+void* BIONIC_SYSV Sbrk(intptr_t increment) { return ProcessBreak().Increment(increment); }
+int BIONIC_SYSV Brk(void* address) { return ProcessBreak().Set(address); }
 
 // --- execve / execvp and friends ----------------------------------------------
 
@@ -630,6 +637,9 @@ void RegisterProcess(SymbolTable& t) {
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   E("fork", ForkUnsupported);
   E("vfork", ForkUnsupported);
+  E("daemon", DaemonUnsupported);
+  E("sbrk", Sbrk);
+  E("brk", Brk);
   E("execve", Execve);
   E("execv", Execv);
   E("execl", gesher_bionic_execl);

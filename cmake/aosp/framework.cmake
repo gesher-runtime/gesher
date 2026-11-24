@@ -127,6 +127,10 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/surface_parcel.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/charset_utils.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
+# A protected child already belongs to the authority when its Java-side epoch
+# is recorded. Allocation failure must retire that child instead of orphaning it.
+set_source_files_properties(${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  PROPERTIES COMPILE_OPTIONS "-fexceptions")
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include
   ${AOSP_DIR}/frameworks/native/libs/binderthreadstate/include)

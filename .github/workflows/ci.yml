@@ -122,7 +122,7 @@ jobs:
         run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
       - name: Build actual app identity restart implementation
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
+        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
       - name: Check UID re-entry, inherited I/O, exact exit and parent-death cleanup
         shell: pwsh
         run: |
@@ -135,7 +135,7 @@ jobs:
       - name: Build actual dexopt child waiting and resource budgets
         if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc compat\framework\services_dexopt_watch.cc tests\native\dexopt_child_wait_test.cc /Fe:dexopt-child-wait.exe user32.lib advapi32.lib ole32.lib
+        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc compat\framework\services_dexopt_watch.cc tests\native\dexopt_child_wait_test.cc /Fe:dexopt-child-wait.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
       - name: Verify real compiler cancellation, reaping, CPU and memory budgets
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -172,6 +172,13 @@ jobs:
           cl /nologo /std:c++20 /EHsc /D_WIN32_WINNT=0x0A00 /DNOMINMAX /Icompat\usb_storage tests\native\usb_block_channel_test.cc compat\usb_storage\block_channel.cc compat\usb_storage\block_broker_client.cc /Fe:usb_block_channel_test.exe bcrypt.lib advapi32.lib
           if errorlevel 1 exit /b 1
           usb_block_channel_test.exe
+      - name: Real program break reservation, growth, shrink and concurrent allocations
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\program_break_test.cc /Fe:program_break_test.exe
+          if errorlevel 1 exit /b 1
+          program_break_test.exe
       - name: Protected Binder bootstrap and data-pipe identity
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -836,6 +843,7 @@ jobs:
           cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
+          cp out/gesher_usb_block_owner_module_test.dll dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
@@ -1131,7 +1139,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle, boot-image, media, arm64]
+    needs: [build, framework, graphics, angle, boot-image, media, arm64, exec]
     runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
@@ -1154,6 +1162,15 @@ jobs:
             .github/workflows
             tools/fonts
             tools/binder
+            compat/bionic
+
+      - name: Verify the optional filesystem tool and ABI test suppliers
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name filesystem-tools --producer "exec / exec" --destination fs-tools-input
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/ci/artifact_receipt.py --name exec --producer "exec / exec" --destination exec-input
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify PowerShell UI translations
         shell: powershell
@@ -1231,6 +1248,7 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           $version = $env:GESHER_PACKAGE_VERSION
           $compilerArgs = @('/Qp', "/DBuildDir=$PWD\dist", "/DAppVersion=$version",
+                            "/DFilesystemToolsDir=$PWD\fs-tools-input\filesystem-tools",
                             "/O$PWD\usb-authority-installer", 'tools\package\gesher-usb-broker.iss')
           & $iscc @compilerArgs
           if ($LASTEXITCODE -ne 0) {
@@ -1244,7 +1262,20 @@ jobs:
           "$checksum  $($setup.Name)" | Set-Content -LiteralPath 'usb-authority-installer\SHA256SUMS.txt' -Encoding ascii
           & .\dist\binder_protected_admission_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          tests/windows/shell/UsbAuthorityInstaller.ps1 -Setup $setup.FullName -BrokerImage 'dist\gesher-usb-authority.exe'
+          foreach ($owner in 'exe', 'dll') {
+            & .\dist\gesher_usb_block_owner_test.exe "$PWD\dist\gesher_usb_block_owner_module_test.dll" $owner
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & .\dist\gesher-exec.exe --elf "$PWD\exec-input\locale-info-x86_64" locale-info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\dist\usb_filesystem_tools_test.exe --tools "$PWD\fs-tools-input\filesystem-tools\bin"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $apk = Join-Path $env:RUNNER_TEMP 'cardwake-otg-root-v1.1.1-release.apk'
+          Invoke-WebRequest -Uri 'https://github.com/jcool-j/cardwake-otg-root/releases/download/v1.1.1/cardwake-otg-root-v1.1.1-release.apk' -OutFile $apk
+          if ((Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'd0afc9864ab0dd1305537cc0f7e2e8e127c11a31cecb012a1e18e210eaf2b313') {
+            throw 'Original CardWake APK digest mismatch'
+          }
+          tests/windows/shell/UsbAuthorityInstaller.ps1 -Setup $setup.FullName -BrokerImage 'dist\gesher-usb-authority.exe' -CardWakeApk $apk
 
       - name: Upload optional USB authority installer preview
         uses: actions/upload-artifact@v4

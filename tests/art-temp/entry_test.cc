@@ -32,6 +32,9 @@ int crt_writes;
 int vm_calls;
 std::vector<std::string> vm_arguments;
 std::vector<std::string> protected_routing;
+std::vector<std::string> runtime_routing;
+int resource_calls;
+uint32_t resource_error;
 
 void Require(bool value, const char* message) {
   ++checks;
@@ -49,6 +52,9 @@ void Reset() {
   crt_failure = temp_reads = attribute_reads = crt_writes = vm_calls = 0;
   vm_arguments.clear();
   protected_routing.clear();
+  runtime_routing.clear();
+  resource_calls = 0;
+  resource_error = 0;
 }
 
 int Run(std::vector<std::wstring> arguments = {L"dalvikvm.exe", L"Main"}) {
@@ -136,6 +142,18 @@ bool ConfigureProtectedBinderStartup(std::string_view locator, std::string_view 
   protected_routing = {std::string(locator), std::string(authority_pid),
                        std::string(desktop_session)};
   return locator == "private-name" && authority_pid == "17" && desktop_session == "4";
+}
+uint32_t InitializeProtectedProcessResources() {
+  ++resource_calls;
+  Require(vm_calls == 0 && temp_reads == 0, "trusted resources precede temporary state and ART");
+  return resource_error;
+}
+}
+namespace gesher::usb_storage {
+bool ConfigureProtectedRuntimeStartup(std::string_view locator, std::string_view authority_pid,
+                                     std::string_view desktop_session) {
+  runtime_routing = {std::string(locator), std::string(authority_pid), std::string(desktop_session)};
+  return locator == "runtime-name" && authority_pid == "17" && desktop_session == "4";
 }
 }
 int gesher_dalvikvm_main(int argc, char** argv) {
@@ -227,6 +245,36 @@ int main() {
     Require(Run({L"dalvikvm.exe", flag, L"private-name", L"bogus", L"4", L"Main"}) ==
                 EXIT_FAILURE && vm_calls == 0 && temp_reads == 0,
             "failed protected routing must not invoke ART in the ordinary mode");
+    const wchar_t* runtime = L"--gesher-protected-runtime";
+    for (bool runtimeFirst : {false, true}) {
+      Reset();
+      std::vector<std::wstring> both = {L"dalvikvm.exe"};
+      const std::vector<std::wstring> binderArgs = {flag, L"private-name", L"17", L"4"};
+      const std::vector<std::wstring> runtimeArgs = {runtime, L"runtime-name", L"17", L"4"};
+      const auto& first = runtimeFirst ? runtimeArgs : binderArgs;
+      const auto& second = runtimeFirst ? binderArgs : runtimeArgs;
+      both.insert(both.end(), first.begin(), first.end());
+      both.insert(both.end(), second.begin(), second.end());
+      both.push_back(L"Main");
+      both.push_back(runtime);
+      Require(Run(both) == 77 && vm_calls == 1 && protected_routing.size() == 3 &&
+                  runtime_routing.size() == 3 && resource_calls == 1 && vm_arguments == std::vector<std::string>(
+                      {"dalvikvm.exe", "Main", "--gesher-protected-runtime"}),
+              "both protected native routes must reach their real owner before ART");
+    }
+    Reset();
+    resource_error = 5;
+    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4", runtime,
+                 L"runtime-name", L"17", L"4", L"Main"}) == EXIT_FAILURE &&
+                resource_calls == 1 && vm_calls == 0 && temp_reads == 0,
+            "failed authority initialization cannot enter ART or create ambient temporary state");
+    Reset();
+    Require(Run({L"dalvikvm.exe", runtime, L"runtime-name", L"17", L"4", L"Main"}) ==
+                EXIT_FAILURE && vm_calls == 0, "protected runtime cannot use ordinary Binder");
+    Reset();
+    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4",
+                 flag, L"private-name", L"17", L"4", L"Main"}) == EXIT_FAILURE && vm_calls == 0,
+            "duplicate routing must not silently replace a native security decision");
 #endif
     std::printf("TempDirectory entry host tests passed: %d checks; Windows APIs modeled\n", checks);
     return 0;

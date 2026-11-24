@@ -161,6 +161,14 @@ HandleP Temporary(const std::string& text);
 
 int StartSubshell(const Shell& sh, const std::string& src, const Io& io,
                   PROCESS_INFORMATION* process) {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    // The protected launcher accepts only typed stdio resources. Preserve the
+    // actual shell state as bounded command text instead of transferring a
+    // general fd 63 capability. Oversized source gets the normal argument-size
+    // failure from the launch API; ordinary execution retains its fd path.
+    return Start(sh, {"sh", "--gesher-script-text", SubshellSource(sh, src),
+        std::to_string(sh.shell_pid), sh.pos.empty() ? "sh" : sh.pos[0]}, io, process);
+  }
   HandleP script = Temporary(SubshellSource(sh, src));
   if (!script) {
     ShErr(sh, io, "cannot create subshell input");

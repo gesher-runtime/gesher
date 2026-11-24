@@ -30,6 +30,7 @@
 #include "descriptor_resources.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "ofd_internal.h"
 #include "usb_block_internal.h"
 #include "native_fence_internal.h"
 #include "revocable_internal.h"
@@ -432,6 +433,9 @@ RetiredDescriptor::~RetiredDescriptor() {
   errno = saved;
 }
 int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count) {
+  if (snapshot && snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    return errno = EISDIR, -1;
+  }
   int block_result;
   if (usb_block::Io(snapshot, bytes, count, false, -1, &block_result)) return block_result;
   FileOperationLease operation(snapshot);
@@ -450,6 +454,9 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
   return TransferFileHandle(snapshot->handle, bytes, count, false, false);
 }
 int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count) {
+  if (snapshot && snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    return errno = EISDIR, -1;
+  }
   int block_result;
   if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, -1, &block_result)) return block_result;
   FileOperationLease operation(snapshot);

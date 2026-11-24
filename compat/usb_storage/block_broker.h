@@ -17,6 +17,8 @@ enum class BlockOperation : uint32_t {
   kDescribe = 1,
   kRead = 2,
   kWrite = 3,
+  kFlush = 4,
+  kSetReadOnly = 5,
 };
 
 struct BlockRequest {
@@ -38,6 +40,7 @@ static_assert(sizeof(BlockReply) == 8);
 // this fixed-size record, without NUL terminators.
 constexpr uint32_t kBlockWritable = 1;
 constexpr uint32_t kBlockRemovable = 2;
+constexpr uint32_t kBlockWriteConsent = 4;
 constexpr uint32_t kMaxBlockDescriptionString = 1024;
 struct BlockDescription {
   uint64_t bytes;

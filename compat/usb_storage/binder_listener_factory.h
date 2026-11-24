@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace gesher::usb_storage {
 
@@ -35,6 +36,12 @@ class BinderListenerFactory final {
   // try to close this value remotely: the broker might already have reused it.
   DWORD Take(HANDLE* broker_listener);
 
+  // The authority adds an exact enrolled package SID before registering and
+  // resuming its app. All instances share the guard's protected pipe DACL.
+  // This grants connection access only; binderd still admits exact retained
+  // process objects and their Android identity independently.
+  DWORD AllowAppContainer(PSID package);
+
   // Stop vending listeners, and stop the exact process to retire all listeners
   // already offered. This is the lifetime of Binder, independent of a USB grant.
   DWORD Revoke();
@@ -56,6 +63,8 @@ class BinderListenerFactory final {
   HANDLE broker_ = nullptr;
   HANDLE guard_ = INVALID_HANDLE_VALUE;
   HANDLE guard_client_ = INVALID_HANDLE_VALUE;
+  std::vector<BYTE> owner_sid_;
+  std::vector<std::vector<BYTE>> package_sids_;
   std::mutex mutex_;
   bool published_ = false;
   bool revoked_ = false;

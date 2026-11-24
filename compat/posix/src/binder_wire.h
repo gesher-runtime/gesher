@@ -41,7 +41,7 @@ namespace binder_wire {
 
 constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
 // Both endpoints must change together; an old endpoint rejects the hello.
-constexpr uint32_t kVersion = 4;
+constexpr uint32_t kVersion = 5;
 
 // One entry for every FD object, in object-offset order. The file HANDLE still
 // occupies pad_binder on the wire; this side table carries the exact shared
@@ -62,6 +62,10 @@ constexpr uint32_t kSocketFileDescription = 4;
 // (or a rights entry's metadata) is exactly kCompletedNativeFenceMetadata.
 // The receiver revalidates the event itself before adopting it.
 constexpr uint32_t kNativeFenceFileDescription = 5;
+// The protected broker admits only the exact ApplicationSharedMemory object
+// published by its authority-registered system server. It supplies a kernel
+// read-only file handle, with zero pad_flags and no shared OFD/control mapping.
+constexpr uint32_t kApplicationSharedMemoryDescription = 6;
 constexpr uint32_t kCompletedNativeFenceMetadata = 0x4;
 // One transaction cannot install more than the receiver's UCRT descriptor
 // ceiling. Bound metadata and native pin allocations before capturing handles.
@@ -109,6 +113,11 @@ enum Op : uint32_t {
   // Takes a group back out of its queue (its sendmsg failed) and closes it.
   // -> {token}; <- {status}: -ENOENT if a receiver already took it.
   kRightsCancel = 11,
+
+  // Protected endpoint only. The authenticated system server publishes its
+  // actual framework region. No caller-supplied PID/UID participates.
+  // -> {magic, version, source_handle (u64), exact_size (u64)}; <- {Win32 status}
+  kPublishApplicationSharedMemory = 12,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

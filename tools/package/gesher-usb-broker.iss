@@ -4,6 +4,9 @@
 #ifndef BuildDir
   #error Pass /DBuildDir=<verified build output directory>
 #endif
+#ifndef FilesystemToolsDir
+  #error Pass /DFilesystemToolsDir=<verified optional filesystem-tools directory>
+#endif
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif

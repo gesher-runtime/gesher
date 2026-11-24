@@ -22,7 +22,9 @@
 #include <string>
 
 #include "internal.h"
+#include "ofd_internal.h"
 #include "usb_block_internal.h"
+#include "../../usb_storage/protected_runtime_client.h"
 #include "revocable_internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
@@ -45,7 +47,17 @@ uid_t AppUid() {
   }();
   return uid;
 }
-#define kAppUid AppUid()
+uid_t CurrentUid() {
+  uint32_t uid = 0, gid = 0;
+  return gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid)
+      ? static_cast<uid_t>(uid) : AppUid();
+}
+gid_t CurrentGid() {
+  uint32_t uid = 0, gid = 0;
+  return gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid)
+      ? static_cast<gid_t>(gid) : AppUid();
+}
+#define kAppUid CurrentUid()
 
 std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
 
@@ -262,7 +274,7 @@ long PathconfValue(int name) {
 // chown as a process without CAP_CHOWN: only "no change" is allowed.
 int CheckOwner(uid_t owner, gid_t group) {
   bool same_owner = owner == static_cast<uid_t>(-1) || owner == kAppUid;
-  bool same_group = group == static_cast<gid_t>(-1) || group == kAppUid;
+  bool same_group = group == static_cast<gid_t>(-1) || group == CurrentGid();
   return same_owner && same_group ? 0 : (errno = EPERM, -1);
 }
 
@@ -296,7 +308,7 @@ int fchown(int fd, uid_t owner, gid_t group) {
 // The ids cannot change, but setting them to what they are succeeds.
 int setuid(uid_t uid) { return uid == kAppUid ? 0 : (errno = EPERM, -1); }
 int seteuid(uid_t uid) { return setuid(uid); }
-int setgid(gid_t gid) { return gid == kAppUid ? 0 : (errno = EPERM, -1); }
+int setgid(gid_t gid) { return gid == CurrentGid() ? 0 : (errno = EPERM, -1); }
 int setegid(gid_t gid) { return setgid(gid); }
 
 int setreuid(uid_t ruid, uid_t euid) {
@@ -317,8 +329,8 @@ int gesher_gethostname(char* name, size_t len) {
 }
 
 int setregid(gid_t rgid, gid_t egid) {
-  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == kAppUid) &&
-            (egid == static_cast<gid_t>(-1) || egid == kAppUid);
+  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == CurrentGid()) &&
+            (egid == static_cast<gid_t>(-1) || egid == CurrentGid());
   return ok ? 0 : (errno = EPERM, -1);
 }
 
@@ -326,8 +338,8 @@ int getpagesize(void) { return static_cast<int>(sysconf(_SC_PAGESIZE)); }
 
 uid_t getuid(void) { return kAppUid; }
 uid_t geteuid(void) { return kAppUid; }
-gid_t getgid(void) { return kAppUid; }
-gid_t getegid(void) { return kAppUid; }
+gid_t getgid(void) { return CurrentGid(); }
+gid_t getegid(void) { return CurrentGid(); }
 pid_t gettid(void) { return static_cast<pid_t>(GetCurrentThreadId()); }
 pid_t setsid(void) { return static_cast<pid_t>(GetCurrentProcessId()); }
 
@@ -578,6 +590,7 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
   if (!snapshot) return -1;
   int block_result;
   if (gesher::usb_block::Io(snapshot, buf, want, writing, offset, &block_result)) return block_result;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE file = snapshot->handle;
@@ -665,6 +678,7 @@ off_t lseek(int fd, off_t offset, int whence) {
   if (!snapshot) return -1;
   int64_t block_result;
   if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = gesher::FileDescriptionIoFlags(snapshot);
