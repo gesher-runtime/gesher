@@ -600,13 +600,24 @@ public final class CredentialManagerService extends ICredentialManager.Default {
         private final IBinder mClient;
         private boolean mCanceled;
         private boolean mComplete;
+        private boolean mLinked;
         private PasskeyBackend.Cancellation mCancellation;
 
         Session(ICancellationSignal transport, IBinder client) {
             mClient = client;
             CancellationSignal.fromTransport(transport).setOnCancelListener(this::cancel);
             try {
-                if (client != null) client.linkToDeath(this, 0);
+                if (client != null) {
+                    client.linkToDeath(this, 0);
+                    boolean ended;
+                    synchronized (this) {
+                        ended = mCanceled || mComplete;
+                        mLinked = !ended;
+                    }
+                    // A death/cancel may race linkToDeath. If it already ended the session,
+                    // the newly registered link is ours to remove here.
+                    if (ended) client.unlinkToDeath(this, 0);
+                }
             } catch (RemoteException alreadyDead) {
                 cancel();
             }
@@ -625,8 +636,19 @@ public final class CredentialManagerService extends ICredentialManager.Default {
                 if (mCanceled || mComplete) return;
                 mCanceled = true;
                 cancellation = mCancellation;
+                mCancellation = null;
             }
+            unlink();
             if (cancellation != null) cancellation.cancel();
+        }
+
+        /** Releases a registered death link exactly once, on every terminal path. */
+        private void unlink() {
+            synchronized (this) {
+                if (!mLinked) return;
+                mLinked = false;
+            }
+            mClient.unlinkToDeath(this, 0);
         }
 
         /** Whether the ceremony may start; false once the application canceled. */
@@ -642,7 +664,7 @@ public final class CredentialManagerService extends ICredentialManager.Default {
                 mComplete = true;
                 mCancellation = null;
             }
-            if (mClient != null) mClient.unlinkToDeath(this, 0);
+            unlink();
             try {
                 reply.send();
             } catch (RemoteException gone) {
