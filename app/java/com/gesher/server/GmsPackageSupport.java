@@ -172,7 +172,7 @@ public final class GmsPackageSupport {
         // native path (new File(nativeLibraryDir)), and without one the package
         // context's getClassLoader throws a NullPointerException (Gmail's
         // ProviderInstaller: "Failed to install provider").
-        AppDataStorage.describeInstalled(ai);
+        ApklessDataDirs.describe(ai);
         return ai;
     }
 
