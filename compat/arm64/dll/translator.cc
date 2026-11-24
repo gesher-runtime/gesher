@@ -1924,7 +1924,8 @@ void PrintRegion(const char* label, uint64_t addr) {
   if (InGuestCode(addr)) {
     owner = "guest code or a guest trampoline page (the host never runs these)";
   } else if (mbi.Type == MEM_PRIVATE && mbi.AllocationProtect == PAGE_EXECUTE_READWRITE &&
-             (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)) != 0) {
+             (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)) != 0 &&
+             (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0) {
     // A host_entry stub (MakeHostEntry): 24-byte slots from the start of a
     // 64 KiB PAGE_EXECUTE_READWRITE allocation, each "mov r10, fn; mov rax,
     // gesher_guest_entry_shim; jmp rax".

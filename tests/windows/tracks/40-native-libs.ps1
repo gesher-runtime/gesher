@@ -404,10 +404,12 @@ foreach ($device in 'default', 'warp') {
     } finally {
       Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
     }
-  } @('egl_context_destroy_test: ok: glUseProgram then draw: thread A''s draw after X''s destruction has its own program''s color',
+  } (@('egl_context_destroy_test: ok: glUseProgram then draw: thread A''s draw after X''s destruction has its own program''s color',
       'egl_context_destroy_test: ok: draw with the same program: thread A''s draw after X''s destruction has its own program''s color',
       'egl_context_destroy_test: ok: destroying thread has another context current: thread B''s context C still draws',
-      'egl_context_destroy_test all passed')
+      'egl_context_destroy_test all passed') +
+    # The WARP run must really be on WARP, not silently on the default adapter.
+    @(if ($device -eq 'warp') { 'gesher EGL: default display: ANGLE, Direct3D 11 WARP device' }))
 }
 
 # The GPU kept from sleeping between the frames Gesher reads back (child
