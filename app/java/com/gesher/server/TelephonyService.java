@@ -222,8 +222,6 @@ public final class TelephonyService {
         private int mSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         private int mFailures;
         private long mReadAt, mGoodAt, mDemandAt;
-        // Successful reads so far, so a caller can tell that a read it asked for succeeded.
-        private long mGoodReads;
         private boolean mWatched, mPolling;
         // A read still blocked in WwanSvc after its timeout (with mReadLock); no second
         // read is started while it lasts.
@@ -315,7 +313,7 @@ public final class TelephonyService {
                 mDemandAt = mClock.millis();
             }
             ensurePolling();
-            if (read(FRESH_MILLIS)) notifyListeners();
+            if (read(FRESH_MILLIS, null)) notifyListeners();
         }
 
         private void ensurePolling() {
@@ -361,30 +359,26 @@ public final class TelephonyService {
         /** One bounded read; listeners hear about changes. Returns whether anything changed. */
         /**
          * A read for a decision that must use Windows' current state (the data switch
-         * setters): true only when Windows was read successfully now (or by a read that
-         * completed meanwhile). A failed, timed-out or still-blocked read answers false, as
+         * setters): true only when this call's own read of Windows succeeded. A failed, timed-out or still-blocked read answers false, as
          * does an exception from a change listener or the property sink, which is logged;
          * the kept reading of a failed read is not current. Bounded like every read.
          */
         boolean readNow() {
             if (!mPresent) return false;
-            long before;
-            synchronized (mLock) {
-                before = mGoodReads;
-            }
+            // This call's own read: a read already in flight (holding mReadLock) finishes
+            // first and does not count, whatever it read.
+            boolean[] good = {false};
             try {
-                refresh();
+                if (read(-1, good)) notifyListeners();
             } catch (RuntimeException e) {
                 android.util.Log.w(TAG, "cellular: reading the modem failed: " + e);
                 return false;
             }
-            synchronized (mLock) {
-                return mGoodReads != before;
-            }
+            return good[0];
         }
 
         boolean refresh() {
-            boolean changed = read(-1);
+            boolean changed = read(-1, null);
             if (changed) notifyListeners();
             return changed;
         }
@@ -393,7 +387,7 @@ public final class TelephonyService {
          * Reads the modem unless (minAge >= 0) the reading is younger than minAge, which
          * another caller may have just refreshed. Returns whether the model changed.
          */
-        private boolean read(long minAge) {
+        private boolean read(long minAge, boolean[] good) {
             if (!mPresent) return false;
             synchronized (mReadLock) {
                 if (minAge >= 0) {
@@ -404,6 +398,7 @@ public final class TelephonyService {
                 WindowsCellular.Snapshot snapshot = WindowsCellular.parse(fetch());
                 WindowsCellular.Modem next = null;
                 boolean readable = snapshot != null && !"error".equals(snapshot.status);
+                if (good != null) good[0] = readable;
                 if (readable) {
                     for (WindowsCellular.Modem modem : snapshot.modems) {
                         if (modem.interfaceId.equals(mInterfaceId)) next = modem;
@@ -419,7 +414,6 @@ public final class TelephonyService {
                     } else {
                         mFailures = 0;
                         mGoodAt = now;
-                        mGoodReads++;
                     }
                     if (Objects.equals(mModem == null ? null : mModem.source,
                             next == null ? null : next.source)) {

@@ -217,6 +217,29 @@ public final class TelephonyHost {
         }
     }
 
+    /** Windows as the mobile-data command reads it: these snapshots in turn, the last kept. */
+    static final class Sequence implements WindowsCellular.Source {
+        final List<String> texts = new ArrayList<>();
+        Sequence(ModemSpec... states) {
+            for (ModemSpec spec : states) {
+                Source one = new Source();
+                one.set(spec);
+                texts.add(one.text);
+            }
+        }
+        @Override public synchronized String snapshot() {
+            return texts.size() > 1 ? texts.remove(0) : texts.get(0);
+        }
+    }
+
+    static ModemSpec windows(String mode, int activation, int register) {
+        ModemSpec spec = new ModemSpec();
+        spec.mode = mode;
+        spec.activation = activation;
+        spec.register = register;
+        return spec;
+    }
+
     static final class Properties implements TelephonyService.PropertySink {
         final List<Integer> simStates = new ArrayList<>();
         @Override public void publish(WindowsCellular.Modem modem, int simState) { simStates.add(simState); }
@@ -1039,6 +1062,11 @@ public final class TelephonyHost {
             t.phone.setDataEnabledForReason(1, user, false, SWITCHER.name);
             t.phone.setDataRoamingEnabled(1, false);
             check(source.writes.size() == writes, "An unknown mode is not written (" + unknown + ")");
+            java.io.ByteArrayOutputStream unknownBytes = new java.io.ByteArrayOutputStream();
+            equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, source,
+                    new java.io.PrintStream(unknownBytes, true, StandardCharsets.UTF_8)), 1,
+                    "The command does not confirm an unknown mode (" + unknown + ")");
+            check(unknownBytes.toString(StandardCharsets.UTF_8).contains("could not be read"), "and says so");
             check(t.phone.isUserDataEnabled(1) && t.phone.isDataRoamingEnabled(1)
                     && "1".equals(rows.get(mobileData)) && "1".equals(rows.get(dataRoaming)),
                     "Unknown mode: nothing changes");
@@ -1185,6 +1213,39 @@ public final class TelephonyHost {
                 "and says so, without a write");
         blocked.hang.countDown();
         MobileDataCommands.sReadTimeoutMillis = readTimeout;
+
+        // The command confirms from Windows itself, not from the phone service's answers:
+        // Windows (as the command reads it) still auto-home after "roaming on" fails; a
+        // connection that stays deactivating is not down; and "was data on" comes from
+        // Windows before the change, so a kept answer cannot skip the disconnect check.
+        int steps = MobileDataCommands.sWaitSteps;
+        MobileDataCommands.sWaitSteps = 0;
+        java.io.ByteArrayOutputStream cliBytes = new java.io.ByteArrayOutputStream();
+        java.io.PrintStream cliOut = new java.io.PrintStream(cliBytes, true, StandardCharsets.UTF_8);
+        int home = WindowsCellular.REGISTER_HOME;
+        equal(MobileDataCommands.run(List.of("roaming", "on"), t.phone, t.subscriptions,
+                new Sequence(windows("auto-home", 1, home)), cliOut), 1,
+                "Roaming on is not confirmed while Windows shows auto-home");
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions,
+                new Sequence(windows("auto", 1, home), windows("manual", WindowsCellular.ACTIVATION_DEACTIVATING, home)),
+                cliOut), 1, "A connection still deactivating is not down");
+        check(cliBytes.toString(StandardCharsets.UTF_8).contains("not confirmed (the connection is still up"),
+                "and the message does not claim a refusal");
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions,
+                new Sequence(windows("manual", 1, home)), cliOut), 0,
+                "Already off in Windows: a connection made by hand is left alone");
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions,
+                new Sequence(windows("auto", 1, home), windows("manual", 1, home)), cliOut), 1,
+                "On in Windows before (whatever the service answers): the disconnect is checked");
+        ModemSpec otherSim = windows("manual", 3, home);
+        otherSim.iccid = "8997201000000000009F";
+        equal(MobileDataCommands.run(List.of("off"), t.phone, t.subscriptions, new Sequence(otherSim), cliOut), 1,
+                "Only the interface with the subscription's SIM is checked");
+        MobileDataCommands.sWaitSteps = steps;
+        spec.mode = "auto";
+        spec.activation = WindowsCellular.ACTIVATION_ACTIVATED;
+        source.set(spec);
+        cellular.refresh();
 
         // A direct Settings.Global write does not change Windows and is replaced by its value.
         rows.put(mobileData, "0");

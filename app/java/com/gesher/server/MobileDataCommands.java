@@ -49,9 +49,8 @@ public final class MobileDataCommands {
         }
         if (phone == null || subscriptions == null) throw new IllegalStateException("Telephony is unavailable");
         int subId = subscriptions.getDefaultDataSubId();
-        boolean user;
         try {
-            user = phone.isDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER);
+            phone.isDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER);
         } catch (IllegalStateException noModem) {
             // The phone service's answer without a modem (TelephonyManager's null service).
             out.println("No cellular modem: there are no mobile data settings on this device");
@@ -63,13 +62,24 @@ public final class MobileDataCommands {
         }
         boolean ok = true;
         if (value != null) {
+            // The SIM's modem, as the phone service sees it: the interface whose SIM has the
+            // active subscription's ICCID (the shell may read identifiers).
+            String iccId = null;
+            android.telephony.SubscriptionInfo info =
+                    subscriptions.getActiveSubscriptionInfo(subId, null, null);
+            if (info != null) iccId = info.getIccId();
+            // Whether data was on, from Windows itself (the service may answer from a kept
+            // reading); unknown when Windows cannot be read, and then the disconnect is checked.
+            WindowsCellular.Modem before = read(windows, iccId);
+            boolean wasOn = before == null || !before.knownMode()
+                    || !WindowsCellular.MODE_MANUAL.equals(before.connectionMode);
             if (roaming) {
                 phone.setDataRoamingEnabled(subId, value);
             } else {
                 phone.setDataEnabledForReason(subId, TelephonyManager.DATA_ENABLED_REASON_USER, value,
                         "com.android.shell");
             }
-            ok = confirm(phone, subId, windows, roaming, value, user, out);
+            ok = confirm(phone, subId, windows, iccId, roaming, value, wasOn, out);
         }
         out.println("Mobile data: " + (phone.isDataEnabledForReason(subId,
                 TelephonyManager.DATA_ENABLED_REASON_USER) ? "on" : "off"));
@@ -86,9 +96,9 @@ public final class MobileDataCommands {
      * switch changes nothing); roaming is auto or auto-home while data is on, and while it
      * is off (manual, where Windows keeps no roaming choice) the phone service's answer.
      */
-    private static boolean confirm(ITelephony phone, int subId, WindowsCellular.Source windows,
+    private static boolean confirm(ITelephony phone, int subId, WindowsCellular.Source windows, String iccId,
             boolean roaming, boolean value, boolean wasOn, PrintStream out) throws RemoteException {
-        WindowsCellular.Modem modem = read(windows);
+        WindowsCellular.Modem modem = read(windows, iccId);
         if (modem == null || !modem.knownMode()) {
             out.println("Windows' cellular settings could not be read, so the change is not confirmed"
                     + " (Windows may or may not have taken it)");
@@ -107,9 +117,9 @@ public final class MobileDataCommands {
                     + " may still apply); Windows' setting is as shown below");
             return false;
         }
-        if (!roaming && !value && wasOn && !disconnected(windows, modem)) {
-            out.println("Windows stored mobile data off but its cellular connection is still up:"
-                    + " Windows refused to disconnect it");
+        if (!roaming && !value && wasOn && !disconnected(windows, iccId, modem)) {
+            out.println("Windows stored mobile data off, but the disconnect is not confirmed (the"
+                    + " connection is still up, or Windows could not be read, after 10 s)");
             return false;
         }
         return true;
@@ -119,7 +129,8 @@ public final class MobileDataCommands {
      * Waits up to ten seconds for Windows' connection to go down: the disconnect completes
      * asynchronously in WwanSvc. Each step reads Windows afresh.
      */
-    private static boolean disconnected(WindowsCellular.Source windows, WindowsCellular.Modem modem) {
+    private static boolean disconnected(WindowsCellular.Source windows, String iccId,
+            WindowsCellular.Modem modem) {
         for (int i = 0; ; i++) {
             if (modem != null && !up(modem)) return true;
             if (i >= sWaitSteps) return false;
@@ -129,7 +140,7 @@ public final class MobileDataCommands {
                 Thread.currentThread().interrupt();
                 return false;
             }
-            modem = read(windows);
+            modem = read(windows, iccId);
         }
     }
 
@@ -139,8 +150,11 @@ public final class MobileDataCommands {
                 || modem.activation == WindowsCellular.ACTIVATION_DEACTIVATING;
     }
 
-    /** One bounded read of Windows' modem (phone 0, the first interface), or null. */
-    private static WindowsCellular.Modem read(WindowsCellular.Source windows) {
+    /**
+     * One bounded read of Windows' modem holding the SIM with this ICCID (the phone service's
+     * modem), or null: also when no interface has that SIM.
+     */
+    private static WindowsCellular.Modem read(WindowsCellular.Source windows, String iccId) {
         AtomicReference<String> raw = new AtomicReference<>();
         Thread reader = new Thread(() -> raw.set(windows.snapshot()), "mobile-data-read");
         reader.setDaemon(true);
@@ -152,7 +166,11 @@ public final class MobileDataCommands {
         }
         if (reader.isAlive()) return null;
         WindowsCellular.Snapshot snapshot = WindowsCellular.parse(raw.get());
-        return snapshot == null || !"ok".equals(snapshot.status) ? null : snapshot.primary();
+        if (snapshot == null || !"ok".equals(snapshot.status) || iccId == null) return null;
+        for (WindowsCellular.Modem modem : snapshot.modems) {
+            if (iccId.equals(WindowsCellular.iccId(modem))) return modem;
+        }
+        return null;
     }
 
     /** One-second steps of the disconnect wait, and the bound of each read; tests shorten them. */

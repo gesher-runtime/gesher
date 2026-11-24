@@ -467,6 +467,9 @@ int main() {
        "auto", "A colon in text is not a prefixed element"},
       {{u"<MBNProfile><Name>p</Name><IsDefault>true</IsDefault><SubscriberID>425010123456789</SubscriberID>"
         u"<:ConnectionMode>auto</:ConnectionMode></MBNProfile>"}, "-", "An empty prefix is malformed"},
+      {{u"<MBNProfile><Name>p</Name><IsDefault>true</IsDefault><SubscriberID>425010123456789</SubscriberID>"
+        u"<ns:ConnectionMode a=\"1\">auto</ns:ConnectionMode></MBNProfile>"}, "-",
+       "A prefixed element with attributes is unreadable"},
       {{u"<v1:MBNProfile xmlns:v1=\"x\"><v1:Name>p</v1:Name><v1:IsDefault>true</v1:IsDefault>"
         u"<v1:SubscriberID>425010123456789</v1:SubscriberID><v1:ConnectionMode>auto</v1:ConnectionMode>"
         u"</v1:MBNProfile>"}, "-", "Prefixed elements are unreadable, not absent"},

@@ -297,11 +297,14 @@ With a modem:
   `gesher-app mobile-data roaming on|off` (no argument shows both). The command calls the
   `phone` service's setters as the shell, as Settings' mobile network screen does, says
   that it changes Windows' cellular connection, and refuses without a modem or without an
-  active SIM subscription. As the setters return nothing, the command then reads Windows
-  itself (each read bounded to five seconds) and exits with an error when Windows cannot be
-  read (the change is then unconfirmed), when Windows does not show the requested setting
-  (refused, or not answered in time, in which case a late change may still apply), and
-  when, after turning data off, Windows' connection is still up ten seconds later.
+  active SIM subscription. As the setters return nothing, the command reads Windows itself
+  (each read bounded to five seconds), on the interface whose SIM has the active
+  subscription's ICCID, as the phone service's modem: before the change, to know whether
+  data was on, and after it. It exits with an error when Windows cannot be read (the
+  change is then unconfirmed), when Windows does not show the requested setting (refused,
+  or not answered in time, in which case a late change may still apply), and when, after
+  turning data on to off, the disconnect is not confirmed within ten seconds (the
+  connection still up, or Windows unreadable).
 
 Not validated on hardware: no physical modem was available. Whether Windows' Settings >
 Cellular "Let Windows keep me connected" and "Roaming options" are this same profile
