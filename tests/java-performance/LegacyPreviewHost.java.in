@@ -65,8 +65,6 @@ public final class LegacyPreviewHost {
             final String name = "host";
             final boolean autofocus = false;
         }
-        /** The session's PC-camera/selected-image choice (CameraImageFallback); unused here. */
-        static final class Choice {}
         static final class Capture {
             final int width, height, frames;
             final Session session;
@@ -87,6 +85,10 @@ public final class LegacyPreviewHost {
                 return 0;
             }
         }
+    }
+    /** The session's camera-or-image answer (the image-picker setting); unused here. */
+    private static final class CameraImageSource {
+        static final class Choice {}
     }
     private static final class CameraAutoFocus {
         interface Lens {}

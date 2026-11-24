@@ -236,6 +236,48 @@ Windows without them (no location service, no Media Foundation) gets clean
   TextureView (they get no native window on Gesher today; frames go to any
   surface that has one).
 
+### Choosing an image instead of the camera (Control Center setting)
+
+An alternative operation for a missing PC capability, approved by the maintainer
+and off by default (CONTRIBUTING.md): a PC usually has no rear camera to
+photograph a document such as a cheque. The Control Center's Camera card has
+"Allow choosing an image from the PC instead of taking a photo", stored as
+`image_picker_fallback=true` in `<data>/system/camera.properties`.
+
+- While it is on, the camera list ends with `gesher-image-picker`
+  (`CameraImageSource.DEVICE_ID`), a fixed-focus rear camera whose frames are an
+  image the user selects with the Windows file picker when an app starts using
+  it (offered at 2592x1944, 1920x1080, 1280x960, 1280x720 and 640x480; the image
+  is scaled into the configured size with its shape kept, on black). Opening one
+  of the PC's cameras asks first: "Use the PC camera" or "Choose an image from
+  the PC". Without the setting nothing changes.
+- The question is asked once per client: from an app's open of the camera until
+  it closes it, a new size, a picture (`takePicture` reopens the device) or a
+  restarted preview keep the answer, and a cancelled question fails the client's
+  opens (`ERROR_CANCELLED`) without asking again. Legacy `Camera.open()` and
+  `getParameters()` do not ask (apps probe a camera that way); `startPreview` asks,
+  outside the session's lock, and Camera2 asks when the capture thread first opens
+  the device.
+- The camera service runs in the app's process, which neither reads data/system
+  nor opens the PC's files (and, in an AppContainer, cannot): the system server's
+  `gesher.camera_source` (`CameraSourceService`) answers whether the setting is on
+  and shows the question and the file picker, owned by the app's process. Choosing
+  requires the caller's CAMERA grant, as opening the camera does, and the selected
+  file (at most 64 MiB) reaches the app's process as a read-only descriptor.
+- `MediaStore.ACTION_IMAGE_CAPTURE` keeps going to Gesher Camera, installed at the
+  device's start when there is a camera or the setting is on; its Camera2 open asks
+  the same question, and the photo it takes, written to `EXTRA_OUTPUT` with the
+  requesting app's own URI grant, is the selected image at the camera's largest size.
+- The setting is followed as it changes for the camera list and the question. What
+  the device decides at its start follows it at the next start: `FEATURE_CAMERA`
+  (the selected-image camera is a rear camera) and whether Gesher Camera is
+  installed on a PC without a camera. An app that cached the camera list keeps it.
+- Validation: `tools/test_camera_image_picker.py` runs the production classes
+  (including the Binder round trip and the descriptor) over framework shims, and
+  `tests/windows/shell/CameraImagePickerChecks.ps1` the Control Center's file
+  handling. The Windows question and file picker and an app's live use of the
+  frames are not exercised in CI.
+
 ## Speech recognition
 
 `SpeechRecognizer` delegates to an installed, enabled, exported Android

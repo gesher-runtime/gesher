@@ -148,6 +148,22 @@
       "en": "Cancel",
       "he": "ביטול"
     },
+    "camera_source_title": {
+      "en": "Camera or image from the PC?",
+      "he": "מצלמה או תמונה מהמחשב?"
+    },
+    "camera_source_camera": {
+      "en": "Use the PC camera",
+      "he": "שימוש במצלמת המחשב"
+    },
+    "camera_source_image": {
+      "en": "Choose an image from the PC",
+      "he": "בחירת תמונה מהמחשב"
+    },
+    "camera_pick_title": {
+      "en": "Choose an image for the camera",
+      "he": "בחירת תמונה עבור המצלמה"
+    },
     "no_device": {
       "en": "no Gesher device is running",
       "he": "סביבת גשר אינה פועלת"
@@ -989,19 +1005,19 @@
       "he": "מצלמה"
     },
     "cp_camera_image_picker": {
-      "en": "Allow choosing an image from PC instead of taking a photo",
+      "en": "Allow choosing an image from the PC instead of taking a photo",
       "he": "אפשר בחירת תמונה מהמחשב במקום צילום במצלמה"
     },
     "cp_camera_image_picker_hint": {
-      "en": "Off by default. When enabled, apps requesting a photo or camera stream can use a chosen PC image (or let you choose when a camera is connected). Takes effect immediately.",
-      "he": "כבוי כברירת מחדל. כשהאפשרות מופעלת, יישומים המבקשים צילום או מצלמה יכולים להשתמש בתמונה מהמחשב (או להציג בחירה כשמחוברת מצלמה). נכנס לתוקף מיידית."
+      "en": "Off by default. When on, an app that takes a photo or opens the camera can use an image you choose from the PC instead; when the PC has a camera, you are asked which to use. Applies the next time an app opens the camera. On a PC without a camera, apps find a camera after Gesher restarts.",
+      "he": "כבוי כברירת מחדל. כשהאפשרות פועלת, יישום שמצלם או פותח את המצלמה יכול להשתמש במקום זאת בתמונה שתבחר מהמחשב; כשיש למחשב מצלמה, תישאל במה להשתמש. חל בפעם הבאה שיישום פותח את המצלמה. במחשב ללא מצלמה, היישומים ימצאו מצלמה לאחר הפעלה מחדש של גשר."
     },
     "cp_camera_image_picker_saved": {
-      "en": "Camera image-picker setting saved.",
-      "he": "הגדרת בחירת התמונה למצלמה נשמרה."
+      "en": "Camera setting saved.",
+      "he": "הגדרת המצלמה נשמרה."
     },
     "cp_camera_image_picker_failed": {
-      "en": "Could not save camera setting: {0}",
+      "en": "Could not save the camera setting: {0}",
       "he": "שמירת הגדרת המצלמה נכשלה: {0}"
     }
   }

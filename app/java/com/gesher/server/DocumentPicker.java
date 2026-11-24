@@ -3,9 +3,7 @@ package com.gesher.server;
 
 import android.content.ClipData;
 import android.content.ClipDescription;
-import android.content.ContentResolver;
 import android.content.Intent;
-import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.FileUtils;
 import android.provider.DocumentsContract;
@@ -14,7 +12,6 @@ import android.provider.MediaStore;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
@@ -57,39 +54,12 @@ final class DocumentPicker {
         }
     };
 
-    private static boolean targetsImageCapturePicker(Intent intent) {
-        android.content.ComponentName component = intent.getComponent();
-        if (component != null) {
-            return IMAGE_CAPTURE_PACKAGE.equals(component.getPackageName())
-                    && IMAGE_CAPTURE_ACTIVITY.equals(component.getClassName());
-        }
-        return IMAGE_CAPTURE_PACKAGE.equals(intent.getPackage());
-    }
-
-    /**
-     * The package PackageManager names for the image-capture picker while
-     * {@link CameraImageFallback} is on (it has no APK). An app that resolves the capture
-     * intent and then starts it by that package or component reaches the same picker.
-     */
-    static final String IMAGE_CAPTURE_PACKAGE = "com.gesher.documents";
-    static final String IMAGE_CAPTURE_ACTIVITY = "com.gesher.documents.ImageCapturePicker";
-
-    static boolean isImageCaptureAction(String action) {
-        return MediaStore.ACTION_IMAGE_CAPTURE.equals(action)
-                || MediaStore.ACTION_IMAGE_CAPTURE_SECURE.equals(action);
-    }
-
     static boolean handles(Intent intent) {
-        if (intent == null) return false;
-        if (isImageCaptureAction(intent.getAction()) && targetsImageCapturePicker(intent)) {
-            return CameraImageFallback.enabled();
-        }
-        if (intent.getComponent() != null || intent.getPackage() != null) return false;
+        if (intent == null || intent.getComponent() != null || intent.getPackage() != null) return false;
         String action = intent.getAction();
         return Intent.ACTION_OPEN_DOCUMENT.equals(action) || Intent.ACTION_CREATE_DOCUMENT.equals(action)
                 || Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) || Intent.ACTION_GET_CONTENT.equals(action)
-                || MediaStore.ACTION_PICK_IMAGES.equals(action)
-                || (isImageCaptureAction(action) && CameraImageFallback.enabled());
+                || MediaStore.ACTION_PICK_IMAGES.equals(action);
     }
 
     /**
@@ -100,7 +70,6 @@ final class DocumentPicker {
      */
     static boolean resolves(Intent intent, String resolvedType) {
         if (!handles(intent)) return false;
-        if (isImageCaptureAction(intent.getAction())) return CameraImageFallback.enabled();
         if (!MediaStore.ACTION_PICK_IMAGES.equals(intent.getAction())) return true;
         String type = resolvedType != null ? resolvedType : intent.getType();
         Uri data = intent.getData();
@@ -158,8 +127,7 @@ final class DocumentPicker {
 
     static final class Request {
         final int mode, targetSdk, maxItems;
-        final boolean multiple, getContent, pickImages, imageCapture, localOnly;
-        final Uri extraOutput;
+        final boolean multiple, getContent, pickImages, localOnly;
         final String title, suggestedName, initialDirectory, filter, extension;
         final String mimeType;
         final String[] mimeTypes;
@@ -174,22 +142,13 @@ final class DocumentPicker {
             Intent intent = new Intent(original);
             String action = intent.getAction();
             this.targetSdk = targetSdk;
-            imageCapture = isImageCaptureAction(action);
-            extraOutput = imageCapture ? intent.getParcelableExtra(MediaStore.EXTRA_OUTPUT, Uri.class) : null;
-            pickImages = !imageCapture && MediaStore.ACTION_PICK_IMAGES.equals(action);
-            mode = imageCapture ? OPEN : Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) ? TREE
+            pickImages = MediaStore.ACTION_PICK_IMAGES.equals(action);
+            mode = Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) ? TREE
                     : Intent.ACTION_CREATE_DOCUMENT.equals(action) ? CREATE : OPEN;
-            getContent = !imageCapture && Intent.ACTION_GET_CONTENT.equals(action);
+            getContent = Intent.ACTION_GET_CONTENT.equals(action);
             localOnly = intent.getBooleanExtra(Intent.EXTRA_LOCAL_ONLY, false);
             String explicitType = resolvedType != null ? resolvedType : intent.getType();
-            if (imageCapture) {
-                rejection = null;
-                multiple = false;
-                maxItems = 1;
-                mimeType = "image/*";
-                mimeTypes = new String[]{"image/*"};
-                title = "Select an image";
-            } else if (pickImages) {
+            if (pickImages) {
                 // AOSP getPhotopickerSelectionLimitOrDefault(1): only EXTRA_PICK_IMAGES_MAX
                 // selects more than one item; EXTRA_ALLOW_MULTIPLE is not part of this action.
                 String failure = null;
@@ -329,57 +288,10 @@ final class DocumentPicker {
 
     static Result select(Request request, String[] selected, DocumentsStorageProvider provider,
             Backend backend) throws IOException {
-        return select(request, selected, provider, backend, null);
-    }
-
-    static Result select(Request request, String[] selected, DocumentsStorageProvider provider,
-            Backend backend, ContentResolver resolver) throws IOException {
         if (selected == null || selected.length == 0) return null;
         if ((!request.multiple && selected.length != 1)
                 || (request.maxItems > 0 && selected.length > request.maxItems)) {
             throw new IOException("Selection count does not match the Android request");
-        }
-        if (request.imageCapture) {
-            File file = DocumentsStorageProvider.selectedFile(selected[0]);
-            if (!file.canRead() || file.isDirectory()
-                    || !request.accepts(DocumentsStorageProvider.mimeType(file))) {
-                throw new IOException("Selected file is not a readable image");
-            }
-            requireLocal(request, backend, file);
-            if (blockedAndroidDirectory(file)) {
-                throw new IOException("Android data/obb is not selectable");
-            }
-            if (request.extraOutput != null) {
-                byte[] jpeg = CameraImageFallback.encodeJpeg(file);
-                if (resolver != null) {
-                    try (android.content.ContentProviderClient client =
-                                 resolver.acquireContentProviderClient(request.extraOutput)) {
-                        if (client == null) {
-                            throw new IOException("No provider for EXTRA_OUTPUT: " + request.extraOutput);
-                        }
-                        try (android.content.res.AssetFileDescriptor afd =
-                                     client.openAssetFile(request.extraOutput, "w", null);
-                             OutputStream out = afd == null ? null : afd.createOutputStream()) {
-                            if (out == null) {
-                                throw new IOException("Could not open EXTRA_OUTPUT: " + request.extraOutput);
-                            }
-                            out.write(jpeg);
-                        }
-                    } catch (android.os.RemoteException e) {
-                        throw new IOException("Could not write EXTRA_OUTPUT: " + request.extraOutput, e);
-                    }
-                } else {
-                    // Only through the requesting app's identity: the system server never
-                    // writes an app-supplied path (file://) with its own access.
-                    throw new IOException("No ContentResolver for EXTRA_OUTPUT: " + request.extraOutput);
-                }
-                return new Result(new Intent().setData(request.extraOutput), List.of(), null, null);
-            }
-            Bitmap thumb = CameraImageFallback.decodeThumbnail(file, 160);
-            if (thumb == null) {
-                throw new IOException("Could not decode selected image: " + file);
-            }
-            return new Result(new Intent("inline-data").putExtra("data", thumb), List.of(), null, null);
         }
         File created = null;
         Object createdKey = null;

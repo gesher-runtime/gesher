@@ -695,23 +695,6 @@ public final class PackageManagerService extends IPackageManager.Default {
             result.addAll(BrowserPackageSupport.queryIntentActivities(intent, resolvedType,
                     flags));
         }
-        if (userId == 0 && intent != null && intent.getComponent() == null && intent.getPackage() == null
-                && DocumentPicker.isImageCaptureAction(intent.getAction())
-                && CameraImageFallback.enabled() && result.isEmpty()) {
-            ResolveInfo ri = new ResolveInfo();
-            ri.activityInfo = new ActivityInfo();
-            ri.activityInfo.packageName = DocumentPicker.IMAGE_CAPTURE_PACKAGE;
-            ri.activityInfo.name = DocumentPicker.IMAGE_CAPTURE_ACTIVITY;
-            ri.activityInfo.exported = true;
-            ri.activityInfo.enabled = true;
-            ri.activityInfo.applicationInfo = new ApplicationInfo();
-            ri.activityInfo.applicationInfo.packageName = DocumentPicker.IMAGE_CAPTURE_PACKAGE;
-            ri.activityInfo.applicationInfo.enabled = true;
-            ri.activityInfo.applicationInfo.flags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_INSTALLED;
-            ri.nonLocalizedLabel = "Choose image (Windows file picker)";
-            ri.isDefault = true;
-            result.add(ri);
-        }
         return result;
     }
 
@@ -1210,7 +1193,10 @@ public final class PackageManagerService extends IPackageManager.Default {
             // No runtime natives (a host JVM loading the class): no radio to report.
         }
         try {
-            addCameraFeatures(FEATURES, WindowsCamera.devices());
+            // The selected-image camera counts while the Control Center's setting is on at
+            // the device's start (CameraImageSource): an app may take a "photo" with it.
+            addCameraFeatures(FEATURES, CameraImageSource.withPicker(WindowsCamera.devices(),
+                    CameraImageFallback.enabled()));
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no cameras to report.
         }

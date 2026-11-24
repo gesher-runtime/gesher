@@ -20,7 +20,7 @@ public final class Camera2CaptureDispatchHost {
     private final Callbacks mCallbacks = new Callbacks();
     private WindowsCamera.Capture mCapture;
     private Size mCaptureFor;
-    private final WindowsCamera.Choice mSourceChoice = new WindowsCamera.Choice();
+    private final CameraImageSource.Choice mSourceChoice = new CameraImageSource.Choice();
 
     private Frame next(CaptureTiming timing) { return frames.poll(); }
     private void fail(Frame f, int error) { f.callbacks.terminal = true; event("fail:" + f.frameNumber + ":" + error); }
@@ -127,16 +127,19 @@ public final class Camera2CaptureDispatchHost {
             }
             void close() { event("close:" + width + "x" + height); }
         }
-        static final class Choice {}
-        static Capture open(String device, int width, int height, Choice choice)
-                throws OpenException {
-            return open(device, width, height);
-        }
         static Capture open(String device, int width, int height) throws OpenException {
             opens++; openWidth = width; openHeight = height;
             event("open:" + width + "x" + height);
             if (openFails) { openFails = false; throw new OpenException(); }
             Capture value = new Capture(); value.width = width; value.height = height; return value;
+        }
+    }
+    /** The image-picker setting off: every open is the fixture's camera. */
+    private static final class CameraImageSource {
+        static final class Choice {}
+        static WindowsCamera.Capture open(String device, int width, int height, Choice choice)
+                throws WindowsCamera.OpenException {
+            return WindowsCamera.open(device, width, height);
         }
     }
     private static final class CameraFrames {

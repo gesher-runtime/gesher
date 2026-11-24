@@ -75,28 +75,28 @@ public final class CameraService extends ICameraService.Default {
     private static volatile CameraService sInstance;
 
     private volatile List<WindowsCamera.Device> mDevices;
-    private volatile boolean mLastImageFallback;
     private final Map<String, CameraDeviceUser> mOpen = new HashMap<>();
 
     private CameraService() {
     }
 
-    /** The devices, found on first use and refreshed if {@link CameraImageFallback} changes. */
+    /**
+     * The devices, found on first use (not when the process starts), and last the selected-
+     * image camera while the Control Center's image-picker setting is on
+     * ({@link CameraImageSource}; the setting is followed as it changes).
+     */
     List<WindowsCamera.Device> devices() {
-        boolean fallback = CameraImageFallback.enabled();
         List<WindowsCamera.Device> devices = mDevices;
-        if (devices == null || fallback != mLastImageFallback) {
+        if (devices == null) {
             synchronized (this) {
-                fallback = CameraImageFallback.enabled();
-                if (mDevices == null || fallback != mLastImageFallback) {
+                if (mDevices == null) {
                     mDevices = WindowsCamera.devices();
-                    mLastImageFallback = fallback;
                     log(WindowsCamera.status() + "; camera ids " + ids(mDevices));
                 }
                 devices = mDevices;
             }
         }
-        return devices;
+        return CameraImageSource.withPicker(devices, CameraImageSource.enabled());
     }
 
     static void log(String message) {

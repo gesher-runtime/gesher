@@ -1,271 +1,335 @@
-/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package com.gesher.server;
 
-import android.content.ContentResolver;
-import android.content.Intent;
-import android.graphics.Bitmap;
-import android.net.Uri;
-import android.provider.MediaStore;
+import android.os.ServiceManager;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 /**
- * Host contract tests for {@link CameraImageFallback}, {@link DocumentPicker} image-capture
- * fallback, and {@link WindowsCamera} image-picker device/stream.
+ * Production CameraImageFallback, CameraImageSource, CameraSourceService (its answer and its
+ * Binder round trip) and WindowsCamera's selected-image capture, over
+ * tools/test_camera_image_picker.py's shims of the framework and of the server's Windows dialogs.
  */
 public final class CameraImagePickerHost {
-    private static int checks;
+    private static int sChecks;
 
-    private static void check(boolean ok, String msg) {
-        ++checks;
-        if (!ok) throw new AssertionError(msg);
+    private static void check(boolean ok, String message) {
+        if (!ok) throw new AssertionError(message);
+        sChecks++;
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 1) {
-            throw new IllegalArgumentException("Expected temp dir argument");
-        }
-        File tempRoot = new File(args[0]);
-        Device.sTestDataDir = new File(tempRoot, "data").getPath();
-        CameraImageFallback.sTestOverride = null;
-
-        testCameraImageFallback(tempRoot);
-        testDocumentPickerImageCapture(tempRoot);
-        testWindowsCameraImagePicker(tempRoot);
-
-        System.out.println("Camera image picker PASS: " + checks + " checks");
+        File temp = new File(args[0]);
+        setting(temp);
+        answers(temp);
+        binderRoundTrip(temp);
+        clientChoices();
+        frames();
+        System.out.println("Camera image picker PASS: " + sChecks + " checks");
     }
 
-    private static void testCameraImageFallback(File tempRoot) throws Exception {
-        // Default off when camera.properties does not exist.
-        check(!CameraImageFallback.enabled(), "CameraImageFallback must default to false");
-        check(!CameraImageFallback.file().exists(), "camera.properties must not exist initially");
-
-        // save(true) / save(false) persistence.
-        CameraImageFallback.save(true);
-        check(CameraImageFallback.file().isFile(), "save(true) must create camera.properties");
-        check(CameraImageFallback.enabled(), "enabled() must be true after save(true)");
-
-        // Preserve unrelated properties across save(false) / save(true).
-        Files.writeString(CameraImageFallback.file().toPath(),
-                "unrelated_prop=keep\nimage_picker_fallback=true\n");
-        CameraImageFallback.save(false);
-        check(!CameraImageFallback.enabled(), "enabled() must be false after save(false)");
-        String propsText = Files.readString(CameraImageFallback.file().toPath());
-        check(propsText.contains("unrelated_prop=keep"), "save(false) must preserve unrelated properties");
-
-        // encodeJpeg: JPEG SOI passthrough.
-        File jpegFile = new File(tempRoot, "sample.jpg");
-        byte[] jpegBytes = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 1, 2, 3};
-        Files.write(jpegFile.toPath(), jpegBytes);
-        byte[] encodedJpeg = CameraImageFallback.encodeJpeg(jpegFile);
-        check(Arrays.equals(jpegBytes, encodedJpeg), "encodeJpeg must pass through JPEG bytes unchanged");
-
-        // encodeJpeg: non-JPEG re-encoded via BitmapFactory/Bitmap.compress.
-        File pngFile = new File(tempRoot, "sample.png");
-        Files.write(pngFile.toPath(), new byte[]{(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A});
-        byte[] reencoded = CameraImageFallback.encodeJpeg(pngFile);
-        check(reencoded.length >= 2 && (reencoded[0] & 0xFF) == 0xFF && (reencoded[1] & 0xFF) == 0xD8,
-                "encodeJpeg must re-encode non-JPEG files to JPEG");
-
-        // toNv12: rejects invalid dimensions.
-        boolean threwOdd = false;
-        try {
-            CameraImageFallback.toNv12(jpegFile, 63, 48);
-        } catch (IllegalArgumentException expected) {
-            threwOdd = true;
-        }
-        check(threwOdd, "toNv12 must reject odd width");
-
-        boolean threwZero = false;
-        try {
-            CameraImageFallback.toNv12(jpegFile, 0, 48);
-        } catch (IllegalArgumentException expected) {
-            threwZero = true;
-        }
-        check(threwZero, "toNv12 must reject zero width");
-
-        // toNv12: produces width * height * 3 / 2 bytes.
-        byte[] nv12 = CameraImageFallback.toNv12(jpegFile, 64, 48);
-        check(nv12.length == 64 * 48 * 3 / 2, "toNv12 must produce width*height*3/2 bytes");
-        boolean anyNonZero = false;
-        for (byte b : nv12) {
-            if (b != 0) {
-                anyNonZero = true;
-                break;
-            }
-        }
-        check(anyNonZero, "toNv12 output must contain image pixel data");
+    private static void setting(File temp) throws IOException {
+        File data = new File(temp, "data");
+        CameraImageFallback.sDataDirForTest = data.getPath();
+        check(!CameraImageFallback.enabled(), "off without camera.properties");
+        File props = new File(data, "system/camera.properties");
+        props.getParentFile().mkdirs();
+        Files.write(props.toPath(), "#Gesher camera settings\nimage_picker_fallback=true\n"
+                .getBytes(StandardCharsets.UTF_8));
+        check(CameraImageFallback.enabled(), "on with image_picker_fallback=true");
+        Files.write(props.toPath(), "image_picker_fallback : TRUE\n".getBytes(StandardCharsets.UTF_8));
+        check(CameraImageFallback.enabled(), "Properties syntax (colon, case) is accepted");
+        Files.write(props.toPath(), "image_picker_fallback=false\n".getBytes(StandardCharsets.UTF_8));
+        check(!CameraImageFallback.enabled(), "off with image_picker_fallback=false");
+        CameraImageFallback.sDataDirForTest = null;
     }
 
-    private static void testDocumentPickerImageCapture(File tempRoot) throws Exception {
-        Intent capture = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        Intent secureCapture = new Intent(MediaStore.ACTION_IMAGE_CAPTURE_SECURE);
+    /** A scripted Windows question and file picker. */
+    static final class FakeUi implements CameraSourceService.Ui {
+        boolean available = true;
+        int answer;
+        String path;
+        final List<String> calls = new ArrayList<>();
 
-        // Disabled by default.
-        CameraImageFallback.sTestOverride = Boolean.FALSE;
-        check(!DocumentPicker.handles(capture), "ACTION_IMAGE_CAPTURE must not be handled when disabled");
-        check(!DocumentPicker.resolves(capture, null), "ACTION_IMAGE_CAPTURE must not resolve when disabled");
-        check(!DocumentPicker.offers(capture), "ACTION_IMAGE_CAPTURE must not be offered when disabled");
-        check(!DocumentPicker.handles(secureCapture), "ACTION_IMAGE_CAPTURE_SECURE must not be handled when disabled");
+        @Override public boolean available() { return available; }
 
-        // Enabled.
-        CameraImageFallback.sTestOverride = Boolean.TRUE;
-        check(DocumentPicker.handles(capture), "ACTION_IMAGE_CAPTURE must be handled when enabled");
-        check(DocumentPicker.resolves(capture, null), "ACTION_IMAGE_CAPTURE must resolve when enabled");
-        check(DocumentPicker.offers(capture), "ACTION_IMAGE_CAPTURE must be offered when enabled");
-        check(DocumentPicker.handles(secureCapture), "ACTION_IMAGE_CAPTURE_SECURE must be handled when enabled");
-        // An app that resolved the capture and starts it by the reported package reaches the picker.
-        check(DocumentPicker.handles(new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                .setPackage(DocumentPicker.IMAGE_CAPTURE_PACKAGE)),
-                "ACTION_IMAGE_CAPTURE for the picker's reported package must be handled");
-        check(!DocumentPicker.handles(new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                .setPackage("com.example.camera")), "Another app's camera keeps ordinary routing");
+        @Override public int ask(String requester, String title, String[] labels,
+                BooleanSupplier active) {
+            calls.add("ask:" + requester + ":" + labels.length);
+            return answer;
+        }
 
-        File chosenImage = new File(tempRoot, "picked.jpg");
-        byte[] chosenBytes = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9};
-        Files.write(chosenImage.toPath(), chosenBytes);
-        DocumentsStorageProvider provider = new DocumentsStorageProvider();
-        DocumentPicker.Backend backend = new DocumentPicker.Backend() {
-            @Override public boolean available() { return true; }
-            @Override public String[] pick(DocumentPicker.Request request, int ownerPid,
-                    java.util.function.BooleanSupplier active) {
-                return new String[]{chosenImage.getPath()};
-            }
-            @Override public boolean isLocal(String windowsPath) { return true; }
-        };
+        @Override public String pick(String title, int ownerPid, BooleanSupplier active) {
+            calls.add("pick:" + ownerPid);
+            return path;
+        }
+    }
 
-        // Case 1: EXTRA_OUTPUT with a file:// URI and no app identity to write it with: the
-        // system server must not write an app-supplied path with its own access.
-        File outFile = new File(tempRoot, "capture-out.jpg");
-        Intent extraOutIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                .putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(outFile));
-        DocumentPicker.Request extraOutReq = new DocumentPicker.Request(extraOutIntent, null, 36);
-        check(extraOutReq.imageCapture, "Request.imageCapture must be true");
-        check(!extraOutReq.multiple && extraOutReq.maxItems == 1, "Image capture must be single-item");
+    static final class FakeCallers implements CameraSourceService.Callers {
+        boolean granted = true;
+        boolean attached = true;
+
+        @Override public String packageOf(int pid, int uid) {
+            if (pid == 666) throw new SecurityException("unknown caller");
+            return "com.example.bank";
+        }
+
+        @Override public boolean cameraGranted(int pid, int uid) { return granted; }
+
+        @Override public boolean attached(int pid) { return attached; }
+    }
+
+    private static void answers(File temp) throws IOException {
+        File image = new File(temp, "cheque.jpg");
+        Files.write(image.toPath(), new byte[] {(byte) 0xFF, (byte) 0xD8, 1, 2, 3});
+        FakeUi ui = new FakeUi();
+        FakeCallers callers = new FakeCallers();
+        boolean[] enabled = {false};
+        CameraSourceService service = new CameraSourceService(callers, ui, () -> enabled[0]);
+
+        CameraSourceService.Answer a = service.answer(10, 10010, "0", true);
+        check(a.kind == CameraImageSource.Selection.CAMERA && ui.calls.isEmpty(),
+                "setting off: a PC camera opens without a question");
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED && ui.calls.isEmpty(),
+                "setting off: no selected-image camera");
+
+        enabled[0] = true;
         boolean refused = false;
         try {
-            DocumentPicker.select(extraOutReq, new String[]{chosenImage.getPath()}, provider,
-                    backend, null);
-        } catch (java.io.IOException expected) {
+            service.answer(666, 10666, "0", true);
+        } catch (SecurityException expected) {
             refused = true;
         }
-        check(refused, "file:// EXTRA_OUTPUT without the app's resolver must fail");
-        check(!outFile.exists(), "The system server must not write an app-supplied file:// path");
+        check(refused && ui.calls.isEmpty(), "an unknown caller is refused before any dialog");
+        callers.granted = false;
+        refused = false;
+        try {
+            service.answer(10, 10010, "0", true);
+        } catch (SecurityException expected) {
+            refused = true;
+        }
+        check(refused && ui.calls.isEmpty(), "without the CAMERA grant there is no question");
+        callers.granted = true;
 
-        // Case 2: EXTRA_OUTPUT with content:// URI via ContentResolver.
-        Uri contentOutUri = Uri.parse("content://test.authority/capture.jpg");
-        ByteArrayOutputStream contentOutStream = new ByteArrayOutputStream();
-        ContentResolver resolver = new ContentResolver() {
-            @Override public OutputStream openOutputStream(Uri uri) {
-                return contentOutUri.equals(uri) ? contentOutStream : null;
-            }
-        };
-        Intent contentOutIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                .putExtra(MediaStore.EXTRA_OUTPUT, contentOutUri);
-        DocumentPicker.Request contentOutReq = new DocumentPicker.Request(contentOutIntent, null, 36);
-        DocumentPicker.Result contentOutRes = DocumentPicker.select(
-                contentOutReq, new String[]{chosenImage.getPath()}, provider, backend, resolver);
-        check(contentOutRes != null && contentOutUri.equals(contentOutRes.intent.getData()),
-                "ContentResolver EXTRA_OUTPUT result must match URI");
-        check(Arrays.equals(chosenBytes, contentOutStream.toByteArray()),
-                "ContentResolver EXTRA_OUTPUT stream must receive JPEG bytes");
+        ui.available = false;
+        a = service.answer(10, 10010, "0", true);
+        check(a.kind == CameraImageSource.Selection.CAMERA && ui.calls.isEmpty(),
+                "no dialog on this desktop: the PC camera");
+        ui.available = true;
 
-        // Case 3: No EXTRA_OUTPUT -> inline "data" thumbnail Bitmap.
-        DocumentPicker.Request inlineReq = new DocumentPicker.Request(capture, null, 36);
-        DocumentPicker.Result inlineRes = DocumentPicker.select(
-                inlineReq, new String[]{chosenImage.getPath()}, provider, backend, null);
-        check(inlineRes != null && "inline-data".equals(inlineRes.intent.getAction()),
-                "Inline capture must return inline-data action");
-        Object thumbObj = inlineRes.intent.getExtra("data");
-        check(thumbObj instanceof Bitmap, "Inline capture must include Bitmap under 'data' extra");
-        Bitmap thumb = (Bitmap) thumbObj;
-        check(thumb.getWidth() == 160, "Inline thumbnail must be scaled to width 160");
+        ui.answer = IntentChooser.UNAVAILABLE;
+        a = service.answer(10, 10010, "0", true);
+        check(a.kind == CameraImageSource.Selection.CAMERA, "an unavailable dialog: the PC camera");
+        ui.calls.clear();
+        ui.answer = 0;
+        a = service.answer(10, 10010, "0", true);
+        check(a.kind == CameraImageSource.Selection.CAMERA
+                && ui.calls.equals(List.of("ask:com.example.bank:2")),
+                "the user chose the camera: asked with the app's package, no file picker");
+        ui.calls.clear();
+        ui.answer = -1;
+        a = service.answer(10, 10010, "0", true);
+        check(a.kind == CameraImageSource.Selection.CANCELLED && ui.calls.size() == 1,
+                "a cancelled question cancels without a file picker");
 
-        CameraImageFallback.sTestOverride = null;
+        ui.calls.clear();
+        ui.answer = 1;
+        ui.path = image.getPath();
+        a = service.answer(10, 10010, "0", true);
+        check(a.kind == CameraImageSource.Selection.IMAGE && image.equals(a.image)
+                && ui.calls.equals(List.of("ask:com.example.bank:2", "pick:10")),
+                "the user chose an image: the file picker, owned by the app's process");
+
+        ui.calls.clear();
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.IMAGE && ui.calls.equals(List.of("pick:10")),
+                "the selected-image camera goes straight to the file picker");
+
+        ui.path = null;
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED, "a cancelled file picker cancels");
+        ui.path = new File(temp, "missing.jpg").getPath();
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED, "a missing file is not an image");
+        ui.path = temp.getPath();
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED, "a directory is not an image");
+        ui.path = image.getPath();
+        callers.attached = false;
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED,
+                "an image chosen after the app's process left is not delivered");
     }
 
-    private static void testWindowsCameraImagePicker(File tempRoot) throws Exception {
-        // IMAGE_PICKER_ID only present when CameraImageFallback is enabled.
-        CameraImageFallback.sTestOverride = Boolean.FALSE;
-        List<WindowsCamera.Device> offDevices = WindowsCamera.devices();
-        for (WindowsCamera.Device d : offDevices) {
-            check(!WindowsCamera.IMAGE_PICKER_ID.equals(d.id),
-                    "IMAGE_PICKER_ID must not be present when disabled");
+    private static void binderRoundTrip(File temp) throws IOException {
+        File image = new File(temp, "photo.png");
+        byte[] bytes = "not really a PNG, but the bytes travel".getBytes(StandardCharsets.UTF_8);
+        Files.write(image.toPath(), bytes);
+        FakeUi ui = new FakeUi();
+        ui.answer = 1;
+        ui.path = image.getPath();
+        boolean[] enabled = {true};
+        CameraSourceService service = new CameraSourceService(new FakeCallers(), ui, () -> enabled[0]);
+        ServiceManager.services.put(CameraSourceService.NAME, service);
+        try {
+            android.os.Binder.callingPid = 10;
+            CameraImageSource.Host client = CameraSourceService.CLIENT;
+            check(client.enabled(), "the setting reaches the app's process over Binder");
+            CameraImageSource.Selection s = client.choose("0", true);
+            check(s.kind == CameraImageSource.Selection.IMAGE
+                    && java.util.Arrays.equals(bytes, s.image),
+                    "the selected file's bytes arrive through the read-only descriptor");
+            check(android.os.ParcelFileDescriptor.OPEN.get() == 0,
+                    "the descriptor is closed once read");
+            ui.answer = 0;
+            s = client.choose("0", true);
+            check(s.kind == CameraImageSource.Selection.CAMERA, "the camera answer arrives");
+            ui.answer = -1;
+            s = client.choose("0", true);
+            check(s.kind == CameraImageSource.Selection.CANCELLED, "the cancel arrives");
+            android.os.Binder.callingPid = 666;
+            s = client.choose("0", true);
+            check(s.kind == CameraImageSource.Selection.CANCELLED,
+                    "a refused caller is answered with an exception, read as a cancel");
+        } finally {
+            ServiceManager.services.remove(CameraSourceService.NAME);
+            android.os.Binder.callingPid = 0;
         }
+        CameraImageSource.Selection none = CameraSourceService.CLIENT.choose("0", true);
+        check(none.kind == CameraImageSource.Selection.CAMERA,
+                "without the service a PC camera opens as without the setting");
+        none = CameraSourceService.CLIENT.choose(CameraImageSource.DEVICE_ID, false);
+        check(none.kind == CameraImageSource.Selection.CANCELLED,
+                "without the service there is no selected image");
+    }
 
-        CameraImageFallback.sTestOverride = Boolean.TRUE;
-        List<WindowsCamera.Device> onDevices = WindowsCamera.devices();
-        WindowsCamera.Device pickerDevice = null;
-        for (WindowsCamera.Device d : onDevices) {
-            if (WindowsCamera.IMAGE_PICKER_ID.equals(d.id)) {
-                pickerDevice = d;
-                break;
+    /** A scripted server side for CameraImageSource. */
+    static final class FakeHost implements CameraImageSource.Host {
+        boolean enabled = true;
+        CameraImageSource.Selection next;
+        int asked;
+
+        @Override public boolean enabled() { return enabled; }
+
+        @Override public CameraImageSource.Selection choose(String cameraId, boolean physical) {
+            asked++;
+            return next;
+        }
+    }
+
+    private static void clientChoices() throws Exception {
+        FakeHost host = new FakeHost();
+        CameraImageSource.Host saved = CameraImageSource.sHost;
+        CameraImageSource.sHost = host;
+        try {
+            List<WindowsCamera.Device> none = List.of();
+            check(CameraImageSource.withPicker(none, false).isEmpty(), "setting off: no extra camera");
+            List<WindowsCamera.Device> list = CameraImageSource.withPicker(none, true);
+            check(list.size() == 1 && CameraImageSource.DEVICE_ID.equals(list.get(0).id)
+                    && list.get(0).isRearFacing() && !list.get(0).autofocus,
+                    "setting on: a fixed-focus rear camera, last");
+
+            byte[] encoded = {1, 2, 3, 4};
+            host.next = new CameraImageSource.Selection(CameraImageSource.Selection.IMAGE, encoded);
+            CameraImageSource.Choice choice = new CameraImageSource.Choice();
+            WindowsCamera.Capture first = CameraImageSource.open(CameraImageSource.DEVICE_ID, 641, 479, choice);
+            check(first.width == 640 && first.height == 478, "an image frame has even dimensions");
+            first.close();
+            WindowsCamera.Capture picture = CameraImageSource.open(CameraImageSource.DEVICE_ID, 1280, 960, choice);
+            check(picture.width == 1280 && host.asked == 1,
+                    "a picture or another size keeps the client's image: asked once");
+            picture.close();
+            CameraImageSource.open(CameraImageSource.DEVICE_ID, 640, 480, new CameraImageSource.Choice()).close();
+            check(host.asked == 2, "a new client is asked again");
+
+            host.asked = 0;
+            host.next = CameraImageSource.Selection.NONE;
+            CameraImageSource.Choice cancelled = new CameraImageSource.Choice();
+            for (int i = 0; i < 3; i++) {
+                int hr = 0;
+                try {
+                    CameraImageSource.open(CameraImageSource.DEVICE_ID, 640, 480, cancelled);
+                } catch (WindowsCamera.OpenException e) {
+                    hr = e.hr;
+                }
+                check(hr == CameraImageSource.ERROR_CANCELLED, "a cancelled client's opens fail");
             }
-        }
-        check(pickerDevice != null, "IMAGE_PICKER_ID must be present when enabled");
-        check("Gesher Image Picker".equals(pickerDevice.name), "Unexpected picker device name");
-        check(pickerDevice.isRearFacing() && !pickerDevice.autofocus,
-                "Picker device must be rear-facing and fixed-focus");
+            check(host.asked == 1, "a cancel is not asked again on every frame or reopen");
 
-        // open(IMAGE_PICKER_ID) with injected ImageSource -> NV12 frames.
-        File streamImage = new File(tempRoot, "stream.jpg");
-        Files.write(streamImage.toPath(), new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9});
-        WindowsCamera.sImageSource = () -> new String[]{streamImage.getPath()};
-        try (WindowsCamera.Capture capture = WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 64, 48)) {
-            check(capture.width == 64 && capture.height == 48, "Capture dimensions must match");
-            byte[] frame = new byte[64 * 48 * 3 / 2];
-            int hr = capture.read(frame);
-            check(hr == 0, "Capture.read must return 0 while open");
-            check(capture.focus(WindowsCamera.Capture.FOCUS_GET, null) == 0x80004001,
-                    "Static image capture focus must return E_NOTIMPL");
-            capture.close();
-            check(capture.read(frame) == 0x80004004, "Capture.read after close must return E_ABORT");
-            check(capture.focus(WindowsCamera.Capture.FOCUS_GET, null) == 0x80004004,
-                    "Capture.focus after close must return E_ABORT");
+            host.asked = 0;
+            host.next = CameraImageSource.Selection.USE_CAMERA;
+            CameraImageSource.Selection s = CameraImageSource.decide(CameraImageSource.DEVICE_ID,
+                    new CameraImageSource.Choice());
+            check(s.kind == CameraImageSource.Selection.CANCELLED,
+                    "the selected-image camera has no camera to fall back to");
+
+            host.asked = 0;
+            host.enabled = false;
+            s = CameraImageSource.decide("0", new CameraImageSource.Choice());
+            check(s.kind == CameraImageSource.Selection.CAMERA && host.asked == 0,
+                    "setting off: a PC camera is opened without asking");
+            host.enabled = true;
+            host.next = CameraImageSource.Selection.USE_CAMERA;
+            CameraImageSource.Choice camera = new CameraImageSource.Choice();
+            CameraImageSource.decide("0", camera);
+            s = CameraImageSource.decide("0", camera);
+            check(s.kind == CameraImageSource.Selection.CAMERA && host.asked == 1,
+                    "the camera answer is kept for the client");
         } finally {
-            WindowsCamera.sImageSource = null;
+            CameraImageSource.sHost = saved;
         }
+    }
 
-        // A client's choice is kept: reopening (another size, a picture, a new preview)
-        // reuses the selected image instead of asking again.
-        int[] picks = {0};
-        WindowsCamera.sImageSource = () -> {
-            picks[0]++;
-            return new String[]{streamImage.getPath()};
-        };
+    private static void frames() throws Exception {
+        byte[] nv12 = CameraImageSource.toNv12(new byte[] {1, 2, 3}, 64, 48);
+        check(nv12.length == 64 * 48 * 3 / 2, "NV12 is width*height*3/2 bytes");
+        boolean any = false;
+        for (byte b : nv12) any |= b != 0;
+        check(any, "the frame carries the image");
+        int[] white = new int[4];
+        java.util.Arrays.fill(white, 0xFFFFFFFF);
+        byte[] w = CameraImageSource.argbToNv12(white, 2, 2);
+        check((w[0] & 0xFF) == 235 && (w[4] & 0xFF) == 128 && (w[5] & 0xFF) == 128,
+                "white is Y 235, U and V 128 (BT.601 limited range)");
+        boolean rejected = false;
         try {
-            WindowsCamera.Choice choice = new WindowsCamera.Choice();
-            WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 64, 48, choice).close();
-            WindowsCamera.Capture reopened =
-                    WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 32, 24, choice);
-            check(reopened.width == 32 && reopened.height == 24, "Reopen must use the new size");
-            check(streamImage.equals(reopened.imageFile), "Reopen must keep the selected image");
-            reopened.close();
-            check(picks[0] == 1, "A client must be asked for an image once, not on each reopen");
-            WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 64, 48, new WindowsCamera.Choice()).close();
-            check(picks[0] == 2, "A new client must be asked again");
-        } finally {
-            WindowsCamera.sImageSource = null;
+            CameraImageSource.toNv12(new byte[] {1}, 63, 48);
+        } catch (IllegalArgumentException expected) {
+            rejected = true;
         }
-
-        // open(IMAGE_PICKER_ID) cancelled when ImageSource returns null.
-        WindowsCamera.sImageSource = () -> null;
-        boolean cancelled = false;
+        check(rejected, "odd NV12 dimensions are refused");
+        boolean undecodable = false;
         try {
-            WindowsCamera.open(WindowsCamera.IMAGE_PICKER_ID, 64, 48);
-        } catch (WindowsCamera.OpenException expected) {
-            cancelled = expected.hr == 0x800704C7;
-        } finally {
-            WindowsCamera.sImageSource = null;
-            CameraImageFallback.sTestOverride = null;
+            CameraImageSource.toNv12(new byte[0], 64, 48);
+        } catch (IOException expected) {
+            undecodable = true;
         }
-        check(cancelled, "Cancelled image pick must throw OpenException with ERROR_CANCELLED (0x800704C7)");
+        check(undecodable, "an image Android cannot decode is an error");
+
+        WindowsCamera.Capture capture = WindowsCamera.Capture.ofFrame(nv12, 64, 48);
+        byte[] frame = new byte[nv12.length];
+        check(capture.read(frame) == 0 && java.util.Arrays.equals(nv12, frame),
+                "each read is the image's frame");
+        check(capture.focus(WindowsCamera.Capture.FOCUS_GET, null) == 0x80004001,
+                "an image has no focus control (E_NOTIMPL)");
+        capture.close();
+        check(capture.read(frame) == 0x80004004, "a closed image capture reads E_ABORT");
+        boolean mismatch = false;
+        try {
+            WindowsCamera.Capture.ofFrame(new byte[10], 64, 48);
+        } catch (IllegalArgumentException expected) {
+            mismatch = true;
+        }
+        check(mismatch, "a frame shorter than its size is refused");
     }
 }

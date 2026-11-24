@@ -170,12 +170,9 @@ final class IntentChooser {
         // document request's choices, not only a fallback when no app resolves.
         if (pickerTarget != null) {
             if (options.size() == MAX_OPTIONS) throw new IllegalArgumentException("Too many chooser options");
-            String pickerLabel = DocumentPicker.isImageCaptureAction(pickerTarget.getAction())
-                    ? "Choose image (Windows file picker)"
-                    : android.provider.MediaStore.ACTION_PICK_IMAGES.equals(pickerTarget.getAction())
-                            ? "Photos and videos (Windows file picker)"
-                            : "Files (Windows file picker)";
-            options.add(new Option(pickerTarget, pickerLabel));
+            options.add(new Option(pickerTarget, android.provider.MediaStore.ACTION_PICK_IMAGES
+                    .equals(pickerTarget.getAction()) ? "Photos and videos (Windows file picker)"
+                    : "Files (Windows file picker)"));
         }
         autoLaunch = shouldAutoLaunch(chooser, options);
     }

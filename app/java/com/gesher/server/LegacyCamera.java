@@ -103,8 +103,8 @@ public final class LegacyCamera {
         Thread preview;
         volatile boolean previewing;
         WindowsCamera.Capture capture;
-        /** The source the app's user chose (PC camera or a selected image), kept until release. */
-        final WindowsCamera.Choice sourceChoice = new WindowsCamera.Choice();
+        /** The camera-or-image answer (CameraImageSource), kept until the camera's release. */
+        final CameraImageSource.Choice sourceChoice = new CameraImageSource.Choice();
         int audioRestriction;
         /** The AF trigger for the preview's next frame (CONTROL_AF_TRIGGER_*). */
         int afTrigger = AF_TRIGGER_IDLE;
@@ -392,7 +392,7 @@ public final class LegacyCamera {
 
     private static WindowsCamera.Capture open(Session s, Size size) {
         try {
-            return WindowsCamera.open(s.device.id, size.getWidth(), size.getHeight(),
+            return CameraImageSource.open(s.device.id, size.getWidth(), size.getHeight(),
                     s.sourceChoice);
         } catch (WindowsCamera.OpenException e) {
             log(e.getMessage());
@@ -402,6 +402,9 @@ public final class LegacyCamera {
 
     public static void startPreview(Camera camera) {
         Session s = session(camera);
+        // The camera-or-image question (asked once) waits for the user: not under the
+        // session's lock, which preview frames and the app's other calls take.
+        CameraImageSource.decide(s.device.id, s.sourceChoice);
         synchronized (s) {
             if (s.previewing) return;
             Size size = size(s, "preview-size");
