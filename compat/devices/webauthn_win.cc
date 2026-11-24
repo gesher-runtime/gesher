@@ -1,7 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 // Gesher (devices track): Windows' WebAuthn API through webauthn.dll's exports
-// (docs/passkeys.md, ADR 0092).
+// (docs/passkeys.md, ADR 0093).
 
 #include "webauthn_win.h"
 

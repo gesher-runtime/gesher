@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Gesher (devices track, ADR 0092): com.gesher.server.WindowsWebAuthn's natives
+// Gesher (devices track, ADR 0093): com.gesher.server.WindowsWebAuthn's natives
 // over webauthn_win.h (docs/passkeys.md). Registered by register_gesher_devices
 // (devices_jni.cc). No callbacks into Java: the calling Java thread blocks in a
 // ceremony while Windows shows its dialog.

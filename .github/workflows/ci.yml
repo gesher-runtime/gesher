@@ -166,7 +166,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/clipboard/Publication.ps1
-      - name: Build actual Windows WebAuthn contracts (ADR 0092)
+      - name: Build actual Windows WebAuthn contracts (ADR 0093)
         if: ${{ !cancelled() }}
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\credentials\webauthn_windows_test.cc compat\devices\webauthn_win.cc /Fe:webauthn-windows.exe user32.lib
@@ -570,7 +570,7 @@ jobs:
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
 
-      - name: Credential Manager passkey contracts (ADR 0092)
+      - name: Credential Manager passkey contracts (ADR 0093)
         run: python3 tools/test_credential_manager_contracts.py --java-home "$JAVA_HOME"
 
       - name: MediaDataSource adapter contracts with checked JNI and UBSan

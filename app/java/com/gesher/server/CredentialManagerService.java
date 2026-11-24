@@ -37,7 +37,7 @@ import java.util.Locale;
 
 /**
  * Android's Credential Manager ({@code credential}, {@code ICredentialManager}) for passkeys,
- * over Windows' WebAuthn API (docs/passkeys.md, ADR 0092).
+ * over Windows' WebAuthn API (docs/passkeys.md, ADR 0093).
  *
  * <p>AOSP's CredentialManagerService hands a request to the device's credential providers
  * and shows their entries in a selector. AOSP has no passkey provider of its own. Here the

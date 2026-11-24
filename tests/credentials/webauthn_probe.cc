@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Manual probe for compat/devices/webauthn_win.cc (docs/passkeys.md, ADR 0092): the real
+// Manual probe for compat/devices/webauthn_win.cc (docs/passkeys.md, ADR 0093): the real
 // Windows WebAuthn ceremonies, which need a person. See tests/credentials/HUMAN_TEST.md.
 //
 //   webauthn_probe info      API version and platform authenticator, no UI

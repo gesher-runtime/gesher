@@ -1,7 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 // Gesher (devices track): Windows' WebAuthn API (webauthn.dll) for
-// com.gesher.server.WindowsWebAuthn (docs/passkeys.md, ADR 0092). The DLL is
+// com.gesher.server.WindowsWebAuthn (docs/passkeys.md, ADR 0093). The DLL is
 // loaded at run time from System32, so the runtime starts on Windows editions
 // without it. Every result here is Windows' own: a credential or an assertion
 // exists only when Windows returned S_OK with one.

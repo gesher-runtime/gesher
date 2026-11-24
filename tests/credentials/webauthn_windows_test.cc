@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Windows host contracts for compat/devices/webauthn_win.cc (docs/passkeys.md, ADR 0092),
+// Windows host contracts for compat/devices/webauthn_win.cc (docs/passkeys.md, ADR 0093),
 // against the real webauthn.dll and without showing any UI:
 //  - the API version, and whether a user-verifying platform authenticator (Windows
 //    Hello) is available: a runner usually has none, both answers are valid;

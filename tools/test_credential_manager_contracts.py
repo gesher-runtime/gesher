@@ -4,7 +4,7 @@
 The Android boundary is stand-ins with android-16.0.0_r4's and androidx.credentials'
 constant values; CredentialManagerService, PasskeyRequests, PasskeyJson, AssetLinks and
 PasskeyBackend are compiled unchanged apart from their package, imports and public class
-visibility (docs/passkeys.md, ADR 0092). Tests cover AOSP's answers without a provider
+visibility (docs/passkeys.md, ADR 0093). Tests cover AOSP's answers without a provider
 (production without Windows' WebAuthn API) and, with an isolated software authenticator
 and a local asset-links server only, request and response mapping, the security refusals,
 Windows' errors, cancellation, client death and concurrent requests.

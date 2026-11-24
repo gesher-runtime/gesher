@@ -5,7 +5,7 @@
 package com.gesher.server;
 
 /**
- * {@link PasskeyBackend} over Windows' webauthn.dll (docs/passkeys.md, ADR 0092;
+ * {@link PasskeyBackend} over Windows' webauthn.dll (docs/passkeys.md, ADR 0093;
  * compat/devices/webauthn_jni.cc and webauthn_win.cc). Every result is Windows' own: the
  * dialog is Windows', owned by the requesting application's foreground window, and a
  * credential or an assertion is returned only for Windows' {@code S_OK}.
