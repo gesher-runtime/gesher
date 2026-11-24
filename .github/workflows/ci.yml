@@ -194,16 +194,16 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
-      - name: Build actual background data restriction reader (ConnectionCost)
+      - name: Build actual connection cost event sink (Network List Manager)
         if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\background_data_win.cc tests\metered-network\background_data_windows_test.cc /Fe:background-data-test.exe ole32.lib
-      - name: Background data restriction answers with the Network List Manager's internet
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib
+      - name: Connection cost events wake the network watcher; subscribe and unsubscribe against Windows
         if: ${{ !cancelled() }}
         shell: pwsh
         run: |
-          & .\background-data-test.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Windows background data restriction checks failed' }
+          & .\cost-events-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows connection cost event checks failed' }
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell

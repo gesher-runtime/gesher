@@ -13,6 +13,7 @@ import android.content.IIntentSender;
 import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -41,6 +42,8 @@ import sun.misc.Unsafe;
 public final class ConnectivityCallbackContractTest {
     private static final String EMPTY = "internet\t0\n";
     private static final String ONLINE = "internet\t1\nnet\t12\tethernet\t1500\t1000000\t1000000\t0\t0\t0\t1\t1\n";
+    private static final String METERED = ONLINE.replace("\t1000000\t1000000\t0\t0\t0\t1\t1\n",
+            "\t1000000\t1000000\t1\t0\t0\t1\t1\n");
     private static final Unsafe UNSAFE;
     private static final AtomicInteger checks = new AtomicInteger();
     static {
@@ -188,6 +191,14 @@ public final class ConnectivityCallbackContractTest {
         @Override public void onAvailable(Network network) { available++; }
         @Override public void onLost(Network network) { lost++; }
         @Override public void onUnavailable() { unavailable++; if (unavailableAction != null) unavailableAction.run(); }
+    }
+    private static final class CapabilitiesCallback extends Callback {
+        int changed;
+        boolean notMetered = true;
+        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+            changed++;
+            notMetered = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+        }
     }
     private static final class EqualCallback extends Callback {
         @Override public boolean equals(Object other) { return other instanceof EqualCallback; }
@@ -519,6 +530,37 @@ public final class ConnectivityCallbackContractTest {
         }
     }
 
+    /**
+     * Windows' connection cost changes on the network that stays connected (the machine's
+     * metered setting): a registered callback hears onCapabilitiesChanged for
+     * NET_CAPABILITY_NOT_METERED, a polling getter sees the new cost, and the restrict-background
+     * status stays DISABLED, as Gesher enforces no background restriction (a "background" line
+     * in a snapshot must not turn into RESTRICT_BACKGROUND_STATUS_ENABLED).
+     */
+    private static void cost(boolean parcel) throws Exception {
+        try (Harness h = new Harness(parcel)) {
+            CapabilitiesCallback callback = new CapabilitiesCallback();
+            h.register(callback);
+            h.service.emit(ONLINE); h.handler.immediate();
+            check(callback.available == 1 && callback.changed == 0 && callback.notMetered, "starts unmetered");
+            check(!h.manager.isActiveNetworkMetered(), "getter: unmetered");
+            h.service.emit(METERED); h.handler.immediate();
+            check(callback.available == 1 && callback.lost == 0, "the same network stays");
+            check(callback.changed == 1 && !callback.notMetered, "metered: onCapabilitiesChanged without NOT_METERED");
+            check(h.manager.isActiveNetworkMetered(), "getter: metered while the callback stays registered");
+            h.service.emit(METERED); h.handler.immediate();
+            check(callback.changed == 1, "an unchanged cost is not announced again");
+            h.service.emit(ONLINE); h.handler.immediate();
+            check(callback.changed == 2 && callback.notMetered, "unmetered again: NOT_METERED is back");
+            h.service.emit(METERED.replace("internet\t1\n", "internet\t1\nbackground\t1\n")); h.handler.immediate();
+            check(h.manager.getRestrictBackgroundStatus() == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED,
+                    "no background restriction is reported (none is enforced)");
+            h.service.emit(ONLINE.replace("internet\t1\n", "internet\t1\nbackground\t0\n")); h.handler.immediate();
+            check(h.manager.getRestrictBackgroundStatus() == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED,
+                    "DISABLED with an unrestricted line too");
+        }
+    }
+
     private static void identity(boolean parcel) throws Exception {
         try (Harness h = new Harness(parcel)) {
             Callback first = new EqualCallback(), second = new EqualCallback();
@@ -639,6 +681,7 @@ public final class ConnectivityCallbackContractTest {
         checks.set(0);
         if (selected.equals("all") || selected.equals("basic")) basic(parcel);
         if (selected.equals("all") || selected.equals("identity")) identity(parcel);
+        if (selected.equals("all") || selected.equals("cost")) cost(parcel);
         if (selected.equals("all") || selected.equals("timeouts")) timeouts(parcel);
         if (selected.equals("all") || selected.equals("teardown")) teardown(parcel);
         if (selected.equals("all") || selected.equals("subscriptions")) subscriptions(parcel);
