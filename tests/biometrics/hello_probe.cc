@@ -108,11 +108,11 @@ int main(int argc, char** argv) {
   }
   printf("started%s\n", foreign ? " with another process's window as owner" : "");
   fflush(stdout);
-  int result = -2;
+  std::atomic<int> result{-2};
   DWORD started = GetTickCount();
   std::thread waiter([&] { result = hello::Await(v); });
   bool canceled = false;
-  while (result == -2) {
+  while (result.load() == -2) {
     if (w != nullptr) Pump();
     if (cancel && !canceled && GetTickCount() - started > 3000) {
       printf("app cancels after 3 s\n");
@@ -124,7 +124,8 @@ int main(int argc, char** argv) {
   }
   waiter.join();
   hello::Release(v);
-  printf("result=%d (%s) after %lu ms\n", result, ResultName(result),
+  const int completed_result = result.load();
+  printf("result=%d (%s) after %lu ms\n", completed_result, ResultName(completed_result),
          (unsigned long)(GetTickCount() - started));
   if (w != nullptr) DestroyWindow(w);
   return 0;
