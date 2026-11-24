@@ -204,7 +204,11 @@ closed three of this layer's leftovers:
   device's write cache**. A power loss right after such an `fsync` can lose
   what the call promised on Linux. Windows offers no stronger flush without
   write access; failing instead would return an error (`EACCES`) that Linux
-  never gives for this call. `file_flags_ofd_test` covers each path.
+  never gives for this call. `file_flags_ofd_test` covers the second handle,
+  the writable alias (mode `0444` and a denying ACL) and the read-only mapping
+  (mode `0444`, a denying ACL and an open that does not share writing); the
+  read-only volume (`ERROR_WRITE_PROTECT`) shares the alias and mapping code
+  but is not tested, since CI has no read-only volume to open.
 - `signal()` is still the CRT's; signal dispositions set with it are not seen
   by `kill` from another process (use `sigaction`).
 - `/proc/<pid>` exists only for this process; `/proc/self/maps` has no
