@@ -542,16 +542,17 @@ public final class ConnectivityCallbackContractTest {
             CapabilitiesCallback callback = new CapabilitiesCallback();
             h.register(callback);
             h.service.emit(ONLINE); h.handler.immediate();
-            check(callback.available == 1 && callback.changed == 0 && callback.notMetered, "starts unmetered");
+            // onAvailable delivers the first onCapabilitiesChanged itself, as AOSP's callback does.
+            check(callback.available == 1 && callback.changed == 1 && callback.notMetered, "starts unmetered");
             check(!h.manager.isActiveNetworkMetered(), "getter: unmetered");
             h.service.emit(METERED); h.handler.immediate();
             check(callback.available == 1 && callback.lost == 0, "the same network stays");
-            check(callback.changed == 1 && !callback.notMetered, "metered: onCapabilitiesChanged without NOT_METERED");
+            check(callback.changed == 2 && !callback.notMetered, "metered: onCapabilitiesChanged without NOT_METERED");
             check(h.manager.isActiveNetworkMetered(), "getter: metered while the callback stays registered");
             h.service.emit(METERED); h.handler.immediate();
-            check(callback.changed == 1, "an unchanged cost is not announced again");
+            check(callback.changed == 2, "an unchanged cost is not announced again");
             h.service.emit(ONLINE); h.handler.immediate();
-            check(callback.changed == 2 && callback.notMetered, "unmetered again: NOT_METERED is back");
+            check(callback.changed == 3 && callback.notMetered, "unmetered again: NOT_METERED is back");
             h.service.emit(METERED.replace("internet\t1\n", "internet\t1\nbackground\t1\n")); h.handler.immediate();
             check(h.manager.getRestrictBackgroundStatus() == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED,
                     "no background restriction is reported (none is enforced)");
