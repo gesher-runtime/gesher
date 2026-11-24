@@ -1,0 +1,183 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package com.gesher.server;
+
+import android.provider.Settings.Secure;
+import android.view.accessibility.CaptioningManager.CaptionStyle;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Host contracts of the unchanged production CaptioningSettings and CaptioningBridge,
+ * against AOSP's own Settings.Secure key names and CaptioningManager.CaptionStyle constants
+ * (android-all 16). Test doubles, here only: Windows' ClosedCaptionProperties values and
+ * the Secure table.
+ */
+public final class CaptioningContracts {
+    private static int sChecks;
+
+    private static void check(boolean condition, String what) {
+        if (!condition) throw new AssertionError(what);
+        sChecks++;
+    }
+
+    private static void equal(Object expected, Object actual, String what) {
+        if (expected == null ? actual != null : !expected.equals(actual)) {
+            throw new AssertionError(what + ": expected <" + expected + "> but was <" + actual + ">");
+        }
+        sChecks++;
+    }
+
+    /** Windows' answer: all Default, computed colors as Windows reports them by default. */
+    static int[] windowsDefaults() {
+        int[] v = new int[CaptioningSettings.VALUES];
+        v[CaptioningSettings.COMPUTED_FONT_COLOR] = 0xFFFFFFFF;
+        v[CaptioningSettings.COMPUTED_BACKGROUND_COLOR] = 0xFF000000;
+        v[CaptioningSettings.COMPUTED_REGION_COLOR] = 0x00000000;
+        return v;
+    }
+
+    static final class TestSecure implements CaptioningBridge.Secure {
+        final Map<String, String> table = new HashMap<>();
+        final List<String> writes = new ArrayList<>();
+        @Override public String get(String key) { return table.get(key); }
+        @Override public void set(String key, String value) {
+            writes.add(key + "=" + value);
+            if (value == null) table.remove(key); else table.put(key, value);
+        }
+    }
+
+    static final class TestWindows implements CaptioningBridge.Backend {
+        int[] values = windowsDefaults();
+        Runnable onChange;
+        int unwatched;
+        @Override public int[] read() { return values == null ? null : values.clone(); }
+        @Override public Runnable watch(Runnable change) {
+            onChange = change;
+            return () -> unwatched++;
+        }
+    }
+
+    static void mapping() {
+        // The keys are AOSP's (CaptioningManager reads exactly these).
+        equal("accessibility_captioning_preset", Secure.ACCESSIBILITY_CAPTIONING_PRESET, "key name");
+        equal(8, CaptioningSettings.KEYS.length, "owned keys");
+        for (String key : CaptioningSettings.KEYS) {
+            check(!key.equals(Secure.ACCESSIBILITY_CAPTIONING_ENABLED)
+                    && !key.equals(Secure.ACCESSIBILITY_CAPTIONING_LOCALE),
+                    "enabled and locale are not Windows': " + key);
+        }
+
+        // Everything Default: no key (CaptioningManager's own defaults).
+        Map<String, String> none = CaptioningSettings.secureValues(windowsDefaults());
+        for (String key : CaptioningSettings.KEYS) equal(null, none.get(key), "all Default: " + key);
+        check(none.keySet().size() == CaptioningSettings.KEYS.length, "every owned key decided");
+
+        // Font size alone: a scale, no style.
+        int[] big = windowsDefaults();
+        big[CaptioningSettings.FONT_SIZE] = 4;  // TwoHundredPercent
+        Map<String, String> scaled = CaptioningSettings.secureValues(big);
+        equal("2.0", scaled.get(Secure.ACCESSIBILITY_CAPTIONING_FONT_SCALE), "200% is 2.0");
+        equal(null, scaled.get(Secure.ACCESSIBILITY_CAPTIONING_PRESET), "size alone keeps the preset");
+        float[] scales = { Float.NaN, 0.5f, 1.0f, 1.5f, 2.0f };
+        for (int i = 1; i < scales.length; i++) {
+            equal(scales[i], CaptioningSettings.fontScale(i), "ClosedCaptionSize " + i);
+        }
+
+        // Yellow text at 75%, blue background, uniform edge, monospaced serif.
+        int[] v = windowsDefaults();
+        v[CaptioningSettings.FONT_COLOR] = 6;          // Yellow
+        v[CaptioningSettings.FONT_OPACITY] = 2;        // SeventyFivePercent
+        v[CaptioningSettings.BACKGROUND_COLOR] = 5;    // Blue
+        v[CaptioningSettings.FONT_EFFECT] = 4;         // Uniform
+        v[CaptioningSettings.FONT_STYLE] = 1;          // MonospacedWithSerifs
+        Map<String, String> custom = CaptioningSettings.secureValues(v);
+        equal(Integer.toString(CaptionStyle.PRESET_CUSTOM), custom.get(Secure.ACCESSIBILITY_CAPTIONING_PRESET),
+                "any style field: the custom preset");
+        equal(Integer.toString(0xBFFFFF00), custom.get(Secure.ACCESSIBILITY_CAPTIONING_FOREGROUND_COLOR),
+                "yellow at 75%");
+        equal(Integer.toString(0xFF0000FF), custom.get(Secure.ACCESSIBILITY_CAPTIONING_BACKGROUND_COLOR),
+                "blue, opacity from Windows' computed color");
+        equal(Integer.toString(CaptionStyle.COLOR_UNSPECIFIED), custom.get(Secure.ACCESSIBILITY_CAPTIONING_WINDOW_COLOR),
+                "region Default: unspecified");
+        equal(Integer.toString(CaptionStyle.EDGE_TYPE_OUTLINE), custom.get(Secure.ACCESSIBILITY_CAPTIONING_EDGE_TYPE),
+                "Uniform is an outline");
+        equal(Integer.toString(CaptionStyle.COLOR_UNSPECIFIED), custom.get(Secure.ACCESSIBILITY_CAPTIONING_EDGE_COLOR),
+                "Windows has no edge color");
+        equal("serif-monospace", custom.get(Secure.ACCESSIBILITY_CAPTIONING_TYPEFACE), "typeface");
+        equal(null, custom.get(Secure.ACCESSIBILITY_CAPTIONING_FONT_SCALE), "size Default: no scale");
+
+        // Edges and typefaces, one by one, against AOSP's constants.
+        int[] edges = { CaptionStyle.EDGE_TYPE_UNSPECIFIED, CaptionStyle.EDGE_TYPE_NONE,
+                CaptionStyle.EDGE_TYPE_RAISED, CaptionStyle.EDGE_TYPE_DEPRESSED,
+                CaptionStyle.EDGE_TYPE_OUTLINE, CaptionStyle.EDGE_TYPE_DROP_SHADOW };
+        for (int i = 0; i < edges.length; i++) equal(edges[i], CaptioningSettings.edgeType(i), "edge " + i);
+        String[] faces = { "", "serif-monospace", "serif", "sans-serif-monospace", "sans-serif",
+                "casual", "cursive", "sans-serif-smallcaps" };
+        for (int i = 0; i < faces.length; i++) equal(faces[i], CaptioningSettings.typeface(i), "style " + i);
+
+        // Colors: names, opacities, and Default name with an opacity (Windows' computed RGB).
+        equal(0x40FF0000, CaptioningSettings.color(3, 3, 0xFFFFFFFF), "red at 25%");
+        equal(0x00FFFFFF, CaptioningSettings.color(1, 4, 0xFFFFFFFF), "white at 0%");
+        equal(0xBF123456, CaptioningSettings.color(0, 2, 0xFF123456), "Default color, 75%: computed RGB");
+        equal(0xFF00FFFF, CaptioningSettings.color(8, 0, 0xFFFFFFFF), "cyan, opacity from computed");
+        equal(CaptionStyle.COLOR_UNSPECIFIED, CaptioningSettings.color(0, 0, 0xFF000000), "Default and Default");
+
+        // Unknown values (a newer Windows): nothing is decided.
+        int[] unknown = windowsDefaults();
+        unknown[CaptioningSettings.FONT_COLOR] = 9;
+        equal(null, CaptioningSettings.secureValues(unknown), "unknown color");
+        unknown = windowsDefaults();
+        unknown[CaptioningSettings.FONT_EFFECT] = 6;
+        equal(null, CaptioningSettings.secureValues(unknown), "unknown edge effect");
+        unknown = windowsDefaults();
+        unknown[CaptioningSettings.FONT_SIZE] = 5;
+        equal(null, CaptioningSettings.secureValues(unknown), "unknown size");
+        equal(null, CaptioningSettings.secureValues(null), "no answer");
+        equal(null, CaptioningSettings.secureValues(new int[3]), "short answer");
+    }
+
+    static void bridge() {
+        TestWindows windows = new TestWindows();
+        TestSecure secure = new TestSecure();
+        // A style left from an earlier Windows setting is removed when Windows says Default.
+        secure.table.put(Secure.ACCESSIBILITY_CAPTIONING_PRESET, "-1");
+        secure.table.put(Secure.ACCESSIBILITY_CAPTIONING_ENABLED, "1");
+        CaptioningBridge bridge = new CaptioningBridge(windows, secure);
+        bridge.start();
+        equal(null, secure.table.get(Secure.ACCESSIBILITY_CAPTIONING_PRESET), "stale preset removed");
+        equal("1", secure.table.get(Secure.ACCESSIBILITY_CAPTIONING_ENABLED), "enabled untouched");
+        check(windows.onChange != null, "watching Windows");
+
+        secure.writes.clear();
+        windows.values[CaptioningSettings.FONT_SIZE] = 3;  // OneHundredFiftyPercent
+        windows.onChange.run();
+        equal("1.5", secure.table.get(Secure.ACCESSIBILITY_CAPTIONING_FONT_SCALE), "change applied");
+        equal(1, secure.writes.size(), "only the changed key is written (one notification)");
+
+        secure.writes.clear();
+        windows.onChange.run();
+        check(secure.writes.isEmpty(), "no change, no write");
+
+        // A failed read changes nothing.
+        windows.values = null;
+        check(!bridge.apply(), "failed read");
+        equal("1.5", secure.table.get(Secure.ACCESSIBILITY_CAPTIONING_FONT_SCALE), "kept after a failed read");
+
+        bridge.stop();
+        equal(1, windows.unwatched, "stop ends the watch");
+        bridge.stop();
+        equal(1, windows.unwatched, "stop twice");
+    }
+
+    public static void main(String[] args) {
+        mapping();
+        bridge();
+        System.out.println("captioning contracts: " + sChecks + " checks passed");
+    }
+}

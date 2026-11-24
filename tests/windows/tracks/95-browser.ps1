@@ -44,3 +44,11 @@ Check 'services: concurrent Control Center requests stay whole on the runtime fi
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.ControlCenterRequestsTest
 } @('ControlCenterRequestsTest all passed:')
+
+# Caption style (CaptioningBridge): Windows' ClosedCaptionProperties read through the
+# production natives and mapped to CaptioningManager's Settings.Secure keys. Read only.
+Check 'services: Windows caption style reads and maps to CaptioningManager''s settings' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.CaptioningWindowsTest
+} @('CaptioningWindowsTest: Windows caption style ',
+  'CaptioningWindowsTest all passed')
