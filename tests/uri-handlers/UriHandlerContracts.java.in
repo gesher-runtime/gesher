@@ -224,6 +224,50 @@ public final class UriHandlerContracts {
                 "maps component with a mailto URI, both registered");
     }
 
+    static void selectorsKeepTheSelectedHandler() {
+        WindowsUriHandlers mailOnly = new WindowsUriHandlers(new TestWindows("mailto"));
+        WindowsUriHandlers all = new WindowsUriHandlers(new TestWindows("mailto", "tel", "sms", "geo"));
+        Intent crossScheme = intent(Intent.ACTION_VIEW, "geo:32,34");
+        crossScheme.setSelector(intent(Intent.ACTION_SENDTO, "mailto:selector@example.com"));
+        check(!mailOnly.canDelegate(crossScheme, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a mail selector cannot launch an unregistered geo handler");
+        check(!all.canDelegate(crossScheme, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a mail selector cannot switch to a different registered handler");
+
+        Intent unsupportedAction = intent(Intent.ACTION_CALL, "tel:+1555");
+        unsupportedAction.setSelector(intent(Intent.ACTION_DIAL, "tel:+1666"));
+        check(!all.canDelegate(unsupportedAction, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a supported selector cannot authorize an unsupported outer action");
+        Intent missingPayload = new Intent(Intent.ACTION_SENDTO);
+        missingPayload.setSelector(intent(Intent.ACTION_SENDTO, "mailto:selector@example.com"));
+        check(!all.canDelegate(missingPayload, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a selector does not manufacture a missing outer payload");
+
+        Intent matching = intent(Intent.ACTION_SENDTO, "mailto:actual@example.com");
+        matching.putExtra(Intent.EXTRA_SUBJECT, "Outer subject");
+        matching.setSelector(intent(Intent.ACTION_VIEW, "mailto:selector@example.com"));
+        check(mailOnly.canDelegate(matching, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a selector may choose the same handler with different resolution data");
+        equal("mailto:actual@example.com?subject=Outer%20subject", WindowsUriHandlers.windowsUri(matching),
+                "the outer recipient and extras, not the selector's, reach Windows");
+        check(matching.getComponent() == null && matching.getSelector() != null,
+                "delegation leaves the caller's intent and selector unchanged");
+
+        Intent alias = intent(Intent.ACTION_SENDTO, "smsto:+1555");
+        alias.setSelector(intent(Intent.ACTION_VIEW, "sms:+1666"));
+        check(all.canDelegate(alias, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "sms and smsto may select the same Windows messaging handler");
+        equal("sms:+1555", WindowsUriHandlers.windowsUri(alias), "SMS keeps its outer recipient");
+
+        Intent typedPayload = intent(Intent.ACTION_SENDTO, "mailto:actual@example.com");
+        typedPayload.setDataAndType(Uri.parse("mailto:actual@example.com"), "application/pdf");
+        typedPayload.setSelector(intent(Intent.ACTION_VIEW, "mailto:selector@example.com"));
+        check(!mailOnly.canDelegate(typedPayload, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a selector's absent MIME type does not hide an unsupported outer MIME type");
+        check(mailOnly.canDelegate(intent(Intent.ACTION_VIEW, "mailto:direct@example.com"),
+                null, PackageManager.MATCH_DEFAULT_ONLY), "ordinary requests still delegate");
+    }
+
     static void windowsUris() {
         Intent compose = intent(Intent.ACTION_SENDTO, "mailto:a@example.com");
         compose.putExtra(Intent.EXTRA_EMAIL, new String[] { "b@example.com", "c@example.com" });
@@ -278,6 +322,7 @@ public final class UriHandlerContracts {
         onlyRegisteredSchemes();
         filtersOfAospApps();
         explicitComponentIsOneHandler();
+        selectorsKeepTheSelectedHandler();
         windowsUris();
         System.out.println("uri-handler contracts: " + sChecks + " checks passed");
     }
