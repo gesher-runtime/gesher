@@ -360,9 +360,8 @@ final class DownloadRequests {
         Integer mediaScanned = values.getAsInteger(Downloads.Impl.COLUMN_MEDIA_SCANNED);
         filtered.put(Downloads.Impl.COLUMN_MEDIA_SCANNED,
                 mediaScanned == null ? Downloads.Impl.MEDIA_NOT_SCANNED : mediaScanned);
-        // AOSP scans an addCompletedDownload file into MediaStore here. Gesher has no
-        // MediaStore provider, so mediaprovider_uri/mediastore_uri stay null, as they are
-        // on Android when the scan returns no URI.
+        // Scanning completed downloads into MediaStore is not connected yet, so
+        // mediaprovider_uri/mediastore_uri stay null, as when Android's scan has no URI.
 
         long rowId;
         mDb.beginTransaction();
@@ -467,8 +466,8 @@ final class DownloadRequests {
         if (!file.exists()) throw new IllegalArgumentException("File doesn't exist: " + file);
         if (caller.local()) return;
         checkDestinationFilePathRestrictions(caller, file, true);
-        // AOSP also rejects a file MediaStore records as another package's. Gesher has
-        // no MediaStore ownership records; the path rules above still apply.
+        SharedStorageOwnership.enforceOwner(file,
+                owner -> mHost.uidOwnsPackage(caller.uid(), owner));
     }
 
     /** Helpers.checkDestinationFilePathRestrictions. */
