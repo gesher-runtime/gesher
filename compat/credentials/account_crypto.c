@@ -158,26 +158,27 @@ done:
 
 typedef int (*ConsentDialog)(enum GesherUiLanguage, const WCHAR*, const WCHAR*);
 
-static jint Consent(JNIEnv* env, jstring label, jstring permissions, ConsentDialog show) {
+// `failure` is the result when no dialog could be shown; it is never a user decision.
+static jint Consent(JNIEnv* env, jstring label, jstring permissions, ConsentDialog show, int failure) {
   // Both runtime entry points host PermissionRequests, whose Java service
   // authenticates the requesting APK/activity. Account storage and account
   // token consent continue to require the separate system-server role.
   if (!server_process && !standalone_process) {
     Fail(env, "java/lang/SecurityException", "Permission consent requires an active runtime");
-    return PERMISSION_DISMISSED;
+    return failure;
   }
-  if (label == NULL || permissions == NULL) return PERMISSION_DISMISSED;
+  if (label == NULL || permissions == NULL) return failure;
   jsize ln = (*env)->GetStringLength(env, label);
   jsize pn = (*env)->GetStringLength(env, permissions);
-  if (ln > 1024 || pn > 8192) return PERMISSION_DISMISSED;
+  if (ln > 1024 || pn > 8192) return failure;
   enum GesherUiLanguage lang = GesherUiCurrentLanguage();
   SIZE_T length = (SIZE_T)ln + (SIZE_T)pn + 2;
   WCHAR* text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, length * sizeof(WCHAR));
-  if (text == NULL) return PERMISSION_DISMISSED;
+  if (text == NULL) return failure;
   WCHAR* permission_text = text + ln + 1;
   (*env)->GetStringRegion(env, label, 0, ln, (jchar*)text);
   (*env)->GetStringRegion(env, permissions, 0, pn, (jchar*)permission_text);
-  if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return PERMISSION_DISMISSED; }
+  if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return failure; }
   int decision = show(lang, text, permission_text);
   HeapFree(GetProcessHeap(), 0, text);
   return decision;
@@ -187,14 +188,14 @@ JNIEXPORT jint GESHER_NATIVE
 Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
                                                        jstring label, jstring permissions) {
   (void)cls;
-  return Consent(env, label, permissions, PermissionDialog);
+  return Consent(env, label, permissions, PermissionDialog, PERMISSION_DISMISSED);
 }
 
 JNIEXPORT jint GESHER_NATIVE
 Java_com_gesher_server_PermissionRequests_nativeConfirmBackground(JNIEnv* env, jclass cls,
                                                                  jstring label, jstring permissions) {
   (void)cls;
-  return Consent(env, label, permissions, BackgroundPermissionDialog);
+  return Consent(env, label, permissions, BackgroundPermissionDialog, BACKGROUND_UNAVAILABLE);
 }
 
 JNIEXPORT jboolean GESHER_NATIVE

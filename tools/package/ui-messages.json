@@ -105,8 +105,8 @@
       "he": "לאפשר רק בזמן השימוש ביישום"
     },
     "background_permission_deny": {
-      "en": "Don't allow",
-      "he": "לא לאפשר"
+      "en": "Don't allow, not even while using the app",
+      "he": "לא לאפשר, גם לא בזמן השימוש ביישום"
     },
     "exact_alarm_title": {
       "en": "Alarms and reminders",

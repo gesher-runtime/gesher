@@ -204,10 +204,21 @@ AOSP:
   a runtime-permission ledger lacking `restriction-exemptions=1` adds the
   installer exemption to their requested restricted permissions and clears
   `APPLY_RESTRICTION` there, as AOSP `restorePermissionState` does for exempt
-  permissions. Grants, denials, `USER_SET` and `USER_FIXED` are unchanged.
+  permissions. Grants, denials, `USER_SET` and `USER_FIXED` are unchanged. Only
+  this migration supplies a default exemption at boot: afterwards a restricted
+  permission with no recorded state (a permission new to the catalogue, or an
+  install whose ledger write was lost) stays restricted. Installs write the
+  ledger before reporting success, so an opt-out session never becomes exempt.
 
-An exemption only makes the permission requestable; the user still consents to
-every grant. `PackageManager.get/add/removeWhitelistedRestrictedPermission`
+An exemption only makes the permission requestable; it never grants it, and the
+user consents to every grant through the dialogs below. Legacy apps (target SDK
+below 23) are the case where Android grants without a request: AOSP gives an
+exempt legacy app its restricted permissions with `REVIEW_REQUIRED`, withholds
+their AppOps and makes the user review the app's permissions before it runs.
+Gesher has no such review screen, so a legacy app's restricted permissions stay
+not granted, with no AppOps, whatever its exemptions (also after the
+migration); its unrestricted permissions keep their legacy grants as before.
+`PackageManager.get/add/removeWhitelistedRestrictedPermission`
 (`IPermissionManager` allowlist calls) follow AOSP: the system allowlist needs
 `WHITELIST_RESTRICTED_PERMISSIONS`, the installer and upgrade allowlists also
 accept the installer of record, only a privileged caller may add to the upgrade
@@ -220,18 +231,34 @@ background request after a foreground grant opens the background choice (Setting
 on a phone). For older targets (microG targets 29) the foreground dialog comes
 first, then the background choice. A background request without its foreground
 is denied without UI. The background choice is a separate native Windows dialog
-with **Allow all the time**, **Allow only while using the app** (the default) and
-**Don't allow** (which also denies the foreground). Each half keeps its own
-decision history: a repeated refusal sets `USER_FIXED`, and a fixed choice is not
-asked again. Closing the dialog is not a decision.
+with, in Android's order, **Allow all the time**, **Allow only while using the
+app** (the default) and **Don't allow, not even while using the app**, which
+removes all of that access, foreground included, and stops the app if it held it.
+
+The choice follows the rules of the screen Android shows at that point:
+
+- **Request dialog of an older target** (PermissionController's upgrade dialog).
+  Each half keeps its own decision history: a repeated refusal sets
+  `USER_FIXED`, and a fixed choice is not asked again. Closing the dialog is not
+  a decision.
+- **Settings page** (App info, below, and the target R+ request, which Android
+  sends to Settings). "Allow only while using the app" leaves the ungranted
+  background permission as it is; "Don't allow" revokes with `USER_SET` only and
+  clears `USER_FIXED` (AOSP `AppPermissionViewModel`). A background permission
+  the user fixed is still offered there; one that is policy or system fixed is
+  not. For the target R+ request, returning without a choice counts against the
+  app as in AOSP `sendDirectlyToSettings`: the first time sets `USER_SET`, the
+  next `USER_FIXED`, after which the app's requests are denied without UI. A
+  dialog that could not be shown is not counted.
 
 When an app opens its own `ACTION_APPLICATION_DETAILS_SETTINGS` while one of its
-background permissions is requestable, ungranted and its foreground is granted,
-Gesher shows that background dialog instead of the Control Center and delivers
-the activity result (`RESULT_CANCELED`, as Settings does) after the user's choice.
-microG's `AskPermissionActivity` uses this path after its first request, so its
-location service no longer reopens the Control Center in a loop. Other App info
-requests open the Control Center as before.
+background permissions is ungranted, changeable on the Settings page and its
+foreground is granted, Gesher shows that background dialog instead of the
+Control Center and delivers the activity result (`RESULT_CANCELED`, as Settings
+does) after the user's choice. microG's `AskPermissionActivity` uses this path
+after its first request, so its location service no longer reopens the Control
+Center in a loop, even after the user refused twice in the request dialog. Other
+App info requests open the Control Center as before.
 
 The trusted host can grant or revoke a requested dangerous permission for user 0:
 

@@ -398,6 +398,22 @@ public final class AppOpsContractTest {
 
         ApkPackage legacy = pkg("fixture.appops.legacy", UID + 2, (byte)7, 22);
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, legacy);
+        // Admitted with AOSP's default installer allowlist. The exemption never activates the
+        // legacy grant of a restricted permission: AOSP keeps it for REVIEW_REQUIRED, and Gesher
+        // has no review screen, so it stays without the grant and its AppOp.
+        int review = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+        check(h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        == PackageManager.PERMISSION_DENIED
+                && (h.pm.permissions().getPermissionFlags(legacy.packageName, Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                        "default:0", 0) & (exempt | apply | review)) == (PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT | review)
+                && h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.READ_EXTERNAL_STORAGE)
+                        == PackageManager.PERMISSION_DENIED
+                && h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.ACCESS_FINE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED,
+                "An installer exemption granted a legacy app's restricted permissions without the user");
+        check(h.ops.checkOperationRaw(OP_FINE_LOCATION, legacy.uid(), legacy.packageName, null) == MODE_FOREGROUND
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, legacy.uid(), legacy.packageName, null) == MODE_IGNORED,
+                "A legacy app's unreviewed restricted permissions supplied AppOps");
         h.pm.permissions().revokeRuntimePermission(legacy.packageName, Manifest.permission.CAMERA, "default:0", 0, "legacy contract");
         check(h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
                 "Legacy runtime permission grants cannot be revoked as modern binary grants");

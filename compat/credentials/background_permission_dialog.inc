@@ -6,10 +6,11 @@
 enum { BACKGROUND_PACKAGE = 1301, BACKGROUND_DETAILS = 1302, BACKGROUND_BRAND = 1303,
        BACKGROUND_HEADING = 1304, BACKGROUND_ALWAYS = 1305, BACKGROUND_FOREGROUND = 1306,
        BACKGROUND_DENY = 1307 };
-// Keep these values in sync with PermissionRequests.java (DISMISSED, DENIED,
-// FOREGROUND_ONLY, ALWAYS). Cancellation is not a user decision.
-enum { BACKGROUND_DISMISSED = 0, BACKGROUND_DENIED = 1, BACKGROUND_FOREGROUND_ONLY = 3,
-       BACKGROUND_ALWAYS_ALLOWED = 4 };
+// Keep these values in sync with PermissionRequests.java (UNAVAILABLE, DISMISSED, DENIED,
+// FOREGROUND_ONLY, ALWAYS). Cancellation is not a user decision; a dialog that could not
+// be shown is not even a dismissal.
+enum { BACKGROUND_UNAVAILABLE = -1, BACKGROUND_DISMISSED = 0, BACKGROUND_DENIED = 1,
+       BACKGROUND_FOREGROUND_ONLY = 3, BACKGROUND_ALWAYS_ALLOWED = 4 };
 
 typedef struct {
   enum GesherUiLanguage language;
@@ -42,14 +43,15 @@ static BOOL BackgroundCreateControls(HWND dialog, BackgroundDialogState* state) 
   HWND details = PermissionControl(dialog, reading, L"EDIT", state->permissions,
       ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | WS_TABSTOP
       | (rtl ? ES_RIGHT : ES_LEFT), BACKGROUND_DETAILS, 16, 126, 218, 30);
-  // Three full-width choices, as on Android's permission page. The safe default keeps
+  // Three full-width choices in Android's order (Allow all the time, Allow only while
+  // using the app, Don't allow). The safe default, set in WM_INITDIALOG, keeps
   // background access off without changing the foreground decision.
-  HWND foreground = PermissionControl(dialog, 0, L"BUTTON",
-      GesherUiText(state->language, "background_permission_foreground"),
-      BS_OWNERDRAW | WS_TABSTOP, BACKGROUND_FOREGROUND, 16, 166, 218, 20);
   HWND always = PermissionControl(dialog, 0, L"BUTTON",
       GesherUiText(state->language, "background_permission_always"),
-      BS_OWNERDRAW | WS_TABSTOP, BACKGROUND_ALWAYS, 16, 190, 218, 20);
+      BS_OWNERDRAW | WS_TABSTOP, BACKGROUND_ALWAYS, 16, 166, 218, 20);
+  HWND foreground = PermissionControl(dialog, 0, L"BUTTON",
+      GesherUiText(state->language, "background_permission_foreground"),
+      BS_OWNERDRAW | WS_TABSTOP, BACKGROUND_FOREGROUND, 16, 190, 218, 20);
   HWND deny = PermissionControl(dialog, 0, L"BUTTON",
       GesherUiText(state->language, "background_permission_deny"),
       BS_OWNERDRAW | WS_TABSTOP, BACKGROUND_DENY, 16, 214, 218, 20);
@@ -67,8 +69,13 @@ static INT_PTR CALLBACK BackgroundDialogProc(HWND dialog, UINT message, WPARAM w
     state = (BackgroundDialogState*)lparam;
     SetLastError(0);
     LONG_PTR previous = SetWindowLongPtrW(dialog, DWLP_USER, (LONG_PTR)state);
-    if (previous == 0 && GetLastError() != 0) { EndDialog(dialog, IDCANCEL); return FALSE; }
+    if (previous == 0 && GetLastError() != 0) {
+      state->decision = BACKGROUND_UNAVAILABLE;
+      EndDialog(dialog, IDCANCEL);
+      return FALSE;
+    }
     if (!BackgroundCreateControls(dialog, state)) {
+      state->decision = BACKGROUND_UNAVAILABLE;
       EndDialog(dialog, IDCANCEL);
       return FALSE;
     }
@@ -130,7 +137,7 @@ static int BackgroundPermissionDialog(enum GesherUiLanguage language, const WCHA
   SIZE_T title_chars = wcslen(title) + 1;
   const WCHAR font[] = L"Segoe UI";
   if ((SIZE_T)(at - buffer.words) + title_chars + 1 + sizeof(font) / sizeof(font[0])
-      > sizeof(buffer.words) / sizeof(buffer.words[0])) return BACKGROUND_DISMISSED;
+      > sizeof(buffer.words) / sizeof(buffer.words[0])) return BACKGROUND_UNAVAILABLE;
   for (SIZE_T i = 0; i < title_chars; ++i) *at++ = title[i];
   *at++ = 9;
   for (SIZE_T i = 0; i < sizeof(font) / sizeof(font[0]); ++i) *at++ = font[i];
@@ -138,5 +145,5 @@ static int BackgroundPermissionDialog(enum GesherUiLanguage language, const WCHA
   INT_PTR result = DialogBoxIndirectParamW(GetModuleHandleW(NULL), dialog, NULL, BackgroundDialogProc,
       (LPARAM)&state);
   GesherHostFreeIcons(&state.icons);
-  return result == -1 ? BACKGROUND_DISMISSED : state.decision;
+  return result == -1 ? BACKGROUND_UNAVAILABLE : state.decision;
 }

@@ -112,6 +112,13 @@ public final class PermissionRequestsTest {
                 && background.get(0).contains(BACKGROUND), "foreground and background were not asked separately");
         require(grants[0] == PackageManager.PERMISSION_GRANTED && grants[1] == PackageManager.PERMISSION_GRANTED
                 && grants[2] == PackageManager.PERMISSION_DENIED, "foreground Allow granted background location");
+        // A second "Allow only while using the app" in the request dialog fixes the refusal;
+        // App info (the Settings page) must still offer the choice, or microG loops.
+        request(whileUsing, apk, apkClass, new String[]{LOCATION, FINE, BACKGROUND}, reply);
+        int fixed = (Integer) policy.getClass().getMethod("getPermissionFlags", String.class, String.class,
+                String.class, int.class).invoke(policy, pkg, BACKGROUND, "default:0", 0);
+        require(background.size() == 2 && (fixed & PackageManager.FLAG_PERMISSION_USER_FIXED) != 0,
+                "a repeated background refusal in the request dialog was not fixed");
         List<Runnable> queue = new ArrayList<>();
         Object settings = controller(pm, pmClass, queue::add, (owner, names) -> false,
                 (owner, names) -> { background.add(names); return ALWAYS; });
@@ -120,7 +127,7 @@ public final class PermissionRequestsTest {
         require((Boolean) open.invoke(settings, apk, (Runnable) returned::incrementAndGet)
                 && returned.get() == 0 && queue.size() == 1, "App info did not wait for the background choice");
         queue.remove(0).run();
-        require(returned.get() == 1 && background.size() == 2
+        require(returned.get() == 1 && background.size() == 3
                 && grant(policy, pkg, BACKGROUND) == PackageManager.PERMISSION_GRANTED,
                 "App info did not grant background location after the choice");
         require(!(Boolean) open.invoke(settings, apk, (Runnable) returned::incrementAndGet) && queue.isEmpty(),

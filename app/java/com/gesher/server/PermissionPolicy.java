@@ -180,11 +180,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         int protection = info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE;
         if (protection == PermissionInfo.PROTECTION_NORMAL) return new PermissionState(true, flags, restricted);
         if (protection == PermissionInfo.PROTECTION_DANGEROUS) {
-            // LEGACY_GRANTED stays a permission grant. Its revocation is represented by
-            // REVOKED_COMPAT, so PermissionChecker can distinguish hard and soft denial.
-            boolean granted = legacy || "granted".equals(decision)
-                    && !(restricted && info.isHardRestricted());
-            return new PermissionState(granted, flags, restricted);
+            return new PermissionState(dangerousGranted(info, flags, legacy, "granted".equals(decision), restricted),
+                    flags, restricted);
         }
         if ((info.protectionLevel & (PermissionInfo.PROTECTION_FLAG_ROLE
                 | PermissionInfo.PROTECTION_FLAG_DEVELOPMENT)) != 0 && "granted".equals(decision)) {
@@ -200,6 +197,22 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                     && privilegedAllowlist(member.packageName, name)) return new PermissionState(true, flags, restricted);
         }
         return new PermissionState(false, flags, restricted);
+    }
+
+    /**
+     * Whether a dangerous permission is held. LEGACY_GRANTED stays a permission grant; its
+     * revocation is represented by REVOKED_COMPAT, so PermissionChecker can distinguish hard
+     * and soft denial. A restricted permission is different: AOSP withholds its legacy
+     * grant's AppOp while REVIEW_REQUIRED and makes the user review the app's permissions
+     * before it runs. Gesher has no such review, so an exemption never activates a legacy
+     * compatibility grant of a restricted permission: it is held only after the review flag
+     * was cleared by the system, and never while the restriction applies.
+     */
+    private static boolean dangerousGranted(PermissionInfo info, int flags, boolean legacy, boolean explicit,
+            boolean restricted) {
+        boolean legacyHeld = legacy && (!info.isRestricted()
+                || (flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0 && !restricted);
+        return legacyHeld || explicit && !(restricted && info.isHardRestricted());
     }
 
     /**
@@ -453,8 +466,17 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             flags &= RESTRICTION_EXEMPT;
             granted = false;
         } else if (legacy) {
-            if (old.hasState() && !old.access.granted) flags |= PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
-            if (!old.hasState()) flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+            // A restricted legacy grant still awaiting review is not a user denial.
+            boolean awaitingReview = info.isRestricted() && old.legacy
+                    && (flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) != 0;
+            if (old.hasState() && !old.access.granted && !awaitingReview) {
+                flags |= PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
+            }
+            // A restricted permission's legacy grant that is not already held waits for an
+            // explicit review: the exemption this admission may add never activates it.
+            if (!old.hasState() || info.isRestricted() && !old.access.granted) {
+                flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+            }
         } else {
             boolean wasImplicit = (flags & implicit) != 0;
             if (old.legacy && !wasImplicit) granted = true;
@@ -536,13 +558,16 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                             : Boolean.parseBoolean(storedLegacy);
                     boolean granted = "granted".equals(decision);
                     boolean restricted = restricted(info, flags, members);
-                    old = new RuntimeState(new PermissionState(legacy || granted && !(restricted && info.isHardRestricted()),
+                    old = new RuntimeState(new PermissionState(dangerousGranted(info,
+                            implicitPermissionFlags(flags, legacy), legacy, granted, restricted),
                             flags, restricted), legacy, granted);
                 }
-                // A permission without any recorded state was admitted through a path that
-                // defaults to the installer allowlist (a session opting out records its
-                // restriction at publication, so its state is never absent here).
-                int exemptions = info.isRestricted() && (migrate || old == null)
+                // Only the one-time migration supplies the default installer exemption. Outside
+                // it, a permission without recorded state (a publication whose ledger write was
+                // lost, or a permission the catalogue gained later) stays restricted: an install
+                // that opted out must never become exempt, and installs write their state
+                // synchronously (Installer, flushDecisions).
+                int exemptions = info.isRestricted() && migrate
                         ? PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT : 0;
                 for (ApkPackage member : members) exemptions |= admissionExemptions(info, member, false)
                         & PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT;
@@ -770,6 +795,26 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                 && !permissionState(installed.uid(), permission, uidMembers(installed.uid())).restricted;
     }
 
+    /**
+     * Whether the user can change this permission on the app's Settings page (AOSP
+     * AppPermissionFragment). Unlike a request, Settings still offers a USER_FIXED
+     * permission; policy and system fixed permissions and restrictions stay unchangeable.
+     */
+    private synchronized boolean changeableInSettings(String pkg, String permission) {
+        ApkPackage installed = mPm.get(pkg);
+        PermissionInfo info = mCatalog.get(permission);
+        if (installed == null || mPm.isRemovalPending(pkg) || installed.parsed.getTargetSdkVersion() < 23
+                || !installed.parsed.getRequestedPermissions().contains(permission)
+                || info == null || !info.isRuntime()) return false;
+        PermissionState state = permissionState(installed.uid(), permission, uidMembers(installed.uid()));
+        return !state.restricted && (state.flags & (PackageManager.FLAG_PERMISSION_POLICY_FIXED
+                | PackageManager.FLAG_PERMISSION_SYSTEM_FIXED)) == 0;
+    }
+
+    private boolean changeable(String pkg, String permission, boolean settings) {
+        return settings ? changeableInSettings(pkg, permission) : canRequest(pkg, permission);
+    }
+
     /** Android R: the release from which a split background permission is requested alone. */
     private static final int BACKGROUND_SPLIT_SDK = android.os.Build.VERSION_CODES.R;
 
@@ -830,50 +875,94 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return new RequestPlan(List.copyOf(foreground), List.copyOf(background), java.util.Set.copyOf(foregroundGranted));
     }
 
-    /** The background choice is offered only while its foreground is granted. */
-    synchronized boolean backgroundChoiceAvailable(ApkPackage expected, String background) {
+    /**
+     * The background choice is offered only while its foreground is granted. {@code settings}:
+     * the choice is the app's Settings page (App info, or a target R+ request sent there),
+     * which still offers a USER_FIXED background permission; otherwise it is the request
+     * dialog of a pre-R target, which does not.
+     */
+    synchronized boolean backgroundChoiceAvailable(ApkPackage expected, String background, boolean settings) {
         return mPm.get(expected.packageName) == expected && !mPm.isRemovalPending(expected.packageName)
-                && canRequest(expected.packageName, background) && !granted(background, expected.packageName)
+                && changeable(expected.packageName, background, settings) && !granted(background, expected.packageName)
                 && anyGranted(expected, foregroundsOf(expected, background));
     }
 
     /**
      * The background permission an app's own Settings page would let the user choose now
-     * (AOSP AppPermissionFragment): requested, user-changeable, not granted, foreground granted.
+     * (AOSP AppPermissionFragment): requested, not policy or system fixed (a user's fixed
+     * refusal can still be changed there), not granted, foreground granted.
      */
     synchronized String pendingBackgroundChoice(ApkPackage expected) {
         java.util.Set<String> backgrounds = RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
         for (String requested : expected.parsed.getRequestedPermissions()) {
-            if (backgrounds.contains(requested) && backgroundChoiceAvailable(expected, requested)) return requested;
+            if (backgrounds.contains(requested) && backgroundChoiceAvailable(expected, requested, true)) return requested;
         }
         return null;
     }
 
     /**
      * Commit the background dialog's explicit choice (PermissionRequests.ALWAYS,
-     * FOREGROUND_ONLY or DENIED). Like PermissionController, each subgroup's repeated
-     * denial is fixed; "Don't allow" also denies the foreground, and revoking a grant
-     * that existed before this request stops the app as Android does.
+     * FOREGROUND_ONLY or DENIED). "Don't allow" also denies the foreground, and revoking a
+     * grant that existed before this request stops the app as Android does.
+     * <p>The request dialog of a pre-R target follows PermissionController's upgrade
+     * dialog: each subgroup's repeated denial is fixed. On the Settings page
+     * ({@code settings}, AOSP AppPermissionViewModel) "Allow only while using the app"
+     * leaves the ungranted background permission as it is, and "Don't allow" revokes with
+     * USER_SET only (userFixed=false), clearing USER_FIXED.
      */
-    void recordBackgroundChoice(ApkPackage expected, String background, int choice, boolean killOnRevoke) {
+    void recordBackgroundChoice(ApkPackage expected, String background, int choice, boolean killOnRevoke,
+            boolean settings) {
         requireSystem();
         if (choice != PermissionRequests.ALWAYS && choice != PermissionRequests.FOREGROUND_ONLY
                 && choice != PermissionRequests.DENIED) return;
+        if (settings && choice == PermissionRequests.FOREGROUND_ONLY) return;
         List<String> revoked = new ArrayList<>();
         boolean changed;
         // One commit: the foreground cannot change between this check and the grant.
         synchronized (mPm) { synchronized (this) {
-            if (!backgroundChoiceAvailable(expected, background)) return;
+            if (!backgroundChoiceAvailable(expected, background, settings)) return;
             changed = commitUserDecision(expected, List.of(background), choice == PermissionRequests.ALWAYS,
-                    false, revoked);
+                    false, settings, revoked);
             if (choice == PermissionRequests.DENIED) {
-                changed |= commitUserDecision(expected, foregroundsOf(expected, background), false, true, revoked);
+                changed |= commitUserDecision(expected, foregroundsOf(expected, background), false, true,
+                        settings, revoked);
             }
         } }
         // Process retirement and notifications run outside the PM and policy monitors.
         if (changed) permissionsChanged(expected, () -> killOnRevoke && revoked.stream()
                 .anyMatch(name -> !granted(name, expected.packageName)));
     }
+
+    /**
+     * A target R+ background request sent to the Settings page returned without a choice.
+     * Like AOSP GrantPermissionsViewModel.sendDirectlyToSettings, that counts against the
+     * app: the background permission becomes USER_SET, or USER_FIXED when it already was,
+     * so an app cannot keep reopening the choice.
+     */
+    void recordBackgroundDismissal(ApkPackage expected, String background) {
+        requireSystem();
+        synchronized (mPm) { synchronized (this) {
+            if (!backgroundChoiceAvailable(expected, background, false)) return;
+            List<ApkPackage> members = uidMembers(expected.uid());
+            PermissionInfo info = mCatalog.get(background);
+            int flags = permissionState(expected.uid(), background, members, info).flags;
+            flags |= (flags & PackageManager.FLAG_PERMISSION_USER_SET) != 0
+                    ? PackageManager.FLAG_PERMISSION_USER_FIXED : PackageManager.FLAG_PERMISSION_USER_SET;
+            Map<Integer, Integer> before = runtimeModes(expected.uid());
+            // The background permission is not granted here (backgroundChoiceAvailable).
+            storeRuntimeDecision(expected, background, info, members, flags, "denied");
+            scheduleWrite();
+            publishRuntimeModes(expected.uid(), before);
+        } }
+        permissionsChanged(expected, () -> false);
+    }
+
+    /**
+     * Explicit durability boundary for an install: the admission's restriction exemptions
+     * (or their absence) reach the ledger before the install reports success. Never call
+     * while holding a package or operation monitor.
+     */
+    boolean flushDecisions() { return mWriter.flush(); }
 
     public boolean isProtectedBroadcast(String action) { return mCatalog.isProtectedBroadcast(action); }
 
@@ -892,7 +981,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     /** Commit an explicit host-dialog choice, never a dismissal or an unavailable dialog. */
     void recordUserDecision(ApkPackage expected, List<String> permissions, boolean allowed) {
         requireSystem();
-        if (!commitUserDecision(expected, permissions, allowed, false, new ArrayList<>())) return;
+        if (!commitUserDecision(expected, permissions, allowed, false, false, new ArrayList<>())) return;
         // Every changed permission was still denied at commit time. In particular,
         // an old dialog cannot revoke a grant that another controller just made.
         permissionsChanged(expected, () -> false);
@@ -901,9 +990,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     /**
      * Store an explicit user choice; false when nothing changed. {@code revokeGranted}: a
      * denial also revokes the listed permissions' existing grants, added to {@code revoked}.
+     * {@code settings}: a Settings page change, which may change a USER_FIXED permission and
+     * whose denial never fixes one (AOSP revokes there with userFixed=false).
      */
     private boolean commitUserDecision(ApkPackage expected, List<String> permissions, boolean allowed,
-            boolean revokeGranted, List<String> revoked) {
+            boolean revokeGranted, boolean settings, List<String> revoked) {
         synchronized (mPm) { synchronized (this) {
             if (mPm.get(expected.packageName) != expected || mPm.isRemovalPending(expected.packageName)) return false;
             List<ApkPackage> members = uidMembers(expected.uid());
@@ -912,7 +1003,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             java.util.Set<String> background = allowed ? java.util.Set.of()
                     : RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
             for (String name : permissions) {
-                if (!canRequest(expected.packageName, name)) continue;
+                if (!changeable(expected.packageName, name, settings)) continue;
                 if (granted(name, expected.packageName)) {
                     if (allowed || !revokeGranted) continue;
                     if (permissionState(expected.uid(), name, members).granted) revoked.add(name);
@@ -922,7 +1013,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                 if (allowed) continue;
                 // Revoking access the user already has is the Settings page's change,
                 // which AOSP records as USER_SET without USER_FIXED.
-                if (revokeGranted) { previouslySet.put(name, false); continue; }
+                if (revokeGranted || settings) { previouslySet.put(name, false); continue; }
                 // Snapshot this foreground/background subgroup's history before mutating it.
                 // Two names in a first request must not count as two user denials.
                 boolean userSet = false;

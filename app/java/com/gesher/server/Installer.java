@@ -676,6 +676,7 @@ final class Installer {
                             + ")" : ""));
             recordSource(original, pkg, code.getPath());
             mPm.packageInstalled(installed, old != null || previous != null, this);
+            persistPermissionAdmission();
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {
             if (pendingCode != null) {
@@ -713,6 +714,18 @@ final class Installer {
             else mEntries.put(entry.packageName, previous);
             if (metadata != null) mAttributions.put(entry.packageName, metadata);
             throw failure;
+        }
+    }
+
+    /**
+     * The registry already records the package; write the permission ledger with the
+     * admission's restriction exemptions (or the session's opt-out) now rather than after
+     * the usual delay. A boot finding no recorded state for a restricted permission keeps
+     * it restricted, so a lost write can only withhold an exemption, never grant one.
+     */
+    private void persistPermissionAdmission() {
+        if (!mPm.permissions().flushDecisions()) {
+            SystemServer.log("install: permission state not yet persisted; it is retried with the next change");
         }
     }
 
@@ -762,6 +775,7 @@ final class Installer {
             ApkPackage current = installSource == null ? null : mPm.get(pkg);
             if (current != null) mPm.permissions().addInstallerAllowlist(current, restrictedAllowlist);
         }
+        persistPermissionAdmission();
         return new String[] {pkg, "unchanged", old.codePath,
                 String.valueOf(parsed.versionCode())};
     }

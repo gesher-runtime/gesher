@@ -22,7 +22,7 @@ static enum GesherUiLanguage language;
 static WCHAR permissions[8193];
 static int exact_action;
 // Background dialog actions: its three buttons, then Enter, Escape and close.
-enum { BG_ALWAYS, BG_FOREGROUND, BG_DENY, BG_ENTER, BG_ESCAPE, BG_CLOSE, BG_TAB_ALWAYS };
+enum { BG_ALWAYS, BG_FOREGROUND, BG_DENY, BG_ENTER, BG_ESCAPE, BG_CLOSE, BG_TAB_DENY };
 static int background_action;
 static unsigned char exact_initial[] = {0, 1};
 static BOOL prompt_confirmation;
@@ -138,7 +138,8 @@ static void CALLBACK InspectBackground(HWND dialog, UINT message, UINT_PTR timer
   HWND foreground = GetDlgItem(dialog, BACKGROUND_FOREGROUND);
   HWND deny = GetDlgItem(dialog, BACKGROUND_DENY);
   if (phase == 1) {
-    Check(GetFocus() == always, "Tab from the default reaches Allow all the time");
+    // Android order: Allow all the time, Allow only while using the app (default), Don't allow.
+    Check(GetFocus() == deny, "Tab from the default reaches Don't allow");
     PostMessageW(GetFocus(), WM_KEYDOWN, VK_RETURN, 0);
     return;
   }
@@ -167,12 +168,20 @@ static void CALLBACK InspectBackground(HWND dialog, UINT message, UINT_PTR timer
   GetWindowRect(deny, &bounds);
   MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
   Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "background choices fit inside the dialog");
+  RECT first, second;
+  GetWindowRect(always, &first);
+  GetWindowRect(foreground, &second);
+  GetWindowRect(deny, &bounds);
+  Check(first.bottom <= second.top && second.bottom <= bounds.top,
+      "background choices follow Android's order: all the time, while using, don't allow");
+  Check(GetNextDlgTabItem(dialog, always, FALSE) == foreground && GetNextDlgTabItem(dialog, foreground, FALSE) == deny,
+      "background choices tab in Android's order");
   if (background_action <= BG_DENY) {
     HWND button = background_action == BG_ALWAYS ? always : background_action == BG_FOREGROUND ? foreground : deny;
     SendMessageW(button, BM_CLICK, 0, 0);
   } else if (background_action == BG_CLOSE) {
     PostMessageW(dialog, WM_CLOSE, 0, 0);
-  } else if (background_action == BG_TAB_ALWAYS) {
+  } else if (background_action == BG_TAB_DENY) {
     phase = 1;
     PostMessageW(GetFocus(), WM_KEYDOWN, VK_TAB, 0);
     SetTimer(dialog, 1, 20, InspectBackground);
@@ -365,13 +374,14 @@ int main(void) {
       Check(decision == expected, "only explicit buttons record a permission decision");
       printf("scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", action, decision);
     }
-    for (background_action = BG_ALWAYS; background_action <= BG_TAB_ALWAYS; ++background_action) {
+    for (background_action = BG_ALWAYS; background_action <= BG_TAB_DENY; ++background_action) {
       phase = 0;
       int choice = BackgroundPermissionDialog(language, L"com.google.android.gms",
           L"access location in the background \u202a(android.permission.ACCESS_BACKGROUND_LOCATION)\u202c");
-      int expected = background_action == BG_ALWAYS || background_action == BG_TAB_ALWAYS ? BACKGROUND_ALWAYS_ALLOWED
+      int expected = background_action == BG_ALWAYS ? BACKGROUND_ALWAYS_ALLOWED
           : background_action == BG_FOREGROUND || background_action == BG_ENTER ? BACKGROUND_FOREGROUND_ONLY
-          : background_action == BG_DENY ? BACKGROUND_DENIED : BACKGROUND_DISMISSED;
+          : background_action == BG_DENY || background_action == BG_TAB_DENY ? BACKGROUND_DENIED
+          : BACKGROUND_DISMISSED;
       Check(choice == expected, "only explicit background choices record a decision");
       printf("background scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", background_action, choice);
     }

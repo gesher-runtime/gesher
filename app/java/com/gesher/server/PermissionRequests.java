@@ -28,12 +28,20 @@ import java.util.function.Consumer;
  */
 final class PermissionRequests {
     // Keep these values in sync with compat/credentials/permission_dialog.inc and
-    // background_permission_dialog.inc. Cancellation is not a user denial.
-    static final int DISMISSED = 0, DENIED = 1, ALLOWED = 2, FOREGROUND_ONLY = 3, ALWAYS = 4;
+    // background_permission_dialog.inc. Cancellation is not a user denial, and a dialog
+    // that could not be shown (UNAVAILABLE) is not even a dismissal.
+    static final int UNAVAILABLE = -1, DISMISSED = 0, DENIED = 1, ALLOWED = 2, FOREGROUND_ONLY = 3, ALWAYS = 4;
+    /**
+     * Where a background choice is made. UPGRADE: the request dialog of a pre-R target
+     * (PermissionController's upgrade dialog). SETTINGS: the app's own App info page.
+     * REDIRECT: a target R+ background request, which Android sends to that Settings page
+     * (GrantPermissionsViewModel.sendDirectlyToSettings).
+     */
+    enum BackgroundMode { UPGRADE, SETTINGS, REDIRECT }
     public interface Decision {
         /** The foreground dialog: DISMISSED, DENIED or ALLOWED. */
         int decide(String packageName, String permissionNames);
-        /** The background dialog: DISMISSED, DENIED, FOREGROUND_ONLY or ALWAYS. */
+        /** The background dialog: UNAVAILABLE, DISMISSED, DENIED, FOREGROUND_ONLY or ALWAYS. */
         int decideBackground(String packageName, String permissionNames);
     }
 
@@ -83,10 +91,11 @@ final class PermissionRequests {
         try {
             AccountSecretStore.ensureLoaded();
             int choice = nativeConfirmBackground(packageName, permissions);
-            return choice == DENIED || choice == FOREGROUND_ONLY || choice == ALWAYS ? choice : DISMISSED;
+            return choice == DISMISSED || choice == DENIED || choice == FOREGROUND_ONLY || choice == ALWAYS
+                    ? choice : UNAVAILABLE;
         } catch (LinkageError | SecurityException e) {
             SystemServer.log("background permission consent unavailable: " + e.getClass().getSimpleName());
-            return DISMISSED;
+            return UNAVAILABLE;
         }
     }
 
@@ -100,13 +109,19 @@ final class PermissionRequests {
     /**
      * The background dialog, then its commit. The policy rechecks this APK generation and the
      * granted foreground under the PM monitor, and stops the app only after releasing it.
+     * Closing the dialog records nothing, except on the REDIRECT path, where Android counts
+     * returning from Settings without a choice against the app.
      */
     private void chooseBackground(PermissionPolicy policy, ApkPackage captured, String background,
-            boolean killOnRevoke) {
-        if (!current(captured) || !policy.backgroundChoiceAvailable(captured, background)) return;
+            boolean killOnRevoke, BackgroundMode mode) {
+        boolean settings = mode != BackgroundMode.UPGRADE;
+        if (!current(captured) || !policy.backgroundChoiceAvailable(captured, background, settings)) return;
         int choice = mDecision.decideBackground(captured.packageName, describe(policy, List.of(background)));
-        if (choice != DENIED && choice != FOREGROUND_ONLY && choice != ALWAYS) return;
-        policy.recordBackgroundChoice(captured, background, choice, killOnRevoke);
+        if (choice == DENIED || choice == FOREGROUND_ONLY || choice == ALWAYS) {
+            policy.recordBackgroundChoice(captured, background, choice, killOnRevoke, settings);
+        } else if (choice == DISMISSED && mode == BackgroundMode.REDIRECT) {
+            policy.recordBackgroundDismissal(captured, background);
+        }
     }
 
     /**
@@ -131,7 +146,7 @@ final class PermissionRequests {
         try {
             mExecutor.execute(() -> {
                 try {
-                    chooseBackground(policy, captured, background, true);
+                    chooseBackground(policy, captured, background, true, BackgroundMode.SETTINGS);
                 } catch (RuntimeException e) {
                     SystemServer.log("background permission choice failed for " + captured.packageName
                             + ": " + e.getClass().getSimpleName());
@@ -184,10 +199,13 @@ final class PermissionRequests {
                         }
                     }
                     // Each background permission gets its own choice once its foreground is
-                    // granted; a foreground denial leaves it unasked, as on Android.
+                    // granted; a foreground denial leaves it unasked, as on Android. A target
+                    // R+ request reaches it only alone, which Android sends to Settings.
+                    BackgroundMode mode = captured.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.R
+                            ? BackgroundMode.REDIRECT : BackgroundMode.UPGRADE;
                     for (String background : plan.background()) {
                         chooseBackground(policy, captured, background,
-                                plan.foregroundAlreadyGranted().contains(background));
+                                plan.foregroundAlreadyGranted().contains(background), mode);
                     }
                     synchronized (mPm) {
                         if (current(captured)) {

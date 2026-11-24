@@ -2869,11 +2869,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     // the user's choice (microG asks this way): on Android that page offers
                     // the choice; here the background dialog does, and the result follows it.
                     final ActivityRecord source = forToken(resultToToken);
-                    final ProcessRecord process = source == null ? null : source.app;
+                    final ProcessRecord process;
+                    final boolean callerOwnsSource;
+                    synchronized (this) {
+                        // source.app and its thread change while a process attaches or dies.
+                        process = source == null ? null : source.app;
+                        IApplicationThread thread = process == null ? null : process.thread;
+                        callerOwnsSource = thread != null && caller != null && process.pid == originalPid
+                                && caller.asBinder().equals(thread.asBinder());
+                    }
                     final ApkPackage captured = mPm.get(settings.packageName);
-                    if (process != null && process.pid == originalPid && caller != null
-                            && caller.asBinder().equals(process.thread.asBinder())
-                            && settings.packageName.equals(source.info.packageName)
+                    if (callerOwnsSource && settings.packageName.equals(source.info.packageName)
                             && captured != null && captured.uid() == originalUid
                             && mPermissionRequests.backgroundSettings(captured, () -> {
                                 synchronized (ActivityTaskManagerService.this) {
@@ -2881,8 +2887,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                             || source.state == State.DESTROYED || !mActivities.contains(source)
                                             || mPm.get(settings.packageName) != captured) return;
                                 }
+                                // deliverResult rechecks the process under its own lock.
                                 deliverResult(source, resultWho, requestCode,
-                                        android.app.Activity.RESULT_CANCELED, null);
+                                        android.app.Activity.RESULT_CANCELED, null, process);
                             })) {
                         SystemServer.log("startActivity: " + action + ": background permission choice for "
                                 + settings.packageName);
