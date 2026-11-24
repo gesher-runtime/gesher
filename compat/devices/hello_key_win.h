@@ -44,13 +44,28 @@ Operation* StartCreate(DWORD pid, const wchar_t* name, size_t length);
 Operation* StartSign(DWORD pid, const wchar_t* name, size_t length, const uint8_t* data,
                      size_t size);
 
+// How long Await keeps waiting for Windows to end a prompt after Cancel.
+constexpr DWORD kCancelGraceMs = 5000;
+
 // Blocks until Windows' prompt ends. A status as above; with kSuccess, *bytes.
-int Await(Operation* operation, std::vector<uint8_t>* bytes);
+int Await(Operation* operation, std::vector<uint8_t>* bytes,
+          DWORD cancel_grace_ms = kCancelGraceMs);
 
 // Thread-safe and idempotent: asks Windows to close the prompt.
 void Cancel(Operation* operation);
 
 // Releases the operation once Await has returned.
 void Release(Operation* operation);
+
+namespace internal {
+
+// Takes ownership of a started RequestCreateAsync (`sign` false) or
+// RequestSignAsync operation (releases it on failure, and then returns an
+// operation whose Await is kFailed). StartCreate and StartSign use it;
+// hello_key_windows_test.cc passes scripted operations to exercise completion
+// and cancellation without UI.
+Operation* Wrap(bool sign, IUnknown* async);
+
+}  // namespace internal
 
 }  // namespace gesher::devices::hello_key

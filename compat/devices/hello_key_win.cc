@@ -231,12 +231,23 @@ Operation* Immediate(int status) {
 
 // Takes `async` (released on failure) and makes it the operation's.
 Operation* Started(bool sign, IUnknown* async, HRESULT hr, const char* call) {
-  IAsyncInfo* info = nullptr;
-  if (SUCCEEDED(hr)) {
-    hr = async->QueryInterface(winrt::IID_IAsyncInfo, reinterpret_cast<void**>(&info));
-  }
   if (FAILED(hr)) {
     Log(call, hr);
+    winrt::Release(async);
+    return Immediate(kFailed);
+  }
+  return internal::Wrap(sign, async);
+}
+
+}  // namespace
+
+namespace internal {
+
+Operation* Wrap(bool sign, IUnknown* async) {
+  IAsyncInfo* info = nullptr;
+  HRESULT hr = async->QueryInterface(winrt::IID_IAsyncInfo, reinterpret_cast<void**>(&info));
+  if (FAILED(hr)) {
+    Log("IAsyncOperation::QueryInterface(IAsyncInfo)", hr);
     winrt::Release(async);
     return Immediate(kFailed);
   }
@@ -247,7 +258,7 @@ Operation* Started(bool sign, IUnknown* async, HRESULT hr, const char* call) {
   return operation;
 }
 
-}  // namespace
+}  // namespace internal
 
 int Supported(HRESULT* hr) {
   *hr = S_OK;
@@ -374,7 +385,7 @@ Operation* StartSign(DWORD pid, const wchar_t* name, size_t length, const uint8_
   return Started(true, operation, r, "KeyCredential.RequestSignAsync");
 }
 
-int Await(Operation* o, std::vector<uint8_t>* bytes) {
+int Await(Operation* o, std::vector<uint8_t>* bytes, DWORD /*cancel_grace_ms*/) {
   bytes->clear();
   if (o->info == nullptr) return o->immediate;
   // A user may take minutes: no time-out, 1 -> 20 ms back-off.
