@@ -29,6 +29,7 @@
 #include <linux/android/binder.h>
 #include <gesher/binder_endpoint.h>
 #include <gesher/file_description.h>
+#include <gesher/rooted_storage_wire.h>
 
 #include "binder_internal.h"
 #include "binder_file_descriptions.h"
@@ -926,6 +927,36 @@ HANDLE binder_endpoint::OpenDropWorker() {
   const HANDLE connected = pipe.handle;
   pipe.handle = INVALID_HANDLE_VALUE;
   return connected;
+}
+
+int binder_endpoint::QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity) {
+  if (capacity == nullptr) return EFAULT;
+  auto& binding = binder_endpoint::Current();
+  if (!binding.IsGuest() || binding.IsStandalone()) return EACCES;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return ErrnoFromWin32(GetLastError());
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
+  uint32_t request[] = {3 * sizeof(uint32_t), wire::kAndroidDataCapacity, wire::kMagic, wire::kVersion};
+  struct {
+    uint32_t length;
+    int32_t status;
+  } header{};
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &header, sizeof(header), false, deadline)) return EIO;
+  if (header.status != 0) {
+    return header.length == sizeof(header.status) && header.status < 0 && header.status >= -4095
+        ? -header.status : EPROTO;
+  }
+  rooted_storage_wire::Filesystem result{};
+  if (header.length != sizeof(header.status) + sizeof(result)) return EPROTO;
+  if (!binder_bootstrap::Transfer(pipe.handle, &result, sizeof(result), false, deadline)) return EIO;
+  if (!binding.VerifyPipe(pipe.handle)) return EACCES;
+  *capacity = result;
+  return 0;
 }
 
 int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {

@@ -1883,6 +1883,34 @@ void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result =
   if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
 }
 
+void ServeAndroidDataCapacity(HANDLE pipe, In in) {
+  uint32_t version = 0;
+  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
+  const auto guest = g_peer_registry->Authenticate(pipe);
+  if (!guest || guest->role != peer::Role::kApplication ||
+      guest->generation.principal.container.size == 0) return;
+
+  // The trusted launcher converts the active profile's Android data directory
+  // before device startup. No guest input selects a directory or gets a handle.
+  const wchar_t* path = _wgetenv(L"GESHER_ANDROID_DATA_HOST_PATH");
+  ULARGE_INTEGER available{}, total{}, free{};
+  int32_t status = 0;
+  if (path == nullptr || *path == L'\0') {
+    status = -ENOENT;
+  } else if (!GetDiskFreeSpaceExW(path, &available, &total, &free)) {
+    status = -EIO;
+  }
+  if (!g_peer_registry->Live(guest)) return;
+  WireReply reply;
+  reply.Put<int32_t>(status);
+  if (status == 0) {
+    reply.Put<uint64_t>(available.QuadPart);
+    reply.Put<uint64_t>(total.QuadPart);
+    reply.Put<uint64_t>(free.QuadPart);
+  }
+  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
+}
+
 namespace playback = gesher::audio_state;
 
 struct AudioRegion {
@@ -2628,6 +2656,8 @@ void Serve(HANDLE pipe) {
 #ifdef GESHER_RECORD_LOCK_BROKER
       } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
         ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
+      } else if (!g_record_only && op == wire::kAndroidDataCapacity) {
+        ServeAndroidDataCapacity(pipe, in);
       } else if (op == wire::kAudioPlaybackPublish || op == wire::kAudioPlaybackQuery ||
                  op == wire::kAudioPlaybackSession || op == wire::kAudioDeviceControls) {
         ServeAudioPlayback(pipe, in, op);

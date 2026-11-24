@@ -11,6 +11,7 @@
 #include "windows_process_identity.h"
 
 namespace gesher::record_locks { struct LinuxFlock; }
+namespace gesher::rooted_storage_wire { struct Filesystem; }
 
 namespace gesher::binder_endpoint {
 
@@ -139,6 +140,7 @@ HANDLE OpenAudioRender(const std::u16string& label);
 HANDLE OpenAudioCapture(bool info_only);
 HANDLE OpenCamera(bool info_only);
 HANDLE OpenDropWorker();
+int QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity);
 int FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* input_and_output);
 // Closes the caller-owned pin after the broker has captured file identity.
 // The pointer is cleared only if the pin was closed.

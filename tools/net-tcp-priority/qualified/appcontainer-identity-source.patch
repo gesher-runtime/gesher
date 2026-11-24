@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc..31669f7 100644
+index ee26bfc..1b02809 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -54,0 +55,2 @@
@@ -80,7 +80,7 @@ index ee26bfc..31669f7 100644
 @@ -968 +998 @@ void CloseStagingFds(Buffer* buffer) {
 -    CloseRemoteHandle(buffer->proc->pid, staging);
 +    CloseRemoteHandle(buffer->proc, staging);
-@@ -1587,17 +1617,115 @@ bool ClientIsRestricted(HANDLE pipe) {
+@@ -1587,17 +1617,12 @@ bool ClientIsRestricted(HANDLE pipe) {
 -  if (!ImpersonateNamedPipeClient(pipe)) return true;
 -  HANDLE token = nullptr;
 -  BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
@@ -110,8 +110,9 @@ index ee26bfc..31669f7 100644
 +    std::lock_guard<std::mutex> lock(g_lock);
 +    for (const auto& entry : g_procs) {
 +      if (!g_peer_registry->Live(entry.second->identity)) revoked.push_back(entry.second);
-+    }
-+  }
+@@ -1606,2 +1631,25 @@ bool ClientIsRestricted(HANDLE pipe) {
+-  CloseHandle(token);
+-  return restricted;
 +  for (const auto& proc : revoked) ProcRelease(proc.get());
 +}
 +
@@ -137,8 +138,8 @@ index ee26bfc..31669f7 100644
 +    return false;
 +  }
 +  return allowed == 1 && (finish || g_peer_registry->Live(process));
-+}
-+
+@@ -1610 +1658,84 @@ bool ClientIsRestricted(HANDLE pipe) {
+-void ServeProc(HANDLE pipe, In in) {
 +void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
 +                          gesher::process_identity::Principal authority) {
 +  peer::OwnedHandle endpoint_owner(endpoint);
@@ -213,17 +214,15 @@ index ee26bfc..31669f7 100644
 +        }
 +        break;
 +      }
-@@ -1604,0 +1733,2 @@ bool ClientIsRestricted(HANDLE pipe) {
++    }
 +    uint32_t status = accepted ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
 +    if (!launch::Transfer(endpoint, &status, sizeof(status), true)) break;
-@@ -1606,2 +1736,3 @@ bool ClientIsRestricted(HANDLE pipe) {
--  CloseHandle(token);
--  return restricted;
++  }
 +  g_peer_registry->CloseAuthority();
 +  ReapRevokedPeers();
 +  ExitProcess(ERROR_BROKEN_PIPE);
-@@ -1610 +1741 @@ bool ClientIsRestricted(HANDLE pipe) {
--void ServeProc(HANDLE pipe, In in) {
++}
++
 +void ServeProc(HANDLE pipe, In in, bool operator_hello) {
 @@ -1613 +1744,15 @@ void ServeProc(HANDLE pipe, In in) {
 -  if (g_sandbox && ClientIsRestricted(pipe)) {
@@ -246,7 +245,7 @@ index ee26bfc..31669f7 100644
 +    if (g_peer_registry && !g_peer_registry->Live(identity)) return;
 @@ -1636,0 +1783 @@ void ServeProc(HANDLE pipe, In in) {
 +    proc->identity = std::move(identity);
-@@ -1653,0 +1801,337 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1653,0 +1801,365 @@ void ServeProc(HANDLE pipe, In in) {
 +#ifdef GESHER_RECORD_LOCK_BROKER
 +bool WaitRecordClient(HANDLE pipe, bool accept_ack);
 +#endif
@@ -330,6 +329,34 @@ index ee26bfc..31669f7 100644
 +  // The client closes after reading its reply. A bounded wait avoids both
 +  // discarding unread bytes on DisconnectNamedPipe and blocking in FlushFileBuffers.
 +  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
++}
++
++void ServeAndroidDataCapacity(HANDLE pipe, In in) {
++  uint32_t version = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
++  const auto guest = g_peer_registry->Authenticate(pipe);
++  if (!guest || guest->role != peer::Role::kApplication ||
++      guest->generation.principal.container.size == 0) return;
++
++  // The trusted launcher converts the active profile's Android data directory
++  // before device startup. No guest input selects a directory or gets a handle.
++  const wchar_t* path = _wgetenv(L"GESHER_ANDROID_DATA_HOST_PATH");
++  ULARGE_INTEGER available{}, total{}, free{};
++  int32_t status = 0;
++  if (path == nullptr || *path == L'\0') {
++    status = -ENOENT;
++  } else if (!GetDiskFreeSpaceExW(path, &available, &total, &free)) {
++    status = -EIO;
++  }
++  if (!g_peer_registry->Live(guest)) return;
++  WireReply reply;
++  reply.Put<int32_t>(status);
++  if (status == 0) {
++    reply.Put<uint64_t>(available.QuadPart);
++    reply.Put<uint64_t>(total.QuadPart);
++    reply.Put<uint64_t>(free.QuadPart);
++  }
++  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
 +}
 +
 +namespace playback = gesher::audio_state;
@@ -584,10 +611,10 @@ index ee26bfc..31669f7 100644
 +}
 +#endif
 +
-@@ -1736,0 +2221,2 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1736,0 +2249,2 @@ void ServeRights(HANDLE pipe, In in) {
 +  peer::Registry::Lease identity;
 +  peer::OwnedHandle legacy_client;
-@@ -1738,3 +2224,11 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1738,3 +2252,11 @@ void ServeRights(HANDLE pipe, In in) {
 -  if (in.Get(&version) && version == wire::kRightsVersion &&
 -      GetNamedPipeClientProcessId(pipe, &client_pid)) {
 -    client = OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid);
@@ -602,26 +629,26 @@ index ee26bfc..31669f7 100644
 +      legacy_client.reset(OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid));
 +      client = legacy_client.get();
 +    }
-@@ -1745 +2238,0 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1745 +2266,0 @@ void ServeRights(HANDLE pipe, In in) {
 -    if (client != nullptr) CloseHandle(client);
-@@ -1749,0 +2243 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1749,0 +2271 @@ void ServeRights(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -1885 +2378,0 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1885 +2406,0 @@ void ServeRights(HANDLE pipe, In in) {
 -  CloseHandle(client);
-@@ -1897,0 +2391,2 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+@@ -1897,0 +2419,2 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
 +      if (g_peer_registry && (!proc->identity ||
 +                              proc->identity->role != peer::Role::kServiceManager)) return -EPERM;
-@@ -1941,0 +2437,2 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1941,0 +2465,2 @@ void ServeThread(HANDLE pipe, In in) {
 +  const auto identity = g_peer_registry ? g_peer_registry->Authenticate(pipe)
 +                                        : peer::Registry::Lease{};
-@@ -1947 +2444,3 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1947 +2472,3 @@ void ServeThread(HANDLE pipe, In in) {
 -    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
 +    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead &&
 +        (!g_peer_registry || (identity && it->second->identity == identity &&
 +                              g_peer_registry->Live(identity)))) {
-@@ -1968,0 +2468 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1968,0 +2496 @@ void ServeThread(HANDLE pipe, In in) {
 +    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
-@@ -2028,0 +2529,89 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -2028,0 +2557,89 @@ void ServeThread(HANDLE pipe, In in) {
 +bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
 +  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
@@ -711,10 +738,10 @@ index ee26bfc..31669f7 100644
 +  settle();
 +}
 +
-@@ -2031 +2620 @@ void Serve(HANDLE pipe) {
+@@ -2031 +2648 @@ void Serve(HANDLE pipe) {
 -  if (ReadMessage(pipe, &msg)) {
 +  if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
-@@ -2035,6 +2624,29 @@ void Serve(HANDLE pipe) {
+@@ -2035,6 +2652,31 @@ void Serve(HANDLE pipe) {
 -      if (op == wire::kHelloProc) {
 -        ServeProc(pipe, in);
 -      } else if (op == wire::kHelloThread) {
@@ -728,6 +755,8 @@ index ee26bfc..31669f7 100644
 +#ifdef GESHER_RECORD_LOCK_BROKER
 +      } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
 +        ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
++      } else if (!g_record_only && op == wire::kAndroidDataCapacity) {
++        ServeAndroidDataCapacity(pipe, in);
 +      } else if (op == wire::kAudioPlaybackPublish || op == wire::kAudioPlaybackQuery ||
 +                 op == wire::kAudioPlaybackSession || op == wire::kAudioDeviceControls) {
 +        ServeAudioPlayback(pipe, in, op);
@@ -750,7 +779,7 @@ index ee26bfc..31669f7 100644
 +        } else if (op == wire::kHelloRights) {
 +          ServeRights(pipe, in);
 +        }
-@@ -2052,0 +2665,10 @@ int main(int argc, char** argv) {
+@@ -2052,0 +2695,10 @@ int main(int argc, char** argv) {
 +  launch::Startup bootstrap;
 +  g_record_only = gesher::binder_bootstrap::ReadStartupRecord(&bootstrap) &&
 +      bootstrap.endpoint == launch::Endpoint::kRecordBroker;
@@ -761,12 +790,12 @@ index ee26bfc..31669f7 100644
 +  if (g_record_only) return EXIT_FAILURE;
 +#endif
 +  const bool protected_launch = g_record_only || launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap);
-@@ -2054 +2676,3 @@ int main(int argc, char** argv) {
+@@ -2054 +2706,3 @@ int main(int argc, char** argv) {
 -  if (argc > 1) {
 +  if (g_record_only) {
 +    device = "standalone record locks";
 +  } else if (argc > 1) {
-@@ -2061,24 +2685,29 @@ int main(int argc, char** argv) {
+@@ -2061,24 +2715,29 @@ int main(int argc, char** argv) {
 -  std::wstring name = wire::kPipePrefix;
 -  for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
 -
@@ -820,7 +849,7 @@ index ee26bfc..31669f7 100644
 +    if (g_rights_doorbell == nullptr || positions_section == nullptr) {
 +      Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
 +    }
-@@ -2091,2 +2720,28 @@ int main(int argc, char** argv) {
+@@ -2091,2 +2750,28 @@ int main(int argc, char** argv) {
 -  g_sandbox = gesher::appcontainer::Enabled();
 -  if (g_sandbox) {
 +  if (g_record_only) {
@@ -949,23 +978,25 @@ index 3492add..26022df 100644
 +  ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage_client.cc
 +  ${CMAKE_CURRENT_LIST_DIR}/src/drop_mount.cc
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index 2fe5f43..aa76d46 100644
+index 2fe5f43..7f2bb3f 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -29,0 +30 @@
 +#include <gesher/binder_endpoint.h>
-@@ -35,0 +37 @@
+@@ -30,0 +32 @@
++#include <gesher/rooted_storage_wire.h>
+@@ -35,0 +38 @@
 +#include "record_lock_operation.h"
-@@ -112,0 +115 @@ std::wstring PipeName() {
+@@ -112,0 +116 @@ std::wstring PipeName() {
 +  if (binder_endpoint::Current().IsStandalone()) return {};
-@@ -117,0 +121,6 @@ std::wstring PipeName() {
+@@ -117,0 +122,6 @@ std::wstring PipeName() {
 +std::wstring RecordPipeName() {
 +  if (!binder_endpoint::Current().IsStandalone()) return PipeName();
 +  const DWORD pid = binder_endpoint::Current().StandaloneRecordBrokerPid();
 +  return pid != 0 ? wire::kStandaloneRecordPipe + std::to_wstring(pid) : std::wstring{};
 +}
 +
-@@ -121,2 +130,7 @@ HANDLE ConnectPipe(const std::wstring& name) {
+@@ -121,2 +131,7 @@ HANDLE ConnectPipe(const std::wstring& name) {
 -                           0, nullptr);
 -    if (h != INVALID_HANDLE_VALUE) return h;
 +                           SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
@@ -975,7 +1006,7 @@ index 2fe5f43..aa76d46 100644
 +      SetLastError(ERROR_ACCESS_DENIED);
 +      return INVALID_HANDLE_VALUE;
 +    }
-@@ -762,0 +777,206 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
+@@ -762,0 +778,236 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 +bool binder_endpoint::EnrollChild(HANDLE process) {
 +  const ULONGLONG deadline = GetTickCount64() + 5000;
 +  const std::wstring name = RecordPipeName();
@@ -1130,6 +1161,36 @@ index 2fe5f43..aa76d46 100644
 +  return connected;
 +}
 +
++int binder_endpoint::QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity) {
++  if (capacity == nullptr) return EFAULT;
++  auto& binding = binder_endpoint::Current();
++  if (!binding.IsGuest() || binding.IsStandalone()) return EACCES;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return EACCES;
++  RecordPipe pipe{ConnectPipe(name)};
++  if (pipe.handle == INVALID_HANDLE_VALUE) return ErrnoFromWin32(GetLastError());
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
++  uint32_t request[] = {3 * sizeof(uint32_t), wire::kAndroidDataCapacity, wire::kMagic, wire::kVersion};
++  struct {
++    uint32_t length;
++    int32_t status;
++  } header{};
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, &header, sizeof(header), false, deadline)) return EIO;
++  if (header.status != 0) {
++    return header.length == sizeof(header.status) && header.status < 0 && header.status >= -4095
++        ? -header.status : EPROTO;
++  }
++  rooted_storage_wire::Filesystem result{};
++  if (header.length != sizeof(header.status) + sizeof(result)) return EPROTO;
++  if (!binder_bootstrap::Transfer(pipe.handle, &result, sizeof(result), false, deadline)) return EIO;
++  if (!binding.VerifyPipe(pipe.handle)) return EACCES;
++  *capacity = result;
++  return 0;
++}
++
 +int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
 +  if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
 +  const std::wstring name = RecordPipeName();
@@ -1182,14 +1243,14 @@ index 2fe5f43..aa76d46 100644
 +  return !error && reply.size() != sizeof(int32_t) ? EPROTO : error;
 +}
 +
-@@ -782 +1002 @@ int OpenBinder(int flags) {
+@@ -782 +1033 @@ int OpenBinder(int flags) {
 -  hello.Put<uint32_t>(wire::kHelloProc);
 +  hello.Put<uint32_t>(binder_endpoint::Current().IsOperator() ? wire::kHelloOperator : wire::kHelloProc);
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 50a85fb..2fbd2c7 100644
+index 50a85fb..641db1a 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
-@@ -111,0 +112,31 @@ enum Op : uint32_t {
+@@ -111,0 +112,34 @@ enum Op : uint32_t {
 +  // Same framing as kHelloProc. The protected broker authenticates the
 +  // Windows device operator and assigns Android shell; the fields grant no role.
 +  kHelloOperator = 12,
@@ -1221,7 +1282,10 @@ index 50a85fb..2fbd2c7 100644
 +  kCamera = 23,
 +  // Authenticated worker for Windows file drops.
 +  kDropWorker = 24,
-@@ -147,0 +179 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
++  // -> {magic, version}; <- {status[, available, total, free (u64 bytes)]}.
++  // The host chooses the Android data volume; the sender supplies no path.
++  kAndroidDataCapacity = 25,
+@@ -147,0 +182 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
 +constexpr const wchar_t kStandaloneRecordPipe[] = L"\\\\.\\pipe\\gesher-binder-standalone-record-";
 diff --git a/compat/posix/src/dirent.cc b/compat/posix/src/dirent.cc
 index 572f641..dfd3a4d 100644
@@ -2453,7 +2517,7 @@ index c504267..3374c5c 100644
 +    return INVALID_HANDLE_VALUE;
 +  }
 diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
-index 30d03bc86..3051bcb4e 100644
+index 30d03bc..3051bcb 100644
 --- a/tests/native/ofd_transfer_host_test.cc.in
 +++ b/tests/native/ofd_transfer_host_test.cc.in
 @@ -86 +86,2 @@ constexpr DWORD CREATE_UNICODE_ENVIRONMENT = 0x400, EXTENDED_STARTUPINFO_PRESENT
@@ -2502,7 +2566,7 @@ index 30d03bc86..3051bcb4e 100644
 +}
 +static HANDLE OpenNullDevice(DWORD, bool) { std::abort(); }
 diff --git a/tools/test_ofd_transfer_contracts.py b/tools/test_ofd_transfer_contracts.py
-index 17667bdeb..0b1f14efc 100644
+index 17667bd..0b1f14e 100644
 --- a/tools/test_ofd_transfer_contracts.py
 +++ b/tools/test_ofd_transfer_contracts.py
 @@ -26,0 +27,25 @@ def without_includes(source):
@@ -2540,7 +2604,7 @@ index 17667bdeb..0b1f14efc 100644
 @@ -55,0 +79 @@ def main():
 +    require_rendered_host_source(template)
 diff --git a/tools/test_revocable_file_contracts.py b/tools/test_revocable_file_contracts.py
-index c2fe1eef5..79fc5e7c5 100644
+index c2fe1ee..79fc5e7 100644
 --- a/tools/test_revocable_file_contracts.py
 +++ b/tools/test_revocable_file_contracts.py
 @@ -17,0 +18,2 @@ import tempfile

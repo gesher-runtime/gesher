@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -215,8 +216,11 @@ public final class Zygote {
             log.getParentFile().mkdirs();
             paths[i] = windowsPath(log.getPath());
         }
+        List<String> hostEnvironment = new ArrayList<>(environment);
+        hostEnvironment.add("GESHER_ANDROID_DATA_HOST_PATH="
+                + windowsPath(Device.dataDir()));
         int[] pids = nativeStartProtectedDevice(device, commands.toArray(new String[0]),
-                paths, environment.toArray(new String[0]), scoped);
+                paths, hostEnvironment.toArray(new String[0]), scoped);
         if (pids.length != 3) throw new IllegalStateException("Protected device startup failed");
         return pids;
     }

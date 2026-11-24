@@ -32,6 +32,8 @@ std::wstring DescriptorPath(HANDLE file);
 std::optional<rooted_storage_wire::Op> LookupBootstrap(const std::wstring& mapped);
 int OpenBootstrap(rooted_storage_wire::Op operation, HANDLE* file);
 
+// Installed guests query the device broker. Standalone guests use their
+// rooted-storage host when one is present.
 bool HasBroker();
 int StatAndroidData(rooted_storage_wire::Filesystem* filesystem);
 

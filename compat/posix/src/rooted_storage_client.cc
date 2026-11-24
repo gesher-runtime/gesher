@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <errno.h>
 #include <gesher/binder_bootstrap.h>
+#include <gesher/binder_endpoint.h>
 #include <gesher/cohost_bootstrap.h>
 
 #include <algorithm>
@@ -117,12 +118,18 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
 }  // namespace
 
 bool HasBroker() {
+  const auto& binding = binder_endpoint::Current();
+  if (binding.IsGuest() && !binding.IsStandalone()) return true;
   const auto& state = cohost_bootstrap::Current();
   return state && !state.storage_pipe.empty();
 }
 
 int StatAndroidData(wire::Filesystem* filesystem) {
   if (filesystem == nullptr) return EFAULT;
+  const auto& binding = binder_endpoint::Current();
+  if (binding.IsGuest() && !binding.IsStandalone()) {
+    return binder_endpoint::QueryAndroidDataCapacity(filesystem);
+  }
   wire::Reply reply;
   return Call(wire::Op::kStatAndroidData, {true, 0, wire::kCredential, {}}, {}, 0, &reply, filesystem);
 }

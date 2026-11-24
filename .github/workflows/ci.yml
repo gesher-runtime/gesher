@@ -1259,13 +1259,14 @@ jobs:
           $env:GESHER_APP_WINDOW = 'headless'
           # The device's processes log how they execute (checked below, ADR 0081).
           $env:GESHER_LOG_EXECUTION = '1'
-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_ANDROID_DATA true 2>&1 | Out-String
           $code = $LASTEXITCODE
           Remove-Item Env:GESHER_LOG_EXECUTION
           Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
-              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume') {
+              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume' -or
+              $out -notmatch 'LifecycleActivity Android data capacity and device-state isolation verified') {
             Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
             throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
           }
