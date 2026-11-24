@@ -32,12 +32,16 @@ $end = $text.IndexOf("`n}", $text.IndexOf('if (-not $script:PanelInstanceCreated
 if ($start -lt 0 -or $end -lt 0) { throw 'The single-panel startup block was not found' }
 $startup = $text.Substring($start, $end + 2 - $start)
 $suffix = [guid]::NewGuid().ToString('N')
-$startup = $startup.Replace('Local\Gesher.ControlPanel', "Local\Gesher.ControlPanelCheck$suffix")
+$runtimeHelper = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($PanelPath))) 'gesher-runtime-files.ps1'
+. $runtimeHelper
+$probeRoot = Join-Path ([IO.Path]::GetTempPath()) "gesher-panel-profile-$suffix"
+$instanceName = Get-GesherControlPanelName $probeRoot
+$startup = ". '" + $runtimeHelper.Replace("'", "''") + "'`n`$root = '" + $probeRoot.Replace("'", "''") + "'`n" + $startup
 $probe = Join-Path ([IO.Path]::GetTempPath()) "gesher-panel-start-$suffix.ps1"
 [IO.File]::WriteAllText($probe, $startup + "`nexit 7`n")
 $created = $false
-$mutex = [System.Threading.Mutex]::new($false, "Local\Gesher.ControlPanelCheck$suffix", [ref] $created)
-$show = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, "Local\Gesher.ControlPanelCheck$suffix.Show")
+$mutex = [System.Threading.Mutex]::new($false, $instanceName, [ref] $created)
+$show = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($instanceName + '.Show'))
 try {
     Assert-Request $created 'The check could not create its panel mutex'
     & powershell -NoProfile -ExecutionPolicy Bypass -File $probe

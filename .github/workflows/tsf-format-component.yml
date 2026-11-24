@@ -61,7 +61,7 @@ jobs:
           python3 tools/windows4/tsf-component-manifest.py
       - uses: actions/upload-artifact@v4
         with:
-          name: tsf-format-${{ github.sha }}-a${{ github.run_attempt }}
+          name: ${{ github.workflow == 'ci' && 'tsf-format' || format('tsf-format-{0}-a{1}', github.sha, github.run_attempt) }}
           path: fixture/
           if-no-files-found: error
           retention-days: 14
@@ -72,8 +72,9 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
-    timeout-minutes: 25
+    # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+    # published hourly reset instead of failing the job.
+    timeout-minutes: 71
     env:
       GH_TOKEN: ${{ github.token }}
     steps:

@@ -1,4 +1,4 @@
-# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+﻿# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # Exercise production dialog wrappers and, on Windows, the actual WPF windows.
 # APK verification has Java behavior tests; source matches cannot verify signatures.
 param(
@@ -88,14 +88,16 @@ function Test-PreparedDialogText([string] $FunctionName, [bool] $OptionalText) {
             }
         }
     }
-    Assert-Dialog ($readerAt -gt 0 -and $loadAt -eq $readerAt + 1 -and $ownerAt -gt $loadAt + 1) 'Production text setup is between XAML loading and owner assignment'
+    Assert-Dialog ($loadAt -gt 0 -and $ownerAt -gt $loadAt + 1) 'Production text setup is between XAML loading and owner assignment'
     $Title = $literalMessage; $Message = $literalMessage
     $Detail = if ($OptionalText) { $literalMessage } else { $null }
     $SubTitle = if ($OptionalText) { $literalMessage } else { $null }
     $ConfirmText = $literalMessage; $CancelText = $literalMessage
     $IsDanger = $true; $IsWarning = $false; $IsError = $OptionalText
     $flowDirection = if ($script:GesherUiLanguage -eq 'he') { 'RightToLeft' } else { 'LeftToRight' }
-    . ([scriptblock]::Create(($statements[0..($readerAt - 1)] | ForEach-Object { $_.Extent.Text }) -join [Environment]::NewLine))
+    . ([scriptblock]::Create(($statements[0..($loadAt - 1)] | ForEach-Object { $_.Extent.Text }) -join [Environment]::NewLine))
+    $viewName = if ($FunctionName -eq 'Show-ModernConfirmDialog') { 'confirm' } else { 'message' }
+    [xml]$dialogXaml = [IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PanelPath) "gesher-panel-$viewName.xaml"))
     $controls = @{}
     foreach ($element in $dialogXaml.SelectNodes('//*[@Name]')) {
         $controls[$element.GetAttribute('Name')] = [pscustomobject]@{
@@ -104,7 +106,7 @@ function Test-PreparedDialogText([string] $FunctionName, [bool] $OptionalText) {
             Visibility = $element.GetAttribute('Visibility')
         }
     }
-    $dialog = [pscustomobject]@{ Title = $dialogXaml.DocumentElement.GetAttribute('Title'); Controls = $controls }
+    $dialog = [pscustomobject]@{ Title = $dialogXaml.DocumentElement.GetAttribute('Title'); Controls = $controls; Resources = @{} }
     $dialog | Add-Member -MemberType ScriptMethod -Name FindName -Value { param($name) $this.Controls[$name] }
     . ([scriptblock]::Create(($statements[($loadAt + 1)..($ownerAt - 1)] | ForEach-Object { $_.Extent.Text }) -join [Environment]::NewLine))
     Assert-Dialog ($dialog.Title -ceq $Title) 'Dialog title retains literal braces, XML characters and all whitespace'
@@ -143,6 +145,7 @@ if ($env:OS -ne 'Windows_NT') {
 Assert-Dialog ([Threading.Thread]::CurrentThread.ApartmentState -eq 'STA') 'WPF checks run in STA'
 Write-Host 'WPF PHASE: loading assemblies'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, UIAutomationProvider, UIAutomationTypes
+. (Join-Path (Split-Path -Parent $PanelPath) 'gesher-panel-view.ps1')
 . ([scriptblock]::Create($script:DialogFunctions['Show-ModernConfirmDialog']))
 
 $references = @(

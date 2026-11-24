@@ -68,6 +68,7 @@ public final class GlBindingsTest {
       return;
     }
     pbuffer(egl, display, config);
+    es3(egl, display);
     gl10(egl, display);
     window(egl, display, config);
     windowInsets(egl, display, config);
@@ -157,6 +158,43 @@ public final class GlBindingsTest {
     egl.eglMakeCurrent(display, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_CONTEXT);
     egl.eglDestroySurface(display, surface);
     egl.eglDestroyContext(display, context);
+  }
+
+  // --- the advertised OpenGL ES version --------------------------------------------------------
+
+  /**
+   * ro.opengles.version (build.prop; ConfigurationInfo.reqGlEsVersion) is what the device
+   * gives: ES 3.0, so an ES 3 config and context exist and GL_VERSION is at least 3.0.
+   */
+  private static void es3(EGL10 egl, EGLDisplay display) {
+    int advertised = android.os.SystemProperties.getInt("ro.opengles.version", 0);
+    check(advertised == 0x30000,
+        "ro.opengles.version advertises OpenGL ES 3.0 (0x" + Integer.toHexString(advertised) + ")");
+    int[] attribs = {EGL10.EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT_KHR */,
+        EGL10.EGL_RED_SIZE, 8, EGL10.EGL_GREEN_SIZE, 8, EGL10.EGL_BLUE_SIZE, 8,
+        EGL10.EGL_SURFACE_TYPE, EGL10.EGL_PBUFFER_BIT, EGL10.EGL_NONE};
+    EGLConfig[] configs = new EGLConfig[1];
+    int[] count = new int[1];
+    boolean chosen = egl.eglChooseConfig(display, attribs, configs, 1, count) && count[0] == 1;
+    EGLContext context = chosen ? context(egl, display, configs[0], 3) : EGL10.EGL_NO_CONTEXT;
+    EGLSurface surface = chosen ? egl.eglCreatePbufferSurface(display, configs[0],
+        new int[] {EGL10.EGL_WIDTH, 8, EGL10.EGL_HEIGHT, 8, EGL10.EGL_NONE}) : EGL10.EGL_NO_SURFACE;
+    boolean current = context != EGL10.EGL_NO_CONTEXT && surface != EGL10.EGL_NO_SURFACE
+        && egl.eglMakeCurrent(display, surface, surface, context);
+    String glVersion = current ? GLES20.glGetString(GLES20.GL_VERSION) : null;
+    int actual = 0;
+    java.util.regex.Matcher m = glVersion == null ? null
+        : java.util.regex.Pattern.compile("^OpenGL ES (\\d+)\\.(\\d+)").matcher(glVersion);
+    if (m != null && m.find()) {
+      actual = (Integer.parseInt(m.group(1)) << 16) | Integer.parseInt(m.group(2));
+    }
+    check(current && actual >= advertised,
+        "EGL10: an ES 3 context gives at least the advertised version (" + glVersion + ")");
+    if (current) {
+      egl.eglMakeCurrent(display, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_CONTEXT);
+    }
+    if (surface != EGL10.EGL_NO_SURFACE) egl.eglDestroySurface(display, surface);
+    if (context != EGL10.EGL_NO_CONTEXT) egl.eglDestroyContext(display, context);
   }
 
   // --- GL10 on an ES 1 context ---------------------------------------------------------------

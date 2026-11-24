@@ -132,7 +132,9 @@ jobs:
           for tool in clang clang++ bison flex ccache; do command -v "$tool"; done
       - name: Install build tools
         if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
-        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
 
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
@@ -400,6 +402,22 @@ jobs:
           grep -q '^javac exit 0, 0 errors' build-http-legacy.log
           test -f out/http-legacy/org.apache.http.legacy.jar
 
+      # android.test.base, android.test.mock and android.test.runner, the libraries
+      # Android declares in platform.xml (frameworks/base/test-base, test-mock and
+      # test-runner, with JUnit 3 from test-junit), each a java_sdk_library built
+      # against the framework's classes (--provided: what those classes already hold)
+      # and installed as /system/framework, not on the boot class path.
+      - name: Build android.test.base, android.test.mock and android.test.runner
+        run: |
+          provided='--provided framework --provided framework-annotations-lib --provided app-compat-annotations --provided unsupportedappusage'
+          for module in android.test.base android.test.mock android.test.runner; do
+            python3 tools/framework/build.py $module --aosp third_party/aosp \
+              --out out/$module --core-classes out/coremod --classpath out/framework/classes \
+              $provided --checkout --javac-memory 4g 2>&1 | grep -v '^warning:' | tee build-$module.log
+            grep -q '^javac exit 0, 0 errors' build-$module.log
+            test -f out/$module/$module.jar
+          done
+
       # gesher-app's driver and its test APK compile against the framework's
       # classes, so they are built here, next to them.
       - name: Build gesher-app and lifecycle.apk
@@ -564,6 +582,12 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Camera runtime permission and attribution admission
+        run: |
+          python3 tools/test_camera_permission.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Permission policy work counts and publication contracts
         run: |
           python3 tools/test_permission_performance.py --java-home "$JAVA_HOME" \
@@ -636,6 +660,12 @@ jobs:
       - name: Floating activity roots and task window placement
         run: |
           python3 tools/test_window_parent_placement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
+      - name: Activity window activation and single-process finish
+        run: |
+          python3 tools/test_activity_window_activation.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 
@@ -868,6 +898,8 @@ jobs:
           cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
           cp out/app/com.android.location.provider.jar dist-framework/
           cp out/http-legacy/org.apache.http.legacy.jar dist-framework/
+          cp out/android.test.base/android.test.base.jar out/android.test.mock/android.test.mock.jar \
+            out/android.test.runner/android.test.runner.jar dist-framework/
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
             out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk out/app/gmsapp.apk dist-framework/
           cp out/framework-res-after/framework-res.apk dist-framework/framework-res-after.apk
@@ -951,6 +983,7 @@ jobs:
           path: |
             build-framework.log
             build-http-legacy.log
+            build-android.test.*.log
             framework-res.log
             out/framework/javac.log
             out/framework/*.sources.txt

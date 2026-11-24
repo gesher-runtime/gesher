@@ -40,6 +40,21 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   is not executable) and the vectored handler resumes it at that stub.
 - **Faults** in guest code end the process with an Android-style
   `Fatal signal` report and exit status 128 + signal, never a hang.
+- **Signals** are the shim's (`signal_bionic.cc`, docs/native-libs.md). A
+  signal another thread queues for a guest thread (`pthread_kill`, `tgkill`,
+  `tkill`) makes the translator stop that thread's guest code at its next
+  block boundary (`gesher_arm64_interrupt_thread`, dynarmic `HaltExecution`)
+  and run the shim's delivery there, below the live guest frames. A guest
+  `SA_SIGINFO` handler's `ucontext_t` is Bionic's arm64 one, its
+  `uc_mcontext` the kernel's `struct sigcontext` with an FPSIMD record, filled
+  with the guest registers where the thread took the signal
+  (`gesher_arm64_guest_context`): at a block boundary, or at the guest call of
+  the host function it is in. Changes a handler makes to it are not applied;
+  the FPCR/FPSR the handler leaves are (`gesher_arm64_guest_fp`), as
+  sigreturn restores them. dynarmic checks for the stop when blocks link
+  directly; its return-stack-buffer and fast-dispatch terminals do not, so a
+  loop made only of indirect branches or returns, with no direct branch or
+  host call in it, is not stopped until it leaves that loop.
 
 - **The ELF loader** (`compat/elf`) maps `EM_AARCH64` objects with executable
   segments non-executable, applies the AArch64 relocations and TLS, and
@@ -241,8 +256,7 @@ getrusage, sched params), bound only when the shim has no such name.
 - A real arm64-only app now reaches its first frame in e2e (TIC-80,
   ci 40307919084 attempt 2); the remaining shim gaps above belong to the
   shim (compat/bionic) so x86_64 apps get them too.
-- Guest JIT code (RWX pages the guest writes), guest signal handlers with an
-  arm64 `ucontext`, LSE atomics (dynarmic does not decode them; HWCAP hides
+- Guest JIT code (RWX pages the guest writes), LSE atomics (dynarmic does not decode them; HWCAP hides
   them), HFAs by value.
 
 ### Dead ends ruled out

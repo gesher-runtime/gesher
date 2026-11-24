@@ -12,7 +12,7 @@ Bluetooth, also in compat/devices, has its own page: [bluetooth.md](bluetooth.md
 | Location service (`location`) | `app/java/com/gesher/server/LocationManagerService.java` (registered in `Services.create`) |
 | Windows' location service | `app/java/com/gesher/server/WindowsLocation.java`, `compat/devices/location_win.cc` (Windows.Devices.Geolocation.Geolocator through its ABI), `compat/devices/winrt.cc` (combase's WinRT functions looked up at run time) |
 | framework-location (`LocationManager`, `ILocationManager`...) | not in framework.jar (on a device it is its own boot jar): `app/build.sh` puts the classes the framework build compiled from `frameworks/base/location/java` into gesher-app.jar, replacing app/compat-java's placeholders |
-| Sensors | `compat/devices/sensors_jni.cc` (SystemSensorManager and BaseEventQueue natives, replacing device_standins.cc's), `compat/devices/sensors.cc` (Windows.Devices.Sensors; GESHER_SENSOR_TEST's sensors; one sampling thread) |
+| Sensors | `compat/devices/sensors_jni.cc` (SystemSensorManager and BaseEventQueue natives, replacing device_standins.cc's), `compat/devices/sensors.cc` (Windows.Devices.Sensors; the stationary accelerometer; GESHER_SENSOR_TEST's sensors; one sampling thread) |
 | Cameras | `compat/devices/camera_mf.cc` (Media Foundation capture devices, NV12 through an IMFSourceReader; GESHER_CAMERA_TEST's camera), `camera_metadata_jni.cc` (CameraMetadataNative over system/media's libcamera_metadata), `camera_frames.cc` (ImageReader, SurfaceUtils, frames into surfaces) |
 | Registration | `compat/devices/devices_jni.cc` (`register_gesher_devices`, a row in `compat/framework/android_runtime.cc` after the device stand-ins); `compat/devices/devices.cmake` (included from CMakeLists.txt) |
 
@@ -25,7 +25,12 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 - Providers `passive`, `network`, `fused`, `gps`. gps, network and fused are
   Windows' location service (gps asks for high accuracy); passive gets what
-  the others report. `isLocationEnabled()` is Windows' setting for desktop
+  the others report.
+- Features: `android.hardware.location` and `location.network` always;
+  `location.gps` only when Windows has a GNSS receiver (a present device
+  interface of the GNSS driver class, `GUID_DEVINTERFACE_GNSS`, which Windows'
+  location service uses for high-accuracy fixes). Google Play filters apps that
+  require `location.gps` on it. `isLocationEnabled()` is Windows' setting for desktop
   apps ("Let desktop apps access your location"), or a test provider being on.
 - Permissions: the app's manifest must ask for ACCESS_FINE_LOCATION or
   ACCESS_COARSE_LOCATION (Gesher grants what an app requests; there is no
@@ -58,11 +63,24 @@ Windows without them (no location service, no Media Foundation) gets clean
   TYPE_ACCELEROMETER (m/s^2, Android's sign), TYPE_GYROSCOPE (rad/s),
   TYPE_MAGNETIC_FIELD, TYPE_LIGHT and TYPE_ROTATION_VECTOR (the quaternion).
   Readings are polled at the rate asked for; on-change sensors report changes
-  only. The CI runners have none: the list is empty and `registerListener`
-  answers false (checked).
+  only. The CI runners have none.
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.
+- When Windows has no accelerometer, gyrometer or orientation sensor, Gesher
+  adds "Gesher Stationary Accelerometer" (vendor Gesher): a PC stands still, so
+  it reads gravity only, on Z (lying face up), continuously, at up to 100 Hz.
+  Z rather than an upright monitor's Y is deliberate: an app's
+  OrientationEventListener then reports no tilt (ORIENTATION_UNKNOWN), so apps
+  that follow the device's tilt do not rotate their content on a desk.
+  This is a maintainer-approved desktop default (CONTRIBUTING.md). It is the
+  same in every process and mode (single process and the Gesher device's app
+  processes; the native sensor list decides, nothing is set per package), and
+  any real motion sensor replaces it. A motion sensor class Windows fails to
+  activate (rather than reporting none) keeps it out, so it never stands in for
+  hardware that is present. `GESHER_SENSOR_FALLBACK=0` turns it off:
+  the list is then empty on the runners and `registerListener` answers false.
+  Both are checked in the single-process mode.
 - Each event queue is an eventfd watched by the queue's Looper, as Android's
   is a BitTube's fd; events are dispatched on the Looper's thread
   (`dispatchSensorEvent`, `dispatchFlushCompleteEvent`). No direct channels,
@@ -99,9 +117,57 @@ Windows without them (no location service, no Media Foundation) gets clean
   timing. A virtual camera (`MFCreateVirtualCamera`, Windows 11) needs the
   source as a registered COM server and the Frame Server service; not done.
 - Characteristics: an EXTERNAL-level camera (as Android's USB cameras): fixed
-  focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
-  device's sizes, LENS_FACING_EXTERNAL (the test camera: BACK), one partial
+  focus unless the camera really focuses (below), auto exposure and white
+  balance, YUV_420_888, PRIVATE and JPEG at the
+  device's sizes, LENS_FACING_FRONT unless configured as the rear camera
+  (`GESHER_CAMERA_REAR_ID`; the test camera: BACK), one partial
   result, the available request/result/characteristics keys.
+- Autofocus: a camera has it when its driver's focus control
+  (`IAMCameraControl`, which Media Foundation's capture source answers to
+  `QueryInterface`; UVC's Focus (Absolute) and Focus, Auto controls) reports
+  both the automatic and the manual flag over a range of lens positions
+  (`HasAutofocus` in camera_mf.cc; the device line's `af` flag,
+  `WindowsCamera.Device.autofocus`). The test camera has fixed focus. Such a
+  camera offers CONTROL_AF_AVAILABLE_MODES AUTO, CONTINUOUS_VIDEO and
+  CONTINUOUS_PICTURE (not OFF: manual focus by LENS_FOCUS_DISTANCE is not
+  implemented), a nonzero LENS_INFO_MINIMUM_FOCUS_DISTANCE (10) in the
+  unspecified units of UNCALIBRATED distances (it claims no real distance), no AF regions, and continuous focus in the default
+  requests (CONTINUOUS_VIDEO for record and video snapshot). A fixed-focus
+  camera keeps `{OFF}`, 0 and AF state INACTIVE as before.
+  `CameraAutoFocus` runs Android's AF state machine on the capture thread: the
+  driver focuses (its automatic focus on in the continuous modes and during an
+  AUTO scan) and a lock turns it off with the lens kept where it is (the
+  position read back and set as manual). A UVC control does not say when a scan
+  has ended, so Gesher observes it: converged when the reported lens position
+  and the centre's sharpness (normalised luma gradient) stay still for 400 ms
+  after at least 600 ms of scanning; failed after 4 s (a dark or featureless
+  picture never converges). A converged scan is locked, then the picture must
+  keep 80% of its sharpness 150 ms later, else NOT_FOCUSED_LOCKED. Triggers
+  follow CaptureResult's tables: AUTO's START scans (ACTIVE_SCAN, then
+  FOCUSED_LOCKED or NOT_FOCUSED_LOCKED), CANCEL stops; in the continuous modes
+  the driver's scans are PASSIVE_SCAN/PASSIVE_FOCUSED/PASSIVE_UNFOCUSED, START
+  locks (CONTINUOUS_PICTURE during a scan once it ends), CANCEL resumes.
+  LENS_STATE is MOVING during a scan. `FEATURE_CAMERA_AUTOFOCUS` is reported
+  only when the camera reported as `FEATURE_CAMERA` (a configured rear camera)
+  has autofocus, as Android defines it for the rear camera. Not verified
+  without such a camera: drivers that report a stale lens position while
+  focusing automatically would move the lens at the lock (the sharpness check
+  then reports NOT_FOCUSED_LOCKED), and whether a driver keeps a locked focus
+  when the legacy `takePicture` reopens the device (Gesher locks it again).
+- Orientation (maintainer-approved desktop adaptation, CONTRIBUTING.md): the
+  frames are upright for the desktop monitor and Gesher does not rotate preview
+  buffers for the legacy `setDisplayOrientation`. So SENSOR_ORIENTATION and the
+  legacy `CameraInfo.orientation` follow the display rotation of the Activity
+  using the camera (its own `Display.getRotation()`; the focused task's only in
+  a process without an Activity, as a service): Android's formulas then ask
+  for no rotation and apps keep unswapped preview sizes in landscape tasks.
+  A rear camera reads the Activity's rotation in degrees (90 at ROTATION_90), a
+  front camera its mirror (270 at ROTATION_90), the same through Camera2, the
+  legacy API and CameraX. A PC's camera is reported FRONT (and
+  FEATURE_CAMERA_FRONT) unless configured as rear: it faces the user
+  (maintainer decision, CONTRIBUTING.md). An app that caches the value (CameraX caches
+  CameraCharacteristics per process) keeps the rotation of its first read; a
+  later change of its task's orientation is not followed.
 - `CameraDeviceUser` (CameraDeviceClient): streams from OutputConfigurations,
   `submitRequestList` (bursts get their frame numbers at submission; the
   repeating request one per frame), `cancelRequest`, `flush`, `waitUntilIdle`,
@@ -115,15 +181,20 @@ Windows without them (no location service, no Media Foundation) gets clean
   after `onConfigured`. An open that fails there is retried by the first
   request, which reports the failure. Then one frame per request, for each
   target: an ImageReader gets YUV_420_888 (I420 planes),
-  RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
+  PRIVATE (the same I420, no visible planes; the reader also has a native
+  producer Surface, so apps can draw into it), RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
   reader's size; another surface with a native window gets RGBA through
   `ANativeWindow_lock`. Then `onCaptureStarted` and the result
   (`CameraMetadataInfo.metadata`, SENSOR_TIMESTAMP and the 3A states).
   `onDeviceIdle` when nothing is left. A second client of the same camera
   evicts the first (onError DISCONNECTED), as cameraserver does.
-- Permission: `connectDevice` needs `android.permission.CAMERA` in the app's
-  manifest (`IPackageManager.getPackageInfo`), else `ERROR_PERMISSION_DENIED`
-  (a SecurityException in the app).
+- Permission: `connectDevice` checks the current `android.permission.CAMERA`
+  grant through `IPackageManager.checkUidPermission` on every open. Its attribution
+  must identify the local application UID/PID (or the Android calling-identity
+  sentinels), and `getPackageUid` must confirm that the named package belongs to
+  that UID. Same-UID sibling attribution remains valid. Denial produces
+  `ERROR_PERMISSION_DENIED` (a SecurityException in the app), before replacing
+  an existing camera owner. Declaring CAMERA alone is insufficient.
 - Natives: `CameraMetadataNative` over system/media's libcamera_metadata
   (`camera_metadata_jni.cc`; no vendor tags; a Parcel carries the packed
   buffer, in-process only); `CameraDeviceImpl`'s result queue natives answer
@@ -135,11 +206,15 @@ Windows without them (no location service, no Media Foundation) gets clean
 - Legacy `android.hardware.Camera` (hwsvc2, ADR 0051): the same devices as
   Camera2, in the app's process (`LegacyCamera`, natives in camera_frames.cc that
   call it): ids in Windows' order, a PC's camera FRONT, the test camera BACK;
-  parameters of a fixed-focus camera without flash, zoom or face detection; preview
+  parameters of a camera without flash, zoom or face detection; preview
   callbacks (NV21 or YV12, callback buffers) and a preview surface with a native
   window; `setPreviewTexture` accepted without frames; `takePicture` (shutter, a
   null raw image, postview, JPEG at the picture size; the preview stops);
-  `autoFocus` succeeds at once; CAMERA in the manifest, else `Fail to connect to
+  `autoFocus` succeeds at once with fixed focus; on a camera with autofocus the
+  focus modes are auto (the default), continuous-video and continuous-picture,
+  `autoFocus` (while previewing) is the AF trigger of the preview's
+  `CameraAutoFocus` and answers success or failure when the lens is locked, and
+  `cancelAutoFocus` cancels it; a current CAMERA grant is required, else `Fail to connect to
   camera service`. Without a camera: `getNumberOfCameras()` 0, `open()` null.
 - `MediaStore.ACTION_IMAGE_CAPTURE`: Gesher Camera (`app/gesher-camera`,
   `gesher-camera.apk` next to dalvikvm.exe; `CameraApp`): the persistent device
@@ -147,7 +222,14 @@ Windows without them (no location service, no Media Foundation) gets clean
   none (so without a camera nothing resolves it, as on a device without one). A
   Camera2 preview in an ImageView with Take photo and Cancel; the JPEG (largest size)
   goes to EXTRA_OUTPUT (RESULT_OK) or comes back as a 160-pixel-wide thumbnail in
-  `data`. `com.gesher.camera.extra.AUTO_CAPTURE_MS` takes it by itself (tests).
+  `data`. It requests ordinary runtime CAMERA consent before starting camera work;
+  refusal returns `RESULT_CANCELED`. `com.gesher.camera.extra.AUTO_CAPTURE_MS`
+  takes it by itself after permission admission (tests).
+- This opening check is one part of [#56/C07](https://github.com/gesher-runtime/gesher/issues/56).
+  It does not complete active-session revocation, AppOps data-delivery ownership,
+  proxy-attribution chains, foreground/privacy policy or hardware qualification.
+  [Admission validation and its boundaries](research/camera-permission-admission-2026-11-22.md)
+  describe the focused evidence.
 - Not there: reprocessing, offline sessions, extensions, torch, high-speed
   sessions, multi-resolution readers, ImageReader surfaces used by other
   producers than the camera (MediaCodec...), preview into SurfaceView or

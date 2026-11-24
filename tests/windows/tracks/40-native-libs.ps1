@@ -23,6 +23,15 @@ Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
 
+# dlopen()'s dlerror() (what System.load's UnsatisfiedLinkError carries): a
+# missing or non-library path in Android's linker words, Windows DLLs in Windows'.
+Check 'dlopen: Android linker errors for app paths, Windows errors for Windows DLLs' {
+  & "$Dir/dlopen_errors_test.exe"
+} @('dlopen-errors: PASS a missing path is "library ... not found"',
+  'dlopen-errors: PASS another file has bad ELF magic',
+  'dlopen-errors: PASS a PE image that fails keeps the Windows error',
+  ' assertions, 0 failures')
+
 # Public loading/lookup/iteration on real ELF dependency graphs. The second
 # executable changes only the test copy's protection primitive for one failure.
 foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transaction_failure_test.exe') {
@@ -59,7 +68,7 @@ $env:GESHER_TEST_SYSTEM_CACERTS = if (Test-Path "$Dir/cacerts/*.0") { '1' } else
 Check 'bionic shim: a libc/pthread .so runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libc_test.so")
 } @('libc_test: all passed', 'sleep contracts: complete', 'elf_load_test all passed',
-    'Bionic realtime range contracts: all passed')
+    'Bionic realtime range contracts: all passed', 'Bionic tgkill contracts: all passed')
 Remove-Item Env:GESHER_TEST_SYSTEM_CACERTS -ErrorAction SilentlyContinue
 
 # Key and thread_local destructors of the bionic shim on threads it did not
@@ -88,6 +97,22 @@ Check 'native libs: stack-protected .so with emulated TLS (API 26) under the %fs
 Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a late TLS library' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_test29.so") (NoDrive "$Dir")
 } @('fs_test: all passed', 'elf_load_test all passed')
+
+# android_dlopen_ext (tests/native/dlext_test.c): extended flags checked as
+# bionic checks them; RESERVED_ADDRESS loads at the start of the caller's
+# reservation or fails without touching it; RESERVED_ADDRESS_HINT falls back
+# to any address; a load failing after mapping leaves the reservation
+# PROT_NONE and the caller's; unimplemented flags fail with dlerror.
+# Run again without placeholder mappings, where the loader copies segments
+# instead of mapping file views (and maps the gaps between them PROT_NONE).
+Check 'native libs: android_dlopen_ext reserved address space, hints, dlclose and flag checks' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/dlext/dlext_test.so") (NoDrive "$Dir/dlext")
+} @('dlext_test: all passed', 'elf_load_test all passed')
+$env:GESHER_MMAP_NO_PLACEHOLDERS = '1'
+Check 'native libs: android_dlopen_ext with copied segments (no placeholder mappings)' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/dlext/dlext_test.so") (NoDrive "$Dir/dlext")
+} @('dlext_test: all passed', 'elf_load_test all passed')
+Remove-Item Env:GESHER_MMAP_NO_PLACEHOLDERS
 
 Check 'native libs: partial unwind covers hidden code and preserves executable data' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_partial_unwind.so")
@@ -180,6 +205,10 @@ Check 'native libs: a stand-in libart.so a packer finds in /proc/self/maps and h
 Check 'bionic shim: ftruncate rights, cursor and same-size final-page invalidation' {
   & "$Dir/bionic_ftruncate_test.exe"
 } @('bionic_ftruncate_test all passed')
+
+Check 'bionic shim: creat and creat64 create or truncate a write-only file' {
+  & "$Dir/bionic_creat_test.exe"
+} @('bionic_creat_test all passed')
 
 Check 'bionic shim: shared CRT stream ownership and wide stdio' {
   & "$Dir/bionic_stdio_contract_test.exe"

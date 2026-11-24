@@ -285,6 +285,27 @@ BionicMallinfo BIONIC_SYSV Mallinfo() {
   return info;
 }
 
+// mallopt(3): 1 on success, 0 on error (bionic's malloc.h). M_PURGE and
+// M_PURGE_ALL release the heap's unused memory to the system, which for the
+// CRT's Windows heap is HeapCompact: it coalesces free blocks and decommits
+// the large free ones. There are no memory tags, so
+// M_BIONIC_SET_HEAP_TAGGING_LEVEL succeeds for M_HEAP_TAGGING_LEVEL_NONE (the
+// level already in force, which bionic accepts) and fails for a tagging level.
+// The heap's other policies (decay time, caches, zero-init) cannot be set from
+// here, so those options fail rather than claim a setting that is not applied.
+int BIONIC_SYSV Mallopt(int option, int value) {
+  constexpr int kPurge = -101, kPurgeAll = -104;  // M_PURGE, M_PURGE_ALL
+  constexpr int kSetHeapTaggingLevel = -204;      // M_BIONIC_SET_HEAP_TAGGING_LEVEL
+  constexpr int kHeapTaggingLevelNone = 0;        // M_HEAP_TAGGING_LEVEL_NONE
+  if (option == kSetHeapTaggingLevel) return value == kHeapTaggingLevelNone ? 1 : 0;
+  if (option != kPurge && option != kPurgeAll) return 0;
+  const HANDLE heap = reinterpret_cast<HANDLE>(_get_heap_handle());
+  SetLastError(ERROR_SUCCESS);
+  // 0 is also the result when the heap has no free block left; only an error
+  // code tells a failure.
+  return HeapCompact(heap, 0) != 0 || GetLastError() == ERROR_SUCCESS ? 1 : 0;
+}
+
 // --- strings and numbers with `long` --------------------------------------
 
 int64_t BIONIC_SYSV Strtol(const char* s, char** end, int base) { return std::strtoll(s, end, base); }
@@ -832,6 +853,9 @@ int64_t BIONIC_SYSV Clock() { return ProcessCpuNanos() / 1000; }  // CLOCKS_PER_
 // caller passed it, and open ignores it without O_CREAT. Linux flag values,
 // like gesher-base's open.
 int BIONIC_SYSV Open(const char* path, int flags, int mode) { return open(path, flags, mode); }
+int BIONIC_SYSV Creat(const char* path, int mode) {
+  return Open(path, O_CREAT | O_TRUNC | O_WRONLY, mode);
+}
 int BIONIC_SYSV Close(int fd) { return close(fd); }
 int64_t BIONIC_SYSV Read(int fd, void* buf, size_t n) {
   return read(fd, buf, static_cast<unsigned>(n > 0x7fffffff ? 0x7fffffff : n));
@@ -1037,21 +1061,131 @@ bool TraceDl() {
   static const bool on = std::getenv("GESHER_TRACE_DL") != nullptr;
   return on;
 }
-void* DlOpenImpl(const char* filename);
+// android_dlopen_ext's android_dlextinfo (<android/dlext.h>, LP64: 0x30
+// bytes). A guest arm64 caller's pointer reaches the shim unchanged and the
+// layout is the same.
+struct AndroidDlextinfo {
+  uint64_t flags;
+  void* reserved_addr;
+  size_t reserved_size;
+  int relro_fd;
+  int library_fd;
+  int64_t library_fd_offset;
+  void* library_namespace;
+};
+static_assert(sizeof(AndroidDlextinfo) == 0x30, "android_dlextinfo is 0x30 bytes on LP64");
+static_assert(offsetof(AndroidDlextinfo, reserved_size) == 0x10, "android_dlextinfo layout");
+static_assert(offsetof(AndroidDlextinfo, relro_fd) == 0x18, "android_dlextinfo layout");
+static_assert(offsetof(AndroidDlextinfo, library_fd_offset) == 0x20, "android_dlextinfo layout");
+static_assert(offsetof(AndroidDlextinfo, library_namespace) == 0x28, "android_dlextinfo layout");
+constexpr uint64_t kDlextReservedAddress = 0x1;
+constexpr uint64_t kDlextReservedAddressHint = 0x2;
+constexpr uint64_t kDlextWriteRelro = 0x4;
+constexpr uint64_t kDlextUseRelro = 0x8;
+constexpr uint64_t kDlextUseLibraryFd = 0x10;
+constexpr uint64_t kDlextUseLibraryFdOffset = 0x20;
+constexpr uint64_t kDlextForceLoad = 0x40;
+constexpr uint64_t kDlextUseNamespace = 0x200;
+constexpr uint64_t kDlextReservedAddressRecursive = 0x400;
+constexpr uint64_t kDlextValidFlags = kDlextReservedAddress | kDlextReservedAddressHint |
+    kDlextWriteRelro | kDlextUseRelro | kDlextUseLibraryFd | kDlextUseLibraryFdOffset |
+    kDlextForceLoad | kDlextUseNamespace | kDlextReservedAddressRecursive;
+// Valid flags this loader does not implement: a call with any of them fails
+// with a dlerror naming them, even for a library already loaded, instead of
+// loading or returning the library without what they ask. FORCE_LOAD is not
+// among them: it only asks not to reuse a loaded library of the same file,
+// which matters only when one is loaded (DlOpenImpl).
+constexpr uint64_t kDlextUnsupportedFlags = kDlextWriteRelro | kDlextUseRelro |
+    kDlextUseLibraryFd | kDlextUseLibraryFdOffset | kDlextUseNamespace |
+    kDlextReservedAddressRecursive;
+
+void* DlOpenFail(const std::string& message) {
+  t_dlerror = "dlopen failed: " + message;
+  t_has_dlerror = true;
+  return nullptr;
+}
+void* DlOpenUnsupported(uint64_t flags) {
+  char message[96];
+  std::snprintf(message, sizeof(message),
+                "android_dlopen_ext: extended flags 0x%llx are not supported",
+                static_cast<unsigned long long>(flags));
+  return DlOpenFail(message);
+}
+
+void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext);
 void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
-  void* handle = DlOpenImpl(filename);
+  void* handle = DlOpenImpl(filename, nullptr);
   if (TraceDl()) {
     std::fprintf(stderr, "gesher dl: dlopen(\"%s\") = %s%s%s\n", filename ? filename : "(null)",
                  handle ? "ok" : "null", handle ? "" : ": ", handle ? "" : t_dlerror.c_str());
   }
   return handle;
 }
-void* DlOpenImpl(const char* filename) {
+// android_dlopen_ext: dlopen with bionic's extended options (<android/dlext.h>).
+// RESERVED_ADDRESS and RESERVED_ADDRESS_HINT load the library into the
+// caller's reservation (LoadOptions::reserved_addr); the other valid flags
+// are not implemented and fail the call (kDlextUnsupportedFlags).
+void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int /*flags*/,
+                                   const AndroidDlextinfo* ext) {
+  void* handle = DlOpenImpl(filename, ext);
+  if (TraceDl()) {
+    std::fprintf(stderr,
+                 "gesher dl: android_dlopen_ext(\"%s\", flags=0x%llx, reserved_addr=%p, "
+                 "reserved_size=0x%zx) = %s%s%s\n",
+                 filename ? filename : "(null)",
+                 ext ? static_cast<unsigned long long>(ext->flags) : 0ULL,
+                 ext ? ext->reserved_addr : nullptr, ext ? ext->reserved_size : size_t{0},
+                 handle ? "ok" : "null", handle ? "" : ": ", handle ? "" : t_dlerror.c_str());
+  }
+  return handle;
+}
+void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
+  // bionic's do_dlopen checks the extended flags first (linker.cpp).
+  if (ext != nullptr) {
+    char message[160];
+    if ((ext->flags & ~kDlextValidFlags) != 0) {
+      std::snprintf(message, sizeof(message), "invalid extended flags to android_dlopen_ext: 0x%llx",
+                    static_cast<unsigned long long>(ext->flags));
+      return DlOpenFail(message);
+    }
+    if ((ext->flags & kDlextUseLibraryFd) == 0 && (ext->flags & kDlextUseLibraryFdOffset) != 0) {
+      std::snprintf(message, sizeof(message),
+                    "invalid extended flag combination (ANDROID_DLEXT_USE_LIBRARY_FD_OFFSET "
+                    "without ANDROID_DLEXT_USE_LIBRARY_FD): 0x%llx",
+                    static_cast<unsigned long long>(ext->flags));
+      return DlOpenFail(message);
+    }
+    if ((ext->flags & kDlextUseNamespace) != 0 && ext->library_namespace == nullptr) {
+      return DlOpenFail("ANDROID_DLEXT_USE_NAMESPACE is set but extinfo->library_namespace is null");
+    }
+    // Not implemented (nothing here creates a linker namespace either): fail
+    // before any lookup, so a library already loaded is not returned as if
+    // the flags had been honoured.
+    if ((ext->flags & kDlextUnsupportedFlags) != 0) {
+      return DlOpenUnsupported(ext->flags & kDlextUnsupportedFlags);
+    }
+  }
   if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
-  if (void* platform = PlatformLibraryHandle(filename)) return platform;
   const char* slash = std::strrchr(filename, '/');
   const char* base = slash ? slash + 1 : filename;
-  if (gesher::elf::Library* existing = gesher::elf::Find(base)) return existing;
+  // FORCE_LOAD only skips bionic's match of an already-loaded library by its
+  // file (inode); a bare name is still found by soname first
+  // (find_loaded_library_by_soname ignores names with a '/'). So with a path,
+  // a library already loaded would be loaded a second time, which this loader
+  // cannot do (one object per name): that fails rather than returning the
+  // first copy. With a bare name the loaded library is returned, as bionic does.
+  const bool force_second_copy =
+      ext != nullptr && (ext->flags & kDlextForceLoad) != 0 && slash != nullptr;
+  if (void* platform = PlatformLibraryHandle(filename)) {
+    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
+    return platform;
+  }
+  // Already loaded: the same handle, where it is, whatever reservation
+  // extinfo offers (bionic finds a loaded library before it maps anything).
+  if (gesher::elf::Library* existing = gesher::elf::Find(base)) {
+    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
+    return existing;
+  }
   std::string path = filename;
   std::vector<std::string> dirs = LibraryDirectories();
   if (slash == nullptr) {
@@ -1069,6 +1203,13 @@ void* DlOpenImpl(const char* filename) {
     }
   }
   gesher::elf::LoadOptions options;
+  if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
+    options.use_reserved = true;
+    options.reserved_addr = ext->reserved_addr;
+    options.reserved_size = ext->reserved_size;
+    // RESERVED_ADDRESS wins when both are set, as in bionic.
+    options.reserved_hint = (ext->flags & kDlextReservedAddress) == 0;
+  }
   std::string dir = DirOf(path);
   if (!dir.empty()) options.search_paths.push_back(dir);
   for (const std::string& d : dirs) options.search_paths.push_back(d);
@@ -1109,6 +1250,10 @@ void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
   }
   return p;
 }
+// dlclose: libraries stay loaded for the life of the process, also one loaded
+// into a caller's reservation (android_dlopen_ext). The caller may unmap that
+// reservation after dlclose; the library then leaves every list
+// (gesher::elf::ForgetReservedMappings, from munmap).
 int BIONIC_SYSV DlClose(void*) { return 0; }
 const char* BIONIC_SYSV DlError() {
   if (!t_has_dlerror) return nullptr;
@@ -1197,9 +1342,47 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
     converted.tv_nsec = static_cast<long>(guest->tv_nsec);
     host_timeout = &converted;
   }
-  return ::syscall(SYS_futex, reinterpret_cast<volatile int*>(a1), op,
-                   static_cast<int>(a3), host_timeout,
-                   reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
+  if (command != FUTEX_WAIT && command != FUTEX_WAIT_BITSET) {
+    return ::syscall(SYS_futex, reinterpret_cast<volatile int*>(a1), op,
+                     static_cast<int>(a3), host_timeout,
+                     reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
+  }
+  // A signal another thread directs at this one interrupts the wait, as on
+  // Linux: its handler runs here; then an untimed wait restarts if every
+  // handler that ran has SA_RESTART, and a timed one fails with EINTR (the
+  // kernel's -ERESTART_RESTARTBLOCK ignores SA_RESTART). An interruption that
+  // ran no handler restarts (a relative timeout counts from the start).
+  const bool relative = command == FUTEX_WAIT && host_timeout != nullptr;
+  const __int128 deadline = relative ? MonotonicNanos() +
+      static_cast<__int128>(converted.tv_sec) * 1000000000 + converted.tv_nsec : 0;
+  for (;;) {
+    ::gesher_futex_interrupt* cell = AttachSignalInterrupt();
+    long r = ::syscall(SYS_futex, reinterpret_cast<volatile int*>(a1), op,
+                       static_cast<int>(a3), host_timeout,
+                       reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
+    const int error = errno;
+    if (cell == nullptr) {
+      errno = error;
+      return r;
+    }
+    DetachSignalInterrupt();
+    // Also after a wake or timeout: a wake can overtake an interrupt request,
+    // and the signal it was for must not wait for some later delivery point.
+    const int ran = DeliverAfterInterrupt();
+    if (r != -1 || error != EINTR) {
+      errno = error;
+      return r;
+    }
+    if (ran == kHandlersWithoutRestart || (ran != kNoHandler && host_timeout != nullptr)) {
+      return errno = kEINTR, -1;
+    }
+    if (relative) {
+      const __int128 left = deadline - MonotonicNanos();
+      if (left <= 0) return errno = kETIMEDOUT, -1;
+      converted.tv_sec = static_cast<time_t>(left / 1000000000);
+      converted.tv_nsec = static_cast<long>(left % 1000000000);
+    }
+  }
 }
 
 void ReportUnresolved(const char* name) {
@@ -1247,6 +1430,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("aligned_alloc", AlignedAllocC11);
   ENTRY("malloc_usable_size", MallocUsableSize);
   ENTRY("mallinfo", Mallinfo);
+  ENTRY("mallopt", Mallopt);
   // mem/str.
   SELF(memcpy);
   SELF(memmove);
@@ -1365,6 +1549,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("open", Open);
   ENTRY("open64", Open);
   ENTRY("__open_2", Open);
+  ENTRY("creat", Creat);
+  ENTRY("creat64", Creat);
   ENTRY("close", Close);
   ENTRY("read", Read);
   ENTRY("write", Write);
@@ -1432,7 +1618,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("__gesher_arm64_nexttowardf", Arm64Nexttowardf);
   // libdl.
   ENTRY("dlopen", DlOpen);
-  ENTRY("android_dlopen_ext", DlOpen);
+  ENTRY("android_dlopen_ext", AndroidDlOpenExt);
   ENTRY("dlsym", DlSym);
   ENTRY("dlvsym", DlSym);
   ENTRY("dlclose", DlClose);
