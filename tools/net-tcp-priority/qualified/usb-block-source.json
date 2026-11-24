@@ -88,7 +88,7 @@
     "compat/usb_storage/block_session.h": "74e9fd7fd1012b88723846fd310fbf7aabc023be0ae5d9b3b17c479a105f711c",
     "compat/usb_storage/host_disk.cc": "1fe0adfdf324ea5bd2f58d09fde9ed35144504f18faeb1f09772b696a324c6a8",
     "compat/usb_storage/host_disk.h": "f48d7e5bdd3bc47b26f9fdfbdb779f4edf389e0844ff4f592ea34a0419005b37",
-    "compat/usb_storage/protected_identity.cc": "a4f85091e282cd43fc30c30f8ff666ddd038edb233add25738ece87d89f92c60",
+    "compat/usb_storage/protected_identity.cc": "bb045546770183b2a985c057f488c78d3f9d8dbd829ebee82a0de3dddf88ead7",
     "compat/usb_storage/protected_identity.h": "9e819c7e5cc08440152b1815c4315ecb4890da42bf04559c4a35c4ce5013e2ec",
     "compat/usb_storage/protected_profile_name.h": "bda4ffbaf8c6fd3c3a686271c701c1270b1672a3c1d48e7881b9ab451cae6db3",
     "compat/usb_storage/protected_runtime_client.cc": "fc1d583b86e6d41fcd23ded1628ea84a0bcc566176d5382e80fb29bd3967d7f8",

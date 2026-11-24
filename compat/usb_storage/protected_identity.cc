@@ -388,7 +388,7 @@ DWORD ProtectedIdentity::Create(const std::wstring& executable, DWORD desktop_se
   if (!ConvertSidToStringSidW(identity->sid(), &sid_text)) return GetLastError();
   const LocalMemory own_sid_text(sid_text);
   wchar_t account[] = L"GesherProtectedRuntime";
-  wchar_t profile_path[32768]{};
+  wchar_t profile_path[MAX_PATH]{};
   stage("identity.enable-profile-privileges");
   ProfilePrivileges privileges(cleanup);
   status = privileges.Enable();
