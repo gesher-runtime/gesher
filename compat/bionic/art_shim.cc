@@ -800,8 +800,30 @@ std::string ArtShimImageArm64(const std::string& oat_version) {
 
 std::string DexFileShimImageArm64() { return A64ShimImage(true, std::string()); }
 
+namespace {
+
+// The imports LoadArtShimArm64 is binding on this thread, while it loads.
+thread_local const ArtShimArm64Imports* t_loading_imports = nullptr;
+
+}  // namespace
+
+void* ResolveArtShimImport(const char* name) {
+  const ArtShimArm64Imports* imports = t_loading_imports;
+  if (imports == nullptr || name == nullptr) return nullptr;
+  if (std::strcmp(name, kArtShimDisableVerifierImport) == 0) return imports->disable_verifier;
+  if (std::strcmp(name, kArtShimIsVerificationEnabledImport) == 0) {
+    return imports->is_verification_enabled;
+  }
+  if (std::strcmp(name, kArtShimIsVerificationSoftFailImport) == 0) {
+    return imports->is_verification_soft_fail;
+  }
+  if (std::strcmp(name, kArtShimOpenCommonImport) == 0) return imports->open_common;
+  return nullptr;
+}
+
 void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, void* runtime,
-                       void** open_common_entry, std::string* path, std::string* error) {
+                       const ArtShimArm64Imports& imports, void** open_common_entry,
+                       std::string* path, std::string* error) {
   static std::mutex mutex;
   static void* entry = nullptr;
   static void* open_common = nullptr;
@@ -822,25 +844,44 @@ void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, v
   MarkDirectoryUsed(sub);
   const std::string dexfile_path = sub + "/" + kDexFileSoname;
   *path = sub + "/" + kSoname;
-  if (!WriteOnce(dexfile_path, dexfile_image, error) || !WriteOnce(*path, image, error)) {
+  // Their imports resolve, on this thread and during these loads only, to
+  // `imports` (ResolveArtShimImport).
+  struct Binding {
+    explicit Binding(const ArtShimArm64Imports* imports) { t_loading_imports = imports; }
+    ~Binding() { t_loading_imports = nullptr; }
+  } binding(&imports);
+  // An object that loaded before a later step failed stays mapped (and named
+  // in /proc/self/maps); the next call's elf::Load returns it by its soname
+  // rather than loading it again.
+  elf::Library* dexfile = nullptr;
+  elf::Library* lib = nullptr;
+  auto fail = [&](const std::string& message) -> void* {
+    *error = message;
+    if (dexfile != nullptr || lib != nullptr) {
+      std::fprintf(stderr, "gesher art: arm64 stand-in incomplete (%s%s%s): %s\n",
+                   dexfile != nullptr ? "libdexfile.so loaded" : "",
+                   dexfile != nullptr && lib != nullptr ? ", " : "",
+                   lib != nullptr ? "libart.so loaded" : "", message.c_str());
+    }
     return nullptr;
-  }
-  elf::Library* dexfile = elf::Load(dexfile_path.c_str(), error);
-  if (dexfile == nullptr) return nullptr;
-  elf::Library* lib = elf::Load(path->c_str(), error);
-  if (lib == nullptr) return nullptr;
+  };
+  if (!WriteOnce(dexfile_path, dexfile_image, error)) return fail(*error);
+  dexfile = elf::Load(dexfile_path.c_str(), error);
+  if (dexfile == nullptr) return fail(*error);
+  if (!WriteOnce(*path, image, error)) return fail(*error);
+  lib = elf::Load(path->c_str(), error);
+  if (lib == nullptr) return fail(*error);
   if (!elf::IsAarch64(lib) || !elf::IsAarch64(dexfile)) {
-    *error = sub + " did not load as arm64 code";
-    return nullptr;
+    return fail(sub + " did not load as arm64 code");
   }
   void* fn = elf::Lookup(lib, kArtLoadClassSymbol);
   void* instance = elf::Lookup(lib, kArtRuntimeInstanceSymbol);
   void* open_common_fn = elf::Lookup(dexfile, kArtOpenCommonEntrySymbol);
   if (fn == nullptr || instance == nullptr || open_common_fn == nullptr) {
-    *error = *path + " lacks " +
-             (fn == nullptr ? kArtLoadClassSymbol
-                            : instance == nullptr ? kArtRuntimeInstanceSymbol : kArtOpenCommonEntrySymbol);
-    return nullptr;
+    return fail(*path + " lacks " +
+                (fn == nullptr          ? kArtLoadClassSymbol
+                 : instance == nullptr ? kArtRuntimeInstanceSymbol
+                                       : kArtOpenCommonEntrySymbol));
   }
   std::memcpy(instance, &runtime, sizeof(runtime));
   entry = fn;

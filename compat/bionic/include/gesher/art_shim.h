@@ -100,11 +100,29 @@ std::string ArtShimImageArm64(const std::string& oat_version);
 // same form.
 std::string DexFileShimImageArm64();
 
-// As LoadArtShim, for the arm64 stand-in: sets its Runtime::instance_ to
-// `runtime` and returns the guest address of its LoadClass, and in
-// *open_common_entry that of its OpenCommon entry (gesher::arm64::HostEntry
-// gives ART a System V entry to each).
+// The host (System V) functions the arm64 stand-ins' imports are bound to,
+// by the import names above.
+struct ArtShimArm64Imports {
+  void* disable_verifier = nullptr;           // kArtShimDisableVerifierImport
+  void* is_verification_enabled = nullptr;    // kArtShimIsVerificationEnabledImport
+  void* is_verification_soft_fail = nullptr;  // kArtShimIsVerificationSoftFailImport
+  void* open_common = nullptr;                // kArtShimOpenCommonImport
+};
+
+// As LoadArtShim, for the arm64 stand-in: binds its imports to `imports`, sets
+// its Runtime::instance_ to `runtime` and returns the guest address of its
+// LoadClass, and in *open_common_entry that of its OpenCommon entry
+// (gesher::arm64::HostEntry gives ART a System V entry to each). A failure
+// after libdexfile.so loaded keeps that object for the next call, which loads
+// only what is missing (an object is never loaded twice).
 void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, void* runtime,
-                       void** open_common_entry, std::string* path, std::string* error);
+                       const ArtShimArm64Imports& imports, void** open_common_entry,
+                       std::string* path, std::string* error);
+
+// The ELF loader's bionic resolver asks this first (compat/bionic/shim.cc): one
+// of the stand-ins' imports, while LoadArtShimArm64 loads them on this thread;
+// nullptr for any other name, thread or time. The imports are in no symbol
+// table, so neither an app's dlsym nor any other object's imports reach them.
+void* ResolveArtShimImport(const char* name);
 
 }  // namespace gesher::bionic

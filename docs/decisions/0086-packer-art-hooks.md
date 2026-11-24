@@ -246,9 +246,11 @@ an x86-64 `libnesec.so` get nothing.
 - **The Runtime functions act on the real Runtime.** Their GOT slots are
   bound to host functions that call `patches/art/0802`'s
   `gesher_art_runtime_disable_verifier` and
-  `gesher_art_runtime_verification` (the stand-in's `__gesher_art_*` imports,
-  registered in the bionic symbol table once at startup, since that table is
-  not locked against lookups on app threads). These act only on this process's
+  `gesher_art_runtime_verification` (the stand-ins' `__gesher_art_*`
+  imports). The loader binds those imports while it loads the stand-ins, on
+  its own thread only (`ResolveArtShimImport`, asked first by the bionic
+  resolver); they are in no symbol table, so an app's `dlsym` or another
+  object's imports never reach them. These act only on this process's
   `Runtime::Current()`; for any other pointer they log it and do nothing
   (or report false). The verifier is disabled only because the app asked
   ART to do so, through ART's own function.
