@@ -2154,7 +2154,9 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             int avail = 0;
             try {
                 avail = s.available();
-            } catch (java.io.IOException ignored) {
+            } catch (Exception ignored) {
+                // This is only an allocation hint. A readable app stream can
+                // decline to implement it; continue with bounded chunks.
             }
             if (avail > 0 && avail <= 16 * 1024 * 1024) {
                 byte[] first = new byte[avail];
