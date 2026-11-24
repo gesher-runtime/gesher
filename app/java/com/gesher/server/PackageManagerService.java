@@ -1176,7 +1176,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
                 PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
-                PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
+                PackageManager.FEATURE_SCREEN_LANDSCAPE,
+                // The built-in WebView provider (WebView2, ADR 0041; WebViewUpdateService).
+                PackageManager.FEATURE_WEBVIEW}) {
             android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
             f.name = name;
             FEATURES.put(name, f);
