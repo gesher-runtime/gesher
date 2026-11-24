@@ -1,0 +1,484 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+package com.gesher.app.webview;
+
+import android.graphics.Outline;
+import android.graphics.Path;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
+import java.io.BufferedWriter;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.lang.management.ManagementFactory;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Random;
+
+public final class WebViewGeometryHost {
+    private static int checks;
+    private static boolean gates;
+    private static final ArrayList<Frame> frames = new ArrayList<>();
+
+    private static final class Provider {
+        final View mView;
+        WebView2Host mHost = new WebView2Host();
+        boolean mDestroyed;
+        Provider(View view) { mView=view; mAttached=true; }
+        void update() { updateBounds(); }
+        void resetPlacement() { mPlacedOnce=false; }
+        @PRODUCTION@
+    }
+
+    private static final class Frame {
+        final long[] placement;
+        final int[] holes, frozen;
+        Frame(long hwnd, int x, int y, int w, int h, int cx, int cy, int cw, int ch,
+                boolean visible, int[] shapes) {
+            placement=new long[] {hwnd,x,y,w,h,cx,cy,cw,ch,visible?1:0};
+            holes=shapes;
+            frozen=shapes==null ? new int[0] : shapes.clone();
+        }
+    }
+
+    private static final class WebView2Host {
+        static final int HOLE_RECT=0, HOLE_ROUND_RECT=1, HOLE_OVAL=2, HOLE_POLYGON=3,
+                CLIP_ROUND_RECT=10, CLIP_OVAL=11, CLIP_POLYGON=12;
+        int calls;
+        boolean record=true;
+        int[] lastHoles;
+        Frame last;
+        void setBounds(long hwnd, int x, int y, int w, int h, int cx, int cy, int cw, int ch,
+                boolean visible, int[] shapes) {
+            ++calls;
+            lastHoles=shapes;
+            // The real JNI copies synchronously. Retain the passed Java reference
+            // as well as its frozen contents to detect later scratch aliasing.
+            if (record) {
+                last=new Frame(hwnd,x,y,w,h,cx,cy,cw,ch,visible,shapes);
+                frames.add(last);
+            }
+        }
+    }
+
+    private static final class GesherWebView {
+        static final boolean DEBUG=false;
+        static long hwndOf(View view) { return view.hwnd; }
+        static void log(String message) {}
+    }
+
+    private static void check(boolean condition, String message) {
+        ++checks;
+        if (!condition) throw new AssertionError(message);
+    }
+    private static View view(int x, int y, int w, int h) {
+        View v=new View(); place(v,x,y,w,h); return v;
+    }
+    private static ViewGroup group(int x, int y, int w, int h) {
+        ViewGroup v=new ViewGroup(); place(v,x,y,w,h); return v;
+    }
+    private static void place(View v, int x, int y, int w, int h) {
+        v.x=x; v.y=y; v.width=w; v.height=h;
+        v.visibleRect.set(x,y,x+w,y+h);
+    }
+    private static ViewOutlineProvider rounded(float radius) {
+        return new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) { out.setRoundRect(0,0,v.width,v.height,radius); }
+        };
+    }
+    private static ViewOutlineProvider polygon(Path path) {
+        return new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) { out.setPath(path); }
+        };
+    }
+    private static void holes(Provider p, int... expected) {
+        check(Arrays.equals(p.mHost.last.frozen,expected), "unexpected packed holes: "
+                +Arrays.toString(p.mHost.last.frozen)+" expected "+Arrays.toString(expected));
+    }
+    private static void bounds(Provider p, long... expected) {
+        check(Arrays.equals(p.mHost.last.placement,expected), "unexpected placement: "
+                +Arrays.toString(p.mHost.last.placement));
+    }
+    private static void unchangedSnapshots() {
+        for (Frame frame:frames) {
+            check(Arrays.equals(frame.holes==null?new int[0]:frame.holes,frame.frozen),
+                    "published shape snapshot was later mutated");
+        }
+    }
+
+    private static void behavior() {
+        ViewGroup root=group(0,0,800,600);
+        View back=view(30,40,30,40), web=view(10,20,200,150), overlay=view(100,120,200,100);
+        root.add(back); root.add(web); root.add(overlay);
+        Provider p=new Provider(web);
+        p.update();
+        bounds(p,1,10,20,200,150,10,20,200,150,1);
+        holes(p,0,100,120,210,170,0,0);
+        int calls=p.mHost.calls, reads=overlay.visibleReads;
+        for (int i=0;i<20;++i) p.update();
+        check(p.mHost.calls==calls, "stable placement was resubmitted");
+        check(overlay.visibleReads==reads+20, "stable frames skipped required dynamic traversal");
+        web.x=17; p.update(); bounds(p,1,17,20,200,150,10,20,200,150,1);
+        holes(p,0,100,120,210,170,0,0);
+        overlay.alpha=0; p.update(); holes(p);
+        overlay.alpha=0.01f; p.update(); holes(p,0,100,120,210,170,0,0);
+        overlay.visibility=View.INVISIBLE; p.update(); holes(p);
+        overlay.visibility=View.VISIBLE; overlay.z=-1; p.update(); holes(p);
+        overlay.z=2; back.z=3; p.update();
+        holes(p,0,30,40,60,80,0,0, 0,100,120,210,170,0,0);
+        root.remove(back); root.add(back); back.z=0; p.update();
+        holes(p,0,100,120,210,170,0,0, 0,30,40,60,80,0,0);
+        web.visibleRect.set(60,70,160,140); p.update();
+        bounds(p,1,17,20,200,150,60,70,100,70,1);
+        holes(p,0,100,120,160,140,0,0);
+        overlay.visible=false; p.update(); holes(p);
+        overlay.visible=true; web.shown=false; p.update();
+        bounds(p,1,17,20,200,150,0,0,0,0,0); holes(p);
+        web.shown=true; web.windowVisibility=View.INVISIBLE; p.update();
+        web.windowVisibility=View.VISIBLE; web.hwnd=0; p.update();
+        bounds(p,0,17,20,200,150,0,0,0,0,0);
+        web.hwnd=0x123456789L; p.update();
+        bounds(p,0x123456789L,17,20,200,150,60,70,100,70,1);
+        calls=p.mHost.calls; p.mAttached=false; p.update();
+        check(p.mHost.calls==calls, "detached WebView submitted bounds");
+        p.mAttached=true; p.resetPlacement(); p.update();
+        check(p.mHost.calls==calls+1, "reattach did not place identical geometry");
+        p.mDestroyed=true; p.update();
+        check(p.mHost.calls==calls+1, "destroyed WebView submitted bounds");
+        p.mDestroyed=false;
+
+        // App-supplied geometry can change without layout or invalidation.
+        root.remove(back); place(web,0,0,300,300); place(overlay,20,30,80,60);
+        overlay.outline=rounded(8); overlay.background=new Drawable(); p.update();
+        holes(p,1,20,30,100,90,8,0);
+        check(overlay.background.getBounds().right==80, "pre-draw background bounds missing");
+        overlay.outline=rounded(50); p.update(); holes(p,1,20,30,100,90,30,0);
+        place(overlay,20,30,60,60); p.update(); holes(p,2,20,30,80,90,30,0);
+        overlay.outline=rounded(0); p.update(); holes(p,0,20,30,80,90,0,0);
+        final int[] dynamicRadius={3};
+        overlay.outline=new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) { out.setRoundRect(0,0,v.width,v.height,dynamicRadius[0]); }
+        };
+        p.update(); holes(p,1,20,30,80,90,3,0);
+        dynamicRadius[0]=6; p.update(); holes(p,1,20,30,80,90,6,0);
+        overlay.outline=new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) { out.setRoundRect(0,0,40,30,5); throw new IllegalStateException("app outline"); }
+        };
+        p.update(); holes(p,0,20,30,80,90,0,0);
+        overlay.outline=rounded(7); web.clipToOutline=true; web.outline=rounded(9);
+        root.clipToOutline=true; root.outline=rounded(11); p.update();
+        holes(p,10,0,0,300,300,9,0, 10,0,0,800,600,11,0, 1,20,30,80,90,7,0);
+        web.outline=rounded(0); root.clipToOutline=false; p.update();
+        holes(p,1,20,30,80,90,7,0);
+        Path path=new Path(0,0.2f,0.4f, .5f,40.6f,2.2f, 1,20.2f,50.8f);
+        overlay.outline=polygon(path); p.update();
+        holes(p,3,20,30,61,81,0,3, 20,30,61,32,40,81);
+        int approximate=path.approximations; calls=p.mHost.calls;
+        p.update(); check(path.approximations==approximate+1, "polygon was cached without content evidence");
+        check(p.mHost.calls==calls, "identical polygon was resubmitted");
+        path.points[4]=45.1f; p.update();
+        holes(p,3,20,30,66,81,0,3, 20,30,65,32,40,81);
+        path.failApproximation=true; p.update(); holes(p,0,20,30,66,81,0,0);
+        path.failApproximation=false;
+        web.outline=polygon(path); p.update();
+        check(p.mHost.last.frozen[0]==WebView2Host.CLIP_POLYGON, "path clipping disappeared");
+        path.points=new float[]{0,1,1, 1,10,12}; p.update();
+        check(p.mHost.last.frozen.length==7, "short path unexpectedly emitted polygon or clipping");
+
+        // Transparent containers descend; a background or the depth cap is a leaf.
+        ViewGroup container=group(0,0,100,100);
+        View one=view(1,2,10,20), two=view(40,50,10,10);
+        container.add(one); container.add(two);
+        root.remove(overlay); root.add(container); web.clipToOutline=false;
+        p.update(); holes(p,0,1,2,11,22,0,0, 0,40,50,50,60,0,0);
+        container.background=new Drawable(); p.update(); holes(p,0,0,0,100,100,0,0);
+        container.background=null; container.remove(one); container.remove(two); p.update();
+        holes(p,0,0,0,100,100,0,0);
+        ViewGroup cursor=container; View atCap=null;
+        for (int i=1;i<=20;++i) {
+            ViewGroup next=group(i,i,90-i,90-i); cursor.add(next); cursor=next;
+            if(i==16) atCap=next;
+        }
+        p.update(); holes(p,0,16,16,90,90,0,0);
+        check(atCap.outlineReads>0 && cursor.outlineReads==0, "depth limit changed");
+        root.remove(container);
+        for(int i=0;i<40;++i) root.add(view(i,i,20,20));
+        p.update(); check(p.mHost.last.frozen.length==32*7, "hole count limit changed");
+
+        randomized();
+        unchangedSnapshots();
+    }
+
+    private static void randomized() {
+        Random random=new Random(17808);
+        ViewGroup root=group(-100,-100,1000,800);
+        View a=view(5,7,280,240), b=view(33,35,260,200);
+        root.add(a); root.add(b);
+        Provider first=new Provider(a), second=new Provider(b);
+        View[] overlays=new View[9];
+        for(int i=0;i<overlays.length;++i) {
+            overlays[i]=view(i*13,i*9,60,50); root.add(overlays[i]);
+        }
+        for(int frame=0;frame<1000;++frame) {
+            View v=overlays[random.nextInt(overlays.length)];
+            switch(random.nextInt(9)) {
+                case 0: v.alpha=random.nextBoolean()?0:0.4f; break;
+                case 1: v.z=random.nextInt(5)-2; break;
+                case 2: v.visibility=random.nextBoolean()?View.VISIBLE:View.GONE; break;
+                case 3: place(v,random.nextInt(350)-30,random.nextInt(300)-30,30+random.nextInt(80),30+random.nextInt(80)); break;
+                case 4: v.outline=random.nextBoolean()?rounded(random.nextInt(60)):null; break;
+                case 5: a.visibleRect.right=150+random.nextInt(150); b.visibleRect.top=random.nextInt(50); break;
+                case 6: a.x=random.nextInt(30); b.y=random.nextInt(35); break;
+                case 7: root.remove(v); root.add(v); break;
+                default: b.shown=random.nextBoolean(); break;
+            }
+            first.update(); second.update();
+            check(first.mHost.last.placement[1]==a.x, "first WebView placement leaked");
+            check(second.mHost.last.placement[2]==b.y, "second WebView placement leaked");
+        }
+    }
+
+    private static void reentry() {
+        ViewGroup root=group(0,0,1000,1000);
+        View web=view(10,20,300,300), overlay=view(40,50,80,60);
+        root.add(web); root.add(overlay);
+        Provider p=new Provider(web);
+        overlay.outline=new ViewOutlineProvider() {
+            int depth;
+            public void getOutline(View v, Outline out) {
+                if(depth++==0) {
+                    try {
+                        out.setRoundRect(1,2,30,40,3);
+                        web.x=210; web.y=220;
+                        p.update();
+                        out.setRoundRect(4,5,55,56,6);
+                    } finally { --depth; }
+                } else {
+                    out.setRoundRect(7,8,67,48,9); --depth;
+                }
+            }
+        };
+        p.update();
+        check(p.mHost.calls==1, "older reentrant pass overwrote newer publication");
+        bounds(p,1,210,220,300,300,10,20,300,300,1);
+        holes(p,1,47,58,107,98,9,0);
+
+        // Exercise uncached depth as well as the cached nested pass.
+        p.resetPlacement();
+        overlay.outline=new ViewOutlineProvider() {
+            int depth;
+            public void getOutline(View v, Outline out) {
+                int current=++depth;
+                try {
+                    web.x=current*10;
+                    if(current<8) p.update();
+                    out.setRoundRect(current,current,60,50,4);
+                } finally { --depth; }
+            }
+        };
+        int calls=p.mHost.calls; p.update();
+        check(p.mHost.calls==calls+1, "deep reentry published stale outer state");
+        check(p.mHost.last.placement[1]==70, "deep pass did not keep its sampled placement");
+        holes(p,1,48,58,100,100,4,0);
+
+        Provider other=new Provider(view(400,410,100,90));
+        overlay.outline=new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) { other.update(); out.setRoundRect(0,0,60,50,2); }
+        };
+        p.update(); bounds(other,1,400,410,100,90,400,410,100,90,1);
+        holes(p,1,40,50,100,100,2,0);
+
+        // A failed collection must relinquish its scratch depth in finally.
+        web.locationFailure=new IllegalStateException("location failure");
+        boolean failed=false;
+        try { p.update(); } catch (IllegalStateException expected) { failed=true; }
+        check(failed, "unexpected getter failure was swallowed");
+        web.locationFailure=null; web.x=99; p.update();
+        check(p.mHost.last.placement[1]==99, "collection did not recover after failure");
+
+        overlay.outline=new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) { p.mAttached=false; out.setRoundRect(0,0,60,50,3); }
+        };
+        calls=p.mHost.calls; p.update(); check(p.mHost.calls==calls, "outline detach was overwritten");
+        p.mAttached=true;
+        WebView2Host host=p.mHost;
+        overlay.outline=new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) { p.mDestroyed=true; p.mHost=null; out.setRoundRect(0,0,60,50,4); }
+        };
+        p.update(); check(host.calls==calls, "outline destroy was overwritten");
+        unchangedSnapshots();
+    }
+
+    private static void measure(String name, Provider p, View moving, boolean changePlacement) {
+        p.update();
+        p.mHost.record=false;
+        for(int i=0;i<1000;++i) { if(changePlacement) moving.x=i&1; p.update(); }
+        int[] snapshot=p.mHost.lastHoles;
+        com.sun.management.ThreadMXBean bean=(com.sun.management.ThreadMXBean)ManagementFactory.getThreadMXBean();
+        check(bean.isThreadAllocatedMemorySupported(), "JVM allocation counter unavailable");
+        bean.setThreadAllocatedMemoryEnabled(true);
+        long thread=Thread.currentThread().getId();
+        long before=bean.getThreadAllocatedBytes(thread);
+        for(int i=0;i<5000;++i) { if(changePlacement) moving.x=i&1; p.update(); }
+        long bytes=bean.getThreadAllocatedBytes(thread)-before;
+        System.out.println(name+" frames=5000 Java allocated bytes="+bytes);
+        if(gates) {
+            check(bytes==0, name+" allocated after warmup: "+bytes);
+            check(p.mHost.lastHoles==snapshot, name+" copied an unchanged hole snapshot");
+        }
+    }
+
+    private static void failedNestedOutline(boolean catchFailure) {
+        ViewGroup root=group(0,0,1000,1000);
+        View web=view(10,20,300,300), overlay=view(40,50,80,60);
+        root.add(web); root.add(overlay);
+        Provider p=new Provider(web);
+        RuntimeException failure=new IllegalStateException("nested getter failed");
+        overlay.outline=new ViewOutlineProvider() {
+            public void getOutline(View v, Outline out) {
+                web.locationFailure=failure;
+                try {
+                    p.update();
+                } catch (RuntimeException expected) {
+                    if(!catchFailure) throw expected;
+                } finally {
+                    web.locationFailure=null;
+                }
+                out.setRoundRect(0,0,80,60,5);
+            }
+        };
+        p.update();
+        check(p.mHost.calls==1, "failed nested attempt suppressed valid initial outer placement");
+        bounds(p,1,10,20,300,300,10,20,300,300,1);
+        if(catchFailure) holes(p,1,40,50,120,110,5,0);
+        else holes(p,0,40,50,120,110,0,0);
+        web.x=77;
+        p.update();
+        check(p.mHost.calls==2, "repeated nested failure suppressed moved outer placement");
+        bounds(p,1,77,20,300,300,10,20,300,300,1);
+        p.update();
+        check(p.mHost.calls==2, "unchanged recovered geometry was resubmitted");
+        unchangedSnapshots();
+    }
+
+    private static void unchangedNestedCollection() {
+        ViewGroup root=group(0,0,1000,1000);
+        View web=view(10,20,300,300), overlay=view(40,50,80,60);
+        root.add(web); root.add(overlay);
+        Provider p=new Provider(web);
+        overlay.outline=rounded(3); p.update();
+        int[] snapshot=p.mHost.lastHoles;
+        overlay.outline=new ViewOutlineProvider() {
+            boolean nested;
+            public void getOutline(View v, Outline out) {
+                if(!nested) {
+                    nested=true;
+                    try { p.update(); } finally { nested=false; }
+                    out.setRoundRect(1,2,60,40,5);
+                } else out.setRoundRect(0,0,80,60,3);
+            }
+        };
+        p.update();
+        check(p.mHost.calls==1, "unchanged nested completion did not supersede outer collection");
+        check(p.mHost.lastHoles==snapshot, "unchanged nested completion replaced the snapshot");
+        holes(p,1,40,50,120,110,3,0);
+        unchangedSnapshots();
+    }
+
+    private static void deeperCompletionSurvivesFailure(boolean unchanged) {
+        ViewGroup root=group(0,0,1000,1000);
+        View web=view(10,20,300,300), overlay=view(40,50,80,60), later=view(150,160,40,40);
+        root.add(web); root.add(overlay); root.add(later);
+        Provider p=new Provider(web);
+        overlay.outline=rounded(3); p.update();
+        int[] snapshot=p.mHost.lastHoles;
+        int[] failures={0};
+        RuntimeException failure=new IllegalStateException("middle collection failed after deeper success");
+        overlay.outline=new ViewOutlineProvider() {
+            int depth;
+            public void getOutline(View v, Outline out) {
+                int current=depth++;
+                try {
+                    if(current==0) {
+                        try { p.update(); } catch (RuntimeException expected) {
+                            check(expected==failure, "unexpected middle failure");
+                            ++failures[0];
+                        } finally { later.locationFailure=null; }
+                        out.setRoundRect(0,0,80,60,7);
+                    } else if(current==1) {
+                        p.update();
+                        // The deeper pass has completed; fail this pass later, from
+                        // outside addShape's outline-provider exception boundary.
+                        later.locationFailure=failure;
+                        out.setRoundRect(0,0,80,60,5);
+                    } else out.setRoundRect(0,0,80,60,unchanged?3:9);
+                } finally { --depth; }
+            }
+        };
+        p.update();
+        check(failures[0]==1 && later.locationFailure==null, "middle failure was not recovered");
+        check(p.mHost.calls==(unchanged?1:2), "failed middle pass erased deeper completion");
+        holes(p,1,40,50,120,110,unchanged?3:9,0, 0,150,160,190,200,0,0);
+        if(unchanged) check(p.mHost.lastHoles==snapshot, "unchanged deeper result copied shapes");
+        int calls=p.mHost.calls;
+        overlay.outline=rounded(4); web.x=81; p.update();
+        check(p.mHost.calls==calls+1, "later update did not recover after nested failure");
+        bounds(p,1,81,20,300,300,10,20,300,300,1);
+        holes(p,1,40,50,120,110,4,0, 0,150,160,190,200,0,0);
+        unchangedSnapshots();
+    }
+
+    private static void recovery() {
+        failedNestedOutline(false);
+        failedNestedOutline(true);
+        unchangedNestedCollection();
+        deeperCompletionSurvivesFailure(false);
+        deeperCompletionSurvivesFailure(true);
+    }
+
+    private static void measurement() {
+        ViewGroup root=group(0,0,1000,1000);
+        View web=view(0,0,500,500); root.add(web);
+        Provider p=new Provider(web);
+        measure("empty-visible",p,web,false);
+        for(int i=0;i<32;++i) root.add(view(i*5,i*5,40,40));
+        measure("32-rectangles",p,web,false);
+        for(int i=1;i<root.children.size();++i) root.children.get(i).outline=rounded(4);
+        measure("32-rounded",p,web,false);
+        measure("placement-only",p,web,true);
+        web.shown=false; measure("hidden",p,web,false); web.shown=true;
+        View top=root.children.get(1);
+        top.outline=new ViewOutlineProvider() {
+            boolean nested;
+            public void getOutline(View v, Outline out) {
+                if(!nested) { nested=true; try { p.update(); } finally { nested=false; } }
+                out.setRoundRect(0,0,v.width,v.height,4);
+            }
+        };
+        if(gates) measure("one-reentrant-level",p,web,false);
+    }
+
+    public static void main(String[] args) throws Exception {
+        gates=args[1].equals("gate");
+        switch(args[0]) {
+            case "behavior": behavior(); break;
+            case "reentry": reentry(); break;
+            case "recovery": recovery(); break;
+            case "measurement": measurement(); break;
+            default: throw new IllegalArgumentException(args[0]);
+        }
+        if(args[0].equals("behavior")) {
+            try(BufferedWriter writer=Files.newBufferedWriter(Paths.get(args[2]))) {
+                for(Frame frame:frames) {
+                    for(long value:frame.placement) { writer.write(Long.toString(value)); writer.write(' '); }
+                    writer.write(Integer.toString(frame.frozen.length));
+                    for(int value:frame.frozen) { writer.write(' '); writer.write(Integer.toString(value)); }
+                    writer.newLine();
+                }
+            }
+            System.out.println("geometry transcript frames="+frames.size());
+        }
+        System.out.println("WebView geometry "+args[0]+": "+checks+" checks passed");
+    }
+}

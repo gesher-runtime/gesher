@@ -10,9 +10,11 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
+import textwrap
 import types
 import unittest
 from unittest.mock import patch
@@ -28,10 +30,19 @@ BASE = '0da2b7f18fa8013932a6cb77dac32423df9ef8ab'
 # Qualify those exact canonical entry/test bytes without rebasing any supplier,
 # compiler, source-preservation or runtime baseline below.
 CANONICAL_CONTEXT_BASE = '20252fde18db387b4d99d99f7050d6336f58bf6e'
+# The reviewed rerun change separately authenticated retained canonical producers.
+# Pin only those entry functions to the reachable #321 squash commit. Their
+# bodies match the reviewed branch; supplier facts, compiler inputs and Windows
+# runtime bodies retain the earlier baseline below.
+RERUN_ENTRY_BASE = 'fdf4861b608d7a5fe8c0fa6c8a285dfbdf573d91'
 
 
 def old_source(path):
     return subprocess.check_output(['git', 'show', BASE + ':' + path], cwd=ROOT, text=True)
+
+
+def rerun_source(path):
+    return subprocess.check_output(['git', 'show', RERUN_ENTRY_BASE + ':' + path], cwd=ROOT, text=True)
 
 
 def functions(source):
@@ -433,7 +444,100 @@ class CorrelationTest(unittest.TestCase):
                 execute(host_record)
 
 
+class ScopeRoutingTest(unittest.TestCase):
+    def test_actual_workflow_shell_keeps_artifact_and_correlation_scopes_separate(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        job = workflow.split('  supplier-correlation:\n', 1)[1].split('\n  windows:', 1)[0]
+        steps = ('Strict current Native host and TCP selected supplier artifacts',
+                 'Correlate selected host supplier between full build and TCP component')
+        scripts = [textwrap.dedent(job.split('      - name: ' + name + '\n', 1)[1]
+                   .split('        run: |\n', 1)[1].split('      - name:', 1)[0]) for name in steps]
+        with tempfile.TemporaryDirectory(prefix='tcp-routing-metadata-only-') as temp:
+            directory = Path(temp)
+            calls = directory / 'calls.jsonl'
+            python = directory / 'python3'
+            python.write_text('#!' + sys.executable + '\nimport json, os, sys\n'
+                'with open(os.environ["TCP_TEST_CALLS"], "a") as output:\n'
+                '    output.write(json.dumps(sys.argv[1:]) + "\\n")\n')
+            python.chmod(0o755)
+            for scope in ('canonical', 'fork-diagnostic'):
+                with self.subTest(scope=scope):
+                    calls.write_text('')
+                    env = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH'],
+                               TCP_TEST_CALLS=str(calls), TCP_EVIDENCE_SCOPE=scope,
+                               GITHUB_SHA='a' * 40, GITHUB_RUN_ATTEMPT='3')
+                    for script in scripts:
+                        subprocess.run(['bash', '-e', '-c', script], env=env, check=True)
+                    expected = [['tools/ci/artifact_receipt.py', '--name', 'native3-locks-host',
+                                 '--producer', 'build', '--destination', 'ci-suppliers/native3_host']]
+                    if scope == 'canonical':
+                        expected += [['tools/ci/component_producer.py', 'stage', 'tcp-selected-correlation'],
+                                     ['tools/toolchain/coherent_supplier_correlation.py']]
+                    else:
+                        expected += [['tools/ci/artifact_receipt.py', '--name',
+                                      'tcp-fork-diagnostic-selected-minimum-' + 'a' * 40 + '-a3',
+                                      '--producer', 'compile-selected-minimum', '--destination',
+                                      'ci-suppliers/tcp_selected'],
+                                     ['tools/toolchain/coherent_supplier_correlation.py', '--fork-diagnostic']]
+                    self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()], expected)
+        self.assertIn("name: ${{ github.repository == 'gesher-runtime/gesher' && 'tcp-coherent-selected-minimum' || format('tcp-fork-diagnostic-{0}-{1}-a{2}', matrix.supplier, github.sha, github.run_attempt) }}", workflow)
+        windows = (ROOT / 'tools/net-tcp-priority/run-component.ps1').read_text()
+        self.assertIn("if ($env:GITHUB_WORKFLOW -ceq 'ci' -and -not $ForkDiagnostic) {", windows)
+        self.assertIn('Where-Object name -CEQ $artifactName', windows)
+        self.assertIn('python $supplierChecker --manifest tcp-fixture/provenance.json', windows)
+
+    def test_actual_manifest_envelope_branch_does_not_grant_canonical_role_to_diagnostics(self):
+        import producer_context
+        path = ROOT / 'tools/net-tcp-priority/manifest.py'
+        # Run the actual final producer branch with nonexecutable metadata. The
+        # preceding compiler/output inspection is covered by preserved bodies.
+        nodes = [node for node in ast.parse(path.read_text()).body
+                 if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == 'fork']
+        self.assertEqual(len(nodes), 1)
+        code = compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec')
+        diagnostic, value = manifest_projection()
+        diagnostic.pop('evidence_schema')
+        diagnostic.pop('diagnostic')
+        namespace = dict(manifest=diagnostic, fork=fork, diagnostic=value,
+                         selection='selected-minimum', os=os, sys=sys, Path=Path, __file__=str(path))
+        with patch.dict(os.environ, GITHUB_WORKFLOW='ci'), \
+                patch.object(producer_context, 'current_context', side_effect=AssertionError('Canonical path used')):
+            exec(code, namespace)
+        fork.check_manifest(diagnostic, value)
+        self.assertNotIn('role', diagnostic)
+        self.assertNotIn('supplier_head', diagnostic)
+        canonical = dict(source='a' * 40, run='7', attempt='1', repository='gesher-runtime/gesher',
+                         repository_id='1426153186', supplier_head='b' * 40, head_repository_id='9',
+                         event='pull_request')
+        namespace.update(manifest={}, fork=None)
+        with patch.dict(os.environ, GITHUB_WORKFLOW='ci'), \
+                patch.object(producer_context, 'current_context', return_value=canonical):
+            exec(code, namespace)
+        self.assertEqual(namespace['manifest'], dict(canonical, role='tcp-selected-minimum'))
+
+    def test_explicit_fork_consumer_and_correlation_reject_canonical_repository(self):
+        import coherent_supplier_correlation as correlation
+        for job in ('windows', 'supplier-correlation'):
+            env, _, _, _ = fixture()
+            env.update(GITHUB_JOB=job, GITHUB_REPOSITORY=identity.CANONICAL,
+                       GITHUB_REPOSITORY_ID=identity.CANONICAL_ID)
+            with self.subTest(job=job), patch.dict(os.environ, env, clear=True), \
+                    patch.object(identity, 'checkout', return_value=env['GITHUB_SHA']), \
+                    patch.object(identity, 'get_json') as api, \
+                    self.assertRaisesRegex(RuntimeError, 'Canonical repository cannot issue'):
+                if job == 'windows':
+                    with patch.object(sys, 'argv', ['fork_supplier.py', '--manifest', 'absent/provenance.json']):
+                        runpy.run_path(str(ROOT / 'tools/net-tcp-priority/fork_supplier.py'), run_name='__main__')
+                else:
+                    correlation.diagnostic_main()
+            api.assert_not_called()
+
+
 class SourcePreservationTest(unittest.TestCase):
+    def test_rerun_entry_baseline_is_reachable(self):
+        subprocess.run(['git', 'merge-base', '--is-ancestor', RERUN_ENTRY_BASE, 'HEAD'],
+                       cwd=ROOT, check=True)
+
     def test_canonical_entries_pins_and_shell_are_byte_exact(self):
         for path in ('tools/toolchain/coherent_tcp_context.py',
                      'tools/toolchain/test_coherent_tcp_context.py'):
@@ -452,8 +556,11 @@ class SourcePreservationTest(unittest.TestCase):
             self.assertEqual(old[name], new[name], name)
         path = 'tools/net-tcp-priority/selected_supplier.py'
         old, new = functions(old_source(path)), functions((ROOT / path).read_text())
-        for name in ('main', 'authority_digest', 'digest', 'normalized'):
+        for name in ('authority_digest', 'digest', 'normalized'):
             self.assertEqual(old[name], new[name], name)
+        reviewed = functions(rerun_source(path))
+        for name in ('main', 'verify_manifest'):
+            self.assertEqual(reviewed[name], new[name], name)
 
     def test_actual_minimum_source_compiler_sdk_and_abi_facts_are_exact(self):
         path = 'tools/host-pthread-authority/minimum_receipt.py'
@@ -523,7 +630,7 @@ class SourcePreservationTest(unittest.TestCase):
         self.assertEqual(old[old.index(marker):], new[new.index(marker):])
         path = 'tools/toolchain/coherent_supplier_correlation.py'
         old, new = functions(old_source(path)), functions((ROOT / path).read_text())
-        self.assertEqual(old['main'], new['main'])
+        self.assertEqual(functions(rerun_source(path))['main'], new['main'])
         self.assertEqual(old['compare'], new['compare'])
 
 

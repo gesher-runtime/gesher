@@ -36,7 +36,7 @@
 #   gesher-app status                  the device's processes
 #   gesher-app cameras                 list Windows cameras and their frame sizes
 #   gesher-app cameras rear CAMERA_ID  record a physically rear-mounted Windows camera
-#   gesher-app cameras reset           clear the mounting choice (external cameras)
+#   gesher-app cameras reset           clear the mounting choice (front cameras)
 #   gesher-app shutdown                stop the device
 #   gesher-app toast-activated         (COM runs it: Gesher's toast activator) a click
 #                                      on an app's toast, given to the device (ADR 0051)
@@ -61,8 +61,11 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
+# AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
+Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
+. (Join-Path $scriptRoot 'gesher-runtime-files.ps1')
 $here = $scriptRoot
 
 # When started interactively from Explorer (.apk double-click or Start menu shortcut),
@@ -89,7 +92,7 @@ try {
   }
 } catch { }
 
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+$root = Set-GesherProfileEnvironment $here
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
@@ -168,7 +171,6 @@ if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path -LiteralPath $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)
 }
-. (Join-Path $here 'gesher-runtime-files.ps1')
 Set-Location -LiteralPath $here
 # A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
 # on the current drive, /mnt/<drive>/... on another, so ':'-separated lists
@@ -319,7 +321,9 @@ try {
   # the APK, then the app in this console's process; the three are stopped when it exits.
   $logs = Join-Path $root 'logs'
   New-Item -ItemType Directory -Force $logs | Out-Null
-  $env:GESHER_BINDER = "gesher-app-$PID"
+  # Unique per run, not only per PID: a reused PID must not name an earlier run's device
+  # (its binder pipe, property session and /proc/sys/kernel/random/boot_id).
+  $env:GESHER_BINDER = "gesher-app-$PID-" + [Convert]::ToString([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(), 16)
   $started = @()
   try {
     $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `

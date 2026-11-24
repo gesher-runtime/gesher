@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A/B the actual ordinary-file Fgetc bodies against an immutable git revision.
+"""A/B the historical ordinary-file Fgetc cache against its predecessor.
 
 Uses glibc FILE locking in place of UCRT, with the device predicate false in
 both variants. File setup is outside timing and every byte/EOF is checked.
@@ -32,11 +32,12 @@ def bodies(source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-ref', default='8b316aebf09ab46d5407e955bf86ed748a1e739f')
+    parser.add_argument('--candidate-ref', default='972c2b42b40c4ac799e147f5e352d07ba615d0fb')
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
     args = parser.parse_args()
     filename = 'compat/bionic/stdio_bionic.cc'
     baseline = subprocess.check_output(['git', 'show', args.baseline_ref + ':' + filename], cwd=ROOT, text=True)
-    current = (ROOT / filename).read_text()
+    current = subprocess.check_output(['git', 'show', args.candidate_ref + ':' + filename], cwd=ROOT, text=True)
     template = (ROOT / 'tests/native/stdio_metadata_benchmark.cc.in').read_text()
     for marker, source in [('@BEFORE@', baseline), ('@AFTER@', current)]:
         code = bodies(source)

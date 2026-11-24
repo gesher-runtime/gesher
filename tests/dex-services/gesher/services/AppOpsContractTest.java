@@ -1177,6 +1177,13 @@ public final class AppOpsContractTest {
         return process;
     }
 
+    /** Probe availability without introducing a policy-to-operation lock order. */
+    private static void inspectRetirementMonitors(Harness h, Object policy, Object operationLock) {
+        synchronized (h.pm) { }
+        synchronized (policy) { }
+        synchronized (operationLock) { }
+    }
+
     /** Real uninstall stages and killUid/processDied, with only APK, client death and disk boundaries controlled. */
     private static void sharedRetirement(boolean stillRequested, boolean legacy, boolean failDisk) throws Exception {
         Harness h = new Harness(legacy ? 22 : 36, Manifest.permission.READ_CONTACTS);
@@ -1241,7 +1248,7 @@ public final class AppOpsContractTest {
             Thread remover = new Thread(retirement, "shared-permission-retirement-contract"); remover.setDaemon(true); remover.start();
             check(disk.entered.await(5, TimeUnit.SECONDS), "Uninstall reaches its explicit permission durability boundary");
             java.util.concurrent.FutureTask<Void> inspect = new java.util.concurrent.FutureTask<>(() -> {
-                synchronized (h.pm) { synchronized (policy) { synchronized (operationLock) { } } }
+                inspectRetirementMonitors(h, policy, operationLock);
                 return null;
             });
             Thread observer = new Thread(inspect, "shared-retirement-monitor-contract"); observer.setDaemon(true); observer.start();

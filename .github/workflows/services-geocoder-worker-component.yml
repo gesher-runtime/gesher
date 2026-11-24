@@ -37,9 +37,11 @@ jobs:
             'tests/windows/helpers/geocoder-compiler-host.ps1' = '43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f'
             'tests/windows/helpers/geocoder-compile.ps1' = '90fceedc449a2ec11dfa80809e05163c89bcf2fa'
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
-            # The reviewed shared track includes sensor flush and real permission/
-            # UID setup; its geocoder implementation and the other nine pins are unchanged.
-            'tests/windows/tracks/58-devices.ps1' = 'b3f3f90ccd1c4c4cc849def7bcdceac03b83be4e'
+            # The reviewed shared track includes sensor flush, current camera grant
+            # admission, explicit fixture permissions, the camera callback-admission
+            # gate and the stationary accelerometer checks. Its geocoder implementation
+            # and the other nine source pins are unchanged.
+            'tests/windows/tracks/58-devices.ps1' = 'b148b37acce2fc03ba22b2682e2c894f5f11498a'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path
