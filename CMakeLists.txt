@@ -123,6 +123,8 @@ include(cmake/aosp/graphics.cmake)
 include(compat/windows/windows.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
+# Legacy RenderScript (docs/renderscript.md): libRS's CPU runtime and librs_jni.so.
+include(cmake/aosp/renderscript.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
 include(cmake/aosp/media.cmake)
 # Link Windows audio and video APIs when building media components.

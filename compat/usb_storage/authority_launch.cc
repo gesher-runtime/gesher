@@ -42,25 +42,29 @@ bool Query(HANDLE token, TOKEN_INFORMATION_CLASS kind, T* result, DWORD size = s
 }
 
 struct Identity {
+  // The typed headers provide the Win32 alignment naturally. Their trailing
+  // SID storage also permits ordinary structure padding without an explicitly
+  // aligned byte-array member (which MSVC diagnoses as C4324).
+  struct UserBuffer { TOKEN_USER value; BYTE sid[SECURITY_MAX_SID_SIZE]; };
+  struct IntegrityBuffer { TOKEN_MANDATORY_LABEL value; BYTE sid[SECURITY_MAX_SID_SIZE]; };
   TOKEN_STATISTICS stats{};
   DWORD session = 0;
   DWORD contained = 0;
   DWORD elevated = 0;
   DWORD ui_access = 0;
-  alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
-  alignas(TOKEN_MANDATORY_LABEL)
-      BYTE integrity[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE]{};
+  UserBuffer user{};
+  IntegrityBuffer integrity{};
 
   bool Read(HANDLE token) {
     return Query(token, TokenStatistics, &stats) && Query(token, TokenSessionId, &session) &&
         Query(token, TokenIsAppContainer, &contained) && Query(token, TokenElevation, &elevated) &&
-        Query(token, TokenUIAccess, &ui_access) && Query(token, TokenUser, user, sizeof(user)) &&
-        Query(token, TokenIntegrityLevel, integrity, sizeof(integrity)) &&
+        Query(token, TokenUIAccess, &ui_access) && Query(token, TokenUser, &user) &&
+        Query(token, TokenIntegrityLevel, &integrity) &&
         IsValidSid(User()) && IsValidSid(Integrity());
   }
-  PSID User() const { return reinterpret_cast<const TOKEN_USER*>(user)->User.Sid; }
+  PSID User() const { return user.value.User.Sid; }
   PSID Integrity() const {
-    return reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(integrity)->Label.Sid;
+    return integrity.value.Label.Sid;
   }
   bool MatchesDesktop(const AuthorityLaunchSpec& spec) const {
     return stats.TokenType == TokenPrimary && session == spec.desktop_session &&
