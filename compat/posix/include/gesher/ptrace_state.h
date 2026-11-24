@@ -120,7 +120,12 @@ const PublishedCodeWrites* CodeWrites();
 // Called by the guard, with every other thread of the process suspended,
 // when a tracer wrote memory: the translator makes its running code return to
 // its dispatcher. It must take no lock and allocate nothing.
+// The translator's code is System V on x86-64 hosts; an ARM64 host has one ABI.
+#if defined(__x86_64__)
 using HaltHook = void (__attribute__((sysv_abi)) *)();
+#else
+using HaltHook = void (*)();
+#endif
 void SetHaltHook(HaltHook hook);
 
 // Marks the calling thread as parked in a Gesher blocking wait while it owns
