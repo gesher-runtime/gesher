@@ -706,11 +706,19 @@ static DWORD PinCohostInput(const std::u16string& path, OwnedHandle* file) {
 
 static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring name,
         jstring display, jobjectArray capabilities, jlong pin, jint uid, jobject permissions,
-        jstring credential, jstring device, jintArray standardDescriptors, jstring buildProp, jstring frameworkRes) {
+        jstring credential, jstring device, jobjectArray external, jintArray standardDescriptors,
+        jstring buildProp, jstring frameworkRes) {
     if (pin <= 0 || permissions == nullptr || !gesher::zygote::HasProtectedLaunchAuthority()) {
         jniThrowException(env, "java/lang/SecurityException", "Protected cohost cannot launch");
         return 0;
     }
+    if (external == nullptr || env->GetArrayLength(external) !=
+        static_cast<jsize>(gesher::rooted_storage_wire::kExternalAreaCount)) {
+        jniThrowException(env, "java/lang/IllegalArgumentException", "Invalid standalone external storage");
+        return 0;
+    }
+    const auto externalPaths = ZygoteStrings(env, external);
+    if (env->ExceptionCheck()) return 0;
     jclass type = env->GetObjectClass(permissions);
     if (type == nullptr) return 0;
     jmethodID bind = env->GetMethodID(type, "bindNativeLease", "(J)V");
@@ -776,19 +784,25 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
             return 0;
         }
         CohostDirectory credentialRoot, deviceRoot;
+        std::array<CohostDirectory, gesher::rooted_storage_wire::kExternalAreaCount> externalRoots;
         std::unique_ptr<gesher::rooted_storage::Server> storage;
         if (!credentialPath.empty() || !devicePath.empty()) {
             failure = PinCohostDirectory(credentialPath, &credentialRoot);
             if (failure == ERROR_SUCCESS) failure = PinCohostDirectory(devicePath, &deviceRoot);
+            for (size_t index = 0; failure == ERROR_SUCCESS && index < externalRoots.size(); ++index) {
+                failure = PinCohostDirectory(externalPaths[index], &externalRoots[index]);
+            }
             if (failure != ERROR_SUCCESS) {
                 env->DeleteGlobalRef(host);
                 jniThrowException(env, "java/lang/SecurityException",
                                   "Cannot admit the exact standalone storage directories");
                 return 0;
             }
-            storage = std::make_unique<gesher::rooted_storage::Server>(
-                gesher::rooted_storage::Roots{credentialRoot.directory.get(), deviceRoot.directory.get()},
-                buildInput.get(), frameworkInput.get());
+            gesher::rooted_storage::Roots roots{credentialRoot.directory.get(), deviceRoot.directory.get()};
+            for (size_t index = 0; index < externalRoots.size(); ++index) {
+                roots.external[index] = externalRoots[index].directory.get();
+            }
+            storage = std::make_unique<gesher::rooted_storage::Server>(roots, buildInput.get(), frameworkInput.get());
             if (storage->name().empty()) {
                 env->DeleteGlobalRef(host);
                 jniThrowException(env, "java/lang/SecurityException", "Cannot create rooted storage");
@@ -839,6 +853,10 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
                     {u"android.permission.RECORD_AUDIO"}, &values) == ERROR_SUCCESS &&
                     values.size() == 1 && values[0] == 0; // PackageManager.PERMISSION_GRANTED
             }};
+        for (size_t index = 0; index < externalRoots.size(); ++index) {
+            services.external[index] = {externalPaths[index], std::move(externalRoots[index].canonical),
+                                        std::move(externalRoots[index].nt)};
+        }
         gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
                                              ZygoteStrings(env, capabilities)};
         failure = gesher::zygote::RunPinnedCohost(ZygoteString(env, command), spec,
@@ -955,7 +973,7 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_runContainedStandalone)},
     {"nativeRunPinnedCohost",
      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;JI"
-     "Lcom/gesher/server/CohostPermissionHost;Ljava/lang/String;Ljava/lang/String;[I"
+     "Lcom/gesher/server/CohostPermissionHost;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;[I"
      "Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_runPinnedCohost)},
     {"nativeCohostPermissionLive", "(J)Z", GESHER_JNI(Zygote_cohostPermissionLive)},

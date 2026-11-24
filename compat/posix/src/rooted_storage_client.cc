@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <errno.h>
 #include <gesher/binder_bootstrap.h>
+#include <gesher/binder_endpoint.h>
 #include <gesher/cohost_bootstrap.h>
 
 #include <algorithm>
 #include <array>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "rooted_storage_client.h"
 #include <gesher/drop_mount.h>
@@ -117,12 +119,18 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
 }  // namespace
 
 bool HasBroker() {
+  const auto& binding = binder_endpoint::Current();
+  if (binding.IsGuest() && !binding.IsStandalone()) return true;
   const auto& state = cohost_bootstrap::Current();
   return state && !state.storage_pipe.empty();
 }
 
 int StatAndroidData(wire::Filesystem* filesystem) {
   if (filesystem == nullptr) return EFAULT;
+  const auto& binding = binder_endpoint::Current();
+  if (binding.IsGuest() && !binding.IsStandalone()) {
+    return binder_endpoint::QueryAndroidDataCapacity(filesystem);
+  }
   wire::Reply reply;
   return Call(wire::Op::kStatAndroidData, {true, 0, wire::kCredential, {}}, {}, 0, &reply, filesystem);
 }
@@ -136,12 +144,22 @@ Selection Lookup(const std::wstring& mapped) {
     std::wstring path;
     uint32_t area;
   };
-  static const std::array roots{
-      Root{AbsoluteDosPath(state.credential), wire::kCredential},
-      Root{AbsoluteDosPath(state.device), wire::kDevice},
-      Root{AbsoluteDosPath(state.credential_canonical), wire::kCredential},
-      Root{AbsoluteDosPath(state.device_canonical), wire::kDevice},
-  };
+  static const auto roots = [&state] {
+    std::vector<Root> result{
+        {AbsoluteDosPath(state.credential), wire::kCredential},
+        {AbsoluteDosPath(state.device), wire::kDevice},
+        {AbsoluteDosPath(state.credential_canonical), wire::kCredential},
+        {AbsoluteDosPath(state.device_canonical), wire::kDevice},
+    };
+    for (size_t index = 0; index < state.external.size(); ++index) {
+      const auto& external = state.external[index];
+      if (external.path.empty()) continue;
+      const uint32_t area = wire::kFirstExternalArea + static_cast<uint32_t>(index);
+      result.push_back({AbsoluteDosPath(external.path), area});
+      result.push_back({AbsoluteDosPath(external.canonical), area});
+    }
+    return result;
+  }();
   if (std::any_of(roots.begin(), roots.end(), [](const Root& root) { return root.path.empty(); })) {
     return {false, EACCES, wire::kCredential, {}};
   }
@@ -169,13 +187,18 @@ std::wstring DescriptorPath(HANDLE file) {
   const DWORD used = GetFinalPathNameByHandleW(file, name.data(), size, format);
   if (used == 0 || used >= size) return {};
   name.resize(used);
-  if (Within(name, state.credential_nt)) {
-    return state.credential_canonical + name.substr(state.credential_nt.size());
-  }
-  if (Within(name, state.device_nt)) {
-    return state.device_canonical + name.substr(state.device_nt.size());
-  }
-  return {};
+  const std::wstring* selected = nullptr;
+  size_t prefix = 0;
+  const auto consider = [&](const std::wstring& nt, const std::wstring& canonical) {
+    if (nt.size() > prefix && Within(name, nt)) {
+      selected = &canonical;
+      prefix = nt.size();
+    }
+  };
+  consider(state.credential_nt, state.credential_canonical);
+  consider(state.device_nt, state.device_canonical);
+  for (const auto& root : state.external) consider(root.nt, root.canonical);
+  return selected ? *selected + name.substr(prefix) : std::wstring{};
 }
 
 std::optional<wire::Op> LookupBootstrap(const std::wstring& mapped) {

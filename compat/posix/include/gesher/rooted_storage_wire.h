@@ -18,6 +18,9 @@ constexpr bool OpensHandle(Op op) {
 }
 constexpr uint32_t kCredential = 0;
 constexpr uint32_t kDevice = 1;
+constexpr uint32_t kFirstExternalArea = 2;
+constexpr uint32_t kExternalAreaCount = 3;
+constexpr uint32_t kAreaCount = kFirstExternalArea + kExternalAreaCount;
 
 // For kOpen the low bits name the requested access. The remaining bits are
 // booleans. kRemove accepts only kDirectory, and kRename only kReplace.

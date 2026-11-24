@@ -10,15 +10,22 @@
 #include <string_view>
 
 #include "binder_bootstrap.h"
+#include "rooted_storage_wire.h"
 
 namespace gesher::cohost_bootstrap {
 
 // The host maps this record writable only while preparing it. Explicitly
 // inherited section handles carry FILE_MAP_READ, and the separate host process
 // handle pins the live native server generation without any control rights.
+struct ExternalRootRecord {
+  std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> path{};
+  std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> canonical{};
+  std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> nt{};
+};
+
 struct Metadata {
   uint32_t magic = 0x47434f48;  // GCOH
-  uint32_t version = 3;
+  uint32_t version = 4;
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> credential{};
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> device{};
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> credential_canonical{};
@@ -29,6 +36,7 @@ struct Metadata {
   std::array<wchar_t, binder_bootstrap::StandaloneName::kMaxPath> framework_res{};
   std::array<wchar_t, 256> storage_pipe{};
   std::array<wchar_t, 256> permission_pipe{};
+  std::array<ExternalRootRecord, rooted_storage_wire::kExternalAreaCount> external{};
 };
 
 template <size_t Size>
@@ -46,6 +54,12 @@ inline bool Load(const std::array<wchar_t, Size>& field, std::wstring* value) {
   value->assign(field.cbegin(), end);
   return true;
 }
+
+struct ExternalRoot {
+  std::wstring path;
+  std::wstring canonical;
+  std::wstring nt;
+};
 
 class Binding {
  public:
@@ -70,7 +84,7 @@ class Binding {
     const auto* metadata = static_cast<const Metadata*>(
         MapViewOfFile(section_, FILE_MAP_READ, 0, 0, sizeof(Metadata)));
     if (metadata == nullptr) return;
-    valid_ = metadata->magic == 0x47434f48 && metadata->version == 3 &&
+    valid_ = metadata->magic == 0x47434f48 && metadata->version == 4 &&
         Load(metadata->credential, &credential) && Load(metadata->device, &device) &&
         Load(metadata->credential_canonical, &credential_canonical) &&
         Load(metadata->device_canonical, &device_canonical) &&
@@ -81,6 +95,13 @@ class Binding {
          (storage_pipe.empty() && credential.empty() && device.empty() &&
           build_prop.empty() && framework_res.empty())) &&
         (!storage_pipe.empty() || !permission_pipe.empty());
+    for (size_t index = 0; valid_ && index < external.size(); ++index) {
+      const auto& record = metadata->external[index];
+      auto& root = external[index];
+      valid_ = Load(record.path, &root.path) && Load(record.canonical, &root.canonical) &&
+          Load(record.nt, &root.nt) && ((root.path.empty() && root.canonical.empty() && root.nt.empty()) ||
+          (!storage_pipe.empty() && !root.path.empty() && !root.canonical.empty() && !root.nt.empty()));
+    }
     UnmapViewOfFile(metadata);
   }
 
@@ -121,6 +142,7 @@ class Binding {
   std::wstring framework_res;
   std::wstring storage_pipe;
   std::wstring permission_pipe;
+  std::array<ExternalRoot, rooted_storage_wire::kExternalAreaCount> external;
   HANDLE storage_host = nullptr;
 
  private:

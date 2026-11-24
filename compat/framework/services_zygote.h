@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../posix/include/gesher/capture_policy.h"
+#include "../posix/include/gesher/rooted_storage_wire.h"
 
 namespace gesher {
 namespace zygote {
@@ -75,6 +76,11 @@ uint32_t ReadStandaloneInput(uint64_t pin, int64_t offset, void* bytes,
                              uint32_t capacity, uint32_t* copied);
 uint32_t RunPinnedContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
                                       uint64_t pin, uint32_t uid, uint32_t* exit_code);
+struct CohostExternalRoot {
+  std::u16string path;
+  std::u16string canonical;
+  std::u16string nt;
+};
 struct CohostSpec {
   std::u16string credential;
   std::u16string device;
@@ -91,6 +97,7 @@ struct CohostSpec {
   std::u16string build_prop{};
   std::u16string framework_res{};
   std::function<bool(const capture_policy::Request&)> capture_allowed{};
+  std::array<CohostExternalRoot, rooted_storage_wire::kExternalAreaCount> external{};
 };
 uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& spec,
                         uint64_t pin, uint32_t uid, const CohostSpec& services, uint32_t* exit_code);

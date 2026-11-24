@@ -43,7 +43,8 @@ HANDLE Root(const Roots& roots, Area area) {
     case Area::kCredential: return roots.credential;
     case Area::kDevice: return roots.device;
   }
-  return INVALID_HANDLE_VALUE;
+  const uint32_t index = static_cast<uint32_t>(area) - rooted_storage_wire::kFirstExternalArea;
+  return index < roots.external.size() ? roots.external[index] : INVALID_HANDLE_VALUE;
 }
 
 int NativeError(NTSTATUS status) {

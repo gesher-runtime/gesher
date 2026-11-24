@@ -2,6 +2,9 @@
 #define GESHER_ROOTED_STORAGE_H
 
 #include <windows.h>
+#include <gesher/rooted_storage_wire.h>
+
+#include <array>
 
 #include <string>
 #include <string_view>
@@ -9,7 +12,10 @@
 
 namespace gesher::rooted_storage {
 
-enum class Area { kCredential, kDevice };
+enum class Area : uint32_t {
+  kCredential = rooted_storage_wire::kCredential,
+  kDevice = rooted_storage_wire::kDevice,
+};
 enum class Access { kRead, kWrite, kReadWrite, kMetadata, kMetadataWrite };
 
 // Borrowed, separately admitted directory handles. The owner holds each identity
@@ -17,6 +23,7 @@ enum class Access { kRead, kWrite, kReadWrite, kMetadata, kMetadataWrite };
 struct Roots {
   HANDLE credential;
   HANDLE device;
+  std::array<HANDLE, rooted_storage_wire::kExternalAreaCount> external{};
 };
 
 struct OpenRequest {

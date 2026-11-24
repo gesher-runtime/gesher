@@ -49,12 +49,12 @@ bool Retain(HANDLE handle, OwnedHandle* retained, ACCESS_MASK rights, DWORD opti
 }
 
 Area ReadArea(uint32_t area) {
-  return area == wire::kCredential ? Area::kCredential : Area::kDevice;
+  return static_cast<Area>(area);
 }
 
 bool Valid(const wire::Request& request) {
   if (request.magic != wire::kMagic || request.version != wire::kVersion ||
-      request.source_area > wire::kDevice || request.target_area > wire::kDevice ||
+      request.source_area >= wire::kAreaCount || request.target_area >= wire::kAreaCount ||
       request.path_units > wire::kMaxPathUnits || request.target_units > wire::kMaxPathUnits ||
       (request.operation != wire::Op::kRename &&
           (request.target_units != 0 || request.target_area != wire::kCredential))) return false;
@@ -172,6 +172,15 @@ class Server::State {
         (framework_res && !Retain(framework_res, &framework_res_, 0, DUPLICATE_SAME_ACCESS))) {
       ce_.reset();
       de_.reset();
+      return;
+    }
+    for (size_t index = 0; index < roots.external.size(); ++index) {
+      if (roots.external[index] &&
+          !Retain(roots.external[index], &external_[index], 0, DUPLICATE_SAME_ACCESS)) {
+        ce_.reset();
+        de_.reset();
+        return;
+      }
     }
   }
 
@@ -225,7 +234,13 @@ class Server::State {
     OwnedHandle worker;
   };
 
-  Roots roots() const { return {ce_.get(), de_.get()}; }
+  Roots roots() const {
+    Roots result{ce_.get(), de_.get()};
+    for (size_t index = 0; index < external_.size(); ++index) {
+      result.external[index] = external_[index].get();
+    }
+    return result;
+  }
 
   bool IsLive() const {
     return !stopped_.load(std::memory_order_acquire) && child_ &&
@@ -334,6 +349,7 @@ class Server::State {
   }
 
   OwnedHandle ce_, de_, child_, job_, build_prop_, framework_res_;
+  std::array<OwnedHandle, wire::kExternalAreaCount> external_;
   Process launch_;
   std::atomic<bool> stopped_{false};
   std::array<Instance, 2> instances_;

@@ -1430,7 +1430,7 @@ DWORD PrepareCohost(const CohostSpec& services, CohostHandles* handles) {
   auto* bytes = MapViewOfFile(mapping.get(), FILE_MAP_WRITE, 0, 0, sizeof(Record));
   if (bytes == nullptr) return GetLastError();
   auto* record = new (bytes) Record;
-  const bool stored = cohost_bootstrap::Store(&record->credential, Wide(services.credential)) &&
+  bool stored = cohost_bootstrap::Store(&record->credential, Wide(services.credential)) &&
       cohost_bootstrap::Store(&record->device, Wide(services.device)) &&
       cohost_bootstrap::Store(&record->credential_canonical, Wide(services.credential_canonical)) &&
       cohost_bootstrap::Store(&record->device_canonical, Wide(services.device_canonical)) &&
@@ -1440,6 +1440,13 @@ DWORD PrepareCohost(const CohostSpec& services, CohostHandles* handles) {
       cohost_bootstrap::Store(&record->framework_res, Wide(services.framework_res)) &&
       cohost_bootstrap::Store(&record->storage_pipe, Wide(services.storage_pipe)) &&
       cohost_bootstrap::Store(&record->permission_pipe, Wide(services.permission_pipe));
+  for (size_t index = 0; stored && index < services.external.size(); ++index) {
+    const auto& root = services.external[index];
+    auto& target = record->external[index];
+    stored = cohost_bootstrap::Store(&target.path, Wide(root.path)) &&
+        cohost_bootstrap::Store(&target.canonical, Wide(root.canonical)) &&
+        cohost_bootstrap::Store(&target.nt, Wide(root.nt));
+  }
   UnmapViewOfFile(bytes);
   if (!stored) return ERROR_FILENAME_EXCED_RANGE;
   HANDLE metadata = nullptr;

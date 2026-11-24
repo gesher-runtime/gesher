@@ -142,6 +142,9 @@ enum Op : uint32_t {
   kCamera = 23,
   // Authenticated worker for Windows file drops.
   kDropWorker = 24,
+  // -> {magic, version}; <- {status[, available, total, free (u64 bytes)]}.
+  // The host chooses the Android data volume; the sender supplies no path.
+  kAndroidDataCapacity = 25,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

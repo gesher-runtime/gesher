@@ -396,15 +396,15 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse the reviewed AppContainer runtime changes into the previous proof.
 # Exact new files are checked before applying the patch; the earlier OFD
 # qualification retains all of its prior source, supplier, and fixture pins.
-APPCONTAINER_IDENTITY_PATCH_SHA256 = 'fd7ee1074c0d97c98da8bbba0140f86303f379185c2d8aa354cb17b7e01a51a8'
+APPCONTAINER_IDENTITY_PATCH_SHA256 = 'b7a2c02e1561bd3096f9eeca4c04c37c25e77cf54c747cc222825083ddada2af'
 APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
- 'compat/binder/binderd.cc': '2f37f06e5b5a088c59bf3e676bbb3c22b526b11eb891195a083c9dc811ff0f36',
+ 'compat/binder/binderd.cc': 'fbf2ca62efe037b081b7fa909806333fcea132cdbb8f165c2b69cb98d30a0aa7',
  'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
  'compat/posix/include/gesher/file_description.h': '94ce9ad7806d727977cc2c6f6df9fa289d1ea94b124404aed6c58fb7416a95d9',
  'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
  'compat/posix/posix.cmake': '8fe75797496a0561ac677ddf12b7b11e31e429daa2ec0379856ffe934392b756',
- 'compat/posix/src/binder.cc': '75f01226fce65a5c954986fe0528769e110a9f70e96009934885a381c5ff4f0a',
- 'compat/posix/src/binder_wire.h': 'f613f9492b4171c397321f15519ec5b852f2917ad929b6d1e495c1136ddd62d7',
+ 'compat/posix/src/binder.cc': '10dbeec0a67daee5fc2363fa35db8282fbf80135b95805d2f05707bde3b2fd11',
+ 'compat/posix/src/binder_wire.h': '17a3474e3d2052b298db14262bb3431c54bce1069aac9c3c78e749721e406af5',
  'compat/posix/src/dirent.cc': '22e3bcf261e56a950fe7a1f3e719cfc5153505f2bd7a693eb6da82c71a4efcff',
  'compat/posix/src/errno.cc': 'f2d2e94807fec9abd2e3785994f388538b1dee9abc49a4b2e574cdd594f89238',
  'compat/posix/src/fd.cc': '4f7ab619d769b885e6f54be626567d4df8ec5a2739901b6beba8a2a5548305dc',
@@ -448,7 +448,7 @@ def preceding_appcontainer_identity_sources(netlink):
   subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
   return {path:(work/path).read_bytes() for path in paths}
 
-NETLINK_QUALIFICATION_SHA256 = '034eddd8573d31aacedb185e64fe484ad38cd6612ed786df6d511e0fbd2ea8b6'
+NETLINK_QUALIFICATION_SHA256 = 'c4d2c9ca3cd553296a9460ba61ca1cbc4ad39ff0f8cd2af7d75e7f991db2028e'
 
 def preceding_netlink_sources():
  folder=ROOT/'tools/net-tcp-priority/qualified'

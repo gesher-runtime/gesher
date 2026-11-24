@@ -68,25 +68,30 @@ GraphicsDex 'HardwareRenderer: SkiaGL chosen by debug.hwui.renderer, on ANGLE''s
   HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'gl', 'debug.hwui.renderer')
 $env:ANDROID_ROOT = $androidRoot
 
-# Without ANGLE (the files of $Dir, hard-linked, less libEGL.dll and
-# libGLESv2.dll), skiagl falls back to the CPU pipeline with a line saying so.
-$env:GESHER_HWUI_RENDERER = 'skiagl'
-$noAngle = Join-Path $env:RUNNER_TEMP 'dist-no-angle'
-New-Item -ItemType Directory -Force $noAngle | Out-Null
-foreach ($file in Get-ChildItem -File $Dir) {
-  if ($file.Name -in @('libEGL.dll', 'libGLESv2.dll')) { continue }
-  $link = Join-Path $noAngle $file.Name
-  if (-not (Test-Path $link)) {
-    try { New-Item -ItemType HardLink -Path $link -Target $file.FullName -ErrorAction Stop | Out-Null }
-    catch { Copy-Item $file.FullName $link }
-  }
-}
+# Without ANGLE, skiagl falls back to the CPU pipeline with a line saying so.
+# Copy the files so the protected runtime can still grant access to the
+# original distribution, which requires its files to have a single link.
 $distDir = $Dir
-$Dir = $noAngle
-GraphicsDex 'HardwareRenderer: skiagl without ANGLE falls back to the CPU pipeline, the same frame' `
-  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'fallback', 'GESHER_HWUI_RENDERER')
-$Dir = $distDir
-Remove-Item Env:GESHER_HWUI_RENDERER
+$previousRenderer = $env:GESHER_HWUI_RENDERER
+$noAngle = Join-Path $env:RUNNER_TEMP "dist-no-angle-$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Path $noAngle -ErrorAction Stop | Out-Null
+try {
+  foreach ($file in Get-ChildItem -LiteralPath $distDir -File) {
+    if ($file.Name -in @('libEGL.dll', 'libGLESv2.dll')) { continue }
+    Copy-Item -LiteralPath $file.FullName -Destination $noAngle -ErrorAction Stop
+  }
+  $Dir = $noAngle
+  $env:GESHER_HWUI_RENDERER = 'skiagl'
+  GraphicsDex 'HardwareRenderer: skiagl without ANGLE falls back to the CPU pipeline, the same frame' `
+    HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'fallback', 'GESHER_HWUI_RENDERER')
+} finally {
+  $Dir = $distDir
+  $env:GESHER_HWUI_RENDERER = $previousRenderer
+  Get-ChildItem -LiteralPath $noAngle -File -Force | ForEach-Object {
+    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+  }
+  [IO.Directory]::Delete($noAngle, $false)
+}
 
 # The framework's Java OpenGL ES/EGL bindings over ANGLE (docs/angle.md, "Java
 # apps"; tests/dex-graphics/gesher/GlBindingsTest.java), what GLSurfaceView and
