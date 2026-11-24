@@ -431,6 +431,11 @@ jobs:
           python3 tools/test_stdio_contracts.py --sanitize
           python3 tools/test_socket_registry_lifetime.py --sanitize
 
+      - name: Guest snprintf bounded accumulation contracts
+        run: |
+          python3 tools/test_snprintf_bounds.py --sanitize --negative-controls
+          python3 tools/test_snprintf_bounds.py --observe-allocations --allocation-contracts
+
       - name: MediaPlayer PCM priming and playback lifecycle contracts
         run: python3 tools/test_media_player_priming.py --sanitize
 

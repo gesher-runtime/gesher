@@ -281,7 +281,7 @@ SHARED_STDIO_PATHS = (
  'compat/posix/src/stdio_output.cc',
 )
 
-def preceding_shared_stdio_sources(qualification):
+def preceding_shared_stdio_sources(qualification,current_sources):
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'shared-stdio-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==SHARED_STDIO_TRANSITION_SHA256,'shared-stdio source transition changed'
@@ -299,9 +299,10 @@ def preceding_shared_stdio_sources(qualification):
  assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'shared-stdio transition patch changed'
  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
      ('diff --git a/'+path+' b/'+path).encode() for path in paths],'shared-stdio patch paths changed'
+ assert sorted(current_sources)==paths,'shared-stdio input paths changed'
  current={};baseline={}
  for path in paths:
-  current[path]=(ROOT/path).read_bytes()
+  current[path]=current_sources[path]
   assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
   baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':'+path])
   assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
@@ -323,6 +324,35 @@ def preceding_shared_stdio_sources(qualification):
  return baseline
 
 
+# The guest snprintf prefix accumulator changes only this formatter source.
+# Reverse this complete transition to the named published main first; its
+# unchanged PR73 transition then restores every original OFD digest. This is source identity
+# qualification only: no supplier, controller or native runtime approval.
+SNPRINTF_BOUNDS_SOURCE='compat/bionic/stdio_bionic.cc'
+SNPRINTF_BOUNDS_BASELINE='fdf4861b608d7a5fe8c0fa6c8a285dfbdf573d91'
+SNPRINTF_BOUNDS_SHA256='ed233ab2d1744263398a9e8ea8619848574e215fe46cf5751ed0ab5558dbcf9b'
+SNPRINTF_BOUNDS_PREVIOUS_SHA256='4600f47dcfe09898b8bbc5ac3f030f88414c1c905dee772dc97682612dadc514'
+SNPRINTF_BOUNDS_PATCH_SHA256='0d9d82b35ded1858b2f455c7f0322172320c1b10e57636a5756e570f7c3a54a9'
+def preceding_snprintf_bounds_source():
+ path=SNPRINTF_BOUNDS_SOURCE
+ current=(ROOT/path).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==SNPRINTF_BOUNDS_SHA256,path
+ patch=(ROOT/'tools/net-tcp-priority/qualified/snprintf-bounds-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==SNPRINTF_BOUNDS_PATCH_SHA256,'snprintf bounds transition changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+ with tempfile.TemporaryDirectory(prefix='gesher-snprintf-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',SNPRINTF_BOUNDS_BASELINE+':'+path])
+  assert previous==expected and hashlib.sha256(previous).hexdigest()==SNPRINTF_BOUNDS_PREVIOUS_SHA256,path
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'snprintf bounds forward reconstruction changed'
+ return previous
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -405,7 +435,11 @@ def preceding_ofd_sources():
         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
- shared_stdio=preceding_shared_stdio_sources(qualification)
+ # First remove only the exact bounded-formatter delta. PR73 then checks its
+ # original four endpoints before every unchanged OFD source digest below.
+ shared_current={path:(ROOT/path).read_bytes() for path in SHARED_STDIO_PATHS}
+ shared_current[SNPRINTF_BOUNDS_SOURCE]=preceding_snprintf_bounds_source()
+ shared_stdio=preceding_shared_stdio_sources(qualification,shared_current)
  for path,digest in qualification['source_sha256'].items():
   actual=shared_stdio[path] if path in shared_stdio else (ROOT/path).read_bytes()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
@@ -615,6 +649,13 @@ def transition_negative_controls():
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
   (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
+  (SNPRINTF_BOUNDS_SOURCE,b'return bytes.size() + omitted;',b'return bytes.size();'),
+  (SNPRINTF_BOUNDS_SOURCE,b'size_t kept = count < Remaining() ? count : Remaining();',b'size_t kept = count;'),
+  (SNPRINTF_BOUNDS_SOURCE,b'out->bytes.resize(offset + kept);',b'out->bytes.resize(offset);'),
+  (SNPRINTF_BOUNDS_SOURCE,b'if (!valid) return -1;\n  if (n != 0) {',b'if (!valid) { if (n) buf[0] = 0; return -1; }\n  if (n != 0) {'),
+  # An unrelated unbounded formatter remains protected by the original digest.
+  (SNPRINTF_BOUNDS_SOURCE,b'std::memcpy(buf, s.c_str(), s.size() + 1);\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf',b'std::memcpy(buf, s.c_str(), s.size());\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf'),
+  ('tools/net-tcp-priority/qualified/snprintf-bounds-source.patch',b'@@',b'@x'),
  ]
  for name,before,after in cases:
   target=ROOT/name
@@ -631,7 +672,20 @@ def transition_negative_controls():
     try:check()
     except (AssertionError,subprocess.CalledProcessError):rejected=True
    assert rejected,'unqualified mutation accepted: '+name+' repin='+str(repin)
- print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4')
+ # Merely refreshing the new source hash must not admit changed parser,
+ # destination-publication, capacity or unrelated unbounded-formatting bytes.
+ # The exact reverse patch and published baseline independently reject them.
+ target=ROOT/SNPRINTF_BOUNDS_SOURCE
+ for name,before,after in cases[-6:-1]:
+  assert ROOT/name==target and original(target).count(before)==1
+  changed_source=original(target).replace(before,after,1)
+  def repinned(path):return changed_source if path==target else original(path)
+  rejected=False
+  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),SNPRINTF_BOUNDS_SHA256=hashlib.sha256(changed_source).hexdigest()):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'repinned snprintf mutation accepted: '+before.decode()
+ print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4 repinned_snprintf_controls=5')
 if __name__=='__main__':
  import sys
  check()
