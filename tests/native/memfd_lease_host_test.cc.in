@@ -20,6 +20,7 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -472,8 +473,51 @@ void ProcessDeath() {
   }
 }
 
+// Require each serial order explicitly. A scheduler is allowed to pick the same
+// winner in every concurrent round, even when both operations start together.
+bool ThreadOrder(bool seal_first) {
+  Memfd file = CreateMemfd();
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool first_done = false;
+  auto await_first = [&] {
+    std::unique_lock<std::mutex> lock(mutex);
+    changed.wait(lock, [&] { return first_done; });
+  };
+  auto complete_first = [&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    first_done = true;
+    changed.notify_one();
+  };
+  int seal_result = -1, map_result = -1;
+  std::shared_ptr<void> lease;
+  std::thread sealer([&] {
+    if (!seal_first) await_first();
+    seal_result = Seal(file.fd, F_SEAL_WRITE);
+    if (seal_first) complete_first();
+  });
+  std::thread mapper([&] {
+    if (seal_first) await_first();
+    map_result = MapShared(file.fd, true, &lease);
+    if (!seal_first) complete_first();
+  });
+  sealer.join();
+  mapper.join();
+  const bool ordered = seal_first ? seal_result == 0 && map_result == EPERM
+                                  : map_result == 0 && seal_result == EBUSY;
+  CHECK_L(seal_first ? "thread seal-first handshake admits only the seal, mmap is EPERM"
+                     : "thread map-first handshake admits only the mapping, seal is EBUSY", ordered);
+  CHECK_L("ordered thread result agrees with stored seals",
+          Seals(file.fd) == (seal_first ? F_SEAL_WRITE : 0));
+  lease.reset();
+  CloseFd(file.fd);
+  unlink(file.path.c_str());
+  return ordered;
+}
+
 // F_SEAL_WRITE against a writable shared mmap: exactly one of them may win.
 void ThreadRace() {
+  const bool seal_first = ThreadOrder(true), map_first = ThreadOrder(false);
   int seal_won = 0, map_won = 0, both = 0, neither = 0;
   for (int round = 0; round < 1500; ++round) {
     Memfd file = CreateMemfd();
@@ -508,24 +552,95 @@ void ThreadRace() {
   printf("thread race: seal won %d, map won %d (both %d, neither %d)\n", seal_won, map_won, both, neither);
   CHECK_L("no round let a write seal and a writable shared mapping both succeed", both == 0);
   CHECK_L("every round had one winner: EBUSY only against a mapping, EPERM only after a seal", neither == 0);
-  CHECK_L("both orders of the race were exercised", seal_won > 0 && map_won > 0);
+  CHECK_L("thread handshakes exercised both orders alongside concurrent rounds", seal_first && map_first);
+}
+
+// A pipe handshake carries actual results, never a timing guess. In map-first
+// order the parent retains its live lease until the child's seal attempt ends.
+bool TransferInt(int fd, int* value, bool writing) {
+  auto* at = reinterpret_cast<unsigned char*>(value);
+  size_t left = sizeof(*value);
+  while (left != 0) {
+    const ssize_t count = writing ? write(fd, at, left) : read(fd, at, left);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) return false;
+    at += count;
+    left -= static_cast<size_t>(count);
+  }
+  return true;
+}
+
+bool ProcessOrder(bool seal_first) {
+  Memfd file = CreateMemfd();
+  int start[2], result[2];
+  if (pipe(start) != 0 || pipe(result) != 0) abort();
+  const pid_t child = fork();
+  if (child < 0) abort();
+  if (child == 0) {
+    close(start[1]);
+    close(result[0]);
+    const int own = OpenFile(file.path);
+    int signal = 0;
+    if (!seal_first && !TransferInt(start[0], &signal, false)) _exit(2);
+    int sealed = Seal(own, F_SEAL_WRITE);
+    if (!TransferInt(result[1], &sealed, true)) _exit(3);
+    _exit(0);
+  }
+  close(start[0]);
+  close(result[1]);
+  int seal_result = -1, map_result = -1, signal = 1;
+  std::shared_ptr<void> lease;
+  bool transferred;
+  if (seal_first) {
+    transferred = TransferInt(result[0], &seal_result, false);
+    map_result = MapShared(file.fd, true, &lease);
+  } else {
+    map_result = MapShared(file.fd, true, &lease);
+    transferred = TransferInt(start[1], &signal, true)
+            && TransferInt(result[0], &seal_result, false);
+  }
+  int status = 0;
+  pid_t waited;
+  do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+  CHECK_L("ordered process handshake returns a result and reaps its child",
+          transferred && waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+  const bool ordered = seal_first ? seal_result == 0 && map_result == EPERM
+                                  : map_result == 0 && seal_result == EBUSY;
+  CHECK_L(seal_first ? "process seal-first handshake admits only the seal, mmap is EPERM"
+                     : "process map-first handshake admits only the mapping, seal is EBUSY", ordered);
+  CHECK_L("ordered process result agrees with stored seals",
+          Seals(file.fd) == (seal_first ? F_SEAL_WRITE : 0));
+  close(start[1]);
+  close(result[0]);
+  lease.reset();
+  CloseFd(file.fd);
+  unlink(file.path.c_str());
+  return ordered;
 }
 
 // The same race between two processes, each with its own handle (own file object).
 void ProcessRace() {
+  const bool seal_first = ProcessOrder(true), map_first = ProcessOrder(false);
   auto* shared = static_cast<std::atomic<int>*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+  if (shared == MAP_FAILED) abort();
   int seal_won = 0, map_won = 0, both = 0, neither = 0;
   for (int round = 0; round < 400; ++round) {
     Memfd file = CreateMemfd();
     shared[0] = 0;
+    shared[1] = 0;
     const pid_t child = fork();
+    if (child < 0) abort();
     if (child == 0) {
       const int own = OpenFile(file.path);
+      shared[1] = 1;
       while (shared[0].load() == 0) {}
       for (int spin = round % 5; spin > 0; --spin) sched_yield();
       { const int result = Seal(own, F_SEAL_WRITE); _exit(result == 0 ? 0 : (result == EBUSY ? 1 : 2)); }
     }
     std::shared_ptr<void> lease;
+    // Both participants must reach the start before either operation is admitted.
+    // Yielding alone did not prevent all 400 parent mappings preceding child setup.
+    while (shared[1].load() == 0) sched_yield();
     shared[0] = 1;
     for (int spin = (round / 5) % 5; spin > 0; --spin) sched_yield();
     const int map_result = MapShared(file.fd, true, &lease);
@@ -537,16 +652,18 @@ void ProcessRace() {
     else if (!sealed && !mapped) ++neither;
     else if (sealed) ++seal_won;
     else ++map_won;
+    if (sealed != ((Seals(file.fd) & F_SEAL_WRITE) != 0)) ++both;
     if (!sealed && seal_status != 1) ++neither;
     if (!mapped && map_result != EPERM) ++neither;
     lease.reset();
     CloseFd(file.fd);
     unlink(file.path.c_str());
   }
+  munmap(shared, 4096);
   printf("process race: seal won %d, map won %d (both %d, neither %d)\n", seal_won, map_won, both, neither);
   CHECK_L("across processes no round let a write seal and a writable mapping both succeed", both == 0);
   CHECK_L("across processes every round had one winner with the right error", neither == 0);
-  CHECK_L("across processes both orders of the race were exercised", seal_won > 0 && map_won > 0);
+  CHECK_L("process handshakes exercised both orders alongside concurrent rounds", seal_first && map_first);
 }
 
 // Seals added in two processes at once must all be stored.
