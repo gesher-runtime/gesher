@@ -24,7 +24,6 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -340,10 +339,52 @@ final class Installer {
 
     /** Conventional companion filenames for a loose APK. */
     private static File[] companionSplits(File apk) {
+        if (apk == null) return null;
         File dir = apk.getParentFile();
+        if (dir == null) dir = apk.getAbsoluteFile().getParentFile();
         if (dir == null) return null;
+        // Keep discovery independent of parsing: even an unreadable candidate must
+        // invalidate the base-only source cache and reach companionsOf's validation.
         return dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
                 && name.endsWith(".apk") && !name.equals(apk.getName()));
+    }
+
+    /**
+     * The companions of {@code pkg} among a loose APK's {@code companions}: a folder such as
+     * Downloads also holds other apps' split_*.apk and config.*.apk files, which are not part
+     * of this install and are left out rather than failing it. An unreadable manifest cannot
+     * establish a different owner, so its parse error still rejects the installation.
+     */
+    private static File[] companionsOf(String pkg, File[] companions) throws IOException {
+        if (companions == null) return null;
+        List<File> own = new ArrayList<>();
+        for (File companion : companions) {
+            String owner = ApkPackage.packageName(companion);
+            if (pkg.equals(owner)) {
+                own.add(companion);
+            } else {
+                SystemServer.log("install " + pkg + ": ignoring " + companion.getName()
+                        + " beside it, an APK of " + owner);
+            }
+        }
+        return own.toArray(new File[0]);
+    }
+
+    /**
+     * Logs the expansion (OBB) files a bundle carries. Android keeps them in shared storage,
+     * {@code Android/obb/<package>/}, where Google Play or an XAPK installer copies them; a
+     * package install does not, and this one leaves them in the archive.
+     */
+    private static void reportExpansions(File archive, String pkg) throws IOException {
+        List<String> obbs;
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            obbs = PackageBundles.expansions(zip);
+        }
+        if (!obbs.isEmpty()) {
+            SystemServer.log("install " + pkg + ": " + archive.getName() + " also holds expansion files,"
+                    + " which were not installed (Android/obb/" + pkg + "/ is left as it is): "
+                    + String.join(", ", obbs));
+        }
     }
 
     /**
@@ -362,11 +403,19 @@ final class Installer {
         if (count == 0 && keepUnspecified) return true;
         if ((installed != null ? installed.length : 0) != count) return false;
         for (int i = 0; i < count; i++) {
-            String name = splits[i].getName();
-            File target = new File(codePath, name.startsWith("split_") ? name : "split_" + name);
-            if (!sameContent(splits[i], target)) return false;
+            if (!sameContent(splits[i], new File(codePath, splitFileName(splits[i])))) return false;
         }
         return true;
+    }
+
+    /**
+     * The installed name of split APK {@code split}, from its manifest rather than its file
+     * name: {@code split_<split name>.apk}, as PackageInstallerSession names it.
+     */
+    private static String splitFileName(File split) throws IOException {
+        String name = ApkPackage.splitName(split);
+        if (name == null) throw new IOException("Not a split APK: " + split.getName());
+        return InstalledSplitSet.apkName(name);
     }
 
     /** base.apk and the split APKs installed beside it (split_*.apk). */
@@ -434,11 +483,23 @@ final class Installer {
                 source = extractBundle(source, tempDir, splits);
                 incomingSplits = splits.toArray(new File[0]);
             } else {
+                if (source.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".apkm")
+                        && !PackageBundles.isZip(source)) {
+                    // APKMirror's encrypted format: Gesher has no key for it and does not guess.
+                    throw new IllegalArgumentException("INSTALL_FAILED_INVALID_APK: " + source.getName()
+                            + " is not a ZIP of APKs but an encrypted APKMirror bundle, which Gesher"
+                            + " cannot open; use an unencrypted .apkm, .apks or .xapk of the app");
+                }
                 incomingSplits = companionSplits(source);
             }
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
             ContactsProviderSupport.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
+            if (tempDir == null) {
+                incomingSplits = companionsOf(pkg, incomingSplits);
+            } else {
+                reportExpansions(original, pkg);
+            }
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
                 ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
@@ -528,8 +589,7 @@ final class Installer {
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
-                    String targetName = split.getName().startsWith("split_")
-                            ? split.getName() : "split_" + split.getName();
+                    String targetName = splitFileName(split);
                     File target = new File(code, targetName);
                     if (!target.createNewFile()) {
                         throw new IOException("Conflicting split filenames: " + targetName);
@@ -749,44 +809,68 @@ final class Installer {
         }
     }
 
+    /**
+     * Stages {@code archive}'s APKs in {@code directory} under the names the package manager
+     * gives a package's files, taken from their manifests rather than from the archive:
+     * {@code base.apk} and {@code split_<split name>.apk}, each with the {@code .dm} beside
+     * it in the archive. Archive paths never reach the filesystem, so entries of different
+     * folders with the same file name neither collide nor leave the directory.
+     */
     private static File extractBundle(File archive, File directory, List<File> splits) throws IOException {
         File base = null;
-        Path staging = directory.toPath().toAbsolutePath().normalize();
         byte[] buffer = new byte[64 * 1024];
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            // An APK set holds alternatives (variants, standalones, other devices' splits):
+            // only the APKs this device gets are installed.
+            List<java.util.zip.ZipEntry> apks = new ArrayList<>();
+            for (String path : PackageBundles.select(zip,
+                    PackageBundles.Device.gesher(android.os.Build.VERSION.SDK_INT))) {
+                apks.add(zip.getEntry(path));
+            }
+            Map<String, java.util.zip.ZipEntry> dexMetadata = new LinkedHashMap<>();
             java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
                 java.util.zip.ZipEntry entry = entries.nextElement();
-                if (entry.isDirectory()) continue;
                 String name = entry.getName();
-                boolean apk = name.endsWith(".apk");
-                if (!apk && !name.endsWith(".dm")) continue;
-                // ZIP uses forward slashes. Only the leaf enters the staging directory.
-                String leaf = name.substring(name.lastIndexOf('/') + 1);
-                if (leaf.indexOf('\\') >= 0 || leaf.indexOf(':') >= 0) {
-                    throw new IOException("Invalid APK bundle filename: " + leaf);
+                if (!entry.isDirectory() && name.endsWith(".dm")) {
+                    dexMetadata.put(name.substring(0, name.length() - 3), entry);
                 }
-                Path out = staging.resolve(leaf).normalize();
-                if (!out.startsWith(staging) || !staging.equals(out.getParent())) {
-                    throw new IOException("Invalid APK bundle filename: " + leaf);
+            }
+            for (int i = 0; i < apks.size(); i++) {
+                java.util.zip.ZipEntry entry = apks.get(i);
+                // A generated name until the manifest names it.
+                File staged = new File(directory, i + ".apk");
+                unzip(zip, entry, staged, buffer);
+                String split = ApkPackage.splitName(staged);
+                String name = InstalledSplitSet.apkName(split);
+                File target = new File(directory, name);
+                if (target.exists()) {
+                    throw new IOException(split == null ? "Multiple base APKs in " + archive
+                            : "Split " + split + " defined more than once in " + archive);
                 }
-                try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = Files.newOutputStream(out,
-                                StandardOpenOption.CREATE_NEW)) {
-                    for (int n; (n = in.read(buffer)) > 0; ) os.write(buffer, 0, n);
+                Files.move(staged.toPath(), target.toPath());
+                String path = entry.getName();
+                java.util.zip.ZipEntry dm = dexMetadata.get(path.substring(0, path.length() - 4));
+                if (dm != null) {
+                    unzip(zip, dm, new File(directory, InstallSessionMetadata.dexName(name)), buffer);
                 }
-                if (!apk) continue;
-                File extracted = out.toFile();
-                if (!ApkPackage.isBaseApk(extracted)) {
-                    splits.add(extracted);
+                if (split == null) {
+                    base = target;
                 } else {
-                    if (base != null) throw new IOException("Multiple base APKs in " + archive);
-                    base = extracted;
+                    splits.add(target);
                 }
             }
         }
         if (base == null) throw new IOException("No base APK in " + archive);
         return base;
+    }
+
+    private static void unzip(java.util.zip.ZipFile zip, java.util.zip.ZipEntry entry, File out,
+            byte[] buffer) throws IOException {
+        try (InputStream in = zip.getInputStream(entry);
+                OutputStream os = Files.newOutputStream(out.toPath(), StandardOpenOption.CREATE_NEW)) {
+            for (int n; (n = in.read(buffer)) > 0; ) os.write(buffer, 0, n);
+        }
     }
 
     synchronized boolean ordinaryInstalled(ApkPackage target) {

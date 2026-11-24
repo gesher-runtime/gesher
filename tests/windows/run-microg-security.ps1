@@ -388,6 +388,7 @@ try {
     Guest 'AccountSecurityTest' @()
     Guest 'AccountSecurityTest' @('standin-storage') 'AccountSecurityTest all passed' 'standin-account-isolation'
     Guest 'AccountSecurityTest' @('authenticator-client', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountSecurityTest all passed' 'authenticator-client-delegation'
+    Guest 'AccountSecurityTest' @('previous-name', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk), (AndroidPath (Join-Path $SigningFixtures '../identity-fixtures'))) 'AccountSecurityTest all passed' 'account-previous-name'
     Guest 'AccountChooserTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountChooserTest all passed:'
     Guest 'AccountVisibilityNotificationTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountVisibilityNotificationTest all passed:'
     Guest 'AccountClientRemovalTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountClientRemovalTest all passed:'

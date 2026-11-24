@@ -149,6 +149,14 @@
       "en": "The application ⁨{0}⁩ is a base split APK and requires companion split APKs (such as ABI or density splits) to be installed.\n\nInstall the full bundle (.xapk, .apks, .apkm or .apk+), or place its split APKs (split_*.apk / config.*.apk) in the same folder.",
       "he": "היישום ⁨{0}⁩ הוא קובץ בסיס חלקי (Split APK) שדורש גם את חלקי ההתקנה הנלווים (כגון ספריות מעבד או משאבי מסך).\n\nיש להתקין את החבילה המלאה (.xapk, .apks, .apkm או .apk+), או להציב את קובצי החלקים הנלווים (split_*.apk / config.*.apk) באותה תיקייה."
     },
+    "install_no_matching_abis": {
+      "en": "The application {0} has native code only for {1}; Gesher runs x86_64 and arm64-v8a.\n\nUse the app's arm64-v8a, x86_64 or universal APK.",
+      "he": "היישום \u202a{0}\u202c כולל קוד מקומי (Native) עבור \u202a{1}\u202c בלבד; גשר תומך ב־\u202ax86_64\u202c וב־\u202aarm64-v8a\u202c.\n\nיש להשתמש בקובץ התקנה (APK) עבור \u202aarm64-v8a\u202c, \u202ax86_64\u202c או בגרסה אוניברסלית."
+    },
+    "install_no_matching_abis_details": {
+      "en": "The application cannot be installed because its native code is not compatible with Gesher.\n\nDetails: \u202a{0}\u202c",
+      "he": "אי אפשר להתקין את היישום משום שהקוד המקומי (Native) שלו אינו תואם לגשר.\n\nפרטים: \u202a{0}\u202c"
+    },
     "uninstalled": {
       "en": "uninstalled {0}",
       "he": "היישום {0} הוסר"
