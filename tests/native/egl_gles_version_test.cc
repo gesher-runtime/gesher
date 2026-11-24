@@ -9,6 +9,7 @@
 // ignoring the boot's declaration) and must fail
 // (tools/test_hwui_renderer_policy.py expects that).
 #include "../../compat/bionic/egl_gles_version.h"
+#include "../../compat/posix/include/gesher/gles_version_property.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -156,6 +157,16 @@ int main() {
       }
     }
   }
+
+  // build.prop's ro.opengles.version: only served versions, in exactly the forms
+  // every loader accepts (the same table is in PackageServiceQueriesTest).
+  for (const char* served : {"196608", "131072", "0x30000", "0X30000", "0x20000", "0196608"}) {
+    Check(gesher::properties::ServedBuildProperty("ro.opengles.version", served), served);
+  }
+  for (const char* refused : {"196609", "0x30001", "65536", "#30000", "+196608", "-196608", " 196608", "196608 ", "0x", "", "three", "0x3000G", "1966080000000"}) {
+    Check(!gesher::properties::ServedBuildProperty("ro.opengles.version", refused), refused);
+  }
+  Check(gesher::properties::ServedBuildProperty("ro.product.model", "196609"), "other properties kept");
 
   if (failures != 0) {
     std::fprintf(stderr, "egl gles version: %d failed\n", failures);

@@ -26,16 +26,31 @@ final class BuildProps {
      * ro.opengles.version only as a version Gesher serves, 0x30000 or 0x20000
      * (compat/bionic/egl_gles_version.h; docs/system-features.md): another value would be
      * declared while EGL gives something else, so it is left unset and the system server's
-     * probe declares the version. compat/art/jni_invocation_static.cc does the same.
+     * probe declares the version: the rule of gesher/gles_version_property.h, which the
+     * property area's initial values and compat/art/jni_invocation_static.cc use.
      */
     static boolean servedGlEsVersion(String key, String value) {
         if (!"ro.opengles.version".equals(key)) return true;
-        try {
-            int v = Integer.decode(value);
-            return v == 0x30000 || v == 0x20000;
-        } catch (NumberFormatException e) {
-            return false;
+        // The forms gesher/gles_version_property.h accepts: decimal digits, or 0x/0X and
+        // hexadecimal digits, at most 10 digits; nothing else (no sign, "#", spaces).
+        int radix = 10;
+        String digits = value;
+        if (value.length() > 2 && value.charAt(0) == '0'
+                && (value.charAt(1) == 'x' || value.charAt(1) == 'X')) {
+            radix = 16;
+            digits = value.substring(2);
         }
+        if (digits.isEmpty() || digits.length() > 10) return false;
+        long v = 0;
+        for (int i = 0; i < digits.length(); i++) {
+            int digit = Character.digit(digits.charAt(i), radix);
+            char c = digits.charAt(i);
+            boolean ascii = (c >= '0' && c <= '9') || (radix == 16
+                    && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')));
+            if (digit < 0 || !ascii) return false;
+            v = v * radix + digit;
+        }
+        return v == 0x30000 || v == 0x20000;
     }
 
     static int load(String path) throws IOException {

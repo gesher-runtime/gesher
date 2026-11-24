@@ -46,20 +46,43 @@ inline int RunAsDeclaredBoot(int argc, char** argv, const char* name, int* decla
     return ok ? -1 : 1;
   }
   char temp[MAX_PATH];
-  GetTempPathA(sizeof temp, temp);
-  const std::string session = std::string(name) + "-" + std::to_string(GetCurrentProcessId());
+  const DWORD length = GetTempPathA(sizeof temp, temp);
+  if (length == 0 || length >= sizeof temp) {
+    std::printf("FAILED: no temporary directory for the --declared run (error %lu)\n", GetLastError());
+    return 1;
+  }
+  // A name of this run's own (process id and a tick count), created here: a
+  // directory left by an earlier process with the same id is never reused, and
+  // the parent removes only what it created.
+  const std::string session = std::string(name) + "-" + std::to_string(GetCurrentProcessId()) + "-" +
+                              std::to_string(GetTickCount64());
   const std::string data = std::string(temp) + session;
-  CreateDirectoryA(data.c_str(), nullptr);
+  if (!CreateDirectoryA(data.c_str(), nullptr)) {
+    std::printf("FAILED: the --declared run's data directory %s could not be created (error %lu)\n",
+                data.c_str(), GetLastError());
+    return 1;
+  }
   SetEnvironmentVariableA("GESHER_BINDER", nullptr);
   SetEnvironmentVariableA("GESHER_PROPERTY_SESSION", session.c_str());
   SetEnvironmentVariableA("ANDROID_DATA", data.c_str());
   SetEnvironmentVariableA("GESHER_TEST_DECLARED_CHILD", "1");
+  // The child ends with the parent (a job that kills its processes when its
+  // last handle, the parent's, closes).
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  if (job != nullptr) {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits);
+  }
   STARTUPINFOW si = {};
   si.cb = sizeof si;
   PROCESS_INFORMATION pi = {};
   std::wstring command = GetCommandLineW();
   DWORD code = 1;
-  if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
+  if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_SUSPENDED, nullptr, nullptr, &si,
+                     &pi)) {
+    if (job != nullptr) AssignProcessToJobObject(job, pi.hProcess);
+    ResumeThread(pi.hThread);
     WaitForSingleObject(pi.hProcess, INFINITE);
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hThread);
@@ -67,6 +90,7 @@ inline int RunAsDeclaredBoot(int argc, char** argv, const char* name, int* decla
   } else {
     std::printf("FAILED: the --declared child did not start (error %lu)\n", GetLastError());
   }
+  if (job != nullptr) CloseHandle(job);
   std::error_code ec;
   std::filesystem::remove_all(data, ec);
   std::printf("%s: the --declared run's data directory %s\n", name,

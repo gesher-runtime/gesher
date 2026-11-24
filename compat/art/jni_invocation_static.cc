@@ -14,6 +14,7 @@
 #include <string>
 
 #include <android-base/file.h>
+#include <gesher/gles_version_property.h>
 #include <android-base/properties.h>
 #include <android-base/strings.h>
 
@@ -30,18 +31,8 @@ JniInvocationImpl the_instance;
 // loads build.prop from Java, after the runtime is up; dalvikvm calls
 // JniInvocationInit just before JNI_CreateJavaVM, so it is loaded here too,
 // from $ANDROID_ROOT/build.prop, with the same syntax (BuildProps.java).
-// ro.opengles.version only as a version Gesher serves (0x30000, 0x20000;
-// compat/bionic/egl_gles_version.h): another value would be declared while
-// EGL gives something else. It is left unset then, and the system server's
-// probe declares the version (docs/system-features.md). BuildProps.java does
-// the same.
-bool ServedGlEsVersion(const std::string& key, const std::string& value) {
-  if (key != "ro.opengles.version") return true;
-  char* end = nullptr;
-  long v = std::strtol(value.c_str(), &end, 0);
-  return end != value.c_str() && *end == '\0' && (v == 0x30000 || v == 0x20000);
-}
-
+// ro.opengles.version only as a version Gesher serves (0x30000, 0x20000): the
+// rule all build.prop loaders share (gesher/gles_version_property.h).
 void LoadBuildProp() {
   const char* root = getenv("ANDROID_ROOT");
   if (root == nullptr) return;
@@ -56,7 +47,7 @@ void LoadBuildProp() {
     // init's "?=" (set if unset) is taken as a plain assignment, as in BuildProps.
     if (!key.empty() && key.back() == '?') key = android::base::Trim(key.substr(0, key.size() - 1));
     std::string value = android::base::Trim(line.substr(eq + 1));
-    if (!ServedGlEsVersion(key, value)) {
+    if (!gesher::properties::ServedBuildProperty(key, value)) {
       std::fprintf(stderr, "build.prop: %s=%s is not an OpenGL ES version Gesher serves (0x30000, 0x20000);"
                    " left unset, the probe declares it\n", key.c_str(), value.c_str());
       continue;

@@ -147,8 +147,13 @@ it from that thread would wait for the initialization, which waits for the
 probe); normally it answers in well under a second. A value already in the
 property (an explicit `build.prop` line) is kept, as on a device, if it is one
 Gesher serves (0x30000 or 0x20000). Any other value in a `build.prop` is not
-loaded (`compat/art/jni_invocation_static.cc`, `BuildProps.java`, with a log
-line), so the property stays unset and the probe declares; a value set some
+loaded by any of its three loaders (the property area's initial values,
+`compat/posix/src/system_properties.cc`; dalvikvm's, `compat/art/jni_invocation_static.cc`,
+with a log line; `BuildProps.java`, with a log line), which share one rule
+(`gesher/gles_version_property.h`: decimal digits or `0x`/`0X` and hexadecimal
+digits, nothing else; the property area also reads the `build.prop` of an
+`ANDROID_ROOT` on another drive, `/mnt/<drive>/...`), so the property stays
+unset and the probe declares; a value set some
 other way that Gesher does not serve is not a declaration either, for
 PackageManagerService (which declares the probed version) and for the EGL
 display choice alike.

@@ -147,12 +147,15 @@ public final class PackageServiceQueriesTest {
             java.lang.reflect.Method served = props.getDeclaredMethod("servedGlEsVersion", String.class, String.class);
             served.setAccessible(true);
             String key = "ro.opengles.version";
-            require((Boolean) served.invoke(null, key, "196608") && (Boolean) served.invoke(null, key, "131072")
-                            && (Boolean) served.invoke(null, key, "0x30000"),
-                    "build.prop: a served OpenGL ES version was refused");
-            require(!(Boolean) served.invoke(null, key, "196609") && !(Boolean) served.invoke(null, key, "65536")
-                            && !(Boolean) served.invoke(null, key, "three"),
-                    "build.prop: an OpenGL ES version Gesher does not serve was kept");
+            // The same table as tests/native/egl_gles_version_test.cc (gles_version_property.h).
+            for (String value : new String[] {"196608", "131072", "0x30000", "0X30000", "0x20000", "0196608"}) {
+                require((Boolean) served.invoke(null, key, value),
+                        "build.prop: the served OpenGL ES version \"" + value + "\" was refused");
+            }
+            for (String value : new String[] {"196609", "0x30001", "65536", "#30000", "+196608", "-196608", " 196608", "196608 ", "0x", "", "three", "0x3000G", "1966080000000"}) {
+                require(!(Boolean) served.invoke(null, key, value),
+                        "build.prop: \"" + value + "\" was kept as an OpenGL ES version");
+            }
             require((Boolean) served.invoke(null, "ro.product.model", "196609"),
                     "build.prop: another property was filtered");
         } catch (ReflectiveOperationException e) {
@@ -165,6 +168,17 @@ public final class PackageServiceQueriesTest {
      * in the normal case: its thread must not wait for that initialization to finish
      * (boundedProbe's ProbeRun). Only where it ran (the property natives present).
      */
+    /** Whether this process's boot probe ran (no preset ro.opengles.version declared). */
+    private static boolean bootProbeRan() {
+        try {
+            Field ran = PackageManagerService.class.getDeclaredField("sGlProbeRan");
+            ran.setAccessible(true);
+            return ran.getBoolean(null);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("PackageManagerService.sGlProbeRan: " + e, e);
+        }
+    }
+
     private static void checkBootProbeBounded() {
         try {
             Field ran = PackageManagerService.class.getDeclaredField("sGlProbeRan");
@@ -227,7 +241,9 @@ public final class PackageServiceQueriesTest {
             require(PackageManagerService.glEsVersion() == probed,
                     "OpenGL ES entry 0x" + Integer.toHexString(PackageManagerService.glEsVersion())
                             + " is not the default display's 0x" + Integer.toHexString(probed));
-            if (probed > 0 && "warp".equals(System.getenv("GESHER_EGL_DEVICE"))) {
+            // On WARP the boot's own probe declares 2.0; a preset declaration (a build.prop
+            // with 0x30000) is given as declared instead, by WARP uncapped.
+            if (probed > 0 && "warp".equals(System.getenv("GESHER_EGL_DEVICE")) && bootProbeRan()) {
                 require(probed == 0x20000, "WARP declared OpenGL ES 0x" + Integer.toHexString(probed)
                         + ", not 2.0");
             }
