@@ -39,9 +39,10 @@ jobs:
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
             # The reviewed shared track includes sensor flush, current camera grant
             # admission, explicit fixture permissions, the camera callback-admission
-            # gate and the stationary accelerometer checks. Its geocoder implementation
-            # and the other nine source pins are unchanged.
-            'tests/windows/tracks/58-devices.ps1' = 'b148b37acce2fc03ba22b2682e2c894f5f11498a'
+            # gate, the stationary accelerometer and the camera autofocus contract
+            # checks. Its geocoder implementation and the other nine source pins are
+            # unchanged.
+            'tests/windows/tracks/58-devices.ps1' = '7efd80e6d775a98775d311f433398275c15b5e98'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

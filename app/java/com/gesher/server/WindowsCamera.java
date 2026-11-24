@@ -18,20 +18,34 @@ import java.util.List;
  * {@link CameraService} (docs/devices.md). Frames are NV12.
  */
 public final class WindowsCamera {
-    /** One capture device: its Windows id, name and the frame sizes it offers. */
+    /**
+     * One capture device: its Windows id, name, the frame sizes it offers and whether its
+     * focus really runs automatically ({@link #autofocus}).
+     */
     public static final class Device {
         public final String id;
         public final String name;
         public final List<Size> sizes;
         public final boolean test;
+        /**
+         * The driver's focus control offers automatic focus and a manual lens position
+         * (compat/devices/camera_mf.cc's HasAutofocus), so Gesher can run, observe and lock
+         * it. False for a fixed-focus camera and always for the test camera.
+         */
+        public final boolean autofocus;
         private final boolean rear;
 
         Device(String id, String name, List<Size> sizes, boolean rear) {
+            this(id, name, sizes, rear, false);
+        }
+
+        Device(String id, String name, List<Size> sizes, boolean rear, boolean autofocus) {
             this.id = id;
             this.name = name;
             this.sizes = Collections.unmodifiableList(sizes);
             this.test = "gesher-test".equals(id);
             this.rear = rear;
+            this.autofocus = autofocus && !test;
         }
 
         public boolean isRearFacing() {
@@ -63,7 +77,13 @@ public final class WindowsCamera {
         return devices;
     }
 
-    /** Parses real devices with an explicit rear-mounting choice; enumeration implies no facing. */
+    /**
+     * Parses real devices with an explicit rear-mounting choice; enumeration implies no facing.
+     * A line is the id, the name, {@code WxH,WxH,...} and the flags, separated by tabs
+     * (devices_jni.cc); the flag {@code af}
+     * marks real autofocus. A line without flags (older natives) has fixed focus, and the
+     * test camera has fixed focus whatever its line says.
+     */
     static List<Device> resolveDevices(String[] lines, String rearSelection,
             boolean hasSelection, boolean testCameraEnabled) {
         List<Device> found = new ArrayList<>();
@@ -88,7 +108,13 @@ public final class WindowsCamera {
                     rear = rearSelection.equals(selectionKey(f[0]));
                 }
             }
-            found.add(new Device(f[0], f[1], sizes, rear));
+            boolean autofocus = false;
+            if (!isTest && f.length > 3) {
+                for (String flag : f[3].split(",")) {
+                    if ("af".equals(flag)) autofocus = true;
+                }
+            }
+            found.add(new Device(f[0], f[1], sizes, rear, autofocus));
         }
         return found;
     }
@@ -133,6 +159,39 @@ public final class WindowsCamera {
             }
             try {
                 return nativeRead(handle, nv12);
+            } finally {
+                long retired = 0;
+                synchronized (this) {
+                    if (--mReaders == 0) {
+                        retired = mRetiredHandle;
+                        mRetiredHandle = 0;
+                    }
+                }
+                if (retired != 0) nativeClose(retired);
+            }
+        }
+
+        /** {@link #focus}'s operations (compat/devices/camera_mf.h's FocusOp). */
+        public static final int FOCUS_GET = 0, FOCUS_AUTO = 1, FOCUS_LOCK = 2;
+
+        /**
+         * Controls the device's focus: {@link #FOCUS_GET} reads the lens position,
+         * {@link #FOCUS_AUTO} turns the driver's automatic focus on, {@link #FOCUS_LOCK}
+         * turns it off with the lens kept where it is. {@code out} (two values, may be null)
+         * receives the lens position and the driver's flags (1 auto, 2 manual) afterwards.
+         * 0 or an HRESULT (E_NOTIMPL without a focus control, as for the test camera).
+         */
+        public int focus(int op, int[] out) {
+            long handle;
+            synchronized (this) {
+                if (mHandle == 0) return 0x80004004;  // E_ABORT
+                handle = mHandle;
+                ++mReaders;
+            }
+            try {
+                return nativeFocus(handle, op, out);
+            } catch (UnsatisfiedLinkError e) {
+                return 0x80004001;  // E_NOTIMPL
             } finally {
                 long retired = 0;
                 synchronized (this) {
@@ -193,6 +252,8 @@ public final class WindowsCamera {
     private static native long nativeOpen(String id, int width, int height, int[] out);
 
     private static native int nativeRead(long handle, byte[] nv12);
+
+    private static native int nativeFocus(long handle, int op, int[] out);
 
     private static native void nativeClose(long handle);
 }

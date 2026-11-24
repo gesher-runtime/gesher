@@ -193,6 +193,9 @@ public final class Services {
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
+        // webviewupdate: the built-in WebView provider's package (WebView2, docs/webview.md).
+        services.put(WebViewUpdateService.NAME, StandIn.of(android.webkit.IWebViewUpdateService.class,
+                new WebViewUpdateService(pm)).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
@@ -304,9 +307,6 @@ public final class Services {
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class,
                 new DeviceServices.TelephonyRegistryService()).asBinder());
-        services.put(Context.TRUST_SERVICE, StandIn.of(
-                android.app.trust.ITrustManager.class,
-                new DeviceServices.TrustService()).asBinder());
         // credential: CredentialManager for passkeys (docs/passkeys.md, ADR 0093). The system
         // server is the one credential provider, over Windows' WebAuthn API (WindowsWebAuthn,
         // null without its natives). Without that API, and for other credential types, the
@@ -315,6 +315,17 @@ public final class Services {
                 android.credentials.ICredentialManager.class,
                 new CredentialManagerService(new CredentialManagerHost(am, pm),
                         WindowsWebAuthn.create(), new AssetLinks.Https())).asBinder());
+        StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
+                android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
+        services.put(Context.TRUST_SERVICE, trust.asBinder());
+        // auth: BiometricManager and BiometricPrompt (ADR 0091). AOSP registers it on every
+        // device; no biometric sensor, the device credential as trust reports it. A
+        // credential is confirmed by Windows Hello (WindowsHello, null without its natives);
+        // while trust reports no secure device, no prompt reaches it.
+        services.put(Context.AUTH_SERVICE, StandIn.of(
+                android.hardware.biometrics.IAuthService.class,
+                new AuthService(new AuthServiceHost(am, atm, pm, trust.asInterface()),
+                        WindowsHello.create())).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
                 new DeviceServices.ShortcutService(pm, am.callers())).asBinder());

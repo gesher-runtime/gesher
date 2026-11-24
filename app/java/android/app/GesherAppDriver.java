@@ -158,6 +158,9 @@ public final class GesherAppDriver {
         instrumentation.basicInit(thread);
         thread.mInstrumentation = instrumentation;
 
+        // The user's CA directories, as ActivityThread.main sets them (GesherAppProcess).
+        GesherAppProcess.useUserCaCertificates();
+
         // The app's network security config (cleartext policy, trust anchors), installed
         // before any app code runs, as handleBindApplication does (docs/network.md).
         try {

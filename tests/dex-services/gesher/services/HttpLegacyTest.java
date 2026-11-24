@@ -32,6 +32,11 @@ public final class HttpLegacyTest {
         if (!condition) throw new AssertionError(message);
     }
 
+    // SharedLibraryRegistry.Uses's required libraries.
+    private static List<?> required(Object uses) throws ReflectiveOperationException {
+        return (List<?>) uses.getClass().getField("required").get(uses);
+    }
+
     public static void main(String[] args) throws Exception {
         // android.util.Xml reads a system property, and the graph the system resources:
         // gesher-app's Main has both in an app.
@@ -60,11 +65,11 @@ public final class HttpLegacyTest {
                 + "$ANDROID_ROOT/framework/org.apache.http.legacy.jar");
 
         // OrgApacheHttpLegacyUpdater: first for API 27 or lower, not for 28; not twice.
-        require(named.equals(withImplicit.invoke(registry, 27, none, none)),
+        require(named.equals(required(withImplicit.invoke(registry, 27, none, none))),
                 "an app targeting API 27 does not get the library");
-        require(((List<?>) withImplicit.invoke(registry, 28, none, none)).isEmpty(),
+        require(required(withImplicit.invoke(registry, 28, none, none)).isEmpty(),
                 "an app targeting API 28 gets the library");
-        require(((List<?>) withImplicit.invoke(registry, 27, none, named)).isEmpty(),
+        require(required(withImplicit.invoke(registry, 27, none, named)).isEmpty(),
                 "an app naming the library optional gets it required as well");
         System.out.println("HttpLegacyTest: apps targeting API 27 or lower get it implicitly, "
                 + "API 28 and up only by name");

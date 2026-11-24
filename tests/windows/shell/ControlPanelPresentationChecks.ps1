@@ -25,6 +25,10 @@ foreach ($language in 'en','he') {
             if (-not $proxyAll -or $proxyAll.Content -cne (Get-GesherText 'cp_btn_proxy_all')) {
                 throw 'Global proxy button missing or not localized'
             }
+            $openLogs = $view.FindName('BtnOpenLogs')
+            if (-not $openLogs -or $openLogs.Content -cne (Get-GesherText 'cp_btn_open_logs')) {
+                throw 'Open logs location button missing or not localized'
+            }
             $list = $view.FindName('AppsList')
             $row = $list.ItemTemplate.LoadContent()
             if (-not $row) { throw 'Item template failed' }

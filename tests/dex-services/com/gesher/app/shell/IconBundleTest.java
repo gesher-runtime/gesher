@@ -148,6 +148,46 @@ public final class IconBundleTest {
             leaf = leaf.substring(leaf.lastIndexOf('/') + 1);
             check(color(new File(Device.dataDir(), "system/apk-icons/" + leaf)) == red, "published cached pixels");
         }
+        // framework-res.apk, Gesher's own file beside the runtime: the platform package,
+        // recorded with Gesher's icon and no app package (it was "not read" before).
+        File frameworkRes = new File(root + "/framework/framework-res.apk");
+        check(AppShell.apkIcon(frameworkRes) == 0, "framework-res.apk is recorded");
+        String frameworkKey = frameworkRes.length() + "\t" + frameworkRes.lastModified() + "\t";
+        String[] frameworkRow = Files.readAllLines(new File(Device.dataDir(), "system/apk-icons.list")
+                .toPath()).stream().filter(x -> x.startsWith(frameworkKey)).findFirst().orElseThrow()
+                .split("\t", -1);
+        check(frameworkRow.length == 4 && frameworkRow[2].endsWith("\\gesher.ico")
+                && "-".equals(frameworkRow[3]), "framework-res.apk is no app: Gesher's icon");
+        String log = new String(Files.readAllBytes(new File(Device.logsDir(), "apk-icons.log").toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
+        check(log.contains("the Android platform's resources (package android), not an app"),
+                "framework-res.apk is logged as the platform's resources");
+        // Its whole manifest parses: android:featureFlag elements are read through
+        // android.os.flagging.AconfigPackage, which framework.jar does not contain (a
+        // NoClassDefFoundError before); only then is the reserved name refused.
+        try {
+            ApkPackage.parse(frameworkRes.getAbsolutePath());
+            throw new AssertionError("the platform package was admitted as an app");
+        } catch (SecurityException expected) {
+            check(String.valueOf(expected.getMessage()).contains("platform package name is reserved"),
+                    "framework-res.apk's manifest parses through its feature flags");
+        }
+        // The flag values answered are the ones Gesher's framework runs with.
+        check(android.os.flagging.AconfigPackage.load("android.content.res")
+                        .getBooleanFlagValue("manifest_flagging", !android.content.res.Flags.manifestFlagging())
+                        == android.content.res.Flags.manifestFlagging(),
+                "aconfig flag value is the framework's own");
+        check(android.os.flagging.AconfigPackage.load("android.content.res")
+                        .getBooleanFlagValue("no_such_flag_in_gesher", true),
+                "undeclared aconfig flag answers the caller's default");
+        try {
+            android.os.flagging.AconfigPackage.load("com.gesher.no.such.flag.package");
+            throw new AssertionError("an aconfig package Gesher lacks was loaded");
+        } catch (android.os.flagging.AconfigStorageReadException expected) {
+            check(expected.getErrorCode()
+                    == android.os.flagging.AconfigStorageReadException.ERROR_PACKAGE_NOT_FOUND,
+                    "missing aconfig package is ERROR_PACKAGE_NOT_FOUND");
+        }
         // A first launch must remember its installed identity even without a drawn icon.
         String installedPackage = ApkPackage.parse(full.getAbsolutePath()).packageName;
         check(!new File(Device.dataDir(), "data/" + installedPackage + "/gesher-shell/icon.ico").exists(),

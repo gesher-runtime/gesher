@@ -696,6 +696,14 @@
       "en": "Ready",
       "he": "מוכן"
     },
+    "cp_btn_open_logs": {
+      "en": "Open logs location",
+      "he": "פתח את מיקום הלוגים"
+    },
+    "cp_open_logs_failed": {
+      "en": "Could not open the logs folder: ⁨{0}⁩",
+      "he": "לא ניתן לפתוח את תיקיית הלוגים: ⁨{0}⁩"
+    },
     "cp_status_working": {
       "en": "Working, please wait…",
       "he": "מעבד, נא להמתין…"
