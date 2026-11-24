@@ -41,8 +41,10 @@ final class CaptioningBridge {
     }
 
     synchronized void start() {
-        apply();
+        // Subscribe before the snapshot: a style change during registration is
+        // then either in this read or delivered by the watch, never lost.
         if (mUnwatch == null) mUnwatch = mWindows.watch(this::apply);
+        apply();
     }
 
     synchronized void stop() {
