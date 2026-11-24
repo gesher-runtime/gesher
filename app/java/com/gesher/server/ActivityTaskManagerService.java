@@ -33,7 +33,6 @@ import android.app.servertransaction.TopResumedActivityChangeItem;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.IIntentSender;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
@@ -137,7 +136,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             AtomicLongFieldUpdater.newUpdater(ProcessRecord.class, "lastActive");
 
     /**
-     * Opens a URL no activity of the device handles (http, https, mailto) with Windows'
+     * Opens a URL no activity of the device handles (http and https; mailto, tel, sms, geo) with Windows'
      * handler (WindowsHost.openUrl): the user's default browser or mail app. The tests
      * replace it (gesher.services.BrowserIntentTest), so that no browser opens.
      */
@@ -2881,14 +2880,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     }
                     return ActivityManager.START_SUCCESS;
                 }
-                if (Intent.ACTION_VIEW.equals(action)) {
+                if (Intent.ACTION_VIEW.equals(action)
+                        || WindowsUriHandlers.handlesScheme(intent.getScheme())) {
                     Uri data = intent.getData();
                     if (data != null) {
                         String scheme = data.getScheme();
-                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)
-                                || "mailto".equalsIgnoreCase(scheme)) {
+                        if (Intent.ACTION_VIEW.equals(action) && ("http".equalsIgnoreCase(scheme)
+                                || "https".equalsIgnoreCase(scheme))
+                                || WindowsUriHandlers.handlesScheme(scheme)) {
                             // Also a VIEW for the Windows default browser's package
-                            // (BrowserPackageSupport, of which resolve() runs nothing).
+                            // (BrowserPackageSupport), or a mailto/tel/sms/geo request for
+                            // Windows' handler (WindowsUriHandlers): resolve() runs neither.
                             final ActivityRecord resultSource;
                             final ProcessRecord expectedResultProcess;
                             final String resultTargetWho;
@@ -2940,7 +2942,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                 }
                             }
                             boolean externalTarget = canDelegateExternalUrl(intent, resolvedType);
-                            boolean opened = externalTarget && sOpenExternalUrl.test(data.toString());
+                            // The handler receives the URI with the fields of the intent's
+                            // contract (WindowsUriHandlers.windowsUri); a browser the URL.
+                            String externalUri = WindowsUriHandlers.handlesScheme(scheme)
+                                    ? WindowsUriHandlers.windowsUri(intent) : data.toString();
+                            boolean opened = externalTarget && externalUri != null
+                                    && sOpenExternalUrl.test(externalUri);
                             SystemServer.log("startActivity: Windows external URL "
                                     + (opened ? "opened" : "unavailable") + " (" + scheme + ")");
                             // ActivityStarter cancels a failed launch or detaches an explicit
@@ -3421,6 +3428,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // The Windows default browser (BrowserPackageSupport) has no activity to run: the
         // start delegates the URL to Windows, as when nothing resolves it.
         if (BrowserPackageSupport.isBrowserPackage(info.packageName)) return null;
+        // Likewise Windows' mailto/tel/sms/geo handlers (WindowsUriHandlers).
+        if (WindowsUriHandlers.isHandlerPackage(info.packageName)
+                && mPm.get(WindowsUriHandlers.PACKAGE) == null) return null;
         info = new ActivityInfo(info);
         if (info.applicationInfo == null) {
             info.applicationInfo = mPm.getApplicationInfo(info.packageName, flags, 0);
@@ -3431,16 +3441,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** An unresolved app-specific or filter-constrained request must not become a shell launch. */
     private boolean canDelegateExternalUrl(Intent intent, String resolvedType) {
         Intent target = resolutionIntent(intent);
-        if ("mailto".equalsIgnoreCase(intent.getScheme())) {
-            // No synthetic Android mail package is advertised. Only an implicit
-            // mail viewer request may use the Windows protocol handler.
-            if (target.getComponent() != null || target.getPackage() != null) return false;
-            IntentFilter mail = new IntentFilter(Intent.ACTION_VIEW);
-            mail.addCategory(Intent.CATEGORY_DEFAULT);
-            mail.addCategory(Intent.CATEGORY_BROWSABLE);
-            mail.addDataScheme("mailto");
-            return mail.match(target.getAction(), resolvedType != null ? resolvedType : target.getType(),
-                    target.getScheme(), target.getData(), target.getCategories(), "gesher") >= 0;
+        if (WindowsUriHandlers.handlesScheme(intent.getScheme())) {
+            // Only what PackageManager resolves to Windows' handler: Windows has one
+            // registered for the scheme now, and the request names that activity or
+            // matches its filter (WindowsUriHandlers.queryIntentActivities).
+            return mPm.get(WindowsUriHandlers.PACKAGE) == null
+                    && !mPm.uriHandlers().queryIntentActivities(target, resolvedType,
+                            PackageManager.MATCH_DEFAULT_ONLY).isEmpty();
         }
         return mPm.get(BrowserPackageSupport.PACKAGE) == null
                 && !BrowserPackageSupport.queryIntentActivities(target, resolvedType,

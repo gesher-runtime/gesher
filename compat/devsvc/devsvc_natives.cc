@@ -15,6 +15,7 @@
 
 #include "core_jni_helpers.h"
 #include "devsvc_win32.h"
+#include "url_handlers_win.h"
 #include "../windows/clipboard_publication.h"
 #include <new>
 
@@ -348,6 +349,16 @@ jboolean WindowsHost_openUrl(JNIEnv* env, jclass, jstring url) {
   return dev::OpenUrl(Str(env, url)) ? JNI_TRUE : JNI_FALSE;
 }
 
+jboolean WindowsHost_hasUrlHandler(JNIEnv* env, jclass, jstring scheme) {
+  static_assert(sizeof(wchar_t) == sizeof(char16_t), "UTF-16 wchar_t");
+  std::u16string s = Str(env, scheme);
+  if (env->ExceptionCheck() || s.empty()) return JNI_FALSE;
+  long hr = 0;
+  dev::UrlHandler handler =
+      dev::QueryUrlHandler(reinterpret_cast<const wchar_t*>(s.c_str()), &hr);
+  return handler == dev::UrlHandler::kRegistered ? JNI_TRUE : JNI_FALSE;
+}
+
 jstring WindowsHost_pickFolder(JNIEnv* env, jclass, jstring title) {
   std::u16string t = title != nullptr ? Str(env, title) : std::u16string();
   std::u16string path = dev::PickFolder(t);
@@ -502,6 +513,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},
     {"nativeFullPath", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_fullPath)},
     {"nativeOpenUrl", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_openUrl)},
+    {"nativeHasUrlHandler", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_hasUrlHandler)},
     {"nativePickFolder", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFolder)},
     {"nativePickFile", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFile)},
     {"nativePickDocuments", "(I" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING

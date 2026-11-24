@@ -8,6 +8,7 @@
 target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_win32.cc
+  ${CMAKE_SOURCE_DIR}/compat/devsvc/url_handlers_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/clipboard_access.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_toast.c
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_activator.c)
@@ -16,4 +17,4 @@ target_sources(framework_runtime PRIVATE
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devsvc)
-target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 wtsapi32)
+target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 shlwapi wtsapi32)
