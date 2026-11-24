@@ -14,11 +14,9 @@ const IID kIidNetworkConnectionCostEvents = {
 
 namespace {
 
-// netlistmgr.h: CLSID_NetworkListManager and IID_INetworkCostManager.
+// netlistmgr.h: CLSID_NetworkListManager.
 const CLSID kClsidNetworkListManager = {
     0xDCB00C01, 0x570F, 0x4A9B, {0x8D, 0x69, 0x19, 0x9F, 0xDB, 0xA5, 0x72, 0x3B}};
-const IID kIidNetworkCostManager = {
-    0xDCB00008, 0x570F, 0x4A9B, {0x8D, 0x69, 0x19, 0x9F, 0xDB, 0xA5, 0x72, 0x3B}};
 
 class Sink final : public ConnectionCostEvents {
  public:
@@ -86,21 +84,18 @@ DWORD WINAPI WatchThread(void* argument) {
   ConnectionCostEvents* sink = nullptr;
   HRESULT hr = SUCCEEDED(init) ? S_OK : init;
   if (SUCCEEDED(hr)) {
-    IUnknown* manager = nullptr;
-    hr = CoCreateInstance(kClsidNetworkListManager, nullptr, CLSCTX_ALL, kIidNetworkCostManager,
-                          reinterpret_cast<void**>(&manager));
+    // Subscribe through NLM's connection-point container directly. Requesting the
+    // machine-wide INetworkCostManager first unnecessarily excludes Windows Server,
+    // even though INetworkConnectionCostEvents itself supports Server 2012 and later.
     IConnectionPointContainer* container = nullptr;
-    if (SUCCEEDED(hr)) {
-      hr = manager->QueryInterface(IID_IConnectionPointContainer,
-                                   reinterpret_cast<void**>(&container));
-    }
+    hr = CoCreateInstance(kClsidNetworkListManager, nullptr, CLSCTX_ALL,
+                          IID_IConnectionPointContainer, reinterpret_cast<void**>(&container));
     if (SUCCEEDED(hr)) hr = container->FindConnectionPoint(kIidNetworkConnectionCostEvents, &point);
     if (SUCCEEDED(hr)) {
       sink = NewConnectionCostSink(watch->event);
       hr = point->Advise(sink, &cookie);
     }
     if (container != nullptr) container->Release();
-    if (manager != nullptr) manager->Release();
   }
   watch->result = hr;
   SetEvent(watch->ready);
