@@ -52,7 +52,7 @@ Examples:
 | Let the user select which real Windows camera is used, and describe its physical mounting. | Within scope. |
 | Report a PC camera not configured as rear as Android's front camera. | Within scope: a desktop default. A PC's camera faces the user; `GESHER_CAMERA_REAR_ID` marks a rear one. |
 | Report a camera's orientation relative to the display rotation of the Activity using it, since Windows delivers frames upright for the monitor. | Within scope: a desktop adaptation. The frames and the capture are real. |
-| Expose Gesher's stationary accelerometer (gravity only) on a PC without motion sensors. | Within scope: a desktop default. Real motion sensors replace it, it is documented and `GESHER_SENSOR_FALLBACK=0` turns it off. |
+| Expose Gesher's stationary accelerometer (gravity only) on a PC without motion sensors. | Within scope: a desktop default. Real motion sensors replace it, it is documented and `GESHER_SENSOR_FALLBACK=0` turns it off. It declares no `android.hardware.sensor.*` feature: only real sensors do. |
 | Implement an Android file-selection request with a Windows file picker. | Within scope: the user picks a file, as asked. |
 | Answer a camera capture request with a file picker or a saved image presented as a fresh capture. | Outside scope: a different operation. |
 | Report success for an operation that did not run (a capture, a payment, an autofocus). | Outside scope. |

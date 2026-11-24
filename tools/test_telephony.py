@@ -10,6 +10,7 @@ transactions, Windows' Mobile Broadband API or a physical modem.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -30,6 +31,12 @@ def main():
     cp = os.pathsep.join(str(path.resolve()) for path in
                          (args.app_classes, args.framework_classes, args.core_classes))
     windows = (args.java_home / 'include/win32').is_dir()
+    # The installed command reaches Launcher's mobile-data command only if gesher-app.ps1
+    # passes it through (docs/telephony.md); anything else is taken for an APK path.
+    launcher = (ROOT / 'tools/package/gesher-app.ps1').read_text(encoding='utf-8')
+    allowed = re.search(r"^\$commands = (.*)$", launcher, re.M)
+    if not allowed or "'mobile-data'" not in allowed.group(1):
+        raise SystemExit('gesher-app.ps1 does not pass mobile-data to the launcher')
     with tempfile.TemporaryDirectory(prefix='telephony-') as temporary:
         work = Path(temporary)
         classes = work / 'classes'
