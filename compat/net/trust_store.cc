@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <wctype.h>
 
 #include <array>
@@ -181,11 +182,16 @@ bool ReadWholeFile(const std::wstring& path, std::string* out) {
   return ok;
 }
 
+// The named stream that marks a user CA file as Gesher's: the SHA-256 of the
+// data Gesher wrote, in hex. Android reads only the file's data.
+const wchar_t kOwnerStream[] = L"gesher-owner";
+
 // Writes dir\name whole: a temporary file in `staging` (on the same volume),
 // then renamed over it. Staging outside cacerts keeps half-written files out
 // of the directory Conscrypt reads.
 bool WriteFileAtomically(const std::wstring& dir, const std::wstring& name,
-                         const std::string& data, const std::wstring& staging) {
+                         const std::string& data, const std::wstring& staging,
+                         const std::string* owner_mark = nullptr) {
   std::wstring path = dir + L"\\" + name;
   wchar_t suffix[64];
   swprintf(suffix, 64, L".tmp-%lu-%lu", GetCurrentProcessId(), GetCurrentThreadId());
@@ -197,6 +203,18 @@ bool WriteFileAtomically(const std::wstring& dir, const std::wstring& name,
   bool ok = ::WriteFile(h, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) &&
             written == data.size();
   CloseHandle(h);
+  if (ok && owner_mark != nullptr) {
+    // On the temporary file, so the rename moves data and mark at once. A
+    // volume without named streams (FAT) keeps no mark; the caller's manifest
+    // still records the file.
+    HANDLE mark = CreateFileW((tmp + L":" + kOwnerStream).c_str(), GENERIC_WRITE, 0, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (mark != INVALID_HANDLE_VALUE) {
+      DWORD n = 0;
+      ::WriteFile(mark, owner_mark->data(), static_cast<DWORD>(owner_mark->size()), &n, nullptr);
+      CloseHandle(mark);
+    }
+  }
   if (ok) ok = MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
   if (!ok) DeleteFileW(tmp.c_str());
   return ok;
@@ -640,6 +658,36 @@ bool RemoveUserEntry(const std::wstring& dir, const std::wstring& name) {
 
 }  // namespace
 
+namespace {
+
+std::string TrimLower(const std::string& text) {
+  size_t begin = text.find_first_not_of(" \t\r\n");
+  if (begin == std::string::npos) return "";
+  size_t end = text.find_last_not_of(" \t\r\n");
+  std::string out = text.substr(begin, end - begin + 1);
+  for (char& c : out) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  return out;
+}
+
+// The digest of dir\name if it is a non-empty file that holds what Gesher
+// recorded for it (`recorded`: a hex SHA-256).
+bool Holds(const std::wstring& path, const std::string& recorded, Digest* digest) {
+  std::string contents;
+  if (!ReadWholeFile(path, &contents) || contents.empty()) return false;
+  *digest = Sha256(Der(contents.begin(), contents.end()));
+  return Hex(*digest) == TrimLower(recorded);
+}
+
+std::string ManifestText(const std::map<std::wstring, Digest>& entries) {
+  std::string listed;
+  for (const auto& [name, digest] : entries) {
+    listed += std::string(name.begin(), name.end()) + " " + Hex(digest) + "\n";
+  }
+  return listed;
+}
+
+}  // namespace
+
 UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
                                    const std::vector<Der>& certificates) {
   UserSyncResult result;
@@ -661,25 +709,42 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
     X509_free(x);
   }
 
-  // Gesher's entries: those the manifest names that still hold what was
-  // written. Anything else in the directory is not Gesher's.
+  // Gesher's entries: those the manifest names, and those whose owner mark
+  // (written with the file) names, that still hold what was written. Either
+  // record alone is enough, so a lost or unwritable manifest does not leave
+  // an entry behind. Anything else in the directory is not Gesher's.
   std::map<std::wstring, Digest> owned;
   std::string manifest;
   bool had_manifest = ReadWholeFile(manifest_path, &manifest);
   for (size_t at = 0; had_manifest && at < manifest.size();) {
     size_t end = manifest.find('\n', at);
     if (end == std::string::npos) end = manifest.size();
-    std::string line = manifest.substr(at, end - at);
+    std::string line = TrimLower(manifest.substr(at, end - at));
     at = end + 1;
-    size_t space = line.find(' ');
+    size_t space = line.find_first_of(" \t");
     if (space == std::string::npos) continue;
     std::wstring name(line.begin(), line.begin() + space);
     if (!IsCertFileName(name)) continue;
-    std::string contents;
-    if (!ReadWholeFile(dir + L"\\" + name, &contents) || contents.empty()) continue;
-    Digest digest = Sha256(Der(contents.begin(), contents.end()));
-    if (Hex(digest) != line.substr(space + 1)) continue;
-    owned[name] = digest;
+    Digest digest;
+    if (Holds(dir + L"\\" + name, line.substr(space + 1), &digest)) owned[name] = digest;
+  }
+  WIN32_FIND_DATAW entry;
+  HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &entry);
+  if (find != INVALID_HANDLE_VALUE) {
+    do {
+      std::wstring name = entry.cFileName;
+      if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || !IsCertFileName(name) ||
+          owned.count(name) != 0) {
+        continue;
+      }
+      std::wstring path = dir + L"\\" + name;
+      std::string mark;
+      Digest digest;
+      if (ReadWholeFile(path + L":" + kOwnerStream, &mark) && Holds(path, mark, &digest)) {
+        owned[name] = digest;
+      }
+    } while (FindNextFileW(find, &entry));
+    FindClose(find);
   }
 
   bool ok = true;
@@ -700,15 +765,32 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
 
   // Wanted ones not in the directory: after the last index of their hash, as
   // TrustedCertificateStore.installCertificate adds one. A tombstone keeps its
-  // index.
+  // index. Like its findCert, the run ends at the first index that is not a
+  // file: an entry there would be unreachable, so a directory in the way is
+  // a failure, not a reason to go past it.
+  struct Pending {
+    std::wstring name;
+    Digest digest;
+    const Der* der;
+  };
+  std::vector<Pending> pending;
+  std::set<std::wstring> planned;
   for (const auto& [digest, entry] : wanted) {
     if (!ok) break;
     std::string der(entry.der->begin(), entry.der->end());
     int index = 0;
     bool present = false;
+    bool blocked = false;
     for (;; index++) {
-      std::wstring path = dir + L"\\" + UserCertName(entry.hash, index);
-      if (!Exists(path)) break;
+      std::wstring name = UserCertName(entry.hash, index);
+      if (planned.count(name) != 0) continue;
+      std::wstring path = dir + L"\\" + name;
+      DWORD attributes = GetFileAttributesW(path.c_str());
+      if (attributes == INVALID_FILE_ATTRIBUTES) break;
+      if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        blocked = true;
+        break;
+      }
       std::string contents;
       if (ReadWholeFile(path, &contents) && contents == der) {
         present = true;
@@ -716,24 +798,52 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
       }
     }
     if (present) continue;
+    if (blocked) {
+      ok = false;
+      continue;
+    }
     std::wstring name = UserCertName(entry.hash, index);
-    if (MakeDirectories(dir) && WriteFileAtomically(dir, name, der, user_dir)) {
-      owned[name] = digest;
+    planned.insert(name);
+    pending.push_back(Pending{name, digest, entry.der});
+  }
+
+  // The manifest names the entries before they are written, so one written
+  // just before a crash is still Gesher's; it is rewritten only when it
+  // changes.
+  auto write_manifest = [&](const std::map<std::wstring, Digest>& entries) {
+    std::string listed = ManifestText(entries);
+    if (listed.empty()) return !had_manifest || DeleteFileW(manifest_path.c_str()) ||
+                               GetLastError() == ERROR_FILE_NOT_FOUND;
+    if (had_manifest && listed == manifest) return true;
+    if (!MakeDirectories(user_dir) ||
+        !WriteFileAtomically(user_dir, L".gesher-user-cacerts", listed, user_dir)) {
+      return false;
+    }
+    had_manifest = true;
+    manifest = listed;
+    return true;
+  };
+  std::map<std::wstring, Digest> intended = owned;
+  for (const Pending& p : pending) intended[p.name] = p.digest;
+  if (!write_manifest(intended)) {
+    // Without the manifest nothing is written: the owner mark alone would
+    // be lost on a volume without named streams.
+    result.ok = false;
+    return result;
+  }
+  bool wrote_all = true;
+  for (const Pending& p : pending) {
+    std::string der(p.der->begin(), p.der->end());
+    std::string mark = Hex(p.digest);
+    if (MakeDirectories(dir) && WriteFileAtomically(dir, p.name, der, user_dir, &mark)) {
+      owned[p.name] = p.digest;
       result.written++;
     } else {
+      wrote_all = false;
       ok = false;
     }
   }
-
-  std::string listed;
-  for (const auto& [name, digest] : owned) {
-    listed += std::string(name.begin(), name.end()) + " " + Hex(digest) + "\n";
-  }
-  if (listed.empty()) {
-    if (had_manifest && !DeleteFileW(manifest_path.c_str())) ok = false;
-  } else if (!had_manifest || listed != manifest) {
-    if (!WriteFileAtomically(user_dir, L".gesher-user-cacerts", listed, user_dir)) ok = false;
-  }
+  if (!wrote_all && !write_manifest(owned)) ok = false;
   result.ok = ok;
   return result;
 }

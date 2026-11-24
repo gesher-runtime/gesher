@@ -68,8 +68,10 @@ struct UserSyncResult {
 // TrustedCertificateStore lays it out: DER files <subject hash>.<n>, a new one
 // after the last of its hash, a removed one truncated to an empty tombstone
 // while a later index exists and deleted (with the tombstones before it)
-// otherwise. A manifest next to the directory (<user_dir>\.gesher-user-cacerts)
-// names the entries Gesher wrote; entries it did not write are never changed.
+// otherwise. A manifest next to the directory (<user_dir>\.gesher-user-cacerts,
+// written before the entries it adds) and a named stream on each entry
+// (:gesher-owner) name the entries Gesher wrote, either one enough; entries it
+// did not write are never changed.
 // The caller serializes writers.
 UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
                                    const std::vector<Der>& certificates);

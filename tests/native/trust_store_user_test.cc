@@ -21,6 +21,7 @@
 #undef OCSP_REQUEST
 #undef OCSP_RESPONSE
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -287,6 +288,119 @@ static void Directory(const std::wstring& root) {
   CHECK(List(added) == std::set<std::wstring>{HashName(other, 0)});
 }
 
+static std::string HexSha256(const Der& der) {
+  uint8_t digest[SHA256_DIGEST_LENGTH];
+  SHA256(der.data(), der.size(), digest);
+  std::string hex;
+  for (uint8_t b : digest) {
+    char two[3];
+    snprintf(two, sizeof(two), "%02x", b);
+    hex += two;
+  }
+  return hex;
+}
+
+// Gesher's entries stay Gesher's when its records fail: a lost or unwritable
+// manifest, a crash between writes, a manifest edited with CRLF line ends.
+// Otherwise an entry would outlive its root in Windows' store, trusted with
+// nothing in Gesher to remove it.
+static void Recovery(const std::wstring& root) {
+  std::wstring user = root + L"\\misc\\user\\0";
+  std::wstring added = user + L"\\cacerts-added";
+  std::wstring manifest = user + L"\\.gesher-user-cacerts";
+  Der x = MakeRoot("Recovery X");
+  Der y = MakeRoot("Recovery Y");
+  std::wstring xpath = added + L"\\" + HashName(x, 0);
+  std::wstring mark = xpath + L":gesher-owner";
+
+  // The entry carries its own owner mark.
+  internal::UserSyncResult r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(r.ok && r.written == 1);
+  CHECK(Contents(mark) == HexSha256(x));
+
+  // Manifest lost, then the root leaves: the mark still names it.
+  CHECK(DeleteFileW(manifest.c_str()));
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(Contents(xpath) == "<missing>");
+
+  // Manifest lost while the root stays: not written twice, removed later.
+  r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(r.ok && r.written == 1);
+  CHECK(DeleteFileW(manifest.c_str()));
+  r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(r.ok && r.written == 0 && r.removed == 0);
+  CHECK(Contents(added + L"\\" + HashName(x, 1)) == "<missing>");
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(Contents(xpath) == "<missing>");
+
+  // A directory where the manifest goes: nothing is written, since the entry
+  // could not be recorded there.
+  CHECK(CreateDirectoryW(manifest.c_str(), nullptr));
+  r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(!r.ok && r.written == 0);
+  CHECK(Contents(xpath) == "<missing>");
+  // Written with a manifest, which is then replaced by a directory: the mark
+  // still lets the entry go with its root.
+  CHECK(RemoveDirectoryW(manifest.c_str()));
+  r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(r.ok && r.written == 1);
+  CHECK(DeleteFileW(manifest.c_str()) && CreateDirectoryW(manifest.c_str(), nullptr));
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.removed == 1);
+  CHECK(Contents(xpath) == "<missing>");
+  CHECK(RemoveDirectoryW(manifest.c_str()));
+
+  // A crash after the manifest named an entry and before it was written:
+  // the next sync writes it.
+  CHECK(WriteBytes(manifest, Utf8(HashName(x, 0)) + " " + HexSha256(x) + "\n"));
+  r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(r.ok && r.written == 1);
+  CHECK(Contents(xpath) == AsString(x));
+  // A crash after an entry's rename and before the manifest recorded it (as
+  // the order was before the manifest went first): the mark names it.
+  CHECK(DeleteFileW(manifest.c_str()));
+  std::wstring ypath = added + L"\\" + HashName(y, 0);
+  CHECK(WriteBytes(ypath, AsString(y)) && WriteBytes(ypath + L":gesher-owner", HexSha256(y)));
+  r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(Contents(ypath) == "<missing>");
+  CHECK(Contents(xpath) == AsString(x));
+
+  // A mark that does not match the data is not Gesher's (the file was
+  // replaced): kept.
+  CHECK(WriteBytes(ypath, AsString(y)) && WriteBytes(ypath + L":gesher-owner", HexSha256(x)));
+  r = internal::SyncUserCaDirectory(user, {x});
+  CHECK(r.ok && r.removed == 0);
+  CHECK(Contents(ypath) == AsString(y));
+  CHECK(DeleteFileW(ypath.c_str()));
+
+  // The manifest alone (no mark: a volume without named streams), with CRLF
+  // line ends, upper case and a malformed line: it still names the entry.
+  CHECK(DeleteFileW(mark.c_str()));
+  std::string upper = HexSha256(x);
+  for (char& c : upper) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+  CHECK(WriteBytes(manifest, "not a line\r\n" + Utf8(HashName(x, 0)) + " " + upper + "\r\n"));
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(Contents(xpath) == "<missing>");
+  CHECK(Contents(manifest) == "<missing>");
+
+  // A directory at <hash>.0 ends the run there, as Conscrypt's findCert ends
+  // it at the first index that is not a file: an entry at .1 would be
+  // unreachable, so none is written. Other entries still are.
+  CHECK(CreateDirectoryW(xpath.c_str(), nullptr));
+  r = internal::SyncUserCaDirectory(user, {x, y});
+  CHECK(!r.ok && r.written == 1);
+  CHECK(Contents(added + L"\\" + HashName(x, 1)) == "<missing>");
+  CHECK(Contents(ypath) == AsString(y));
+  CHECK(RemoveDirectoryW(xpath.c_str()));
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(List(added).empty());
+}
+
 // The production sync against this machine's stores, in temporary roots.
 static void ThisMachine(const std::wstring& root) {
   std::wstring system = root + L"\\system";
@@ -380,6 +494,7 @@ int main() {
 
   Classification();
   Directory(root + L"\\fixture");
+  Recovery(root + L"\\recovery");
   ThisMachine(root + L"\\machine");
 
   RemoveTree(root);
