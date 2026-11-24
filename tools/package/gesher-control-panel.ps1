@@ -82,7 +82,10 @@ function Set-CameraImagePickerEnabled([bool] $enabled) {
     if ($enabled) { $lines.Add('image_picker_fallback=true') }
     $directory = Split-Path -Parent $script:CameraFile
     if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
-    [IO.File]::WriteAllLines($script:CameraFile, $lines, [Text.UTF8Encoding]::new($false))
+    # The system server reads the file at any time: write a sibling, then move it into place.
+    $temporary = $script:CameraFile + '.tmp'
+    [IO.File]::WriteAllLines($temporary, $lines, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporary -Destination $script:CameraFile -Force
 }
 
 # Packages whose tasks are windows of their own (AppWindows.java's file).

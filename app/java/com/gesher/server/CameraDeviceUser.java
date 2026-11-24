@@ -808,7 +808,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     /** A new source starts the AF state machine again (mode applied on the next frame). */
     private void startAutoFocus(WindowsCamera.Capture capture) {
-        mAutoFocus = mDevice.autofocus
+        // A selected image (CameraImageSource) has no lens: as a fixed-focus camera.
+        mAutoFocus = mDevice.autofocus && !capture.isFrame()
                 ? new CameraAutoFocus(CameraAutoFocus.lensOf(capture, mCameraId)) : null;
     }
 

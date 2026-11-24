@@ -48,6 +48,12 @@ public final class CameraSourceService extends Binder {
 
         /** The selected file's Windows path, or null when the user cancels. */
         String pick(String title, int ownerPid, BooleanSupplier active) throws IOException;
+
+        /**
+         * The selected file, as the document picker admits a selection: canonical, local, and
+         * not in Android/data, obb or sandbox (other apps' private storage).
+         */
+        File resolve(String windowsPath) throws IOException;
     }
 
     static final Ui WINDOWS = new Ui() {
@@ -68,7 +74,21 @@ public final class CameraSourceService extends Binder {
                     "*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif", null, false, true, ownerPid, active);
             return selected == null || selected.length == 0 ? null : selected[0];
         }
+
+        @Override public File resolve(String windowsPath) throws IOException {
+            File file = DocumentsStorageProvider.selectedFile(windowsPath);
+            if (DocumentPicker.blockedAndroidDirectory(file)) {
+                throw new IOException("Android data/obb is not selectable");
+            }
+            if (!WindowsHost.isLocalDocument(Zygote.windowsPath(file.getPath()))) {
+                throw new IOException("the selected file is not available locally");
+            }
+            return file;
+        }
     };
+
+    /** At most one question at a time: each holds a binder thread until the user answers. */
+    private final java.util.concurrent.Semaphore mQuestion = new java.util.concurrent.Semaphore(1);
 
     /** Who is calling: an attached app with its CAMERA grant (host tests replace it). */
     interface Callers {
@@ -134,6 +154,21 @@ public final class CameraSourceService extends Binder {
         if (!mCallers.cameraGranted(pid, uid)) {
             throw new SecurityException("Choosing a camera source requires the CAMERA permission");
         }
+        // A question waits for the user on this binder thread: one at a time, so callers
+        // cannot pile dialogs up or use the server's binder threads up.
+        if (!mQuestion.tryAcquire()) {
+            SystemServer.log("camera source: " + requester + ": another question is open");
+            return new Answer(CameraImageSource.Selection.CANCELLED, null);
+        }
+        try {
+            return ask(requester, pid, cameraId, physical);
+        } finally {
+            mQuestion.release();
+        }
+    }
+
+    private Answer ask(String requester, int pid, String cameraId, boolean physical)
+            throws IOException {
         BooleanSupplier active = () -> mCallers.attached(pid);
         if (physical) {
             if (!mUi.available()) return new Answer(CameraImageSource.Selection.CAMERA, null);
@@ -149,16 +184,46 @@ public final class CameraSourceService extends Binder {
         if (path == null || !active.getAsBoolean()) {
             return new Answer(CameraImageSource.Selection.CANCELLED, null);
         }
-        File file = new File(Zygote.fromWindowsPath(path));
-        if (!file.isFile() || file.length() > CameraImageSource.MAX_IMAGE_BYTES) {
-            SystemServer.log("camera source: " + requester + ": " + path
-                    + " is not a readable image of at most " + CameraImageSource.MAX_IMAGE_BYTES
-                    + " bytes");
+        File file;
+        try {
+            file = mUi.resolve(path);
+        } catch (IOException | IllegalArgumentException e) {
+            SystemServer.log("camera source: " + requester + ": the selection is refused: "
+                    + e.getMessage());
+            return new Answer(CameraImageSource.Selection.CANCELLED, null);
+        }
+        // Only an image of a format Android decodes reaches the app (the picker's filter is
+        // a suggestion the user can change); the user's path stays out of the log.
+        if (!file.isFile() || file.length() > CameraImageSource.MAX_IMAGE_BYTES
+                || !isImage(file)) {
+            SystemServer.log("camera source: " + requester + ": " + file.getName()
+                    + " is not a JPEG, PNG, GIF, BMP or WebP image of at most "
+                    + CameraImageSource.MAX_IMAGE_BYTES + " bytes");
             return new Answer(CameraImageSource.Selection.CANCELLED, null);
         }
         SystemServer.log("camera source: " + requester + ", camera " + cameraId
                 + ": a selected image (" + file.length() + " bytes)");
         return new Answer(CameraImageSource.Selection.IMAGE, file);
+    }
+
+    /** The file starts as a JPEG, PNG, GIF, BMP or WebP image does. */
+    static boolean isImage(File file) {
+        byte[] h = new byte[12];
+        int n = 0;
+        try (InputStream in = new java.io.FileInputStream(file)) {
+            int r;
+            while (n < h.length && (r = in.read(h, n, h.length - n)) > 0) n += r;
+        } catch (IOException e) {
+            return false;
+        }
+        if (n >= 3 && (h[0] & 0xFF) == 0xFF && (h[1] & 0xFF) == 0xD8 && (h[2] & 0xFF) == 0xFF) {
+            return true;  // JPEG
+        }
+        if (n >= 8 && (h[0] & 0xFF) == 0x89 && h[1] == 'P' && h[2] == 'N' && h[3] == 'G') return true;
+        if (n >= 6 && h[0] == 'G' && h[1] == 'I' && h[2] == 'F' && h[3] == '8') return true;
+        if (n >= 2 && h[0] == 'B' && h[1] == 'M') return true;
+        return n >= 12 && h[0] == 'R' && h[1] == 'I' && h[2] == 'F' && h[3] == 'F'
+                && h[8] == 'W' && h[9] == 'E' && h[10] == 'B' && h[11] == 'P';
     }
 
     @Override
@@ -252,13 +317,20 @@ public final class CameraSourceService extends Binder {
                     return CameraImageSource.Selection.USE_CAMERA;
                 }
                 if (kind != CameraImageSource.Selection.IMAGE) return CameraImageSource.Selection.NONE;
+                ParcelFileDescriptor image = ParcelFileDescriptor.CREATOR.createFromParcel(reply);
+                long size = image.getStatSize();
                 // The stream owns the descriptor and closes it once.
-                try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(
-                        ParcelFileDescriptor.CREATOR.createFromParcel(reply))) {
+                try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(image)) {
                     return new CameraImageSource.Selection(CameraImageSource.Selection.IMAGE,
-                            read(in));
+                            read(in, size));
                 }
-            } catch (RemoteException | IOException | RuntimeException e) {
+            } catch (SecurityException e) {
+                // Not an app the server knows, or no CAMERA grant: no question was asked, and
+                // a PC camera opens as without the setting (its own permission check applies).
+                CameraService.log("camera " + cameraId + ": choosing its source: " + e);
+                return physical ? CameraImageSource.Selection.USE_CAMERA
+                        : CameraImageSource.Selection.NONE;
+            } catch (RemoteException | IOException | RuntimeException | OutOfMemoryError e) {
                 CameraService.log("camera " + cameraId + ": choosing its source: " + e);
                 return CameraImageSource.Selection.NONE;
             } finally {
@@ -268,18 +340,20 @@ public final class CameraSourceService extends Binder {
         }
     };
 
-    /** The descriptor's bytes, at most {@link CameraImageSource#MAX_IMAGE_BYTES}. */
-    static byte[] read(InputStream in) throws IOException {
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        byte[] buffer = new byte[64 * 1024];
-        int n;
-        while ((n = in.read(buffer)) > 0) {
-            if (out.size() + n > CameraImageSource.MAX_IMAGE_BYTES) {
-                throw new IOException("the selected image is larger than "
-                        + CameraImageSource.MAX_IMAGE_BYTES + " bytes");
-            }
-            out.write(buffer, 0, n);
+    /**
+     * The descriptor's {@code size} bytes (its file's size when it was sent), read into one
+     * array of that size: at most {@link CameraImageSource#MAX_IMAGE_BYTES}.
+     */
+    static byte[] read(InputStream in, long size) throws IOException {
+        if (size <= 0 || size > CameraImageSource.MAX_IMAGE_BYTES) {
+            throw new IOException("the selected image has " + size + " bytes (at most "
+                    + CameraImageSource.MAX_IMAGE_BYTES + ")");
         }
-        return out.toByteArray();
+        byte[] bytes = new byte[(int) size];
+        int at = 0;
+        int n;
+        while (at < bytes.length && (n = in.read(bytes, at, bytes.length - at)) > 0) at += n;
+        if (at != bytes.length) throw new IOException("the selected image changed while read");
+        return bytes;
     }
 }

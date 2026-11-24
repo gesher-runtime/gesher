@@ -45,6 +45,11 @@ public final class Bitmap {
         pixels = new int[Math.max(1, width * height)];
     }
     public static Bitmap createBitmap(int width, int height, Config config) { return new Bitmap(width, height); }
+    public static int transformed;
+    public static Bitmap createBitmap(Bitmap src, int x, int y, int w, int h, Matrix m, boolean filter) {
+        transformed++;
+        return m.quarterTurn ? new Bitmap(h, w) : new Bitmap(w, h);
+    }
     public int getWidth() { return width; }
     public int getHeight() { return height; }
     void fill(int color) { java.util.Arrays.fill(pixels, color); }
@@ -57,6 +62,7 @@ public final class Bitmap {
     'android/graphics/BitmapFactory.java': '''package android.graphics;
 /** Any non-empty input decodes as a 320x240 image (the shim has no codecs). */
 public final class BitmapFactory {
+    public static int decodes;
     public static final class Options {
         public boolean inJustDecodeBounds;
         public int outWidth, outHeight, inSampleSize = 1;
@@ -64,8 +70,29 @@ public final class BitmapFactory {
     public static Bitmap decodeByteArray(byte[] data, int offset, int length, Options opts) {
         if (length <= 0) return null;
         if (opts != null && opts.inJustDecodeBounds) { opts.outWidth = 320; opts.outHeight = 240; return null; }
+        decodes++;
         return new Bitmap(320, 240);
     }
+}
+''',
+    'android/graphics/Matrix.java': '''package android.graphics;
+public final class Matrix {
+    public boolean quarterTurn;
+    public void setRotate(float degrees) { quarterTurn = Math.abs(degrees) % 180 == 90; }
+    public void setScale(float sx, float sy) {}
+    public boolean postScale(float sx, float sy) { return true; }
+}
+''',
+    'android/media/ExifInterface.java': '''package android.media;
+/** The orientation tests set; stream contents are not parsed. */
+public final class ExifInterface {
+    public static final String TAG_ORIENTATION = "Orientation";
+    public static final int ORIENTATION_NORMAL = 1, ORIENTATION_FLIP_HORIZONTAL = 2,
+            ORIENTATION_ROTATE_180 = 3, ORIENTATION_FLIP_VERTICAL = 4, ORIENTATION_TRANSPOSE = 5,
+            ORIENTATION_ROTATE_90 = 6, ORIENTATION_TRANSVERSE = 7, ORIENTATION_ROTATE_270 = 8;
+    public static volatile int orientation = ORIENTATION_NORMAL;
+    public ExifInterface(java.io.InputStream in) throws java.io.IOException {}
+    public int getAttributeInt(String tag, int def) { return orientation; }
 }
 ''',
     'android/graphics/Color.java': '''package android.graphics;
@@ -161,6 +188,7 @@ public final class ParcelFileDescriptor implements java.io.Closeable {
         out.writeObject(new ParcelFileDescriptor(file));
         if ((flags & Parcelable.PARCELABLE_WRITE_RETURN_VALUE) != 0) close();
     }
+    public long getStatSize() { return file.length(); }
     @Override public synchronized void close() {
         if (closed) throw new IllegalStateException("closed twice");
         closed = true;
@@ -224,13 +252,25 @@ final class WindowsHost {
             java.util.function.BooleanSupplier active) throws java.io.IOException {
         throw new java.io.IOException("no Windows picker in host tests");
     }
+    static boolean isLocalDocument(String windowsPath) { return true; }
 }
 ''',
     'com/gesher/server/DocumentPicker.java': '''package com.gesher.server;
-final class DocumentPicker { static final int OPEN = 0; }
+final class DocumentPicker {
+    static final int OPEN = 0;
+    static boolean blockedAndroidDirectory(java.io.File file) { return false; }
+}
 ''',
     'com/gesher/server/Zygote.java': '''package com.gesher.server;
-final class Zygote { static String fromWindowsPath(String path) { return path; } }
+final class Zygote {
+    static String fromWindowsPath(String path) { return path; }
+    static String windowsPath(String path) { return path; }
+}
+''',
+    'com/gesher/server/DocumentsStorageProvider.java': '''package com.gesher.server;
+final class DocumentsStorageProvider {
+    static java.io.File selectedFile(String path) { return new java.io.File(path); }
+}
 ''',
     'com/gesher/server/SystemServer.java': '''package com.gesher.server;
 final class SystemServer { static void log(String message) { System.out.println("server: " + message); } }

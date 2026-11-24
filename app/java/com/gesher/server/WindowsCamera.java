@@ -171,6 +171,11 @@ public final class WindowsCamera {
             return new Capture(nv12, width, height);
         }
 
+        /** A selected image's frames ({@link #ofFrame}): no lens, fixed focus. */
+        public boolean isFrame() {
+            return mFrame != null;
+        }
+
         /** The next frame into {@code nv12}; blocks until there is one. 0 or an HRESULT. */
         public int read(byte[] nv12) {
             if (mFrame != null) {

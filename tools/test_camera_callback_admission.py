@@ -109,7 +109,7 @@ STUBS = {
  class WindowsCamera {static final class Device{final String id="host",name="explicit capture adapter";final boolean autofocus=false;}
  static final class OpenException extends Exception{} static volatile boolean failRead;static volatile int reads,closes;
  static volatile java.util.concurrent.CountDownLatch readEntered,readRelease;
- static final class Capture{final int width=16,height=16;int read(byte[] b){synchronized(WindowsCamera.class){reads++;}
+ static final class Capture{final int width=16,height=16;boolean isFrame(){return false;}int read(byte[] b){synchronized(WindowsCamera.class){reads++;}
  java.util.concurrent.CountDownLatch gate=readRelease;if(gate!=null){readEntered.countDown();try{gate.await();}catch(InterruptedException e){throw new RuntimeException(e);}}
  return failRead?-1:0;}
  void close(){synchronized(WindowsCamera.class){closes++;}}}

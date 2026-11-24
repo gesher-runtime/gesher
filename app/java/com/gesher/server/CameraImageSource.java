@@ -8,10 +8,13 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.media.ExifInterface;
 import android.util.Size;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -39,7 +42,7 @@ public final class CameraImageSource {
     public static final String DEVICE_ID = "gesher-image-picker";
     static final int ERROR_CANCELLED = 0x800704C7;  // HRESULT_FROM_WIN32(ERROR_CANCELLED)
     /** The largest selected image read (bytes); a larger file is refused. */
-    static final int MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+    static final int MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 
     /** What {@link CameraSourceService} answers; host tests replace it. */
     interface Host {
@@ -96,6 +99,9 @@ public final class CameraImageSource {
     /** One client's answer, kept from its first open until it closes the camera. */
     public static final class Choice {
         private Selection mSelection;
+        /** The selected image's last frame and its size (a picture or reopen reuses it). */
+        private byte[] mFrame;
+        private int mFrameWidth, mFrameHeight;
 
         synchronized Selection get() {
             return mSelection;
@@ -103,6 +109,29 @@ public final class CameraImageSource {
 
         synchronized void set(Selection selection) {
             if (mSelection == null) mSelection = selection;
+        }
+
+        /** Whether the client's frames are a selected image (fixed focus, whatever the device). */
+        synchronized boolean image() {
+            return mSelection != null && mSelection.kind == Selection.IMAGE;
+        }
+
+        /**
+         * Forgets a cancelled answer, so the app's next explicit start asks again (the
+         * legacy startPreview: an app retries it; a Camera2 frame loop never resets).
+         */
+        synchronized void resetCancelled() {
+            if (mSelection != null && mSelection.kind == Selection.CANCELLED) mSelection = null;
+        }
+
+        synchronized byte[] frame(int width, int height) {
+            return mFrame != null && mFrameWidth == width && mFrameHeight == height ? mFrame : null;
+        }
+
+        synchronized void keepFrame(byte[] frame, int width, int height) {
+            mFrame = frame;
+            mFrameWidth = width;
+            mFrameHeight = height;
         }
     }
 
@@ -140,9 +169,14 @@ public final class CameraImageSource {
                 int w = Math.max(2, width & ~1);
                 int h = Math.max(2, height & ~1);
                 try {
-                    return WindowsCamera.Capture.ofFrame(toNv12(selection.image, w, h), w, h);
-                } catch (IOException | RuntimeException e) {
-                    CameraService.log("camera " + id + ": the selected image: " + e.getMessage());
+                    byte[] frame = choice.frame(w, h);
+                    if (frame == null) {
+                        frame = toNv12(selection.image, w, h);
+                        choice.keepFrame(frame, w, h);
+                    }
+                    return WindowsCamera.Capture.ofFrame(frame, w, h);
+                } catch (IOException | RuntimeException | OutOfMemoryError e) {
+                    CameraService.log("camera " + id + ": the selected image: " + e);
                     throw new WindowsCamera.OpenException(id, 0x80004005);  // E_FAIL
                 }
             }
@@ -169,8 +203,17 @@ public final class CameraImageSource {
             sample *= 2;
         }
         options.inSampleSize = sample;
-        Bitmap source = BitmapFactory.decodeByteArray(encoded, 0, encoded.length, options);
-        if (source == null) throw new IOException("not an image Android decodes");
+        Bitmap decoded = BitmapFactory.decodeByteArray(encoded, 0, encoded.length, options);
+        if (decoded == null) throw new IOException("not an image Android decodes");
+        // A phone's photo is often stored sideways with an EXIF orientation, which Windows
+        // applies when it shows the file: so does the camera's frame.
+        Bitmap source = decoded;
+        Matrix orientation = exifOrientation(encoded);
+        if (orientation != null) {
+            source = Bitmap.createBitmap(decoded, 0, 0, decoded.getWidth(), decoded.getHeight(),
+                    orientation, true);
+            if (source != decoded) decoded.recycle();
+        }
         Bitmap frame = null;
         try {
             frame = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
@@ -196,25 +239,64 @@ public final class CameraImageSource {
         }
     }
 
-    /** BT.601 limited range, as the cameras' NV12 (CameraFrames converts it back). */
+    /** The EXIF orientation's transform, or null when the image is stored upright. */
+    static Matrix exifOrientation(byte[] encoded) {
+        int tag;
+        try {
+            tag = new ExifInterface(new ByteArrayInputStream(encoded)).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+        } catch (IOException | RuntimeException e) {
+            return null;  // no EXIF (PNG, BMP...) or none readable: as stored
+        }
+        Matrix m = new Matrix();
+        switch (tag) {
+            case ExifInterface.ORIENTATION_FLIP_HORIZONTAL: m.setScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_ROTATE_180: m.setRotate(180); break;
+            case ExifInterface.ORIENTATION_FLIP_VERTICAL: m.setScale(1, -1); break;
+            case ExifInterface.ORIENTATION_TRANSPOSE: m.setRotate(90); m.postScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_ROTATE_90: m.setRotate(90); break;
+            case ExifInterface.ORIENTATION_TRANSVERSE: m.setRotate(-90); m.postScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_ROTATE_270: m.setRotate(-90); break;
+            default: return null;
+        }
+        return m;
+    }
+
+    /**
+     * BT.601 limited range, as the cameras' NV12 (CameraFrames converts it back); each
+     * chroma sample is its 2x2 block's average.
+     */
     static byte[] argbToNv12(int[] argb, int width, int height) {
         int ySize = width * height;
         byte[] nv12 = new byte[ySize * 3 / 2];
         for (int row = 0; row < height; row++) {
             int rowOffset = row * width;
-            int uvRowOffset = ySize + (row >> 1) * width;
             for (int col = 0; col < width; col++) {
                 int px = argb[rowOffset + col];
                 int r = (px >> 16) & 0xFF;
                 int g = (px >> 8) & 0xFF;
                 int b = px & 0xFF;
                 nv12[rowOffset + col] = (byte) clamp(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
-                if ((row & 1) == 0 && (col & 1) == 0) {
-                    nv12[uvRowOffset + col] =
-                            (byte) clamp(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
-                    nv12[uvRowOffset + col + 1] =
-                            (byte) clamp(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
+            }
+        }
+        for (int row = 0; row < height; row += 2) {
+            int uvRowOffset = ySize + (row >> 1) * width;
+            for (int col = 0; col < width; col += 2) {
+                int r = 0, g = 0, b = 0;
+                for (int dy = 0; dy < 2; dy++) {
+                    for (int dx = 0; dx < 2; dx++) {
+                        int px = argb[(row + dy) * width + col + dx];
+                        r += (px >> 16) & 0xFF;
+                        g += (px >> 8) & 0xFF;
+                        b += px & 0xFF;
+                    }
                 }
+                r = (r + 2) >> 2;
+                g = (g + 2) >> 2;
+                b = (b + 2) >> 2;
+                nv12[uvRowOffset + col] = (byte) clamp(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
+                nv12[uvRowOffset + col + 1] =
+                        (byte) clamp(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
             }
         }
         return nv12;

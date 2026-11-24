@@ -70,7 +70,16 @@ public final class CameraImagePickerHost {
 
         @Override public String pick(String title, int ownerPid, BooleanSupplier active) {
             calls.add("pick:" + ownerPid);
+            if (whilePicking != null) whilePicking.run();
             return path;
+        }
+
+        Runnable whilePicking;
+        boolean refuse;
+
+        @Override public File resolve(String windowsPath) throws IOException {
+            if (refuse) throw new IOException("Android data/obb is not selectable");
+            return new File(windowsPath);
         }
     }
 
@@ -90,7 +99,7 @@ public final class CameraImagePickerHost {
 
     private static void answers(File temp) throws IOException {
         File image = new File(temp, "cheque.jpg");
-        Files.write(image.toPath(), new byte[] {(byte) 0xFF, (byte) 0xD8, 1, 2, 3});
+        Files.write(image.toPath(), new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 1, 2, 3});
         FakeUi ui = new FakeUi();
         FakeCallers callers = new FakeCallers();
         boolean[] enabled = {false};
@@ -164,7 +173,39 @@ public final class CameraImagePickerHost {
         ui.path = temp.getPath();
         a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
         check(a.kind == CameraImageSource.Selection.CANCELLED, "a directory is not an image");
+        File text = new File(temp, "notes.jpg");
+        Files.write(text.toPath(), "just text, named .jpg".getBytes(StandardCharsets.UTF_8));
+        ui.path = text.getPath();
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED,
+                "a file that is not an image is not delivered, whatever its name");
         ui.path = image.getPath();
+        ui.refuse = true;
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED,
+                "a selection the document picker would refuse (Android/data...) is not delivered");
+        ui.refuse = false;
+        check(CameraSourceService.isImage(image), "a JPEG is an image");
+
+        // One question at a time: a second caller while one waits is not asked.
+        CameraSourceService.Answer[] second = new CameraSourceService.Answer[1];
+        ui.whilePicking = () -> {
+            try {
+                second[0] = service.answer(11, 10011, CameraImageSource.DEVICE_ID, false);
+            } catch (IOException e) {
+                throw new AssertionError(e);
+            }
+        };
+        ui.calls.clear();
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        ui.whilePicking = null;
+        check(a.kind == CameraImageSource.Selection.IMAGE
+                && second[0].kind == CameraImageSource.Selection.CANCELLED
+                && ui.calls.equals(List.of("pick:10")),
+                "a question while another is open is refused without a dialog");
+        a = service.answer(11, 10011, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.IMAGE, "the next question is asked once the first is answered");
+
         callers.attached = false;
         a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
         check(a.kind == CameraImageSource.Selection.CANCELLED,
@@ -173,7 +214,7 @@ public final class CameraImagePickerHost {
 
     private static void binderRoundTrip(File temp) throws IOException {
         File image = new File(temp, "photo.png");
-        byte[] bytes = "not really a PNG, but the bytes travel".getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = "\u0089PNG\r\n\u001a\n and the rest of the file".getBytes(StandardCharsets.ISO_8859_1);
         Files.write(image.toPath(), bytes);
         FakeUi ui = new FakeUi();
         ui.answer = 1;
@@ -199,8 +240,11 @@ public final class CameraImagePickerHost {
             check(s.kind == CameraImageSource.Selection.CANCELLED, "the cancel arrives");
             android.os.Binder.callingPid = 666;
             s = client.choose("0", true);
+            check(s.kind == CameraImageSource.Selection.CAMERA,
+                    "a refused caller is not asked; its PC camera opens as without the setting");
+            s = client.choose(CameraImageSource.DEVICE_ID, false);
             check(s.kind == CameraImageSource.Selection.CANCELLED,
-                    "a refused caller is answered with an exception, read as a cancel");
+                    "a refused caller gets no selected image");
         } finally {
             ServiceManager.services.remove(CameraSourceService.NAME);
             android.os.Binder.callingPid = 0;
@@ -249,6 +293,11 @@ public final class CameraImagePickerHost {
             check(picture.width == 1280 && host.asked == 1,
                     "a picture or another size keeps the client's image: asked once");
             picture.close();
+            int decodes = android.graphics.BitmapFactory.decodes;
+            CameraImageSource.open(CameraImageSource.DEVICE_ID, 1280, 960, choice).close();
+            check(android.graphics.BitmapFactory.decodes == decodes,
+                    "the same size reuses the image's frame instead of decoding it again");
+            check(choice.image(), "the client's frames are an image (fixed focus)");
             CameraImageSource.open(CameraImageSource.DEVICE_ID, 640, 480, new CameraImageSource.Choice()).close();
             check(host.asked == 2, "a new client is asked again");
 
@@ -265,6 +314,14 @@ public final class CameraImagePickerHost {
                 check(hr == CameraImageSource.ERROR_CANCELLED, "a cancelled client's opens fail");
             }
             check(host.asked == 1, "a cancel is not asked again on every frame or reopen");
+            check(!cancelled.image(), "a cancelled client has no image");
+            cancelled.resetCancelled();
+            host.next = CameraImageSource.Selection.USE_CAMERA;
+            check(CameraImageSource.decide("0", cancelled).kind == CameraImageSource.Selection.CAMERA
+                    && host.asked == 2, "after a reset (the app starts the preview again) it is asked again");
+            cancelled.resetCancelled();
+            CameraImageSource.decide("0", cancelled);
+            check(host.asked == 2, "a reset forgets only a cancel");
 
             host.asked = 0;
             host.next = CameraImageSource.Selection.USE_CAMERA;
@@ -296,6 +353,18 @@ public final class CameraImagePickerHost {
         boolean any = false;
         for (byte b : nv12) any |= b != 0;
         check(any, "the frame carries the image");
+        android.media.ExifInterface.orientation = android.media.ExifInterface.ORIENTATION_ROTATE_90;
+        int transformed = android.graphics.Bitmap.transformed;
+        CameraImageSource.toNv12(new byte[] {1, 2, 3}, 64, 48);
+        check(android.graphics.Bitmap.transformed == transformed + 1,
+                "an EXIF orientation is applied before scaling, as Windows shows the photo");
+        android.media.ExifInterface.orientation = android.media.ExifInterface.ORIENTATION_NORMAL;
+        CameraImageSource.toNv12(new byte[] {1, 2, 3}, 64, 48);
+        check(android.graphics.Bitmap.transformed == transformed + 1, "an upright image is not transformed");
+        int[] quad = {0xFFFF0000, 0xFF0000FF, 0xFF0000FF, 0xFFFF0000};
+        byte[] q = CameraImageSource.argbToNv12(quad, 2, 2);
+        byte[] red = CameraImageSource.argbToNv12(new int[] {0xFFFF0000, 0xFFFF0000, 0xFFFF0000, 0xFFFF0000}, 2, 2);
+        check((q[4] & 0xFF) != (red[4] & 0xFF), "chroma averages its 2x2 block");
         int[] white = new int[4];
         java.util.Arrays.fill(white, 0xFFFFFFFF);
         byte[] w = CameraImageSource.argbToNv12(white, 2, 2);
