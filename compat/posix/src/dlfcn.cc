@@ -144,11 +144,9 @@ std::string AndroidLoadError(const char* filename) {
   close(fd);
   if (got < 0) return std::string();
   if (got >= 2 && header[0] == 'M' && header[1] == 'Z') return std::string();
-  char text[256];
   if (st.st_size == 0) {
-    snprintf(text, sizeof(text), "file offset for the library \"%s\" >= file size: 0 >= 0",
-             filename);
-    return std::string("dlopen failed: ") + text;
+    return std::string("dlopen failed: file offset for the library \"") + filename +
+           "\" >= file size: 0 >= 0";
   }
   if (got < static_cast<ssize_t>(sizeof(header))) {
     return std::string("dlopen failed: \"") + filename +
@@ -156,6 +154,8 @@ std::string AndroidLoadError(const char* filename) {
            " bytes";
   }
   // A file that starts with the ELF magic went to the ELF loader before.
+  // The path is not part of the formatted text: a long one is never cut short.
+  char text[16];
   snprintf(text, sizeof(text), "%02x%02x%02x%02x", header[0], header[1], header[2], header[3]);
   return std::string("dlopen failed: \"") + filename + "\" has bad ELF magic: " + text;
 }
