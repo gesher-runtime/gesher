@@ -19,6 +19,20 @@ Check 'services: a browser for apps that look for one (com.gesher.browser: VIEW 
   'BrowserIntentTest: starting VIEW http(s) for com.gesher.browser (package, component, implicit) delegates the URL to Windows',
   'BrowserIntentTest all passed')
 
+# Windows' mailto/tel/sms/geo protocol handlers as Android activities (WindowsUriHandlers):
+# each resolves and opens exactly when this machine's Windows has a handler registered for
+# the scheme (AssocQueryStringW), and is ActivityNotFoundException otherwise. The opener is
+# replaced: nothing opens. The per-scheme lines show the runner's own associations.
+Check 'services: mailto/tel/sms/geo resolve and open only through a registered Windows handler; otherwise no activity' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.UriHandlerIntentTest
+} @('UriHandlerIntentTest: mailto Windows handler',
+  'UriHandlerIntentTest: tel Windows handler',
+  'UriHandlerIntentTest: sms Windows handler',
+  'UriHandlerIntentTest: geo Windows handler',
+  'UriHandlerIntentTest: CALL, mms and SEND message/rfc822 have no Windows handler activity',
+  'UriHandlerIntentTest all passed')
+
 Check 'services: app and channel notification settings open Windows controls; unsupported intents and failed launches stay unresolved' {
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.NotificationSettingsIntentTest
