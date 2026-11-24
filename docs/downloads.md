@@ -15,7 +15,8 @@ and `frameworks/base` `DownloadManager`, `Downloads`.
 | --- | --- |
 | `DownloadProvider` | The registered `ContentProvider` (authority `downloads`), its manifest declaration, Binder caller identity, permissions, URI grants, completion broadcasts, network state and per-package network security policy. |
 | `DownloadRequests` | DownloadProvider's rows and rules: schema (version 114), insert validation for the public API, `SQLiteQueryBuilder` strict queries with the per-UID clause, update, delete, `openFile` checks, destinations and file names. |
-| `DownloadQueue` | What DownloadProvider asks JobScheduler for: runs ready rows when their network requirement and retry delay are met, reschedules retries, resumes rows on start. |
+| `DownloadQueue` | What DownloadProvider asks JobScheduler for: runs ready rows when their network, charging and idle requirements and retry delay are met, stops a running row whose charging or idle requirement is lost, reschedules retries, resumes rows on start. |
+| `DeviceConstraints` | When JobScheduler's charging, battery-not-low and idle constraints hold, from Windows' power status and display-off inactivity; shared with `JobSchedulerService` so both agree. |
 | `DownloadTransfer` | DownloadThread's HTTP execution: redirects, statuses, `Range`/`If-Match` resumption, durable progress checkpoints, final destination handling. |
 
 `ContentProviders.getContentProvider` answers `downloads` with the system server's
@@ -58,6 +59,18 @@ provider, and an app cannot publish that authority.
   (`getRequiredNetworkType`, including the over-mobile size settings). Without a
   suitable network nothing is requested and the row stays pending until the network
   changes.
+- Charging and idle: `setRequiresCharging` and `setRequiresDeviceIdle`
+  (`FLAG_REQUIRES_CHARGING`, `FLAG_REQUIRES_DEVICE_IDLE`, which `Helpers.scheduleJob`
+  passes to `JobInfo`) are evaluated exactly as Gesher's `JobSchedulerService`
+  evaluates those job constraints (`DeviceConstraints`): charging is AC power with a
+  battery that is charging, full or absent (a PC without a battery on mains) and not
+  low; idle is the session display off without input for
+  `config_jobSchedulerInactivityIdleThreshold` (31 minutes). An unknown power status
+  satisfies neither. A waiting row stays `STATUS_PENDING`; Windows' power status,
+  display and resume notifications (and, while the display is off, one check when the
+  threshold is reached) evaluate it again. A running download whose requirement is
+  lost stops as JobScheduler's `onStopJob` makes `DownloadThread` stop: it keeps its
+  bytes, waits to retry, and resumes once its retry delay and requirements allow.
 - Completion: a completed row (success or error), or the removal of an unfinished one,
   sends `ACTION_DOWNLOAD_COMPLETE` with `EXTRA_DOWNLOAD_ID` to the requesting package
   (legacy rows: `Downloads.Impl.ACTION_DOWNLOAD_COMPLETED` to their class).
@@ -76,18 +89,18 @@ These are absent rather than simulated:
   MediaStore ownership.
 - Certificate transparency policy (`ConfigNetworkSecurityPolicy`) is not installed per
   download; the package's trust anchors and cleartext rules are.
-- `setRequiresCharging` / `setRequiresDeviceIdle` flags are stored but do not delay a
-  download; disk-space preallocation is a usable-space check only.
+- Disk-space preallocation is a usable-space check only.
 - The downloads UI (`ACTION_VIEW_DOWNLOADS`) and `DownloadStorageProvider`
   (`com.android.providers.downloads.documents`) are not provided.
 
 ## Tests
 
 `tools/test_download_manager_contracts.py` compiles `DownloadRequests`,
-`DownloadQueue` and `DownloadTransfer` unchanged with AOSP's `SQLiteQueryBuilder` and
+`DownloadQueue`, `DownloadTransfer` and `DeviceConstraints` unchanged with AOSP's `SQLiteQueryBuilder` and
 `SQLiteTokenizer` (pinned android-16.0.0_r4 sources), runs SQL in SQLite through
 sqlite-jdbc, and transfers over real sockets from a local HTTP server: admission,
 ownership, strict SQL, redirects, HTTP failures, cut connections with resumption,
-network requirements, cleartext refusal, file naming, removal and restart recovery.
+network requirements, charging and idle requirements (from a stand-in power status and
+display-off time), cleartext refusal, file naming, removal and restart recovery.
 `DownloadProvider` (Binder, permissions, grants, Windows networks and proxy) is not
 exercised by that host test.

@@ -20,8 +20,11 @@ import java.util.concurrent.TimeUnit;
 /**
  * What AOSP's DownloadProvider asks JobScheduler and DownloadJobService to do
  * (Helpers.scheduleJob, DownloadInfo.getRequiredNetworkType/getMinimumLatency): run each
- * ready download once a network it may use is connected and its retry delay has passed,
- * and run it again after a retryable failure. It lives in the system server, so a
+ * ready download once a network it may use is connected, its retry delay has passed and
+ * the device is charging or idle when the request requires it (FLAG_REQUIRES_CHARGING,
+ * FLAG_REQUIRES_DEVICE_IDLE, read as JobScheduler reads them: {@link DeviceConstraints}),
+ * and run it again after a retryable failure. A running download whose charging or idle
+ * requirement no longer holds is stopped, as JobScheduler stops its job. It lives in the system server, so a
  * download outlives its app's process; rows persist, so a running download resumes from
  * its last durable checkpoint when Gesher starts again.
  */
@@ -52,6 +55,12 @@ final class DownloadQueue {
         String userAgent();
         long currentTimeMillis();
         long elapsedRealtime();
+        /** WindowsHost.powerStatus(), as {@link DeviceConstraints} reads it; null if unknown. */
+        int[] powerStatus();
+        /** WindowsHost.jobIdleMillis(): display-off time without input; 0 while in use. */
+        long idleMillis();
+        /** Calls {@code listener} when Windows reports a power status or display change. */
+        void listen(Runnable listener);
     }
 
     interface Transport {
@@ -70,7 +79,13 @@ final class DownloadQueue {
     private final Set<Long> mQueued = new HashSet<>();
     private final Set<Long> mRescheduled = new HashSet<>();
     private final Map<Long, ScheduledFuture<?>> mDelayed = new HashMap<>();
-    private final Set<Long> mWaitingForNetwork = new HashSet<>();
+    /** Ready requests waiting for their network or device requirements. */
+    private final Set<Long> mWaiting = new HashSet<>();
+    /** The running downloads' charging/idle requirements (FLAG_REQUIRES_*). */
+    private final Map<Long, Integer> mRunningFlags = new HashMap<>();
+    /** One check when a waiting request's inactivity threshold is reached. */
+    private ScheduledFuture<?> mIdleCheck;
+    private boolean mListening;
     private boolean mStopped;
 
     DownloadQueue(DownloadRequests requests, Environment environment) {
@@ -99,6 +114,12 @@ final class DownloadQueue {
 
     /** Boot: everything that was ready, including downloads cut off by a restart, runs. */
     void start() {
+        boolean listen;
+        synchronized (this) {
+            listen = !mListening;
+            mListening = true;
+        }
+        if (listen) mEnvironment.listen(this::conditionsChanged);
         for (long id : mRequests.ids()) schedule(id);
     }
 
@@ -109,6 +130,8 @@ final class DownloadQueue {
             for (DownloadTransfer transfer : mRunning.values()) transfer.requestShutdown();
             for (ScheduledFuture<?> future : mDelayed.values()) future.cancel(false);
             mDelayed.clear();
+            if (mIdleCheck != null) mIdleCheck.cancel(false);
+            mIdleCheck = null;
         }
         mWorkers.shutdown();
         mTimers.shutdownNow();
@@ -127,10 +150,37 @@ final class DownloadQueue {
 
     /** The network changed: requests waiting for one are evaluated again. */
     void networkChanged() {
+        reevaluateWaiting();
+    }
+
+    /**
+     * Windows' power status or session display changed: a running download whose charging
+     * or idle requirement no longer holds stops (JobScheduler's onStopJob; its transfer
+     * ends with a retryable status and is scheduled again), and waiting requests are
+     * evaluated again.
+     */
+    void conditionsChanged() {
+        List<DownloadTransfer> lost = new java.util.ArrayList<>();
+        synchronized (this) {
+            if (mStopped) return;
+            for (Map.Entry<Long, Integer> running : mRunningFlags.entrySet()) {
+                if (!deviceConditionsSatisfied(running.getValue())) {
+                    DownloadTransfer transfer = mRunning.get(running.getKey());
+                    if (transfer != null) lost.add(transfer);
+                }
+            }
+        }
+        for (DownloadTransfer transfer : lost) transfer.requestShutdown();
+        reevaluateWaiting();
+    }
+
+    private void reevaluateWaiting() {
         Set<Long> waiting;
         synchronized (this) {
-            waiting = new HashSet<>(mWaitingForNetwork);
-            mWaitingForNetwork.clear();
+            waiting = new HashSet<>(mWaiting);
+            mWaiting.clear();
+            if (mIdleCheck != null) mIdleCheck.cancel(false);
+            mIdleCheck = null;
         }
         for (long id : waiting) schedule(id);
     }
@@ -140,7 +190,7 @@ final class DownloadQueue {
         synchronized (this) {
             ScheduledFuture<?> delayed = mDelayed.remove(id);
             if (delayed != null) delayed.cancel(false);
-            mWaitingForNetwork.remove(id);
+            mWaiting.remove(id);
             DownloadTransfer running = mRunning.get(id);
             if (running != null) running.requestShutdown();
         }
@@ -153,7 +203,7 @@ final class DownloadQueue {
             if (mStopped) return;
             ScheduledFuture<?> delayed = mDelayed.remove(id);
             if (delayed != null) delayed.cancel(false);
-            mWaitingForNetwork.remove(id);
+            mWaiting.remove(id);
             if (info == null || !info.readyToSchedule()) {
                 DownloadTransfer running = mRunning.get(id);
                 if (running != null) running.requestShutdown();
@@ -170,7 +220,12 @@ final class DownloadQueue {
                 return;
             }
             if (!networkSatisfied(info, info.totalBytes)) {
-                mWaitingForNetwork.add(id);
+                mWaiting.add(id);
+                return;
+            }
+            if (!deviceConditionsSatisfied(info.flags)) {
+                mWaiting.add(id);
+                armIdleCheck(info.flags);
                 return;
             }
             mQueued.add(id);
@@ -208,6 +263,38 @@ final class DownloadQueue {
         return networkRefusal(info, totalBytes) == null;
     }
 
+    /**
+     * JobInfo.setRequiresCharging / setRequiresDeviceIdle as Helpers.scheduleJob sets them
+     * from FLAG_REQUIRES_CHARGING / FLAG_REQUIRES_DEVICE_IDLE, and as BatteryController and
+     * IdleController satisfy them (the downloads job is never the top app's).
+     */
+    boolean deviceConditionsSatisfied(int flags) {
+        if ((flags & Downloads.Impl.FLAG_REQUIRES_CHARGING) != 0
+                && !DeviceConstraints.stablePower(mEnvironment.powerStatus())) {
+            return false;
+        }
+        if ((flags & Downloads.Impl.FLAG_REQUIRES_DEVICE_IDLE) != 0
+                && !DeviceConstraints.idle(mEnvironment.idleMillis())) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * DeviceIdlenessTracker's idle alarm: with the display already off, idle begins when the
+     * inactivity threshold passes, without another display change. Guarded by this.
+     */
+    private void armIdleCheck(int flags) {
+        if ((flags & Downloads.Impl.FLAG_REQUIRES_DEVICE_IDLE) == 0) return;
+        long delay = DeviceConstraints.untilIdle(mEnvironment.idleMillis());
+        if (delay < 0) return;
+        if (mIdleCheck != null) {
+            if (mIdleCheck.getDelay(TimeUnit.MILLISECONDS) <= delay) return;
+            mIdleCheck.cancel(false);
+        }
+        mIdleCheck = mTimers.schedule(this::conditionsChanged, delay, TimeUnit.MILLISECONDS);
+    }
+
     /** DownloadInfo.getMinimumLatency. */
     long minimumLatency(DownloadRequests.Info info) {
         if (info.status != Downloads.Impl.STATUS_WAITING_TO_RETRY) return 0;
@@ -240,9 +327,16 @@ final class DownloadQueue {
                 if (mStopped || info == null || !info.readyToSchedule()) return;
                 // Skip a download that already finished (DownloadThread.run).
                 if (info.status == Downloads.Impl.STATUS_SUCCESS) return;
+                // JobScheduler starts a job only while its constraints hold.
+                if (!deviceConditionsSatisfied(info.flags)) {
+                    mWaiting.add(id);
+                    armIdleCheck(info.flags);
+                    return;
+                }
                 state = state(info);
                 transfer = new DownloadTransfer(state, network(info), row(info));
                 mRunning.put(id, transfer);
+                mRunningFlags.put(id, info.flags);
             }
             state.status = Downloads.Impl.STATUS_RUNNING;
             mRequests.writeStatus(id, Downloads.Impl.STATUS_RUNNING);
@@ -265,7 +359,10 @@ final class DownloadQueue {
             }
             boolean again;
             synchronized (this) {
-                if (transfer != null) mRunning.remove(id);
+                if (transfer != null) {
+                    mRunning.remove(id);
+                    mRunningFlags.remove(id);
+                }
                 mQueued.remove(id);
                 again = mRescheduled.remove(id);
             }

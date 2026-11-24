@@ -2,7 +2,8 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 """Run the production DownloadManager provider, queue and transfer on a host JVM.
 
-DownloadRequests, DownloadQueue and DownloadTransfer are compiled unchanged. AOSP's
+DownloadRequests, DownloadQueue, DownloadTransfer and DeviceConstraints are compiled
+unchanged. AOSP's
 SQLiteQueryBuilder and SQLiteTokenizer (android-16.0.0_r4, pinned by SHA-256) provide
 the strict query building the provider relies on; SQL runs in a real SQLite engine
 (sqlite-jdbc, pinned by SHA-256) behind a thin SQLiteDatabase stand-in. HTTP goes over
@@ -27,7 +28,7 @@ import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION = ('DownloadTransfer', 'DownloadRequests', 'DownloadQueue')
+PRODUCTION = ('DownloadTransfer', 'DownloadRequests', 'DownloadQueue', 'DeviceConstraints')
 INPUTS = {
     'sqlite-jdbc-3.46.1.3.jar': (
         'https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar',
@@ -83,6 +84,10 @@ def main() -> None:
     sources = {}
     for name in PRODUCTION:
         source = production_source(args.source_ref, name)
+        if source is None and name == 'DeviceConstraints':
+            # Before the queue read charging and idle state; its contracts show the effect.
+            print(f'{name}.java does not exist at {args.source_ref}', flush=True)
+            continue
         if source is None:
             print(f'FAIL {name}.java does not exist at {args.source_ref}: no content://downloads '
                   'provider, so DownloadManager.enqueue fails with IllegalArgumentException '

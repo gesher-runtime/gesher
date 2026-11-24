@@ -444,6 +444,19 @@ public final class DownloadProvider extends ContentProvider {
         @Override public String userAgent() { return defaultUserAgent(); }
         @Override public long currentTimeMillis() { return System.currentTimeMillis(); }
         @Override public long elapsedRealtime() { return SystemClock.elapsedRealtime(); }
+        /** The power status JobSchedulerService's charging constraint reads. */
+        @Override public int[] powerStatus() { return WindowsHost.powerStatus(); }
+        /** The display-off inactivity JobSchedulerService's idle constraint reads. */
+        @Override public long idleMillis() { return WindowsHost.jobIdleMillis(); }
+        /** The events JobSchedulerService re-evaluates those constraints on. */
+        @Override public void listen(Runnable listener) {
+            WindowsHost.addListener(events -> {
+                if ((events & (WindowsHost.EVENT_POWER_STATUS | WindowsHost.EVENT_DISPLAY_STATE
+                        | WindowsHost.EVENT_RESUMED)) != 0) {
+                    listener.run();
+                }
+            });
+        }
     }
 
     /** Constants.DEFAULT_USER_AGENT. */
