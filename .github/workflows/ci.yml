@@ -107,7 +107,7 @@ jobs:
         timeout-minutes: 3
         shell: cmd
         run: |
-          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_protected_launch_test.cc tests\native\usb_scm_profile_control.cc compat\usb_storage\protected_identity.cc compat\usb_storage\authority_launch.cc compat\framework\app_container.cc /Fe:usb_protected_launch_test.exe advapi32.lib userenv.lib wtsapi32.lib user32.lib ole32.lib shell32.lib uuid.lib > usb-protected-launch.log 2>&1
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_protected_launch_test.cc tests\native\usb_scm_profile_control.cc tests\native\usb_lowbox_iat_trace.cc compat\usb_storage\protected_identity.cc compat\usb_storage\authority_launch.cc compat\framework\app_container.cc /Fe:usb_protected_launch_test.exe advapi32.lib userenv.lib wtsapi32.lib user32.lib ole32.lib shell32.lib uuid.lib > usb-protected-launch.log 2>&1
           set "GESHER_PROTECTED_LAUNCH_COMPILE_EXIT=%errorlevel%"
           >> usb-protected-launch.log echo Protected launch compiler exit: %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
           if not "%GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%"=="0" (
@@ -115,7 +115,7 @@ jobs:
             exit /b %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
           )
           python -c "from datetime import datetime, timezone; print('Protected launch: fixture-start-utc=' + datetime.now(timezone.utc).isoformat(timespec='microseconds'))" >> usb-protected-launch.log 2>&1
-          usb_protected_launch_test.exe --scm-profile-control >> usb-protected-launch.log 2>&1
+          usb_protected_launch_test.exe --scm-profile-control --lowbox-iat-trace >> usb-protected-launch.log 2>&1
           set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"
           >> usb-protected-launch.log echo Protected launch native exit: %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
           if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" pwsh -NoLogo -NoProfile -NonInteractive -File tools\ci\protected_profile_diagnostics.ps1 -LogPath usb-protected-launch.log >> usb-protected-launch.log 2>&1

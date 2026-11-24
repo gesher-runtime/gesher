@@ -5,6 +5,7 @@
 #include "../../compat/usb_storage/protected_identity.h"
 #include "../../compat/usb_storage/authority_launch.h"
 #include "../../compat/framework/app_container.h"
+#include "usb_lowbox_iat_trace.h"
 #include "usb_scm_profile_control.h"
 #include <aclapi.h>
 #include <securityappcontainer.h>
@@ -31,6 +32,7 @@ namespace {
 namespace storage = gesher::usb_storage;
 namespace container = gesher::appcontainer;
 namespace profile_control = gesher::usb_storage::test;
+namespace lowbox_trace = gesher::usb_storage::test;
 struct Close { void operator()(void* h) const { if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h); } };
 struct ScClose { void operator()(SC_HANDLE h) const { if (h) CloseServiceHandle(h); } };
 struct Free { void operator()(void* p) const { if (p) LocalFree(p); } };
@@ -111,19 +113,23 @@ struct Evidence {
   DWORD target_token_access = ERROR_NOT_READY;
   DWORD private_caller_token_access = ERROR_NOT_READY;
   DWORD system_caller_token_access = ERROR_NOT_READY;
+  lowbox_trace::LowboxIatTraceEvidence lowbox_trace;
   EquivalentTokenEvidence equivalent;
   profile_control::ScmProfileControlEvidence scm_control;
   char stage[96] = "complete";
   char cleanup_stage[64] = "none";
 };
-// Fixed diagnostic payload: two API paths, eight exact directory observations,
-// and at most twelve ACEs per object. The controller validates counts/strings.
-static_assert(std::is_trivially_copyable_v<Evidence> && sizeof(Evidence) <= 16384);
+// Fixed diagnostic payload: one bounded exact-call trace, two API paths, eight
+// directory observations, and at most twelve ACEs per object. The controller
+// and trace printer validate counts/strings before using the received record.
+static_assert(std::is_trivially_copyable_v<Evidence> &&
+              std::is_standard_layout_v<Evidence> && sizeof(Evidence) <= 65536);
 struct Configuration {
   std::wstring name, image, directory;
   DWORD session = 0;
   ULONGLONG worker_deadline = 0;
   bool scm_profile_control = false;
+  bool lowbox_iat_trace = false;
 } config;
 SERVICE_STATUS_HANDLE service_status = nullptr;
 Handle service_stop;
@@ -146,6 +152,17 @@ bool DeadlineArgument(std::wstring_view value, ULONGLONG* result) {
     parsed = parsed * 10 + digit;
   }
   *result = parsed;
+  return true;
+}
+struct FixtureOptions { bool scm_profile_control = false, lowbox_iat_trace = false; };
+bool ParseFixtureOptions(int argc, wchar_t** argv, int first, FixtureOptions* options) {
+  if (!options || first < 1 || first > argc || argc - first > 2) return false;
+  for (int i = first; i < argc; ++i) {
+    const std::wstring_view flag(argv[i]);
+    if (flag == L"--scm-profile-control" && !options->scm_profile_control) options->scm_profile_control = true;
+    else if (flag == L"--lowbox-iat-trace" && !options->lowbox_iat_trace) options->lowbox_iat_trace = true;
+    else return false;
+  }
   return true;
 }
 Local Security(bool low = false) {
@@ -948,6 +965,35 @@ void PrintEquivalentToken(const EquivalentTokenEvidence& observed) {
   PrintTokenPhase("after-default-seal", observed.after);
   PrintNamespace(observed.object_namespace);
 }
+class ScopedLowboxTrace final {
+ public:
+  ScopedLowboxTrace(bool enabled, DWORD target_session, Evidence* evidence) noexcept
+      : evidence_(enabled ? evidence : nullptr) {
+    if (evidence_) {
+      evidence_->lowbox_trace.expected_target_session = target_session;
+      // Setup and coverage gaps are diagnostic observations. The actual
+      // production call still runs once; End also handles partial setup.
+      lowbox_trace::BeginLowboxIatTrace(&evidence_->lowbox_trace);
+    }
+  }
+  ~ScopedLowboxTrace() { End(); }
+  ScopedLowboxTrace(const ScopedLowboxTrace&) = delete;
+  ScopedLowboxTrace& operator=(const ScopedLowboxTrace&) = delete;
+  DWORD End() noexcept {
+    if (!evidence_) return restored_;
+    Evidence* const evidence = evidence_;
+    evidence_ = nullptr;
+    restored_ = lowbox_trace::EndLowboxIatTrace(&evidence->lowbox_trace);
+    if (restored_ != ERROR_SUCCESS && evidence->cleanup == ERROR_SUCCESS) {
+      evidence->cleanup = restored_;
+      std::snprintf(evidence->cleanup_stage, sizeof(evidence->cleanup_stage), "%s", "restore-lowbox-iat-observer");
+    }
+    return restored_;
+  }
+ private:
+  Evidence* evidence_ = nullptr;
+  DWORD restored_ = ERROR_SUCCESS;
+};
 Evidence RunSystem() {
   Evidence evidence;
   bool installed = false;
@@ -1065,14 +1111,19 @@ Evidence RunSystem() {
         "deny-case-insensitive-environment-shadow", ERROR_INVALID_DATA);
     ObserveLaunchAccess(identity->token(), &evidence);
     production_attempted = true;
+    ScopedLowboxTrace observer(config.lowbox_iat_trace, config.session, &evidence);
     const DWORD created = storage::AuthorityLaunch::Create(identity->token(), spec, &child, &stage);
-    if (created != ERROR_SUCCESS && std::strcmp(stage, "lowbox.create-token") == 0) {
+    const DWORD restored = observer.End();
+    if (restored == ERROR_SUCCESS && created != ERROR_SUCCESS && std::strcmp(stage, "lowbox.create-token") == 0) {
       // The failed production object has already been destroyed. This is an
       // equivalently derived token, observed only after the real failure; no
       // diagnostic result retries launch or changes that primary result.
       ObserveEquivalentToken(identity->token(), spec, &evidence.equivalent);
     }
     Check(created, stage);
+    // A successfully created child remains suspended if observer teardown
+    // failed. The normal cleanup path must stop it; never Resume under hooks.
+    Check(restored, "restore-lowbox-iat-observer");
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;
     Require(IsProcessInJob(child->process(), service_job.get(), &contained) && contained, "inherited-lowbox-job");
@@ -1209,7 +1260,7 @@ DWORD Guest(const wchar_t* profile) {
   }
   return written == 3 ? ERROR_SUCCESS : ERROR_WRITE_FAULT;
 }
-DWORD Controller(bool explicit_scm_control) {
+DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
   DWORD result = ERROR_SUCCESS;
   Service service;
   Handle process;
@@ -1273,6 +1324,7 @@ DWORD Controller(bool explicit_scm_control) {
     std::wstring command = Quote(image) + L" --test-service " + name + L" " + std::to_wstring(session) +
         L" " + std::to_wstring(deadline);
     if (explicit_scm_control) command += L" --scm-profile-control";
+    if (explicit_lowbox_trace) command += L" --lowbox-iat-trace";
     service.reset(CreateServiceW(manager.get(), name.c_str(), name.c_str(), SERVICE_START | SERVICE_STOP |
         SERVICE_QUERY_STATUS | DELETE, SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
         command.c_str(), nullptr, nullptr, nullptr, L"LocalSystem", nullptr));
@@ -1318,6 +1370,10 @@ DWORD Controller(bool explicit_scm_control) {
     worker_profile_release_verified = evidence.cleanup == ERROR_SUCCESS && evidence.profile_identity_created == 1 &&
         evidence.profile_unload_attempted == 1 && evidence.profile_unload_status == ERROR_SUCCESS &&
         evidence.profile_privilege_restore_status == ERROR_SUCCESS;
+    if (explicit_lowbox_trace) {
+      std::puts("Protected lowbox IAT trace: trigger=explicit-opt-in scope=single-production-launch-call");
+      lowbox_trace::PrintLowboxIatTrace(evidence.lowbox_trace);
+    }
     PrintEquivalentToken(evidence.equivalent);
     scm_control = evidence.scm_control;
     result = evidence.status ? evidence.status : evidence.cleanup;
@@ -1474,10 +1530,10 @@ int wmain(int argc, wchar_t** argv) {
   if (argc == 2 && std::wstring_view(argv[1]) == L"runtime-identity") return storage::RunRuntimeIdentityService();
   if (argc == 4 && std::wstring_view(argv[1]) == L"--prepare-desktop") return static_cast<int>(storage::PrepareRuntimeDesktop(argv[2], argv[3]));
   if (argc == 3 && std::wstring_view(argv[1]) == L"--guest") return static_cast<int>(Guest(argv[2]));
-  if ((argc == 5 || argc == 6) && std::wstring_view(argv[1]) == L"--test-service") {
+  if (argc >= 5 && argc <= 7 && std::wstring_view(argv[1]) == L"--test-service") {
     try {
-      Require(argc == 5 || std::wstring_view(argv[5]) == L"--scm-profile-control",
-          "test-control-argument", ERROR_INVALID_PARAMETER);
+      FixtureOptions options;
+      Require(ParseFixtureOptions(argc, argv, 5, &options), "test-options-argument", ERROR_INVALID_PARAMETER);
       config.image = Image();
       config.directory = config.image.substr(0, config.image.find_last_of(L'\\'));
       config.name = argv[2];
@@ -1489,12 +1545,13 @@ int wmain(int argc, wchar_t** argv) {
       const ULONGLONG now = GetTickCount64();
       Require(config.worker_deadline > now && config.worker_deadline - now <= 90000,
           "test-existing-worker-deadline", ERROR_INVALID_PARAMETER);
-      config.scm_profile_control = argc == 6;
+      config.scm_profile_control = options.scm_profile_control;
+      config.lowbox_iat_trace = options.lowbox_iat_trace;
       SERVICE_TABLE_ENTRYW entries[] = {{config.name.data(), ServiceMain}, {nullptr, nullptr}};
       return StartServiceCtrlDispatcherW(entries) ? 0 : static_cast<int>(GetLastError());
     } catch (...) { return 1; }
   }
-  if (argc == 1) return static_cast<int>(Controller(false));
-  if (argc == 2 && std::wstring_view(argv[1]) == L"--scm-profile-control") return static_cast<int>(Controller(true));
+  FixtureOptions options;
+  if (ParseFixtureOptions(argc, argv, 1, &options)) return static_cast<int>(Controller(options.scm_profile_control, options.lowbox_iat_trace));
   return 2;
 }
