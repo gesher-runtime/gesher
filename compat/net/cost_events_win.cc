@@ -57,11 +57,23 @@ class Sink final : public ConnectionCostEvents {
 }  // namespace
 
 struct CostWatch {
+  // The caller and the worker each own one reference once CreateThread succeeds.
+  // A timed-out caller can leave while COM initialization is still running.
+  std::atomic<ULONG> refs{1};
   HANDLE event = nullptr;
   HANDLE stop = nullptr;
   HANDLE ready = nullptr;
   HANDLE thread = nullptr;
   HRESULT result = E_FAIL;
+
+  void Release() {
+    if (--refs != 0) return;
+    if (thread != nullptr) CloseHandle(thread);
+    if (stop != nullptr) CloseHandle(stop);
+    if (ready != nullptr) CloseHandle(ready);
+    if (event != nullptr) CloseHandle(event);
+    delete this;
+  }
 };
 
 namespace {
@@ -99,6 +111,7 @@ DWORD WINAPI WatchThread(void* argument) {
   if (sink != nullptr) sink->Release();
   if (point != nullptr) point->Release();
   if (SUCCEEDED(init)) CoUninitialize();
+  watch->Release();
   return 0;
 }
 
@@ -110,11 +123,20 @@ CostWatch* StartCostWatch(HANDLE event, HRESULT* hr_out) {
   HRESULT ignored;
   HRESULT& hr = hr_out != nullptr ? *hr_out : ignored;
   CostWatch* watch = new CostWatch;
-  watch->event = event;
+  // A failed StartCostWatch lets the caller close its event even if the worker is
+  // still returning from COM. Keep an owned handle for any late callback.
+  if (!DuplicateHandle(GetCurrentProcess(), event, GetCurrentProcess(), &watch->event,
+                       0, FALSE, DUPLICATE_SAME_ACCESS)) {
+    hr = HRESULT_FROM_WIN32(GetLastError());
+    watch->Release();
+    return nullptr;
+  }
   watch->stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  watch->ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (watch->stop != nullptr) watch->ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (watch->stop != nullptr && watch->ready != nullptr) {
+    ++watch->refs;
     watch->thread = CreateThread(nullptr, 0, WatchThread, watch, 0, nullptr);
+    if (watch->thread == nullptr) watch->Release();
   }
   if (watch->thread == nullptr) {
     hr = HRESULT_FROM_WIN32(GetLastError());
@@ -123,10 +145,10 @@ CostWatch* StartCostWatch(HANDLE event, HRESULT* hr_out) {
   }
   if (WaitForSingleObject(watch->ready, 30000) != WAIT_OBJECT_0) {
     hr = HRESULT_FROM_WIN32(WAIT_TIMEOUT);
-    // The thread may still be in a COM call: let it finish on its own and clean up then.
+    // The worker's reference keeps the events alive until it has unadvised and exited COM.
     SetEvent(watch->stop);
-    CloseHandle(watch->thread);
-    return nullptr;  // watch and its events are intentionally left to the thread's exit
+    watch->Release();
+    return nullptr;
   }
   hr = watch->result;
   if (FAILED(hr)) {
@@ -141,11 +163,8 @@ void StopCostWatch(CostWatch* watch) {
   if (watch->thread != nullptr) {
     SetEvent(watch->stop);
     WaitForSingleObject(watch->thread, INFINITE);
-    CloseHandle(watch->thread);
   }
-  if (watch->stop != nullptr) CloseHandle(watch->stop);
-  if (watch->ready != nullptr) CloseHandle(watch->ready);
-  delete watch;
+  watch->Release();
 }
 
 }  // namespace gesher::net
