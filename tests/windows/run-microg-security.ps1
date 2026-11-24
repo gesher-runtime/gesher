@@ -396,6 +396,7 @@ try {
     Guest 'SdkSandboxUnsupportedTest' @() 'SdkSandboxUnsupportedTest all passed:'
     Guest 'NetworkStatsUnavailableTest' @() 'NetworkStatsUnavailableTest all passed:'
     Guest 'GrammaticalInflectionUnavailableTest' @() 'GrammaticalInflectionUnavailableTest all passed:'
+    Guest 'WebViewProviderPackageTest' @() 'WebViewProviderPackageTest all passed:'
     Guest 'BluetoothBroadcastAttributionTest' @() 'BluetoothBroadcastAttributionTest all passed:'
     Guest 'UsbServiceContractTest' @() 'UsbServiceContractTest all passed:'
     Guest 'WindowIdTest' @() 'WindowIdTest all passed:'
