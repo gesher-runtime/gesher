@@ -8,6 +8,8 @@
 #include <windows.h>
 #include <stdint.h>
 
+#include "winrt.h"
+
 namespace gesher::devices::hello {
 
 // UserConsentVerifierAvailability: Available 0, DeviceNotPresent 1,
@@ -30,15 +32,34 @@ struct Verification;
 Verification* Start(DWORD pid, const wchar_t* message, size_t length, StartFailure* failure,
                     HRESULT* hr);
 
+// How long Await keeps waiting for Windows to end a prompt after Cancel.
+constexpr DWORD kCancelGraceMs = 5000;
+
 // Blocks until the prompt ends. UserConsentVerificationResult: Verified 0,
 // DeviceNotPresent 1, NotConfiguredForUser 2, DisabledByPolicy 3, DeviceBusy 4,
 // RetriesExhausted 5, Canceled 6; -1 on a Windows error (logged).
-int Await(Verification* v);
+//
+// After Cancel the wait is bounded: when Windows has not ended the operation
+// within `cancel_grace_ms` (its Cancel failed, or it ignores the request), the
+// operation is abandoned and Await returns Canceled. The caller then calls
+// Release as usual, which drops Gesher's references; a late result from the
+// abandoned operation is never read, so it can never be reported.
+int Await(Verification* v, DWORD cancel_grace_ms = kCancelGraceMs);
 
-// Thread-safe and idempotent: asks Windows to cancel the prompt.
+// Thread-safe and idempotent: asks Windows to cancel the prompt and starts
+// Await's grace period, also when Windows refuses the request.
 void Cancel(Verification* v);
 
 // Releases the verification once Await has returned.
 void Release(Verification* v);
+
+namespace internal {
+
+// Takes ownership of a started IAsyncOperation<UserConsentVerificationResult>
+// (releases it on failure). Start uses it; hello_windows_test.cc passes
+// scripted operations to exercise completion and cancellation without UI.
+Verification* Wrap(winrt::IAsyncOperation<int>* operation, HRESULT* hr);
+
+}  // namespace internal
 
 }  // namespace gesher::devices::hello

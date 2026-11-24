@@ -3,7 +3,8 @@
 
 The Android and system-server boundaries are stand-ins with android-16.0.0_r4's
 constant values; AuthService and WindowsHelloBackend are compiled unchanged apart
-from their package, imports and public class visibility. Tests cover the
+from their package, imports and public class visibility; StandIn, the dispatch the
+service's Binder uses, is compiled the same way. Tests cover the
 sensor-less AOSP answers with no Windows Hello backend (production today), and,
 with an isolated test double only, the device-credential confirmation outcomes,
 cancellation, replacement, client death and callback ordering.
@@ -28,6 +29,9 @@ SOURCES = {
                                      "interface KeystoreOperations"),
     "// PRODUCTION_SERVICE": ("app/java/com/gesher/server/AuthService.java",
                               "public final class AuthService", "final class AuthService"),
+    # The Binder-facing dispatch: every IAuthService call an app makes goes through it.
+    "// PRODUCTION_STANDIN": ("app/java/com/gesher/server/StandIn.java",
+                              "public final class StandIn", "final class StandIn"),
 }
 
 

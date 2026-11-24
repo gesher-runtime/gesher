@@ -1,10 +1,12 @@
 /* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
 // Host contracts for com.gesher.server.AuthService (ADR 0091). The production
-// AuthService and WindowsHelloBackend are inserted unchanged apart from their
-// package, imports and public class visibility; everything else here is a
+// AuthService, WindowsHelloBackend and StandIn are inserted unchanged apart from
+// their package, imports and public class visibility; everything else here is a
 // boundary stand-in with android-16.0.0_r4's constant values. FakeBackend is an
 // isolated test double: production registers no backend.
+import java.lang.reflect.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class AuthServiceContracts {
@@ -494,10 +496,117 @@ public final class AuthServiceContracts {
         check(r.calls.equals(List.of("error(1,1,0)")), "and a plain prompt without the verifier stays HW_UNAVAILABLE");
     }
 
+    // --- the Binder-facing path: IAuthService through StandIn, as apps reach it ----------
+
+    interface Call { Object run() throws Exception; }
+
+    static Object binder(Call call) {
+        try {
+            return call.run();
+        } catch (SecurityException e) {
+            return e;
+        } catch (Exception e) {
+            return e;
+        }
+    }
+
+    static boolean denied(Object result, String permission) {
+        return result instanceof SecurityException
+                && String.valueOf(((SecurityException) result).getMessage()).contains(permission);
+    }
+
+    static void binderPermissions() {
+        fresh(true, false);
+        StandIn.setStrict(false);  // production's default mode
+        IAuthService auth = StandIn.of(IAuthService.class, service).asInterface();
+        final String test = AuthService.TEST_BIOMETRIC, internal = AuthService.USE_BIOMETRIC_INTERNAL;
+        List<Integer> completed = new ArrayList<>();
+        IInvalidationCallback invalidation = () -> completed.add(1);
+
+        // Denied: an app holding only USE_BIOMETRIC (AOSP's @EnforcePermission / checkInternalPermission).
+        check(denied(binder(() -> auth.getSensorProperties("com.example.bank")), test),
+                "getSensorProperties without TEST_BIOMETRIC: SecurityException");
+        check(denied(binder(() -> auth.createTestSession(0, new ITestSessionCallback() {}, "p")), test),
+                "createTestSession without TEST_BIOMETRIC: SecurityException");
+        check(denied(binder(() -> { auth.setIdentityCheckTestStatus(new IdentityCheckStatus()); return null; }), test),
+                "setIdentityCheckTestStatus without TEST_BIOMETRIC: SecurityException");
+        check(denied(binder(() -> auth.getUiPackage()), test),
+                "getUiPackage without TEST_BIOMETRIC: SecurityException");
+        check(denied(binder(() -> { auth.registerEnabledOnKeyguardCallback(new IBiometricEnabledOnKeyguardCallback() {}); return null; }), internal),
+                "registerEnabledOnKeyguardCallback without USE_BIOMETRIC_INTERNAL: SecurityException");
+        check(denied(binder(() -> { auth.registerAuthenticationStateListener(new AuthenticationStateListener()); return null; }), internal),
+                "registerAuthenticationStateListener without USE_BIOMETRIC_INTERNAL: SecurityException");
+        check(denied(binder(() -> { auth.unregisterAuthenticationStateListener(new AuthenticationStateListener()); return null; }), internal),
+                "unregisterAuthenticationStateListener without USE_BIOMETRIC_INTERNAL: SecurityException");
+        check(denied(binder(() -> { auth.registerIdentityCheckStateListener(new IIdentityCheckStateListener() {}); return null; }), internal),
+                "registerIdentityCheckStateListener without USE_BIOMETRIC_INTERNAL: SecurityException");
+        check(denied(binder(() -> { auth.unregisterIdentityCheckStateListener(new IIdentityCheckStateListener() {}); return null; }), internal),
+                "unregisterIdentityCheckStateListener without USE_BIOMETRIC_INTERNAL: SecurityException");
+        check(denied(binder(() -> { auth.invalidateAuthenticatorIds(0, 1, invalidation); return null; }), internal)
+                && completed.isEmpty(),
+                "invalidateAuthenticatorIds without USE_BIOMETRIC_INTERNAL: SecurityException, no callback");
+        check(denied(binder(() -> { auth.resetLockoutTimeBound(new Token(), "p", 1, 0, new byte[0]); return null; }), internal),
+                "resetLockoutTimeBound without USE_BIOMETRIC_INTERNAL: SecurityException");
+        check(denied(binder(() -> { auth.resetLockout(0, new byte[0]); return null; }), internal),
+                "resetLockout without USE_BIOMETRIC_INTERNAL: SecurityException");
+        check(denied(binder(() -> auth.hasEnrolledBiometrics(0, "p")), internal),
+                "hasEnrolledBiometrics without USE_BIOMETRIC_INTERNAL: SecurityException");
+        host.granted.clear();
+        check(denied(binder(() -> auth.getLastAuthenticationTime(0, WEAK)), "USE_BIOMETRIC"),
+                "getLastAuthenticationTime without USE_BIOMETRIC: SecurityException");
+        check(denied(binder(() -> { auth.cancelAuthentication(new Token(), "p", 1); return null; }), "USE_BIOMETRIC"),
+                "cancelAuthentication without USE_BIOMETRIC: SecurityException");
+
+        // Allowed: the sensor-less device's answers (BiometricService with mSensors empty).
+        host.granted.addAll(Set.of(Manifest.permission.USE_BIOMETRIC, test));
+        Object sensors = binder(() -> auth.getSensorProperties("com.example.bank"));
+        check(sensors instanceof List && ((List<?>) sensors).isEmpty(),
+                "getSensorProperties with TEST_BIOMETRIC: an empty list");
+        check(binder(() -> auth.createTestSession(0, new ITestSessionCallback() {}, "p")) == null,
+                "createTestSession with TEST_BIOMETRIC: null, no sensor has that id");
+        check(binder(() -> auth.getUiPackage()) instanceof CharSequence
+                && binder(() -> auth.getUiPackage()).toString().equals("res:config_biometric_prompt_ui_package"),
+                "getUiPackage with TEST_BIOMETRIC: config_biometric_prompt_ui_package");
+        Object identity = binder(() -> { auth.setIdentityCheckTestStatus(new IdentityCheckStatus()); return null; });
+        check(identity instanceof UnsupportedOperationException,
+                "setIdentityCheckTestStatus with TEST_BIOMETRIC: unsupported, not a silent success");
+        host.granted.add(internal);
+        check(binder(() -> { auth.registerEnabledOnKeyguardCallback(new IBiometricEnabledOnKeyguardCallback() {}); return "ok"; }).equals("ok"),
+                "registerEnabledOnKeyguardCallback with USE_BIOMETRIC_INTERNAL: accepted");
+        check(binder(() -> { auth.registerAuthenticationStateListener(new AuthenticationStateListener()); return "ok"; }).equals("ok")
+                && binder(() -> { auth.unregisterAuthenticationStateListener(new AuthenticationStateListener()); return "ok"; }).equals("ok"),
+                "(un)registerAuthenticationStateListener with USE_BIOMETRIC_INTERNAL: accepted, no fingerprint or face service");
+        check(binder(() -> { auth.registerIdentityCheckStateListener(new IIdentityCheckStateListener() {}); return "ok"; }).equals("ok")
+                && binder(() -> { auth.unregisterIdentityCheckStateListener(new IIdentityCheckStateListener() {}); return "ok"; }).equals("ok"),
+                "(un)registerIdentityCheckStateListener with USE_BIOMETRIC_INTERNAL: accepted");
+        check(binder(() -> { auth.invalidateAuthenticatorIds(0, 1, invalidation); return "ok"; }).equals("ok")
+                && completed.equals(List.of(1)),
+                "invalidateAuthenticatorIds with USE_BIOMETRIC_INTERNAL: onCompleted at once, no sensor to invalidate");
+        check(binder(() -> { auth.resetLockoutTimeBound(new Token(), "p", 1, 0, new byte[0]); return "ok"; }).equals("ok")
+                && binder(() -> { auth.resetLockout(0, new byte[0]); return "ok"; }).equals("ok"),
+                "resetLockout(TimeBound) with USE_BIOMETRIC_INTERNAL: accepted, nothing locked out");
+
+        // Every IAuthService method is the service's own: none falls through to Default's answer.
+        List<String> inherited = new ArrayList<>();
+        for (Method m : IAuthService.class.getDeclaredMethods()) {
+            if (m.getName().equals("asBinder")) continue;
+            try {
+                if (AuthService.class.getMethod(m.getName(), m.getParameterTypes()).getDeclaringClass()
+                        != AuthService.class) inherited.add(m.getName());
+            } catch (NoSuchMethodException e) {
+                inherited.add(m.getName());
+            }
+        }
+        Collections.sort(inherited);
+        check(inherited.isEmpty(), "no IAuthService method is inherited from Default: " + inherited);
+        check(events.isEmpty() && host.pending() == 0, "no prompt or callback came out of these calls");
+    }
+
     public static void main(String[] args) throws Exception {
         unavailable();
         available();
         keystore();
+        binderPermissions();
         System.out.println(checks + " checks, " + failures + " failures");
         if (failures != 0) System.exit(1);
     }
@@ -579,10 +688,34 @@ interface IBinder {
     boolean unlinkToDeath(DeathRecipient recipient, int flags);
 }
 
-final class Binder {
+class Binder implements IBinder {
     static int callingUid, callingPid;
     static int getCallingUid() { return callingUid; }
     static int getCallingPid() { return callingPid; }
+    IInterface local;
+    void attachInterface(IInterface owner, String descriptor) { local = owner; }
+    public void linkToDeath(IBinder.DeathRecipient r, int flags) {}
+    public boolean unlinkToDeath(IBinder.DeathRecipient r, int flags) { return true; }
+}
+
+interface IInterface {
+    IBinder asBinder();
+}
+
+final class ParceledListSlice<T> {
+    final List<T> list;
+    ParceledListSlice(List<T> list) { this.list = list; }
+}
+
+final class ITestSession {}
+interface ITestSessionCallback {}
+final class IdentityCheckStatus {}
+final class SensorPropertiesInternal {}
+interface IBiometricEnabledOnKeyguardCallback {}
+class AuthenticationStateListener {}
+interface IIdentityCheckStateListener {}
+interface IInvalidationCallback {
+    void onCompleted() throws RemoteException;
 }
 
 final class UserHandle {
@@ -603,7 +736,13 @@ interface IBiometricServiceReceiver {
     IBinder asBinder();
 }
 
-interface IAuthService {
+interface IAuthService extends IInterface {
+    // android-16.0.0_r4 IAuthService.aidl, in its order.
+    ITestSession createTestSession(int sensorId, ITestSessionCallback callback, String opPackageName)
+            throws RemoteException;
+    void setIdentityCheckTestStatus(IdentityCheckStatus identityCheckStatus) throws RemoteException;
+    List<SensorPropertiesInternal> getSensorProperties(String opPackageName) throws RemoteException;
+    String getUiPackage() throws RemoteException;
     long authenticate(IBinder token, long sessionId, int userId, IBiometricServiceReceiver receiver,
             String opPackageName, PromptInfo promptInfo) throws RemoteException;
     void cancelAuthentication(IBinder token, String opPackageName, long requestId) throws RemoteException;
@@ -612,22 +751,51 @@ interface IAuthService {
     boolean hasEnrolledBiometrics(int userId, String opPackageName) throws RemoteException;
     List<BiometricEnrollmentStatusInternal> getEnrollmentStatusList(int userId, String opPackageName)
             throws RemoteException;
+    void registerEnabledOnKeyguardCallback(IBiometricEnabledOnKeyguardCallback callback)
+            throws RemoteException;
+    void registerAuthenticationStateListener(AuthenticationStateListener listener) throws RemoteException;
+    void unregisterAuthenticationStateListener(AuthenticationStateListener listener) throws RemoteException;
+    void registerIdentityCheckStateListener(IIdentityCheckStateListener listener) throws RemoteException;
+    void unregisterIdentityCheckStateListener(IIdentityCheckStateListener listener) throws RemoteException;
+    void invalidateAuthenticatorIds(int userId, int fromSensorId, IInvalidationCallback callback)
+            throws RemoteException;
     long[] getAuthenticatorIds(int userId) throws RemoteException;
+    void resetLockoutTimeBound(IBinder token, String opPackageName, int fromSensorId, int userId,
+            byte[] hardwareAuthToken) throws RemoteException;
+    void resetLockout(int userId, byte[] hardwareAuthToken) throws RemoteException;
     CharSequence getButtonLabel(int userId, String opPackageName, int authenticators) throws RemoteException;
     CharSequence getPromptMessage(int userId, String opPackageName, int authenticators) throws RemoteException;
     CharSequence getSettingName(int userId, String opPackageName, int authenticators) throws RemoteException;
 
+    /** The AIDL-generated Default: null, 0, false and no-op answers. */
     class Default implements IAuthService {
+        public ITestSession createTestSession(int s, ITestSessionCallback c, String p) { return null; }
+        public void setIdentityCheckTestStatus(IdentityCheckStatus s) {}
+        public List<SensorPropertiesInternal> getSensorProperties(String p) { return null; }
+        public String getUiPackage() { return null; }
         public long authenticate(IBinder t, long s, int u, IBiometricServiceReceiver r, String p, PromptInfo i) { return 0; }
         public void cancelAuthentication(IBinder t, String p, long id) {}
         public int canAuthenticate(String p, int u, int a) { return 0; }
         public long getLastAuthenticationTime(int u, int a) { return 0; }
         public boolean hasEnrolledBiometrics(int u, String p) { return false; }
         public List<BiometricEnrollmentStatusInternal> getEnrollmentStatusList(int u, String p) { return null; }
+        public void registerEnabledOnKeyguardCallback(IBiometricEnabledOnKeyguardCallback c) {}
+        public void registerAuthenticationStateListener(AuthenticationStateListener l) {}
+        public void unregisterAuthenticationStateListener(AuthenticationStateListener l) {}
+        public void registerIdentityCheckStateListener(IIdentityCheckStateListener l) {}
+        public void unregisterIdentityCheckStateListener(IIdentityCheckStateListener l) {}
+        public void invalidateAuthenticatorIds(int u, int s, IInvalidationCallback c) {}
         public long[] getAuthenticatorIds(int u) { return null; }
+        public void resetLockoutTimeBound(IBinder t, String p, int s, int u, byte[] h) {}
+        public void resetLockout(int u, byte[] h) {}
         public CharSequence getButtonLabel(int u, String p, int a) { return null; }
         public CharSequence getPromptMessage(int u, String p, int a) { return null; }
         public CharSequence getSettingName(int u, String p, int a) { return null; }
+        public IBinder asBinder() { return null; }
+    }
+
+    class Stub {
+        public static final String DESCRIPTOR = "android.hardware.biometrics.IAuthService";
     }
 }
 
@@ -636,3 +804,5 @@ interface IAuthService {
 // PRODUCTION_KEY_OPERATIONS
 
 // PRODUCTION_SERVICE
+
+// PRODUCTION_STANDIN
