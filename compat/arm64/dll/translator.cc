@@ -1392,8 +1392,8 @@ class Env final : public A64::UserCallbacks {
       // pending_call_, and the call this block queued must still be made.
       const PendingHostCall pending = pending_call_;
       if (pending.undefined) {
-        // The SYS instruction is at PC - 4 (dynarmic set PC past it). As the
-        // kernel delivers a synchronous signal first, before queued ones.
+        // The SYS instruction is at PC - 4 (dynarmic set PC past it). Checked
+        // before queued signals: the kernel takes a synchronous fault first.
         const uint64_t pc = jit->GetPC() - 4;
         uint32_t insn = 0;
         if (InGuestCode(pc)) std::memcpy(&insn, reinterpret_cast<void*>(pc), 4);
