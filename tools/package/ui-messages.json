@@ -983,6 +983,26 @@
     "cp_update_reopen_failed": {
       "en": "The update is installed. Close and reopen the control center from the Start menu.",
       "he": "העדכון מותקן. סגור את לוח הבקרה ופתח אותו מחדש מתפריט התחל."
+    },
+    "cp_camera_title": {
+      "en": "Camera",
+      "he": "מצלמה"
+    },
+    "cp_camera_image_picker": {
+      "en": "Allow choosing an image from PC instead of taking a photo",
+      "he": "אפשר בחירת תמונה מהמחשב במקום צילום במצלמה"
+    },
+    "cp_camera_image_picker_hint": {
+      "en": "Off by default. When enabled, apps requesting a photo or camera stream can use a chosen PC image (or let you choose when a camera is connected). Takes effect immediately.",
+      "he": "כבוי כברירת מחדל. כשהאפשרות מופעלת, יישומים המבקשים צילום או מצלמה יכולים להשתמש בתמונה מהמחשב (או להציג בחירה כשמחוברת מצלמה). נכנס לתוקף מיידית."
+    },
+    "cp_camera_image_picker_saved": {
+      "en": "Camera image-picker setting saved.",
+      "he": "הגדרת בחירת התמונה למצלמה נשמרה."
+    },
+    "cp_camera_image_picker_failed": {
+      "en": "Could not save camera setting: {0}",
+      "he": "שמירת הגדרת המצלמה נכשלה: {0}"
     }
   }
 }

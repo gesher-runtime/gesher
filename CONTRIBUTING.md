@@ -63,6 +63,7 @@ Examples:
 | Expose Gesher's stationary accelerometer (gravity only) on a PC without motion sensors. | Within scope: a desktop default. Real motion sensors replace it, it is documented and `GESHER_SENSOR_FALLBACK=0` turns it off. |
 | Substitute a similar available PC capability for a missing one (such as exposing a regular PC camera as a rear camera) with maintainer approval. | Within scope once approved by the maintainer and listed here as a decided adaptation (no setting required). |
 | Provide an alternative operation for a missing PC capability (such as choosing an existing image from the PC for a camera capture) via an explicit, documented setting with maintainer approval. | Within scope once approved by the maintainer, gated behind an explicit setting, and listed here as a decided adaptation. |
+| Add a Control Center setting (off by default) to choose a PC image instead of live camera capture or stream a chosen image via Camera/Camera2. | Within scope: maintainer-approved, gated behind an explicit setting, and listed here. |
 | Implement an Android file-selection request with a Windows file picker. | Within scope: the user picks a file, as asked. |
 | Answer a camera capture request with a file picker or a saved image presented as a fresh capture. | Outside scope: a different operation, unless enabled by a maintainer-approved, documented setting for a missing PC capability. |
 | Report success for an operation that did not run (a capture, a payment, an autofocus). | Outside scope. |

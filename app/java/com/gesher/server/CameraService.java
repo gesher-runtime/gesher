@@ -75,18 +75,22 @@ public final class CameraService extends ICameraService.Default {
     private static volatile CameraService sInstance;
 
     private volatile List<WindowsCamera.Device> mDevices;
+    private volatile boolean mLastImageFallback;
     private final Map<String, CameraDeviceUser> mOpen = new HashMap<>();
 
     private CameraService() {
     }
 
-    /** The devices, found on first use (not when the process starts). */
+    /** The devices, found on first use and refreshed if {@link CameraImageFallback} changes. */
     List<WindowsCamera.Device> devices() {
+        boolean fallback = CameraImageFallback.enabled();
         List<WindowsCamera.Device> devices = mDevices;
-        if (devices == null) {
+        if (devices == null || fallback != mLastImageFallback) {
             synchronized (this) {
-                if (mDevices == null) {
+                fallback = CameraImageFallback.enabled();
+                if (mDevices == null || fallback != mLastImageFallback) {
                     mDevices = WindowsCamera.devices();
+                    mLastImageFallback = fallback;
                     log(WindowsCamera.status() + "; camera ids " + ids(mDevices));
                 }
                 devices = mDevices;

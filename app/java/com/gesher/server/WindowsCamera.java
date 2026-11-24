@@ -6,6 +6,8 @@ package com.gesher.server;
 
 import android.util.Size;
 
+import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -53,14 +55,21 @@ public final class WindowsCamera {
         }
     }
 
-    private static volatile List<Device> sDevices;
+    public static final String IMAGE_PICKER_ID = "gesher-image-picker";
+
+    interface ImageSource {
+        String[] pick() throws IOException;
+    }
+
+    static volatile ImageSource sImageSource;
+    private static volatile List<Device> sPhysicalDevices;
 
     private WindowsCamera() {
     }
 
-    /** The devices (found once per process). Empty without Gesher's natives. */
-    public static List<Device> devices() {
-        List<Device> devices = sDevices;
+    /** Physical cameras (plus GESHER_CAMERA_TEST if enabled), cached once per process. */
+    static List<Device> physicalDevices() {
+        List<Device> devices = sPhysicalDevices;
         if (devices != null) return devices;
         List<Device> found = new ArrayList<>();
         String rearSelection = System.getenv("GESHER_CAMERA_REAR_ID");
@@ -73,8 +82,26 @@ public final class WindowsCamera {
             // Not Gesher's runtime: no cameras.
         }
         devices = Collections.unmodifiableList(found);
-        sDevices = devices;
+        sPhysicalDevices = devices;
         return devices;
+    }
+
+    /**
+     * The devices (physical cameras, plus the virtual image picker when
+     * {@link CameraImageFallback#enabled()} is true). Empty without Gesher's natives and
+     * without the image-picker fallback.
+     */
+    public static List<Device> devices() {
+        List<Device> physical = physicalDevices();
+        if (!CameraImageFallback.enabled()) return physical;
+        for (Device d : physical) {
+            if (IMAGE_PICKER_ID.equals(d.id)) return physical;
+        }
+        List<Device> withPicker = new ArrayList<>(physical.size() + 1);
+        withPicker.addAll(physical);
+        withPicker.add(new Device(IMAGE_PICKER_ID, "Gesher Image Picker",
+                List.of(new Size(1280, 720), new Size(640, 480)), true, false));
+        return Collections.unmodifiableList(withPicker);
     }
 
     /**
@@ -140,17 +167,40 @@ public final class WindowsCamera {
         private long mHandle;
         private long mRetiredHandle;
         private int mReaders;
+        private final byte[] mStaticNv12;
+        private volatile boolean mStaticClosed;
+        public final File imageFile;
         public final int width;
         public final int height;
 
         private Capture(long handle, int width, int height) {
             mHandle = handle;
+            mStaticNv12 = null;
+            this.imageFile = null;
+            this.width = width;
+            this.height = height;
+        }
+
+        private Capture(byte[] staticNv12, File imageFile, int width, int height) {
+            mHandle = 0;
+            mStaticNv12 = staticNv12;
+            this.imageFile = imageFile;
             this.width = width;
             this.height = height;
         }
 
         /** The next frame into {@code nv12}; blocks until there is one. 0 or an HRESULT. */
         public int read(byte[] nv12) {
+            if (mStaticNv12 != null) {
+                if (mStaticClosed) return 0x80004004;  // E_ABORT
+                System.arraycopy(mStaticNv12, 0, nv12, 0, Math.min(nv12.length, mStaticNv12.length));
+                try {
+                    Thread.sleep(33);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return mStaticClosed ? 0x80004004 : 0;
+            }
             long handle;
             synchronized (this) {
                 if (mHandle == 0) return 0x80004004;  // E_ABORT
@@ -182,6 +232,9 @@ public final class WindowsCamera {
          * 0 or an HRESULT (E_NOTIMPL without a focus control, as for the test camera).
          */
         public int focus(int op, int[] out) {
+            if (mStaticNv12 != null) {
+                return mStaticClosed ? 0x80004004 : 0x80004001;  // E_ABORT / E_NOTIMPL
+            }
             long handle;
             synchronized (this) {
                 if (mHandle == 0) return 0x80004004;  // E_ABORT
@@ -206,6 +259,10 @@ public final class WindowsCamera {
 
         @Override
         public void close() {
+            if (mStaticNv12 != null) {
+                mStaticClosed = true;
+                return;
+            }
             long handle;
             synchronized (this) {
                 if (mHandle == 0) return;
@@ -234,6 +291,20 @@ public final class WindowsCamera {
 
     /** Opens {@code id} at its offered size nearest to {@code width} x {@code height}. */
     public static Capture open(String id, int width, int height) throws OpenException {
+        if (IMAGE_PICKER_ID.equals(id)) {
+            return openImagePicker(id, width, height);
+        }
+        if (CameraImageFallback.enabled() && IntentChooser.HOST.available()) {
+            int choice = IntentChooser.HOST.choose("camera", "Choose camera source",
+                    new String[]{"PC Camera", "Choose image (Windows file picker)"},
+                    new boolean[]{true, true}, () -> true);
+            if (choice == 1) {
+                return openImagePicker(id, width, height);
+            }
+            if (choice < 0) {
+                throw new OpenException(id, 0x800704C7);
+            }
+        }
         int[] out = new int[3];
         long handle;
         try {
@@ -243,6 +314,37 @@ public final class WindowsCamera {
         }
         if (handle == 0) throw new OpenException(id, out[2]);
         return new Capture(handle, out[0], out[1]);
+    }
+
+    /** Re-opens an already-selected {@code imageFile} at {@code width} x {@code height} without prompting. */
+    public static Capture openImage(File imageFile, int width, int height) throws OpenException {
+        if (imageFile == null) throw new OpenException(IMAGE_PICKER_ID, 0x800704C7);
+        int evenW = Math.max(2, width & ~1);
+        int evenH = Math.max(2, height & ~1);
+        try {
+            byte[] nv12 = CameraImageFallback.toNv12(imageFile, evenW, evenH);
+            return new Capture(nv12, imageFile, evenW, evenH);
+        } catch (IOException | RuntimeException e) {
+            throw new OpenException(IMAGE_PICKER_ID, 0x800704C7);
+        }
+    }
+
+    private static Capture openImagePicker(String id, int width, int height) throws OpenException {
+        try {
+            ImageSource source = sImageSource;
+            String[] selected = source != null ? source.pick()
+                    : WindowsHost.pickDocuments(DocumentPicker.OPEN, "Select an image", "", null,
+                            "*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif", null, false, false,
+                            android.os.Process.myPid(), () -> true);
+            if (selected == null || selected.length == 0 || selected[0] == null) {
+                throw new OpenException(id, 0x800704C7);
+            }
+            return openImage(new File(Zygote.fromWindowsPath(selected[0])), width, height);
+        } catch (OpenException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            throw new OpenException(id, 0x800704C7);
+        }
     }
 
     private static native String[] nativeList();

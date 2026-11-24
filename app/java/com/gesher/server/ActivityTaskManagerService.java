@@ -1228,6 +1228,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         provider.holder(); // Initialize the real framework transport before exposing any result URI.
         final DocumentSession session;
         final boolean cancelResult;
+        final android.content.ContentResolver resolver;
         boolean pauseCovered = false;
         synchronized (this) {
             if (requiredTask != null && !hasAppTaskLocked(requiredTask)) return ActivityManager.START_CANCELED;
@@ -1263,6 +1264,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (task < 0 && covered != null && covered.app == null) covered = null;
             session = new DocumentSession(key, origin, recipient, covered, process, creator,
                     mVerifiedLifetime.get(), resultWho, requestCode, requiredTask);
+            android.content.pm.ApplicationInfo resolverApp = creator != null
+                    ? creator.applicationInfo(0) : mPm.getApplicationInfo("android", 0, 0);
+            resolver = mAm != null && resolverApp != null
+                    ? mAm.mimeResolver(resolverApp, session.originProcess) : null;
             mDocumentPickers.put(key, session);
             if (task >= 0) { mHiddenTasks.remove(task); focusTaskLocked(task); }
             if (covered != null) {
@@ -1298,7 +1303,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     String[] selected = request.rejection != null ? null
                             : backend.pick(request, ownerPid, session::active);
                     if (!session.active()) return;
-                    result = DocumentPicker.select(request, selected, provider, backend);
+                    result = DocumentPicker.select(request, selected, provider, backend, resolver);
                     synchronized (ActivityTaskManagerService.this) {
                         if (!session.active()) return;
                         if (result != null && session.recipient != null) {
@@ -2696,6 +2701,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             int launchTaskId, boolean shareIdentity, ActivityRecord[] started, AppTaskRecord requiredTask) {
+        if (intent != null && DocumentPicker.isImageCaptureAction(intent.getAction())
+                && DocumentPicker.handles(intent)) {
+            boolean hasCameraApp;
+            synchronized (mPm) {
+                hasCameraApp = resolve(intent, resolvedType, caller != null) != null;
+            }
+            if (hasCameraApp) {
+                intent = Intent.createChooser(intent, "Choose camera or image");
+            }
+        }
         if (IntentChooser.handles(intent)) {
             synchronized (this) {
                 if (requiredTask != null && !hasAppTaskLocked(requiredTask)) {
@@ -3421,6 +3436,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // The Windows default browser (BrowserPackageSupport) has no activity to run: the
         // start delegates the URL to Windows, as when nothing resolves it.
         if (BrowserPackageSupport.isBrowserPackage(info.packageName)) return null;
+        if ("com.gesher.documents".equals(info.packageName)) return null;
         info = new ActivityInfo(info);
         if (info.applicationInfo == null) {
             info.applicationInfo = mPm.getApplicationInfo(info.packageName, flags, 0);

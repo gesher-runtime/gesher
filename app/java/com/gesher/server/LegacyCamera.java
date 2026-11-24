@@ -645,11 +645,22 @@ public final class LegacyCamera {
             // The frame comes from a capture at the picture size; the preview stops, as
             // a picture ends it on Android.
             boolean keepFocus;
+            java.io.File prevImage;
             synchronized (s) {
                 keepFocus = s.device.autofocus && s.focusLocked;
+                prevImage = s.capture != null ? s.capture.imageFile : null;
             }
             stop(s);
-            WindowsCamera.Capture c = open(s, picture);
+            WindowsCamera.Capture c;
+            if (prevImage != null) {
+                try {
+                    c = WindowsCamera.openImage(prevImage, picture.getWidth(), picture.getHeight());
+                } catch (WindowsCamera.OpenException e) {
+                    c = null;
+                }
+            } else {
+                c = open(s, picture);
+            }
             if (c == null) {
                 post(s, MSG_ERROR, 1, 0, null);
                 return;

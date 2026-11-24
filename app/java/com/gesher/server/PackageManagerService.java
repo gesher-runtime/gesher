@@ -695,6 +695,23 @@ public final class PackageManagerService extends IPackageManager.Default {
             result.addAll(BrowserPackageSupport.queryIntentActivities(intent, resolvedType,
                     flags));
         }
+        if (userId == 0 && intent != null && intent.getComponent() == null && intent.getPackage() == null
+                && DocumentPicker.isImageCaptureAction(intent.getAction())
+                && CameraImageFallback.enabled() && result.isEmpty()) {
+            ResolveInfo ri = new ResolveInfo();
+            ri.activityInfo = new ActivityInfo();
+            ri.activityInfo.packageName = "com.gesher.documents";
+            ri.activityInfo.name = "com.gesher.documents.ImageCapturePicker";
+            ri.activityInfo.exported = true;
+            ri.activityInfo.enabled = true;
+            ri.activityInfo.applicationInfo = new ApplicationInfo();
+            ri.activityInfo.applicationInfo.packageName = "com.gesher.documents";
+            ri.activityInfo.applicationInfo.enabled = true;
+            ri.activityInfo.applicationInfo.flags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_INSTALLED;
+            ri.nonLocalizedLabel = "Choose image (Windows file picker)";
+            ri.isDefault = true;
+            result.add(ri);
+        }
         return result;
     }
 

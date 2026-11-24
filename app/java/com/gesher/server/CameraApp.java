@@ -24,7 +24,7 @@ final class CameraApp {
             String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
             // Drive-less, with '/', as the launcher hands APK paths over.
             String apk = (dir + "gesher-camera.apk").replace('\\', '/').replaceFirst("^[A-Za-z]:", "");
-            int cameras = WindowsCamera.devices().size();
+            int cameras = WindowsCamera.physicalDevices().size();
             boolean installed = pm.get(PACKAGE) != null;
             if (cameras > 0 && new File(apk).isFile()) {
                 String[] r = installer.install(apk);
