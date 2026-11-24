@@ -20,4 +20,12 @@ public interface KeystoreOperations {
      */
     WindowsHelloBackend.Verification authorize(WindowsHelloBackend.Request request,
             long operationId, WindowsHelloBackend.Completion completion);
+
+    /**
+     * The confirmation to use for a credential prompt without an operation: {@code verifier}
+     * itself, or one that also releases keys with a timeout ({@link KeyBoundHello}).
+     */
+    default WindowsHelloBackend confirming(WindowsHelloBackend verifier) {
+        return verifier;
+    }
 }

@@ -1,7 +1,8 @@
 # 0091: Biometric and device-credential authentication over Windows Hello (auth track)
 
-Status: proposed. Phase 1 (below) is implemented; the phases after it wait for the
-scope questions at the end to be answered by maintainers.
+Status: proposed. Phases 1, 2 (natives) and 2b (the device credential reaches apps,
+section "Phase 2b") are implemented; keystore binding and any biometric class wait for
+the scope questions at the end.
 
 ## Context
 
@@ -174,8 +175,11 @@ authoring environment):
   prompts the user; the key type is fixed.
 - Not verified here (stated for maintainers to check): the NCrypt "Microsoft Passport
   Key Storage Provider" key properties, whether WinBio can attribute a Hello
-  verification to a biometric, `RequestVerificationForWindowAsync` on Windows 10, from an
-  MTA thread, and with a window of another process as owner.
+  verification to a biometric, and `RequestVerificationForWindowAsync` on Windows 10.
+- Measured since, on Windows 11 Pro build 26300 with `tests/biometrics/hello_probe.cc`
+  (the production `hello_win.cc` functions): the call works from an MTA thread with the
+  process's own window as owner (`verify` → Verified, `cancel` → Canceled), and with
+  another process's foreground window as owner (decision 11).
 
 ## Decision
 
@@ -251,11 +255,196 @@ authoring environment):
    `ACTION_CONFIRM_DEVICE_CREDENTIAL` activity that runs the same verification and
    returns `RESULT_OK`/`RESULT_CANCELED`; cancel with `USER_CANCELED` when the owner
    leaves the foreground; Windows' foreground-window rules.
+   *(2b, implemented: section "Phase 2b" below. `IWindowManager.isKeyguardSecure`,
+   the feature, the confirm-credential intent and the foreground rule are decided there.)*
 3. Keystore: a real key-bound path (route b) — keys wrapped by a Windows Hello /
    TPM-protected key (KeyCredentialManager or the Passport KSP), auth tokens recorded
    on confirmation, `setUserAuthenticationRequired` enforced, `getLastAuthenticationTime`
    answered, `operationId` honoured. Only after that could a Strong claim be discussed.
 4. Biometric classes only if open question 2 finds a truthful signal.
+
+## Phase 2b: the credential reaches apps
+
+Phase 2 left `trust` answering "not secure", so no production path reached Windows Hello.
+Phase 2b turns it on. Sources as above (`android-16.0.0_r4` GitHub mirrors;
+`MicrosoftDocs/sdk-api`, `MicrosoftDocs/winrt-api`).
+
+### Contracts added to the picture
+
+- `KeyguardManager.isDeviceSecure()` is `mTrustManager.isDeviceSecure(userId, deviceId)`;
+  `isKeyguardSecure()` is `mWM.isKeyguardSecure(mContext.getUserId())`
+  (KeyguardManager.java). `TrustManagerService.isDeviceSecure` answers false for
+  `deviceId != Context.DEVICE_ID_DEFAULT` ("Virtual devices are considered insecure"),
+  passes the user through `ActivityManager.handleIncomingUser(..., requireFull)` and
+  returns `mLockPatternUtils.isSecure(userId)`. `WindowManagerService.isKeyguardSecure`
+  throws `SecurityException("Requires INTERACT_ACROSS_USERS permission")` for another
+  user without it and returns `mPolicy.isKeyguardSecure(userId)`
+  (PhoneWindowManager → the keyguard: a secure lock screen or a locked SIM).
+- `PreAuthInfo.create`: `credentialAvailable = trustManager.isDeviceSecure(userId,
+  context.getDeviceId())`. `getInternalStatus`: biometric and credential requested, no
+  sensor: `credentialAvailable` → `TYPE_CREDENTIAL`/`AUTHENTICATOR_OK`, else
+  `CREDENTIAL_NOT_ENROLLED`; biometric only, no sensor: `BIOMETRIC_NO_HARDWARE`;
+  credential only: `credentialAvailable ? AUTHENTICATOR_OK : CREDENTIAL_NOT_ENROLLED`.
+  AuthService already computed exactly this (phase 1's table); only its input changes.
+- `FEATURE_SECURE_LOCK_SCREEN`: "The device has a secure implementation of keyguard,
+  meaning the device supports PIN, pattern and password as defined in Android CDD"
+  (PackageManager.java). It is a property of the device, read once:
+  `LockSettingsService.systemReady` stores `mHasSecureLockScreen =
+  hasSystemFeature(FEATURE_SECURE_LOCK_SCREEN)` and without it refuses to set any
+  credential (`UnsupportedOperationException("This operation requires secure lock screen
+  feature")`), so a device without the feature is never secure.
+- `createConfirmDeviceCredentialIntent`: `if (!isDeviceSecure()) return null;` then
+  `ACTION_CONFIRM_DEVICE_CREDENTIAL` with `EXTRA_TITLE`/`EXTRA_DESCRIPTION` and
+  `setPackage(getSettingsPackageForIntent(intent))`, which is the first
+  `MATCH_SYSTEM_ONLY` activity's package or, with none, `"com.android.settings"`.
+- Settings' `ConfirmDeviceCredentialActivity` (packages/apps/Settings,
+  `password/ConfirmDeviceCredentialActivity.java`; exported, filter for
+  `CONFIRM_DEVICE_CREDENTIAL`, `CONFIRM_FRP_CREDENTIAL` and the repair-mode actions):
+  title from `getStringExtra(EXTRA_TITLE)`, details from
+  `getCharSequenceExtra(EXTRA_DESCRIPTION)`, authenticators from the int extra
+  `biometric_prompt_authenticators`, default `DEVICE_CREDENTIAL | BIOMETRIC_WEAK`; the
+  real caller is `getCallingActivity()`. It shows a BiometricPrompt and keeps itself
+  alive "until BiometricPrompt goes away". `onAuthenticationSucceeded` →
+  `setResult(Activity.RESULT_OK, mIntentData); finish()`. `onAuthenticationError` with
+  `USER_CANCELED` or `CANCELED` → `finish()` (the result stays `RESULT_CANCELED`); other
+  errors, when `DEVICE_CREDENTIAL` was requested, → `showConfirmCredentials()` (the
+  PIN/pattern/password screen), or, when it was not, "Finishing, device credential not
+  requested". `showConfirmCredentials` on a device with no credential:
+  `Log.d(TAG, "No pin/pattern/pass set"); setResult(Activity.RESULT_OK)`.
+- `createConfirmFactoryResetCredentialIntent` throws `UnsupportedOperationException`
+  without `LockPatternUtils.frpCredentialEnabled` or a persistent data block service, and
+  `IllegalStateException` on a provisioned device.
+- Owner in the background: `AuthController.onTaskStackChanged` → `isOwnerInBackground()`
+  → `cancelIfOwnerIsNotInForeground()` → `closeDialog(DISMISSED_REASON_USER_CANCEL, ...)`
+  → `mReceiver.onDialogDismissed(reason)`, which AuthSession reports to the client as
+  `BIOMETRIC_ERROR_USER_CANCELED`.
+- Windows: `RequestVerificationForWindowAsync`: "req.target-min-winverclnt: Windows Build
+  22000"; `appWindow`: "Handle to the window of the active application."
+  `UserConsentVerifierAvailability`: Available "An authentication device is available.",
+  DeviceNotPresent "There is no authentication device available.", NotConfiguredForUser
+  "An authentication device is not configured for this user.", DisabledByPolicy "Group
+  policy has disabled the authentication device.", DeviceBusy "The authentication device
+  is performing an operation and is unavailable."
+
+### Decisions
+
+7. **One availability decision, `DeviceCredential`.** The credential is available when
+   the Windows Hello natives are in the runtime, Windows' build (`RtlGetVersion`) is
+   22000 or later, the device supports a secure lock screen (decision 8) and
+   `CheckAvailabilityAsync` answers `Available` now (cached for 5 s), or answers
+   `DeviceBusy` or fails after an `Available` within the last 10 minutes (see below). `trust`'s
+   `isDeviceSecure`, the window manager's `isKeyguardSecure`, `auth` (through `trust`, as
+   PreAuthInfo, and directly before a prompt) and the confirm-credential activity read
+   this one object. `isDeviceLocked` and `isKeyguardLocked` stay false: an app runs in
+   the user's unlocked Windows session. Below build 22000 the device is simply not
+   secure, whatever Windows Hello's state.
+   **A busy Windows Hello is not "no credential"** (review of #470). Android keeps two
+   questions apart: does the user have a credential (`PreAuthInfo`'s `credentialAvailable`
+   from `ITrustManager.isDeviceSecure`, `CREDENTIAL_NOT_ENROLLED` ->
+   `BIOMETRIC_ERROR_NO_DEVICE_CREDENTIAL` -> `BIOMETRIC_ERROR_NONE_ENROLLED`), and can the
+   authenticator work now (`Utils.biometricConstantsToBiometricManager`/`authenticatorStatusToBiometricConstant`:
+   every other status, `default:` after `BIOMETRIC_HARDWARE_NOT_DETECTED`, ->
+   `BIOMETRIC_ERROR_HW_UNAVAILABLE`; android-16.0.0_r4 `services/core/java/com/android/server/biometrics/Utils.java`).
+   Windows' `DeviceBusy` ("The authentication device is performing an operation") and a failed
+   query answer only the second question. So:
+   - `DeviceCredential.available()` (`isDeviceSecure`, `isKeyguardSecure`,
+     `canAuthenticate(DEVICE_CREDENTIAL)`, the confirm-credential activity) keeps the last
+     definite answer across a busy or failed reading: enrolled stays enrolled, not enrolled
+     stays not enrolled (a busy reading never creates a credential).
+   - A definite answer (`Available`, `NotConfiguredForUser`, `DisabledByPolicy`,
+     `DeviceNotPresent`) replaces what is remembered at once.
+   - **Trust bound: 10 minutes** (`BUSY_TRUST_MS`) from the last definite answer. A device
+     that is occupied for seconds is busy; one that does not answer for 10 minutes is a
+     failing Windows Hello, and Gesher can no longer say that a credential exists, so
+     `isDeviceSecure` becomes false then. AOSP has no "unknown" for it. This is the one
+     deliberate edge of the rule, and the bound is a constant, not a Windows fact.
+   - A prompt attempted while busy ends with `BIOMETRIC_ERROR_HW_UNAVAILABLE`
+     (`AuthService.unavailable`: `DeviceCredential.state()` is the live answer), with no
+     Windows prompt; a confirm-credential intent ends `RESULT_CANCELED`.
+   - At start, a busy or failed first answer is asked again 3 times, 250 ms apart, before
+     decision 8 reads it.
+8. **`FEATURE_SECURE_LOCK_SCREEN` is decided once, when the system server starts**, as
+   Android fixes features at boot: declared when Windows then answers `Available` or
+   `NotConfiguredForUser` (Windows has a verifier; the user has or has not set it up, as
+   a phone's user has or has not set a screen lock), absent for `DeviceNotPresent`,
+   `DisabledByPolicy`, `DeviceBusy`, a failed query, Windows below 22000 or no natives.
+   The user's later changes move only the state, never the feature:
+   - set up → removed: the feature stays, `isDeviceSecure` becomes false (a phone whose
+     user removed the lock);
+   - not set up → set up: `isDeviceSecure` becomes true without a restart;
+   - no feature at start → Windows Hello appears later: the device stays not secure
+     until Gesher's system server restarts. This keeps AOSP's invariant that a device
+     without the feature is never secure (LockSettingsService above), at the cost of a
+     restart; a `DeviceBusy` or failed query that lasts through the start-up retries (decision 7)
+     has the same cost.
+9. **`ACTION_CONFIRM_DEVICE_CREDENTIAL` is answered by the activity manager**
+   (`ConfirmCredential`, `ActivityTaskManagerService.confirmDeviceCredential`): Gesher has
+   no Settings package, as for the Bluetooth consent activities. It matches the action
+   with no package or `com.android.settings`, no component, data or type. The calling
+   activity is covered and paused like under any system activity, the same `AuthService`
+   session as a BiometricPrompt runs (title and description as Windows' message,
+   `DEVICE_CREDENTIAL | BIOMETRIC_WEAK`, or the intent's authenticators), and the result
+   is `RESULT_OK` **only** for Windows' `Verified`. Windows' prompt is owned by the
+   calling process's own foreground window, never another app's. The caller finishing or
+   its process dying cancels the verification.
+   - *Deviation, deliberate*: where Settings answers `RESULT_OK` because no credential
+     is set at all, Gesher answers `RESULT_CANCELED`. Gesher cannot state that a Windows
+     account has no credential (it may have a password Windows Hello does not cover),
+     and an `OK` there would report a confirmation nobody gave.
+   - Windows' `RetriesExhausted` is `RESULT_CANCELED` (Settings would fall back to its
+     own credential screen, which Gesher does not have).
+   - Settings' private `extra_data` result intent is not returned; the result has no data.
+   - `CONFIRM_FRP_CREDENTIAL`, the repair-mode, remote-device and `_WITH_USER` actions
+     are not handled and stay unresolved (`ActivityNotFoundException`): Gesher has no
+     factory reset protection, repair mode or second user.
+   - Package manager queries do not list a Settings activity for the action, so
+     `getSettingsPackageForIntent` falls to `"com.android.settings"`, which is what the
+     activity manager matches.
+10. **BiometricPrompt with `DEVICE_CREDENTIAL`** (alone, or with biometric bits, which
+    fall to the credential since there is no sensor) now reaches Windows Hello. A
+    biometric-only request stays `BIOMETRIC_ERROR_HW_NOT_PRESENT`; a request with a
+    `CryptoObject` (`operationId != 0`) stays `BIOMETRIC_ERROR_HW_UNAVAILABLE` until the
+    keystore enforces authentication (phase 3).
+11. **The prompt is started in the system server with the app process's window as
+    owner** (`RequestVerificationForWindowAsync(appWindow = the root owner of the
+    foreground window, when it is the app's)`). Windows accepts it: measured on
+    Windows 11 Pro build 26300 with `hello_probe host` as the "app" and a second
+    process asking, `foreign-verify` ended `Verified` (the user entered the PIN, 19.5 s)
+    and `foreign-cancel` ended `Canceled` 3.1 s after the start (the "app's" cancel at
+    3 s). That is one machine and one build, and the probe, not the system server
+    across Binder. *Fallback, kept as a note only and not implemented*: should a
+    Windows build refuse a window of another process (`E_INVALIDARG`/`E_ACCESSDENIED`,
+    reported today as `BIOMETRIC_ERROR_HW_UNAVAILABLE`), the call moves into the app
+    process: a Gesher-internal `StandIn.Extension` transaction on the app's
+    `IApplicationThread` binder runs `Start`/`Await`/`Cancel` there against its own
+    window and returns Windows' result; the session, its rules and the mapping stay in
+    the system server, which must then treat the app as untrusted for the result (an
+    app could answer "Verified" itself). That weakness is why the direct path is the
+    one implemented.
+12. **Owner leaving the foreground, and app death.** While Windows' prompt shows,
+    `WindowsHello` samples every 250 ms where Windows' foreground window is relative to
+    the owner (`hello_owner.cc`, decided by `OwnerWatch`): a window of the app's process
+    (*owner*), a window of another process whose root owner is the app's window
+    (*owned*: Windows' prompt), anything else (*other*), or the owner window no longer
+    existing (*gone*). Two consecutive *other* samples after the prompt was seen, or
+    *gone*, cancel the verification; Windows' `Canceled` is reported as
+    `BIOMETRIC_ERROR_USER_CANCELED`, as SystemUI's dismissal. The client's Binder death
+    still ends the session without a callback (phase 1), and the confirm-credential
+    request is canceled when its caller's activity or process is gone.
+    Microsoft documents `appWindow` only as "the window of the active application", not
+    that the prompt is a window owned by it. So the watch cancels for *other* only
+    after it has seen an *owned* window once: if a Windows build hosts the prompt
+    without that ownership, no prompt is canceled for a foreground change (it stays
+    until the user answers it; the log says so once), instead of every prompt being
+    canceled the moment it appears. `hello_owner_probe` shows which it is on a machine.
+
+### Still open after 2b
+
+- The `RESULT_OK`-without-a-credential deviation in decision 9, and whether the
+  confirm-credential intent should instead stay unresolved while the device is not
+  secure.
+- Whether the boot-time decision for the feature (decision 8) is preferred over
+  declaring it whenever Windows is 22000 or later.
 
 ## Open questions for maintainers
 

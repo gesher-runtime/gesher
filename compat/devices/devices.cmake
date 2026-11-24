@@ -16,6 +16,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/hello_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/hello_key_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/hello_key_win.cc
+  ${CMAKE_SOURCE_DIR}/compat/devices/hello_owner.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/hello_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/location_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/sensors.cc

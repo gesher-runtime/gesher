@@ -344,6 +344,12 @@ public final class KeystoreAuthorization implements KeystoreOperations {
         return operation::cancel;
     }
 
+    /** A confirmation also releases keys with a timeout, as an auth token does. */
+    @Override
+    public WindowsHelloBackend confirming(WindowsHelloBackend verifier) {
+        return new KeyBoundHello(verifier, this);
+    }
+
     private int signed(Binding binding, int uid, long operationId, HelloKeyBackend.Result result) {
         switch (result.status) {
             case HelloKeyBackend.SUCCESS:

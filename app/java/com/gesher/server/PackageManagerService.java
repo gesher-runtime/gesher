@@ -1092,6 +1092,7 @@ public final class PackageManagerService extends IPackageManager.Default {
      * FEATURE_LOCATION_GPS is not claimed, as no GNSS receiver is known. Google Play filters
      * on these (a RECORD_AUDIO or location permission implies the feature unless the app
      * marks it not required), so an absent one hides an app the device can run.
+     * FEATURE_SECURE_LOCK_SCREEN follows Windows Hello ({@link #addSecureLockScreenFeature}).
      */
     static final android.util.ArrayMap<String, android.content.pm.FeatureInfo> FEATURES =
             new android.util.ArrayMap<>();
@@ -1121,6 +1122,22 @@ public final class PackageManagerService extends IPackageManager.Default {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
         addLocationFeatures(FEATURES);
+        try {
+            addSecureLockScreenFeature(FEATURES, DeviceCredential.system().supported());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no verifier to report.
+        }
+    }
+
+    /**
+     * FEATURE_SECURE_LOCK_SCREEN when Windows has a credential verifier Gesher can use
+     * (Windows Hello on build 22000 or later, set up by the user or not), decided once
+     * when the system server starts ({@link DeviceCredential#supported}, ADR 0091).
+     */
+    static void addSecureLockScreenFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            boolean supported) {
+        if (supported) addFeature(features, PackageManager.FEATURE_SECURE_LOCK_SCREEN);
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */

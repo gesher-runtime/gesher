@@ -21,6 +21,11 @@ int Availability(HRESULT* hr);
 // owner of a prompt shown for that process (also used by hello_key_win.cc).
 HWND ForegroundWindowOf(DWORD pid);
 
+// The window Start would make the prompt's owner for process `pid` right now:
+// the root owner of the foreground window when that window is `pid`'s, else
+// null. WindowsHello watches it while the prompt shows (hello_owner.h).
+HWND OwnerWindow(DWORD pid);
+
 // Why Start returned no verification.
 enum class StartFailure { kNone, kNotForeground, kWindows };
 

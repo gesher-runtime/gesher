@@ -142,6 +142,16 @@ jobs:
         run: |
           & .\hello-key-windows.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows Hello key contracts failed' }
+      - name: Build actual Windows Hello prompt-owner contracts (ADR 0091)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_owner_windows_test.cc compat\devices\hello_owner.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-owner.exe ole32.lib user32.lib
+      - name: Windows build number and prompt-owner classification without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\hello-owner.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Hello prompt-owner contracts failed' }
       - name: Exact native reader ownership and handle reuse controls
         if: ${{ !cancelled() }}
         shell: pwsh
