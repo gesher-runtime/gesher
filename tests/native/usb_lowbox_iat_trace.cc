@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Disposable-test-only observer: no production dependency or inline patches.
 // Native ABIs: Microsoft's NtOpenThreadToken[Ex], NtOpenProcessToken and
-// ZwOpenProcessTokenEx, NtOpenDirectoryObject, ZwCreateDirectoryObject and
-// NtCreateLowBoxToken documentation. BOOLEAN is deliberately not Win32 BOOL.
-// The additional Ex directory declaration and RTL last-status declarations are
-// independently checked against the maintained primary phnt headers at:
+// ZwOpenProcessTokenEx, NtOpenDirectoryObject, ZwCreateDirectoryObject,
+// NtCreateLowBoxToken, ZwOpenSymbolicLinkObject, NtQuery/SetSecurityObject,
+// ZwDuplicateObject, NtDuplicateToken, NtQuery/SetInformationToken and
+// RtlNtStatusToDosError documentation. BOOLEAN is deliberately not Win32 BOOL;
+// the status mapper returns ULONG (Win32), not NTSTATUS.
+// The symbolic-link creation, Ex directory and RTL last-status declarations,
+// and all new token/object declarations, are independently checked against
+// the maintained primary phnt headers at:
 // https://github.com/winsiderss/phnt/blob/53fbbdc5b5d2b08761db1c7b26bfa8c820924356/ntobapi.h
 // https://github.com/winsiderss/phnt/blob/53fbbdc5b5d2b08761db1c7b26bfa8c820924356/ntrtl.h
+// https://github.com/winsiderss/phnt/blob/53fbbdc5b5d2b08761db1c7b26bfa8c820924356/ntseapi.h
 // Those declarations are ABI evidence, not a Microsoft support guarantee.
 #include "usb_lowbox_iat_trace.h"
 #include <winternl.h>
@@ -36,13 +41,23 @@ using Directory = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 using DirectoryEx = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, HANDLE, ULONG);
 using Lowbox = NTSTATUS(NTAPI*)(PHANDLE, HANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
     PSID, ULONG, PSID_AND_ATTRIBUTES, ULONG, PHANDLE);
+using CreateSymbolicLink = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PCUNICODE_STRING);
+using QuerySecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, ULONG, PULONG);
+using SetSecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR);
+using DuplicateObject = NTSTATUS(NTAPI*)(HANDLE, HANDLE, HANDLE, PHANDLE, ACCESS_MASK, ULONG, ULONG);
+using DuplicateToken = NTSTATUS(NTAPI*)(HANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, BOOLEAN, TOKEN_TYPE, PHANDLE);
+using QueryTokenInformation = NTSTATUS(NTAPI*)(HANDLE, TOKEN_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+using SetTokenInformation = NTSTATUS(NTAPI*)(HANDLE, TOKEN_INFORMATION_CLASS, PVOID, ULONG);
+using StatusToWin32 = ULONG(NTAPI*)(NTSTATUS);
 using LastNtStatus = NTSTATUS(NTAPI*)();
 using SetNtStatus = VOID(NTAPI*)(NTSTATUS);
 
 constexpr DWORD kSlots = 32, kPages = 16;
 constexpr const char* kNames[kLowboxTraceSymbolCount] = {
     "NtOpenThreadToken", "NtOpenThreadTokenEx", "NtOpenProcessToken", "NtOpenProcessTokenEx",
-    "NtOpenDirectoryObject", "NtCreateDirectoryObject", "NtCreateDirectoryObjectEx", "NtCreateLowBoxToken"};
+    "NtOpenDirectoryObject", "NtCreateDirectoryObject", "NtCreateDirectoryObjectEx", "NtCreateLowBoxToken",
+    "NtCreateSymbolicLinkObject", "NtOpenSymbolicLinkObject", "NtQuerySecurityObject", "NtSetSecurityObject",
+    "NtDuplicateObject", "NtDuplicateToken", "NtQueryInformationToken", "NtSetInformationToken", "RtlNtStatusToDosError"};
 struct Slot { void* volatile* address = nullptr; void* original = nullptr; void* hook = nullptr; DWORD api = 0; bool installed = false; };
 struct Page { void* address = nullptr; DWORD original = 0; bool writable = false; };
 struct State {
@@ -130,6 +145,24 @@ DWORD Symbol(const char* name) {
   for (DWORD i = 0; i < kLowboxTraceSymbolCount; ++i) if (std::strcmp(name, kNames[i]) == 0) return i;
   return kLowboxTraceSymbolCount;
 }
+template <SIZE_T Capacity>
+void UnicodeSnapshot(PCUNICODE_STRING source, wchar_t (&text)[Capacity], DWORD* bytes,
+    DWORD* copied_characters, DWORD* truncated, DWORD* status) noexcept {
+  UNICODE_STRING name{};
+  if (!Snapshot(&name, source, sizeof(name)) || (name.Length % sizeof(wchar_t)) ||
+      name.Length > name.MaximumLength || (name.Length && !name.Buffer)) {
+    *status = ERROR_INVALID_DATA; return;
+  }
+  *bytes = name.Length;
+  const DWORD characters = name.Length / sizeof(wchar_t);
+  const DWORD copied = (std::min)(characters, static_cast<DWORD>(Capacity - 1));
+  if (!Snapshot(text, name.Buffer, copied * sizeof(wchar_t))) {
+    *status = ERROR_NOACCESS; text[0] = 0; return;
+  }
+  text[copied] = 0;
+  *copied_characters = copied;
+  *truncated = copied != characters;
+}
 void ObjectSnapshot(LowboxTraceCall* call, POBJECT_ATTRIBUTES source) noexcept {
   if (!source) return;
   OBJECT_ATTRIBUTES object{};
@@ -139,25 +172,13 @@ void ObjectSnapshot(LowboxTraceCall* call, POBJECT_ATTRIBUTES source) noexcept {
   call->object_attributes = object.Attributes;
   call->root = reinterpret_cast<ULONG_PTR>(object.RootDirectory);
   if (!object.ObjectName) return;
-  UNICODE_STRING name{};
-  if (!Snapshot(&name, object.ObjectName, sizeof(name)) || (name.Length % sizeof(wchar_t)) ||
-      name.Length > name.MaximumLength || (name.Length && !name.Buffer)) {
-    call->input_snapshot_status = ERROR_INVALID_DATA; return;
-  }
-  call->name_bytes = name.Length;
-  const DWORD characters = name.Length / sizeof(wchar_t);
-  const DWORD copied = (std::min)(characters, static_cast<DWORD>(std::size(call->name) - 1));
-  if (!Snapshot(call->name, name.Buffer, copied * sizeof(wchar_t))) {
-    call->input_snapshot_status = ERROR_NOACCESS; call->name[0] = 0; return;
-  }
-  call->name[copied] = 0;
-  call->name_characters = copied;
-  call->name_truncated = copied != characters;
+  UnicodeSnapshot(object.ObjectName, call->name, &call->name_bytes, &call->name_characters,
+      &call->name_truncated, &call->input_snapshot_status);
 }
 
-template <class Invoke>
-NTSTATUS Forward(LowboxTraceApi api, LowboxTraceCall input, POBJECT_ATTRIBUTES object,
-    PHANDLE output, void* caller, Invoke invoke) noexcept {
+template <class Result = NTSTATUS, class Invoke>
+Result Forward(LowboxTraceApi api, LowboxTraceCall input, POBJECT_ATTRIBUTES object,
+    PHANDLE output, void* caller, Invoke invoke, PCUNICODE_STRING target = nullptr) noexcept {
   const DWORD entry_error = GetLastError();
   const NTSTATUS entry_status = state.last_status();
   const bool record = GetCurrentThreadId() == state.thread &&
@@ -181,21 +202,27 @@ NTSTATUS Forward(LowboxTraceApi api, LowboxTraceCall input, POBJECT_ATTRIBUTES o
     if (address >= state.base && address - state.base < state.image_size)
       call->caller_rva = static_cast<DWORD>(address - state.base);
     ObjectSnapshot(call, object);
+    if (api == LowboxTraceApi::create_symbolic_link) {
+      UnicodeSnapshot(target, call->target, &call->target_bytes, &call->target_characters,
+          &call->target_truncated, &call->target_snapshot_status);
+    }
   }
   // Snapshot helpers may change both error slots. Restore both before passing
   // the exact original arguments, token context and access mask to ntdll.
   state.set_status(entry_status); SetLastError(entry_error);
-  const NTSTATUS result = invoke();
+  const Result result = invoke();
   const DWORD returned_error = GetLastError();
   if (call) {
     call->status = static_cast<DWORD>(result);
     // On NT_SUCCESS the native contract has just written this caller-owned
     // output slot. KernelBase retains its arguments until this return. No API,
     // token query, allocation or name resolution runs after forwarding.
-    if (result >= 0 && output) {
-      HANDLE value = nullptr; std::memcpy(&value, output, sizeof(value));
-      call->result = reinterpret_cast<ULONG_PTR>(value);
-      call->returned_handle = value && value != INVALID_HANDLE_VALUE;
+    if constexpr (std::is_same_v<Result, NTSTATUS>) {
+      if (result >= 0 && output) {
+        HANDLE value = nullptr; std::memcpy(&value, output, sizeof(value));
+        call->result = reinterpret_cast<ULONG_PTR>(value);
+        call->returned_handle = value && value != INVALID_HANDLE_VALUE;
+      }
     }
   }
   observing = false;
@@ -246,12 +273,92 @@ TRACE_NOINLINE NTSTATUS NTAPI HookCreateLowbox(PHANDLE out, HANDLE source, ACCES
   return Forward(LowboxTraceApi::create_lowbox_token, in, object, out, TRACE_CALLER(),
       [&] { return Original<Lowbox>(LowboxTraceApi::create_lowbox_token)(out, source, access, object, package, count, capabilities, handles, values); });
 }
+TRACE_NOINLINE NTSTATUS NTAPI HookCreateSymbolicLink(PHANDLE out, ACCESS_MASK access,
+    POBJECT_ATTRIBUTES object, PCUNICODE_STRING target) noexcept {
+  LowboxTraceCall in{}; in.access = access;
+  return Forward(LowboxTraceApi::create_symbolic_link, in, object, out, TRACE_CALLER(),
+      [&] { return Original<CreateSymbolicLink>(LowboxTraceApi::create_symbolic_link)(out, access, object, target); }, target);
+}
+TRACE_NOINLINE NTSTATUS NTAPI HookOpenSymbolicLink(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBUTES object) noexcept {
+  LowboxTraceCall in{}; in.access = access;
+  return Forward(LowboxTraceApi::open_symbolic_link, in, object, out, TRACE_CALLER(),
+      [&] { return Original<Directory>(LowboxTraceApi::open_symbolic_link)(out, access, object); });
+}
+TRACE_NOINLINE NTSTATUS NTAPI HookQuerySecurity(HANDLE object, SECURITY_INFORMATION information,
+    PSECURITY_DESCRIPTOR descriptor, ULONG length, PULONG needed) noexcept {
+  LowboxTraceCall in{}; in.source = reinterpret_cast<ULONG_PTR>(object);
+  in.security_information = information; in.buffer_length = length;
+  // Record only the request's class/size. No security or token contents are
+  // read, and no output buffer is inspected after the original native call.
+  return Forward(LowboxTraceApi::query_security, in, nullptr, nullptr, TRACE_CALLER(),
+      [&] { return Original<QuerySecurity>(LowboxTraceApi::query_security)(object, information, descriptor, length, needed); });
+}
+TRACE_NOINLINE NTSTATUS NTAPI HookSetSecurity(HANDLE object, SECURITY_INFORMATION information,
+    PSECURITY_DESCRIPTOR descriptor) noexcept {
+  LowboxTraceCall in{}; in.source = reinterpret_cast<ULONG_PTR>(object); in.security_information = information;
+  return Forward(LowboxTraceApi::set_security, in, nullptr, nullptr, TRACE_CALLER(),
+      [&] { return Original<SetSecurity>(LowboxTraceApi::set_security)(object, information, descriptor); });
+}
+TRACE_NOINLINE NTSTATUS NTAPI HookDuplicateObject(HANDLE source_process, HANDLE source, HANDLE target_process,
+    PHANDLE out, ACCESS_MASK access, ULONG attributes, ULONG options) noexcept {
+  LowboxTraceCall in{}; in.source = reinterpret_cast<ULONG_PTR>(source); in.access = access;
+  in.source_process = reinterpret_cast<ULONG_PTR>(source_process);
+  in.target_process = reinterpret_cast<ULONG_PTR>(target_process);
+  in.handle_attributes = attributes; in.flags = options;
+  // With DUPLICATE_CLOSE_SOURCE and no target process, no target handle is
+  // produced. Forward the caller's exact out pointer but do not read it.
+  return Forward(LowboxTraceApi::duplicate_object, in, nullptr, target_process ? out : nullptr, TRACE_CALLER(),
+      [&] { return Original<DuplicateObject>(LowboxTraceApi::duplicate_object)(source_process, source,
+          target_process, out, access, attributes, options); });
+}
+TRACE_NOINLINE NTSTATUS NTAPI HookDuplicateToken(HANDLE source, ACCESS_MASK access,
+    POBJECT_ATTRIBUTES object, BOOLEAN effective_only, TOKEN_TYPE type, PHANDLE out) noexcept {
+  LowboxTraceCall in{}; in.source = reinterpret_cast<ULONG_PTR>(source); in.access = access;
+  in.effective_only = effective_only; in.token_type = static_cast<DWORD>(type);
+  return Forward(LowboxTraceApi::duplicate_token, in, object, out, TRACE_CALLER(),
+      [&] { return Original<DuplicateToken>(LowboxTraceApi::duplicate_token)(source, access, object, effective_only, type, out); });
+}
+TRACE_NOINLINE NTSTATUS NTAPI HookQueryTokenInformation(HANDLE token, TOKEN_INFORMATION_CLASS information,
+    PVOID buffer, ULONG length, PULONG returned) noexcept {
+  LowboxTraceCall in{}; in.source = reinterpret_cast<ULONG_PTR>(token);
+  in.information_class = static_cast<DWORD>(information); in.buffer_length = length;
+  return Forward(LowboxTraceApi::query_token_information, in, nullptr, nullptr, TRACE_CALLER(),
+      [&] { return Original<QueryTokenInformation>(LowboxTraceApi::query_token_information)(token, information, buffer, length, returned); });
+}
+TRACE_NOINLINE NTSTATUS NTAPI HookSetTokenInformation(HANDLE token, TOKEN_INFORMATION_CLASS information,
+    PVOID buffer, ULONG length) noexcept {
+  LowboxTraceCall in{}; in.source = reinterpret_cast<ULONG_PTR>(token);
+  in.information_class = static_cast<DWORD>(information); in.buffer_length = length;
+  return Forward(LowboxTraceApi::set_token_information, in, nullptr, nullptr, TRACE_CALLER(),
+      [&] { return Original<SetTokenInformation>(LowboxTraceApi::set_token_information)(token, information, buffer, length); });
+}
+TRACE_NOINLINE ULONG NTAPI HookStatusToWin32(NTSTATUS status) noexcept {
+  LowboxTraceCall in{}; in.mapped_ntstatus = static_cast<DWORD>(status);
+  // This routine's return is a Win32 error number, not an NTSTATUS and not a
+  // native-success indicator. Preserve any last-NTSTATUS change it makes.
+  return Forward<ULONG>(LowboxTraceApi::status_to_win32, in, nullptr, nullptr, TRACE_CALLER(),
+      [&] { return Original<StatusToWin32>(LowboxTraceApi::status_to_win32)(status); });
+}
+static_assert(std::is_convertible_v<decltype(&HookCreateSymbolicLink), CreateSymbolicLink> &&
+              std::is_convertible_v<decltype(&HookOpenSymbolicLink), Directory> &&
+              std::is_convertible_v<decltype(&HookQuerySecurity), QuerySecurity> &&
+              std::is_convertible_v<decltype(&HookSetSecurity), SetSecurity> &&
+              std::is_convertible_v<decltype(&HookDuplicateObject), DuplicateObject> &&
+              std::is_convertible_v<decltype(&HookDuplicateToken), DuplicateToken> &&
+              std::is_convertible_v<decltype(&HookQueryTokenInformation), QueryTokenInformation> &&
+              std::is_convertible_v<decltype(&HookSetTokenInformation), SetTokenInformation> &&
+              std::is_convertible_v<decltype(&HookStatusToWin32), StatusToWin32>);
 void* Hook(DWORD api) {
   void* hooks[kLowboxTraceSymbolCount] = {
       reinterpret_cast<void*>(&HookOpenThread), reinterpret_cast<void*>(&HookOpenThreadEx),
       reinterpret_cast<void*>(&HookOpenProcess), reinterpret_cast<void*>(&HookOpenProcessEx),
       reinterpret_cast<void*>(&HookOpenDirectory), reinterpret_cast<void*>(&HookCreateDirectory),
-      reinterpret_cast<void*>(&HookCreateDirectoryEx), reinterpret_cast<void*>(&HookCreateLowbox)};
+      reinterpret_cast<void*>(&HookCreateDirectoryEx), reinterpret_cast<void*>(&HookCreateLowbox),
+      reinterpret_cast<void*>(&HookCreateSymbolicLink), reinterpret_cast<void*>(&HookOpenSymbolicLink),
+      reinterpret_cast<void*>(&HookQuerySecurity), reinterpret_cast<void*>(&HookSetSecurity),
+      reinterpret_cast<void*>(&HookDuplicateObject), reinterpret_cast<void*>(&HookDuplicateToken),
+      reinterpret_cast<void*>(&HookQueryTokenInformation), reinterpret_cast<void*>(&HookSetTokenInformation),
+      reinterpret_cast<void*>(&HookStatusToWin32)};
   return hooks[api];
 }
 
@@ -270,6 +377,8 @@ void InspectImage(HMODULE module, LowboxIatTraceEvidence* evidence) {
       nt.OptionalHeader.SizeOfImage >= 4096 && nt.OptionalHeader.SizeOfImage <= 128 * 1024 * 1024 &&
       nt.OptionalHeader.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_IMPORT, ERROR_BAD_EXE_FORMAT);
   state.image_size = nt.OptionalHeader.SizeOfImage; evidence->image_size = state.image_size;
+  evidence->image_timestamp = nt.FileHeader.TimeDateStamp;
+  evidence->image_checksum = nt.OptionalHeader.CheckSum;
   if (nt.OptionalHeader.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT)
     evidence->delay_imports_present = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].Size != 0;
   const auto table = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
@@ -466,7 +575,7 @@ DWORD EndLowboxIatTrace(LowboxIatTraceEvidence* evidence) noexcept {
 }
 
 void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
-  bool valid = e.version == 1 && e.attempted <= 1 && e.delay_imports_present <= 1 &&
+  bool valid = e.version == 2 && e.attempted <= 1 && e.delay_imports_present <= 1 &&
       e.record_count <= kLowboxTraceRecordCount && e.slot_count <= kSlots &&
       e.page_count <= kPages && e.missing_symbols <= kLowboxTraceSymbolCount && e.record_count <= e.total_calls &&
       e.overflow == e.total_calls - e.record_count;
@@ -476,6 +585,7 @@ void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
     const auto& r = e.records[(first + i) % kLowboxTraceRecordCount];
     valid = r.sequence == first + i && static_cast<DWORD>(r.api) < kLowboxTraceSymbolCount &&
         r.name_characters < std::size(r.name) && r.name[r.name_characters] == 0 && r.name_truncated <= 1 &&
+        r.target_characters < std::size(r.target) && r.target[r.target_characters] == 0 && r.target_truncated <= 1 &&
         r.returned_handle <= 1 && r.caller_rva < e.image_size;
   }
   std::printf("Protected lowbox IAT: attempted=%lu setup=%lu restore=%lu page-restore=%lu thread=%lu worker-session=%lu session-query=%lu expected-target-session=%lu slots=%lu pages=%lu calls=%lu records=%lu overflow=%lu missing=%lu uninspectable=%lu delay-imports=%lu\n",
@@ -486,7 +596,11 @@ void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
       static_cast<unsigned long>(e.overflow), static_cast<unsigned long>(e.missing_symbols), static_cast<unsigned long>(e.uninspectable_imports),
       static_cast<unsigned long>(e.delay_imports_present));
   if (!valid) { std::puts("Protected lowbox IAT: invalid bounded evidence; coverage inconclusive"); return; }
+  std::printf("Protected lowbox IAT: version=%lu module=KernelBase.dll mapped-pe-timestamp=0x%08lx mapped-pe-checksum=0x%08lx mapped-image-size=0x%08lx\n",
+      static_cast<unsigned long>(e.version), static_cast<unsigned long>(e.image_timestamp),
+      static_cast<unsigned long>(e.image_checksum), static_cast<unsigned long>(e.image_size));
   std::puts("Protected lowbox IAT: scope=one-complete-AuthorityLaunch::Create ordinary-KernelBase-imports-only, including intentional token-right denials; relative names retain raw root handles; missing records do not prove missing calls");
+  std::puts("Protected lowbox IAT: names and link targets have separate byte lengths/truncation flags; truncated text is not exact identity; numeric handle values can be reused after close");
   for (DWORD i = 0; i < kLowboxTraceSymbolCount; ++i) {
     const auto& s = e.symbols[i];
     std::printf("Protected lowbox IAT: api=%s imported=%lu patched=%lu restored=%lu coverage-win32=%lu\n", kNames[i],
@@ -494,14 +608,21 @@ void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
   }
   for (DWORD i = 0; i < e.record_count; ++i) {
     const auto& r = e.records[(first + i) % kLowboxTraceRecordCount];
-    std::printf("Protected lowbox IAT: seq=%lu api=%s ntstatus=0x%08lx access=0x%08lx open-as-self=%lu handle-attributes=0x%08lx object-attributes=0x%08lx flags=0x%08lx source=0x%llx root=0x%llx shadow=0x%llx result=0x%llx returned=%lu caller-rva=0x%08lx capabilities=%lu handles=%lu snapshot=%lu name-bytes=%lu copied=%lu truncated=%lu name=%ls\n",
-        static_cast<unsigned long>(r.sequence), kNames[static_cast<DWORD>(r.api)], static_cast<unsigned long>(r.status),
+    const bool win32 = r.api == LowboxTraceApi::status_to_win32;
+    std::printf("Protected lowbox IAT: seq=%lu api=%s return-domain=%s %s=0x%08lx mapped-input-ntstatus=0x%08lx access=0x%08lx open-as-self=%lu handle-attributes=0x%08lx object-attributes=0x%08lx flags=0x%08lx source=0x%llx source-process=0x%llx target-process=0x%llx root=0x%llx shadow=0x%llx result=0x%llx returned=%lu caller-rva=0x%08lx capabilities=%lu handles=%lu information-class=%lu buffer-length=%lu security-information=0x%08lx token-type=%lu effective-only=%lu snapshot=%lu name-bytes=%lu copied=%lu truncated=%lu name=%ls target-snapshot=%lu target-bytes=%lu target-copied=%lu target-truncated=%lu target=%ls\n",
+        static_cast<unsigned long>(r.sequence), kNames[static_cast<DWORD>(r.api)], win32 ? "win32" : "ntstatus",
+        win32 ? "win32" : "ntstatus", static_cast<unsigned long>(r.status), static_cast<unsigned long>(r.mapped_ntstatus),
         static_cast<unsigned long>(r.access), static_cast<unsigned long>(r.open_as_self), static_cast<unsigned long>(r.handle_attributes),
         static_cast<unsigned long>(r.object_attributes), static_cast<unsigned long>(r.flags), static_cast<unsigned long long>(r.source),
+        static_cast<unsigned long long>(r.source_process), static_cast<unsigned long long>(r.target_process),
         static_cast<unsigned long long>(r.root), static_cast<unsigned long long>(r.shadow), static_cast<unsigned long long>(r.result),
         static_cast<unsigned long>(r.returned_handle), static_cast<unsigned long>(r.caller_rva), static_cast<unsigned long>(r.capability_count),
-        static_cast<unsigned long>(r.handle_count), static_cast<unsigned long>(r.input_snapshot_status), static_cast<unsigned long>(r.name_bytes),
-        static_cast<unsigned long>(r.name_characters), static_cast<unsigned long>(r.name_truncated), r.name);
+        static_cast<unsigned long>(r.handle_count), static_cast<unsigned long>(r.information_class), static_cast<unsigned long>(r.buffer_length),
+        static_cast<unsigned long>(r.security_information), static_cast<unsigned long>(r.token_type), static_cast<unsigned long>(r.effective_only),
+        static_cast<unsigned long>(r.input_snapshot_status), static_cast<unsigned long>(r.name_bytes),
+        static_cast<unsigned long>(r.name_characters), static_cast<unsigned long>(r.name_truncated), r.name,
+        static_cast<unsigned long>(r.target_snapshot_status), static_cast<unsigned long>(r.target_bytes),
+        static_cast<unsigned long>(r.target_characters), static_cast<unsigned long>(r.target_truncated), r.target);
   }
 }
 }  // namespace gesher::usb_storage::test

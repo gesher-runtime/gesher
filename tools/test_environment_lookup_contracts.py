@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--output', type=Path, help='Retain generated source and logs in this directory')
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'g++'))
     parser.add_argument('--negative-control', action='store_true', help='Restore the observed empty-on-error behavior; the same checks must fail')
+    parser.add_argument('--negative-role-control', action='store_true', help='Remove the protected system-server discovery guard; the same role checks must fail')
     args = parser.parse_args()
     temporary = tempfile.TemporaryDirectory(prefix='gesher-environment-lookup-') if args.output is None else None
     args.output = args.output or Path(temporary.name)
@@ -37,6 +38,10 @@ def main():
         assert source.count(checked_application) == 1
         source = source.replace(checked_decode, 'path_value = EnvironmentValue(environment_path);')
         source = source.replace(checked_application, '')
+    if args.negative_role_control:
+        role_guard = '!gesher::usb_storage::ProtectedRuntimeIsSystemServer()'
+        assert source.count(role_guard) == 1
+        source = source.replace(role_guard, 'true')
     first = source[source.index('bool IsSlash('):source.index('// What a file is,')]
     selection = source[source.index('bool IsShName('):source.index('\n}  // namespace\n\nstd::wstring Widen(')]
     public = source[source.index('std::wstring LauncherPath('):source.index('\nbool IsToolName(')]
@@ -71,7 +76,7 @@ def main():
     static const char* process_path = ".";
     static const char* process_comspec = nullptr;
     static const char* process_launcher = nullptr;
-    static bool protected_runtime = false, protected_credentials = false;
+    static bool protected_runtime = false, protected_credentials = false, protected_system_server = false;
     static uint32_t protected_uid = UINT32_MAX, protected_gid = UINT32_MAX;
     static int probes;
     static std::map<std::wstring, std::string> files;
@@ -101,6 +106,9 @@ def main():
     @PROTECTED_POLICY@
     namespace gesher::usb_storage {
     bool ProtectedRuntimeEnabled() { return protected_runtime; }
+    bool ProtectedRuntimeIsSystemServer() {
+      return protected_runtime && protected_credentials && protected_system_server;
+    }
     bool ProtectedRuntimeCredentials(uint32_t* uid, uint32_t* gid) {
       if (!protected_credentials) return false;
       *uid = protected_uid; *gid = protected_gid;
@@ -149,7 +157,7 @@ def main():
     }
     static void Reset() {
       process_path = "."; process_comspec = nullptr; process_launcher = nullptr;
-      protected_runtime = false; protected_credentials = false;
+      protected_runtime = false; protected_credentials = false; protected_system_server = false;
       protected_uid = UINT32_MAX; protected_gid = UINT32_MAX;
       probes = 0; errno = 0;
     }
@@ -209,6 +217,45 @@ def main():
       Check("ordinary protected app retains its ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
       Reset();
       Check("ordinary Android keeps unrestricted ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
+      Check("ordinary Android supplies no su alias", ex::FindAllInPath("su", ".").empty());
+      Check("explicit discovery ignores unrelated PATH", ex::FindAllInPath("C:/known/good.exe", "C:/missing") ==
+          std::vector<std::string>{"C:/known/good.exe"});
+      // Declared host boundaries only: these headers exercise actual selection
+      // bodies; no helper, media operation, authority or Windows process runs.
+      std::string elf(20, '\0');
+      elf[0] = '\x7f'; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
+      elf[4] = 2; elf[5] = 1; elf[18] = 62;
+      const std::wstring sealed_tool = L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat";
+      files[sealed_tool] = elf;
+      files[L".\\su"] = "MZ";
+      files[L".\\mkfs.vfat"] = "MZ";
+      protected_runtime = true;
+      Check("unauthenticated protected su discovery cannot use PATH substitute",
+          ex::FindAllInPath("su", ".").empty());
+      Check("unauthenticated protected helper discovery cannot use PATH substitute",
+          ex::FindAllInPath("mkfs.vfat", ".").empty());
+      protected_credentials = true; protected_uid = 10000; protected_gid = 10000;
+      Check("authenticated app discovers its protected su route",
+          ex::FindAllInPath("su", ".") == std::vector<std::string>{"/system/bin/su"});
+      Check("authenticated app retains explicit protected su spelling",
+          ex::FindAllInPath("/system/xbin/su", ".") == std::vector<std::string>{"/system/xbin/su"});
+      protected_system_server = true; protected_uid = 1000; protected_gid = 1000;
+      Check("system server cannot discover reserved su through PATH",
+          ex::FindAllInPath("su", ".").empty());
+      Check("system server cannot discover explicit protected su",
+          ex::FindAllInPath("/system/xbin/su", ".").empty());
+      protected_system_server = false; protected_uid = 0; protected_gid = 0;
+      Check("protected root discovers an admitted sealed helper alias",
+          ex::FindAllInPath("mkfs.vfat", ".") == std::vector<std::string>{"/system/bin/mkfs.vfat"});
+      files[sealed_tool] = "MZ";
+      Check("non-ELF sealed helper cannot fall back to PATH",
+          ex::FindAllInPath("mkfs.vfat", ".").empty());
+      files.erase(sealed_tool);
+      Check("missing sealed helper cannot fall back to PATH",
+          ex::FindAllInPath("mkfs.vfat", ".").empty());
+      files.erase(L".\\su"); files.erase(L".\\mkfs.vfat");
+      Reset();
+      Check("role reset restores ordinary discovery", ex::FindAllInPath("su", ".").empty());
       std::printf("%d checks; %d failures (source-body host control only)\n", checks, failures);
       return failures ? 1 : 0;
     }
@@ -224,6 +271,7 @@ def main():
     print('exec_spawn.cc original SHA256', original_sha256)
     print('compiled source SHA256', hashlib.sha256(source.encode()).hexdigest())
     if args.negative_control: print('Focused empty-on-error mutation; this is not historical source.')
+    if args.negative_role_control: print('Focused system-server guard mutation; this is not Windows execution.')
     print(run.stdout + run.stderr, end='')
     if temporary is not None: temporary.cleanup()
     return run.returncode

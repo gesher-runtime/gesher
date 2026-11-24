@@ -423,7 +423,7 @@ USB_BLOCK_PATH_BASES.update(dict.fromkeys((
  'compat/libcore/process.cc',
  'compat/posix/src/system.cc',
 ), '5b2af6e4e5de5525791c304de21c2c6a77aebcd2'))
-USB_BLOCK_TRANSITION_SHA256 = '4c522b49c4f719ee31170c866c16f333ade90e67c86cecc23ecb5bff28e11472'
+USB_BLOCK_TRANSITION_SHA256 = '845585277763bfcc7116d9f353b1d05c753d99f04a2416cefbcbbfb50ce54c6a'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

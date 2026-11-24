@@ -9,10 +9,13 @@ namespace gesher::usb_storage::test {
 enum class LowboxTraceApi : DWORD {
   open_thread_token, open_thread_token_ex, open_process_token,
   open_process_token_ex, open_directory, create_directory,
-  create_directory_ex, create_lowbox_token, count,
+  create_directory_ex, create_lowbox_token, create_symbolic_link,
+  open_symbolic_link, query_security, set_security, duplicate_object,
+  duplicate_token, query_token_information, set_token_information,
+  status_to_win32, count,
 };
 inline constexpr DWORD kLowboxTraceSymbolCount = static_cast<DWORD>(LowboxTraceApi::count);
-inline constexpr DWORD kLowboxTraceRecordCount = 32;
+inline constexpr DWORD kLowboxTraceRecordCount = 64;
 
 struct LowboxTraceSymbolEvidence {
   DWORD imported = 0, patched = 0, restored = 0;
@@ -26,17 +29,27 @@ struct LowboxTraceCall {
   DWORD status = 0, returned_handle = 0, caller_rva = 0;
   DWORD input_snapshot_status = ERROR_SUCCESS;
   DWORD name_bytes = 0, name_characters = 0, name_truncated = 0;
+  DWORD information_class = 0, buffer_length = 0, security_information = 0;
+  DWORD token_type = 0, effective_only = 0, mapped_ntstatus = 0;
+  DWORD target_snapshot_status = ERROR_SUCCESS;
+  DWORD target_bytes = 0, target_characters = 0, target_truncated = 0;
   ULONG_PTR source = 0, root = 0, result = 0, shadow = 0;
-  wchar_t name[192]{};
+  ULONG_PTR source_process = 0, target_process = 0;
+  // Keep the total text budget bounded while retaining more final calls.
+  // Original byte lengths and independent flags disclose either truncation;
+  // shortened text never establishes an exact object or link-target identity.
+  wchar_t name[128]{};
+  wchar_t target[64]{};
 };
 struct LowboxIatTraceEvidence {
-  DWORD version = 1;
+  DWORD version = 2;
   // Caller may set ONLY this metadata field before Begin. It is an expected
   // target session, not a claim that every recorded call had that token/session.
   DWORD expected_target_session = 0;
   DWORD attempted = 0, setup_status = ERROR_NOT_READY, restore_status = ERROR_NOT_READY;
   DWORD worker_thread = 0, worker_session = 0, worker_session_status = ERROR_NOT_READY;
   DWORD image_size = 0, slot_count = 0, page_count = 0;
+  DWORD image_timestamp = 0, image_checksum = 0;
   DWORD missing_symbols = 0, uninspectable_imports = 0, delay_imports_present = 0;
   DWORD total_calls = 0, record_count = 0, overflow = 0;
   DWORD page_restore_status = ERROR_NOT_READY;
@@ -47,7 +60,7 @@ struct LowboxIatTraceEvidence {
 };
 static_assert(std::is_trivially_copyable_v<LowboxIatTraceEvidence> &&
               std::is_standard_layout_v<LowboxIatTraceEvidence> &&
-              sizeof(LowboxIatTraceEvidence) <= 32768);
+              sizeof(LowboxIatTraceEvidence) <= 65536);
 
 // Explicit test opt-in only. This process permits one Begin, on the exact
 // SYSTEM worker thread that will make the one real AuthorityLaunch::Create.
