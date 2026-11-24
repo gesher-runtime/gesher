@@ -3,8 +3,8 @@
 
 The Android and system-server boundaries are stand-ins with android-16.0.0_r4's
 constant values; AuthService and WindowsHelloBackend are compiled unchanged apart
-from their package, imports and public class visibility; StandIn, the dispatch the
-service's Binder uses, is compiled the same way. Tests cover the
+from their package, imports, boundary type qualification and public class visibility;
+StandIn, the dispatch the service's Binder uses, is compiled the same way. Tests cover the
 sensor-less AOSP answers with no Windows Hello backend (production today), and,
 with an isolated test double only, the device-credential confirmation outcomes,
 cancellation, replacement, client death and callback ordering.
@@ -49,6 +49,9 @@ def main() -> None:
         print(Path(relative).name, "SHA256", hashlib.sha256(source.encode()).hexdigest(), flush=True)
         # The harness declares java.util.* once; Android types are its stand-ins.
         source = re.sub(r"^package .*;\n|^import .*;\n", "", source, flags=re.MULTILINE)
+        # StandIn's extension signatures use fully qualified Android boundary types.
+        source = source.replace("android.os.Parcel", "Parcel").replace(
+            "android.os.RemoteException", "RemoteException")
         if public not in source:
             raise SystemExit(f"{relative}: expected '{public}'")
         harness = harness.replace(marker, source.replace(public, private, 1))
