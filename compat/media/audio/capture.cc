@@ -22,7 +22,8 @@ namespace gesher::media {
 namespace {
 
 // A source without a data signal of its own is pulled every period; one with a
-// signal waits for it, and this bounds that wait (the endpoint buffers 200 ms).
+// signal waits for it, and this bounds that wait. In shared event mode WASAPI
+// chooses the endpoint buffer duration; packets normally wake us each period.
 constexpr int kPeriodMs = 10;
 constexpr int kSignalSafetyMs = 50;
 
@@ -372,7 +373,10 @@ class CaptureEngine {
       Process(command);
     } else {
       commands_.push_back(&command);
-      cv_.notify_all();
+      // The worker may be in the source's data wait, not cv_. Control requests
+      // must interrupt that wait too: preparing or starting another recorder
+      // cannot depend on the current endpoint producing a packet.
+      Wake();
       cv_.wait(lock, [&] { return command.done; });
     }
     if (error != nullptr) *error = command.error;
@@ -464,7 +468,8 @@ class CaptureEngine {
   InputInfo info_;
   std::atomic<bool> restart_{false};
   // Guards waiting_ (the source the worker is waiting on, for Wake to interrupt) and
-  // the period wait; never held with mu_ or while calling into a source but Interrupt.
+  // the period wait. Wake may hold mu_ first; the worker releases wake_mu_ before
+  // reacquiring mu_. No source call runs under wake_mu_ except Interrupt.
   std::mutex wake_mu_;
   std::condition_variable wake_cv_;
   CaptureSource* waiting_ = nullptr;
