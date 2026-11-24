@@ -6,7 +6,7 @@ The production change adds a direct one-byte path in `Wcsnrtombs` after its exis
 
 The fixed six-block ABBA campaign contains **432 fresh processes / 1,728 records** across all18 predeclared cases. ASCII7–65536 conversion medians improve61.997–72.255% in process CPU; every paired block for those five lengths improves. The complete4096-word query/allocate/convert/consume-every-byte/free lifecycle improves **41.778%**, with all six paired blocks improving30.855–50.250%. Restartable, legacy, repeated seven-byte chunks, mixed and invalid-suffix operations retain their complete API results and also improve in these measurements.
 
-**Costs and uncertainty remain part of the result.** The query-only pooled CPU median regresses5.433%, despite five of six paired-block means improving; its sixth block regresses8.003%. One-character conversion has one paired block regressing0.307%. Empty and zero-capacity controls vary substantially between blocks, and the independent pilot's empty-string median regressed42.864% (5.464→7.806ns), while final empty median improves17.140%. The all-non-ASCII row is a control, not a promised new fast path. First-call and p95 results below retain adverse rows and are not app-startup measurements. No release budget or whole-application speed is accepted from this host experiment.
+**Costs and uncertainty remain part of the result.** The query-only pooled CPU median regresses5.433%, despite five of six paired-block means improving; its sixth block regresses8.003%. One-character conversion has one paired block regressing0.307%. Empty and zero-capacity controls vary substantially between blocks, and the independent pilot's empty-string median regressed42.864% (5.464→7.806ns), while final empty median improves17.140%. The all-non-ASCII row is a control, not a promised new fast path. First-call and p95 results below retain adverse rows and are not app-startup measurements. In particular, the first-call ASCII4096 CPU p95 grows from 67.578 to 786.924 µs (+1064.47%), and its wall p95 grows from 69.286 to 790.177 µs (+1040.46%). The complete lifecycle first-call wall p95 also grows from 42.167 to 52.866 µs (+25.37%). These observed tails remain costs of this fixed campaign even though its steady medians improve. No release budget or whole-application speed is accepted from this host experiment.
 
 ### All final cases
 
@@ -35,9 +35,9 @@ CPU and wall values are per complete scenario operation. A process's steady rate
 
 ### First calls, tails and complete pilot
 
-Each process records its very first production invocation after input/oracle/caller-buffer preparation, then three steady intervals. First-call clock overhead is material for tiny operations. p95 is the nearest-rank observed process rate (12 samples per variant in the final), not a statistical population guarantee. Full subprocess wall, including setup and output verification, is retained separately in JSON.
+Each process records its very first production invocation after input/oracle/caller-buffer preparation, then three steady intervals. First-call clock overhead is material for tiny operations. The first-call and steady distributions are reported separately. p95 is the nearest-rank observed value (12 samples per variant in the final, so the reported p95 is the largest observed sample), not a statistical population guarantee. Full subprocess wall, including setup and output verification, is retained separately in JSON.
 
-| Case | First CPU change | First wall change | CPU p95 baseline→candidate µs | Wall p95 baseline→candidate µs | Pilot steady CPU change |
+| Case | First CPU change | First wall change | Steady CPU p95 baseline→candidate µs | Steady wall p95 baseline→candidate µs | Pilot steady CPU change |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | empty | +12.310% | -0.380% | 0.017298→0.007961 | 0.017343→0.007965 | +42.864% |
 | ascii1 | -4.056% | -3.867% | 0.015943→0.013512 | 0.015945→0.013515 | -41.889% |
@@ -57,6 +57,31 @@ Each process records its very first production invocation after input/oracle/cal
 | output0 | +3.527% | +4.102% | 0.013207→0.010864 | 0.013209→0.010866 | -12.764% |
 | output8 | -16.166% | -11.575% | 0.069854→0.026310 | 0.069930→0.026311 | -75.708% |
 | source4096 | -67.561% | -63.300% | 27.200678→8.840079 | 27.624290→8.841656 | -72.742% |
+
+### All first-call medians and tails
+
+These are absolute durations for the first production invocation, after input, reference and caller-buffer preparation. They include clock overhead and do not measure process startup or application launch. Every predeclared case is retained, including the large ASCII4096 tail and the lifecycle wall-tail regression.
+
+| Case | First CPU median baseline→candidate µs | First CPU p95 baseline→candidate µs | First wall median baseline→candidate µs | First wall p95 baseline→candidate µs |
+| --- | ---: | ---: | ---: | ---: |
+| empty | 1.612500→1.811000 | 4.663000→3.811000 | 3.024500→3.013000 | 49.936000→5.105000 |
+| ascii1 | 1.676500→1.608500 | 2.888000→2.469000 | 2.973500→2.858500 | 4.116000→3.582000 |
+| ascii7 | 1.887000→1.561000 | 2.720000→2.266000 | 3.110000→2.928500 | 3.951000→3.443000 |
+| ascii32 | 1.846000→1.624500 | 4.144000→2.686000 | 3.127500→2.911500 | 26.602000→4.668000 |
+| ascii256 | 2.482000→2.050500 | 3.798000→3.016000 | 3.640000→3.272000 | 4.859000→4.210000 |
+| ascii4096 | 17.803000→6.320500 | 67.578000→786.924000 | 19.027000→7.574500 | 69.286000→790.177000 |
+| ascii65536 | 311.552000→74.845500 | 589.119000→150.852000 | 312.984000→75.969500 | 590.667000→152.318000 |
+| measure4096 | 6.264500→6.341000 | 10.372000→9.211000 | 7.497500→7.658000 | 11.710000→10.528000 |
+| restart4096 | 18.776000→6.240000 | 42.288000→10.645000 | 19.945500→7.450000 | 43.713000→11.962000 |
+| legacy4096 | 18.002000→6.193500 | 22.830000→9.282000 | 19.151500→7.439500 | 46.417000→10.614000 |
+| chunks4096 | 18.639500→7.896000 | 83.987000→13.147000 | 19.805500→9.228000 | 85.617000→14.430000 |
+| lifecycle4096 | 26.785000→16.329000 | 40.641000→31.566000 | 28.077000→17.564000 | 42.167000→52.866000 |
+| mixed4096 | 21.251500→7.670000 | 25.009000→12.521000 | 22.387500→8.832000 | 26.182000→14.188000 |
+| nonascii4096 | 24.900000→26.960000 | 1579.599000→32.324000 | 26.092000→28.055000 | 1581.478000→33.560000 |
+| invalid4096 | 19.875500→9.418500 | 27.622000→11.102000 | 21.224000→10.786500 | 28.898000→12.659000 |
+| output0 | 1.616000→1.673000 | 2.833000→2.651000 | 2.828000→2.944000 | 4.794000→4.014000 |
+| output8 | 1.831000→1.535000 | 5.360000→2.608000 | 3.067000→2.712000 | 50.436000→3.949000 |
+| source4096 | 18.772000→6.089500 | 86.763000→37.558000 | 19.943000→7.319000 | 220.447000→38.806000 |
 
 ## Source, qualification and resources
 
