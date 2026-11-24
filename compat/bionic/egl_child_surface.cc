@@ -5,13 +5,9 @@
 // as code in the executable does; this file never goes through the System V
 // thunks apps use.
 
-// DEVMODEW for EnumDisplaySettingsW lives in <wingdi.h>, which -DNOGDI omits.
-#ifndef NOMINMAX
-#define NOMINMAX 1
-#endif
-#undef NOGDI
 #define EGL_NO_PLATFORM_SPECIFIC_TYPES 1
 #include "egl_child_surface.h"
+#include "display_refresh.h"
 #include "egl_readback_layout.h"
 #include "gpu_keepalive.h"
 
@@ -162,6 +158,7 @@ struct Child {
   std::thread* thread = nullptr;
   int helper_width = 0, helper_height = 0;
   std::chrono::steady_clock::time_point last_post{};
+  DisplayRefresh refresh;
   EGLContext last_context = EGL_NO_CONTEXT;
   bool interval_zero = false;  // ANGLE's swap interval set to 0 for it
   bool reverse_rows = false;
@@ -181,33 +178,6 @@ std::unordered_map<HWND, std::thread*>& Threads() {
 std::unordered_map<EGLSurface, std::shared_ptr<Child>>& Children() {
   static auto* map = new std::unordered_map<EGLSurface, std::shared_ptr<Child>>();
   return *map;
-}
-
-constexpr int64_t kDefaultRefreshHz = 60;
-constexpr int64_t kDefaultRefreshIntervalUs =
-    (1'000'000 + kDefaultRefreshHz / 2) / kDefaultRefreshHz;  // 16667 us
-
-// Queries the active refresh rate of the display monitor associated with `hwnd`
-// and converts it to a frame interval in microseconds, falling back to 60 Hz
-// (16667 us) when headless, when a query fails, or when Win32 reports the
-// hardware-default sentinel (dmDisplayFrequency <= 1).
-int64_t QueryRefreshIntervalUs(HWND hwnd) {
-  HMONITOR monitor = MonitorFromWindow(
-      hwnd, hwnd != nullptr ? MONITOR_DEFAULTTONEAREST : MONITOR_DEFAULTTOPRIMARY);
-  if (monitor == nullptr) return kDefaultRefreshIntervalUs;
-  MONITORINFOEXW mi = {};
-  mi.cbSize = sizeof(mi);
-  if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO*>(&mi))) {
-    return kDefaultRefreshIntervalUs;
-  }
-  DEVMODEW dm = {};
-  dm.dmSize = sizeof(dm);
-  if (!EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) ||
-      dm.dmDisplayFrequency <= 1) {
-    return kDefaultRefreshIntervalUs;
-  }
-  const int64_t hz = static_cast<int64_t>(dm.dmDisplayFrequency);
-  return std::max<int64_t>(1, (1'000'000 + hz / 2) / hz);
 }
 
 // Waits until `t` on a high-resolution waitable timer. sleep_for waits whole
@@ -481,13 +451,11 @@ bool ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
     }
   }
   post_site.Add(gesher::perf::Now() - post_start);
-  // Paced as the monitor's refresh rate would (60 Hz fallback when headless;
-  // the hidden swap chain itself is not vsynced).
-  static gesher::perf::Site pace_site(
-      "EGL child surface: display refresh pacing wait (count: ms late)");
-  const int64_t interval_us = QueryRefreshIntervalUs(c->helper);
+  // The hidden swap chain has no useful vsync. Pace to the queried host mode,
+  // with a 60 Hz fallback when Windows cannot report a display frequency.
+  static gesher::perf::Site pace_site("EGL child surface: display pacing wait (count: ms late)");
   auto now = std::chrono::steady_clock::now();
-  auto next = c->last_post + std::chrono::microseconds(interval_us);
+  auto next = c->last_post + c->refresh.Period(c->helper, now);
   const int64_t pace_start = gesher::perf::Now();
   if (now < next) WaitUntil(next);
   c->last_post = std::chrono::steady_clock::now();
