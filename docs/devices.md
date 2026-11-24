@@ -216,6 +216,10 @@ active provider disconnects, the current operations fail and a new operation may
 reconnect. Destroying the recognizer or losing its app process releases the
 provider binding and cancels active listening.
 
+Gesher's own provider, Gesher Speech Recognition (`com.gesher.stt`), is installed when
+Windows has SAPI 5 recognizers and becomes the unset default; see
+[speech-recognition.md](speech-recognition.md).
+
 `tools/test_speech_recognition.py --help` describes the host fixtures. The Windows
 framework-fixes track also runs them under ART. The fixtures exercise the broker and
 public client with controlled providers. A packaged provider and physical audio

@@ -200,6 +200,23 @@ final class SettingsProvider extends ContentProvider {
     }
 
     /**
+     * Adds a Settings.Secure default from the system server: the value when the setting
+     * has none, as a default row (a value written to it later replaces it, and is kept).
+     * Speech recognition: {@code voice_recognition_service} once Gesher's recognition
+     * service is installed (SttEngineApp, docs/speech-recognition.md).
+     */
+    static void addSecureDefault(String name, String value) {
+        SettingsProvider p = sInstance;
+        if (p == null) return;
+        boolean added;
+        synchronized (p) {
+            added = !p.mTables.get(SECURE).containsKey(name);
+            if (added) p.mStore.addDefault(SECURE, name, value);
+        }
+        if (added) p.notifySetting(SECURE, name);
+    }
+
+    /**
      * Sets a Settings.System value from the system server (locale track: TIME_12_24 when
      * Windows' time format changes; ADR 0049).
      */

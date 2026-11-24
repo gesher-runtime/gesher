@@ -106,6 +106,8 @@ Source: "{#BuildDir}\oatdump.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 ; Gesher Camera (ADR 0051): ACTION_IMAGE_CAPTURE's app, installed by the Gesher device when the PC has a camera.
 Source: "{#BuildDir}\gesher-camera.apk"; DestDir: "{app}"; Flags: ignoreversion
+; Gesher Speech Recognition (docs/speech-recognition.md): the RecognitionService, installed by the Gesher device when Windows has speech recognizers.
+Source: "{#BuildDir}\gesher-stt.apk"; DestDir: "{app}"; Flags: ignoreversion
 ; The boot image (docs/boot-image.md): the boot class path's classes, verified
 ; and linked by dex2oat, which dalvikvm maps instead of loading them one by one.
 Source: "{#BuildDir}\framework\x86_64\*"; DestDir: "{app}\framework\x86_64"; Flags: ignoreversion
