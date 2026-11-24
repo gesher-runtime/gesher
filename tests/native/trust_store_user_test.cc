@@ -495,6 +495,27 @@ static void SharedDirectory(const std::wstring& root) {
   CHECK(Contents(added + L"\\" + HashName(old_root, 1)) == "<missing>");
   CHECK(DeleteFileW(old_path.c_str()));
   CHECK(List(added).empty());
+
+  // The manifest lost while Gesher's entry is held without sharing: its
+  // owner mark, still readable, records it, so the root is not written again
+  // at the next index, and the manifest records it again.
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(r.ok && r.written == 1);
+  CHECK(DeleteFileW((user + L"\\.gesher-user-cacerts").c_str()));
+  HANDLE locked = CreateFileW(new_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(locked != INVALID_HANDLE_VALUE);
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(!r.ok && r.written == 0 && r.error == ERROR_SHARING_VIOLATION);
+  CHECK(Contents(added + L"\\" + HashName(new_root, 1)) == "<missing>");
+  CHECK(Contents(user + L"\\.gesher-user-cacerts").find(Utf8(HashName(new_root, 0))) !=
+        std::string::npos);
+  CloseHandle(locked);
+  r = internal::SyncUserCaDirectory(user, {new_root});
+  CHECK(r.ok && r.written == 0 && r.removed == 0);
+  r = internal::SyncUserCaDirectory(user, {});
+  CHECK(r.ok && r.removed == 1);
+  CHECK(List(added).empty());
 }
 
 // The production sync against this machine's stores, in temporary roots.

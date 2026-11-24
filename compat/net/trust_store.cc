@@ -734,9 +734,10 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   // record alone is enough, so a lost or unwritable manifest does not leave
   // an entry behind. Anything else in the directory is not Gesher's.
   std::map<std::wstring, Digest> owned;
-  // Manifest lines whose entry exists but cannot be read now (opened without
-  // sharing): kept as they are, so the entry stays recorded until a later
-  // sync can check and, if need be, remove it.
+  // Gesher's entries (by a manifest line or the owner mark) that exist but
+  // cannot be read now (opened without sharing): listed in the manifest as
+  // recorded, so the entry stays recorded until a later sync can check and,
+  // if need be, remove it.
   std::map<std::wstring, std::string> unreadable;
   std::string manifest;
   bool had_manifest = ReadWholeFile(manifest_path, &manifest);
@@ -768,7 +769,7 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
     do {
       std::wstring name = entry.cFileName;
       if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || !IsCertFileName(name) ||
-          owned.count(name) != 0) {
+          owned.count(name) != 0 || unreadable.count(name) != 0) {
         continue;
       }
       std::wstring path = dir + L"\\" + name;
@@ -780,9 +781,18 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
       mark = TrimLower(mark);
       std::string lower_name = TrimLower(std::string(name.begin(), name.end()));
       size_t space = mark.find(' ');
-      if (space != std::string::npos && mark.substr(0, space) == lower_name &&
-          Holds(path, mark.substr(space + 1), &digest)) {
+      if (space == std::string::npos || mark.substr(0, space) != lower_name) continue;
+      if (Holds(path, mark.substr(space + 1), &digest)) {
         owned[name] = digest;
+        continue;
+      }
+      // The stream stays readable while the file itself is held without
+      // sharing: the mark alone then records it (the manifest may be lost),
+      // as a manifest line does for an entry that cannot be read.
+      std::string ignored;
+      if (!ReadWholeFile(path, &ignored)) {
+        fail(GetLastError());
+        unreadable[name] = mark.substr(space + 1);
       }
     } while (FindNextFileW(find, &entry));
     FindClose(find);
@@ -810,7 +820,7 @@ UserSyncResult SyncUserCaDirectory(const std::wstring& user_dir,
   // a failure, not a reason to go past it. An entry that could not be
   // removed stays where it is and does not hold up the others. Gesher's own
   // entry for the certificate that cannot be read now (its manifest line
-  // gives the digest) is present: writing it again would make a second alias.
+  // or owner mark gives the digest) is present: writing it again would make a second alias.
   enum class Slot { kFree, kPresent, kBlocked };
   std::set<std::wstring> planned;
   auto find_slot = [&](unsigned long hash, const Digest& digest, const std::string& der,
